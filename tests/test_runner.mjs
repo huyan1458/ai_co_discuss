@@ -2999,6 +2999,24 @@ test('a member whose operations were refused is not captured, even when its sess
   assert.equal(state.posts, undefined);
 });
 
+test('a command refused for something the member can correct resumes its session up to three times with what to change', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const deliveries = [];
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
+    deliveries.push(task.prompt);
+    setImmediate(() => { task.on_denials([{ tool: 'run_command', detail: `codiscuss message post --body "\`x${deliveries.length}\`"`, retry_hint: '命令含有 `，改用 --body-file' }]); task.on_exit('运行了未授权的命令'); });
+    return { status: 'accepted', session_id: 'session-1' };
+  });
+  for (let turn = 0; turn < 4; turn++) await runner.tick();
+  assert.equal(deliveries.length, 4, 'the first turn and three corrections');
+  assert.match(deliveries[1], /第 1 次提醒，之后还有 2 次改正机会[\s\S]*命令「codiscuss message post --body "`x1`"」被拒：命令含有 `/);
+  assert.match(deliveries[3], /这是最后一次改正机会[\s\S]*`x1`[\s\S]*`x2`[\s\S]*`x3`/, 'each reminder lists every refusal so far');
+  assert.notEqual(state.executions[0].status, 'failed');
+  await runner.tick();
+  assert.equal(deliveries.length, 4, 'a fourth refusal is not resumed');
+  assert.equal(state.executions[0].status, 'failed');
+});
+
 test('a member that worked and ended without submitting has its last remark captured as the answer', async t => {
   const { state, store, config } = await free_fixture(t);
   const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {

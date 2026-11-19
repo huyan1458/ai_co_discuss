@@ -17,12 +17,15 @@ import { computed, inject, ref, watch } from "vue";
 import ImportDialog from "./ImportDialog.vue";
 import MemoBlock from "./memo-block.js";
 import { use_workflow_library } from "./workflow-library.js";
+import { use_invited_rooms } from "./external-members.js";
 import { t } from "./i18n.js";
 
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives"]);
 const { view, bridge, act, pending } = inject("discussion");
-// While the workflow page fills the middle, no room row is shown as the open one.
-const { page_open: workflow_page } = use_workflow_library();
+// While the workflow page or an invited room fills the middle, no room row is shown as the open one.
+const { page_open: workflow_library_open } = use_workflow_library();
+const { page_open: invited_open } = use_invited_rooms();
+const middle_page = computed(() => workflow_library_open.value || invited_open.value);
 const rooms = computed(() => view.value.rooms.filter((room) => !room.archived));
 const archived_count = computed(() => view.value.rooms.filter((room) => room.archived).length);
 const folders = computed(() => (view.value.folder_groups || []).map((folder) => ({ ...folder,
@@ -94,7 +97,7 @@ function room_time_title(room) {
 // Everything a room row and its menus read besides the room itself, so a row re-renders only when this, the room or its
 // time label changes rather than on every view publish.
 const row_state = computed(() => JSON.stringify([view.value.directory_pending, view.value.archive_pending, view.value.backup_pending,
-  view.value.folders, view.value.room_site, manual_order.value, view.value.room?.id, pending.value, workflow_page.value, open_room_running.value]));
+  view.value.folders, view.value.room_site, manual_order.value, view.value.room?.id, pending.value, middle_page.value, open_room_running.value]));
 /** The open room's own live state is fresher than the directory's, so its light follows that. */
 const open_room_running = computed(() => (view.value.room?.free?.members || [])
   .some((member) => ["dispatched", "started"].includes(member.execution?.status)));
@@ -120,7 +123,7 @@ function recovery_items(item) {
 const unconfirmed_launches = computed(() => view.value.launch.recoveries.filter((item) => item.id !== view.value.creating_room?.submission_id));
 
 function room_row(room, index, count) {
-  return { items: actions(room, index, room.folder_id || null, count), active: !workflow_page.value && room.id === view.value.room?.id, busy: Boolean(pending.value),
+  return { items: actions(room, index, room.folder_id || null, count), active: !middle_page.value && room.id === view.value.room?.id, busy: Boolean(pending.value),
     archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room),
     running: room_running(room) };
 }

@@ -14,6 +14,7 @@ import ApiSettings from "./ApiSettings.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberTextDialog from "./MemberTextDialog.vue";
 import SessionBrowser from "./SessionBrowser.vue";
+import { SCOPES, WAKES, scope_label } from "./external-members.js";
 import { adapter_profile, same_session_family } from "../runner/adapters/profiles.mjs";
 import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
 
@@ -33,7 +34,15 @@ const props = defineProps({
   workflow: { type: String, default: "" },
   // Imported presets start read-only until the user grants the requested level on that card.
   access_locked: Boolean,
+  // Joining a room on another computer: software, start (new or resumed conversation; manual start is greyed, since
+  // this computer's service wakes it), model, effort and prompt as usual; 本机权限 takes the project row's place and
+  // 被点名时 follows it (`trust`). Description and presets do not apply. `confine_reason`: why the software cannot be
+  // confined to room commands.
+  joining: Boolean,
+  confine_reason: { type: String, default: "" },
 });
+// Joining only: `{ wake, confined }`, edited on the back like the card's other settings.
+const trust = defineModel("trust", { type: Object, default: null });
 // Library edits stay in this draft; no room profile, software default or saved expert preset is changed.
 const preset = defineModel("preset", { type: Object, default: null });
 const emit = defineEmits(["remove", "mode", "host"]);
@@ -165,9 +174,10 @@ const facts = computed(() => preset.value ? [
   ...configurable.value ? [{ label: t('模型'), value: profile.value.model || models.value.defaults?.model || t('软件默认模型') }] : [],
   ...configurable.value && (profile.value.adapter !== "api" || profile.value.effort) ? [{ label: t('强度'), value: effort_label.value }] : [],
   // A workflow card that may change files is pointed out before it joins.
-  ...sets_access.value ? [{ label: t('项目'), value: access_label(access.value), ...(props.workflow && access.value !== "read" ? { tone: "warn" } : {}) }] : [],
+  ...sets_access.value && !props.joining ? [{ label: t('项目'), value: access_label(access.value), ...(props.workflow && access.value !== "read" ? { tone: "warn" } : {}) }] : [],
   // The crown already offers hosting and the badge names the host, so only the refusal needs a row.
   ...props.hosting && !props.host && !props.hostable ? [{ label: t('主持'), value: host_fact.value }] : [],
+  ...props.joining && trust.value ? [{ label: t('本机权限'), value: scope_label(trust.value.confined), ...(trust.value.confined ? {} : { tone: "warn" }) }] : [],
 ]);
 // Ask only for connection values that are missing; a field stays while the back is open so typing does not hide it.
 const CONNECTION_FIELDS = { executable: { label: t('路径'), placeholder: t('可执行文件完整路径') },
@@ -208,7 +218,7 @@ function flip(next) {
   if (next && !can_flip.value) return;
   card.value?.focus({ preventScroll: true });
   asked.value = next ? required_connection() : [];
-  if (next && !back.value) { opened_with = { profile: JSON.parse(JSON.stringify(preset.value || profile.value)), mode: props.mode }; }
+  if (next && !back.value) { opened_with = { profile: JSON.parse(JSON.stringify(preset.value || profile.value)), mode: props.mode, trust: trust.value && { ...trust.value } }; }
   back.value = next;
 }
 
@@ -218,6 +228,7 @@ function cancel() {
     if (preset.value) preset.value = opened_with.profile;
     else bridge.restore_launch_profile(props.name, opened_with.profile);
     if (opened_with.mode !== props.mode) emit("mode", opened_with.mode);
+    if (opened_with.trust) trust.value = opened_with.trust;
     opened_with = null;
   }
   flip(false);
@@ -306,7 +317,7 @@ const prompt_source = computed(() => prompt_preset.value && prompt_draft.value.t
 // What the runner adds for this member, built by the runner's own function so the dialog never drifts from what is sent;
 // values known only at delivery are placeholders. An API expert gets the skills as its system prompt instead.
 const prompt_fixed = computed(() => {
-  if (preset.value) return null;
+  if (preset.value || props.joining) return null;
   const adapter = profile.value.adapter;
   if (!adapter || adapter === "api") return null;
   // The local service runs on this computer, so its command name and the Windows read rule follow this browser's system.
@@ -366,6 +377,7 @@ function reset_model() {
 /** Switch this card's delivery; every dialog showing the card shares this one rule. */
 function choose_mode(option) {
   // The history window binds a conversation only when one is picked; closing it leaves the card as it was.
+  if (option === "manual" && props.joining) return;
   if (option === HISTORY) { browsing.value = true; return; }
   if (resuming.value) bridge.write_launch(props.name, "session_id", null);
   if (option === "cli") bridge.default_launch_entry(props.name);
@@ -415,7 +427,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 </script>
 
 <template>
-  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host, 'is-static': !automatic, 'is-manual': manual }"
+  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host, 'is-static': !automatic, 'is-manual': manual, 'is-joining': joining }"
     :data-identity="bridge.identities[name]?.style" :data-face="visible_back ? 'back' : 'front'" tabindex="-1" @keydown.esc="escape">
     <motion.div class="expert-card-turn" :style="{ rotateY: angle }">
       <div class="expert-card-face expert-card-front" :inert="visible_back" :aria-hidden="visible_back">
@@ -443,15 +455,15 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span v-if="can_flip" class="expert-card-flip is-open" :class="{ 'is-tight': mode_options.length > 2 }"><UIcon name="i-lucide-settings-2" /><span class="expert-card-flip-label">{{ t('设置') }}</span></span>
         </component>
         <div v-if="mode_options.length > 1" class="expert-card-modes expert-card-front-modes" :class="{ 'is-dense': mode_options.length > 2 }" role="radiogroup" :aria-label="t('{value1} 启动方式', { value1: name })" @keydown="choose_capability">
-          <button v-for="option in mode_options" :key="option" type="button" :title="MODE_TITLES[option]"
-            role="radio" :aria-checked="current_mode === option" :tabindex="current_mode === option ? 0 : -1" :data-mode="option" @click="choose_mode(option)">{{ ACCESS_LABELS[option] }}</button>
+          <button v-for="option in mode_options" :key="option" type="button" :title="joining && option === 'manual' ? t('加入另一台电脑的房间时由本机服务唤醒，不能手动启动') : MODE_TITLES[option]"
+            role="radio" :aria-checked="current_mode === option" :tabindex="current_mode === option ? 0 : -1" :data-mode="option" :disabled="joining && option === 'manual'" @click="choose_mode(option)">{{ ACCESS_LABELS[option] }}</button>
         </div>
         <span class="expert-card-tools">
           <!-- A card with a back keeps the description beside the prompt there; one without a back has only the front. A manual card has none, as its settings live in the user's own session. -->
           <button v-if="!can_flip && !manual" type="button" :class="{ 'is-set': description }" :aria-label="t('编辑 {value1} 的名称与描述', { value1: name })" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="preset" type="button" :class="{ 'is-set': prompt_text }" :title="prompt_title" :aria-label="t('编辑 {value1} 的专属提示词', { value1: name })" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
           <button v-if="hostable" type="button" class="expert-card-host" :aria-pressed="host" :aria-label="host ? t('{value1} 是主持人', { value1: name }) : t('设 {value1} 为主持人', { value1: name })" :title="host ? t('主持人') : t('设为主持人')" @click="emit('host')"><UIcon name="i-lucide-crown" /></button>
-          <button type="button" :aria-label="t('移出 {value1}', { value1: name })" :title="t('移出')" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
+          <button v-if="!joining" type="button" :aria-label="t('移出 {value1}', { value1: name })" :title="t('移出')" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
         </span>
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
@@ -459,7 +471,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <div class="expert-card-back-body nowheel nopan nodrag">
         <div class="expert-card-heading"><strong>{{ member_label }}<span v-if="member_label !== name">{{ name }}</span><span>{{ t('设置') }}</span></strong>
           <span class="expert-card-heading-tools">
-          <button type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="t('编辑 {value1} 的名称与描述', { value1: name })" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
+          <button v-if="!joining" type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="t('编辑 {value1} 的名称与描述', { value1: name })" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="preset || profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="t('编辑 {value1} 的专属提示词', { value1: name })" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="t('检查 {value1} 的 API 配置', { value1: name })" :title="t('检查配置：发送一次极短请求，核对地址、密钥、协议与模型')" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></span></div>
         <div v-if="!preset && automatic && !restricted && entry_items.length > 1" class="expert-card-field">
@@ -468,7 +480,23 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <div v-for="item in restricted ? [] : connection" :key="item.field" class="expert-card-field">
           <span>{{ item.label }}</span><UInput :model-value="profile[item.field] || ''" :placeholder="item.placeholder" :aria-label="`${name} ${item.placeholder}`" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, item.field, $event)" />
         </div>
-        <div v-if="sets_access" class="expert-card-field">
+        <template v-if="joining && trust">
+          <div class="expert-card-field">
+            <span :title="t('你的 AI 在这台电脑上能做什么：只用共议命令在对方房间里发言，或像平时一样读写本机文件、联网。')">{{ t('本机权限') }}</span>
+            <div class="expert-card-modes" role="radiogroup" :aria-label="t('本机权限')">
+              <button v-for="option in SCOPES" :key="String(option.value)" type="button" role="radio" :aria-checked="trust.confined === option.value"
+                :disabled="option.value && Boolean(confine_reason)" :title="option.value && confine_reason ? confine_reason : undefined" @click="trust = { ...trust, confined: option.value }">{{ option.label }}</button>
+            </div>
+          </div>
+          <p v-if="!trust.confined" class="expert-card-warning">{{ t("可读本机文件、联网；对方房间的内容可能诱导它这样做。") }}</p>
+          <div class="expert-card-field">
+            <span>{{ t('被点名时') }}</span>
+            <div class="expert-card-modes" role="radiogroup" :aria-label="t('被点名时')">
+              <button v-for="option in WAKES" :key="option.value" type="button" role="radio" :aria-checked="trust.wake === option.value" @click="trust = { ...trust, wake: option.value }">{{ option.label }}</button>
+            </div>
+          </div>
+        </template>
+        <div v-if="sets_access && !joining" class="expert-card-field">
           <span>{{ t('项目') }}</span>
           <div class="expert-card-modes" role="radiogroup" :aria-label="t('{value1} 的项目文件权限', { value1: name })">
             <button v-for="option in access_options(profile.adapter, full_only)" :key="option.value" type="button" role="radio" :title="option.hint"
@@ -492,7 +520,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <p v-else class="expert-card-note"><UIcon name="i-lucide-monitor" />{{ configuration_note }}</p>
         </div>
         <span class="expert-card-flip-actions">
-          <template v-if="view.launch.available && !workflow && !preset">
+          <template v-if="view.launch.available && !workflow && !preset && !joining">
             <button type="button" class="expert-card-flip is-cancel" :disabled="saving_preset" :aria-label="t('{value1}预设「{value2}」', { value1: own_preset ? t('更新') : t('存为'), value2: name })" :title="t('存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入')" @click="save_preset">{{ saving_preset ? t('保存中…') : own_preset ? t('更新预设') : t('存为预设') }}</button>
           </template>
           <button type="button" class="expert-card-flip is-cancel" :aria-label="t('放弃 {value1} 的修改', { value1: name })" @click="cancel">{{ t('取消') }}</button>
@@ -604,6 +632,10 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-naming > p { margin: -2px 0 0; color: var(--ui-text-dimmed); font-size: 11px; }
 .expert-card-naming-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .expert-card-note { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
+/* Joining: four-character labels (本机权限, 被点名时) on both faces. */
+.expert-card.is-joining .expert-card-facts > div, .expert-card.is-joining .expert-card-field { grid-template-columns: 4.5em minmax(0, 1fr); }
+.expert-card.is-joining .expert-card-catalog { margin-left: calc(4.5em + 8px); }
+.expert-card-warning { margin: -4px 0 0 calc(4.5em + 8px); color: var(--ui-warning, #e0a33a); font-size: 11px; line-height: 1.5; }
 /* A manual card is set by the user's own AI session, not this page: a dashed frame and a system-given name. */
 .expert-card.is-manual .expert-card-face { border-style: dashed; }
 .expert-card-manual { display: grid; gap: 4px; width: 100%; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }

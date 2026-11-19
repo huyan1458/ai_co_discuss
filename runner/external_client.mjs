@@ -15,7 +15,7 @@ import { parseArgs } from 'node:util';
 import { gunzipSync } from 'node:zlib';
 
 import { adapter_profile, API_PROVIDERS, lockdown_support } from './adapters/profiles.mjs';
-import { external_task_text, TASK_SUBCOMMANDS } from './expert_prompts.mjs';
+import { correctable_refusals, external_task_text, MAX_EXPERT_PROMPT, MAX_REFUSAL_RETRIES, refusal_retry_prompt, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
 import { atomic_json } from './files.mjs';
 import { t } from './i18n.mjs';
 
@@ -28,10 +28,14 @@ export const POLL_MS = 5000;
 export const RENEW_MS = 30000;
 // What “完全借用” allows when the owner sets no limit of their own.
 const HISTORY_LIMIT = 50;
+// The end of a run's output kept with a run that ended unanswered, so its owner can see why; it never leaves this computer.
+const OUTPUT_TAIL = 2000;
 const MODEL_LIMIT = 120;
 // What this computer keeps of each request its AI received and each answer it gave, so the history still reads after the
 // inviting room can no longer be reached.
 const TEXT_LIMIT = 4000;
+// How many of the inviting room's latest messages the invited room's page shows.
+const ROOM_MESSAGE_WINDOW = 100;
 // How often a pass also reads the member's current grant (`/view`) when nothing is woken; a wake and the room view always read it.
 const VIEW_REFRESH_MS = 60000;
 // The website gives up on a relayed request after 9 seconds; ask for an answer within that.
@@ -115,10 +119,25 @@ function read_json(path, fallback) {
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : fallback;
 }
 
+// The secrets last opened, by file: opening them starts PowerShell on Windows (about half a second, blocking), and the
+// service sends several relay requests every few seconds. A file changed by another process is opened again.
+const opened_secrets = new Map();
+const file_stamp = path => { try { const { mtimeMs, size } = statSync(path); return `${mtimeMs}:${size}`; } catch { return ''; } };
+
 function read_secrets(home) {
-  const stored = read_json(join(external_home(home), SECRETS_FILE), null);
-  if (!stored) return {};
-  return JSON.parse(stored.dpapi ? DPAPI_CODEC.open(stored) : PLAIN_CODEC.open(stored));
+  const path = join(external_home(home), SECRETS_FILE), stamp = file_stamp(path), kept = opened_secrets.get(path);
+  if (!stamp) return {};
+  if (kept?.stamp === stamp) return structuredClone(kept.secrets);
+  const stored = read_json(path, null);
+  const secrets = JSON.parse(stored.dpapi ? DPAPI_CODEC.open(stored) : PLAIN_CODEC.open(stored));
+  opened_secrets.set(path, { stamp, secrets: structuredClone(secrets) });
+  return secrets;
+}
+
+function write_secrets(home, secrets) {
+  const path = join(external_home(home), SECRETS_FILE);
+  atomic_json(path, secret_codec.seal(JSON.stringify(secrets)));
+  opened_secrets.set(path, { stamp: file_stamp(path), secrets: structuredClone(secrets) });
 }
 
 /** Read the store without changing it. */
@@ -148,7 +167,7 @@ function with_store(home, task) {
     const access = { get: () => (secrets ||= read_secrets(home)), changed: false };
     const result = task(store, access, Date.now());
     atomic_json(join(directory, STORE_FILE), store);
-    if (access.changed) atomic_json(join(directory, SECRETS_FILE), secret_codec.seal(JSON.stringify(secrets)));
+    if (access.changed) write_secrets(home, secrets);
     return result;
   } finally { rmSync(lock, { force: true }); }
 }
@@ -394,7 +413,9 @@ function check_ai(input) {
   // The AI reaches the other room only through this computer's codiscuss (a CLI) or this module (the model API's room
   // and repo tools); App windows do neither.
   if (!['cli', 'api'].includes(profile?.kind)) throw failure('ai_unsupported', '外部成员只能派命令行软件（如 Claude Code）或模型 API');
-  return { adapter, model: String(input.model || ''), effort: String(input.effort || '') };
+  // The member's own prompt, as on a room member's card: present (even empty) replaces the software's preset, null drops it.
+  const prompt = input.system_prompt === undefined || input.system_prompt === null ? {} : { system_prompt: String(input.system_prompt).slice(0, MAX_EXPERT_PROMPT) };
+  return { adapter, model: String(input.model || ''), effort: String(input.effort || ''), ...prompt };
 }
 
 /** The saved model API this AI runs on, as `[participant name, settings]`; empty when this computer has none. */
@@ -420,6 +441,8 @@ function ai_identity(home, ai) {
 export async function join_invite(home, input, deps = {}) {
   const invite = parse_invite(input.invite, input);
   const ai = check_ai(input);
+  // A conversation this computer's software already holds, picked to carry its context into the room.
+  const session_id = String(input.session_id || '');
   const keys = await machine_keys(invite.site, invite.machine, deps);
   if (invite.fingerprint && invite.fingerprint !== keys.fingerprint) {
     throw failure('fingerprint_mismatch', '这不是邀请你的那台电脑：指纹不符，已停止加入。请向对方确认链接');
@@ -457,7 +480,8 @@ export async function join_invite(home, input, deps = {}) {
       member: joined.member.name, member_id: joined.member.id ?? null, key_id, open_level: joined.level || invite.level || 'read',
       directories: Array.isArray(joined.directories) ? joined.directories : [],
       expires_at: Number(joined.expires_at) ? Number(joined.expires_at) * 1000 : null, ai, ai_reported: JSON.stringify(identity),
-      limits: null, paused: false, status: 'active', contact: { at: now, state: 'online', error: '' }, approvals: [], running: null };
+      limits: null, paused: false, status: 'active', contact: { at: now, state: 'online', error: '' }, approvals: [], running: null,
+      ...(session_id ? { session_id } : {}) };
     if (previous) {
       const { end_reason, leave_pending, ...kept } = previous;
       store.records[id] = { ...kept, ...fresh, rejoined_at: now };
@@ -632,26 +656,41 @@ function kept_messages(record) {
   return [...messages.values()].sort((a, b) => a.id - b.id);
 }
 
-/** The record with what the inviting room shows this member, when it can be reached. */
-export async function room_view(home, { id, cached = false }, deps = {}) {
+/** One page of the inviting room's messages, oldest first: those numbered above `after`, at most `limit`. */
+async function message_page(home, id, record, after, limit, deps) {
+  const path = `${MEMBER_API.messages(record.room)}?${new URLSearchParams({ after, limit })}`;
+  return (await member_api(home, id, 'GET', path, undefined, deps)).messages || [];
+}
+
+/**
+ * The record with what the inviting room shows this member (what it may read there anyway), when it can be reached:
+ * the room's latest messages, oldest first, or with `before`, the page just before that message. `earlier` says whether
+ * older messages remain.
+ */
+export async function room_view(home, { id, cached = false, before }, deps = {}) {
   const record = find_record(read_store(home), id);
   // What this computer already knows, without the network: the page shows it at once while the real read is under way.
-  if (cached) return { record: record_view(record, read_store(home)), room: null, messages: kept_messages(record) };
-  let room = null, problem = null;
+  if (cached) return { record: record_view(record, read_store(home)), room: null, messages: kept_messages(record), earlier: false };
+  if (before !== undefined) {
+    const end = Math.max(0, Number(before) - 1), after = Math.max(0, end - ROOM_MESSAGE_WINDOW);
+    try {
+      const messages = end > after ? await message_page(home, id, record, after, end - after, deps) : [];
+      return { messages, earlier: after > 0 };
+    } catch (error) { return { messages: [], earlier: true, error: error.message, ...failure_fields(error) }; }
+  }
+  let room = null, problem = null, earlier = false;
   let messages = [];
   try {
-    // What the page shows in the middle: requests naming this AI and this AI's own answers, oldest first. Sent together,
-    // since each one crosses the relay and in turn they outlast the page's refresh.
-    const query = field => `${MEMBER_API.messages(record.room)}?${new URLSearchParams({ [field]: record.member })}`;
-    const [view, ...pages] = await Promise.all([refresh_grant(home, id, deps),
-      ...['mention', 'author'].map(field => member_api(home, id, 'GET', query(field), undefined, deps))]);
+    // The view comes first for the room's latest message number.
+    const view = await refresh_grant(home, id, deps);
+    const after = Math.max(0, (Number(view?.latest_message_id) || 0) - ROOM_MESSAGE_WINDOW);
+    messages = await message_page(home, id, record, after, ROOM_MESSAGE_WINDOW, deps);
     room = view;
-    const unique = new Map(pages.flatMap(page => page.messages || []).map(message => [message.id, message]));
-    messages = [...unique.values()].sort((a, b) => a.id - b.id);
+    earlier = after > 0;
   } catch (error) { problem = error; messages = kept_messages(record); }
   const store = read_store(home);
   // Also under `room`, where the page (子Task6) looks for them.
-  return { record: record_view(store.records[id], store), room: room ? { ...room, messages } : null, messages,
+  return { record: record_view(store.records[id], store), room: room ? { ...room, messages } : null, messages, earlier,
     ...(problem ? { error: problem.message, ...failure_fields(problem) } : {}) };
 }
 
@@ -751,18 +790,25 @@ export async function wake(home, id, request_ids, deps = {}, { only = false } = 
 }
 
 /** Write this run's files and hand it to the adapter layer; the run ends through its callbacks or a failure here. */
-async function deliver_external(home, record, execution, { lockdown, software }, deps) {
-  let settled = false;
+async function deliver_external(home, record, execution, { lockdown, software, tried = { attempts: 0, refusals: [] } }, deps) {
+  let settled = false, refusals = [];
   const end = reason => {
     if (settled) return;
     settled = true;
-    finish(home, record.id, execution.id, reason, deps).catch(error => deps.log?.(error.message));
+    // A command refused for something the AI can correct (shell symbols in an inline answer): the same session is
+    // resumed with every such refusal so far, up to MAX_REFUSAL_RETRIES times.
+    const next = { attempts: tried.attempts + 1, refusals: [...tried.refusals, ...refusals] };
+    const retry = refusals.length && tried.attempts < MAX_REFUSAL_RETRIES ? () => deliver_external(home, find_record(read_store(home), record.id), execution,
+      { lockdown, software, tried: next }, deps) : null;
+    finish(home, record.id, execution.id, reason, deps, retry).catch(error => deps.log?.(error.message));
   };
-  try { await start_run(home, record, execution, { lockdown, software, end }, deps); }
+  const take_denials = denials => { refusals = correctable_refusals(denials); };
+  const resume = tried.attempts ? refusal_retry_prompt(execution.id, tried.refusals, tried.attempts) : '';
+  try { await start_run(home, record, execution, { lockdown, software, end, resume, take_denials }, deps); }
   catch (error) { end(error.message || t('执行失败')); }
 }
 
-async function start_run(home, record, execution, { lockdown, software, end }, deps) {
+async function start_run(home, record, execution, { lockdown, software, end, resume, take_denials }, deps) {
   const base = join(external_home(home), 'runtime', record.id);
   // A fresh empty folder each run: nothing of this computer is in reach of the AI's own file tools. A locked-down run
   // works in its draft folder instead (子Task5 CONTRACT §1), which holds only its own drafts.
@@ -787,27 +833,44 @@ async function start_run(home, record, execution, { lockdown, software, end }, d
     role: 'member', cwd: null, project_access: 'read', draft_directory: drafts, open_level: record.open_level, directories,
     skills: ['discuss-participant/SKILL.md', 'discuss-participant/references/room.md'].map(file => join(skills_directory, file)),
     cli, subcommands: TASK_SUBCOMMANDS, access_file: access_path, tool_lockdown: lockdown, instructions });
-  const profile = { adapter: record.ai.adapter, ...software, model: record.ai.model || software.model || '', effort: record.ai.effort, cwd: workdir, project_access: 'read' };
+  const profile = { adapter: record.ai.adapter, ...software, model: record.ai.model || software.model || '', effort: record.ai.effort, cwd: workdir, project_access: 'read',
+    ...(Object.hasOwn(record.ai, 'system_prompt') ? { system_prompt: record.ai.system_prompt } : {}) };
   const log_path = join(base, `external-${execution.id}.log`);
   const deliver = deps.deliver || (await import('./adapters/index.mjs')).deliver_task;
   const result = await deliver(profile, { session_id: record.session_id || '' }, {
     id: `external-${execution.id}`, participant: record.member, directory: base, member_directory: base, task_path, access_path,
-    draft_directory: drafts, extra_directories: [], skill_directories: [skills_directory], prompt, profile, images: [],
+    draft_directory: drafts, extra_directories: [], skill_directories: [skills_directory], prompt: resume || with_expert_prompt(prompt, profile), profile, images: [],
     tool_lockdown: lockdown, room_title: record.room_title,
     // For the model API: its room and repo tools go through `proxy_request` / `repo_command` with `external_access`;
     // no member credential or key is passed (CONTRACT §5.1).
     api_context: { home, site: record.site, room: record.room, mode: 'free', role: 'member', execution_id: execution.id, requests,
       read_after: execution.read_until ?? null, cwd: null, project_access: 'read', extra_directories: [], external_access: access },
     on_binding: session => bind_session(home, record.id, session),
-    on_process: () => {}, on_activity: () => {}, on_note: () => {}, on_edits: () => {}, on_denials: () => {},
+    on_process: handle => run_processes.set(execution.id, { handle, end }), on_activity: () => {}, on_note: () => {}, on_edits: () => {}, on_denials: take_denials,
     on_output: (path, chunk) => appendFileSync(log_path, chunk, { mode: 0o600 }),
     on_failure: error => end(String(error?.message || error || t('执行失败'))),
-    on_exit: () => end(''),
+    // The adapter names an operation its rules refused (a run that cannot ask ends right after). The full text names
+    // this computer's paths and the refused command, so it stays here; the inviting room hears only that it was refused.
+    on_exit: denial => end(denial ? { local: t('{member} {denial}，未提交本次回答', { member: record.member, denial }),
+      shared: t('{member} 的操作被本机权限规则拒绝，未提交本次回答', { member: record.member }) } : ''),
   });
   if (result?.session_id) bind_session(home, record.id, result.session_id);
   // This computer cannot pass on a stop from the inviting room, nor live progress.
   await member_api(home, record.id, 'POST', MEMBER_API.execution(record.room, execution.id), { action: 'delivery', stoppable: false, progress: false }, deps)
     .catch(error => deps.log?.(error.message));
+}
+
+// The software process of each run in this service, by execution: stopped when the inviting room has closed the execution
+// while the process stays (it answered, or the run was cancelled there, yet the software never exits).
+const run_processes = new Map();
+
+/** The inviting room no longer has this execution open: stop what still runs here and settle it as it ended there. */
+async function settle_closed_run(home, id, execution_id, deps) {
+  const run = run_processes.get(execution_id);
+  try { run?.handle?.kill?.(); } catch (error) { deps.log?.(error.message); }
+  // The run's own ending settles it once, whichever comes first; a run this service did not start is settled here.
+  if (run) run.end('');
+  else await finish(home, id, execution_id, '', deps);
 }
 
 function bind_session(home, id, session_id) {
@@ -821,7 +884,16 @@ function bind_session(home, id, session_id) {
  * as a note); still open there → failed, and the room is told why, as the room runner does; closed there without an
  * answer (cancelled, retracted) → ended.
  */
-async function finish(home, id, execution_id, reason, deps) {
+/** The last part of a run's output on this computer, without terminal colour codes; empty when it wrote nothing. */
+function run_output(home, id, execution_id) {
+  const path = join(external_home(home), 'runtime', id, `external-${execution_id}.log`);
+  if (!existsSync(path)) return '';
+  const text = readFileSync(path, 'utf8').replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').trim();
+  return text.length > OUTPUT_TAIL ? `…${text.slice(-OUTPUT_TAIL)}` : text;
+}
+
+async function finish(home, id, execution_id, reason, deps, retry = null) {
+  run_processes.delete(execution_id);
   change_record(home, id, record => { if (record.running?.execution_id === execution_id) record.running = null; });
   const record = read_store(home).records[id];
   const answers = await member_api(home, id, 'GET', `${MEMBER_API.messages(record.room)}?${new URLSearchParams({ author: record.member })}`, undefined, deps)
@@ -831,13 +903,24 @@ async function finish(home, id, execution_id, reason, deps) {
   const inbox = answered ? null : await member_api(home, id, 'GET', MEMBER_API.inbox(record.room), undefined, deps).catch(() => null);
   // Unknown (the other computer not reachable) counts as open, so the failure is reported once it can be.
   const open = !answered && (!inbox || (inbox.executions || []).some(item => item.id === execution_id));
+  // Still open without an answer, and the AI can correct what was refused: it runs again in the same session first.
+  if (open && !answered && retry) {
+    change_record(home, id, (current, now) => {
+      current.running = { execution_id, started_at: now, last_renew: deps.now?.() ?? now };
+      remember(current, { execution_id, outcome: 'woken', message_ids: [], note: 'refusal_retry' }, now);
+    });
+    return retry();
+  }
   const outcome = answered ? 'answered' : open ? 'failed' : 'ended';
-  const text = reason || t('{member} 会话已结束，但未提交本次回答', { member: record.member });
-  change_record(home, id, (current, now) => remember(current, { execution_id, outcome,
+  // `reason` is one text for both sides, or `{ local, shared }` when what this computer keeps must not leave it.
+  const { local = reason, shared = reason } = reason && typeof reason === 'object' ? reason : {};
+  const text = local || t('{member} 会话已结束，但未提交本次回答', { member: record.member });
+  const output = answered ? '' : run_output(home, id, execution_id);
+  change_record(home, id, (current, now) => remember(current, { execution_id, outcome, ...(output ? { output } : {}),
     ...(answer ? { answer: { id: answer.id, author: String(answer.author || record.member), text: clip(answer.text) } } : {}),
-    ...(reason ? { reason } : open ? { reason: text, reason_text: { template: '{member} 会话已结束，但未提交本次回答', params: { member: record.member } } } : {}) }, now));
+    ...(local ? { reason: local } : open ? { reason: text, reason_text: { template: '{member} 会话已结束，但未提交本次回答', params: { member: record.member } } } : {}) }, now));
   if (!open) return;
-  try { await member_api(home, id, 'POST', MEMBER_API.execution(record.room, execution_id), { action: 'fail', reason: text.slice(0, 400) }, deps); }
+  try { await member_api(home, id, 'POST', MEMBER_API.execution(record.room, execution_id), { action: 'fail', reason: (shared || text).slice(0, 400) }, deps); }
   catch (error) { if (error.status !== 409) deps.log?.(t('未能向对方上报执行 #{execution} 的结束：{reason}', { execution: execution_id, reason: error.message })); }
 }
 
@@ -879,7 +962,13 @@ export async function poll_record(home, id, deps = {}) {
   await report_ai(home, record, deps);
   if (record.running) {
     if (now - record.running.last_renew < RENEW_MS) return { running: record.running.execution_id };
-    await member_api(home, id, 'POST', MEMBER_API.execution(record.room, record.running.execution_id), { action: 'renew' }, deps);
+    try { await member_api(home, id, 'POST', MEMBER_API.execution(record.room, record.running.execution_id), { action: 'renew' }, deps); }
+    catch (error) {
+      // 409: the execution is closed there (answered, cancelled, retracted) while the process here never ended.
+      if (error.status !== 409) throw error;
+      await settle_closed_run(home, id, record.running.execution_id, deps);
+      return { running: null, settled: record.running.execution_id };
+    }
     change_record(home, id, current => { if (current.running) current.running.last_renew = now; });
     return { running: record.running.execution_id, renewed: true };
   }
@@ -909,15 +998,16 @@ export async function poll_record(home, id, deps = {}) {
   return { approval: approval.id };
 }
 
-/** Pull for every active record in the service until stopped; one record's failure never holds up the others. */
+/**
+ * Pull for every active record in the service until stopped. Records are pulled side by side, since each pull crosses
+ * the relay several times; one record's failure never holds up the others.
+ */
 export function start_external_client(home, { log = () => {}, signal, deps = {} } = {}) {
   const loop = async () => {
     while (!signal?.aborted) {
       const ids = Object.values(read_store(home).records).filter(record => record.status === 'active' || record.leave_pending).map(record => record.id);
-      for (const id of ids) {
-        try { await poll_record(home, id, { log, ...deps }); }
-        catch (error) { if (!error.offline) log(t('被邀请房间 {id} 拉取失败：{reason}', { id, reason: error.message })); }
-      }
+      await Promise.all(ids.map(id => poll_record(home, id, { log, ...deps })
+        .catch(error => { if (!error.offline) log(t('被邀请房间 {id} 拉取失败：{reason}', { id, reason: error.message })); })));
       await new Promise(done => { const timer = setTimeout(done, POLL_MS); signal?.addEventListener('abort', () => { clearTimeout(timer); done(); }, { once: true }); });
     }
   };
@@ -960,7 +1050,7 @@ export function external_route(room, method, path, body) {
 export async function proxy_request(home, request, deps = {}) {
   const access = external_access(request.access);
   const record = find_record(read_store(home), access.record);
-  if (record.status !== 'active') return { status: 403, body: { error: t('已退出这个被邀请的房间') } };
+  if (record.status !== 'active') return { status: 403, body: { error: t('已退出这个外部房间') } };
   const path = String(request.path || '');
   const target = access.room === record.room && !path.includes('..') && ['GET', 'POST'].includes(request.method)
     ? external_route(record.room, request.method, path, request.body) : null;
@@ -1033,13 +1123,13 @@ function print_record(record) {
   return lines.join('\n');
 }
 
-const HELP = () => t(`被邀请的房间（本机 AI 作为外部成员参加另一台电脑上的房间）
+const HELP = () => t(`外部房间（本机 AI 作为外部成员参加另一台电脑上的房间）
 
 用法：
-  codiscuss join <链接|配对码> [--site 站点] [--machine 电脑编号] --adapter 软件 [--model M] [--effort E]
+  codiscuss join <链接|配对码> [--site 站点] [--machine 电脑编号] --adapter 软件 [--model M] [--effort E] [--session 会话] [--prompt 提示词]
   codiscuss invited list
   codiscuss invited trust ID auto|ask [--unconfined|--confined]
-  codiscuss invited ai ID [--adapter 软件] [--model M] [--effort E]
+  codiscuss invited ai ID [--adapter 软件] [--model M] [--effort E] [--prompt 提示词]
   codiscuss invited pause ID | resume ID
   codiscuss invited approve ID 待确认编号 | refuse ID 待确认编号
   codiscuss invited leave ID
@@ -1047,7 +1137,8 @@ const HELP = () => t(`被邀请的房间（本机 AI 作为外部成员参加另
   codiscuss invited room ID
 
 被点名时：auto 直接回答；ask 每次先问你。
-在这台电脑上：默认只在房间里发言（只能运行共议命令）；--unconfined 不受限，可读本机文件、联网。
+本机权限：默认只在房间里发言（只能运行共议命令）；--unconfined 不受限，可读本机文件、联网。
+--session 续接这个软件已有的会话（带着原上下文加入）；--prompt 只发给它的专属提示词，空字符串表示不用软件预设。
 同意后由本机服务唤醒 AI，请保持 codiscuss 服务运行。加 --json 输出 JSON。
 `);
 
@@ -1066,6 +1157,7 @@ export async function external_main(command, args, { home, deps = {}, write = te
   const service = home || (await import('./discussion_service.mjs')).service_home();
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     site: { type: 'string' }, machine: { type: 'string' }, adapter: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' },
+    session: { type: 'string' }, prompt: { type: 'string' },
     label: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     unconfined: { type: 'boolean' }, confined: { type: 'boolean' },
     'access-file': { type: 'string' }, root: { type: 'string' }, offset: { type: 'string' }, limit: { type: 'string' }, 'max-bytes': { type: 'string' },
@@ -1083,9 +1175,10 @@ export async function external_main(command, args, { home, deps = {}, write = te
     return out(await repo_command(service, op, options, load_access(values['access-file']), deps));
   }
   if (values.help || (command === 'invited' && !positionals.length) || (command === 'join' && !positionals.length)) return write(HELP());
-  const ai = { ...(values.adapter ? { adapter: values.adapter } : {}), ...(values.model !== undefined ? { model: values.model } : {}), ...(values.effort !== undefined ? { effort: values.effort } : {}) };
+  const ai = { ...(values.adapter ? { adapter: values.adapter } : {}), ...(values.model !== undefined ? { model: values.model } : {}), ...(values.effort !== undefined ? { effort: values.effort } : {}),
+    ...(values.prompt !== undefined ? { system_prompt: values.prompt } : {}) };
   let result;
-  if (command === 'join') result = await join_invite(service, { invite: positionals[0], site: values.site, machine: values.machine, label: values.label, ...ai }, deps);
+  if (command === 'join') result = await join_invite(service, { invite: positionals[0], site: values.site, machine: values.machine, label: values.label, ...(values.session ? { session_id: values.session } : {}), ...ai }, deps);
   else {
     const [verb, id, extra] = positionals;
     const action = { list: 'invited-list', trust: 'invited-trust', ai: 'invited-ai', pause: 'invited-pause', resume: 'invited-pause', approve: 'invited-approve',
@@ -1099,7 +1192,7 @@ export async function external_main(command, args, { home, deps = {}, write = te
     result = await invited_command(service, action, input, deps);
   }
   if (values.json) return out(result);
-  if (result.records) return write(`${result.records.length ? result.records.map(print_record).join('\n') : t('还没有被邀请的房间')}\n`);
+  if (result.records) return write(`${result.records.length ? result.records.map(print_record).join('\n') : t('还没有外部房间')}\n`);
   if (result.removed) return write(`${t('已删除这条被邀请记录')}\n`);
   return write(`${print_record(result.record)}${result.record?.leave_pending ? `\n${t('暂时连不上对方电脑，常驻服务会继续通知它；通知送达或成员资格到期后删除本机密钥')}` : ''}${result.error ? `\n${t('读不到对方房间：{reason}', { reason: result.error })}` : ''}\n`);
 }

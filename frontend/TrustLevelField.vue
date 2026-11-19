@@ -23,8 +23,8 @@ const disabled = (option) => option.value && Boolean(props.confine_reason);
       </div>
     </div>
     <div class="trust-row">
-      <span class="trust-label">{{ t("在这台电脑上") }}</span>
-      <div class="trust-segments" role="radiogroup" :aria-label="t('在这台电脑上')">
+      <span class="trust-label" :title="t('你的 AI 在这台电脑上能做什么：只用共议命令在对方房间里发言，或像平时一样读写本机文件、联网。')">{{ t("本机权限") }}</span>
+      <div class="trust-segments" role="radiogroup" :aria-label="t('本机权限')">
         <button v-for="option in SCOPES" :key="String(option.value)" type="button" role="radio" :aria-checked="value.confined === option.value" :class="{ 'is-selected': value.confined === option.value }"
           :disabled="disabled(option)" :title="disabled(option) ? confine_reason : undefined" @click="set({ confined: option.value })">{{ option.label }}</button>
       </div>

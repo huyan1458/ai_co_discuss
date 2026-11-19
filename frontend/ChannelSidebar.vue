@@ -2,6 +2,7 @@
 import { computed, inject, ref } from "vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
 import InvitedRooms from "./InvitedRooms.vue";
+import { use_invited_rooms } from "./external-members.js";
 import { use_workflow_library, workflow_problem } from "./workflow-library.js";
 import { t } from "./i18n.js";
 
@@ -24,10 +25,13 @@ function open_workflow(id) {
 /** New or import from the heading's "+", then close the drawer once the page shows the draft. */
 const add_items = library.add_items.map((group) => group.map((item) => ({ ...item, onSelect: () => { item.onSelect(); emit("workflows"); } })));
 const app_version = __APP_VERSION__;
+const invited_open = use_invited_rooms().page_open;
 // The open tab, or null without a room: the links (and the menu) rebuild only when it changes, not on every view publish.
-const link_state = computed(() => view.value.room ? `${view.value.tab}:${page_open.value}` : null);
-// The room's views wait for a room.
+const link_state = computed(() => invited_open.value ? "invited" : view.value.room ? `${view.value.tab}:${page_open.value}` : null);
+// The room's views wait for a room. An invited room has only its messages: the other room's private chats, runs, settings
+// and files are not this computer's to open, so those stay disabled rather than switching to a room of this computer.
 const view_links = computed(() => { const tab = link_state.value; return props.tabs.map((item) => {
+  if (tab === "invited") return { ...item, active: item.value === "discussion", disabled: item.value !== "discussion", onSelect: () => {} };
   const usable = tab !== null;
   return { ...item, active: usable && !page_open.value && view.value.tab === item.value, disabled: !usable || item.disabled, onSelect: () => emit("tab", item.value) };
 }); });

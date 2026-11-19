@@ -35,9 +35,22 @@ function notify(level, message) {
   toast.add({ title: message, color: level === "error" ? "error" : level === "warning" ? "warning" : "success", duration: level === "error" ? 6000 : 3000 });
 }
 
+// The state leaves out the entry's checks over the network (the relay can take seconds), so the page shows at once and
+// the entry's ways are filled in when their check answers; only the latest check is kept.
+let entry_check = 0;
+async function check_entry() {
+  const check = ++entry_check;
+  try { const entry = await call("entry"); if (check === entry_check && entry) state.value = { ...state.value, entry }; }
+  catch (failure) { if (check === entry_check) notify("error", failure.message); }
+}
+
 async function reload() {
   loading.value = true;
-  try { state.value = await call("state"); return true; }
+  try {
+    state.value = await call("state");
+    if (state.value.hosting) check_entry(); else entry_check += 1;
+    return true;
+  }
   catch (failure) { notify("error", failure.message); return false; }
   finally { loading.value = false; ready.value = true; }
 }

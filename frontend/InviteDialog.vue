@@ -3,7 +3,6 @@
 import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import ExpertCard from "./ExpertCard.vue";
 import ExternalExpertCard from "./ExternalExpertCard.vue";
-import ExternalInviteCard from "./ExternalInviteCard.vue";
 import PlatformConfigDialog from "./PlatformConfigDialog.vue";
 import RosterAdd from "./RosterAdd.vue";
 import { room_operations, runner_text, seat_options } from "./external-members.js";
@@ -28,9 +27,9 @@ async function copy_launch(name) {
 // Everyone picked for one invitation, one card per platform: [{ name, mode }].
 const invite_picks = ref([]);
 let invite_pick_seq = 0;
-// External expert cards among the picks, each `{ id, draft }`; 邀请 adds their seats, and each seat's link then
-// shows in place of the cards.
-const external_drafts = ref([]), external_seats = ref([]);
+// External expert cards among the picks, each `{ id, draft }`; 邀请 adds their seats awaiting check-in. The link is
+// shared later from the seat's 邀请详情 above the composer, as a manual member's launch instruction is.
+const external_drafts = ref([]);
 let external_seq = 0;
 const room_directories = computed(() => {
   const models = view.value.launch.room_models;
@@ -83,7 +82,6 @@ watch(inviting, async (open) => {
   invite_workflow.value = null;
   invite_picks.value = [];
   external_drafts.value = [];
-  external_seats.value = [];
   invite_tried.value = false;
   invited_manual.value = [];
   if (props.workflowId) await choose_workflow(props.workflowId);
@@ -198,7 +196,7 @@ async function submit_invitation() {
     if (!await act("enable_room_workflow", { id: workflow.id, members: workflow.members })) return await refresh_after(invited_any);
     invite_workflow.value = null;
   }
-  if (!invite_picks.value.length && !invited_manual.value.length && !external_seats.value.length) inviting.value = false;
+  if (!invite_picks.value.length && !invited_manual.value.length) inviting.value = false;
   await refresh_after(invited_any);
 }
 
@@ -207,9 +205,7 @@ async function add_external_seats() {
   let added = false;
   for (const item of [...external_drafts.value]) {
     try {
-      const options = seat_options(item.draft, room_directories.value);
-      const result = await room_operations(bridge).create_invite(room.value.id, options);
-      external_seats.value = [...external_seats.value, { member_id: result.member_id, settings: { level: options.level, duration: options.duration, directories: item.draft.directories } }];
+      await room_operations(bridge).create_invite(room.value.id, seat_options(item.draft, room_directories.value));
       external_drafts.value = external_drafts.value.filter((entry) => entry !== item);
       added = true;
     } catch (error) { bridge.notify("error", runner_text(error.message)); break; }
@@ -248,7 +244,6 @@ async function refresh_after(invited_any) {
           <RosterAdd :label="t('选择 AI（可多选）')" :items="library_items" @add="add_library_item" @configure="configure_platform" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
         </template>
         <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}{{ t('：') }}{{ record(member.name)?.status === 'away' ? t('确认后请回，保留原会话') : t('已在场，沿用原成员') }}</p>
-        <ExternalInviteCard v-for="seat in external_seats" :key="seat.member_id" :member-id="seat.member_id" :settings="seat.settings" />
         <div v-if="invite_picks.length || external_drafts.length && !invite_workflow" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
             <ExpertCard :name="pick.name" :mode="pick.mode" :choices="pick.card ? ['cli'] : ['cli', 'manual']" :status="invite_status(pick.name)" :directory="view.launch.room_models?.project_directory || ''" :workflow="pick.card ? invite_workflow?.label || '' : ''" @mode="pick.mode = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
@@ -259,7 +254,7 @@ async function refresh_after(invited_any) {
         <!-- Always rendered once cards exist, so switching a card's mode never changes the dialog height. -->
         <p v-if="invite_picks.length" class="fine-print" :class="{ 'pb-invite-reserved': !(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')) }" :aria-hidden="!(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual'))">{{ t("手动启动的成员排在程序启动的成员之后加入队列。") }}</p>
         <p v-else-if="submitting" class="pb-invite-empty">{{ t("正在加入成员…") }}</p>
-        <p v-else-if="!invite_workflow && !external_drafts.length && !external_seats.length" class="pb-invite-empty">{{ t("选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。") }}</p>
+        <p v-else-if="!invite_workflow && !external_drafts.length" class="pb-invite-empty">{{ t("选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。") }}</p>
         <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available" role="alert" class="fine-print">{{ t("邀请需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
         <div class="pb-invite-footer">
           <UButton :label="t('取消')" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />

@@ -219,6 +219,8 @@ export async function revoke_member(bridge, act, room_id, member) {
 
 // A reads its records this often while the local service is reachable: a default-level request waits for an answer.
 const INVITED_POLL_MS = 5000;
+/** The id the middle page is opened on while a join is still under way (the record has no id yet). */
+export const PENDING_JOIN_ID = "pending-join";
 let invited = null;
 
 /** A's invited records, shared by the sidebar, the middle page and the rail; created on first use. */
@@ -297,13 +299,13 @@ export function invited_items(record, messages = []) {
     if (entry.execution_id) {
       const run = runs.get(entry.execution_id) || { at: entry.at, message_ids: [], outcome: "running", reason: "", reason_text: null };
       run.message_ids.push(...(entry.message_ids || []));
-      if (entry.outcome !== "woken") Object.assign(run, { outcome: entry.outcome === "ended" ? "finished" : entry.outcome, reason: entry.reason || "", reason_text: entry.reason_text || null });
+      if (entry.outcome !== "woken") Object.assign(run, { outcome: entry.outcome === "ended" ? "finished" : entry.outcome, reason: entry.reason || "", reason_text: entry.reason_text || null, output: entry.output || "" });
       runs.set(entry.execution_id, run);
     } else if (!["ended", "left"].includes(entry.outcome)) others.push(entry);
   }
   const running = record.running?.execution_id;
   const history = [
-    ...[...runs].map(([id, run]) => item(`e${id}`, run.at, id === running ? "running" : run.outcome, run.message_ids, { execution_id: id, reason: run.reason, reason_text: run.reason_text })),
+    ...[...runs].map(([id, run]) => item(`e${id}`, run.at, id === running ? "running" : run.outcome, run.message_ids, { execution_id: id, reason: run.reason, reason_text: run.reason_text, output: run.output || "" })),
     ...others.map((entry, index) => item(`h${index}`, entry.at, entry.outcome, entry.message_ids, { reason: entry.reason || "", reason_text: entry.reason_text || null })),
   ].sort((a, b) => time_ms(b.at) - time_ms(a.at));
   const waiting = (record.approvals || []).map((approval) => item(`a${approval.id}`, approval.received_at, "waiting", approval.message_ids, { by: approval.created_by }));
@@ -328,7 +330,8 @@ function create_invited({ view, bridge }) {
   const room_me = ref({});
   // The texts last read for each record, shown at once when it is opened again.
   const room_messages = new Map();
-  // The invitation being accepted, listed in the sidebar while its answer crosses the relay.
+  // The invitation being accepted, listed in the sidebar while its answer crosses the relay: `{ room_title, known }`,
+  // `known` being the record ids before it, so the joined record is recognised however it first arrives.
   const pending_join = ref(null);
   // Records being deleted: a list read meanwhile does not bring them back.
   const hidden = new Set();
@@ -344,6 +347,9 @@ function create_invited({ view, bridge }) {
       // Ended and left records stay: their history and why they ended remain readable. One being deleted stays out.
       records.value = (result.records || []).filter((record) => !hidden.has(record.id));
       failure.value = "";
+      // A read during the join can bring the new record before the join answers: it takes the pending row's place.
+      const joined = pending_join.value && records.value.find((record) => !pending_join.value.known.has(record.id));
+      if (joined) settle_join(joined);
       for (const record of records.value) {
         for (const approval of record.approvals || []) {
           const key = `${record.id}:${approval.id}`;
@@ -384,16 +390,27 @@ function create_invited({ view, bridge }) {
 
   const open = (id) => { selected_id.value = id; page_open.value = true; };
   const close = () => { page_open.value = false; };
+  /** The joined record replaces the pending row in place; a page opened on the pending row moves on to it. */
+  function settle_join(record) {
+    pending_join.value = null;
+    if (!records.value.some((item) => item.id === record.id)) records.value = [record, ...records.value];
+    if (selected_id.value === PENDING_JOIN_ID) selected_id.value = record.id;
+  }
   /** Join, then apply the chosen settings. */
   async function join({ trust, room_title = "", ...payload }) {
-    pending_join.value = { room_title };
+    pending_join.value = { room_title, known: new Set(records.value.map((record) => record.id)) };
     try {
       const result = await bridge.local_request(OPERATIONS.invited_join, payload);
-      if (result?.record && trust) await bridge.local_request(OPERATIONS.invited_trust, trust_payload(result.record.id, trust));
+      if (result?.record) settle_join(result.record);
+      if (result?.record && trust) {
+        patch_record(result.record.id, () => ({ wake: trust.wake, confined: trust.confined, lockdown: trust.confined }));
+        await bridge.local_request(OPERATIONS.invited_trust, trust_payload(result.record.id, trust));
+      }
       await load();
       return result || {};
     } catch (error) {
       bridge.notify("error", runner_text(error.message));
+      if (selected_id.value === PENDING_JOIN_ID) page_open.value = false;
       return null;
     } finally { pending_join.value = null; }
   }

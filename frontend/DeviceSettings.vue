@@ -65,7 +65,7 @@ async function pair() {
 }
 
 // Scanning in the page: the camera frames are read here until a pairing link shows up, then pairing starts at once.
-const { scanning, camera_ready, video, scan, stop_scan } = use_qr_camera({
+const { scanning, camera_ready, has_camera, video, scan, stop_scan } = use_qr_camera({
   accept(text) {
     const scanned = bridge.device.take_scanned(text);
     if (!scanned) return false;
@@ -154,7 +154,7 @@ const date = (time) => new Date(time).toLocaleString(locale, { month: "numeric",
       <p class="fine-print">{{ t('扫描电脑本机网页 设置 → 添加设备 的二维码，或输入配对码。') }}</p>
       <div class="device-pair-row">
         <UInput v-model="code" placeholder="XXXX-XXXX-XXXX" autocomplete="off" :maxlength="16" class="w-full" :aria-label="t('配对码')" />
-        <UButton icon="i-lucide-scan-line" color="neutral" variant="outline" class="pb-action" :aria-label="t('扫码')" :title="t('扫码')" :disabled="Boolean(busy) || scanning" :loading="scanning && !camera_ready" @click="scan" />
+        <UButton icon="i-lucide-scan-line" color="neutral" variant="outline" class="pb-action" :aria-label="t('扫码')" :title="has_camera ? t('扫码') : t('这台设备没有相机，请输入配对码')" :disabled="Boolean(busy) || scanning || !has_camera" :loading="scanning && !camera_ready" @click="scan" />
       </div>
       <div v-if="scanning" class="device-scan">
         <p v-if="!camera_ready" class="fine-print" role="status">{{ t('正在打开相机…') }}</p>

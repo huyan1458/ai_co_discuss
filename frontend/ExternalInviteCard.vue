@@ -67,7 +67,21 @@ async function copy(kind, text) {
   clearTimeout(copy_timer);
   copy_timer = setTimeout(() => { copied.value = ""; }, COPY_FEEDBACK_MS);
 }
-onUnmounted(() => clearTimeout(copy_timer));
+// A link lasts 10 minutes: once it lapses while shown, a new one replaces it (voiding nothing usable), as long as the seat
+// still awaits check-in. Generating fails without a bound site; that is told once, not retried in a loop.
+const EXPIRY_GRACE_MS = 1000;
+let refresh_timer = 0;
+watch(invite, (value) => {
+  clearTimeout(refresh_timer);
+  if (!value?.url) return;
+  refresh_timer = setTimeout(refresh_expired, Math.max(0, time_ms(value.expires_at) - Date.now()) + EXPIRY_GRACE_MS);
+}, { immediate: true });
+async function refresh_expired() {
+  if (!seat_id.value || busy.value) return;
+  const seat = await operations.member(room.value.id, seat_id.value).catch(() => null);
+  if (seat?.claimed_at === 0 && seat.status !== "removed") generate();
+}
+onUnmounted(() => { clearTimeout(copy_timer); clearTimeout(refresh_timer); });
 const date = (value) => bridge.format_time(time_ms(value));
 const leaf = (path) => path.split(/[\\/]/).filter(Boolean).pop() || path;
 // Ties each segmented control to its visible label.

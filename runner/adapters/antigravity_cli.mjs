@@ -39,7 +39,23 @@ export function agy_denial(step) {
   }
   const command = String(parameters.CommandLine || '');
   const rule = `${kind === 'unsandboxed' ? 'unsandboxed_command' : 'command'}(${command})`;
-  return { tool: step.tool_name || 'run_command', detail: command.slice(0, DENIAL_FIELD), rule: command && rule.length <= DENIAL_FIELD ? rule : '' };
+  return { tool: step.tool_name || 'run_command', detail: command.slice(0, DENIAL_FIELD), rule: command && rule.length <= DENIAL_FIELD ? rule : '',
+    ...symbol_hint(command) };
+}
+
+// What `agy_rule` refuses inside a codiscuss command: shell separators and expressions, and line breaks.
+const SHELL_SYMBOLS = /[;&|<>$`()\r\n]/g;
+
+/**
+ * A codiscuss command refused only for the shell symbols in it, most often an inline --body answer carrying backticks or
+ * brackets: `retry_hint` tells the member what to change, so the runner can let it correct the command (2026-11-19).
+ */
+function symbol_hint(command) {
+  if (!/^codiscuss(\.cmd)?\s/.test(command)) return {};
+  const symbols = [...new Set(command.match(SHELL_SYMBOLS) || [])].map(item => (item === '\n' || item === '\r' ? '换行' : item));
+  if (!symbols.length) return {};
+  return { retry_hint: `命令含有 ${[...new Set(symbols)].join(' ')}，codiscuss 命令里不能出现反引号、英文括号、$、;、&、|、<、> 或换行，`
+    + '会被当作拼接其他命令而拒绝。若是 --body 的正文含这些符号，把正文写进草稿目录的文件，改用 --body-file 提交；其他参数去掉这些符号再运行。' };
 }
 
 /** Allow only the discussion website commands, without shell separators or expressions. */

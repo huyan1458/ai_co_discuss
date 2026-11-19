@@ -16,11 +16,14 @@ const open = defineModel("open", { type: Boolean, default: false });
 const { view, bridge, act } = inject("discussion");
 const operations = room_operations(bridge);
 const room = computed(() => view.value.room);
+// The member as the room shows it now: the opener passes a snapshot, while check-in arrives with a later room read.
+const live = computed(() => [...(room.value?.free?.members || []), ...(room.value?.free?.ended_externals || [])]
+  .find((item) => item.id === props.member?.id) || props.member);
 // The member as this dialog last read it (`GET …/external-members/{id}`), else as the rail passed it: after 延长 or
 // 降为只讨论 the dialog reads again, so its header and buttons follow at once.
 const info = computed(() => detail.value ? { level: detail.value.scope === "read" ? "read" : "discuss", expires_at: time_ms(detail.value.expires_at),
   directories: (detail.value.directories || []).map((path) => String(path).split(/[\\/]/).filter(Boolean).pop() || path),
-  computer: detail.value.machine_label || "", pending: detail.value.claimed_at === 0, ended: detail.value.status === "removed" } : external_of(props.member));
+  computer: detail.value.machine_label || "", pending: detail.value.claimed_at === 0, ended: detail.value.status === "removed" } : external_of(live.value));
 const reads = ref([]), detail = ref(null), loading = ref(false), failure = ref("");
 const busy = ref(""), extend_to = ref("1h"), confirming = ref(false);
 // Inviting an ended member back: a new link brings the same member (name, label, history) back to its seat.
@@ -40,6 +43,8 @@ async function load() {
   finally { loading.value = false; }
 }
 watch(open, (value) => { if (!value) return; reads.value = []; detail.value = null; reinviting.value = props.reinvite; load(); });
+// Checked in while the invitation shows: read again, so the dialog turns into the member's details and reading record.
+watch(() => external_of(live.value)?.pending, (pending, was) => { if (open.value && was && pending === false) load(); });
 
 /** One change through the room backend; the room is read again so the rail shows it. */
 async function change(action, extra, success) {
@@ -70,7 +75,7 @@ function size(bytes) {
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="t('外部成员 · {name}', { name: member ? bridge.display_name(member.name) : '' })"
+  <UModal v-model:open="open" :title="t('外部成员 · {name}', { name: live ? bridge.display_name(live.name) : '' })"
     :description="info ? [info.computer, LEVEL_SHORT[info.level], info.ended ? t('已结束') : info.pending ? [t('待签到'), pending_expiry].join(' · ') : remaining_label(info.expires_at)].filter(Boolean).join(' · ') : ''" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
       <ExternalInviteCard v-if="detail && ((detail.claimed_at === 0 && !info?.ended) || reinviting)" :key="member.id" :member-id="member.id" :settings="{ level: detail.scope, duration: detail.duration, directories: detail.directories, invite_version: detail.invite_version }" />
@@ -79,7 +84,7 @@ function size(bytes) {
       <div v-else-if="info" class="external-member">
         <!-- What is open now, laid out like an expert card's facts: a label column and a value column. -->
         <dl class="external-member-facts">
-          <div v-if="external_ai(member)"><dt>{{ t("对方的 AI") }}</dt><dd>{{ t("{name}（对方自报）", { name: external_ai(member) }) }}</dd></div>
+          <div v-if="external_ai(live)"><dt>{{ t("对方的 AI") }}</dt><dd>{{ t("{name}（对方自报）", { name: external_ai(live) }) }}</dd></div>
           <div><dt>{{ t("对方能看到") }}</dt><dd>{{ LEVEL_SHORT[info.level] }}</dd></div>
           <div v-if="info.level === 'read'"><dt>{{ t("开放目录") }}</dt><dd :title="info.directories.join('、')">{{ info.directories.join("、") || "—" }}</dd></div>
           <div v-if="!info.pending"><dt>{{ t("剩余时间") }}</dt><dd>{{ info.ended ? t("已结束") : remaining_label(info.expires_at) || "—" }}</dd></div>

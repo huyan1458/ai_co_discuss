@@ -82,6 +82,34 @@ export function access_label(level) { return level === 'own' ? '自行决定' : 
 export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image', 'repo'];
 
 /**
+ * The limit on a quick answer given inline with --body: a run allowed only codiscuss commands refuses a command line
+ * carrying shell symbols, and PowerShell rewrites `$` and backticks inside quotes. The participant skill says the same.
+ */
+export const INLINE_BODY_RULE = '--body 的正文不能含反引号、英文括号、$、;、&、|、<、> 或换行，含这些时写草稿再用 --body-file';
+
+// How many times one execution is resumed to correct commands it can fix itself (2026-11-19 user: three).
+export const MAX_REFUSAL_RETRIES = 3;
+const REFUSED_COMMAND_SHOWN = 200;
+
+/**
+ * Which refusals a member can correct itself: the adapter's denials carrying a `retry_hint`, as `{command, hint}`.
+ */
+export const correctable_refusals = denials => (denials || []).filter(item => item.retry_hint)
+  .map(item => ({ command: String(item.detail || '').slice(0, REFUSED_COMMAND_SHOWN), hint: item.retry_hint }));
+
+/**
+ * What a member hears when the program resumes its session after refused commands: every refusal so far in this
+ * execution, oldest first, each with what to change, and how many corrections are left.
+ */
+export function refusal_retry_prompt(execution_id, refusals, attempt = 1) {
+  const listed = refusals.map((item, index) => `${index + 1}. 命令「${item.command}」被拒：${item.hint}`).join('\n');
+  const left = MAX_REFUSAL_RETRIES - attempt;
+  return `你在这次房间任务（执行 #${execution_id}，仍在进行）里的命令被本机安全规则拒绝，回答还没有提交（第 ${attempt} 次提醒，`
+    + `${left ? `之后还有 ${left} 次改正机会` : '这是最后一次改正机会'}）：\n\n${listed}\n\n`
+    + '按上面改正后接着完成，已经做完的部分不必重做，最后提交这次执行的回答。';
+}
+
+/**
  * The task text for a member woken on this computer for a room on another computer (an external member): the project
  * lives over there and is read only through `repo`; a locked-down run (`lockdown`) may run only codiscuss subcommands and
  * write only in `draft_directory`. `access_file` is the run's external access file. `directories` are what the other
@@ -96,8 +124,8 @@ export function external_task_text({ name, messages, requests = [], cli, access_
   const limits = lockdown ? `本次只能运行 ${cli} 子命令，只能在 ${draft_directory} 写草稿，不能读写其他本机文件或联网。` : '';
   const instructions = `你作为外部成员参加另一台电脑上的房间，只读对方开放的项目，不修改任何文件。命令只用 subcommands 列出的 ${cli} 子命令。${limits}${reading}`;
   const prompt = `${wake_opening(requests, name)}（来自另一台电脑上的房间），对应消息 ${messages}。${instructions}`
-    + `用 ${cli} message view 消息编号${access} 看原文，${cli} room read${access} 看房间概况。`
-    + `做完用 ${cli} message post --body-file 草稿${access} 提交一次回答（简短回答可用 --body "回答"）。房间按 Markdown 显示回答，内容较多时用分段、标题或列表排版。先读任务文件 ${task_path} 与其中列出的技能。`;
+    + `用 ${cli} message view 消息编号${access} 看原文，${cli} room view${access} 看房间概况。`
+    + `做完用 ${cli} message post --body-file 草稿${access} 提交一次回答（简短回答可用 --body "回答"；${INLINE_BODY_RULE}）。房间按 Markdown 显示回答，内容较多时用分段、标题或列表排版。先读任务文件 ${task_path} 与其中列出的技能。`;
   return { instructions, prompt };
 }
 
@@ -158,10 +186,10 @@ export function free_task_text({ name, discussion, discussion_request, profile, 
   }
   // A greeting deserves a quick answer, and reading the skills first costs it one or two model rounds.
   const access = access_file ? ` --access-file ${access_file}` : '';
-  // A one-line answer goes inline: a draft file guards long or quoted text and retries, which a greeting does not need.
   // The credential already names the room, the member and this execution, so the commands carry only what changes.
   // The message numbers are already known, so the original is one `message view` away instead of a list (#3129).
-  const quick = `问候、致谢等简单消息可跳过技能：${cli} message view 上面的消息编号${access} 看原文，${cli} message post --body "回答"${access} 回复（正文含引号时先写草稿再用 --body-file）。`;
+  // A one-line answer goes inline: a draft file guards long or symbol-laden text and retries, which a greeting does not need.
+  const quick = `问候、致谢等简单消息可跳过技能：${cli} message view 上面的消息编号${access} 看原文，${cli} message post --body "回答"${access} 回复（${INLINE_BODY_RULE}）。`;
   const opening = `${wake_opening(requests, name, discussion)}，对应消息 ${messages}。`;
   // Choosing a sub-workflow was left to the host's memory and got skipped, so every host task now asks for it (#4487).
   const route = workflow ? '本房间启用了工作流：派活或改文件之前，先读 workflow.skill_path，把这次请求对照主线和 workflow.sub_workflows 每一项的 description；命中就读它的 SKILL.md 并照做，不问要不要用，回答开头写明走的哪条；都不命中就写明按普通请求处理。' : '';

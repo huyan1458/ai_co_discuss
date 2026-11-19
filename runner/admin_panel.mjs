@@ -666,9 +666,11 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       const windows = process.platform === 'win32';
       return { hosting, version: VERSION, service: op.service_overview(data), online_site: bound_site(data)?.site || '', platform: process.platform,
         launcher: windows && existsSync(launcher_path(data)), autostart: windows && op.autostart_enabled(), login_methods: LOGIN_METHODS, providers: API_PROVIDERS,
-        ...(hosting ? { accounts: await op.list_accounts(data), clis: op.shared_cli_state(), entry: await op.entry_overview(data) }
+        ...(hosting ? { accounts: await op.list_accounts(data), clis: op.shared_cli_state(), entry: await op.entry_overview(data, { reach: false }) }
           : { accounts: [], clis: {}, entry: null }) };
     }
+    // The entry with what needs the network (the relay's reach, the tunnel's connection), asked apart so the state is quick.
+    if (method === 'GET' && section === 'entry' && !name) return hosting ? op.entry_overview(data) : null;
     // This computer: the owner's own service, its updates and login autostart.
     // The owner's site opens in the default browser (not the panel's own window), through a signed link while it is protected.
     if (method === 'POST' && section === 'service' && name === 'open') { open_browser(signed_site_url(site_url(data), data)); return { ok: true }; }
@@ -865,16 +867,20 @@ function relay_problem(relay, entry_running, service_running) {
   return '';
 }
 
-async function entry_overview(data) {
+/**
+ * The entry and its ways from outside. With `reach` off it leaves out what needs asking the relay over the network and
+ * cloudflared (`checked: false`), so the panel's state answers at once; the page then asks `GET entry` for the rest.
+ */
+async function entry_overview(data, { reach = true } = {}) {
   const { port, public_url, tunnel, relay_enabled, tunnel_enabled, relay_url } = entry_settings(data), status = await entry_status(data);
   const bound = bound_site(data);
   const relay = { url: relay_url, site: bound?.site || '', link: relay_url && bound ? `${relay_url}/?m=${bound.machine}` : '',
-    ...(relay_enabled && relay_url && bound ? await relay_status(relay_url, bound.machine) : {}) };
-  if (relay_enabled) relay.problem = relay_problem(relay, status.running, Boolean(local_status(data).running));
+    ...(reach && relay_enabled && relay_url && bound ? await relay_status(relay_url, bound.machine) : {}) };
+  if (reach && relay_enabled) relay.problem = relay_problem(relay, status.running, Boolean(local_status(data).running));
   // The address handed to people: the owner's domain when it is on (direct, and outside the Workers quota), else the relay.
   const address = tunnel_enabled && public_url ? public_url : relay_enabled ? relay.link : '';
-  return { running: status.running, port: status.running ? status.port : port, public_url, relay_enabled, tunnel_enabled, address, relay,
-    tunnel: tunnel ? { host: tunnel.host, name: tunnel.name, ...(await tunnel_status(data)) } : null };
+  return { running: status.running, port: status.running ? status.port : port, public_url, relay_enabled, tunnel_enabled, address, relay, checked: reach,
+    tunnel: tunnel ? { host: tunnel.host, name: tunnel.name, ...(reach ? await tunnel_status(data) : {}) } : null };
 }
 
 /** Make sure what a way from outside needs is there before it is turned on. */

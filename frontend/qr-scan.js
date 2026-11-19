@@ -37,11 +37,21 @@ export async function read_qr_image(file) {
  * @param {object} options
  * @param {(text: string) => boolean} options.accept Takes a code's text; true ends the scan.
  * @param {() => void} options.denied Called when the camera cannot be opened.
- * @returns {{scanning: object, camera_ready: object, video: object, scan: Function, stop_scan: Function}} The scan's state and controls.
+ * @returns {{scanning: object, camera_ready: object, has_camera: object, video: object, scan: Function, stop_scan: Function, check_camera: Function}}
+ *   The scan's state and controls; `has_camera` is false when the browser lists no camera (most desktops).
  */
 export function use_qr_camera({ accept, denied }) {
   const scanning = ref(false), camera_ready = ref(false), video = ref(null);
+  const has_camera = ref(Boolean(navigator.mediaDevices?.getUserMedia));
   let scan_version = 0, stream = null;
+
+  /** Look for a camera again; the device list names its kinds before any permission is given. */
+  async function check_camera() {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => null);
+    if (devices) has_camera.value = devices.some((device) => device.kind === "videoinput");
+  }
+  check_camera();
 
   function stop_scan() {
     scan_version++;
@@ -91,5 +101,5 @@ export function use_qr_camera({ accept, denied }) {
     read_frames();
   }
 
-  return { scanning, camera_ready, video, scan, stop_scan };
+  return { scanning, camera_ready, has_camera, video, scan, stop_scan, check_camera };
 }

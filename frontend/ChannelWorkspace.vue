@@ -451,8 +451,8 @@ function resize_nav_by_key(event) {
           </template>
           <template v-else-if="invited_page">
             <span class="channel-title-icon"><UIcon name="i-lucide-monitor-smartphone" /></span>
-            <div class="channel-title"><div class="channel-title-copy"><h1 :title="invited_record?.room_title">{{ invited_record?.room_title || t('被邀请的房间') }}</h1></div></div>
-            <span class="channel-header-context">{{ t("被邀请的房间") }}<template v-if="invited_record?.machine_name"><span>·</span>{{ invited_record.machine_name }}</template></span>
+            <div class="channel-title"><div class="channel-title-copy"><h1 :title="invited_record?.room_title">{{ invited_record?.room_title || invited_rooms.pending_join.value?.room_title || t('外部房间') }}</h1></div></div>
+            <span class="channel-header-context">{{ t("外部房间") }}<template v-if="invited_record?.machine_name"><span>·</span>{{ invited_record.machine_name }}</template></span>
           </template>
           <template v-else>
             <span class="channel-title-icon"><UIcon name="i-lucide-hash" /></span>
@@ -578,7 +578,7 @@ function resize_nav_by_key(event) {
     <USlideover v-model:open="nav_open" side="left" :title="t('房间导航')" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-navigation-drawer' }">
       <template #content><ChannelSidebar :tabs="tabs" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @invited="open_invited" @tab="choose_tab" @settings="nav_open = false; modal = 'settings'" /></template>
     </USlideover>
-    <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :content="{ onInteractOutside: keep_drawer_for_file_float }" :title="invited_page ? t('被邀请的房间') : room.title" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.host ? t('{value1} 主持', { value1: bridge.display_name(room.host) }) : ''" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
+    <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :content="{ onInteractOutside: keep_drawer_for_file_float }" :title="invited_page ? t('外部房间') : room.title" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.host ? t('{value1} 主持', { value1: bridge.display_name(room.host) }) : ''" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
       <template #body><InvitedRoomRail v-if="invited_page" drawer /><FreeBoard v-else @history="info_open = false; open_consensus()" /></template>
     </USlideover>
     <JoinInvitedDialog />

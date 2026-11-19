@@ -137,6 +137,8 @@
   "扫描电脑本机网页 设置 → 添加设备 的二维码，或输入配对码。": "Scan the QR code under Settings → Add device on the computer's local site, or enter the pairing code.",
   "配对码": "Pairing code",
   "扫码": "Scan code",
+  "这台设备没有相机，请输入配对码": "This device has no camera. Enter the pairing code.",
+  "这台设备没有相机，可选择或粘贴二维码图片": "This device has no camera. Pick or paste a QR code image.",
   "正在打开相机…": "Opening camera…",
   "相机画面": "Camera view",
   "取消": "Cancel",

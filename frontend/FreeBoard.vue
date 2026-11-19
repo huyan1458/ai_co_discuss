@@ -269,7 +269,7 @@ watch(() => [room.value.id, free.value.members], ([room_id, members]) => {
   known_external.set(room_id, new Set(ids));
   if (!seen) return;
   for (const member of members.filter((item) => external_of(item) && !awaiting_member(item) && !seen.has(item.id)))
-    bridge.notify("warning", t('{name} 经邀请加入了房间（外部 · {level}）；不是你邀请的就在成员菜单里撤销', { name: bridge.display_name(member.name), level: external_tag(member) }));
+    bridge.notify("warning", t('{name} 已加入房间，非你邀请可撤销', { name: bridge.display_name(member.name) }));
 }, { immediate: true });
 // The member whose description is open for editing; the scheduler and the host read it from the room.
 const describing = ref(""), describing_saving = ref(false);
@@ -394,8 +394,10 @@ watch(() => room.value.id, () => { starting.value = false; });
 <style scoped>
 .pb-member.is-away { opacity: .6; }
 .pb-ended-members { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
-.pb-ended-members .pb-member { display: flex; align-items: flex-start; gap: 8px; padding: 4px 8px; line-height: 1.35; font-size: 12px; }
-.pb-ended-members .pb-member-body { min-width: 0; }
+/* Same columns as a speaking-order row, with its empty place column, so avatars and names line up. */
+.pb-ended-members .pb-member { grid-template-columns: 18px auto minmax(0, 1fr) auto; gap: 8px; min-height: 0; padding: 4px 8px; }
+.pb-ended-members .pb-member::before { content: ""; }
+.pb-ended-members .pb-member-body { min-width: 0; line-height: 1.35; }
 /* A member from another computer: a dashed ring marks it apart from this computer's own AIs. */
 .pb-goal-status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .pb-goal-status.is-paused { color: var(--ui-text-muted); }

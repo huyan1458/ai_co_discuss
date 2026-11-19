@@ -1,13 +1,14 @@
 <script setup>
 /**
  * Join a room on another computer with an invitation link, typed in or read from a QR code (camera, image or pasted
- * screenshot): pick which AI of this computer goes, its model and effort, and how it answers when named (starting at
- * 直接回答 · 只在房间里发言). The same as `codiscuss join <link>`.
+ * screenshot): pick which AI of this computer goes, then set it up on its expert card (ExpertCard.vue in joining mode):
+ * software, a new or resumed conversation, model, effort, its own prompt, and its local access and how it answers when
+ * named (starting at 只在房间里发言 · 直接回答).
+ * The same as `codiscuss join <link>`.
  */
 import { computed, inject, ref, watch } from "vue";
 import RosterAdd from "./RosterAdd.vue";
-import EffortSlider from "./EffortSlider.vue";
-import TrustLevelField from "./TrustLevelField.vue";
+import ExpertCard from "./ExpertCard.vue";
 import { LEVEL_SHORT, lockdown_problem, use_invited_rooms } from "./external-members.js";
 import { read_qr_image, use_qr_camera } from "./qr-scan.js";
 import { t } from "./i18n.js";
@@ -25,9 +26,8 @@ function take_link(value) {
   text.value = link;
   return true;
 }
-const { scanning, camera_ready, video, scan, stop_scan } = use_qr_camera({ accept: take_link,
+const { scanning, camera_ready, has_camera, video, scan, stop_scan, check_camera } = use_qr_camera({ accept: take_link,
   denied: () => bridge.notify("error", t("无法打开相机：请允许本网站使用相机，或用系统相机扫码")) });
-const can_scan = Boolean(navigator.mediaDevices?.getUserMedia);
 const image_input = ref(null);
 async function read_image(file) {
   if (!take_link(await read_qr_image(file))) bridge.notify("warning", t("这张图片里没有识别到邀请二维码"));
@@ -53,6 +53,7 @@ function default_platform() {
 }
 watch(open, (value) => {
   if (!value) return stop_scan();
+  check_camera();
   text.value = invited.join_text.value;
   if (!platform.value) {
     const name = default_platform();
@@ -66,13 +67,9 @@ function choose(name) {
   platform.value = name;
   bridge.load_launch_models(name);
 }
-// Model and effort are the platform's own launch settings, the same ones its expert card sets.
+// Software, model and effort are the platform's own launch settings, set on its expert card as elsewhere.
 const profile = computed(() => (platform.value && view.value.launch.profiles[platform.value]) || {});
-const model = computed({ get: () => profile.value.model || "__default__", set: (value) => bridge.write_launch_model(platform.value, value) });
-const effort = computed({ get: () => profile.value.effort || "", set: (value) => bridge.write_launch(platform.value, "effort", value) });
-const models = computed(() => platform.value && view.value ? bridge.launch_model_state(platform.value) : null);
-const model_items = computed(() => models.value?.items || []);
-const effort_items = computed(() => [{ value: "", label: t("默认强度") }, ...(models.value?.efforts || []).map((value) => ({ value, label: value }))]);
+const card_status = computed(() => bridge.platform_configured(platform.value) ? { text: t("已配置本机软件"), tone: "ready" } : { text: t("待补齐接入配置"), tone: "warn" });
 // The link alone says where the inviting computer is and carries its key fingerprint.
 const is_link = computed(() => /^https?:\/\//i.test(text.value.trim()));
 // Software that cannot be confined to codiscuss commands can only run unrestricted: choosing it switches to 不受限, and
@@ -107,8 +104,12 @@ async function submit() {
   const link = text.value.trim();
   open.value = false;
   const result = await invited.join({ invite: link, room_title: link_room_title(link),
-    adapter: profile.value.adapter, model: profile.value.model || "", effort: profile.value.effort || "", trust: trust.value });
+    adapter: profile.value.adapter, model: profile.value.model || "", effort: profile.value.effort || "", trust: trust.value,
+    ...(profile.value.session_id ? { session_id: profile.value.session_id } : {}),
+    ...(Object.hasOwn(profile.value, "system_prompt") ? { system_prompt: profile.value.system_prompt } : {}) });
   if (!result) return invited.start_join(link);
+  // The resumed conversation now belongs to the joined record; this software's next card starts a new one.
+  if (profile.value.session_id) bridge.write_launch(platform.value, "session_id", null);
   bridge.notify("info", t("已加入「{room}」", { room: result.record?.room_title || "" }));
   if (result.record?.id) invited.open(result.record.id);
 }
@@ -122,7 +123,7 @@ async function submit() {
         <UFormField :label="t('邀请链接')">
           <div class="join-invited-link">
             <UInput v-model="text" class="w-full" :placeholder="t('粘贴邀请链接或二维码截图')" autocomplete="off" inputmode="url" />
-            <UButton v-if="can_scan" icon="i-lucide-scan-line" color="neutral" variant="outline" :aria-label="t('扫码')" :title="t('扫码')" :disabled="scanning" :loading="scanning && !camera_ready" @click="scan" />
+            <UButton icon="i-lucide-scan-line" color="neutral" variant="outline" :aria-label="t('扫码')" :title="has_camera ? t('扫码') : t('这台设备没有相机，可选择或粘贴二维码图片')" :disabled="scanning || !has_camera" :loading="scanning && !camera_ready" @click="scan" />
             <UButton icon="i-lucide-image" color="neutral" variant="outline" :aria-label="t('选择二维码图片')" :title="t('选择二维码图片')" @click="image_input?.click()" />
             <input ref="image_input" type="file" accept="image/*" hidden @change="pick_image" />
           </div>
@@ -136,13 +137,9 @@ async function submit() {
         <p v-else-if="LEVEL_SHORT[offered.level]" class="fine-print" role="note">{{ t("对方开放：{level}", { level: LEVEL_SHORT[offered.level] }) }}</p>
         <RosterAdd :label="t('派哪个 AI')" :items="items" @add="choose" />
         <p v-if="!platforms.length && invited.available.value" class="fine-print" role="note">{{ t("这台电脑还没有可派出的 AI 软件，请先在设置里配置。") }}</p>
-        <template v-if="platform">
-          <UFormField :label="t('模型')">
-            <USelect v-model="model" :items="model_items" class="w-full" :loading="models?.loading" :placeholder="t('软件默认模型')" />
-          </UFormField>
-          <EffortSlider v-if="effort_items.length > 1" v-model="effort" :items="effort_items" :label="t('强度')" />
-        </template>
-        <TrustLevelField v-model="trust" :confine_reason="lockdown" />
+        <div v-if="platform" class="join-invited-card">
+          <ExpertCard :key="platform" :name="platform" mode="cli" :choices="['cli', 'manual']" :status="card_status" joining v-model:trust="trust" :confine_reason="lockdown" />
+        </div>
         <p v-if="lockdown" class="fine-print" role="note" :title="lockdown">{{ t("这个 AI 只能不受限运行。") }}</p>
         <p v-if="!invited.available.value" class="fine-print" role="alert">{{ t("加入需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
         <div class="join-invited-footer">
@@ -162,4 +159,6 @@ async function submit() {
 .join-invited-scan video { width: 100%; max-width: 320px; aspect-ratio: 1; object-fit: cover; border-radius: 10px; background: #000; }
 .join-invited-warning { color: var(--ui-warning, #e0a33a); }
 .join-invited-footer { display: flex; justify-content: flex-end; gap: 8px; }
+/* One card at the invite dialog's card size. */
+.join-invited-card { width: min(272px, 100%); }
 </style>

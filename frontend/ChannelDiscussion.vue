@@ -33,7 +33,7 @@ import { motion, useSpring, useTransform } from "motion-v";
 import FlipDigit from "./FlipDigit.vue";
 import { locale, t } from './i18n.js';
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
-import { declined, awaiting_member } from "./external-members.js";
+import { declined, awaiting_member, room_operations, runner_message, runner_text, seat_invites, time_ms } from "./external-members.js";
 import RequestStatus from "./RequestStatus.vue";
 
 const pending_seat = ref(null), pending_seat_open = ref(false);
@@ -1883,6 +1883,20 @@ const navigation_sections = computed(() => {
   }));
 });
 const navigation_entries = computed(() => navigation_sections.value.flatMap((section) => section.entries));
+/** Work in progress is not a message yet; it gets a pulsing tick after the messages until its answer lands. */
+const navigation_working = computed(() => transcript_messages.value.filter((item) => item.slot_card && item.working && !item.failure && !item.retry));
+
+/** Scroll a work-in-progress card to the reading line. */
+function jump_to_working(item) {
+  const element = transcript.value;
+  const card = element?.querySelector(`[id="execution-${item.id}"]`);
+  if (!card) return;
+  close_preview();
+  reader.state.following = false;
+  jump_target.value = null;
+  write_scroll(element, element.scrollTop + card.getBoundingClientRect().top - reading_top(element) - READING_OFFSET);
+  track_scroll();
+}
 
 /** The glass top bar overlays the transcript, so readable content starts below it. */
 function reading_top(element) {
@@ -1929,6 +1943,11 @@ function track_scroll() {
     return;
   }
   jump_target.value = null;
+  // At the end the last cards never reach the reading line, so the newest message is where the reader is.
+  if (near_end) {
+    active_message.value = navigation_groups.value.at(-1)?.messages.at(-1)?.id ?? null;
+    return;
+  }
   // Cards run top to bottom, so a binary search finds the first one reaching the reading line in a few measurements.
   let low = 0, high = messages.length;
   while (low < high) {
@@ -2510,6 +2529,24 @@ async function copy_launch(name) {
   launch_copied.value = name;
   launch_copy_timer = setTimeout(reset_launch_copy, COPY_FEEDBACK_MS);
 }
+/**
+ * Copy a seat's invitation link: the one this page last generated while it can still be redeemed, else a new one
+ * (which voids the old). The copied feedback shares the launch instruction's slot, keyed by the member's name.
+ */
+async function copy_seat_link(member) {
+  const room_id = room.value.id;
+  reset_launch_copy();
+  try {
+    let invite = seat_invites.get(`${room_id}:${member.id}`);
+    if (!invite?.url || time_ms(invite.expires_at) <= Date.now()) {
+      invite = await room_operations(bridge).create_invite(room_id, { member_id: member.id });
+    }
+    if (!invite.url) return bridge.notify("warning", runner_message(invite.reason_text, invite.reason));
+    if (!await bridge.execute("copy", invite.url) || room.value?.id !== room_id) return;
+    launch_copied.value = member.name;
+    launch_copy_timer = setTimeout(reset_launch_copy, COPY_FEEDBACK_MS);
+  } catch (error) { bridge.notify("error", runner_text(error.message)); }
+}
 watch([() => room.value?.id, () => speaking_turn.value?.id], reset_launch_copy);
 onBeforeUnmount(reset_launch_copy);
 
@@ -2794,6 +2831,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <button v-for="item in section.entries" :key="item.key" v-memo="[item.message, item.label, item.index, active_message === item.message.id, item.message.id === (active_message || view.messages[0]?.id), preview_index < 0 ? -1 : Math.min(Math.abs(item.index - preview_index), NAV_HOVER_REACH), preview_open && preview_entry === item.key]" type="button" class="channel-navigation-entry" :class="item.round ? 'channel-round-range' : 'channel-message-jump'" :data-author="item.round ? undefined : bridge.identities[item.message.author]?.style" :data-jump-id="item.round ? undefined : item.message.id" :data-round-jump="item.round ? item.label : undefined" :aria-label="item.label" :tabindex="!item.round && item.message.id === (active_message || view.messages[0]?.id) ? 0 : -1" :aria-current="!item.round && active_message === item.message.id ? 'location' : undefined" :aria-describedby="preview_open && preview_entry === item.key ? 'channel-navigation-preview' : undefined" @pointerenter="hover_preview(item, $event)" @pointermove="hover_preview(item, $event)" @focus="focus_preview(item, $event)" @keydown="navigate_by_key($event, item.index)" @click="activate_navigation(item, $event)">
             <span v-if="item.round" class="channel-round-number" aria-hidden="true">{{ item.number || '' }}</span>
             <span v-else class="channel-jump-tick" aria-hidden="true" :style="tick_state(item, item.index)"></span>
+          </button>
+        </div>
+        <div v-if="navigation_working.length" class="channel-map-working" :style="{ '--round-message-count': navigation_working.length }">
+          <button v-for="item in navigation_working" :key="`working-${item.id}`" type="button" tabindex="-1" class="channel-navigation-entry channel-message-jump channel-working-jump" :data-author="bridge.identities[item.author]?.style" :aria-label="t('{value1} 正在处理', { value1: bridge.display_name(item.author) })" :title="t('{value1} 正在处理', { value1: bridge.display_name(item.author) })" @click="jump_to_working(item)">
+            <span class="channel-jump-tick" aria-hidden="true"></span>
           </button>
         </div>
       </div>
@@ -3230,7 +3272,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <button type="button" class="attachment-remove" :aria-label="t('移除 {value1}', { value1: file.file_name })" @click="act('remove_attachment', file.id)"><UIcon name="i-lucide-x" /></button>
             </div>
           </div>
-          <div v-for="unregistered_member in unregistered_members" :key="unregistered_member.name" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ unregistered_member.access === 'external' ? t('外部专家 · 待签到') : t('{value1} 待注册：在其会话中粘贴启动指令', { value1: bridge.display_name(unregistered_member.name) }) }}</span><UButton v-if="view.access?.can_manage && unregistered_member.access === 'external'" :label="t('邀请链接')" size="xs" color="neutral" variant="ghost" @click="pending_seat = unregistered_member; pending_seat_open = true" /><UButton v-if="view.access?.can_manage && unregistered_member.access !== 'external'" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? t('已复制') : t('复制启动指令')" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
+          <div v-for="unregistered_member in unregistered_members" :key="unregistered_member.name" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ unregistered_member.access === 'external' ? t('外部专家 · 待签到') : t('{value1} 待注册：在其会话中粘贴启动指令', { value1: bridge.display_name(unregistered_member.name) }) }}</span><UButton v-if="view.access?.can_manage && unregistered_member.access === 'external'" :label="t('邀请详情')" size="xs" color="neutral" variant="ghost" @click="pending_seat = unregistered_member; pending_seat_open = true" /><UButton v-if="view.access?.can_manage && unregistered_member.access === 'external'" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? t('已复制') : t('复制邀请链接')" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_seat_link(unregistered_member)" /><UButton v-if="view.access?.can_manage && unregistered_member.access !== 'external'" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === unregistered_member.name ? t('已复制') : t('复制启动指令')" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)" /></div>
           <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'" :label="launch_copied === speaking_member.name ? t('已复制') : t('复制启动指令')" aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)" /></div>
           <div v-if="view.reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ t('回复 #{value1}', { value1: view.reply_to }) }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="t('取消回复')" @click="act('cancel_reply')" /></div>
         </template>

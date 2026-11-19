@@ -7,7 +7,7 @@ import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, clean
 import { api as raw_api, overlapping_directories, read_rule } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
 import { capture_base, file_diffs } from './file_diff.mjs';
-import { free_task_text, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
+import { correctable_refusals, free_task_text, MAX_REFUSAL_RETRIES, refusal_retry_prompt, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
 import { entry_access, site_fetch } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
 import { image_settings } from './image_service.mjs';
@@ -515,6 +515,10 @@ export class FreeRoomRunner {
     this.replies = new Map();
     // Executions whose software reported refused operations; their last remark is not captured.
     this.denied = new Set();
+    // Execution id -> its last turn's refusals the member can correct (`correctable_refusals`), and per execution how
+    // often it was resumed with them and every such refusal so far; past MAX_REFUSAL_RETRIES it fails as before.
+    this.refusal_hints = new Map();
+    this.refusal_retries = new Map();
     // Per execution, which delivery is current: a turn stopped by a pause may report its exit after the resumed one began.
     this.generations = new Map();
     // Executions whose software failed before any turn ran, as its adapter reported; safe to deliver again.
@@ -1163,6 +1167,9 @@ export class FreeRoomRunner {
           if (denials?.length && current()) {
             this.denied.add(live());
             this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`recovery-denied:${live()}`, '1');
+            // What the adapter says the member can correct itself; the turn's end resumes it with these.
+            const refusals = correctable_refusals(denials);
+            if (refusals.length) this.refusal_hints.set(live(), refusals);
           }
           api(this.config, `/executions/${live()}`, { action: 'denials', denials }).catch(() => {});
         },
@@ -1315,6 +1322,20 @@ export class FreeRoomRunner {
       if (this.exited.has(execution.id)) {
         const latest = await api(this.config, `/executions/${execution.id}`);
         const denial = this.exited.get(execution.id);
+        const refusals = this.refusal_hints.get(execution.id);
+        this.refusal_hints.delete(execution.id);
+        const tried = this.refusal_retries.get(execution.id) || { attempts: 0, refusals: [] };
+        // A command refused for something the member can correct (shell symbols in an inline answer): resume the same
+        // session with what to change, up to MAX_REFUSAL_RETRIES times, rather than fail a turn whose answer was nearly sent.
+        if (['dispatched', 'started'].includes(latest.status) && refusals && tried.attempts < MAX_REFUSAL_RETRIES) {
+          const next = { attempts: tried.attempts + 1, refusals: [...tried.refusals, ...refusals] };
+          this.refusal_retries.set(execution.id, next);
+          this.exited.delete(execution.id);
+          this.replies.delete(execution.id);
+          this.denied.delete(execution.id);
+          this.save(member.name, { status: 'delivering', error: '' });
+          return this.invoke(member, latest, { resume: refusal_retry_prompt(execution.id, next.refusals, next.attempts) });
+        }
         // Program notices alone (failure reminder, timed check) need no reply: with nothing to handle the turn just ends.
         if (['dispatched', 'started'].includes(latest.status) && !denial && latest.requests?.length
           && latest.requests.every(item => item.purpose === 'notice')) return this.end_quiet(member.name, execution.id);
@@ -1349,7 +1370,7 @@ export class FreeRoomRunner {
    */
   async carry_on(name, old, id) {
     this.continued.set(old, id);
-    for (const map of [this.generations, this.steers, this.activity, this.replies, this.exited, this.execution_processes]) {
+    for (const map of [this.generations, this.steers, this.activity, this.replies, this.exited, this.execution_processes, this.refusal_hints, this.refusal_retries]) {
       if (map.has(old)) { map.set(id, map.get(old)); map.delete(old); }
     }
     for (const set of [this.denied, this.not_started, this.not_retryable, this.turn_ended]) if (set.delete(old)) set.add(id);

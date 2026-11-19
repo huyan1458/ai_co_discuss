@@ -414,6 +414,8 @@ export async function admin_cli(args, { client = panel_client, print = text => p
   const commands = {
     status: async () => {
       const { login_methods: _methods, providers: _providers, ...state } = await call('state');
+      // The state leaves out the entry's checks over the network; they are asked apart.
+      if (state.hosting) state.entry = await call('entry');
       return values.full ? state : summary(state);
     },
     service: () => call(`service/${need(rest[0], 'start|stop|restart')}`, {}),

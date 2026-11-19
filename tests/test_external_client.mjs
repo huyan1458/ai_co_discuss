@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 import { external_task_text, TASK_SUBCOMMANDS } from '../runner/expert_prompts.mjs';
+import { agy_denial } from '../runner/adapters/antigravity_cli.mjs';
 import { APPROVAL_TIMEOUT_MS, fingerprint_of, invite_proof, invited_command, key_id_of, member_api, MEMBER_API, parse_invite, poll_record, proxy_request,
   lockdown_launch_guard, read_store, RENEW_MS, repo_command, use_plain_secrets } from '../runner/external_client.mjs';
 
@@ -68,12 +69,15 @@ function fake_b() {
     const execution = path.match(/\/executions\/(\d+)$/);
     if (execution) {
       state.executions.push({ id: Number(execution[1]), ...body });
+      if (body.action === 'renew' && !state.open.has(Number(execution[1]))) return { status: 409, body: { error: '执行已结束' } };
       if (body.action === 'fail') state.open.delete(Number(execution[1]));
       return { status: 200, body: { id: Number(execution[1]) } };
     }
     if (path === MEMBER_API.answer(ROOM)) { state.answers.push(body); state.open.delete(body.execution_id); return { status: 201, body: { id: 77 } }; }
     if (path === MEMBER_API.ai(ROOM)) { state.ai_reports.push(body); return state.ai_refused ? { status: 404, body: { error: '地址不存在' } } : { status: 200, body: { reported: true } }; }
-    if (path === MEMBER_API.view(ROOM)) return { status: 200, body: { room: { id: ROOM }, me: state.me } };
+    if (path === MEMBER_API.view(ROOM)) return { status: 200, body: { room: { id: ROOM }, me: state.me, latest_message_id: 150 } };
+    if (path === `${MEMBER_API.messages(ROOM)}?after=50&limit=100`) return { status: 200, body: { messages: [{ id: 44, author: '用户', text: '再看' }, { id: 60, author: 'Codex', text: '别人的发言' }] } };
+    if (path === `${MEMBER_API.messages(ROOM)}?after=0&limit=43`) return { status: 200, body: { messages: [{ id: 40, author: '用户', text: '@Claude-ext 看看' }, { id: 44, author: '用户', text: '再看' }] } };
     const one = path.match(new RegExp(`^${MEMBER_API.messages(ROOM)}/(\\d+)$`));
     if (one) return { status: 200, body: { message: { id: Number(one[1]), author: '用户', text: `请求正文 ${one[1]} ` + 'x'.repeat(5000) } } };
     if (path === `${MEMBER_API.messages(ROOM)}?mention=Claude-ext`) return { status: 200, body: { messages: [{ id: 40, author: '用户', text: '@Claude-ext 看看' }, { id: 44, author: '用户', text: '再看' }] } };
@@ -285,6 +289,19 @@ test('a newly joined computer wakes when named, without asking again', async t =
   assert.deepEqual(read_store(home).records[record.id].approvals, []);
 });
 
+test('joining can resume a conversation this computer holds and carries its own prompt into each run', async t => {
+  const b = fake_b(), delivery = fake_deliver();
+  const { home, record } = await joined(t, b, { session_id: 'old-session', system_prompt: '在对方房间里说话谨慎些。' });
+  b.state.pending = [{ id: 7, message_id: 40, purpose: 'host_ask', created_by: 'host' }];
+  await poll_record(home, record.id, deps(b, delivery));
+  const [run] = delivery.runs;
+  assert.equal(run.binding.session_id, 'old-session', 'the first run resumes the picked conversation');
+  assert.equal(run.profile.system_prompt, '在对方房间里说话谨慎些。');
+  assert.ok(run.task.prompt.endsWith('在对方房间里说话谨慎些。'), 'the prompt follows the fixed task text');
+  await invited_command(home, 'invited-ai', { id: record.id, system_prompt: null });
+  assert.ok(!Object.hasOwn(read_store(home).records[record.id].ai, 'system_prompt'), 'null drops the own prompt');
+});
+
 test('default trust waits for consent; approving lets the service wake a locked-down run bound to its execution', async t => {
   const b = fake_b(), delivery = fake_deliver();
   const { home, record } = await joined_asking(t, b);
@@ -314,6 +331,30 @@ test('default trust waits for consent; approving lets the service wake a locked-
   assert.equal(read_store(home).records[record.id].running.execution_id, 100);
 });
 
+test('a run whose execution is closed there while its software never exits is stopped and settled once', async t => {
+  const b = fake_b(), delivery = fake_deliver();
+  const { home, record } = await joined(t, b);
+  await invited_command(home, 'invited-trust', { id: record.id, trust: 'trusted' });
+  b.state.pending = [{ id: 1, message_id: 10 }];
+  const start = Date.now();
+  const { execution_id } = await poll_record(home, record.id, deps(b, delivery, { now: () => start }));
+  let kills = 0;
+  delivery.runs[0].task.on_process({ kill: () => { kills += 1; } });
+  await proxy_request(home, { access: { transport: 'external', record: record.id, room: ROOM }, method: 'POST', path: `/api/rooms/${ROOM}/messages`,
+    body: { author: 'Claude-ext', text: '答完了', execution_id, submission_id: 'sub-closed', kind: 'chat' } }, { fetcher: b.fetcher });
+  const pass = await poll_record(home, record.id, deps(b, delivery, { now: () => start + RENEW_MS + 1 }));
+  assert.equal(pass.settled, execution_id);
+  assert.equal(kills, 1);
+  await wait_for(() => read_store(home).records[record.id].history.some(entry => entry.outcome === 'answered'));
+  // The process ending after the stop settles nothing twice.
+  delivery.runs[0].task.on_exit();
+  await new Promise(done => setTimeout(done, 50));
+  const after = read_store(home).records[record.id];
+  assert.equal(after.running, null);
+  assert.equal(after.history.filter(entry => entry.execution_id === execution_id && entry.outcome !== 'woken').length, 1);
+  assert.ok(!b.state.executions.some(item => item.action === 'fail'));
+});
+
 test('a running execution is renewed, and ending without an answer fails it there', async t => {
   const b = fake_b(), delivery = fake_deliver();
   const { home, record } = await joined(t, b);
@@ -340,6 +381,20 @@ test('a running execution is renewed, and ending without an answer fails it ther
   delivery.runs[1].task.on_exit();
   await wait_for(ended(home, record.id, 101));
   assert.equal(b.state.executions.filter(item => item.action === 'fail').length, 1);
+});
+
+test('a run that ends unanswered keeps the end of its output here, and the inviting room hears only the reason', async t => {
+  const b = fake_b(), delivery = fake_deliver();
+  const { home, record } = await joined(t, b);
+  b.state.pending = [{ id: 1, message_id: 10 }];
+  await poll_record(home, record.id, deps(b, delivery));
+  const { task } = delivery.runs[0];
+  task.on_output('stderr', '\u001b[31mError: not signed in to agy\u001b[0m\n');
+  task.on_exit();
+  await wait_for(reported(b, 'fail'));
+  const run = read_store(home).records[record.id].history.find(item => item.execution_id === 100 && item.outcome === 'failed');
+  assert.equal(run.output, 'Error: not signed in to agy');
+  assert.ok(!b.state.executions.find(item => item.action === 'fail').reason.includes('agy'), 'the output stays on this computer');
 });
 
 test('refusing or letting a request time out tells the inviting room it was not agreed to', async t => {
@@ -524,6 +579,54 @@ test('the external task text points the AI at repo and its own access file', () 
   assert.doesNotMatch(discuss.prompt, /repo read/);
   assert.match(discuss.prompt, /没有开放项目文件/);
   assert.match(prompt, /只能在 \/x\/drafts 写草稿/);
+  // The quick inline answer stays, with the symbols a limited run refuses on the command line spelled out.
+  assert.match(prompt, /可用 --body "回答"；--body 的正文不能含反引号、英文括号/);
+  assert.match(prompt, /codiscuss room view --access-file/, 'names a room command that exists');
+});
+
+test('agy names a codiscuss command refused for its shell symbols, with what to change', () => {
+  const refused = command => agy_denial({ state: 'ERROR', tool_name: 'run_command', tool_info: { parameters: { CommandLine: command },
+    error: { message: `permission check failed for unsandboxed "${command}": user denied permission to run command` } } });
+  const inline = refused('codiscuss.cmd message post --body "可以看 `ai_co_discuss` (只读)" --access-file C:\\x\\a.json');
+  assert.match(inline.retry_hint, /命令含有 ` \( \)/);
+  assert.match(inline.retry_hint, /--body-file/);
+  assert.equal(refused('powershell Get-Content secret.txt').retry_hint, undefined, 'other commands are refused for what they are');
+});
+
+test('a run refused for shell symbols resumes its session up to three times with what to change, then fails as before', async t => {
+  const b = fake_b(), delivery = fake_deliver();
+  const { home, record } = await joined(t, b);
+  b.state.pending = [{ id: 1, message_id: 10 }];
+  await poll_record(home, record.id, deps(b, delivery));
+  const refuse = turn => {
+    delivery.runs[turn].task.on_denials([{ tool: 'run_command', detail: `codiscuss message post --body "\`x${turn}\`"`, retry_hint: '命令含有 `，改用 --body-file' }]);
+    delivery.runs[turn].task.on_exit('运行了未授权的命令');
+  };
+  for (let turn = 0; turn < 3; turn++) {
+    refuse(turn);
+    await wait_for(() => delivery.runs.length === turn + 2);
+    assert.ok(!reported(b, 'fail')(), 'not failed while it corrects itself');
+  }
+  assert.equal(delivery.runs[1].binding.session_id, 'session-1', 'the same conversation');
+  assert.match(delivery.runs[1].task.prompt, /第 1 次提醒[\s\S]*`x0`[\s\S]*改用 --body-file/);
+  assert.match(delivery.runs[3].task.prompt, /这是最后一次改正机会[\s\S]*`x0`[\s\S]*`x1`[\s\S]*`x2`/);
+  refuse(3);
+  await wait_for(reported(b, 'fail'));
+  assert.equal(delivery.runs.length, 4, 'three corrections at most');
+});
+
+test('a run refused by its rules says so here, and the inviting room hears it without this computer\'s details', async t => {
+  const b = fake_b(), delivery = fake_deliver();
+  const { home, record } = await joined(t, b);
+  b.state.pending = [{ id: 1, message_id: 10 }];
+  await poll_record(home, record.id, deps(b, delivery));
+  delivery.runs[0].task.on_exit('运行了未授权的命令「codiscuss.cmd message post --body "C:/Users/me"」，无人值守模式下无法确认权限而被自动拒绝，随后会话结束');
+  await wait_for(reported(b, 'fail'));
+  const run = read_store(home).records[record.id].history.find(item => item.execution_id === 100 && item.outcome === 'failed');
+  assert.match(run.reason, /运行了未授权的命令「codiscuss\.cmd message post/);
+  const sent = b.state.executions.find(item => item.action === 'fail').reason;
+  assert.match(sent, /本机权限规则拒绝|permission rules/);
+  assert.ok(!sent.includes('C:/Users'), 'paths on this computer stay here');
 });
 
 /** Run discuss.py as the AI would, asynchronously: the fake website answers from this same process. */
@@ -627,12 +730,15 @@ test('approving one request claims only that one; others keep waiting for consen
   assert.deepEqual(read_store(home).records[record.id].approvals.filter(item => item.status === 'waiting').map(item => item.request_ids), [[21]]);
 });
 
-test('the room view carries requests naming this AI and its answers', async t => {
+test('the room view carries the room\'s latest messages, and earlier pages before a given message', async t => {
   const b = fake_b();
   const { home, record } = await joined(t, b);
   const view = await invited_command(home, 'invited-room', { id: record.id }, { fetcher: b.fetcher });
-  assert.deepEqual(view.messages.map(item => item.id), [40, 42, 44]);
+  assert.deepEqual(view.messages.map(item => item.id), [44, 60]);
+  assert.equal(view.earlier, true);
   assert.deepEqual(view.room.messages, view.messages);
+  const older = await invited_command(home, 'invited-room', { id: record.id, before: 44 }, { fetcher: b.fetcher });
+  assert.deepEqual([older.messages.map(item => item.id), older.earlier], [[40, 44], false]);
   assert.equal(view.room.me.name, 'Claude-ext');
 });
 

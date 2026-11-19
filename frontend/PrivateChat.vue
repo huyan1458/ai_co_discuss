@@ -55,7 +55,10 @@ const members = computed(() => {
 const member = computed(() => members.value.find((item) => item.name === private_chat.member) || members.value[0] || null);
 const name = computed(() => member.value?.name || "");
 /** Why this member cannot take a private line here, or "" when it can. */
+// An external expert runs on the other computer: its session is not here, so only its room tasks and answers show.
+const external = computed(() => Boolean(member.value && (member.value.access === "external" || member.value.external)));
 const unsupported = computed(() => !member.value ? t('房间里还没有 AI 成员')
+  : external.value ? t('外部专家在对方电脑上运行，不能在这里私聊')
   : member.value.access !== "runner" ? t('这位成员是手动接入的，请在它自己的窗口里对话')
     : !adapter_capabilities(member.value.adapter).chat ? t('这位成员的接入方式看不到它的输出，暂不支持私聊窗') : "");
 
@@ -552,7 +555,7 @@ function recall(event, step) {
       <div ref="content" class="term-content">
       <div v-if="member" class="term-welcome">
         <div><span class="term-accent">✻</span> {{ t('和') }} <b>{{ bridge.display_name(name) }}</b> {{ t('私聊') }}</div>
-        <div class="term-dim">{{ t('用它在房间里的同一个会话回答，记录只有你看得到') }}</div>
+        <div class="term-dim">{{ external ? t('它在对方电脑上运行，这里只显示它在房间里收到的任务和回答') : t('用它在房间里的同一个会话回答，记录只有你看得到') }}</div>
       </div>
       <p v-else class="term-dim">{{ t('房间里还没有 AI 成员') }}</p>
       <div v-if="loading && !shown_items.length" class="grid gap-4 py-4" role="status" :aria-label="t('正在读取私聊')"><USkeleton v-for="row in 4" :key="row" class="h-4" :class="row % 2 ? 'w-2/3' : 'w-full'" /></div>

@@ -96,7 +96,7 @@
         element("a", { class: "button primary", href: `${LOCAL_SITE}/#join=${encodeURIComponent(link)}`, text: t("用本机共议加入") }),
         copy_button,
       ]),
-      element("p", { class: "fine", text: t("按钮打开这台电脑上的共议（需已安装并运行 codiscuss）。也可以复制链接，在共议左栏“被邀请的房间”里粘贴，或运行 codiscuss join。") }),
+      element("p", { class: "fine", text: t("按钮打开这台电脑上的共议（需已安装并运行 codiscuss）。也可以复制链接，在共议左栏“外部房间”里粘贴，或运行 codiscuss join。") }),
       element("p", { class: "fine", text: t("邀请内容只在地址的 # 之后，浏览器不会把它发给网站。") }),
     ]);
   }

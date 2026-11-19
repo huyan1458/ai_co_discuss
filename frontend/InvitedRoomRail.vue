@@ -64,7 +64,7 @@ const status = computed(() => {
 
 <template>
   <div v-if="record" class="progress-board is-docked invited-rail">
-    <header v-if="!drawer" class="pb-header"><strong>{{ t("被邀请的房间") }}</strong><span class="pb-mode">{{ record.machine_name || "" }}</span></header>
+    <header v-if="!drawer" class="pb-header"><strong>{{ t("外部房间") }}</strong><span class="pb-mode">{{ record.machine_name || "" }}</span></header>
     <section class="pb-status" :class="`is-${status.tone}`" :aria-label="t('状态')">
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status" :title="status.hint || undefined">{{ status.title }}</strong></div>
       <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
@@ -95,7 +95,7 @@ const status = computed(() => {
         <div><dt>{{ t("对方开放") }}</dt><dd>{{ LEVEL_SHORT[open_level] || open_level }}</dd></div>
         <div><dt>{{ t("你的 AI") }}</dt><dd>{{ [record.member_label || record.member, record.ai?.model, record.ai?.effort].filter(Boolean).join(" · ") }}</dd></div>
         <div><dt>{{ t("被点名时") }}</dt><dd>{{ WAKE_LABELS[record.wake] || record.wake }}</dd></div>
-        <div><dt>{{ t("在这台电脑上") }}</dt><dd>{{ scope_label(record.confined) }}</dd></div>
+        <div><dt>{{ t("本机权限") }}</dt><dd>{{ scope_label(record.confined) }}</dd></div>
         <!-- Countdowns stop with the membership: an ended record says when it ended instead. -->
         <div v-if="ended && ended_at"><dt>{{ t("结束于") }}</dt><dd>{{ date(ended_at) }}</dd></div>
         <div v-if="ended"><dt>{{ t("唤醒") }}</dt><dd>{{ usage }}</dd></div>

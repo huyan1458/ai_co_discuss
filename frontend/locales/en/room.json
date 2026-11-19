@@ -493,6 +493,8 @@
   "保留全部记录；需要总结时可直接请主持人写一份。": "Keep all records; ask the host directly if you need a summary.",
   "房间里还没有 AI 成员": "No AI members in this room yet",
   "这位成员是手动接入的，请在它自己的窗口里对话": "This member is connected manually; talk in its own window",
+  "外部专家在对方电脑上运行，不能在这里私聊": "This external expert runs on the other computer; it cannot be chatted with privately here",
+  "它在对方电脑上运行，这里只显示它在房间里收到的任务和回答": "It runs on the other computer; only the room tasks it received and its answers show here",
   "这位成员的接入方式看不到它的输出，暂不支持私聊窗": "This connection does not expose output, so private chat is unavailable",
   "打断": "Interrupt",
   "{value1} · 空闲": "{value1} · Idle",

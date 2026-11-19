@@ -35,7 +35,7 @@ const HELP = t(`AI CoDiscuss CLI
   schema [COMMAND]      离线查看命令与参数
   api PATH              访问尚未封装的网站接口
   join LINK|CODE        用本机 AI 加入另一台电脑上的房间（外部成员）
-  invited COMMAND       查看被邀请的房间，调整信任等级、同意或拒绝唤醒、退出
+  invited COMMAND       查看外部房间，调整信任等级、同意或拒绝唤醒、退出
   repo COMMAND          外部成员只读查看对方电脑开放的项目
 
   codiscuss service --help

@@ -34,7 +34,10 @@ const default_way = computed(() => (ways_on.value.length > 1 ? "tunnel" : ""));
 // The relay needs this computer bound to an online site (its entry address is fetched on turning it on); the tunnel, its setup.
 const prepared = (way) => (way === "relay" ? Boolean(entry.value.relay?.site) : Boolean(entry.value.tunnel));
 // The tunnel as cloudflared reports it: connected to Cloudflare, running but not (yet) connected, or not running.
+// Shown on a way that is on until the panel's check over the network answers.
+const CHECKING = { label: t('检查中…'), tag: "is-gray", hint: "" };
 const tunnel_state = computed(() => {
+  if (!entry.value.checked) return CHECKING;
   const tunnel = entry.value.tunnel;
   if (tunnel?.connected) return { label: t('已连接'), tag: "is-green", hint: "" };
   if (tunnel?.running) return { label: t('连接中'), tag: "is-amber", hint: t('cloudflared 已运行但还没连上 Cloudflare：刚启动时稍等片刻；持续如此请检查网络与代理是否放行 *.cloudflare.com、*.argotunnel.com，日志在数据目录 tunnel.log') };
@@ -42,6 +45,7 @@ const tunnel_state = computed(() => {
 });
 // The relay as this computer sees it: usable from outside, or the first thing in the way and what to do (from the panel).
 const relay_state = computed(() => {
+  if (!entry.value.checked) return CHECKING;
   const problem = entry.value.relay?.problem || "";
   return problem ? { label: t('暂时打不开'), tag: "is-amber", hint: problem } : { label: t('可以访问'), tag: "is-green", hint: "" };
 });
