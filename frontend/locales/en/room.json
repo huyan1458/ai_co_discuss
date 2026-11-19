@@ -739,6 +739,7 @@
   "会话": "Session",
   "为 {name} 选择历史会话": "Pick a past session for {name}",
   "选中的会话由程序在后台续接，带着它已有的上下文加入房间；它工作时请不要在原窗口继续操作。": "The program resumes the picked session in the background, so it joins the room with the context it already has. While it is working, do not keep using it in its original window.",
+  "将从选中的会话分叉出新会话加入房间，保留已有上下文；原会话不变，在原软件里打开它看不到房间里的后续记录。": "A new session forked from the picked one joins the room with its existing context. The original is unchanged; opening it in the original software will not show what happens in the room.",
   "搜索标题、目录或会话 ID": "Search by title, folder or session ID",
   "搜索历史会话": "Search past sessions",
   "会话范围": "Session scope",

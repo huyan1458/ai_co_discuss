@@ -10,10 +10,10 @@
 - `workflow.missing` 是启用后才新增、还没有成员的卡片，要用时运行 `<cli> launch workflow-join --card 卡片ID …`（API 主持人请用户在右栏点工作流的“刷新”）。
 - 离开或被移除的角色不要自行请回或另找人代替，在回答里说明缺谁。
 
-`workflow.sub_workflows` 是主线之外按需使用的子工作流（如检查、试演），各有 SKILL.md 和成员卡片：请求与它的 `description` 相符、用户点名或主线写明此处用它时才用，读法同上。它的角色只在用时加入：开工前 `<cli> launch workflow-join --sub 子工作流ID …`，用完 `<cli> launch workflow-leave --sub 子工作流ID …` 设为离开（会话保留）；`workflow.members` 里带 `sub_workflow` 的成员就是它的角色。参数见 `<cli> launch workflow-join --help`。API 主持人没有命令行，请不进这些角色，在回答里说明缺谁。
+`workflow.sub_workflows` 是主线之外按需使用的子工作流（如检查、试演），各有 SKILL.md 和成员卡片：请求与它的 `description` 相符、用户点名（任务的 `named_workflows.sub_workflows` 列出它）或主线写明此处用它时才用，读法同上。它的角色只在用时加入：开工前 `<cli> launch workflow-join --sub 子工作流ID …`，用完 `<cli> launch workflow-leave --sub 子工作流ID …` 设为离开（会话保留）；`workflow.members` 里带 `sub_workflow` 的成员就是它的角色。参数见 `<cli> launch workflow-join --help`。API 主持人没有命令行，请不进这些角色，在回答里说明缺谁。
 
 ## 保存与启用
 
 用户请你把本房间的做法存成工作流（或要你按某种分工新建一套流程），或消息里写了 `$workflow-creator` 时，按 [workflow-creator](../../workflow-creator/SKILL.md) 技能做；是新建还是修改已有工作流，按用户写的内容判断。任务有 `host_workflows: true` 时，房主已允许你自行保存并启用，不必等用户导入。
 
-用户请你启用工作流库里已有的工作流（如“启用工作流「连载」（`novel-serial`）”）时：任务有 `host_workflows: true` 就运行 `<cli> launch workflow-adopt --id <工作流 ID> …`，程序启用它、邀请缺少的卡片成员，返回 `members` 和 `skill_path`；本次要接着按它做时读 `skill_path`，下一次执行起任务里有 `workflow` 字段。用户只说了启用时，回答说明已启用和带来了谁即可。没有该字段或你是 API 主持人时不能启用，请用户在“成员与设置 → 协作设置”打开“主持人完整权限”。
+用户请你启用工作流库里已有的工作流（任务的 `named_workflows.workflows` 列出它，或用户用文字说明）时：任务有 `host_workflows: true` 就运行 `<cli> launch workflow-adopt --id <工作流 ID> …`，程序启用它、邀请缺少的卡片成员，返回 `members` 和 `skill_path`；本次要接着按它做时读 `skill_path`，下一次执行起任务里有 `workflow` 字段。用户只说了启用时，回答说明已启用和带来了谁即可。没有该字段或你是 API 主持人时不能启用，请用户在“成员与设置 → 协作设置”打开“主持人完整权限”。

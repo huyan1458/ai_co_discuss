@@ -35,7 +35,7 @@
   "引用文件：{value1}": "File references: {value1}",
   "{value1} 之后仍交来了回答，未采纳：不进入记录，其他 AI 读不到。": "{value1} later submitted a reply, which was not accepted. It is excluded from the record and hidden from other AI members.",
   "本机尚未确认进程结束，可能仍在生成；网站不再接受本次回答。": "The computer has not confirmed the process stopped; it may still be generating. Replies from this run are no longer accepted.",
-  "{value1} 在自己的窗口或 App 里，本机无法停止，可能仍在生成；网站不再接受本次回答。": "{value1} is in its own window or app and cannot be stopped locally. It may still be generating; replies from this run are no longer accepted.",
+  "{value1} 在自己的窗口或 App 里，本机停不了，可能仍在生成；要立即中断，请到它的窗口或 App 里手动停止。": "{value1} runs in its own window or App and cannot be stopped from here; it may still be generating. To interrupt it now, stop it by hand in that window or App.",
   "正在停止": "Stopping",
   "等待本机服务结束进程。": "Waiting for the local service to stop the process.",
   "待投递": "Waiting to deliver",

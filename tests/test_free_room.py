@@ -235,6 +235,22 @@ class SingleMemberTests(FreeRoomTests):
             next_execution = self.reserve()[1]
             self.assertEqual(self.answer(next_execution["id"])[0], 201)
 
+    def test_an_unstoppable_turn_seen_to_end_releases_the_hold(self):
+        """A window turn the runner could not stop but followed may later be reported stopped; nothing else replaces it."""
+        member_id = self.request(self.path)[1]["free"]["members"][0]["id"]
+        self.say("开始", to=["Claude"])
+        execution = self.reserve()[1]
+        url = f"{self.path}/executions/{execution['id']}"
+        self.request(url, {"action": "delivery", "stoppable": False, "progress": True}, self.owner)
+        self.request(f"{self.path}/members/{member_id}/interrupt", {}, self.owner)
+        self.assertEqual(self.request(url, {"action": "stopped", "result": "unstoppable"}, self.owner)[0], 200)
+        self.assertEqual(self.request(url, {"action": "stopped", "result": "unconfirmed"}, self.owner)[0], 409)
+        held = lambda: self.request(self.path + "/inbox", token=self.owner)[1]["members"][0]["held_until"]
+        self.assertGreater(held(), 0)
+        self.assertEqual(self.request(url, {"action": "stopped", "result": "stopped"}, self.owner)[0], 200)
+        self.assertEqual(held(), 0)
+        self.assertEqual(self.request(url, {"action": "stopped", "result": "unstoppable"}, self.owner)[0], 409)
+
     def test_interjection_reaches_only_a_steerable_running_execution_once(self):
         """The owner's interjection waits for the runner, is idempotent by submission_id and never outlives its execution."""
         self.say("开始", to=["Claude"])
@@ -2249,6 +2265,23 @@ class HostTests(HostRoomTests):
         self.assertEqual(status, 201, final)
         self.assertEqual(final["message"]["execution_id"], carried["id"], "an answer bound to the first execution goes to the live one")
         self.assertIn(("Claude", "keep_working", "completed"), self.requests())
+
+    def test_a_late_answer_after_an_interrupted_keep_working_turn_ends_the_hold(self):
+        """A host in a window the runner cannot stop dispatches with keep_working and the owner interrupts the carried-on
+        turn: its answer, still bound to the first execution, is that turn's late answer and lets the next request go."""
+        FreeRoomTests.say(self, "让 Codex 审，你接着改")
+        first = self.reserve_for("Claude")[1]["id"]
+        self.request(f"{self.path}/executions/{first}", {"action": "delivery", "stoppable": False, "progress": True}, self.owner)
+        post = lambda **extra: self.request(f"{self.path}/messages", {"author": "Claude", "text": "派活", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": first, **extra}, self.member)
+        self.assertEqual(post(to=["Codex"], keep_working=True)[0], 201)
+        claude_id = self.member_id("Claude")
+        self.assertEqual(self.request(f"{self.path}/members/{claude_id}/interrupt", {}, self.owner)[0], 200)
+        held = lambda: next(item for item in self.request(self.path + "/inbox", token=self.owner)[1]["members"]
+                            if item["name"] == "Claude")["held_until"]
+        self.assertGreater(held(), 0, "an interrupted turn the runner cannot stop holds the next delivery")
+        self.assertEqual(post(text="改完了")[0], 409)
+        self.assertEqual(held(), 0, "the late answer shows the turn ended")
 
     def test_a_held_dispatch_keeps_its_detached_members(self):
         """At the round limit a dispatch is held with its detached members; continuing the chain sends them all."""

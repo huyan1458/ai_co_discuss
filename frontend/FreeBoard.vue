@@ -52,6 +52,10 @@ const goal_expanded = ref(false);
 const goal_dialog = ref(false);
 const current_round = computed(() => discussion.value ? room.value.current_turn?.round || (room.value.completed_rounds || 0) + 1 : 0);
 const host = computed(() => (free.value.members || []).find((member) => member.role === "host" && member.status === "active"));
+// External members that have gone stay listed, dimmed, with why: they take no requests.
+const ended_externals = computed(() => free.value.ended_externals || []);
+const ENDED_REASONS = { expired: t("已到期"), left: t("对方已退出"), revoked: t("已撤销") };
+const ended_reason = (member) => ENDED_REASONS[member.external?.end_reason] || t("已结束");
 // Shown only while in use: sending its members away ends it, and "/" starts it again.
 const workflow = computed(() => active_workflow(view.value.launch.room_models?.workflow, free.value.members));
 const in_workflow = (name) => Boolean(workflow.value?.enabled && Object.values(workflow.value.members || {}).includes(name));
@@ -238,13 +242,13 @@ function member_row_key(member, state) {
 /** The rail's quick entry to a member's actions; the room overview lays the same list out in full. */
 function member_menu(member) {
   return member_actions(member, { view: view.value, act, describe: (name) => { describing.value = name; },
-    external: (target) => { external_member.value = target; external_open.value = true; },
+    external: (target) => { external_member.value = target; external_reinvite.value = false; external_open.value = true; },
     revoke: (target) => revoke_member(bridge, act, room.value.id, target) });
 }
 
 const inviting = ref(false);
 // The external member whose dialog is open.
-const external_member = ref(null), external_open = ref(false);
+const external_member = ref(null), external_open = ref(false), external_reinvite = ref(false);
 // Remaining times count down on the rail; a minute is fine-grained enough for "剩余 N 分钟".
 const CLOCK_TICK_MS = 30_000;
 const clock = ref(Date.now());
@@ -356,6 +360,17 @@ watch(() => room.value.id, () => { starting.value = false; });
           </MemoBlock>
         </template>
       </SpeakingOrder>
+      <ul v-if="ended_externals.length" class="pb-ended-members" :aria-label="t('已离开的外部专家')">
+        <li v-for="member in ended_externals" :key="member.id" class="pb-member is-away">
+          <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+          <div class="pb-member-body">
+            <div class="pb-member-name">{{ bridge.display_name(member.name) }}</div>
+            <div class="pb-member-status is-neutral" :title="member.external?.ended_at ? bridge.format_time(member.external.ended_at * 1000) : undefined"><span class="pb-dot"></span><span class="pb-member-status-text">{{ t("已离开：{reason}", { reason: ended_reason(member) }) }}</span></div>
+          </div>
+          <UButton v-if="!room.archived" icon="i-lucide-user-round-plus" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="t('重新邀请 {name}', { name: bridge.display_name(member.name) })" :title="t('重新邀请')"
+            @click="external_member = member; external_reinvite = true; external_open = true" />
+        </li>
+      </ul>
       <UButton v-if="!room.archived" icon="i-lucide-plus" :label="t('邀请 AI 加入')" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-action-add" @click="invite_workflow_id = ''; inviting = true" />
     </section>
     <section v-if="!room.archived && !discussion && !goal" class="pb-actions pb-start-actions" :aria-label="t('操作')">
@@ -369,7 +384,7 @@ watch(() => room.value.id, () => { starting.value = false; });
   <StartDiscussionDialog v-model:open="starting" />
   <StartGoalDialog v-model:open="goal_dialog" :edit="Boolean(goal)" :initial="goal" />
   <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" :description="t('新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。')" />
-  <ExternalMemberDialog v-model:open="external_open" :member="external_member" />
+  <ExternalMemberDialog v-model:open="external_open" :member="external_member" :reinvite="external_reinvite" />
   <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
     :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
     @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
@@ -378,6 +393,9 @@ watch(() => room.value.id, () => { starting.value = false; });
 
 <style scoped>
 .pb-member.is-away { opacity: .6; }
+.pb-ended-members { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
+.pb-ended-members .pb-member { display: flex; align-items: flex-start; gap: 8px; padding: 4px 8px; line-height: 1.35; font-size: 12px; }
+.pb-ended-members .pb-member-body { min-width: 0; }
 /* A member from another computer: a dashed ring marks it apart from this computer's own AIs. */
 .pb-goal-status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .pb-goal-status.is-paused { color: var(--ui-text-muted); }

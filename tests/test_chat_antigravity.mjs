@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { listen_local } from './local_port.mjs';
-import { CHAT_TIMING } from '../runner/adapters/antigravity_app.mjs';
+import { CHAT_TIMING, ROOM_TIMING } from '../runner/adapters/antigravity_app.mjs';
 import { conversation_open_elsewhere } from '../runner/adapters/antigravity_cli.mjs';
 import { deliver_task } from '../runner/adapters/index.mjs';
 
@@ -208,4 +208,16 @@ test('stopping an App chat turn also stops its background command, or says it ma
   g.app.hold = true;
   const failed = await run_chat(g, undefined, async (result, child) => { await delay(100); child.kill(); });
   assert.match(failed.error, /已停止这一轮，但未能停止后台命令.*后台命令可能仍在运行/);
+});
+
+test('an App room task is not stopped from here but its end is heard', async t => {
+  Object.assign(ROOM_TIMING, { poll_ms: 20, read_failures: 2 });
+  const f = await fake_app(t, { turn: [response('房间任务做完')] });
+  let ended;
+  const heard = new Promise(resolve => { ended = resolve; });
+  const result = await deliver_task(f.config, { session_id: 'conv-1' }, { id: 'free-9', directory: f.root, access_path: f.access_path, prompt: 'room',
+    on_turn_end: () => ended(true) });
+  assert.deepEqual(result.capabilities, { stoppable: false, progress: false, ends: true });
+  assert.equal(await heard, true);
+  assert.ok(f.app.steps.length > 1, 'only after the new turn added its steps and the App went idle');
 });

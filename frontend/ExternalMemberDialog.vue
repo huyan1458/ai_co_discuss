@@ -10,7 +10,8 @@ import ConfirmDialog from "./ConfirmDialog.vue";
 import { DURATIONS, LEVEL_SHORT, extended_until, external_ai, external_of, remaining_label, room_operations, time_ms } from "./external-members.js";
 import { t } from "./i18n.js";
 
-const props = defineProps({ member: { type: Object, default: null } });
+// `reinvite`: opened to invite an ended member back, so its invitation shows first.
+const props = defineProps({ member: { type: Object, default: null }, reinvite: Boolean });
 const open = defineModel("open", { type: Boolean, default: false });
 const { view, bridge, act } = inject("discussion");
 const operations = room_operations(bridge);
@@ -22,6 +23,8 @@ const info = computed(() => detail.value ? { level: detail.value.scope === "read
   computer: detail.value.machine_label || "", pending: detail.value.claimed_at === 0, ended: detail.value.status === "removed" } : external_of(props.member));
 const reads = ref([]), detail = ref(null), loading = ref(false), failure = ref("");
 const busy = ref(""), extend_to = ref("1h"), confirming = ref(false);
+// Inviting an ended member back: a new link brings the same member (name, label, history) back to its seat.
+const reinviting = ref(false);
 
 async function load() {
   if (!props.member || !room.value) return;
@@ -36,7 +39,7 @@ async function load() {
   } catch (error) { failure.value = error.message; }
   finally { loading.value = false; }
 }
-watch(open, (value) => { if (!value) return; reads.value = []; detail.value = null; load(); });
+watch(open, (value) => { if (!value) return; reads.value = []; detail.value = null; reinviting.value = props.reinvite; load(); });
 
 /** One change through the room backend; the room is read again so the rail shows it. */
 async function change(action, extra, success) {
@@ -70,7 +73,7 @@ function size(bytes) {
   <UModal v-model:open="open" :title="t('外部成员 · {name}', { name: member ? bridge.display_name(member.name) : '' })"
     :description="info ? [info.computer, LEVEL_SHORT[info.level], info.ended ? t('已结束') : info.pending ? [t('待签到'), pending_expiry].join(' · ') : remaining_label(info.expires_at)].filter(Boolean).join(' · ') : ''" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
-      <ExternalInviteCard v-if="detail?.claimed_at === 0 && !info?.ended" :key="member.id" :member-id="member.id" :settings="{ level: detail.scope, duration: detail.duration, directories: detail.directories, invite_version: detail.invite_version }" />
+      <ExternalInviteCard v-if="detail && ((detail.claimed_at === 0 && !info?.ended) || reinviting)" :key="member.id" :member-id="member.id" :settings="{ level: detail.scope, duration: detail.duration, directories: detail.directories, invite_version: detail.invite_version }" />
       <!-- A seat awaiting check-in opens on its invitation: nothing else shows until that has been read. -->
       <div v-if="info?.pending && !detail && !failure" class="external-member-invite-loading" role="status" :aria-label="t('正在读取邀请')"><USkeleton class="external-member-invite-skeleton" /></div>
       <div v-else-if="info" class="external-member">
@@ -95,7 +98,8 @@ function size(bytes) {
             <UButton :label="info.pending ? t('移除席位') : t('撤销授权')" icon="i-lucide-ban" size="xs" color="error" variant="soft" :disabled="Boolean(busy)" @click="confirming = true" />
           </div>
         </section>
-        <p v-else class="external-member-ended" role="status"><UIcon name="i-lucide-circle-slash" />{{ t("这位外部成员已结束，不能再调整；需要时重新邀请。") }}</p>
+        <div v-else-if="!reinviting" class="external-member-ended" role="status"><UIcon name="i-lucide-circle-slash" /><span>{{ t("这位外部成员已结束。") }}</span>
+          <UButton v-if="!room?.archived" :label="t('重新邀请')" icon="i-lucide-user-round-plus" size="xs" color="neutral" variant="outline" class="pb-action" @click="reinviting = true" /></div>
         <section v-if="!info.pending" class="external-member-reads" :aria-label="t('读取记录')">
           <h4>{{ t("读取记录") }}</h4>
           <div v-if="loading && !reads.length" role="status" :aria-label="t('正在读取读取记录')"><USkeleton v-for="row in 3" :key="row" class="external-member-skeleton" /></div>

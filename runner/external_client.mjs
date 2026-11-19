@@ -444,19 +444,31 @@ export async function join_invite(home, input, deps = {}) {
     throw failure('join_incomplete', '对方返回的加入结果不完整');
   }
   return with_store(home, (store, secrets, now) => {
-    const id = attempt.id;
     const name = joined.machine?.name || keys.name || invite.machine_name;
-    // Accepting the invitation is the consent: a new record answers at once, confined.
     const machine = store.machines[keys.fingerprint] ||= {};
     Object.assign(machine, { machine: keys.id, site: invite.site, machine_name: name, updated_at: now });
-    store.records[id] = { id, site: invite.site, machine: keys.id, machine_name: name, machine_fingerprint: keys.fingerprint,
+    // Invited back as the same member of the same room: the record this computer still keeps carries on, with its
+    // history and settings; once deleted, a new record starts.
+    const previous = Object.values(store.records).find(record => record.id !== attempt.id && record.machine_fingerprint === keys.fingerprint
+      && record.room === joined.room.id && record.member === joined.member.name && (record.member_id ?? null) === (joined.member.id ?? null));
+    const id = previous?.id || attempt.id;
+    const fresh = { id, site: invite.site, machine: keys.id, machine_name: name, machine_fingerprint: keys.fingerprint,
       machine_key: keys.public_key, fingerprint_checked: Boolean(invite.fingerprint), room: joined.room.id, room_title: String(joined.room.name || invite.room_name),
       member: joined.member.name, member_id: joined.member.id ?? null, key_id, open_level: joined.level || invite.level || 'read',
       directories: Array.isArray(joined.directories) ? joined.directories : [],
-      expires_at: Number(joined.expires_at) ? Number(joined.expires_at) * 1000 : null, ai, ai_reported: JSON.stringify(identity), wake: 'auto', confined: true,
-      limits: null, wakes: 0, last_wake_at: null, paused: false,
-      status: 'active', contact: { at: now, state: 'online', error: '' }, approvals: [], history: [], running: null, joined_at: now };
-    secrets.get()[id] = { private_key: pair.private_key, token: joined.token };
+      expires_at: Number(joined.expires_at) ? Number(joined.expires_at) * 1000 : null, ai, ai_reported: JSON.stringify(identity),
+      limits: null, paused: false, status: 'active', contact: { at: now, state: 'online', error: '' }, approvals: [], running: null };
+    if (previous) {
+      const { end_reason, leave_pending, ...kept } = previous;
+      store.records[id] = { ...kept, ...fresh, rejoined_at: now };
+    } else {
+      // Accepting the invitation is the consent: a new record answers at once, confined.
+      store.records[id] = { ...fresh, wake: 'auto', confined: true, wakes: 0, last_wake_at: null, history: [], joined_at: now };
+    }
+    const values = secrets.get();
+    values[id] = { private_key: pair.private_key, token: joined.token };
+    // A retry of this join finds the record it ended up in.
+    values[attempt_key] = { ...values[attempt_key], id };
     secrets.changed = true;
     return { record: record_view(store.records[id], store) };
   });

@@ -779,7 +779,7 @@
   "answers 的 selected 须为选项列表": "selected in answers must be a list of options",
   "第 {item} 题不接受自由回答": "Question {item} does not take a free answer",
   "第 {item} 题是单选：选一个选项，或填写自由回答": "Question {item} takes one choice: choose an option or write a free answer",
-  "action 须为 update 或 revoke": "action must be update or revoke",
+  "action 须为 update、revoke 或 reopen": "action must be update, revoke or reopen",
   "bytes 须为 0–{limit} 的整数": "bytes must be an integer from 0 to {limit}",
   "client_id 已被使用": "This client_id is already in use",
   "directories 须为最多 {count} 个目录，每个不超过 {length} 字": "directories must list at most {count} directories of up to {length} characters each",

@@ -293,3 +293,40 @@ test('a chat turn in a window whose console is reachable is stoppable; its handl
   assert.equal(closed, true);
   assert.match(readFileSync(join(task.directory, 'claude-chat-12.log'), 'utf8'), /"type":"codiscuss.stop","terminal":"conhost","sent":true/);
 });
+
+test('a room task in a window whose console is reachable is stoppable and takes interjections; a stop that cannot take keeps following the turn', async t => {
+  const session_id = randomUUID();
+  const inbox = await inbox_server(t);
+  const { log, sessions } = claude_home(t, session_id, { socket: inbox.socket, status: 'busy' });
+  const { task, seen } = chat_task(mkdtempSync(join(tmpdir(), 'room-run-')));
+  Object.assign(task, { id: 'free-21', chat: false, inbox: true, prompt: '请先读取任务文件 free-21.task.json' });
+  const calls = [], processes = [];
+  task.on_process = handle => processes.push(handle);
+  const result = await claude.deliver(own(session_id), { session_id }, task, () => { throw new Error('no process'); }, undefined,
+    { console: (pid, { escape = false } = {}) => { calls.push({ pid, escape }); return { ok: true, terminal: 'conhost', reason: '' }; } });
+  assert.deepEqual(result.capabilities, { stoppable: true, progress: true });
+  const [handle] = processes;
+  assert.equal(handle.stop_on_shutdown, false, 'the runner\'s shutdown presses no key in the owner\'s window');
+  for (let waited = 0; !inbox.received.length && waited < 2000; waited += 20) await delay(20);
+  appendFileSync(log, line({ type: 'user', message: { role: 'user', content: inbox.received[0][1].message.content } }) + tool_call);
+  assert.equal(await result.steer('用户插话：先停一下'), true);
+  for (let waited = 0; inbox.received.length < 2 && waited < 2000; waited += 20) await delay(20);
+  assert.match(inbox.received[1][1].message.content, /^\[codiscuss:free-21\+1\] [\s\S]*用户插话：先停一下$/);
+  let closed = false;
+  handle.once('close', () => { closed = true; });
+  // A tool still runs: no Esc goes in, and the turn is followed on instead of being given up as ended.
+  writeFileSync(join(sessions, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: session_id, status: 'busy', messagingSocketPath: inbox.socket }));
+  handle.kill();
+  await delay(300);
+  assert.deepEqual(calls.filter(call => call.escape), []);
+  assert.equal(closed, false);
+  assert.equal(seen.exits + seen.failures.length, 0);
+  appendFileSync(log, tool_return + line({ type: 'attachment', attachment: { type: 'queued_command', prompt: inbox.received[1][1].message.content } }));
+  handle.kill();
+  for (let waited = 0; !calls.some(call => call.escape) && waited < 4000; waited += 20) await delay(20);
+  assert.equal(calls.filter(call => call.escape).length, 1, 'the Esc goes once the tool returned');
+  appendFileSync(log, interrupted('[Request interrupted by user]'));
+  await settled(seen);
+  assert.equal(seen.exits, 1);
+  assert.equal(closed, true, 'the handle closes with the turn, so the runner reports the stop');
+});

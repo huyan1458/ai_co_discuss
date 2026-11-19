@@ -167,7 +167,7 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
   background: var(--ui-bg); color: var(--ui-text-highlighted); font-size: var(--channel-nav-text); outline: none; }
 .channel-folder-section, .channel-folder-rooms, .channel-root-rooms { min-width: 0; }
 .channel-folder-section { position: relative; }
-.channel-folder-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding-right: 8px; border-radius: 6px; }
+.channel-folder-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding-right: 8px; border-radius: 6px; margin-bottom: 2px; }
 @media (hover: hover) { .channel-folder-row:hover { background: var(--channel-ghost-hover); } }
 .channel-folder-row:is(:hover, :focus-within) .channel-folder-actions, .channel-folder-row:has([data-state="open"]) .channel-folder-actions { opacity: 1; pointer-events: auto; }
 /* Desktop: the right edge shows count/time at rest and the row's actions on hover. */
@@ -1667,6 +1667,10 @@ html[data-theme^="channel"] .content-page > .timeline-switch { max-width: 1280px
 .channel-request-status.is-link { cursor: pointer; }
 .channel-request-status.is-link:hover { color: var(--ui-text-highlighted) !important; }
 .channel-request-status > [class*="icon"] { flex-shrink: 0; width: 12px; height: 12px; }
+.channel-request-status.is-delivering { color: var(--ui-info) !important; }
+.channel-request-spin { animation: channel-request-spin 1s linear infinite; }
+@keyframes channel-request-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .channel-request-spin { animation: none; } }
 .channel-request-menu { max-width: min(320px, calc(100vw - 24px)); }
 .channel-request-menu [role="menuitem"] span { overflow-wrap: anywhere; white-space: normal; }
 .model-picker { display: flex; align-items: center; gap: 4px; min-width: 0; }

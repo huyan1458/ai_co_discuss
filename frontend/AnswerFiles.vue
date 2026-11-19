@@ -93,27 +93,27 @@ onBeforeUnmount(() => observer?.disconnect());
         <span class="answer-file-name">{{ file.name }}</span>
         <span class="answer-file-meta">{{ file_type(file.name)[0] }} · {{ file_size(file.size) }}</span>
       </span>
-      <span class="answer-file-open">{{ t('打开') }}</span>
+      <UIcon name="i-lucide-arrow-up-right" class="answer-file-open" />
     </button>
   </div>
 </template>
 
 <style scoped>
-.answer-files { display: grid; gap: 8px; max-width: 520px; }
+.answer-files { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; max-width: 680px; }
 .answer-files:not(:empty) { margin-top: 12px; }
-.answer-file { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 10px 12px 10px 10px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-bg-elevated); text-align: left; cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }
-.answer-file:hover { border-color: var(--ui-border-accented); box-shadow: 0 2px 10px #0000002e; }
+.answer-file { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 7px 10px 7px 7px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 60%, transparent); text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
+.answer-file:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); }
 .answer-file:focus-visible { outline: 2px solid var(--ui-primary); outline-offset: 1px; }
-.answer-file-icon { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 9px; background: color-mix(in srgb, currentColor 14%, transparent); font-size: 21px; color: var(--ui-text-muted); }
+.answer-file-icon { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 7px; background: color-mix(in srgb, currentColor 12%, transparent); font-size: 17px; color: var(--ui-text-muted); }
 .answer-file-icon.is-blue { color: #519aba; }
 .answer-file-icon.is-orange { color: #e37933; }
 .answer-file-icon.is-yellow { color: #cbcb41; }
 .answer-file-icon.is-green { color: #8dc149; }
 .answer-file-icon.is-purple { color: #a074c4; }
 .answer-file-icon.is-red { color: #cc3e44; }
-.answer-file-text { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
-.answer-file-name { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.answer-file-meta { color: var(--ui-text-dimmed); font-size: 12px; }
-.answer-file-open { flex-shrink: 0; padding: 4px 11px; border: 1px solid var(--ui-border-accented); border-radius: 8px; color: var(--ui-text-toned); font-size: 12px; transition: background .15s, color .15s; }
-.answer-file:hover .answer-file-open { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
+.answer-file-text { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }
+.answer-file-name { overflow: hidden; color: var(--ui-text-highlighted); font-size: 12.5px; font-weight: 500; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.answer-file-meta { color: var(--ui-text-dimmed); font-size: 11px; line-height: 15px; }
+.answer-file-open { flex-shrink: 0; width: 15px; height: 15px; color: var(--ui-text-dimmed); transition: color .15s, transform .15s; }
+.answer-file:hover .answer-file-open { color: var(--ui-text-highlighted); transform: translate(1px, -1px); }
 </style>

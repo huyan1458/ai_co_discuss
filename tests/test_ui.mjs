@@ -7,6 +7,7 @@ import { API_PROVIDERS } from "../runner/discussion_api.mjs";
 import { member_actions } from "../frontend/member-actions.js";
 import { access_label, access_options, EXPERT_PROMPT_PRESETS } from "../runner/expert_prompts.mjs";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
+import { slash_insertion } from "../runner/slash_names.mjs";
 import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
 import { t } from "../frontend/i18n.js";
 import { declined, external_of, external_tag, extended_until, invited_items, remaining_label, take_join_fragment } from "../frontend/external-members.js";
@@ -83,7 +84,7 @@ function mention_fixture() {
   const controller = theme_fixture();
   controller.context.test_state.room = room.value;
   const editor = { value: "", selectionStart: 0, selectionEnd: 0, focus() {}, setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; } };
-  const context = vm.createContext({ computed, ref, watch, nextTick, text, room, free, free_members, ENTER_SENDS: true,
+  const context = vm.createContext({ computed, ref, watch, nextTick, text, room, free, free_members, ENTER_SENDS: true, slash_insertion,
     view: ref({ tab: "messages" }), prompt: ref({ textareaRef: editor }), bridge: controller.context.window.discuss_view,
     // No browser editing command here: replacing a draft falls back to writing the text directly.
     document: { execCommand: () => false } });
@@ -369,7 +370,7 @@ test("retracting the latest message members started on stops that work and rewin
   await context.retract_message(5);
   assert.equal(JSON.stringify(posts), JSON.stringify([["/api/rooms/one/rewind", { message_id: 5, revision: "r1" }]]), "the rewind carries the plan's revision");
   assert.equal(input.value, "原问题");
-  assert.match(notified[0][1], /^已撤回；正在停止 Codex；Claude 在自己的窗口或 App 里本机无法停止.*Claude 的会话未回退.*文件改动不会恢复$/,
+  assert.match(notified[0][1], /^已撤回；正在停止 Codex；Claude 在自己的窗口或 App 里，本机停不了.*手动停止.*Claude 的会话未回退.*文件改动不会恢复$/,
     "a window the runner cannot stop is not called stopped");
   posts.length = 0;
   plan = { ...plan, members: [{ name: "Codex", session: "cut", executions: [9, 3] }] };

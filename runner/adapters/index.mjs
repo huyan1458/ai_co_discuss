@@ -5,7 +5,9 @@
  *   the web page reads as well;
  * - its behaviour in its own module, a descriptor with the same shape for every software:
  *   - `deliver(config, binding, task, spawn_process, user_home)` → `{session_id, status, capabilities, steer?}`, where
- *     `capabilities` `{stoppable, progress}` says what this one delivery can do, and `steer(text)` (when the running
+ *     `capabilities` `{stoppable, progress, ends?}` says what this one delivery can do (`ends`: a turn it can neither stop
+ *     nor follow is still watched, and `task.on_turn_end()` reports when it ended, saying nothing about an answer; the
+ *     runner uses it only to tell the site a voided turn is over), and `steer(text)` (when the running
  *     software can take an interjection without ending its turn) passes one in, resolving false once the turn is over;
  *   - `session`: `{path, exists, branch, settings}` for the software's own session store, or null; with `list(options)`
  *     and `preview(session_id, options)` when its stored conversations can be browsed (see `software_sessions`);

@@ -1465,10 +1465,13 @@ function mention_handles(name, names) {
   return nickname && nickname !== name && !taken.includes(nickname) ? [nickname, name] : [name];
 }
 
-/** What renders as a mention: the user and each member by the handle @ offers for it; a member ID with a nickname stays plain text. */
+/**
+ * What renders as a mention: the user, each member by the handle @ offers for it, and the group mentions the send path
+ * recognises (@全体成员 / @all, @全体依次 / @all-seq); a member ID with a nickname stays plain text.
+ */
 function mention_highlights() {
   const names = (state.room?.members || []).map(member => member.name);
-  return ["用户", display_name("用户"), ...names.map(name => mention_handles(name, names)[0])];
+  return ["用户", display_name("用户"), "全体成员", "all", "全体依次", "all-seq", ...names.map(name => mention_handles(name, names)[0])];
 }
 
 /** Render room text with the open room's mentions marked and `#123` message references clickable. */
@@ -1899,8 +1902,10 @@ async function change_member({ member_id, name, action, role, latest_id, quiet =
     finish_member_request(room_id, token, record, result);
     if (!quiet && state.room?.id === room_id) notify("info", member.access === "manual" ? t('{value1} 已请回，凭证已更新；请用新的启动指令让它重新注册。', { value1: name }) : t('{value1} 已请回，续接原会话。', { value1: name }));
   } else {
+    const live = action === "interrupt" ? live_executions_of(member_id) : [];
     await request_json(`/api/rooms/${room_id}/members/${member_id}${action === "interrupt" ? "/interrupt" : ""}`,
       action === "interrupt" ? {} : { action, ...(role ? { role } : {}), ...(latest_id !== undefined ? { latest_id } : {}) });
+    warn_unstoppable(live);
   }
   if (state.room?.id === room_id) await refresh_room();
 }
@@ -1949,6 +1954,8 @@ async function invite_member({ name, access, project_access = "read", session_id
   if (state.room?.id === room_id) {
     // A manual member's start step lives on the board row, the composer bar and the invite dialog; no extra notice.
     const notice = access === "manual" ? ""
+        : record.options?.session_id && window.discuss_backup.adapter_profile(adapter)?.copy_bound
+          ? t('{value1} 已加入，在原会话的分叉上工作；原会话里看不到房间里的后续记录。', { value1: record.member.name })
         : record.options?.session_id ? t('{value1} 已接入原会话；它工作时请不要在原窗口继续操作。', { value1: record.member.name })
         : t('{value1} 已加入，之后点名它即会由本机服务唤醒。', { value1: record.member.name });
     if (notice) notify("info", notice);
@@ -4325,7 +4332,8 @@ function participant_files(name, room, saved) {
 
 /**
  * What a borrowed session means for its original window, shown when hovering "借用会话". The Apps take each task in
- * their own chat, and a taken-over Claude member gets it in its open window, so only a background resume shares nothing.
+ * their own chat, and a taken-over Claude member gets it in its open window; a background resume works in a copy where
+ * the adapter makes one (`copy_bound`), so the original never shows the room's turns.
  */
 function participant_session_hint(name, room, saved) {
   const member = (room?.members || []).find(item => item.name === name);
@@ -4334,6 +4342,9 @@ function participant_session_hint(name, room, saved) {
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (member.adapter === "claude" && profile?.project_access === "own") {
     return t('续接你自己的会话：原窗口开着时任务直接送进该窗口；窗口关闭时改在后台续接，期间不要重新打开该会话');
+  }
+  if (window.discuss_backup.adapter_profile(member.adapter)?.copy_bound && profile?.project_access !== "own") {
+    return t('从你已有的会话分叉而来；原会话里看不到房间里的后续记录');
   }
   return t('续接你已有的会话；它工作时请不要在原窗口继续操作');
 }
@@ -5246,8 +5257,21 @@ function render_host_options(id, names, selected) {
 /** Owner stop for a free room: void the member's live execution and queued requests. */
 async function interrupt_member(member_id) {
   const room_id = state.room.id;
+  const live = live_executions_of(member_id);
   await request_json(`/api/rooms/${room_id}/members/${member_id}/interrupt`, {});
+  warn_unstoppable(live);
   if (state.room?.id === room_id) await refresh_room();
+}
+
+/** The member's running executions, read before a stop voids them. */
+function live_executions_of(member_id) {
+  const member = (state.room?.free?.members || []).find(item => item.id === member_id);
+  return (state.room?.free?.executions || []).filter(item => item.member === member?.name && ["dispatched", "started"].includes(item.status));
+}
+
+/** A stop the runner cannot carry out (a window or App) says at once where to stop it by hand. */
+function warn_unstoppable(live) {
+  if (live.some(item => item.capabilities?.stoppable === false)) notify("warning", stop_summary(live));
 }
 
 /**
@@ -5270,7 +5294,7 @@ function stop_summary(executions) {
   const unstoppable = executions.filter(item => item.capabilities?.stoppable === false);
   const unknown = executions.filter(item => !item.capabilities);
   return [stopping.length ? t('正在停止 {value1}', { value1: names(stopping) }) : "",
-    unstoppable.length ? t('{value1} 在自己的窗口或 App 里本机无法停止，可能仍在生成，之后的回答会被拒收', { value1: names(unstoppable) }) : "",
+    unstoppable.length ? t('{value1} 在自己的窗口或 App 里，本机停不了，仍会继续生成；要立即中断，请到它的窗口或 App 里手动停止', { value1: names(unstoppable) }) : "",
     unknown.length ? t('{value1} 的本次工作已作废', { value1: names(unknown) }) : ""].filter(Boolean).join("；");
 }
 

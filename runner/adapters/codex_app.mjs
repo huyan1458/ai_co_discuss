@@ -83,21 +83,63 @@ function app_steer(config, thread_id) {
   };
 }
 
+// A room turn runs in the App, which the runner cannot stop; it only watches the chat for that turn to end, so a stop the
+// owner makes in the App lets the room deliver again at once.
+const ROOM_POLL_MS = 2000;
+const ROOM_READ = { turnLimit: 3 };
+
+/** The ids of the chat's latest turns before a task goes in, or null when the App cannot be read. */
+async function turns_before(config, thread_id) {
+  const app = new CodexAppClient(config.pipe_path);
+  try { await app.open(); return new Set((await app.read_thread(thread_id, ROOM_READ)).turns.map(turn => turn.id)); }
+  catch { return null; }
+  finally { app.close(); }
+}
+
+/**
+ * Read the chat until a turn newer than `seen` has ended and the chat is idle, then report `on_turn_end`. Gives up quietly
+ * after the private chat's ceiling or when the App stays unreadable; the room then falls back to the site's hold.
+ * `options` (`connect`, `poll_ms`, `timeout_ms`) replace the App and the timings in tests.
+ */
+export async function watch_room_turn(config, thread_id, seen, task, options = {}) {
+  const connect = options.connect || (() => open_app(config));
+  const deadline = Date.now() + (options.timeout_ms ?? CHAT_TIMEOUT_MS);
+  let app = null, failures = 0;
+  try {
+    while (Date.now() < deadline) {
+      await sleep(options.poll_ms ?? ROOM_POLL_MS);
+      let snapshot;
+      try { app ||= await connect(); snapshot = await app.read_thread(thread_id, ROOM_READ); failures = 0; }
+      catch { app?.close(); app = null; if (++failures >= CHAT_READ_FAILURES) return; continue; }
+      const newest = snapshot.turns[0];
+      if (newest && !seen.has(newest.id) && newest.status !== 'inProgress' && snapshot.thread.status.type !== 'active') return task.on_turn_end?.();
+    }
+  } finally { app?.close(); }
+}
+
+/** What a room delivery into this chat can do: never stopped, its end heard when the chat could be read beforehand. */
+function room_delivery(config, thread_id, seen, task) {
+  if (!seen) return IN_APP;
+  watch_room_turn(config, thread_id, seen, task).catch(() => {});
+  return { ...IN_APP, ends: true };
+}
+
 /** Deliver one task to Codex's real App, with the original chat reused afterward. */
 async function deliver(config, binding, task, _spawn, user_home = homedir()) {
   if (binding.session_id) {
     try { bind_access(task.access_path, binding.session_id); }
     catch (error) { throw not_sent(error); }
+    const seen = await turns_before(config, binding.session_id);
     // `codex queue` reaches only a chat the App has loaded; a fork made after a rewind, or a chat after the App restarted,
     // is not loaded until a message is sent through the App itself (tested on App tools, 2026-10).
     if (await unloaded(config, binding.session_id)) {
       const app = new CodexAppClient(config.pipe_path);
       try { await app.open(); await app.send_message(binding.session_id, task.prompt); }
       finally { app.close(); }
-      return { session_id: binding.session_id, status: 'accepted', capabilities: IN_APP, steer: app_steer(config, binding.session_id) };
+      return { session_id: binding.session_id, status: 'accepted', capabilities: room_delivery(config, binding.session_id, seen, task), steer: app_steer(config, binding.session_id) };
     }
     const receipt = await run_program(config.executable, ['queue', '--thread', binding.session_id, '--message', task.prompt], { timeout: CALL_TIMEOUT_MS });
-    return { session_id: binding.session_id, status: 'accepted', receipt, capabilities: IN_APP, steer: app_steer(config, binding.session_id) };
+    return { session_id: binding.session_id, status: 'accepted', receipt, capabilities: room_delivery(config, binding.session_id, seen, task), steer: app_steer(config, binding.session_id) };
   }
   const app = new CodexAppClient(config.pipe_path);
   try {
@@ -110,7 +152,7 @@ async function deliver(config, binding, task, _spawn, user_home = homedir()) {
     const result = await app.create_thread(source, task.prompt, `CoDiscuss · ${task.participant}`, target);
     task.on_binding(result.thread_id);
     bind_access(task.access_path, result.thread_id);
-    return { session_id: result.thread_id, status: 'accepted', capabilities: IN_APP, steer: app_steer(config, result.thread_id) };
+    return { session_id: result.thread_id, status: 'accepted', capabilities: room_delivery(config, result.thread_id, new Set(), task), steer: app_steer(config, result.thread_id) };
   } finally { app.close(); }
 }
 

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { adapter_of } from '../runner/adapters/index.mjs';
-import { codex_chat } from '../runner/adapters/codex_app.mjs';
+import { codex_chat, watch_room_turn } from '../runner/adapters/codex_app.mjs';
 
 const THREAD = 'thread-1';
 const PROMPT = '私聊开头\n\n请看一下 a < b & c';
@@ -113,4 +113,21 @@ test('Codex App private chat fails before sending without a chat, and kill() arc
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(await result.steer('太晚了'), false, 'an ended turn refuses interjections');
   cleanup();
+});
+
+test('a Codex App room turn is watched for its end, not for turns the chat had before', async () => {
+  const states = [
+    { thread: { status: { type: 'active' } }, turns: [{ id: 'old', status: 'inProgress' }] },
+    { thread: { status: { type: 'active' } }, turns: [{ id: 'room', status: 'inProgress' }, { id: 'old', status: 'completed' }] },
+    { thread: { status: { type: 'idle' } }, turns: [{ id: 'room', status: 'interrupted' }, { id: 'old', status: 'completed' }] },
+  ];
+  let reads = 0, ended = 0;
+  const app = { async read_thread() { return states[Math.min(reads++, states.length - 1)]; }, close() {} };
+  await watch_room_turn({}, THREAD, new Set(['old']), { on_turn_end: () => { ended++; } }, { connect: async () => app, poll_ms: 1 });
+  assert.equal(ended, 1);
+  assert.equal(reads, 3, 'the earlier turn ending does not count; the room turn stopped in the App does');
+  reads = 0; ended = 0;
+  const failing = { async read_thread() { throw new Error('pipe closed'); }, close() {} };
+  await watch_room_turn({}, THREAD, new Set(), { on_turn_end: () => { ended++; } }, { connect: async () => failing, poll_ms: 1 });
+  assert.equal(ended, 0, 'an unreadable App gives up quietly');
 });

@@ -110,7 +110,7 @@ function skill_file(path) {
       return value.startsWith("'") && value.endsWith("'") ? value.slice(1, -1).replaceAll("''", "'") : value;
     };
     const id = field('name'), description = field('description');
-    return id && description ? { id, label: id, description, prompt: `请调用技能「${id}」：` } : null;
+    return id && description ? { id, label: id, description, prompt: `/${id} ` } : null;
   } catch { return null; }
   finally { if (descriptor !== undefined) closeSync(descriptor); }
 }

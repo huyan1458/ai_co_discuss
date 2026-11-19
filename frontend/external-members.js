@@ -330,6 +330,8 @@ function create_invited({ view, bridge }) {
   const room_messages = new Map();
   // The invitation being accepted, listed in the sidebar while its answer crosses the relay.
   const pending_join = ref(null);
+  // Records being deleted: a list read meanwhile does not bring them back.
+  const hidden = new Set();
   const busy = ref("");
   const announced = new Set();
   let timer = 0;
@@ -339,8 +341,8 @@ function create_invited({ view, bridge }) {
     if (!available.value) return;
     try {
       const result = await bridge.local_request(OPERATIONS.invited_list, {});
-      // Ended and left records stay: their history and why they ended remain readable.
-      records.value = result.records || [];
+      // Ended and left records stay: their history and why they ended remain readable. One being deleted stays out.
+      records.value = (result.records || []).filter((record) => !hidden.has(record.id));
       failure.value = "";
       for (const record of records.value) {
         for (const approval of record.approvals || []) {
@@ -414,19 +416,36 @@ function create_invited({ view, bridge }) {
     settle_approval(id, approval);
     return run(`decide:${approval}`, OPERATIONS.invited_refuse, { id, approval }, t("已拒绝，对方会看到“对方未同意”"));
   }
+  /** Leave at once on the page; telling the other computer follows, and a failure puts the record back as it was. */
   async function leave(id) {
-    const done = await run("leave", OPERATIONS.invited_leave, { id });
-    if (!done) return done;
-    bridge.notify(done.record?.leave_pending ? "warning" : "info", done.record?.leave_pending
-      ? t("已在这台电脑上退出；暂时连不上对方电脑，会在后台继续通知它") : t("已退出该房间"));
+    patch_record(id, () => ({ status: "left", paused: true }));
     if (selected_id.value === id) page_open.value = false;
-    return done;
+    try {
+      const done = await bridge.local_request(OPERATIONS.invited_leave, { id });
+      bridge.notify(done?.record?.leave_pending ? "warning" : "info", done?.record?.leave_pending
+        ? t("已在这台电脑上退出；暂时连不上对方电脑，会在后台继续通知它") : t("已退出该房间"));
+      return done || {};
+    } catch (error) {
+      bridge.notify("error", runner_text(error.message));
+      return null;
+    } finally { load(); }
   }
-  /** Delete an ended record from this computer; the middle goes back to the room it was showing before. */
+  /** Delete an ended record: it leaves the list at once, and comes back only if this computer refuses. */
   async function remove(id) {
-    const done = await run("remove", OPERATIONS.invited_remove, { id }, t("记录已删除"));
-    if (done && selected_id.value === id) page_open.value = false;
-    return done;
+    hidden.add(id);
+    records.value = records.value.filter((record) => record.id !== id);
+    if (selected_id.value === id) page_open.value = false;
+    try {
+      const done = await bridge.local_request(OPERATIONS.invited_remove, { id });
+      bridge.notify("info", t("记录已删除"));
+      return done || {};
+    } catch (error) {
+      bridge.notify("error", runner_text(error.message));
+      return null;
+    } finally {
+      hidden.delete(id);
+      load();
+    }
   }
   /** One invited room: `{ record, room, error? }`, room being this computer's AI's view of the other room. */
   const read_room = (id, options = {}) => bridge.local_request(OPERATIONS.invited_room, { id, ...options });

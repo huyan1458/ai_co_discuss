@@ -1144,7 +1144,8 @@ def free_view(connection, room_id):
         WHERE w.room_id=? AND w.key LIKE 'checkin:%' AND NOT EXISTS (SELECT 1 FROM member_requests d WHERE d.message_id=r.answer_id)
         ORDER BY w.message_id DESC LIMIT ?""", (room_id, RECENT_EXECUTIONS))]
     return {"failure_wakes": failure_wakes, "quiet_checkins": quiet_checkins, "host_checkin": {"minutes": checkin["interval_seconds"] // 60, "due_at": checkin["due_at"]} if checkin else None,
-            "members": members, "requests": requests[::-1], "executions": recent_executions(connection, room_id),
+            "members": members, "ended_externals": external_members.ended_view(connection, room_id),
+            "requests": requests[::-1], "executions": recent_executions(connection, room_id),
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_rounds": max_rounds,
             "chain_rounds": progress, "recommendations": recent_recommendations(connection, room_id, now)[::-1],
             "queued_messages": queue_view(connection, room_id), "questions": questions.room_questions_view(connection, room_id)}
@@ -1411,8 +1412,9 @@ def check_answer(connection, room_id, member, payload):
         raise PermissionError(Text("执行编号不属于本成员"))
     if row["status"] == "completed":
         # The host dispatched with keep_working and went on in the same turn: its answer belongs to where that turn went.
-        row = live_continuation(connection, row) or row
-        payload["execution_id"] = row["id"]
+        # A continuation stopped or failed since takes the answer as that one's late answer, which ends its hold.
+        row = continuation_end(connection, row)
+        execution_id = payload["execution_id"] = row["id"]
     revived = revive_failed(connection, room_id, row) if row["status"] == "failed" else None
     if revived:
         row = revived
@@ -1450,12 +1452,15 @@ def check_keep_working(member, payload):
         raise ValueError(Text("keep_working 只能由本机接入的主持人在派活（to）时使用，值为 true，不能与 continue、sequential 或 next_review 同用"))
 
 
-def live_continuation(connection, row):
-    """The live execution that a host's `keep_working` moved this answered execution's turn onto, or None."""
-    while row and row["status"] == "completed":
+def continuation_end(connection, row):
+    """The last execution a host's `keep_working` moved this answered execution's turn onto, in whatever state it is now;
+    the row itself when its turn did not move."""
+    while row["status"] == "completed":
         link = connection.execute("SELECT next_id FROM execution_continuations WHERE execution_id=?", (row["id"],)).fetchone()
-        row = link and connection.execute("SELECT * FROM member_executions WHERE id=?", (link[0],)).fetchone()
-    return row if row and row["status"] in ACTIVE else None
+        if not link:
+            break
+        row = connection.execute("SELECT * FROM member_executions WHERE id=?", (link[0],)).fetchone()
+    return row
 
 
 def keep_working(connection, room_id, host, message_id, chain_id, execution_id):
@@ -3373,12 +3378,15 @@ def late_answer(connection, room_id, execution_id, token):
 
 
 def record_stop_result(connection, room_id, execution_id, result):
-    """Record a stop idempotently; an unconfirmed stop may later gain a confirmed outcome."""
+    """Record a stop idempotently; an unconfirmed stop may later gain a confirmed outcome, and an unstoppable one the
+    runner kept following may later be seen to end (`stopped`), in its window or App or on its own."""
     if result not in STOP_RESULTS:
         raise ValueError(Text("result 须为 {value1}", value1='、'.join(STOP_RESULTS)))
     saved = connection.execute("""INSERT INTO execution_capabilities (execution_id,room_id,stop_result) VALUES (?,?,?)
         ON CONFLICT(execution_id) DO UPDATE SET stop_result=excluded.stop_result
-        WHERE stop_result IN ('','unconfirmed') AND stop_result<>excluded.stop_result""", (execution_id, room_id, result))
+        WHERE stop_result<>excluded.stop_result
+          AND (stop_result IN ('','unconfirmed') OR (stop_result='unstoppable' AND excluded.stop_result='stopped'))""",
+                           (execution_id, room_id, result))
     if saved.rowcount:
         return False
     previous = connection.execute("SELECT stop_result FROM execution_capabilities WHERE execution_id=?", (execution_id,)).fetchone()[0]

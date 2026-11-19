@@ -26,6 +26,7 @@ import { add_excerpt, excerpt_mark_place, excerpt_range, excerpt_source, excerpt
 import { keep_reading_position } from "./scroll-anchor.js";
 import { guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
 import { FILE_MENTION_PATTERN } from "./file-mention.mjs";
+import { slash_insertion } from "../runner/slash_names.mjs";
 import MemoBlock from "./memo-block.js";
 import UTooltip from "@nuxt/ui/components/Tooltip.vue";
 import { motion, useSpring, useTransform } from "motion-v";
@@ -108,7 +109,7 @@ const QUOTE_OFFER_HEIGHT = 28;
 const QUOTE_COMMENT_WIDTH = 340;
 const QUOTE_COMMENT_HEIGHT = 40;
 const QUOTE_GAP = 6;
-let listen_timer = 0, pointer_down = false;
+let listen_timer = 0, pointer_down = false, selection_check = 0;
 const speech_configured = async () => Boolean((await speech_settings()).api_key_ref);
 // A selection being added to the chat: `{ id, range, text, to, touch, left, top }`, waiting for an optional comment.
 const quoting = ref(null);
@@ -123,6 +124,7 @@ const excerpt_marks = ref(new Map());
 /** Hide the offer while a selection is changing and check again once it settles. */
 function schedule_listen() {
   listen_here.value = null;
+  selection_check += 1;
   window.clearTimeout(listen_timer);
   if (!pointer_down) listen_timer = window.setTimeout(track_selection, LISTEN_SETTLE_MS);
 }
@@ -151,15 +153,16 @@ async function track_selection() {
   const text = card ? range.toString().replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim() : "";
   if (!text) { listen_here.value = null; return; }
   const kept = range.cloneRange();
-  if (pointer_down || quoting.value) return;
+  // Both buttons show together: wait for whether speech is set up before offering, and drop the offer if the selection
+  // changed meanwhile.
+  const check = ++selection_check;
+  const speech = await speech_configured().catch(() => false);
+  if (check !== selection_check || pointer_down || quoting.value) return;
   // On touch screens the system's own selection menu sits next to the selection, so the buttons wait above the composer instead.
   const touch = window.matchMedia("(pointer: coarse)").matches;
   const to = body.contains(kept.endContainer) ? text_offset(body, kept.endContainer, kept.endOffset) : body.textContent.length;
   const from = text_offset(body, kept.startContainer, kept.startOffset);
-  listen_here.value = { id: Number(card.dataset.messageId), range: kept, text, from, to, speech: false, touch, ...place_by(kept, QUOTE_OFFER_WIDTH, QUOTE_OFFER_HEIGHT) };
-  const shown = listen_here.value;
-  const speech = await speech_configured().catch(() => false);
-  if (listen_here.value === shown) shown.speech = speech;
+  listen_here.value = { id: Number(card.dataset.messageId), range: kept, text, from, to, speech, touch, ...place_by(kept, QUOTE_OFFER_WIDTH, QUOTE_OFFER_HEIGHT) };
 }
 /** Open the comment box for the offered selection, keeping the selected text highlighted meanwhile. */
 async function start_quote() {
@@ -702,7 +705,8 @@ function stop_state(execution) {
   // A late answer shows the member did finish the turn; it stays out of the transcript and AI reads.
   if (execution.late_answer) return { label, note: t('{value1} 之后仍交来了回答，未采纳：不进入记录，其他 AI 读不到。', { value1: name }) };
   if (execution.stop_result === "unconfirmed") return { label, note: t('本机尚未确认进程结束，可能仍在生成；网站不再接受本次回答。') };
-  if (execution.stop_result === "unstoppable" || capabilities(execution)?.stoppable === false) return { label, note: t('{value1} 在自己的窗口或 App 里，本机无法停止，可能仍在生成；网站不再接受本次回答。', { value1: name }) };
+  // A turn the runner could not stop but saw end (in its window or on its own) reads as stopped.
+  if (execution.stop_result !== "stopped" && (execution.stop_result === "unstoppable" || capabilities(execution)?.stoppable === false)) return { label, note: t('{value1} 在自己的窗口或 App 里，本机停不了，可能仍在生成；要立即中断，请到它的窗口或 App 里手动停止。', { value1: name }) };
   return { label, note: label === t('正在停止') ? t('等待本机服务结束进程。') : "" };
 }
 // The runner retries a delivery that did not take this many times (runner/free_runner.mjs MAX_DELIVERY_RETRIES).
@@ -727,7 +731,9 @@ const request_badges = stable_computed(() => {
     // An external member's computer turned the request down or let it wait out: the other side did not agree.
     let [label, color] = declined(request) ? [t('对方未同意'), "warning"] : voided ? [stop_state(voided).label, "neutral"] : FREE_REQUEST_LABELS[request.status];
     const execution = executions.get(request.execution_id);
-    if (request.status === "delivering" && execution?.status === "started") label = t('处理中');
+    // The request stays delivering until answered; the runner's delivery report (capabilities) says it reached the software.
+    const delivered = request.status === "delivering" && (execution?.status === "started" || Boolean(execution?.capabilities));
+    if (delivered) label = t('处理中');
     if (request.status === "pending" && (source.executions || []).some((item) => item.member === request.member && ["dispatched", "started"].includes(item.status))) label = t('等待中：等当前执行结束');
     const title = declined(request) ? (request.external_outcome === "timeout" ? t('对方电脑在时限内没有确认唤醒') : t('对方电脑拒绝了这次唤醒'))
       : request.status === "failed" ? failures.get(request.execution_id) || t('执行失败') : REQUEST_CANCEL_REASONS[request.cancel_reason] || request.cancel_reason || "";
@@ -735,7 +741,7 @@ const request_badges = stable_computed(() => {
     const answer_label = request.answer_id ? (answer_execution && answer_execution.request_message_id !== request.message_id
       ? t('在 #{id} 一并回答', { id: request.answer_id }) : t('查看回答 #{id}', { id: request.answer_id })) : "";
     badges.set(request.message_id, [...(badges.get(request.message_id) || []),
-      { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, status: label.split("：")[0], color, title, answer_id: request.answer_id, answer_label }]);
+      { key: request.id, label: `${bridge.display_name(request.member)} · ${label}`, status: label.split("：")[0], color, title, delivering: request.status === "delivering" && !delivered, answer_id: request.answer_id, answer_label }]);
   }
   return badges;
 });
@@ -1096,14 +1102,14 @@ const skill_options = computed(() => {
   return PLATFORM_SKILL_COMMANDS.filter((item) => `${item.id} ${item.label} ${item.search}`.toLocaleLowerCase().includes(query))
     .map((item) => ({ key: `skill:${item.id}`, skill: item, group: t('平台技能') }));
 });
-/** The sub-workflows of the workflow in use; like a platform skill, picking one only prefills a request to the host. */
+/** The sub-workflows of the workflow in use; like a platform skill, picking one only inserts its `/id` for the host. */
 const sub_workflow_options = computed(() => {
   const workflow = room_workflow.value;
   if (!can_call_skill.value || !workflow?.sub_workflows?.length) return [];
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
   return workflow.sub_workflows.filter((item) => `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
     .map((item) => ({ key: `sub-workflow:${item.id}`, group: t('工作流「{value1}」的子工作流', { value1: workflow.label }),
-      skill: { ...item, prompt: `用工作流「${workflow.label}」的子工作流「${item.label}」（${item.id}）：` } }));
+      skill: { ...item, prompt: slash_insertion(item.id) } }));
 });
 const member_skill_catalog = ref({});
 const skill_member = computed(() => mention_context.value?.member || "");
@@ -1241,14 +1247,14 @@ async function select_mention(option) {
 }
 
 /**
- * Replace the "/command" with a request asking the host to enable the workflow, leaving the caret after it for the
- * task. Enabling another workflow replaces the current one; the members the old one brought stay as ordinary members.
+ * Replace the typed "/…" with the workflow's `/id`, which asks the host to enable it, leaving the caret after it for
+ * the task. Enabling another workflow replaces the current one; the members the old one brought stay as ordinary members.
  */
 async function pick_workflow(option, start, end) {
   mention_context.value = null;
   if (option.enabled) return bridge.notify("info", t('本房间已启用工作流「{value1}」', { value1: option.workflow.label }));
   if (option.disabled) return bridge.notify("warning", option.disabled);
-  await replace_draft(start, replace_end(end, " "), `启用工作流「${option.workflow.label}」（${option.workflow.id}），`);
+  await replace_draft(start, replace_end(end, " "), slash_insertion(option.workflow.id));
   mention_context.value = null;
 }
 

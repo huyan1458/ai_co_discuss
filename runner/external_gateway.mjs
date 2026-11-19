@@ -197,8 +197,14 @@ async function invite_site(home, site_url) {
 export async function create_invite(home, { room_id, token, level = 'read', folders, duration = '1h', site_url, member_id, by = 'computer' }, { fetcher } = {}) {
   const room = await owned_room(home, room_id, token, fetcher);
   if (member_id) {
-    const current = await local_call(room, 'GET', `/api/rooms/${encodeURIComponent(room_id)}/external-members/${member_id}`, { token, fetcher });
+    const path = `/api/rooms/${encodeURIComponent(room_id)}/external-members/${member_id}`;
+    let current = await local_call(room, 'GET', path, { token, fetcher });
     if (current.status !== 200) throw new GatewayError(current.status, current.body?.error || '外部成员不存在');
+    // A member that has ended is invited back as itself: its seat awaits check-in again, with the settings it had.
+    if (current.body.status === 'removed') {
+      current = await local_call(room, 'POST', path, { token, fetcher, body: { action: 'reopen' } });
+      if (current.status !== 200) throw new GatewayError(current.status, current.body?.error || '外部成员不存在');
+    }
     level = current.body.scope;
     duration = current.body.duration;
     folders = current.body.directories.map(path => room.directories.indexOf(path));

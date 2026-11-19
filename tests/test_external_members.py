@@ -261,6 +261,34 @@ class OwnerGrantTests(ExternalMemberTests):
 
 
 class MemberScopeTests(ExternalMemberTests):
+    def test_a_member_that_left_stays_listed_with_why(self):
+        member = self.create()
+        self.assertEqual(self.ext("leave", {})[0], 200)
+        free = self.request(self.path, token=self.owner)[1]["free"]
+        self.assertNotIn(EXTERNAL, [item["name"] for item in free["members"]], "it takes no more requests")
+        ended = [item for item in free["ended_externals"] if item["id"] == member["member_id"]]
+        self.assertEqual([(item["name"], item["external"]["end_reason"]) for item in ended], [(EXTERNAL, "left")])
+        self.assertGreater(ended[0]["external"]["ended_at"], 0)
+
+    def test_an_ended_member_can_be_invited_back_as_itself(self):
+        member = self.create()
+        member_id = member["member_id"]
+        self.assertEqual(self.ext("leave", {})[0], 200)
+        path = f"{self.owner_path}/{member_id}"
+        status, reopened = self.request(path, {"action": "reopen"}, self.owner)
+        self.assertEqual((status, reopened["status"], reopened["claimed_at"], reopened["end_reason"], reopened["name"]),
+                         (200, "active", 0, "", EXTERNAL), reopened)
+        self.assertEqual(self.ext("view")[0], 403, "the old credential no longer works")
+        version = self.request(path, {"action": "invite"}, self.owner)[1]["invite_version"]
+        token = uuid.uuid4().hex
+        binding = {"action": "bind", "invite_version": version, "token": token, "machine": "ext:again", "expires_at": int(time.time()) + 3600}
+        self.assertEqual(self.request(path, binding, self.owner)[0], 200)
+        self.assertEqual(self.request(path, {**binding, "action": "activate"}, self.owner)[0], 200)
+        self.assertEqual(self.call(f"{self.ext_path}/view", token=token, external=True)[0], 200)
+        free = self.request(self.path, token=self.owner)[1]["free"]
+        self.assertEqual([item["id"] for item in free["members"] if item["name"] == EXTERNAL], [member_id], "the same member, not a new one")
+        self.assertFalse([item for item in free["ended_externals"] if item["id"] == member_id])
+
     def test_requests_for_a_renamed_member_are_found_by_its_member_id(self):
         self.create()
         sent = self.say("@另一台电脑 你在吗", to=[EXTERNAL])[1]

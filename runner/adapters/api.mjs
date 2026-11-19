@@ -605,7 +605,7 @@ ${project_text(context.project, context.commands, context.image_input, context.n
     // Nor can an API host open the host's occasional pages: a room host gets them all, a discussion host its own three
     // (opening, roster, closing) and the two its page links to.
     ...(host && discussion ? ['host-opening.md', 'host-roster.md', 'host-closing.md'].map(file => skill_text('discuss-session', `references/${file}`)) : []),
-    ...(host ? (discussion ? ['control.md', 'workflow.md'] : ['relay.md', 'control.md', 'workflow.md', 'dev-flow.md'])
+    ...(host ? (discussion ? ['control.md', 'workflow.md'] : ['members.md', 'relay.md', 'control.md', 'workflow.md', 'dev-flow.md'])
       .map(file => skill_text('discuss-host', `references/${file}`)) : []),
     ...(goal_host(context) ? [skill_text('discuss-goal'), skill_text('discuss-goal', 'references/start.md'), skill_text('discuss-goal', 'references/finish.md')] : []),
     ...(host && context.workflow ? [workflow_text(context.workflow)] : []),

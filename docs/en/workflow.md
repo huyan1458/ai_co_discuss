@@ -92,7 +92,7 @@ From the member panel you can:
 
 - **Invite** members. A member card offers three ways to start:
   - **Automatic start**: this computer starts a new, empty session.
-  - **History** (Claude Code, Codex, Antigravity CLI): opens a window listing that software's past sessions by time, like `claude -r` or Codex's `/resume`. Search it, show this project's sessions or all of them, and preview the latest messages of the selected one. The program then resumes the picked session in the background, so it joins with the context it already has. While it is working, do not keep using it in its original window. An Antigravity CLI session keeps its own project and agy permissions; the room's project access does not apply to it.
+  - **History** (Claude Code, Codex, Antigravity CLI): opens a window listing that software's past sessions by time, like `claude -r` or Codex's `/resume`. Search it, show this project's sessions or all of them, and preview the latest messages of the selected one. On its first wake-up the program copies the picked session into a new one and resumes that copy in the background, so the member joins with the context it already has. The original stays unchanged, even with its window still open, but opening it later in the original software (for example with `claude -r`) will not show the room's turns. Through the Codex App nothing is copied: tasks go straight into that session in the App. An Antigravity CLI session keeps its own project and agy permissions; the room's project access does not apply to it.
   - **Manual start**: run the start instruction in a conversation you already have open; room tasks are then delivered into that window where possible.
 
   Experts invited during a discussion join the end of the current round.

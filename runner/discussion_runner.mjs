@@ -168,8 +168,9 @@ export class DiscussionStore {
         const next = entries[index];
         if (JSON.stringify(item) === JSON.stringify(next)) return true;
         const session = this.binding(item[0]).session_id || item[6];
+        // A member working in a copy of its invited conversation keeps naming the original, so that may stay as it was.
         return item[0] === next[0] && same_session_family(item[1], next[1])
-          && session && next[6] === session && (!item[6] || item[6] === session)
+          && (next[6] === item[6] || session && next[6] === session && (!item[6] || item[6] === session))
           && JSON.stringify(item.slice(2, 6)) === JSON.stringify(next.slice(2, 6));
       });
       // Experts invited during a run only add entries; every existing binding must stay as it was.

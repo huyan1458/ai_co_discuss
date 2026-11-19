@@ -25,6 +25,9 @@
  *   `browse_sessions`: its stored conversations can be listed and previewed on this machine, so the owner picks the one a
  *   new member resumes from a browsing window instead of typing its ID; a picked conversation may be bound even without
  *   `host_existing`.
+ *   `copy_bound`: a woken member bound to an existing conversation (picked in that window, given by ID or restored)
+ *   works in a copy of it made at its first turn, so the original stays as it was: resuming it in the background beside
+ *   a window still open on it would split it. A taken-over manual member (`own`) keeps its original conversation.
  * - `defaults_by_query`: its default model is read by running it (seconds), so a quick read leaves it for later.
  * - `capabilities`: `delivery` `{stoppable, progress}` of a usual delivery (each delivery reports its own); `rewind`: `cut`
  *   (the runner cuts the session), `fresh` (context rebuilt each time) or `kept` (cannot be cut here); `project` (works in
@@ -89,7 +92,7 @@ export const ADAPTER_PROFILES = {
     efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], models: true, access_levels: ALL_ACCESS, per_tool_allow: false,
     access_hints: { read: '只读沙箱', write: '项目可写的沙箱，命令在沙箱内运行、可联网',
       auto: '沙箱外的操作由模型申请提权，Codex 自动审核代替人工批准', full: '无沙箱、无审批（--dangerously-bypass-approvals-and-sandbox）' },
-    client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex', browse_sessions: true,
+    client: 'codex', adopt: 'session', host_existing: true, session_family: 'codex', browse_sessions: true, copy_bound: true,
     lockdown_hint: '沙箱只读档仍可读整个磁盘、运行任意只读命令，无法只放行 codiscuss 命令',
     sandbox_needs_desktop: true,
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, limits_directories: true, ripgrep: true, chat: true, resume: true, images: true, capture: FINAL_REMARK,
@@ -109,7 +112,7 @@ export const ADAPTER_PROFILES = {
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'], models: true, access_levels: ALL_ACCESS, per_tool_allow: true,
     access_hints: { read: '只放行网站命令与草稿，不改项目文件、不跑其他命令', write: '可改项目文件，Bash / PowerShell 命令全部放行（无沙箱）',
       auto: 'Claude auto 模式：由分类器判断，实测项目外写入和联网都会放行', full: 'bypassPermissions：跳过全部权限检查' },
-    client: 'claude', adopt: 'own_cwd', host_existing: true, restore_manual: true, browse_sessions: true,
+    client: 'claude', adopt: 'own_cwd', host_existing: true, restore_manual: true, browse_sessions: true, copy_bound: true,
     resume_command: session_id => `claude --resume ${session_id}`,
     // Claude Code runs commands through bash on Windows too, where the npm shim works without .cmd.
     windows_command: 'codiscuss',
@@ -125,7 +128,7 @@ export const ADAPTER_PROFILES = {
       full: '跳过全部权限确认（--dangerously-skip-permissions），并放开沙箱外命令与 MCP 工具' },
     unsupported_hints: { auto: 'agy 只在交互窗口提供自动模式，后台运行（-p）不支持' },
     // Only a conversation this tool created gets its session rules; an existing one keeps its own project and permissions.
-    client: 'antigravity', adopt: 'session', host_existing: false, own_project_when_bound: true, browse_sessions: true,
+    client: 'antigravity', adopt: 'session', host_existing: false, own_project_when_bound: true, browse_sessions: true, copy_bound: true,
     // Confined by session rules that allow only the codiscuss commands and deny MCP and web reads (agy_lockdown_grants).
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, capture: FINAL_REMARK, tool_lockdown: true },
     // A read-only agy session allows only codiscuss commands and headless agy ends the turn on a denied one; agy streams no

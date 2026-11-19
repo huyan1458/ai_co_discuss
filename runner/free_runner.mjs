@@ -13,7 +13,8 @@ import { atomic_json } from './files.mjs';
 import { image_settings } from './image_service.mjs';
 import { outside_directory, room_directories } from './project_files.mjs';
 import { SessionDriver } from './session_driver.mjs';
-import { effective_profile, load_room_workflow, workflow_in_use, workflow_task_field } from './workflows.mjs';
+import { slash_names } from './slash_names.mjs';
+import { effective_profile, load_room_workflow, workflow_directory, workflow_in_use, workflow_task_field } from './workflows.mjs';
 import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
 import { room_text, room_payload } from './room_text.mjs';
 import { question_notice } from './question_weixin.mjs';
@@ -41,6 +42,8 @@ const NOTICE_EXCERPT = 300;
 // A manual member's session that refuses a delivery is retried in the same execution, after a wait the owner can cut short.
 const MAX_DELIVERY_RETRIES = 3;
 const RETRY_DELAY_SECONDS = 60;
+// How long a voided turn the runner cannot stop is still watched for its end: a little past the site's 600-second hold.
+const UNSTOPPABLE_FOLLOW_MS = 15 * 60_000;
 // The failure classes an adapter may report (adapter contract `on_failure(reason, {failure_class, ...})`).
 const FAILURE_CLASSES = ['quota', 'auth', 'output_truncated', 'compaction_failed', 'policy_blocked'];
 const RESTART_REASON = room_text("重启后无法确认上次执行结果");
@@ -184,6 +187,40 @@ export function attachment_placeholder(file, number) {
   return `[${IMAGE_TYPES.has(file.content_type) ? '图片' : '文件'} #${number}]`;
 }
 
+/** The text of the user's own messages among those that woke this execution; an unreadable one is skipped. */
+export async function user_request_texts(config, execution) {
+  const message_ids = [...new Set((execution.requests || []).map(item => item.message_id).filter(Number.isInteger))];
+  const texts = [];
+  for (const message_id of message_ids) {
+    try {
+      const message = await api(config, `/messages/${message_id}`);
+      if (message.author === '用户' && message.text) texts.push(message.text);
+    } catch { /* The host still reads the message itself. */ }
+  }
+  return texts;
+}
+
+/**
+ * The workflows and sub-workflows the user named with "/" for the host: a sub-workflow of the workflow in use, or a
+ * workflow in this computer's library other than that one. The task carries them, so the host never has to recognise
+ * the syntax. Other "/" words are left to the message. Null when nothing was named.
+ */
+export function named_workflows(texts, { sub_workflows = [], current = '', in_library = () => false } = {}) {
+  const named = { workflows: [], sub_workflows: [] };
+  for (const name of new Set(texts.flatMap(slash_names))) {
+    if (sub_workflows.includes(name)) named.sub_workflows.push(name);
+    else if (name !== current && in_library(name)) named.workflows.push(name);
+  }
+  const kept = Object.fromEntries(Object.entries(named).filter(([, names]) => names.length));
+  return Object.keys(kept).length ? kept : null;
+}
+
+/** Whether this computer's workflow library has a workflow with this ID. */
+function library_has(config, id) {
+  try { return Boolean(config.api_home) && existsSync(join(workflow_directory(config.api_home, id), 'SKILL.md')); }
+  catch { return false; }
+}
+
 /**
  * Download the attachments of the messages that woke this execution into its own folder, checked against their SHA-256,
  * so the member reads local copies and software that takes images gets them with the task. A file that cannot be fetched
@@ -245,7 +282,7 @@ export function room_goal(room) {
 }
 
 export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true,
-  workflow = null, room_members = [], goal = null, attachments = [], room = null, model_change = null } = {}) {
+  workflow = null, room_members = [], goal = null, attachments = [], room = null, model_change = null, request_texts = [] } = {}) {
   const id = `free-${execution.id}`;
   const draft_directory = member_drafts(config, member.name);
   mkdirSync(draft_directory, { recursive: true });
@@ -280,7 +317,7 @@ export function free_task_files(config, member, execution, binding, { session = 
       ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-session/references/host.md'] : [],
       ...direct_question ? ['discuss-participant/references/room.md'] : []]
     : ['discuss-participant/SKILL.md', 'discuss-participant/references/room.md',
-      ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/room.md'] : []];
+      ...member.role === 'host' ? ['discuss-host/SKILL.md', 'discuss-host/references/room.md', 'discuss-host/references/members.md'] : []];
   // The host works a goal while it is open, and also handles the request that opens it or the wrap-up after it ends.
   const goal_task = member.role === 'host' && (['active', 'paused'].includes(goal?.status)
     || requests.some(item => ['goal_start', 'goal_continue'].includes(item.purpose)));
@@ -309,14 +346,17 @@ export function free_task_files(config, member, execution, binding, { session = 
   const image = config.image_generation && image_settings(config.api_home).configured ? image_settings(config.api_home) : null;
   // Relay, question and image rules are read only when the task carries them, keeping the everyday path short.
   if (image || requests.some(item => item.sequence || item.question || item.question_needed)) skills.push('discuss-participant/references/situations.md');
-  // The host's occasional pages likewise: relays and question cards, room control on a notice, the workflow, pre-set reviews.
+  const named = member.role === 'host' ? named_workflows(request_texts, { sub_workflows: host_workflow?.sub_workflows.map(sub => sub.id) || [],
+    current: host_workflow?.id || '', in_library: id => library_has(config, id) }) : null;
+  // The host's occasional pages likewise: relays and question cards, room control on a notice, the workflow (also when
+  // the user named one to enable), pre-set reviews.
   if (member.role === 'host') {
     if (requests.some(item => item.sequence || item.question?.task || item.question_needed)) skills.push('discuss-host/references/relay.md');
     // A notice, or a hand-back where someone failed or was cancelled, is what calls for diagnosing and recovering.
     if (requests.some(item => item.purpose === 'notice' || (item.outcome || []).some(entry => ['failed', 'cancelled'].includes(entry.status)))) {
       skills.push('discuss-host/references/control.md');
     }
-    if (workflow_field) skills.push('discuss-host/references/workflow.md');
+    if (workflow_field || named?.workflows) skills.push('discuss-host/references/workflow.md');
     if (reviews.length) skills.push('discuss-host/references/dev-flow.md');
   }
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
@@ -333,6 +373,7 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(model_change ? { model_change: { ...model_change, note: `你的模型已从 ${model_change.from} 换为 ${model_change.to}；不要按之前的自述判断自己用的是哪个模型。` } } : {}),
     // What became of the @s in this member's previous answer: quoted, waiting, queued for the host or picked up.
     ...(execution.mentions?.length ? { mentions: execution.mentions } : {}),
+    ...(named ? { named_workflows: named } : {}),
     ...(stopped.length ? { stopped_executions: stopped } : {}),
     role: member.role || 'member',
     // Only where the adapter declares capture: without it, only a submitted answer is saved, as the skill already says.
@@ -480,6 +521,8 @@ export class FreeRoomRunner {
     this.not_started = new Set();
     // Executions whose software failed in a way a retry meets again (a used-up limit, a lost login), as its adapter reported.
     this.not_retryable = new Set();
+    // Executions whose turn an adapter that cannot stop it saw end (`on_turn_end`); only a voided one's stop report reads it.
+    this.turn_ended = new Set();
     this.failure_classes = new Map();
     this.snapshots = new Map();
     // Execution id -> { phase, at, sent_phase, sent_at }: what the member's software last showed it doing.
@@ -1031,12 +1074,12 @@ export class FreeRoomRunner {
     const live = () => this.live_id(execution.id);
     const current = () => this.generations.get(live()) === generation;
     const binding = this.store.binding(member.name);
-    // A member whose session a rewind restarted is bound to '' and must not fall back to the session it was invited with.
-    if (binding.session_id === undefined && adapter.session_id) binding.session_id = adapter.session_id;
     let invoked = false;
     // Remarks before the software shows any work (an adapter's own "not started yet") are never its reply.
     let worked = false;
     try {
+      // A member whose session a rewind restarted is bound to '' and must not fall back to the session it was invited with.
+      await this.bind_invited(member.name, adapter, binding);
       // A resumed execution's session was already cut at its first delivery.
       const warning = resume ? '' : await this.cut_rewound(member.name, adapter, binding, execution);
       const session_request = execution.requests?.find(item => item.session_request_id && ['discuss', 'discuss_host'].includes(item.purpose));
@@ -1055,10 +1098,11 @@ export class FreeRoomRunner {
       if (workflow?.error && this.workflow_error !== workflow.error) this.log(`工作流 ${workflow.id} 不可用：${workflow.error}`);
       this.workflow_error = workflow?.error || '';
       const attachments = await request_attachments(this.config, execution, member_runtime(this.config, member.name));
+      const request_texts = member.role === 'host' ? await user_request_texts(this.config, execution) : [];
       const model_change = this.model_change(member.name);
       const task = free_task_files(this.config, member, execution, binding, {
         session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped, workflow, room_members: this.room?.members,
-        goal: this.room?.goal_state?.goal || null, attachments, room: this.room, model_change,
+        goal: this.room?.goal_state?.goal || null, attachments, room: this.room, model_change, request_texts,
       });
       this.store.db.prepare('DELETE FROM metadata WHERE key IN (?,?)').run(`recovery:${execution.id}`, `recovery-denied:${execution.id}`);
       invoked = true;
@@ -1106,6 +1150,8 @@ export class FreeRoomRunner {
             ...(Number.isSafeInteger(reset_at) && reset_at > 0 ? { reset_at } : {}) });
           try { if (this.row(member.name)?.execution_id === live()) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ }
         },
+        // The turn was seen to end in a window or App the runner cannot stop; unlike on_exit it says nothing about an answer.
+        on_turn_end: () => { if (current()) this.turn_ended.add(live()); },
         on_exit: denial => {
           if (!current()) return;
           this.exited.set(live(), denial || '');
@@ -1173,19 +1219,39 @@ export class FreeRoomRunner {
    * session could not be cut and the member continues in the old one.
    */
   async cut_rewound(name, adapter, binding, execution) {
-    const key = `session-fork:${name}`;
-    const pending = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
-    if (pending && !session_exists(adapter.adapter, binding.session_id)) { binding.fork = JSON.parse(pending); return ''; }
-    if (pending) this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
+    if (this.pending_fork(name, adapter, binding)) return '';
     if (!binding.session_id || !execution.rewound_executions?.length || !BRANCHABLE_ADAPTERS.includes(adapter.adapter)) return '';
     try {
       const cut = await branch_session(adapter, binding.session_id, execution.rewound_executions);
       if (!cut) return '';
-      if (cut.fork) this.store.db.prepare('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, JSON.stringify(cut.fork));
-      this.store.bind(name, cut.session_id);
-      Object.assign(binding, cut);
+      this.rebind(name, binding, cut);
       return '';
     } catch (error) { return `会话未能回退（${error.message}），本次沿用原会话，它可能仍记得已回退的内容`; }
+  }
+  /** Ask a fork that has not happened yet (a Claude fork happens on its next turn) again; true while it is pending. */
+  pending_fork(name, adapter, binding) {
+    const key = `session-fork:${name}`;
+    const pending = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
+    if (pending && !session_exists(adapter.adapter, binding.session_id)) { binding.fork = JSON.parse(pending); return true; }
+    if (pending) this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
+    return false;
+  }
+  /** Bind a member to a branch of its session, keeping a fork its software makes on the next turn pending. */
+  rebind(name, binding, branch) {
+    if (branch.fork) this.store.db.prepare('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(`session-fork:${name}`, JSON.stringify(branch.fork));
+    this.store.bind(name, branch.session_id);
+    Object.assign(binding, branch);
+  }
+  /**
+   * A member not yet bound starts in the conversation it was invited with. Where the adapter declares `copy_bound`, its
+   * first turn works in a copy of that conversation instead, so the original, possibly still open in a window, is never
+   * written; a taken-over manual member (`own`) keeps its original.
+   */
+  async bind_invited(name, adapter, binding) {
+    if (binding.session_id !== undefined || !adapter.session_id) return;
+    if (adapter.project_access === 'own' || !adapter_of(adapter.adapter)?.copy_bound) { binding.session_id = adapter.session_id; return; }
+    try { this.rebind(name, binding, await branch_session(adapter, adapter.session_id, [], { always: true })); }
+    catch (error) { throw Object.assign(new Error(`未能复制历史会话：${error.message}`), { delivery_status: 'not_sent' }); }
   }
   /**
    * After an execution completed normally, its software may run on for the close window its adapter declares, so the
@@ -1286,7 +1352,7 @@ export class FreeRoomRunner {
     for (const map of [this.generations, this.steers, this.activity, this.replies, this.exited, this.execution_processes]) {
       if (map.has(old)) { map.set(id, map.get(old)); map.delete(old); }
     }
-    for (const set of [this.denied, this.not_started, this.not_retryable]) if (set.delete(old)) set.add(id);
+    for (const set of [this.denied, this.not_started, this.not_retryable, this.turn_ended]) if (set.delete(old)) set.add(id);
     if (this.failure_classes.has(old)) { this.failure_classes.set(id, this.failure_classes.get(old)); this.failure_classes.delete(old); }
     const snapshot = this.snapshots.get(old);
     const moved_before = snapshot?.before ? workspace_snapshot(snapshot.directory) : null;
@@ -1336,8 +1402,9 @@ export class FreeRoomRunner {
    * progress. Kept locally until the execution ends so a restarted runner still knows whether it could stop it.
    * A lost report is retained for the final stop result; sites and runners must use the same capability protocol.
    */
-  async report_delivery(execution_id, { stoppable, progress, steer = false, resume = false }, member) {
-    this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`delivery:${execution_id}`, JSON.stringify({ stoppable, progress, member }));
+  async report_delivery(execution_id, { stoppable, progress, ends = false, steer = false, resume = false }, member) {
+    // `ends`: the adapter cannot stop or follow this turn but reports when it ends (`on_turn_end`); kept locally only.
+    this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`delivery:${execution_id}`, JSON.stringify({ stoppable, progress, ends, member }));
     await api(this.config, `/executions/${execution_id}`, { action: 'delivery', stoppable, progress, steer, resume })
       .catch(error => this.log(`执行 #${execution_id} 的投递能力未能上报：${error.message}`));
   }
@@ -1363,9 +1430,17 @@ export class FreeRoomRunner {
     if (!value) return;
     const delivery = stored_delivery(value), processes = this.execution_processes.get(execution_id);
     const ended = processes ? processes.size === 0 : this.exited.has(execution_id) || this.orphan(execution_id)?.alive === false;
-    const result = delivery.pending_result && delivery.pending_result !== 'unconfirmed' ? delivery.pending_result
-      : !delivery.stoppable ? 'unstoppable' : ended ? 'stopped' : 'unconfirmed';
-    if (delivery.stop_result === result) return;
+    // A turn this runner could not stop but follows (`progress`) or hears end (`ends`) is still watched: once it ends, in
+    // its window or App by the owner or on its own, `stopped` lifts the site's hold on the next delivery.
+    const followed = Boolean(delivery.progress || delivery.ends);
+    const seen_end = ended || this.turn_ended.has(execution_id);
+    const result = delivery.pending_result && !['unconfirmed', 'unstoppable'].includes(delivery.pending_result) ? delivery.pending_result
+      : !delivery.stoppable ? (followed && seen_end ? 'stopped' : 'unstoppable') : ended ? 'stopped' : 'unconfirmed';
+    if (delivery.stop_result === result) {
+      // Past the site's hold (HOLD_SECONDS in backend/free_room.py) an unstoppable turn's end changes nothing.
+      if (result === 'unstoppable' && Date.now() - (delivery.reported_at || 0) > UNSTOPPABLE_FOLLOW_MS) this.forget_stop(execution_id);
+      return;
+    }
     // An execution that left the inbox by finishing normally has no stop to report; only a voided one does.
     if (['completed', 'failed'].includes((await api(this.config, `/executions/${execution_id}`)).status)) {
       this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
@@ -1387,13 +1462,20 @@ export class FreeRoomRunner {
     }
     this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)')
       .run(`stopped:${name}`, JSON.stringify([...new Set([...this.stopped_executions(name), execution_id])]));
-    if (result === 'unconfirmed') {
+    if (result === 'unconfirmed' || (result === 'unstoppable' && followed)) {
       this.store.db.prepare('UPDATE metadata SET value=? WHERE key=?')
-        .run(JSON.stringify({ ...delivery, member: name, pending_result: result, stop_result: result }), key);
+        .run(JSON.stringify({ ...delivery, member: name, pending_result: result, stop_result: result, reported_at: Date.now() }), key);
       // The site's bounded hold now controls the next delivery; retain handles to observe and retry termination.
       for (const child of processes || []) this.members.get(name)?.delete(child);
     }
-    else { this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key); this.execution_processes.delete(execution_id); this.forget_owner(execution_id); }
+    else this.forget_stop(execution_id);
+  }
+  /** Drop what this runner keeps for one voided execution's stop report. */
+  forget_stop(execution_id) {
+    this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`delivery:${execution_id}`);
+    this.execution_processes.delete(execution_id);
+    this.turn_ended.delete(execution_id);
+    this.forget_owner(execution_id);
   }
   /**
    * An execution whose handles an earlier runner process tracked and this one does not: `{alive}` says whether any of its
@@ -1672,6 +1754,8 @@ export class FreeRoomRunner {
     let settle;
     const ended = new Promise(resolve => { settle = resolve; });
     try {
+      await this.bind_invited(member.name, profile, binding);
+      this.pending_fork(member.name, profile, binding);
       const task = chat_task_files(this.config, member, chat, binding);
       // Software without its own session (the model API) takes the earlier lines as its context.
       const history = (await api(this.config, `/members/${member.id}/chat`).catch(() => ({ chats: [] }))).chats

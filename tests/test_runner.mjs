@@ -23,7 +23,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { listen_local } from './local_port.mjs';
 import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
-import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, request_attachments, member_drafts, member_extra_directories, member_folders, review_capability_version, room_goal, workspace_snapshot } from '../runner/free_runner.mjs';
+import { slash_insertion } from '../runner/slash_names.mjs';
+import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, named_workflows, request_attachments, member_drafts, member_extra_directories, member_folders, review_capability_version, room_goal, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
 
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
@@ -247,6 +248,24 @@ test('the occasional skill page is listed only when a request carries a relay or
   assert.ok(read(relay).some(path => path.endsWith('discuss-participant/references/situations.md')));
 });
 
+test('a workflow or sub-workflow the "/" menu inserts reaches the host task as named_workflows', () => {
+  const home = mkdtempSync(join(tmpdir(), 'named-home-'));
+  mkdirSync(join(home, 'workflows', 'story-serial'), { recursive: true });
+  writeFileSync(join(home, 'workflows', 'story-serial', 'SKILL.md'), '---\nname: story-serial\n---\n');
+  const config = { site: 'http://127.0.0.1:1', room: 'r', directory: mkdtempSync(join(tmpdir(), 'named-')), project: resolve('.'), api_home: home,
+    members: { Host: { token: 'h'.repeat(32) } }, participants: { Host: { adapter: 'codex' } } };
+  const task = request_texts => JSON.parse(readFileSync(free_task_files(config, { name: 'Host', role: 'host' },
+    { id: 1, read_until: 0, requests: [{ id: 1, message_id: 1, purpose: 'ask' }] }, {}, { request_texts }).task_path, 'utf8'));
+  // The page writes with slash_insertion and the runner reads with slash_names: the same module on both sides.
+  const host = task([`${slash_insertion('story-serial')}写第一集，见 src/a、/tmp/x/y、\`/review\`\n> /quoted`]);
+  assert.deepEqual(host.named_workflows, { workflows: ['story-serial'] });
+  assert.ok(host.skills.some(path => path.split(sep).join('/').endsWith('discuss-host/references/workflow.md')));
+  // Unknown "/" words, such as a member's skill, are left to the message.
+  assert.equal(task(['@Codex /review 看下改动']).named_workflows, undefined);
+  assert.deepEqual(named_workflows([slash_insertion('rehearsal')], { sub_workflows: ['rehearsal'], current: 'story-serial', in_library: () => true }),
+    { sub_workflows: ['rehearsal'] });
+});
+
 test("the host's occasional pages are listed only when the task carries what they cover", () => {
   const config = { site: 'http://127.0.0.1:1', room: 'r', directory: mkdtempSync(join(tmpdir(), 'host-pages-')), project: resolve('.'),
     members: { Host: { token: 'h'.repeat(32) } }, participants: { Host: { adapter: 'codex' } } };
@@ -256,6 +275,7 @@ test("the host's occasional pages are listed only when the task carries what the
     { id, read_until: 0, requests: [{ id, message_id: id, ...request }] }, {}, options)).filter(path => path.includes('discuss-host/references/'));
   const listed = (paths, page) => paths.some(path => path.endsWith(`discuss-host/references/${page}`));
   assert.ok(listed(host(1, { purpose: 'route' }), 'room.md'));
+  assert.ok(listed(host(1, { purpose: 'route' }), 'members.md'), 'every room request brings the member guide');
   assert.ok(listed(host(2, { purpose: 'handoff', sequence: { id: 3, phase: 'checkpoint' } }), 'relay.md'));
   assert.ok(listed(host(3, { purpose: 'route', question: { id: 5, task: 'decide' } }), 'relay.md'));
   assert.ok(listed(host(4, { purpose: 'notice' }), 'control.md'));
@@ -361,8 +381,8 @@ test('API file tools stay inside the project, refuse secrets and private files, 
   writeFileSync(join(root, 'outside.txt'), 'outside');
   const tools = files => participant_tools({ role: 'member', project: files }).map(item => item.name);
   const reader = open_project({ cwd: project, project_access: 'read' }, [service]);
-  assert.deepEqual(tools(null), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
-  assert.deepEqual(tools(reader), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read', 'glob', 'grep', 'git', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
+  assert.deepEqual(tools(null), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'web_fetch', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
+  assert.deepEqual(tools(reader), ['read_room', 'read_messages', 'read_message', 'read_execution', 'read_attachment', 'read_goal', 'read', 'glob', 'grep', 'git', 'web_fetch', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
   assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: reader }), /可用 read、glob、grep、git 工具只读本房间的项目目录/);
 
   // The read envelope and footers follow DeepSeek Harness.
@@ -383,7 +403,7 @@ test('API file tools stay inside the project, refuse secrets and private files, 
   assert.ok(run_file_tool(reader, 'git', { command: 'diff', paths: ['../outside.txt'] }).error);
 
   const writer = open_project({ cwd: project, project_access: 'write' }, [service]);
-  assert.deepEqual(tools(writer).slice(-6), ['write', 'edit', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
+  assert.deepEqual(tools(writer).slice(-7), ['write', 'edit', 'web_fetch', 'read_question', 'ask_question', 'read_events', 'submit_chat']);
   assert.match(system_prompt({ participant: 'DeepSeek', role: 'member', project: writer }), /草稿文件与 --body-file 不适用：回答正文直接放进 submit_chat/);
   const edit = { file_path: 'notes.md', old_string: 'one', new_string: 'first' };
   assert.match(run_file_tool(writer, 'edit', edit).error, /has not been read/);
@@ -1526,9 +1546,12 @@ test('a taken-over Claude member whose own window is open gets its task through 
   assert.equal(claude_inbox_ready({ ...profile, project_access: 'write' }, { session_id: original }), false, 'a lent session is not a manual window');
   const access_path = join(home, 'access.json'); writeFileSync(access_path, JSON.stringify({ token: 'member', session_id: '' }));
   const spawned = [], bound = [];
-  const result = await deliver_task({ ...profile, executable: process.execPath }, { session_id: original },
-    { id: 'free-7', inbox: true, access_path, directory: home, prompt: '请先读取任务文件 free-7.task.json', on_note: () => {}, on_binding: session => bound.push(session) }, (...args) => { spawned.push(args); throw new Error('no process'); });
-  assert.deepEqual(result, { session_id: original, status: 'accepted', capabilities: { stoppable: false, progress: true } }, 'the adapter reports it cannot stop a window, but reads its progress');
+  // A console that cannot be reached leaves the task unstoppable; a reachable one is covered in test_chat_claude.mjs.
+  const result = await adapter_of('claude').deliver({ ...profile, executable: process.execPath }, { session_id: original },
+    { id: 'free-7', inbox: true, access_path, directory: home, prompt: '请先读取任务文件 free-7.task.json', on_note: () => {}, on_binding: session => bound.push(session) }, (...args) => { spawned.push(args); throw new Error('no process'); },
+    undefined, { console: () => ({ ok: false, terminal: '', reason: 'AttachConsole 错误 5' }) });
+  assert.deepEqual({ ...result, steer: typeof result.steer }, { session_id: original, status: 'accepted', capabilities: { stoppable: false, progress: true }, steer: 'function' },
+    'the adapter reports it cannot stop a window it cannot reach, but reads its progress and takes interjections');
   assert.deepEqual(spawned, []);
   assert.deepEqual(bound, [original], 'the discussion runner enters the execution once the session is reported');
   for (let waited = 0; received.length < 2 && waited < 2000; waited += 20) await delay(20);
@@ -1630,6 +1653,27 @@ test('a Claude window turn interrupted or closed before it finished exits with t
   assert.equal(state.posts, undefined);
   assert.match(state.executions[0].result, /在原窗口里被中断了这一轮，未提交本次回答/);
   assert.ok(!state.calls.some(call => call.endsWith('retry_wait')));
+});
+
+test('a member invited with an existing conversation works in a copy, while a taken-over one keeps its original', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-copy-'));
+  const previous = process.env.CLAUDE_CONFIG_DIR; process.env.CLAUDE_CONFIG_DIR = home;
+  t.after(() => {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
+    rmSync(home, { recursive: true, force: true });
+  });
+  mkdirSync(join(home, 'projects', 'work'), { recursive: true });
+  writeFileSync(join(home, 'projects', 'work', 'picked-session.jsonl'), `${JSON.stringify({ type: 'user', uuid: 'u1', message: { content: '旧对话' } })}\n`);
+  for (const [project_access, copied] of [['read', true], ['own', false]]) {
+    const { store, config } = await free_fixture(t);
+    config.participants.Claude = { adapter: 'claude', project_access, session_id: 'picked-session' };
+    const bindings = [];
+    await new FreeRoomRunner(config, store, async (adapter, binding) => { bindings.push({ ...binding }); return { status: 'accepted' }; }).tick();
+    if (!copied) { assert.deepEqual(bindings, [{ session_id: 'picked-session' }]); continue; }
+    assert.notEqual(bindings[0].session_id, 'picked-session');
+    assert.deepEqual(bindings[0].fork, { from: 'picked-session', at: '' });
+    assert.equal(store.binding('Claude').session_id, bindings[0].session_id);
+  }
 });
 
 test('agy 全放开 skips its permission prompts, which no other level does', async t => {
@@ -3051,6 +3095,42 @@ test('a voided execution the runner cannot stop, in a window or App, is reported
   state.held_until = 0;
   await runner.tick();
   assert.equal(state.executions.length, 2);
+});
+
+test('a voided turn the runner cannot stop but follows reports stopped once it ends in its window', async t => {
+  const { state, store, config } = await free_fixture(t);
+  let exit;
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
+    exit = task.on_exit; return { status: 'accepted', capabilities: { stoppable: false, progress: true } };
+  });
+  await runner.tick();
+  state.executions[0].status = 'cancelled';
+  await runner.tick();
+  assert.equal(state.executions[0].stop_result, 'unstoppable', 'the turn may still run in the window');
+  assert.ok(store.db.prepare("SELECT value FROM metadata WHERE key='delivery:1'").get(), 'the runner keeps following it');
+  exit();
+  await runner.tick();
+  assert.equal(state.executions[0].stop_result, 'stopped', 'its end lifts the hold');
+  assert.equal(store.db.prepare("SELECT value FROM metadata WHERE key='delivery:1'").get(), undefined);
+});
+
+test('a voided App turn the adapter only hears end reports stopped once it ends, never failing a live one', async t => {
+  const { state, store, config } = await free_fixture(t);
+  let turn_end;
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
+    turn_end = task.on_turn_end; return { status: 'accepted', capabilities: { stoppable: false, progress: false, ends: true } };
+  });
+  await runner.tick();
+  turn_end();
+  await runner.tick();
+  assert.equal(state.executions[0].status, 'dispatched', 'a turn end says nothing about an answer, so a live execution stays');
+  runner.turn_ended.clear();
+  state.executions[0].status = 'cancelled';
+  await runner.tick();
+  assert.equal(state.executions[0].stop_result, 'unstoppable');
+  turn_end();
+  await runner.tick();
+  assert.equal(state.executions[0].stop_result, 'stopped');
 });
 
 for (const sent of [false, true]) test(`a kill signal returning ${sent} stays unconfirmed until every process closes`, async t => {

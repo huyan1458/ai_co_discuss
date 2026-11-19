@@ -6,6 +6,7 @@
  */
 import { computed, inject, nextTick, ref, watch } from "vue";
 import { t } from "./i18n.js";
+import { adapter_profile } from "../runner/adapters/profiles.mjs";
 
 const props = defineProps({
   /** The member the conversation is picked for, shown in the title. */
@@ -32,6 +33,10 @@ const list = ref(null), messages = ref(null);
 // A newer request (typing, switching scope, selecting another row) makes an older answer stale.
 let list_request = 0, preview_request = 0, search_timer;
 const scoped = computed(() => Boolean(props.directory));
+// Software that works in a copy says so here, before the pick: the original then never shows the room's turns.
+const description = computed(() => adapter_profile(props.adapter)?.copy_bound
+  ? t('将从选中的会话分叉出新会话加入房间，保留已有上下文；原会话不变，在原软件里打开它看不到房间里的后续记录。')
+  : t('选中的会话由程序在后台续接，带着它已有的上下文加入房间；它工作时请不要在原窗口继续操作。'));
 const chosen = computed(() => sessions.value.find((session) => session.id === current.value) || (preview.value?.id === current.value ? preview.value : null));
 
 /**
@@ -126,7 +131,7 @@ watch(query, () => { clearTimeout(search_timer); if (open.value) search_timer = 
 
 <template>
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" :title="t('为 {name} 选择历史会话', { name: bridge.display_name(name) })"
-    :description="t('选中的会话由程序在后台续接，带着它已有的上下文加入房间；它工作时请不要在原窗口继续操作。')" :ui="{ content: 'glass-panel studio-modal session-browser-modal', body: 'dialog-body' }">
+    :description="description" :ui="{ content: 'glass-panel studio-modal session-browser-modal', body: 'dialog-body' }">
     <template #body>
       <div class="session-browser">
         <div class="session-browser-list">

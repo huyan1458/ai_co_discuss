@@ -49,10 +49,49 @@ function queue_request(config, request) {
 
 /** Queue one immutable request for the official App-managed Sidecar. */
 async function deliver(config, binding, task) {
-  ready_sidecar(config, binding, task);
+  const ready = ready_sidecar(config, binding, task);
+  const server = language_server(ready);
+  // Steps already in the conversation belong to earlier turns; an unreadable one is simply not watched.
+  let start = server ? 0 : null;
+  if (server && binding.session_id) start = await read_conversation(server, binding.session_id).then(item => item.steps.length, () => null);
   queue_request(config, { id: task.id, event_id: Number(task.id.replace(/^free-/, '')), prompt: task.prompt,
     session_id: binding.session_id || '', access_path: task.access_path });
-  return { session_id: binding.session_id || '', status: 'sidecar_pending', capabilities: IN_APP };
+  if (start === null) return { session_id: binding.session_id || '', status: 'sidecar_pending', capabilities: IN_APP };
+  watch_room_turn(config, server, { session_id: binding.session_id || '', start }, task).catch(() => {});
+  return { session_id: binding.session_id || '', status: 'sidecar_pending', capabilities: { ...IN_APP, ends: true } };
+}
+
+/** The App's language server the Sidecar handed over, or null (an older Sidecar, or an App that no longer passes it). */
+function language_server(ready) {
+  return ready.language_server?.address && ready.language_server?.csrf_token ? ready.language_server : null;
+}
+
+// A room turn runs in the App and is not stopped from here; it is only watched for its end, so a stop the owner makes in
+// the App lets the room deliver again at once. Tests shorten these.
+export const ROOM_TIMING = { poll_ms: 2000, wait_ms: 2 * 60 * 60 * 1000, read_failures: 10 };
+
+/**
+ * Wait for the Sidecar's receipt (a new conversation's id), then read the conversation until it goes idle with new steps
+ * and nothing pending, and report `on_turn_end`. Gives up quietly on a refused delivery, an unreadable App or the
+ * ceiling; the room then falls back to the site's hold.
+ */
+export async function watch_room_turn(config, server, { session_id, start }, task) {
+  const finished = new Map(), until = Date.now() + ROOM_TIMING.wait_ms;
+  let failures = 0;
+  while (Date.now() < until) {
+    await sleep(ROOM_TIMING.poll_ms);
+    if (!session_id) {
+      const result = receipt(config, task.id);
+      if (result && result.status !== 'accepted') return;
+      session_id = result?.session_id || '';
+      if (!session_id) continue;
+    }
+    let conversation;
+    try { conversation = await read_conversation(server, session_id); failures = 0; }
+    catch { if (++failures >= ROOM_TIMING.read_failures) return; continue; }
+    const steps = conversation.steps.slice(start);
+    if (steps.length && conversation.idle && !turn_pending(steps, finished)) return task.on_turn_end?.();
+  }
 }
 
 /** Queue a chat message and wait for the Sidecar to pass it to the App; the conversation ID it went into. */
@@ -190,7 +229,7 @@ async function stop_turn(server, session_id) {
  */
 async function chat(config, binding, task) {
   const ready = ready_sidecar(config, binding, task);
-  const server = ready.language_server?.address && ready.language_server?.csrf_token ? ready.language_server : null;
+  const server = language_server(ready);
   let start = 0;
   if (server && binding.session_id) {
     let conversation;

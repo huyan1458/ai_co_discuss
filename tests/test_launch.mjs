@@ -89,7 +89,7 @@ test('skill catalogs use native discovery in the member directory without a mode
     ] },
   } })}\n`));
   const native = await software_skills({ adapter: 'claude', executable: process.execPath, cwd: ROOT }, claude);
-  assert.deepEqual(native.skills, [{ id: 'plugin:review', label: 'plugin:review', description: 'Review changes', prompt: '请调用技能「plugin:review」：' }]);
+  assert.deepEqual(native.skills, [{ id: 'plugin:review', label: 'plugin:review', description: 'Review changes', prompt: '/plugin:review ' }]);
   assert.equal(claude.requests.length, 1);
   assert.equal(claude.requests[0].request.subtype, 'initialize');
   assert.ok(claude.invocations[0][1].includes('{"disableAllHooks":true}'));

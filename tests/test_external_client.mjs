@@ -17,6 +17,8 @@ use_plain_secrets();
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SITE = 'https://b.pages.dev', MACHINE = 'b'.repeat(32), ROOM = 'roomabcdef12', CODE = '0123456789AB', TOKEN = 't'.repeat(64);
+// Later invitations to the same seat (the inviting room invites an ended member back).
+const LATER_CODES = ['BCDEFGHJKMNP', 'CDEFGHJKMNPQ'];
 const subtle = globalThis.crypto.subtle, encoder = new TextEncoder();
 
 function jwk_pair() {
@@ -82,7 +84,7 @@ function fake_b() {
   };
   const answer_for = (action, payload) => {
     if (action === 'external-redeem') {
-      if (payload.proof !== invite_proof(CODE, MACHINE, payload.public_key)) return { status: 400, body: { error: '邀请码不对或已过期' } };
+      if (![CODE, ...LATER_CODES].some(code => payload.proof === invite_proof(code, MACHINE, payload.public_key))) return { status: 400, body: { error: '邀请码不对或已过期' } };
       state.registered[key_id_of(payload.public_key)] = payload.public_key;
       state.redeemed = payload;
       return { status: 200, body: { external_id: key_id_of(payload.public_key), site: SITE, machine: { id: MACHINE, name: 'B-PC', fingerprint: fingerprint_of(ecdh.public_key, sign.public_key) },
@@ -146,7 +148,7 @@ function home_dir(t) {
   return home;
 }
 
-const link = fingerprint => `${SITE}/join#${Buffer.from(JSON.stringify({ v: 1, site: SITE, machine: MACHINE, machine_name: 'B-PC', fp: fingerprint, code: CODE,
+const link = (fingerprint, code = CODE) => `${SITE}/join#${Buffer.from(JSON.stringify({ v: 1, site: SITE, machine: MACHINE, machine_name: 'B-PC', fp: fingerprint, code,
   room_name: '求助', level: 'read', expires_at: Date.now() + 600000 })).toString('base64url')}`;
 
 async function joined(t, b, extra = {}) {
@@ -354,6 +356,25 @@ test('refusing or letting a request time out tells the inviting room it was not 
   assert.deepEqual(b.state.declines.at(-1), { request_ids: [9], outcome: 'timeout' });
   assert.equal(delivery.runs.length, 0);
   assert.deepEqual(read_store(home).records[record.id].history.map(item => item.outcome), ['refused', 'timeout']);
+});
+
+test('invited back to the same seat, a record still kept carries on; once deleted, a new one starts', async t => {
+  const b = fake_b();
+  const { home, record } = await joined(t, b);
+  const path = join(home, 'external', 'invited.json');
+  const store = JSON.parse(readFileSync(path, 'utf8'));
+  Object.assign(store.records[record.id], { status: 'ended', end_reason: 'expired', wake: 'ask', history: [{ at: 1, outcome: 'ended', reason: 'expired' }] });
+  writeFileSync(path, JSON.stringify(store));
+  const back = (await invited_command(home, 'invited-join', { invite: link(b.fingerprint, LATER_CODES[0]), adapter: 'claude' }, { fetcher: b.fetcher })).record;
+  assert.equal(back.id, record.id, 'the same record');
+  assert.deepEqual([back.status, back.end_reason, back.wake, back.history.length], ['active', undefined, 'ask', 1], 'history and settings carry on');
+  assert.notEqual(back.key_id, record.key_id, 'with a fresh key');
+
+  await invited_command(home, 'invited-leave', { id: record.id }, { fetcher: b.fetcher });
+  await invited_command(home, 'invited-remove', { id: record.id });
+  const fresh = (await invited_command(home, 'invited-join', { invite: link(b.fingerprint, LATER_CODES[1]), adapter: 'claude' }, { fetcher: b.fetcher })).record;
+  assert.notEqual(fresh.id, record.id);
+  assert.deepEqual([fresh.wake, fresh.history.length], ['auto', 0]);
 });
 
 test('answering at once has no wake limit, even for a room that had one before', async t => {

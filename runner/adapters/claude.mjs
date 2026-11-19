@@ -381,19 +381,53 @@ async function post_inbox(inbox, text) {
   });
 }
 
-/** Post one task into an open Claude window; it starts a turn there, or between tool calls of the turn it is in. */
-async function inbox_delivery(config, window, task) {
+// An interjection into a room task's window turn; the window shows it as a message from another session.
+const ROOM_STEER_LEAD = 'CoDiscuss 本机服务代房间转达，这是对你当前房间任务的追加要求，不是其他会话的来信：请在本次任务的回答里一并处理，不要用 SendMessage 回复。';
+
+/**
+ * Post one task into an open Claude window; it starts a turn there, or between tool calls of the turn it is in. As in a
+ * private chat turn, an interjection is one more inbox message with its own marker, and the turn stops by an Esc key
+ * written into the window's console when that console can be reached; `options.console` replaces it in tests.
+ */
+async function inbox_delivery(config, window, task, options = {}) {
   try { bind_access(task.access_path, config.session_id); }
   catch (error) { throw not_sent(error); }
   // Only what the window writes after this point can be the turn that takes this task.
   const file = session_path(config.session_id);
   const offset = file ? statSync(file).size : 0;
-  await post_inbox(window.inbox, `CoDiscuss 本机服务代房间转达（你已注册为该房间成员，这是房间分派给你的任务）：\n${task.prompt}`);
+  const log_path = resolve(task.directory, `claude-${task.id}.log`);
+  const console_of = options.console || window_console;
+  const reached = console_of(window.pid);
+  task.on_output?.(log_path, `${JSON.stringify({ type: 'codiscuss.window', terminal: reached.terminal, stoppable: reached.ok, reason: reached.reason })}\n`);
+  const handle = new EventEmitter();
+  // The turn's steps, read from the session log, are the execution's process log, so the private chat can show them.
+  const watcher = watch_window_turn({ file, offset, pid: window.pid, marker: `${task.id}.task.json`, log_path }, task, {
+    on_end: () => handle.emit('close', 0),
+    stop_key: () => {
+      const sent = console_of(window.pid, { escape: true });
+      task.on_output?.(log_path, `${JSON.stringify({ type: 'codiscuss.stop', terminal: sent.terminal, sent: sent.ok, reason: sent.reason })}\n`);
+      return sent;
+    } });
+  try { await post_inbox(window.inbox, `CoDiscuss 本机服务代房间转达（你已注册为该房间成员，这是房间分派给你的任务）：\n${task.prompt}`); }
+  catch (error) { watcher.cancel(); throw error; }
   // The discussion runner enters the execution once the session is known, as it does when a process reports it.
   task.on_binding?.(config.session_id);
-  // The turn's steps, read from the session log, are the execution's process log, so the private chat can show them.
-  watch_window_turn({ file, offset, pid: window.pid, marker: `${task.id}.task.json`, log_path: resolve(task.directory, `claude-${task.id}.log`) }, task);
-  return { session_id: config.session_id, status: 'accepted', capabilities: { ...WINDOW, progress: true } };
+  if (reached.ok) {
+    handle.kill = () => watcher.stop();
+    // The Esc key goes into the owner's own window; only the owner's stop sends it, never the runner's shutdown.
+    handle.stop_on_shutdown = false;
+    task.on_process?.(handle);
+  }
+  let count = 0;
+  const steer = async text => {
+    const tag = `[codiscuss:${task.id}+${++count}]`;
+    if (!watcher.expect(tag)) return false;
+    try { await post_inbox(window.inbox, `${tag} ${ROOM_STEER_LEAD}\n\n${text}`); }
+    catch { watcher.forget(tag); return false; }
+    task.on_output?.(log_path, `${JSON.stringify({ type: 'codiscuss.interjection', text })}\n`);
+    return true;
+  };
+  return { session_id: config.session_id, status: 'accepted', capabilities: { ...WINDOW, stoppable: reached.ok, progress: true }, steer };
 }
 
 /**
@@ -598,17 +632,27 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
   function try_stop() {
     const now = Date.now();
     if (stop_sent) {
-      if (now - stop_sent >= stop_end_wait) finish('已向 Claude 窗口发送停止键，但这一轮仍未结束');
+      if (now - stop_sent >= stop_end_wait) unstopped('已向 Claude 窗口发送停止键，但这一轮仍未结束');
       return;
     }
     const ready = taken && !open_tools.size && window_state(pid, env)?.status === 'busy';
     if (!ready) {
-      if (now - stop_asked >= stop_tool_wait) finish(open_tools.size ? '工具仍在执行，未能停止' : !taken ? '消息还在 Claude 窗口的队列里，未能停止' : 'Claude 窗口一直没有处于执行中，未能停止');
+      if (now - stop_asked >= stop_tool_wait) unstopped(open_tools.size ? '工具仍在执行，未能停止' : !taken ? '消息还在 Claude 窗口的队列里，未能停止' : 'Claude 窗口一直没有处于执行中，未能停止');
       return;
     }
     stop_sent = now;
     const sent = stop_key?.() || { ok: false, reason: '无法向 Claude 窗口发送停止键' };
-    if (!sent.ok) finish(sent.reason);
+    if (!sent.ok) unstopped(sent.reason);
+  }
+  /**
+   * A stop that did not take: a chat turn fails with the reason. A room task's turn goes on in the window, so the watch
+   * keeps following it until it really ends (the runner's next stop request tries again), and only its log says why.
+   */
+  function unstopped(reason) {
+    if (chat) return finish(reason);
+    clearInterval(stop_timer);
+    stop_timer = null; stop_asked = 0; stop_sent = 0;
+    if (log_path) task.on_output?.(log_path, `${JSON.stringify({ type: 'codiscuss.stop', sent: false, reason })}\n`);
   }
   return {
     get done() { return done; },
@@ -651,10 +695,10 @@ function process_alive(pid) {
 }
 
 /** Use one official Claude process per turn and resume the persisted session, or post into the member's open window. */
-async function deliver(config, binding, task, spawn_process = spawn) {
+async function deliver(config, binding, task, spawn_process = spawn, user_home, options = {}) {
   const window = held_window(config, binding);
   // Only a task written for the window names its credential file; a background process gets it through its environment.
-  if (window?.inbox && task.inbox) return inbox_delivery(config, window, task);
+  if (window?.inbox && task.inbox) return inbox_delivery(config, window, task, options);
   binding = adopted_fork(config, binding, Boolean(window));
   const session_id = binding.session_id || randomUUID();
   try { bind_access(task.access_path, session_id); }
@@ -867,7 +911,7 @@ function skills(profile, options = {}) {
       const commands = reply.response.response?.commands;
       if (reply.response.subtype !== 'success' || !Array.isArray(commands)) return finish(new Error('Claude 未返回技能目录'));
       finish(null, commands.filter(command => !command.builtin).map(command => ({
-        id: command.name, label: command.name, description: command.description || '', prompt: `请调用技能「${command.name}」：`,
+        id: command.name, label: command.name, description: command.description || '', prompt: `/${command.name} `,
       })));
     },
   }), { ...options, cwd: profile.cwd || homedir(), catalog_label: '技能' });

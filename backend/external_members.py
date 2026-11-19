@@ -22,6 +22,8 @@ EXTERNAL_HEADER = "X-CoDiscuss-External"
 BRIDGE_HEADER = "X-CoDiscuss-Bridge"
 EXTERNAL_PREFIX = ["api", "external", "rooms"]
 SCOPES = ("discuss", "read")
+# How many ended external members the roster still lists.
+MAX_ENDED_SHOWN = 10
 QUOTA_KEYS = ("hourly_bytes", "total_bytes", "hourly_reads")
 DEFAULT_QUOTA = {"hourly_bytes": 4 * 1024 * 1024, "total_bytes": 64 * 1024 * 1024, "hourly_reads": 600}
 MAX_QUOTA = {"hourly_bytes": 1024 ** 3, "total_bytes": 100 * 1024 ** 3, "hourly_reads": 100000}
@@ -121,14 +123,24 @@ def owner_view(connection, row):
 
 def room_view_field(connection, member_id):
     """The `external` field of a member in the room view, or None for a local member; no local paths."""
-    row = connection.execute("SELECT scope,expires_at,machine_label,platform,model,directories,claimed_at,invite_version FROM external_members WHERE member_id=?",
-                             (member_id,)).fetchone()
+    row = connection.execute("""SELECT scope,expires_at,machine_label,platform,model,directories,claimed_at,invite_version,ended_at,end_reason
+        FROM external_members WHERE member_id=?""", (member_id,)).fetchone()
     if not row:
         return None
     return {"scope": row["scope"], "expires_at": row["expires_at"], "machine_label": row["machine_label"],
             "platform": row["platform"], "model": row["model"],
             "directories": directory_names(json.loads(row["directories"])), "claimed_at": row["claimed_at"],
-            "invite_version": row["invite_version"]}
+            "invite_version": row["invite_version"], "ended_at": row["ended_at"], "end_reason": row["end_reason"]}
+
+
+def ended_view(connection, room_id):
+    """External members that checked in and have since ended (expired, left or revoked), newest first, so the roster
+    can still show who was here and why they went; they take no requests."""
+    rows = connection.execute("""SELECT m.id,m.name,m.adapter,m.role,m.status,m.access,m.session_mode,m.read_until
+        FROM room_members m JOIN external_members x ON x.member_id=m.id
+        WHERE m.room_id=? AND m.status='removed' AND x.claimed_at>0 AND x.ended_at>0 ORDER BY x.ended_at DESC LIMIT ?""",
+                              (room_id, MAX_ENDED_SHOWN)).fetchall()
+    return [{**dict(row), "external": room_view_field(connection, row["id"])} for row in rows]
 
 
 def external_row(connection, room_id, member_id):
@@ -311,12 +323,14 @@ def update_external(connection, room_id, member_id, token, payload, now):
     action = payload.get("action")
     if action in ("invite", "bind", "activate"):
         return seat_action(connection, row, payload, now)
+    if action == "reopen":
+        return reopen_member(connection, row, now)
     if action == "revoke":
         if row["status"] == "active":
             end_member(connection, row, "revoked")
         return owner_view(connection, external_row(connection, room_id, member_id))
     if action != "update":
-        raise ValueError(Text("action 须为 update 或 revoke"))
+        raise ValueError(Text("action 须为 update、revoke 或 reopen"))
     if row["status"] != "active":
         raise classified(FileExistsError, Text("外部成员已结束，不能再调整；需要时重新邀请"), "external_ended", reason=row["end_reason"])
     scope = payload.get("scope", row["scope"])
@@ -329,6 +343,25 @@ def update_external(connection, room_id, member_id, token, payload, now):
         machine_label=?,updated_at=? WHERE member_id=?""", (scope, json.dumps(directories, ensure_ascii=False), expires_at,
                                                           quota["hourly_bytes"], quota["total_bytes"], quota["hourly_reads"], label, now, member_id))
     return owner_view(connection, external_row(connection, room_id, member_id))
+
+
+def reopen_member(connection, row, now):
+    """Turn an ended external member back into a seat awaiting check-in, so a new link brings the same member back: its
+    name, label and history in the room stay. The old credential and binding are cleared; a seat already waiting is left."""
+    if row["status"] == "active":
+        return owner_view(connection, row)
+    if not row["ended_at"]:
+        raise FileExistsError(Text("外部成员不存在"))
+    if connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND name=? AND status<>'removed' AND id<>?",
+                          (row["room_id"], row["name"], row["id"])).fetchone():
+        raise FileExistsError(Text("{name} 已是本房间成员", name=row["name"]))
+    if connection.execute("SELECT COUNT(*) FROM room_members WHERE room_id=? AND status<>'removed'", (row["room_id"],)).fetchone()[0] >= MAX_ROOM_AGENTS:
+        raise FileExistsError(Text("房间成员已满"))
+    connection.execute("UPDATE room_members SET status='active',role='member',token_hash='' WHERE id=?", (row["id"],))
+    connection.execute("""UPDATE external_members SET ended_at=0,end_reason='',claimed_at=0,machine='',token_hash='',
+        expires_at=?,created_at=?,updated_at=? WHERE member_id=?""", (now + PENDING_SEAT_SECONDS, now, now, row["id"]))
+    free_room.sync_participants(connection, row["room_id"])
+    return owner_view(connection, external_row(connection, row["room_id"], row["id"]))
 
 
 def seat_action(connection, row, payload, now):

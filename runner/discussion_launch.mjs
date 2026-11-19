@@ -1596,8 +1596,10 @@ function switch_codex_adapter(context, name, profile, adapter) {
     const store = new DiscussionStore(current.directory);
     try {
       const binding = store.binding(name).session_id;
-      if (session && binding && session !== binding) throw new Error('原会话绑定不一致，请先核对原会话');
-      session = binding || session;
+      // A member invited with a conversation the CLI copies works in that copy, and keeps naming the original it came from.
+      const copied = Boolean(session && binding && session !== binding && adapter_profile(profile.adapter)?.copy_bound);
+      if (session && binding && session !== binding && !copied) throw new Error('原会话绑定不一致，请先核对原会话');
+      if (!copied) session = binding || session;
     } finally { store.close(); }
   }
   if (!session) throw new Error('尚无实际 Codex 会话，不能切换；请先完成首次接入');
