@@ -147,15 +147,18 @@ test('shipped workflows install only when asked, replacing a different copy afte
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-workflows-'));
   try {
     // What ships passes the same check as any import, so the library can read it.
-    const shipped = fileURLToPath(new URL('../workflows/story-serial', import.meta.url));
-    assert.equal(preview_workflow({ folder: shipped }, validate_preset, () => true).id, 'story-serial');
-    assert.deepEqual(install_workflows(home).map(item => [item.name, item.status]), [['story-serial', 'installed']]);
+    const shipped_ids = ['decision-council', 'story-serial', 'trpg-classic'];
+    for (const id of shipped_ids) {
+      const shipped = fileURLToPath(new URL(`../workflows/${id}`, import.meta.url));
+      assert.equal(preview_workflow({ folder: shipped }, validate_preset, () => true).id, id);
+    }
+    assert.deepEqual(install_workflows(home).map(item => [item.name, item.status]), shipped_ids.map(id => [id, 'installed']));
     assert.equal(get_workflow(home, 'story-serial').commands[0].id, 'state-check');
-    assert.equal(install_workflows(home)[0].status, 'unchanged');
+    assert(install_workflows(home).every(item => item.status === 'unchanged'));
     // An edited copy is replaced by the shipped one, and the edit survives in the backup.
     const edited = join(home, 'workflows', 'story-serial', 'agents', 'critic.md');
     writeFileSync(edited, 'my own critic');
-    const [result] = install_workflows(home);
+    const [result] = install_workflows(home, ['story-serial']);
     assert.equal(result.status, 'updated');
     assert.notEqual(readFileSync(edited, 'utf8'), 'my own critic');
     assert.equal(readFileSync(join(result.backup, 'agents', 'critic.md'), 'utf8'), 'my own critic');
@@ -200,7 +203,8 @@ test('setup configures native CLI, preserves existing profile and uses configure
     // Shipped workflows go in only on a run that asks for them.
     assert(!existsSync(join(env.DISCUSS_SERVICE_HOME, 'workflows', 'story-serial')));
     const asked = execute(['setup', ...options, '--workflows']);
-    assert.deepEqual(JSON.parse(asked.stdout).workflows.map(item => item.status), ['installed']);
+    assert.deepEqual(JSON.parse(asked.stdout).workflows.map(item => [item.name, item.status]),
+      ['decision-council', 'story-serial', 'trpg-classic'].map(id => [id, 'installed']));
     // Hosting (the management panel) is remembered once turned on, and stays until turned off.
     if (process.platform === 'win32') {
       const hosting = () => JSON.parse(readFileSync(join(env.DISCUSS_SERVICE_HOME, 'local-settings.json'), 'utf8')).hosting;

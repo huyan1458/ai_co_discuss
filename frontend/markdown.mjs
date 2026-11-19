@@ -1,6 +1,7 @@
 import MarkdownIt from "markdown-it";
 import { katex } from "@mdit/plugin-katex";
 import markdown_it_cjk_friendly from "markdown-it-cjk-friendly";
+import { FILE_MENTION_PATTERN } from "./file-mention.mjs";
 
 // CJK-friendly emphasis lets `**结论。**后文` close after Chinese punctuation.
 const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true })
@@ -30,7 +31,8 @@ function inside_link(tokens, index) {
 markdown.renderer.rules.text = (tokens, index, options, environment) => {
   let html = markdown.utils.escapeHtml(tokens[index].content).replace(SKILL_PATTERN, `$1<span class="skill-ref">${SKILL_ICON}$2</span>`);
   if (environment?.message_refs && !inside_link(tokens, index)) html = html.replace(MESSAGE_REF_PATTERN, '<button type="button" class="message-ref" data-message-ref="$1">#$1</button>');
-  return environment?.mention ? html.replace(environment.mention, '$1<span class="mention">$2</span>') : html;
+  if (!environment?.mention) return html;
+  return html.replace(FILE_MENTION_PATTERN, '$1<span class="mention">$2</span>').replace(environment.mention, '$1<span class="mention">$2</span>');
 };
 markdown.renderer.rules.link_open = (tokens, index, options, environment, renderer) => {
   tokens[index].attrSet("target", "_blank");

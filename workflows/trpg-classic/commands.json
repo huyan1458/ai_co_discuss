@@ -1,0 +1,5 @@
+{ "commands": [
+  { "id": "roll", "description": "掷一套新骰子：d20 两个，d4/d6/d8/d10/d12 各四个，按从左到右取用",
+    "run": ["python", "-X", "utf8", "{workflow}/tools/掷骰.py"],
+    "access": "read", "timeout_seconds": 30 }
+] }

@@ -1,0 +1,111 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "contrarian",
+      "type": "card",
+      "card": "contrarian",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "outsider",
+      "type": "card",
+      "card": "outsider",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "alternatives",
+      "type": "card",
+      "card": "alternatives",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "executor",
+      "type": "card",
+      "card": "executor",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "disputes",
+      "type": "host",
+      "label": "找分歧",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "debate",
+      "type": "host",
+      "label": "当事人交锋",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "synthesis",
+      "type": "host",
+      "label": "综合建议",
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "contrarian",
+      "label": "中性陈述·同时答"
+    },
+    {
+      "source": "start",
+      "target": "outsider",
+      "label": "中性陈述·同时答"
+    },
+    {
+      "source": "start",
+      "target": "alternatives",
+      "label": "中性陈述·同时答"
+    },
+    {
+      "source": "start",
+      "target": "executor",
+      "label": "中性陈述·同时答"
+    },
+    {
+      "source": "contrarian",
+      "target": "disputes"
+    },
+    {
+      "source": "outsider",
+      "target": "disputes"
+    },
+    {
+      "source": "alternatives",
+      "target": "disputes"
+    },
+    {
+      "source": "executor",
+      "target": "disputes"
+    },
+    {
+      "source": "disputes",
+      "target": "debate",
+      "label": "有会改变结论的分歧"
+    },
+    {
+      "source": "disputes",
+      "target": "synthesis",
+      "label": "无关键分歧"
+    },
+    {
+      "source": "debate",
+      "target": "synthesis"
+    }
+  ]
+}

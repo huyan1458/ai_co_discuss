@@ -1,0 +1,121 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "prepare",
+      "type": "host",
+      "label": "开团准备",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "dm",
+      "type": "card",
+      "card": "dm",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "fighter",
+      "type": "card",
+      "card": "fighter",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "rogue",
+      "type": "card",
+      "card": "rogue",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "wizard",
+      "type": "card",
+      "card": "wizard",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "check",
+      "type": "host",
+      "label": "每轮检查",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "dm_wrap",
+      "type": "card",
+      "card": "dm",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "wrap",
+      "type": "host",
+      "label": "收团答疑",
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "prepare"
+    },
+    {
+      "source": "prepare",
+      "target": "dm",
+      "label": "开场"
+    },
+    {
+      "source": "dm",
+      "target": "fighter",
+      "label": "结算与描述"
+    },
+    {
+      "source": "fighter",
+      "target": "rogue",
+      "label": "依次声明"
+    },
+    {
+      "source": "rogue",
+      "target": "wizard",
+      "label": "依次声明"
+    },
+    {
+      "source": "wizard",
+      "target": "check"
+    },
+    {
+      "source": "check",
+      "target": "dm",
+      "label": "下一轮·带上用户行动"
+    },
+    {
+      "source": "check",
+      "target": "fighter",
+      "label": "桌边商量·不带DM"
+    },
+    {
+      "source": "check",
+      "target": "dm_wrap",
+      "label": "结束或叫停"
+    },
+    {
+      "source": "dm_wrap",
+      "target": "wrap",
+      "label": "收团总结"
+    },
+    {
+      "source": "wizard",
+      "target": "dm",
+      "label": "用户坐席·等你发言"
+    }
+  ]
+}

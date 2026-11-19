@@ -25,6 +25,7 @@ import ExecutionChanges from "./ExecutionChanges.vue";
 import { add_excerpt, excerpt_mark_place, excerpt_range, excerpt_source, excerpts_markdown, file_preview, hold_selection, text_offset } from "./file-preview.js";
 import { keep_reading_position } from "./scroll-anchor.js";
 import { guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
+import { FILE_MENTION_PATTERN } from "./file-mention.mjs";
 import MemoBlock from "./memo-block.js";
 import UTooltip from "@nuxt/ui/components/Tooltip.vue";
 import { motion, useSpring, useTransform } from "motion-v";
@@ -865,14 +866,14 @@ const blank = (match) => " ".repeat(match.length);
  */
 const mention_mirror = computed(() => token_mirror(text.value, view.value.attachment_drafts, mention_spans(text.value)));
 function mention_spans(value) {
-  if (!mention_pool.value.length || !value.includes("@")) return [];
+  if (!value.includes("@")) return [];
   // Masking keeps every offset, so matches in the masked copy point at the same characters of the draft.
   const masked = value.replace(/```[\s\S]*?```/g, blank).replace(/`[^`\n]*`/g, blank).replace(/^>.*$/gm, blank);
   const names = free_members.value.map((member) => member.name);
   // Longest handle first, and a span already highlighted is not highlighted again by a shorter handle inside it.
   const handles = mention_pool.value.flatMap(({ name }) => names.includes(name) ? bridge.mention_handles(name, names) : [name])
     .sort((left, right) => right.length - left.length);
-  const taken = [];
+  const taken = [...masked.matchAll(FILE_MENTION_PATTERN)].map((match) => [match.index + match[1].length, match.index + match[0].length]);
   for (const name of handles) for (const match of masked.matchAll(new RegExp(MENTION_PATTERN(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).source, "gu"))) {
     const span = [match.index + match[1].length, match.index + match[0].length];
     if (!taken.some(([start, end]) => span[0] < end && start < span[1])) taken.push(span);
