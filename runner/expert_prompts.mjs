@@ -97,7 +97,7 @@ export function external_task_text({ name, messages, requests = [], cli, access_
   const instructions = `你作为外部成员参加另一台电脑上的房间，只读对方开放的项目，不修改任何文件。命令只用 subcommands 列出的 ${cli} 子命令。${limits}${reading}`;
   const prompt = `${wake_opening(requests, name)}（来自另一台电脑上的房间），对应消息 ${messages}。${instructions}`
     + `用 ${cli} message view 消息编号${access} 看原文，${cli} room read${access} 看房间概况。`
-    + `做完用 ${cli} message post --body-file 草稿${access} 提交一次回答（简短回答可用 --body "回答"）。先读任务文件 ${task_path} 与其中列出的技能。`;
+    + `做完用 ${cli} message post --body-file 草稿${access} 提交一次回答（简短回答可用 --body "回答"）。房间按 Markdown 显示回答，内容较多时用分段、标题或列表排版。先读任务文件 ${task_path} 与其中列出的技能。`;
   return { instructions, prompt };
 }
 

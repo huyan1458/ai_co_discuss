@@ -26,6 +26,7 @@ export const OPERATIONS = {
   invited_approve: "invited-approve",
   invited_refuse: "invited-refuse",
   invited_leave: "invited-leave",
+  invited_remove: "invited-remove",
   invited_room: "invited-room",
 };
 // Room routes of the room backend, with the owner's credential.
@@ -53,7 +54,7 @@ export const DURATIONS = [
 const DURATION_DAYS = { "3d": 3, "7d": 7, "30d": 30 };
 /** A's three trust levels, recorded per inviting computer. */
 export const TRUST_LEVELS = [
-  { value: "default", label: t("默认"), description: t("对方点名后先问你，同意才唤醒；AI 只能用共议命令") },
+  { value: "default", label: t("每次询问"), description: t("对方点名后先问你，同意才唤醒；AI 只能用共议命令") },
   { value: "borrow", label: t("完全借用"), description: t("点名即唤醒，受下面的次数与期限上限；AI 只能用共议命令") },
   { value: "trusted", label: t("信任设备"), description: t("点名即唤醒，不设上限，按普通只读成员运行；这台电脑之后的邀请直接接受") },
 ];
@@ -333,6 +334,10 @@ function create_invited({ view, bridge }) {
   // What the other room says about this member now (`invited-room` → `room.me`), by record: its scope and end follow
   // the owner's later changes, which the record learns only on its next pull.
   const room_me = ref({});
+  // The texts last read for each record, shown at once when it is opened again.
+  const room_messages = new Map();
+  // The invitation being accepted, listed in the sidebar while its answer crosses the relay.
+  const pending_join = ref(null);
   // D6a: 信任设备 is set only on this computer's own page; through the relay or from an online page it stays greyed.
   const trust_local = computed(() => Boolean(view.value.admin?.local) || ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname));
   const busy = ref("");
@@ -365,9 +370,13 @@ function create_invited({ view, bridge }) {
     timer = setInterval(load, INVITED_POLL_MS);
   }, { immediate: true });
 
+  /** Show a write's outcome before the computer has confirmed it; `load` puts the truth back if it fails. */
+  function patch_record(id, change) {
+    records.value = records.value.map((record) => record.id === id ? { ...record, ...change(record) } : record);
+  }
   /** Run one write, show its error as a notice, and read the records again; returns the result or null. */
   async function run(name, operation, payload, success = "") {
-    if (busy.value) return null;
+    if (busy.value) { load(); return null; }
     busy.value = name;
     try {
       const result = await bridge.local_request(operation, payload);
@@ -376,25 +385,47 @@ function create_invited({ view, bridge }) {
       return result || {};
     } catch (error) {
       bridge.notify("error", runner_text(error.message));
+      load();
       return null;
     } finally { busy.value = ""; }
   }
 
   const open = (id) => { selected_id.value = id; page_open.value = true; };
   const close = () => { page_open.value = false; };
-  /** Join, then set the trust level if the user chose one above 默认 (`invited-join` starts at the computer's level). */
-  async function join({ trust, ...payload }) {
-    const result = await run("join", OPERATIONS.invited_join, payload);
-    if (!result?.record) return result;
-    if (trust && trust.trust !== result.record.trust) await set_trust(result.record.id, trust);
-    return result;
+  /** Join, then apply the chosen trust level and 完全借用 limits (`invited-join` starts at the computer's level). */
+  async function join({ trust, room_title = "", ...payload }) {
+    pending_join.value = { room_title };
+    try {
+      const result = await bridge.local_request(OPERATIONS.invited_join, payload);
+      if (result?.record && trust && (trust.trust !== result.record.trust || trust.trust === "borrow")) {
+        await bridge.local_request(OPERATIONS.invited_trust, trust_payload(result.record.id, trust));
+      }
+      await load();
+      return result || {};
+    } catch (error) {
+      bridge.notify("error", runner_text(error.message));
+      return null;
+    } finally { pending_join.value = null; }
   }
+  const trust_payload = (id, { trust, max_wakes, hours }) => ({ id, trust, ...(trust === "borrow" ? { max_wakes, hours } : {}) });
   /** `trust`: { trust, max_wakes, hours }; the limits apply to 完全借用 only. */
-  const set_trust = (id, { trust, max_wakes, hours }, success = "") => run("trust", OPERATIONS.invited_trust,
-    { id, trust, ...(trust === "borrow" ? { max_wakes, hours } : {}) }, success);
-  const set_paused = (id, paused) => run("pause", OPERATIONS.invited_pause, { id, paused }, paused ? t("已暂停") : t("已恢复"));
-  const approve = (id, approval) => run(`decide:${approval}`, OPERATIONS.invited_approve, { id, approval }, t("已同意，正在唤醒"));
-  const refuse = (id, approval) => run(`decide:${approval}`, OPERATIONS.invited_refuse, { id, approval }, t("已拒绝，对方会看到“对方未同意”"));
+  function set_trust(id, trust, success = "") {
+    patch_record(id, () => ({ trust: trust.trust }));
+    return run("trust", OPERATIONS.invited_trust, trust_payload(id, trust), success);
+  }
+  function set_paused(id, paused) {
+    patch_record(id, () => ({ paused }));
+    return run("pause", OPERATIONS.invited_pause, { id, paused }, paused ? t("已暂停") : t("已恢复"));
+  }
+  const settle_approval = (id, approval) => patch_record(id, (record) => ({ approvals: (record.approvals || []).filter((item) => item.id !== approval) }));
+  function approve(id, approval) {
+    settle_approval(id, approval);
+    return run(`decide:${approval}`, OPERATIONS.invited_approve, { id, approval }, t("已同意，正在唤醒"));
+  }
+  function refuse(id, approval) {
+    settle_approval(id, approval);
+    return run(`decide:${approval}`, OPERATIONS.invited_refuse, { id, approval }, t("已拒绝，对方会看到“对方未同意”"));
+  }
   async function leave(id) {
     const done = await run("leave", OPERATIONS.invited_leave, { id });
     if (!done) return done;
@@ -403,13 +434,19 @@ function create_invited({ view, bridge }) {
     if (selected_id.value === id) page_open.value = false;
     return done;
   }
+  /** Delete an ended record from this computer; the middle goes back to the room it was showing before. */
+  async function remove(id) {
+    const done = await run("remove", OPERATIONS.invited_remove, { id }, t("记录已删除"));
+    if (done && selected_id.value === id) page_open.value = false;
+    return done;
+  }
   /** One invited room: `{ record, room, error? }`, room being this computer's AI's view of the other room. */
-  const read_room = (id) => bridge.local_request(OPERATIONS.invited_room, { id });
+  const read_room = (id, options = {}) => bridge.local_request(OPERATIONS.invited_room, { id, ...options });
   /** Open the join dialog, optionally filled with a link or code. */
   function start_join(text = "") { join_text.value = text; joining.value = true; }
 
-  return { available, records, loaded, failure, page_open, selected_id, selected, joining, join_text, busy, room_me, trust_local,
-    load, open, close, join, set_trust, set_paused, approve, refuse, leave, read_room, start_join };
+  return { available, records, loaded, failure, page_open, selected_id, selected, joining, join_text, busy, room_me, room_messages, pending_join, trust_local,
+    load, open, close, join, set_trust, set_paused, approve, refuse, leave, remove, read_room, start_join };
 }
 
 /**

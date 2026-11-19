@@ -366,7 +366,7 @@ test('a paired device manages this computer\'s invited rooms as the computer doe
     proof: pairing_proof(code, env.link.id, device.public_key), passkey: software_passkey('discussion.test').create(pairing_passkey_challenge(code, device.public_key), SITE) })).status, 200);
   const ran = [];
   const options = { run: command => { ran.push(command); return { status: 200, body: { records: [] } }; } };
-  const actions = ['invited-list', 'invited-join', 'invited-trust', 'invited-ai', 'invited-pause', 'invited-approve', 'invited-refuse', 'invited-leave', 'invited-room'];
+  const actions = ['invited-list', 'invited-join', 'invited-trust', 'invited-ai', 'invited-pause', 'invited-approve', 'invited-refuse', 'invited-leave', 'invited-remove', 'invited-room'];
   for (const action of actions) {
     const id = next_id(), ephemeral = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
     const shared = await relay_cipher(await crypto.subtle.exportKey('jwk', ephemeral.privateKey), env.link.public_key);

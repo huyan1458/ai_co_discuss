@@ -278,8 +278,16 @@ const creating_preview = computed(() => {
   const creating = view.value.creating_room;
   if (!creating?.opened) return null;
   const members = Object.entries(creating.experts || {}).map(([name, mode]) => ({ name, access: mode === "manual" ? "manual" : "runner", adapter: view.value.launch.profiles?.[name]?.adapter }));
-  return { ...creating, members };
+  const host = members.find((member) => member.name === creating.host);
+  const host_name = host ? bridge.display_name(host.name) : "";
+  // These lines read as they will in the finished room, so opening it changes the state and nothing around it.
+  const recipient = members.length === 1 ? t('发给 {value1}', { value1: bridge.display_name(members[0].name) })
+    : host ? t('发给主持人 {value1}；@ 其他成员让它们发言', { value1: host_name }) : t('未 @ 任何成员：只作留言，不会唤醒 AI');
+  const detail = host ? t('消息默认交给 {value1}；@ 其他成员让它们发言', { value1: host_name }) : t('没有主持人：消息只作留言');
+  return { ...creating, members, host_name, recipient, detail, can_start: host?.access === "runner" && view.value.launch.available };
 });
+// The composer's broadcast switch is there once speech is set up; the placeholder keeps the same row of buttons.
+const creating_speech_ready = (() => { try { return localStorage.getItem("ai-codiscuss-speech-ready") === "1"; } catch { return false; } })();
 
 /** Open the shared creation form from either navigation surface. */
 function create_channel(folder = null) {
@@ -510,7 +518,19 @@ function resize_nav_by_key(event) {
         <FilePreview />
         </div>
       </div>
-      <div v-else-if="creating_preview && !middle_page" class="channel-body channel-body-discussion"><div class="channel-content"><section class="channel-conversation"><div class="channel-transcript" role="status" :aria-label="t('正在创建：{name}', { name: creating_preview.title })"><div class="channel-message-group channel-topic-group"><TopicCard :preview="creating_preview" /></div></div></section></div></div>
+      <div v-else-if="creating_preview && !middle_page" class="channel-body channel-body-discussion"><div class="channel-content"><section class="channel-conversation"><div class="channel-transcript" role="status" :aria-label="t('正在创建：{name}', { name: creating_preview.title })"><div class="channel-message-group channel-topic-group"><TopicCard :preview="creating_preview" /></div>
+        <div class="channel-empty"><UIcon name="i-lucide-hash" /><h2>{{ creating_preview.title }}</h2><p class="flex items-center gap-1.5"><UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />{{ t("正在创建房间…") }}</p></div></div>
+        <div class="channel-composer-dock"><div class="channel-composer-column">
+          <UChatPrompt model-value="" disabled :autofocus="false" :rows="1" :placeholder="t('发消息到 # {value1}', { value1: creating_preview.title })" :aria-label="t('留言正文')" variant="outline" color="neutral" class="channel-composer" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }">
+            <template #footer>
+              <UButton type="button" icon="i-lucide-paperclip" :aria-label="t('添加附件')" color="neutral" variant="ghost" size="sm" disabled />
+              <UButton v-if="creating_speech_ready" type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :aria-label="t('开启语音播报')" disabled />
+              <UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" :aria-label="t('语音输入')" disabled />
+              <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('发送')" disabled />
+            </template>
+          </UChatPrompt>
+          <div class="channel-composer-note"><span>{{ creating_preview.recipient }}</span></div>
+        </div></div></section></div></div>
       <div v-else-if="view.rooms_loading && !middle_page" class="grid flex-1 place-content-center justify-items-center gap-3 text-muted" role="status"><UIcon name="i-lucide-loader-circle" class="size-6 animate-spin" /><span>{{ t("正在读取房间…") }}</span></div>
       <RoomWelcome v-else-if="!middle_page" />
     </main>
@@ -544,11 +564,14 @@ function resize_nav_by_key(event) {
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" :aria-label="t('调整右侧栏宽度')" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="t('{count} 像素', { count: rail_width })" :title="t('拖动调整右侧栏宽度，也可使用左右方向键')" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" v-keep-reading class="channel-member-rail" :aria-label="t('当前焦点与讨论进度')">
       <section class="channel-rail-board"><InvitedRoomRail v-if="invited_page" /><FreeBoard v-else-if="room" @history="open_consensus()" />
-        <div v-else-if="creating_preview" class="progress-board is-docked"><header class="pb-header"><strong>{{ t("房间") }}</strong></header>
+        <div v-else-if="creating_preview" class="progress-board is-docked"><header class="pb-header"><strong>{{ t("房间") }}</strong><span class="pb-mode">{{ creating_preview.host_name ? t('{value1} 主持', { value1: creating_preview.host_name }) : t('无主持人') }}</span></header>
+          <section class="pb-status is-primary" :aria-label="t('房间状态')"><div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ t("正在创建") }}</strong></div><p class="pb-status-detail">{{ creating_preview.detail }}</p></section>
           <section class="pb-section" :aria-label="t('发言顺序')"><h4>{{ t('发言顺序') }}</h4><ul class="pb-members">
-            <li v-for="member in creating_preview.members" :key="member.name" class="pb-member"><UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-              <div class="pb-member-body"><div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.name === creating_preview.host" name="i-lucide-crown" :title="t('主持人')" /></div><div class="pb-member-status"><span class="pb-dot"></span><span class="pb-member-status-text">{{ t("正在启动") }}</span></div></div></li>
-          </ul></section></div>
+            <li v-for="member in creating_preview.members" :key="member.name" class="pb-member pb-member-creating"><span></span><UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+              <div class="pb-member-body"><div class="pb-member-name">{{ bridge.display_name(member.name) }}<UIcon v-if="member.name === creating_preview.host" name="i-lucide-crown" :title="t('主持人')" /></div><USkeleton v-if="member.access === 'runner'" class="pb-member-setup-skeleton" /><div class="pb-member-status"><span class="pb-dot"></span><span class="pb-member-status-text">{{ t("正在启动") }}</span></div></div></li>
+          </ul><UButton icon="i-lucide-plus" :label="t('邀请 AI 加入')" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-action-add" disabled /></section>
+          <section class="pb-actions pb-start-actions" :aria-label="t('操作')"><div class="pb-start-pair"><UButton icon="i-lucide-messages-square" :label="t('开启讨论')" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" disabled /><UButton icon="i-lucide-target" :label="t('开启 Goal')" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" disabled /></div>
+            <p v-if="!creating_preview.can_start" class="pb-free-note">{{ t('开启讨论或 Goal 需要一位由本机唤醒的 AI 主持人。') }}</p></section></div>
         <div v-else class="progress-board is-docked"><header class="pb-header"><strong>{{ t("讨论进度") }}</strong></header><p class="channel-rail-empty">{{ t("暂无房间，新建讨论后在这里查看进度与参与者。") }}</p></div></section>
     </aside>
 

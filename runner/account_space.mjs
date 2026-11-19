@@ -10,7 +10,10 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
+import { atomic_json } from './files.mjs';
+
 const SETTINGS_FILE = 'local-settings.json';
+const HIDDEN_PROJECTS_FILE = 'hidden-projects.json';
 // A hosted account's instance writes the failures its runner judged here, one JSON line each; the owner's panel relays them.
 export const OPERATOR_EVENTS_FILE = 'operator-events.jsonl';
 const PROJECT_NAME_LIMIT = 80;
@@ -57,6 +60,44 @@ export function account_projects(root) {
   return readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory())
     .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }))
     .map(entry => ({ id: createHash('sha256').update(entry.name).digest('hex').slice(0, 16), name: entry.name, path: join(root, entry.name) }));
+}
+
+/** Names the account removed from its list; their folders stay on disk, so rooms using them keep working. */
+function hidden_project_names(home) {
+  const path = join(home, HIDDEN_PROJECTS_FILE);
+  const names = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : [];
+  return Array.isArray(names) ? names.filter(name => typeof name === 'string') : [];
+}
+
+/** The projects an ordinary account sees in its list: its folders, without the ones it removed. */
+export function listed_account_projects(home, root) {
+  const hidden = new Set(hidden_project_names(home));
+  return account_projects(root).filter(project => !hidden.has(project.name));
+}
+
+/**
+ * Take projects off an ordinary account's list without touching their folders; repeating a removal changes nothing.
+ *
+ * Args:
+ *   home: The instance's service directory, which keeps the hidden names.
+ *   root: The account's projects root.
+ *   ids: The ids of the projects to remove, as `account_projects` reports them.
+ */
+export function hide_account_projects(home, root, ids) {
+  const projects = new Map(account_projects(root).map(project => [project.id, project.name]));
+  const names = ids.map(id => projects.get(id));
+  if (names.includes(undefined)) throw new Error('项目不存在，请刷新后重试');
+  atomic_json(join(home, HIDDEN_PROJECTS_FILE), [...new Set([...hidden_project_names(home), ...names])]);
+}
+
+/** Create a project, or bring back the removed project of that name with its files. */
+export function create_or_restore_account_project(home, root, name) {
+  const wanted = typeof name === 'string' ? name.trim() : '';
+  const hidden = hidden_project_names(home);
+  if (!hidden.includes(wanted)) return create_account_project(root, name);
+  atomic_json(join(home, HIDDEN_PROJECTS_FILE), hidden.filter(item => item !== wanted));
+  const folder = join(root, wanted);
+  return existsSync(folder) ? { name: wanted, path: folder } : create_account_project(root, name);
 }
 
 /** Create one project folder directly under the projects root; a name that would nest or escape is refused. */

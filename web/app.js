@@ -4948,6 +4948,13 @@ async function create_launch_project(name) {
   return result.created;
 }
 
+/** Take projects off an ordinary account's list; their folders and files stay on the computer. */
+async function remove_launch_projects(ids) {
+  const result = await local_launch_request("projects", { remove: ids });
+  state.launch.projects = result.projects;
+  publish_view();
+}
+
 /** Save machine defaults without per-discussion session IDs or project write access. */
 async function save_launch_defaults() {
   // Defaults are per platform; an extra instance's model and effort apply to its own discussion only.
@@ -6440,7 +6447,7 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input, upload_progress,
   write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, remove_launch_projects, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

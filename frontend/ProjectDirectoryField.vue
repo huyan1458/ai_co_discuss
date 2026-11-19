@@ -94,11 +94,12 @@ function finish_folder(path) {
 // A select: the draft space and every project are always listed, the current one checked; creating sits apart at the end.
 const restricted_items = computed(() => [
   bound.value ? [] : [{ label: t('草稿空间'), description: t('不指定项目，为这个房间单独建一个文件夹'), icon: "i-lucide-folder-open",
-    ...(chosen.value ? {} : { trailingIcon: "i-lucide-check" }), onSelect: () => write_cwd("") }],
+    ...(cwd.value ? {} : { trailingIcon: "i-lucide-check" }), onSelect: () => write_cwd("") }],
   projects.value.length ? [{ type: "label", label: t('我的项目') },
     ...projects.value.map((project) => ({ label: project.name, icon: "i-lucide-folder",
       ...(chosen.value === project ? { trailingIcon: "i-lucide-check" } : {}), onSelect: () => write_cwd(project.path) }))] : [],
-  [{ label: t('新建项目…'), icon: "i-lucide-folder-plus", onSelect: () => { creating.value = { open: true, name: "", saving: false, error: "" }; } }],
+  [{ label: t('新建项目…'), icon: "i-lucide-folder-plus", onSelect: () => { creating.value = { open: true, name: "", saving: false, error: "" }; } },
+    ...(projects.value.length ? [{ label: t('管理项目…'), icon: "i-lucide-settings-2", onSelect: open_manager }] : [])],
 ].filter((group) => group.length));
 
 // ---- New project for a restricted account: a name only; the computer creates the folder. ----
@@ -179,13 +180,23 @@ function remove(index) {
   if (editing.value === index) editing.value = -1;
 }
 
+/** Remove the projects taken off the draft; a field still pointing at one goes back to no project. */
+async function remove_restricted_projects() {
+  const kept = new Set(draft.value.map((project) => project.id));
+  const removed = projects.value.filter((project) => !kept.has(project.id));
+  if (!removed.length) return;
+  await bridge.remove_launch_projects(removed.map((project) => project.id));
+  if (removed.some((project) => same_path(project.path, cwd.value))) write_cwd("");
+}
+
 /** The service checks every path exists on its own computer before replacing the list. */
 async function save_projects() {
   if (complete(adding.value)) confirm_add();
   saving.value = true;
   error.value = "";
   try {
-    await bridge.save_launch_projects(draft.value);
+    if (restricted.value) await remove_restricted_projects();
+    else await bridge.save_launch_projects(draft.value);
     managing.value = false;
   } catch (failure) { error.value = failure.message; } finally { saving.value = false; }
 }
@@ -206,9 +217,9 @@ async function save_projects() {
   <div v-else-if="restricted" class="project-field">
     <div class="project-select-wrap" :class="{ 'has-actions': $slots.actions }">
       <UDropdownMenu :items="restricted_items" :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-menu project-menu project-menu-field' }" :disabled="props.disabled">
-        <button type="button" class="project-select" :class="{ 'is-empty': !chosen && bound }" :disabled="props.disabled">
-          <UIcon :name="chosen ? 'i-lucide-folder' : bound ? 'i-lucide-folder-search' : 'i-lucide-folder-open'" class="project-select-icon" />
-          <span>{{ chosen ? chosen.name : bound ? t('选择项目') : t('草稿空间') }}</span>
+        <button type="button" class="project-select" :class="{ 'is-empty': !cwd && bound }" :disabled="props.disabled">
+          <UIcon :name="cwd ? 'i-lucide-folder' : bound ? 'i-lucide-folder-search' : 'i-lucide-folder-open'" class="project-select-icon" />
+          <span>{{ chosen ? chosen.name : cwd ? folder_name(cwd) : bound ? t('选择项目') : t('草稿空间') }}</span>
           <UIcon name="i-lucide-chevron-down" class="project-select-chevron" />
         </button>
       </UDropdownMenu>
@@ -236,7 +247,8 @@ async function save_projects() {
     <slot name="actions" />
   </div>
 
-  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="managing" :title="t('常用项目')" :description="t('保存在运行 codiscuss 的这台电脑上。登录同一网站的手机、平板可直接选择，路径不会离开这台电脑。')"
+  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="managing" :title="restricted ? t('我的项目') : t('常用项目')"
+    :description="restricted ? t('移除后不再出现在列表里，文件夹和文件都会保留，正在使用它的房间不受影响。以后新建同名项目即可恢复。') : t('保存在运行 codiscuss 的这台电脑上。登录同一网站的手机、平板可直接选择，路径不会离开这台电脑。')"
     :ui="{ content: 'glass-panel studio-modal project-modal', body: 'dialog-body' }">
     <template #body>
       <form class="project-manager dialog-form" @submit.prevent="save_projects">
@@ -253,9 +265,9 @@ async function save_projects() {
               <UButton icon="i-lucide-check" color="neutral" variant="ghost" size="xs" :aria-label="t('完成编辑')" :disabled="!complete(project)" @click="editing = -1" />
             </template>
             <template v-else>
-              <div class="project-text"><strong>{{ project.name }}</strong><small :title="bridge.display_path(project.path)">{{ bridge.display_path(project.path) }}</small></div>
+              <div class="project-text"><strong>{{ project.name }}</strong><small v-if="!restricted" :title="bridge.display_path(project.path)">{{ bridge.display_path(project.path) }}</small></div>
               <div class="project-actions">
-                <UButton icon="i-lucide-pencil" color="neutral" variant="ghost" size="xs" :aria-label="t('编辑 {value1}', { value1: project.name })" @click="adding = null; editing = index" />
+                <UButton v-if="!restricted" icon="i-lucide-pencil" color="neutral" variant="ghost" size="xs" :aria-label="t('编辑 {value1}', { value1: project.name })" @click="adding = null; editing = index" />
                 <UButton icon="i-lucide-trash-2" color="neutral" variant="ghost" size="xs" :aria-label="t('移除 {value1}', { value1: project.name })" @click="remove(index)" />
               </div>
             </template>
@@ -274,7 +286,7 @@ async function save_projects() {
             <UButton :label="t('加入列表')" icon="i-lucide-plus" color="neutral" variant="soft" size="sm" :disabled="!complete(adding)" @click="confirm_add" />
           </div>
         </div>
-        <button v-else type="button" class="project-add-trigger" @click="start_adding"><UIcon name="i-lucide-plus" />{{ t('添加项目') }}</button>
+        <button v-else-if="!restricted" type="button" class="project-add-trigger" @click="start_adding"><UIcon name="i-lucide-plus" />{{ t('添加项目') }}</button>
 
         <p v-if="error" role="alert" class="project-error"><UIcon name="i-lucide-circle-alert" />{{ error }}</p>
         <div class="project-footer">

@@ -113,6 +113,26 @@ class OwnerGrantTests(ExternalMemberTests):
         self.assertEqual(self.ext("ai", {"adapter": "claude", "model": "m" * 121})[0], 400)
         self.assertEqual(self.ext("ai", {"adapter": "claude"}, token=uuid.uuid4().hex)[0], 403)
 
+    def test_a_seat_is_named_after_its_ai_on_joining_unless_the_owner_renamed_it(self):
+        labels = lambda: self.request(self.path, token=self.owner)[1]["labels"]
+
+        def join(name, platform):
+            seat = self.create(pending=True, name=name, token=None)
+            path = f"{self.owner_path}/{seat['member_id']}"
+            version = self.request(path, {"action": "invite"}, self.owner)[1]["invite_version"]
+            self.request(path, {"action": "bind", "invite_version": version, "token": uuid.uuid4().hex, "machine": f"ext:{name}",
+                                "expires_at": int(time.time()) + 3600, "adapter": "claude", "platform": platform}, self.owner)
+
+        self.create(pending=True, name="Custom-ext", token=None)
+        self.assertEqual(labels()["Custom-ext"], "外部专家")
+        join("Custom-ext2", "Claude")
+        join("Custom-ext3", "Claude")
+        join("Custom-ext4", "Custom")
+        self.create(pending=True, name="Custom-ext5", token=None)
+        self.request(f"{self.path}/labels", {"labels": {"Custom-ext5": "小王的助手"}}, self.owner)
+        self.assertEqual([labels()[name] for name in ("Custom-ext", "Custom-ext2", "Custom-ext3", "Custom-ext4", "Custom-ext5")],
+                         ["外部专家", "外部 Claude", "外部 Claude2", "外部专家4", "小王的助手"])
+
     def test_databases_from_before_reported_ai_gain_its_columns_and_keep_their_members(self):
         from backend.free_room import migrate_free_tables
         member = self.create()
@@ -241,6 +261,13 @@ class OwnerGrantTests(ExternalMemberTests):
 
 
 class MemberScopeTests(ExternalMemberTests):
+    def test_requests_for_a_renamed_member_are_found_by_its_member_id(self):
+        self.create()
+        sent = self.say("@另一台电脑 你在吗", to=[EXTERNAL])[1]
+        self.say("这条没有点名它")
+        status, body = self.ext(f"messages?mention={EXTERNAL}")
+        self.assertEqual((status, [item["id"] for item in body["messages"]]), (200, [sent["message"]["id"]]), body)
+
     def test_request_claim_progress_and_answer(self):
         self.create()
         sent = self.say("请帮忙看 app.py", to=[EXTERNAL])[1]

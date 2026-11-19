@@ -3,8 +3,8 @@
  * device's passkey, and revoke devices or their remote write grants. The paired computer decides; this only asks it. */
 import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { renderSVG } from "uqr";
-import jsQR from "jsqr";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import { use_qr_camera } from "./qr-scan.js";
 import { locale, t } from './i18n.js';
 
 const { view, bridge } = inject("discussion");
@@ -65,58 +65,16 @@ async function pair() {
 }
 
 // Scanning in the page: the camera frames are read here until a pairing link shows up, then pairing starts at once.
-const scanning = ref(false);
-const camera_ready = ref(false);
-let scan_version = 0;
-const video = ref(null);
-let stream = null;
-function stop_scan() {
-  scan_version++;
-  stream?.getTracks().forEach((track) => track.stop());
-  stream = null;
-  scanning.value = false;
-  camera_ready.value = false;
-}
-async function scan() {
-  if (scanning.value) return;
-  const version = ++scan_version;
-  scanning.value = true;
-  try {
-    const opened = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
-    if (version !== scan_version) { opened.getTracks().forEach((track) => track.stop()); return; }
-    stream = opened;
-  } catch {
-    if (version !== scan_version) return;
-    stop_scan();
-    bridge.notify("error", t('无法打开相机：请允许本网站使用相机，或用系统相机扫码'));
-    return;
-  }
-  await new Promise(requestAnimationFrame);
-  if (version !== scan_version || !video.value) return;
-  video.value.srcObject = stream;
-  await video.value.play().catch(() => {});
-  if (version !== scan_version) return;
-  camera_ready.value = true;
-  const canvas = document.createElement("canvas");
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  const frame = () => {
-    if (!scanning.value) return;
-    const { videoWidth: width, videoHeight: height } = video.value;
-    if (width && height) {
-      Object.assign(canvas, { width, height });
-      context.drawImage(video.value, 0, 0, width, height);
-      const found = jsQR(context.getImageData(0, 0, width, height).data, width, height, { inversionAttempts: "dontInvert" });
-      const scanned = found && bridge.device.take_scanned(found.data);
-      if (scanned) {
-        stop_scan();
-        code.value = scanned;
-        return pair();
-      }
-    }
-    requestAnimationFrame(frame);
-  };
-  requestAnimationFrame(frame);
-}
+const { scanning, camera_ready, video, scan, stop_scan } = use_qr_camera({
+  accept(text) {
+    const scanned = bridge.device.take_scanned(text);
+    if (!scanned) return false;
+    code.value = scanned;
+    pair();
+    return true;
+  },
+  denied: () => bridge.notify("error", t('无法打开相机：请允许本网站使用相机，或用系统相机扫码')),
+});
 
 /** Show a two-minute code and the QR code a phone camera can open, for pairing another device. */
 function add_device() {

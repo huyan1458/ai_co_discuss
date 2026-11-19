@@ -306,6 +306,10 @@ html[data-theme^="channel"] .pb-action { flex-shrink: 0; white-space: nowrap; mi
 html[data-theme^="channel"] .pb-action.pb-action-block { display: flex; width: 100%; justify-content: center; }
 html[data-theme^="channel"] .pb-action.pb-action-add { margin-top: 8px; border-style: dashed; background: transparent; }
 .progress-board > .pb-actions:has(.pb-action-block) { flex-wrap: wrap; }
+/* The two start buttons share one row; the note on why they are disabled sits below them. */
+.progress-board > .pb-start-actions { flex-direction: column; align-items: stretch; }
+.pb-start-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pb-start-pair .pb-action { justify-content: center; }
 html[data-theme^="channel"] .pb-action:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); }
 html[data-theme^="channel"] .pb-action [class*="icon"] { width: 14px; height: 14px; }
 /* Stop-all sits at the end of the status title it controls, so showing or hiding it never shifts the meters below. */
@@ -337,6 +341,10 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-member-status .pb-dot { width: 6px; height: 6px; }
 .pb-member-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pb-member-status small { color: var(--ui-text-dimmed); font-size: 11px; }
+/* A room still being created lays its members out like the finished speaking order; the setup line fills in once it opens. */
+.pb-member-creating { grid-template-columns: 18px auto minmax(0, 1fr) auto; gap: 8px; min-height: 0; padding: 4px 8px; }
+.pb-member-creating .pb-member-body { line-height: 1.35; }
+.pb-member-setup-skeleton { width: 96px; height: 11px; margin: 3px 0; }
 .pb-member-more { opacity: 0; }
 .pb-member:hover .pb-member-more, .pb-member-more:focus-visible, .pb-member-more[data-state="open"] { opacity: 1; }
 .pb-note { margin: 8px 0 0; color: var(--ui-text-dimmed); font-size: 11px; }

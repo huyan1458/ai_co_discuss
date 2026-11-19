@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { account_projects, account_space, create_account_project, draft_folder } from './account_space.mjs';
+import { account_projects, account_space, create_or_restore_account_project, draft_folder, hide_account_projects, listed_account_projects } from './account_space.mjs';
 import { atomic_json } from './files.mjs';
 import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, read_only_enforced, read_project_files, read_project_folders, room_directories, search_project_roots } from './project_files.mjs';
 import { guard_remote_request, list_remote_directories, remote_allows, remote_roots } from './remote_policy.mjs';
@@ -677,7 +677,7 @@ const PROJECT_ID_PATTERN = /^[0-9a-f]{8,32}$/;
 export function launch_projects(home) {
   // An ordinary account's projects are the folders under its projects root; it keeps no list of its own.
   const { projects_root } = account_space(home);
-  if (projects_root) return { projects: account_projects(projects_root), restricted: true };
+  if (projects_root) return { projects: listed_account_projects(home, projects_root), restricted: true };
   const path = join(home, 'launch-projects.json');
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { projects: [] };
 }
@@ -687,8 +687,12 @@ export function launch_projects(home) {
 export function save_launch_projects(home, input) {
   const { projects_root } = account_space(home);
   if (projects_root) {
-    if (typeof input.create !== 'string') throw new Error('此账号的项目只能在自己的项目文件夹内新建：请提供 create（项目名称）');
-    const created = create_account_project(projects_root, input.create);
+    if (Array.isArray(input.remove)) {
+      hide_account_projects(home, projects_root, input.remove);
+      return launch_projects(home);
+    }
+    if (typeof input.create !== 'string') throw new Error('此账号的项目只能在自己的项目文件夹内新建或移除：请提供 create（项目名称）或 remove（项目编号列表）');
+    const created = create_or_restore_account_project(home, projects_root, input.create);
     return { ...launch_projects(home), created };
   }
   if (!Array.isArray(input.projects)) throw new Error('projects 必须为列表');
@@ -2298,6 +2302,7 @@ function granted_projects(home) {
   const { projects_root, workspace } = account_space(home);
   if (!projects_root) return launch_projects(home).projects;
   mkdirSync(workspace, { recursive: true });
+  // Removed projects stay granted: removing only shortens the list, and rooms working there must keep running.
   return [...account_projects(projects_root), { name: '草稿空间', path: workspace }];
 }
 

@@ -25,36 +25,57 @@ const OUTCOMES = {
   lockdown_unsupported: [t("这个软件不能限制为只用共议命令，未启动"), "error"], ai_unavailable: [t("这台电脑没有可用的 AI 程序，未启动"), "error"],
   ended: [t("成员资格已结束"), "neutral"],
 };
-let version = 0;
-async function load(quiet = false) {
+// The record being read: a read crosses the relay and can outlast the refresh, so the next one waits for it to finish.
+let reading = "";
+function show_messages(id, list) {
+  messages.value = list;
+  invited.room_messages.set(id, list);
+}
+async function load() {
   const id = invited.selected_id.value;
-  if (!id) return;
-  const request = ++version;
-  if (!quiet) loading.value = true;
+  if (!id || reading === id) return;
+  reading = id;
   try {
     const result = await invited.read_room(id);
-    if (request !== version) return;
-    // Kept from the last read while the other computer cannot be reached, so the answers do not vanish.
+    if (invited.selected_id.value !== id) return;
     // The top-level `messages`: the other room's, or the texts this computer kept when it cannot be reached. An empty
     // answer during an outage keeps what was last shown rather than blanking the page.
-    if (!result.error || result.messages?.length) messages.value = result.messages || [];
+    if (!result.error || result.messages?.length) show_messages(id, result.messages || []);
     if (result.room?.me) invited.room_me.value = { ...invited.room_me.value, [id]: result.room.me };
     error.value = runner_message(result.error_text, result.error || "");
     misses.value = result.error ? misses.value + 1 : 0;
     if (!result.error) reached.value = true;
     failure.value = "";
-  } catch (problem) { if (request === version) failure.value = runner_message(null, problem.message); }
-  finally { if (request === version) loading.value = false; }
+  } catch (problem) { if (invited.selected_id.value === id) failure.value = runner_message(null, problem.message); }
+  finally {
+    if (reading === id) reading = "";
+    if (invited.selected_id.value === id) loading.value = false;
+  }
 }
-watch(() => invited.selected_id.value, () => { messages.value = []; misses.value = 0; reached.value = false; load(); }, { immediate: true });
-const timer = setInterval(() => { if (!record.value?.status || record.value.status === "active") load(true); }, REFRESH_MS);
+/** Open a record: what is already known shows at once, and the other room is read behind it. */
+function open_record(id) {
+  messages.value = invited.room_messages.get(id) || [];
+  error.value = failure.value = "";
+  misses.value = 0;
+  reached.value = false;
+  loading.value = Boolean(id) && !messages.value.length;
+  if (id && !messages.value.length) {
+    invited.read_room(id, { cached: true }).then((kept) => {
+      if (invited.selected_id.value === id && !messages.value.length && kept.messages?.length) messages.value = kept.messages;
+    }).catch(() => {});
+  }
+  load();
+}
+watch(() => invited.selected_id.value, open_record, { immediate: true });
+const timer = setInterval(() => { if (!record.value?.status || record.value.status === "active") load(); }, REFRESH_MS);
 onBeforeUnmount(() => clearInterval(timer));
 
 const items = computed(() => invited_items(record.value, messages.value));
 const ai_name = computed(() => record.value?.member_label || record.value?.member || t("你的 AI"));
 const active = computed(() => !record.value?.status || record.value.status === "active");
-// A room never read yet has nothing to fall back on, so its first miss already says why the page is empty.
-const offline = computed(() => active.value && Boolean(error.value) && (misses.value >= OFFLINE_AFTER_MISSES || !reached.value));
+const offline = computed(() => active.value && Boolean(error.value) && misses.value >= OFFLINE_AFTER_MISSES);
+// Until a read has answered, a text not shown yet is still on its way rather than gone.
+const read_settled = computed(() => reached.value || misses.value >= OFFLINE_AFTER_MISSES || !active.value);
 const full_date = (value) => value ? new Date(time_ms(value)).toLocaleString([], { hour12: false }) : "";
 const short_date = (value) => value ? new Date(time_ms(value)).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "";
 const outcome_of = (item) => OUTCOMES[item.outcome] || [item.outcome || "", "neutral"];
@@ -94,7 +115,7 @@ function reason_class(item) {
       <div v-else-if="failure" class="invited-notice is-error" role="alert">
         <UIcon name="i-lucide-circle-alert" />
         <div><p>{{ failure }}</p></div>
-        <UButton :label="t('重试')" size="xs" color="neutral" variant="outline" @click="load()" />
+        <UButton :label="t('重试')" size="xs" color="neutral" variant="outline" @click="load" />
       </div>
       <div v-else-if="!items.length" class="invited-empty">
         <span class="invited-empty-icon"><UIcon name="i-lucide-at-sign" /></span>
@@ -118,7 +139,7 @@ function reason_class(item) {
                   <UBadge :color="outcome_of(item)[1]" variant="subtle" size="sm" class="invited-outcome">{{ outcome_of(item)[0] }}</UBadge>
                 </header>
                 <div v-for="message in item.requests" :key="message.id" class="channel-message-text markdown-body invited-text" v-html="bridge.render_room_markdown(message.text)"></div>
-                <p v-if="item.missing_text" class="channel-message-text channel-stop-reason invited-reason">{{ t("正文在对方房间，已无法读取") }}</p>
+                <p v-if="item.missing_text && read_settled" class="channel-message-text channel-stop-reason invited-reason">{{ t("正文在对方房间，已无法读取") }}</p>
                 <p v-else-if="item.reason" class="channel-message-text invited-reason" :class="reason_class(item)">{{ runner_message(item.reason_text, item.reason) }}</p>
               </article>
               <article v-for="answer in item.answers" :key="answer.id" class="invited-turn is-answer">

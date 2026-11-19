@@ -17,6 +17,8 @@ MAX_ROOM_AGENTS = 12
 INSTANCE_PATTERN = re.compile(rf"({'|'.join(AI_PLATFORMS)})(?:-[0-9A-Za-z_]{{1,{MAX_INSTANCE_SUFFIX}}})?")
 # The name people and AIs call a platform when it differs from its ID; web/app.js PLATFORM_IDENTITIES shows the same.
 PLATFORM_NICKNAMES = {"Antigravity": "Gemini", "Custom": "自定义 API"}
+# What a joined external member is called after (外部 Claude); a custom API keeps its pending name.
+JOINED_NICKNAMES = {PLATFORM_NICKNAMES.get(platform, platform) for platform in AI_PLATFORMS if platform != "Custom"}
 
 
 def is_ai(name):
@@ -44,8 +46,16 @@ def default_label(name):
 
 def default_label_text(name, label):
     """Return display metadata only for the unchanged Custom platform nickname."""
-    if name.startswith("Custom-ext") and label == "另一台电脑" + name.removeprefix("Custom-ext"):
-        return text_payload(Text("另一台电脑{suffix}", suffix=name.removeprefix("Custom-ext")))
+    if name.startswith("Custom-ext"):
+        suffix = name.removeprefix("Custom-ext")
+        if label == "外部专家" + suffix:
+            return text_payload(Text("外部专家{suffix}", suffix=suffix))
+        # Rooms invited before the pending name was renamed keep the label stored then.
+        if label == "另一台电脑" + suffix:
+            return text_payload(Text("另一台电脑{suffix}", suffix=suffix))
+        joined = re.fullmatch(r"外部 (\S+?)(\d*)", label or "")
+        if joined and joined[1] in JOINED_NICKNAMES:
+            return text_payload(Text("外部 {ai}{suffix}", ai=joined[1], suffix=joined[2]))
     if platform_of(name) == "Custom" and label == default_label(name):
         return text_payload(Text("自定义 API{suffix}", suffix=name[len("Custom"):]))
     return None

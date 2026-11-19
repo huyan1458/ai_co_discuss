@@ -381,10 +381,6 @@ watch(() => room.value.id, () => { starting.value = false; });
 /* A member from another computer: a dashed ring marks it apart from this computer's own AIs. */
 .pb-goal-status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .pb-goal-status.is-paused { color: var(--ui-text-muted); }
-/* The two start buttons share one row; the note on why they are disabled sits below them. */
-.progress-board > .pb-start-actions { flex-direction: column; align-items: stretch; }
-.pb-start-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.pb-start-pair .pb-action { justify-content: center; }
 .pb-goal-usage { margin: 4px 0 0; color: var(--ui-text-muted); font-size: 11px; }
 .pb-goal-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 /* Speaking-order rows stay compact: name, then the workflow tag and setup on one line, then the status. */

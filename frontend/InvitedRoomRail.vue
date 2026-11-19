@@ -13,7 +13,7 @@ import { t } from "./i18n.js";
 defineProps({ drawer: Boolean });
 const invited = use_invited_rooms();
 const record = invited.selected;
-const editing = ref(false), leaving = ref(false);
+const editing = ref(false), leaving = ref(false), removing = ref(false);
 const trust = ref({ trust: "default", max_wakes: 20, hours: 24 });
 const HOUR_MS = 3_600_000;
 watch(() => record.value?.id, () => { editing.value = false; });
@@ -26,7 +26,8 @@ function start_edit() {
 async function save() {
   // 信任设备 cannot be chosen through the relay (D6a): a record already trusted keeps its level until changed here or locally.
   if (!invited.trust_local.value && trust.value.trust === "trusted") { editing.value = false; return; }
-  if (await invited.set_trust(record.value.id, trust.value, t("信任等级已更新"))) editing.value = false;
+  editing.value = false;
+  invited.set_trust(record.value.id, trust.value, t("信任等级已更新"));
 }
 const usage = computed(() => {
   const value = record.value;
@@ -41,6 +42,7 @@ const borrow_until = computed(() => record.value?.trust === "borrow" ? remaining
 const CONTACT = { offline: t("对方电脑不在线"), error: t("通信出错") };
 const BY ={ user: t("对方房主"), host: t("对方主持人") };
 const leave_items = [t("对方房间里的成员身份立即结束，之后点名不再唤醒你的 AI。"), t("你的 AI 已经读到的内容仍留在它的会话里。")];
+const remove_items = [t("这台电脑上这个房间的记录、历史和运行文件会被删除，无法恢复。"), t("对方房间不受影响，你的 AI 自己的会话也会保留。")];
 const date = (value) => new Date(time_ms(value)).toLocaleString([], { hour12: false });
 const busy = invited.busy;
 // What the other room says now (`room.me`, read by the middle page) wins over what the record kept from joining.
@@ -127,7 +129,12 @@ const status = computed(() => {
         </div>
       </div>
     </section>
+    <section v-else class="pb-section" :aria-label="t('删除记录')">
+      <UButton :label="t('删除记录')" icon="i-lucide-trash-2" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block invited-leave"
+        :title="record.leave_pending ? t('退出通知还没送达对方电脑，送达后才能删除记录') : undefined" :loading="busy === 'remove'" :disabled="Boolean(busy) || record.leave_pending" @click="removing = true" />
+    </section>
     <ConfirmDialog v-model:open="leaving" :title="t('退出「{room}」', { room: record.room_title || '' })" :items="leave_items" :confirm-label="t('退出房间')" danger @confirm="invited.leave(record.id)" />
+    <ConfirmDialog v-model:open="removing" :title="t('删除「{room}」的记录', { room: record.room_title || '' })" :items="remove_items" :confirm-label="t('删除记录')" danger @confirm="invited.remove(record.id)" />
   </div>
 </template>
 

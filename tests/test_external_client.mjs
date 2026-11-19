@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -155,6 +155,13 @@ async function joined(t, b, extra = {}) {
   return { home, record };
 }
 
+/** Joined, with the owner having chosen to be asked before every wake. */
+async function joined_asking(t, b) {
+  const { home, record } = await joined(t, b);
+  await invited_command(home, 'invited-trust', { id: record.id, trust: 'default' });
+  return { home, record };
+}
+
 const deps = (b, delivery, more = {}) => ({ fetcher: b.fetcher, deliver: delivery.deliver, software: { executable: 'C:/fake/claude.exe' }, ...more });
 /**
  * Wait until `check()` holds: a run's end is reported in the background (its adapter callback), so the test waits for the
@@ -172,7 +179,7 @@ const reported = (b, action) => () => b.state.executions.some(item => item.actio
 test('joining keeps the key and credential out of the record and every command output', async t => {
   const b = fake_b();
   const { home, record } = await joined(t, b);
-  assert.equal(record.trust, 'default');
+  assert.equal(record.trust, 'borrow');
   assert.equal(record.fingerprint_checked, true);
   assert.equal(record.member, 'Claude-ext');
   assert.deepEqual(record.directories, [{ root: 0, name: 'app' }]);
@@ -266,9 +273,19 @@ test('a bare code needs the site, takes its only computer, and is marked uncheck
   await assert.rejects(invited_command(home, 'invited-join', { invite: link(b.fingerprint), adapter: 'codex' }, { fetcher: b.fetcher }), /命令行软件|command-line/);
 });
 
-test('default trust waits for consent; approving lets the service wake a locked-down run bound to its execution', async t => {
+test('a newly joined computer wakes when named, without asking again', async t => {
   const b = fake_b(), delivery = fake_deliver();
   const { home, record } = await joined(t, b);
+  b.state.pending = [{ id: 7, message_id: 40, purpose: 'host_ask', created_by: 'host' }];
+  const woke = await poll_record(home, record.id, deps(b, delivery));
+  assert.equal(woke.execution_id, 100);
+  assert.equal(delivery.runs[0].task.tool_lockdown, true);
+  assert.deepEqual(read_store(home).records[record.id].approvals, []);
+});
+
+test('default trust waits for consent; approving lets the service wake a locked-down run bound to its execution', async t => {
+  const b = fake_b(), delivery = fake_deliver();
+  const { home, record } = await joined_asking(t, b);
   b.state.pending = [{ id: 7, message_id: 40, purpose: 'host_ask', created_by: 'host' }];
   const first = await poll_record(home, record.id, deps(b, delivery));
   assert.ok(first.approval);
@@ -325,7 +342,7 @@ test('a running execution is renewed, and ending without an answer fails it ther
 
 test('refusing or letting a request time out tells the inviting room it was not agreed to', async t => {
   const b = fake_b(), delivery = fake_deliver();
-  const { home, record } = await joined(t, b);
+  const { home, record } = await joined_asking(t, b);
   b.state.pending = [{ id: 8, message_id: 41 }];
   const { approval } = await poll_record(home, record.id, deps(b, delivery));
   await invited_command(home, 'invited-refuse', { id: record.id, approval }, deps(b, delivery));
@@ -446,6 +463,29 @@ test('a leave the inviting computer did not hear is delivered later, and the key
   assert.ok(!secrets().includes(TOKEN));
 });
 
+test('only a settled record can be deleted, and deleting removes its key and run files here', async t => {
+  const b = fake_b();
+  const { home, record } = await joined(t, b);
+  const secrets = () => readFileSync(join(home, 'external', 'secrets.json'), 'utf8');
+  await assert.rejects(invited_command(home, 'invited-remove', { id: record.id }), error => error.code === 'record_active');
+
+  b.state.online = false;
+  await invited_command(home, 'invited-leave', { id: record.id }, { fetcher: b.fetcher });
+  await assert.rejects(invited_command(home, 'invited-remove', { id: record.id }), error => error.code === 'leave_pending');
+  assert.ok(secrets().includes(TOKEN), 'the undelivered leave still needs the key');
+
+  b.state.online = true;
+  await poll_record(home, record.id, { fetcher: b.fetcher, now: () => b.state.me.expires_at * 1000 - 60000 });
+  const drafts = join(home, 'external', 'drafts', record.id);
+  mkdirSync(drafts, { recursive: true });
+  const calls = b.state.calls.length;
+  assert.deepEqual(await invited_command(home, 'invited-remove', { id: record.id }), { removed: record.id });
+  assert.equal(read_store(home).records[record.id], undefined);
+  assert.ok(!secrets().includes(TOKEN));
+  assert.ok(!existsSync(drafts));
+  assert.equal(b.state.calls.length, calls, 'the inviting room is not contacted');
+});
+
 test('the external task text points the AI at repo and its own access file', () => {
   assert.ok(TASK_SUBCOMMANDS.includes('repo'));
   const { prompt } = external_task_text({ name: 'Claude-ext', messages: '#40', cli: 'codiscuss', access_file: '/x/a.json', task_path: '/x/t.json', lockdown: true,
@@ -547,7 +587,7 @@ test('a restricted run cannot use launch image or launch files outside its draft
 
 test('approving one request claims only that one; others keep waiting for consent', async t => {
   const b = fake_b(), delivery = fake_deliver();
-  const { home, record } = await joined(t, b);
+  const { home, record } = await joined_asking(t, b);
   b.state.pending = [{ id: 20, message_id: 80 }];
   const { approval } = await poll_record(home, record.id, deps(b, delivery));
   b.state.pending.push({ id: 21, message_id: 81 });

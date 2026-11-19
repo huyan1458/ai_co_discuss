@@ -1,7 +1,7 @@
 <script setup>
 /**
  * The invite dialog's card for an AI on another computer: what it may do, which of this room's directories it reads,
- * how long it stays. A reserved seat shows its current link, QR code and pairing code, or why a link is unavailable.
+ * how long it stays. A reserved seat shows its current link and QR code, or why a link is unavailable.
  */
 import { computed, inject, onUnmounted, ref, useId, watch } from "vue";
 import { renderSVG } from "uqr";
@@ -55,8 +55,9 @@ function generate() {
     const result = await operations.create_invite(room.value.id, { member_id: seat_id.value || undefined, level: level.value, duration: duration.value,
       ...(level.value === "read" ? { folders } : {}) });
     seat_id.value = result.member_id;
-    await act("refresh");
+    // The link shows as soon as it exists; the roster catches up behind it.
     invite.value = { ...result, svg: result.url ? renderSVG(result.url, { border: 1 }) : "" };
+    Promise.resolve(act("refresh")).catch(() => {});
   });
 }
 
@@ -122,15 +123,12 @@ const uid = useId();
       <div class="external-invite-result-body">
         <p v-if="invite.pending">{{ t("待生成链接") }}</p>
         <p v-if="invite.pending && invite.reason" class="external-invite-hint">{{ runner_message(invite.reason_text, invite.reason) }}</p>
-        <p v-else>{{ t("把链接或二维码发给对方；对方也可以在自己的共议里输入配对码：") }}</p>
-        <p v-if="invite.url" class="external-invite-code">{{ invite.code }}</p>
+        <p v-else>{{ t("把链接或二维码发给对方。") }}</p>
         <div class="external-invite-copy">
           <UButton v-if="invite.url" :icon="copied === 'url' ? 'i-lucide-check' : 'i-lucide-copy'" :label="copied === 'url' ? t('已复制') : t('复制链接')" size="xs" :color="copied === 'url' ? 'success' : 'neutral'" variant="outline" @click="copy('url', invite.url)" />
-          <UButton v-if="invite.url" :icon="copied === 'code' ? 'i-lucide-check' : 'i-lucide-copy'" :label="copied === 'code' ? t('已复制') : t('复制配对码')" size="xs" :color="copied === 'code' ? 'success' : 'neutral'" variant="outline" @click="copy('code', invite.code)" />
           <UButton :label="invite.url || settings?.invite_version ? t('重新生成链接') : t('生成链接')" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="ghost" @click="generate" />
         </div>
         <p v-if="invite.url" class="external-invite-hint">{{ t("{time} 前兑换有效，只能用一次。对方兑换后完成签到，你会收到提示，可随时撤销。", { time: date(invite.expires_at) }) }}</p>
-        <p v-if="invite.url" class="external-invite-hint">{{ t("配对码不含这台电脑的公钥指纹，优先发链接或二维码。") }}</p>
       </div>
     </div>
   </section>
@@ -174,7 +172,6 @@ const uid = useId();
 /* The QR code keeps a white plate in both themes so phone cameras read it (same as device pairing). */
 .external-invite-qr { flex-shrink: 0; width: 148px; height: 148px; padding: 6px; border-radius: 8px; background: #fff; }
 .external-invite-qr :deep(svg) { display: block; width: 100%; height: 100%; }
-.external-invite-code { margin: 0; color: var(--ui-text-highlighted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 18px; font-weight: 600; letter-spacing: 1px; }
 .external-invite-copy { display: flex; flex-wrap: wrap; gap: 6px; }
 .external-invite-pending { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--ui-border-muted); }
 .external-invite-pending ul { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }

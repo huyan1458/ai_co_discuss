@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -76,6 +76,28 @@ test('an ordinary account\'s instance uses only its own projects and draft space
     assert.throws(() => command(f.home, 'room-settings', { site: 'http://127.0.0.1:1', room_id: 'r', token: 't', extra_directories: [path] }), /未允许/, path);
   }
   assert.throws(() => command(f.home, 'pick-directory'), /只能使用自己的项目文件夹/);
+});
+
+test('removing a project only shortens the list: its files and access stay, and the same name brings it back', t => {
+  const f = fixture(t);
+  const projects = join(f.root, 'projects'), workspace = join(f.root, 'workspace');
+  for (const folder of [projects, workspace]) mkdirSync(folder);
+  writeFileSync(join(f.home, 'local-settings.json'), JSON.stringify({ workspace, projects_root: projects }));
+  const { created, projects: listed } = command(f.home, 'projects', { create: '新品方案' });
+  writeFileSync(join(created.path, 'plan.md'), 'keep me');
+  const { id } = listed[0];
+
+  assert.deepEqual(command(f.home, 'projects', { remove: [id] }).projects, []);
+  assert.deepEqual(command(f.home, 'projects', { remove: [id] }).projects, []);
+  assert.deepEqual(command(f.home, 'settings').projects, []);
+  assert.equal(readFileSync(join(created.path, 'plan.md'), 'utf8'), 'keep me');
+  assert.equal(command(f.home, 'browse-directory', { path: created.path }).path, created.path);
+  assert.throws(() => command(f.home, 'projects', { remove: ['0000000000000000'] }), /项目不存在/);
+
+  const restored = command(f.home, 'projects', { create: '新品方案' });
+  assert.equal(restored.created.path, created.path);
+  assert.deepEqual(restored.projects.map(project => project.id), [id]);
+  assert.equal(readFileSync(join(created.path, 'plan.md'), 'utf8'), 'keep me');
 });
 
 test('the computer owner\'s instance keeps its saved project list and may name any folder', t => {

@@ -351,7 +351,8 @@ test('A chain: join by link; at the default level a request waits for A, and A r
   const b = await computer_b_with_project(t), a = computer_a(t);
   const { invited_command, poll_record, APPROVAL_TIMEOUT_MS } = await import('../runner/external_client.mjs');
   const record = await cli_join(a, b);
-  assert.equal(record.trust, 'default');
+  assert.equal(record.trust, 'borrow');
+  await invited_command(a.home, 'invited-trust', { id: record.id, trust: 'default' });
   assert.equal(record.lockdown, true);
   assert.equal(record.fingerprint_checked, true, 'the link\'s fingerprint was checked against B\'s keys');
   assert.equal(record.machine, b.link.id);

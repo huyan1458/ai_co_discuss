@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 
 from . import free_room
-from .identity import AI_PLATFORMS, MAX_ROOM_AGENTS, is_ai
+from .identity import AI_PLATFORMS, MAX_ROOM_AGENTS, PLATFORM_NICKNAMES, is_ai
 from .runtime import begin_write, require_owner, token_hash
 from .texts import Text, text_payload
 
@@ -290,10 +290,7 @@ def create_external(connection, room_id, token, payload, now):
         if duration not in ("1h", "today", "3d", "7d", "30d"):
             raise ValueError(Text("外部成员不存在"))
         connection.execute("UPDATE external_members SET claimed_at=0,invite_duration=? WHERE member_id=?", (duration, cursor.lastrowid))
-        suffix = name.removeprefix("Custom-ext") if name.startswith("Custom-ext") else f"-{cursor.lastrowid}"
-        connection.execute("""INSERT INTO member_labels(room_id,name,label,updated_at) VALUES(?,?,?,?)
-            ON CONFLICT(room_id,name) DO UPDATE SET label=excluded.label,updated_at=excluded.updated_at""",
-                           (room_id, name, str(Text("另一台电脑{suffix}", suffix=suffix)), now))
+        save_label(connection, room_id, name, pending_label(name, cursor.lastrowid), now)
     free_room.queue_invited_expert(connection, room_id, name, now)
     free_room.sync_participants(connection, room_id)
     row = external_row(connection, room_id, cursor.lastrowid)
@@ -358,6 +355,7 @@ def seat_action(connection, row, payload, now):
             save_ai(connection, row["id"], payload, now)
             connection.execute("UPDATE external_members SET machine=?,machine_label=?,token_hash=?,expires_at=? WHERE member_id=?",
                                (machine, label, hashed, expiry, row["id"]))
+            name_joined(connection, row, now)
         elif action == "activate":
             if not row["machine"]:
                 raise FileExistsError(Text("外部成员不存在"))
@@ -367,6 +365,36 @@ def seat_action(connection, row, payload, now):
                 free_room.queue_invited_expert(connection, row["room_id"], row["name"], now)
                 free_room.sync_participants(connection, row["room_id"])
     return owner_view(connection, external_row(connection, row["room_id"], row["id"]))
+
+
+def pending_label(name, member_id):
+    """The name a seat goes by until someone joins it: 外部专家, 外部专家2 … (the suffix of Custom-ext, Custom-ext2 …)."""
+    suffix = name.removeprefix("Custom-ext") if name.startswith("Custom-ext") else f"-{member_id}"
+    return str(Text("外部专家{suffix}", suffix=suffix))
+
+
+def save_label(connection, room_id, name, label, now):
+    """Set one member's display label; its member name (ID) stays as it is."""
+    connection.execute("""INSERT INTO member_labels(room_id,name,label,updated_at) VALUES(?,?,?,?)
+        ON CONFLICT(room_id,name) DO UPDATE SET label=excluded.label,updated_at=excluded.updated_at""", (room_id, name, label, now))
+
+
+def name_joined(connection, row, now):
+    """On first joining, a seat still under its pending name takes its AI's (外部 Claude, 外部 Claude2 …).
+
+    A name the owner gave is kept, and so is the pending one when the AI is unknown or a custom API, which has no
+    name of its own. Only the label changes; the member name that requests and records use stays.
+    """
+    platform = connection.execute("SELECT platform FROM external_members WHERE member_id=?", (row["id"],)).fetchone()[0]
+    current = free_room.member_labels(connection, row["room_id"]).get(row["name"])
+    legacy = "另一台电脑" + row["name"].removeprefix("Custom-ext")
+    if platform in ("", "Custom") or current not in (pending_label(row["name"], row["id"]), legacy):
+        return
+    nickname = PLATFORM_NICKNAMES.get(platform, platform)
+    taken = set(free_room.member_display_names(connection, row["room_id"]).values())
+    label = next(candidate for number in range(1, MAX_ROOM_AGENTS + 2)
+                 if (candidate := f"外部 {nickname}{number if number > 1 else ''}") not in taken)
+    save_label(connection, row["room_id"], row["name"], label, now)
 
 
 def list_reads(connection, room_id, member_id, token, params):
@@ -557,6 +585,9 @@ def external_api(connection, parts, params, method, token, read_payload, hooks):
     if method == "GET" and route == ["view"]:
         return member_room_view(connection, room_id, member), 200
     if method == "GET" and route == ["messages"]:
+        # "Requests naming me" follows the room's records: the text says the name the owner gave it, not its member ID.
+        if reading.get("mention") == member["name"]:
+            reading = {**{key: value for key, value in reading.items() if key != "mention"}, "requested_of": member["id"]}
         return hooks["messages"](connection, room_id, reading, token), 200
     if method == "GET" and len(route) == 2 and route[0] == "messages" and route[1].isdigit():
         return hooks["message"](connection, room_id, int(route[1]), reading, token), 200

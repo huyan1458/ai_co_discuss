@@ -83,7 +83,7 @@ DIRECTORY_OPERATIONS = ("move", "folder")
 # Local entry commands for external members: the owner's invites (room credential) and this computer's invited records.
 INVITE_COMMANDS = ("room-invite", "room-invites", "room-invite-revoke")
 INVITED_COMMANDS = ("invited-list", "invited-join", "invited-trust", "invited-ai", "invited-pause", "invited-approve", "invited-refuse",
-                    "invited-leave", "invited-room")
+                    "invited-leave", "invited-remove", "invited-room")
 ADMIN_OPERATIONS = ("rename", "archive", "restore", "delete")
 DIRECTORY_PICKER_TIMEOUT = 600  # the folder dialog waits for the person at the computer
 # Files are streamed to players in pieces of this size.
@@ -2002,6 +2002,10 @@ def message_filters(room_id, params):
     if mention:
         clauses.append("instr(messages.text, ?) > 0")
         values.append(f"@{mention}")
+    if "requested_of" in params:
+        # The requests the room recorded for this member, however the owner has renamed it in the text.
+        clauses.append("messages.id IN (SELECT message_id FROM member_requests WHERE room_id=? AND member_id=?)")
+        values.extend([room_id, int(params["requested_of"])])
     if "kind" in params:
         if params["kind"] not in ("opinion", "moderation", "receipt", "chat"):
             raise ValueError(Text('发言职责无效'))

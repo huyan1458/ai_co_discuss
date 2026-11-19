@@ -318,6 +318,7 @@
   "从常用项目中选择": "Choose from saved projects",
   "选择常用项目": "Select a saved project",
   "添加常用项目": "Add saved project",
+  "移除后不再出现在列表里，文件夹和文件都会保留，正在使用它的房间不受影响。以后新建同名项目即可恢复。": "Removed projects leave this list, but their folders and files are kept and rooms using them are not affected. Create a project with the same name to bring one back.",
   "临时路径": "One-off path",
   "加入常用项目": "Add to saved projects",
   "粘贴或输入临时路径": "Paste or type a one-off path",

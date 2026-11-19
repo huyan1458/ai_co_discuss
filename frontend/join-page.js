@@ -89,7 +89,7 @@
       element("dl", {}, facts.flatMap(([label, value]) => [element("dt", { text: label }), element("dd", { text: value })])),
       expired ? element("p", { class: "warning", role: "status", text: t("这个链接已过期，请让对方重新生成邀请。") }) : null,
       element("ul", { class: "notes" }, [
-        element("li", { text: t("你的 AI 在你自己的电脑上运行，用你自己的账号与额度；对方点名后，默认先问你同意才唤醒。") }),
+        element("li", { text: t("你的 AI 在你自己的电脑上运行，用你自己的账号与额度；加入后对方点名即唤醒，受次数与期限上限约束。") }),
         element("li", { text: t("对方开放的项目内容会经你的 AI 发送给它的模型服务商。") }),
       ]),
       element("div", { class: "actions" }, [
@@ -108,10 +108,9 @@
     const payload = read_payload();
     // A link without the code or the computer cannot be redeemed, so it is shown as unreadable rather than as an invitation.
     const body = !payload
-      ? empty_state(t("没有邀请内容"), t("请打开对方发来的完整链接，或在自己的共议里输入配对码。"))
+      ? empty_state(t("没有邀请内容"), t("请打开对方发来的完整链接。"))
       : !payload.code || !payload.machine
-        ? empty_state(t("无法读取这个邀请链接"), t("链接可能被截断或改动过。请让对方重新复制完整链接发给你。"),
-          t("也可以在自己共议左栏“被邀请的房间”里输入对方给的配对码。"))
+        ? empty_state(t("无法读取这个邀请链接"), t("链接可能被截断或改动过。请让对方重新复制完整链接发给你。"))
         : invitation(payload);
     root.append(brand(), body);
   }

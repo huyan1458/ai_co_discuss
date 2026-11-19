@@ -50,6 +50,8 @@ const SECRETS_FILE = 'secrets.json';
 const LOCK_FILE = 'invited.lock';
 const LOCK_WAIT_MS = 3000;
 const LOCK_STALE_MS = 10000;
+// Under the external home, one folder per record in each.
+const RUN_FOLDERS = ['runtime', 'work', 'drafts'];
 const CODE_PATTERN = /^[0-9A-Z]{12}$/;
 const HEX32 = /^[0-9a-f]{32}$/;
 const RECORD_ID = /^[0-9a-f]{16}$/;
@@ -437,13 +439,15 @@ export async function join_invite(home, input, deps = {}) {
   return with_store(home, (store, secrets, now) => {
     const id = attempt.id;
     const name = joined.machine?.name || keys.name || invite.machine_name;
-    const machine = store.machines[keys.fingerprint] ||= { trust: 'default' };
+    // Accepting the invitation is the consent: a new computer starts at 完全借用, within its limits.
+    const machine = store.machines[keys.fingerprint] ||= { trust: 'borrow' };
     Object.assign(machine, { machine: keys.id, site: invite.site, machine_name: name, updated_at: now });
     store.records[id] = { id, site: invite.site, machine: keys.id, machine_name: name, machine_fingerprint: keys.fingerprint,
       machine_key: keys.public_key, fingerprint_checked: Boolean(invite.fingerprint), room: joined.room.id, room_title: String(joined.room.name || invite.room_name),
       member: joined.member.name, member_id: joined.member.id ?? null, key_id, open_level: joined.level || invite.level || 'read',
       directories: Array.isArray(joined.directories) ? joined.directories : [],
-      expires_at: Number(joined.expires_at) ? Number(joined.expires_at) * 1000 : null, ai, ai_reported: JSON.stringify(identity), limits: null, wakes: 0, last_wake_at: null, paused: false,
+      expires_at: Number(joined.expires_at) ? Number(joined.expires_at) * 1000 : null, ai, ai_reported: JSON.stringify(identity),
+      limits: machine.trust === 'borrow' ? { max_wakes: BORROW_DEFAULTS.max_wakes, until: now + BORROW_DEFAULTS.hours * HOUR_MS, used: 0 } : null, wakes: 0, last_wake_at: null, paused: false,
       status: 'active', contact: { at: now, state: 'online', error: '' }, approvals: [], history: [], running: null, joined_at: now };
     secrets.get()[id] = { private_key: pair.private_key, token: joined.token };
     secrets.changed = true;
@@ -565,6 +569,29 @@ async function deliver_leave(home, id, deps = {}) {
   return { leave_pending: false };
 }
 
+/**
+ * Delete an ended or left record from this computer: its history, key, credential and run files. Nothing is sent to the
+ * inviting room, and the trust given to that computer stays, since it covers all of that computer's rooms.
+ */
+export function remove_record(home, { id }, deps = {}) {
+  const record = with_store(home, (store, secrets) => {
+    const found = find_record(store, id);
+    if (found.status === 'active') throw failure('record_active', '这个房间还在进行中，请先退出再删除记录');
+    if (found.leave_pending) throw failure('leave_pending', '退出通知还没送达对方电脑，送达后才能删除记录');
+    delete store.records[found.id];
+    forget_keys(secrets, found.id);
+    return found;
+  });
+  // A run still going keeps its folders; they are only leftovers, so one that cannot be removed does not fail the delete.
+  if (!record.running) {
+    for (const folder of RUN_FOLDERS) {
+      try { rmSync(join(external_home(home), folder, record.id), { recursive: true, force: true }); }
+      catch (error) { deps.log?.(error.message); }
+    }
+  }
+  return { removed: record.id };
+}
+
 /** Keep the record in line with what the inviting room grants now (`/view` `me`): level, deadline and opened directories. */
 function apply_grant(home, id, me, now = Date.now()) {
   if (!me || typeof me !== 'object') return;
@@ -596,15 +623,19 @@ function kept_messages(record) {
 }
 
 /** The record with what the inviting room shows this member, when it can be reached. */
-export async function room_view(home, { id }, deps = {}) {
+export async function room_view(home, { id, cached = false }, deps = {}) {
   const record = find_record(read_store(home), id);
+  // What this computer already knows, without the network: the page shows it at once while the real read is under way.
+  if (cached) return { record: record_view(record, read_store(home)), room: null, messages: kept_messages(record) };
   let room = null, problem = null;
   let messages = [];
   try {
-    room = await refresh_grant(home, id, deps);
-    // What the page shows in the middle: requests naming this AI and this AI's own answers, oldest first.
+    // What the page shows in the middle: requests naming this AI and this AI's own answers, oldest first. Sent together,
+    // since each one crosses the relay and in turn they outlast the page's refresh.
     const query = field => `${MEMBER_API.messages(record.room)}?${new URLSearchParams({ [field]: record.member })}`;
-    const pages = await Promise.all(['mention', 'author'].map(field => member_api(home, id, 'GET', query(field), undefined, deps)));
+    const [view, ...pages] = await Promise.all([refresh_grant(home, id, deps),
+      ...['mention', 'author'].map(field => member_api(home, id, 'GET', query(field), undefined, deps))]);
+    room = view;
     const unique = new Map(pages.flatMap(page => page.messages || []).map(message => [message.id, message]));
     messages = [...unique.values()].sort((a, b) => a.id - b.id);
   } catch (error) { problem = error; messages = kept_messages(record); }
@@ -632,12 +663,13 @@ export async function invited_command(home, action, input = {}, deps = {}) {
   if (action === 'invited-approve') return approve(home, input);
   if (action === 'invited-refuse') return refuse_approval(home, input, deps);
   if (action === 'invited-leave') return leave(home, input, deps);
+  if (action === 'invited-remove') return remove_record(home, input, deps);
   if (action === 'invited-room') return room_view(home, input, deps);
   throw failure('unknown_action', '未知的被邀请记录操作：{action}', { action });
 }
 
 export const INVITED_ACTIONS = new Set(['invited-list', 'invited-join', 'invited-trust', 'invited-ai', 'invited-pause', 'invited-approve',
-  'invited-refuse', 'invited-leave', 'invited-room']);
+  'invited-refuse', 'invited-leave', 'invited-remove', 'invited-room']);
 
 // ---- Pulling and waking (in the service) ----
 
@@ -980,7 +1012,7 @@ function load_access(path) {
 const integer = value => value === undefined ? undefined : Number(value);
 
 function print_record(record) {
-  const trust = { default: t('默认（每次须你同意）'), borrow: t('完全借用'), trusted: t('信任设备') }[record.trust];
+  const trust = { default: t('每次询问（每次须你同意）'), borrow: t('完全借用'), trusted: t('信任设备') }[record.trust];
   const contact = { online: t('在线'), offline: t('不在线'), error: t('出错'), unknown: t('未知') }[record.contact?.state || 'unknown'];
   const lines = [t('{id}  {room}（{site}）成员 {member}', { id: record.id, room: record.room_title || record.room, site: record.site, member: record.member }),
     t('  信任等级：{trust}；已唤醒 {wakes} 次；对方电脑：{contact}{paused}', { trust, wakes: record.wakes, contact, paused: record.paused ? t('；已暂停') : '' })];
@@ -1003,6 +1035,7 @@ const HELP = () => t(`被邀请的房间（本机 AI 作为外部成员参加另
   codiscuss invited pause ID | resume ID
   codiscuss invited approve ID 待确认编号 | refuse ID 待确认编号
   codiscuss invited leave ID
+  codiscuss invited remove ID
   codiscuss invited room ID
 
 信任等级：default 每次点名须你同意；borrow 直接唤醒，受次数与期限上限；trusted 直接唤醒、不设上限、不收窄。
@@ -1046,7 +1079,7 @@ export async function external_main(command, args, { home, deps = {}, write = te
   else {
     const [verb, id, extra] = positionals;
     const action = { list: 'invited-list', trust: 'invited-trust', ai: 'invited-ai', pause: 'invited-pause', resume: 'invited-pause', approve: 'invited-approve',
-      refuse: 'invited-refuse', leave: 'invited-leave', room: 'invited-room' }[verb];
+      refuse: 'invited-refuse', leave: 'invited-leave', remove: 'invited-remove', room: 'invited-room' }[verb];
     if (!action) return write(HELP());
     const input = { id, ...(verb === 'trust' ? { trust: extra, ...(values['max-wakes'] ? { max_wakes: values['max-wakes'] } : {}), ...(values.hours ? { hours: values.hours } : {}) } : {}),
       ...(verb === 'ai' ? ai : {}), ...(['pause', 'resume'].includes(verb) ? { paused: verb === 'pause' } : {}), ...(['approve', 'refuse'].includes(verb) ? { approval: extra } : {}) };
@@ -1054,5 +1087,6 @@ export async function external_main(command, args, { home, deps = {}, write = te
   }
   if (values.json) return out(result);
   if (result.records) return write(`${result.records.length ? result.records.map(print_record).join('\n') : t('还没有被邀请的房间')}\n`);
+  if (result.removed) return write(`${t('已删除这条被邀请记录')}\n`);
   return write(`${print_record(result.record)}${result.record?.leave_pending ? `\n${t('暂时连不上对方电脑，常驻服务会继续通知它；通知送达或成员资格到期后删除本机密钥')}` : ''}${result.error ? `\n${t('读不到对方房间：{reason}', { reason: result.error })}` : ''}\n`);
 }

@@ -32,10 +32,13 @@ function row_note(record) {
   <div class="channel-directory-heading channel-tools-heading">
     <button type="button" class="channel-section-toggle" :aria-expanded="section_open" @click="section_open = !section_open"><UIcon :name="section_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t("被邀请的房间") }}</button>
     <div v-if="available" class="channel-directory-actions">
-      <UButton icon="i-lucide-plus" :aria-label="t('用链接或配对码加入')" :title="t('用链接或配对码加入')" size="xs" color="neutral" variant="ghost" @click="invited.start_join()" />
+      <UButton icon="i-lucide-plus" :aria-label="t('用邀请链接加入')" :title="t('用邀请链接加入')" size="xs" color="neutral" variant="ghost" @click="invited.start_join()" />
     </div>
   </div>
   <nav v-show="section_open" :aria-label="t('被邀请的房间列表')" class="channel-room-list invited-list">
+    <div v-if="invited.pending_join.value" class="channel-room-row" role="status">
+      <span class="channel-room-select"><UIcon name="i-lucide-loader-circle" class="animate-spin" /><span>{{ invited.pending_join.value.room_title || t("未命名房间") }}</span><small class="channel-room-time">{{ t("加入中…") }}</small></span>
+    </div>
     <div v-for="record in records" :key="record.id" class="channel-room-row" :class="{ active: page_open && selected_id === record.id, 'is-ended': ended(record) }">
       <button type="button" class="channel-room-select" :aria-current="page_open && selected_id === record.id ? 'page' : undefined" :title="t('{computer} · {trust}', { computer: record.machine_name || '', trust: TRUST_LABELS[record.trust] || '' })" @click="open(record.id)">
         <UIcon :name="ended(record) ? 'i-lucide-circle-slash' : record.approvals?.length ? 'i-lucide-bell-ring' : record.paused ? 'i-lucide-circle-pause' : 'i-lucide-monitor-smartphone'" :class="{ 'invited-alert': record.approvals?.length }" /><span>{{ record.room_title || t("未命名房间") }}</span>
