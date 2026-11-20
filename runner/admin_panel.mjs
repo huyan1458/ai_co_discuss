@@ -256,6 +256,27 @@ async function finish_update(data) {
   write_update_job(data, { ...job, status: 'done', ok: installed, steps });
 }
 
+/**
+ * Bring an installed program copy up to date when the panel starts: a version installed some other way than the panel's
+ * update (npm, setup) or an AI program that upgraded itself leaves it behind (user 2026-11-19). Same order as an update:
+ * the isolated instances running from the copy stop first, or files in use stay old, then start again. What fails stays
+ * on the overview's program copy row for the owner.
+ */
+async function sync_stale_copy(data) {
+  if (!hosting_enabled(data)) return;
+  const copy = shared_cli_state();
+  if (!copy.app || (copy.app_version === VERSION && !copy.outdated.length)) return;
+  const running = (await list_accounts(data)).filter(account => account.os_user && account.running);
+  for (const account of running) await run_instance(data, account.name, 'stop');
+  try {
+    const result = install_runtime(data);
+    if (result.warnings.length) throw new Error(result.warnings.join('；'));
+    for (const name of Object.keys(read_os_users(data))) if (read_accounts(data)[name]) await prepare_account(data, name);
+  } finally {
+    for (const account of running) await start_verified(data, account.name);
+  }
+}
+
 // ---- Accounts ----
 
 /**
@@ -402,7 +423,7 @@ function install_runtime(data) {
  */
 function account_env(data, name, action, request = {}, folders = {}) {
   const { env_script } = shared_paths();
-  if (!existsSync(env_script)) throw panel_error('还没有安装隔离账号的程序副本，请先在“概览 → 登录入口 → 托管账号入口”中同步');
+  if (!existsSync(env_script)) throw panel_error('还没有安装隔离账号的程序副本，请先在“概览 → 本机 → 程序副本”中安装');
   const text = run_as_user(data, name, `& ${ps_quote(process.execPath)} ${ps_quote(env_script)} ${action} $Job`,
     { files: { 'request.json': JSON.stringify(request) }, folders, timeout: 120_000 });
   const line = text.split(/\r?\n/).reverse().find(item => item.trim().startsWith('{'));
@@ -560,7 +581,7 @@ function run_instance(data, name, command) {
   }
   if (command === 'start' && read_os_users(data)[name]) {
     const { local_script } = shared_paths();
-    if (!existsSync(local_script)) throw panel_error('还没有安装隔离账号的程序副本，请先在“概览 → 登录入口 → 托管账号入口”中同步');
+    if (!existsSync(local_script)) throw panel_error('还没有安装隔离账号的程序副本，请先在“概览 → 本机 → 程序副本”中安装');
     // Whatever was set up first, the instance starts on the shared copies its Windows user can run.
     use_shared_programs(data, name);
     return start_instance_as_user(data, name, service, local_script, process.execPath, { key_file });
@@ -1479,11 +1500,15 @@ function run_panel(data, port) {
     process.stdout.write(t(`管理面板已启动：http://127.0.0.1:{value1}
 `, { value1: port }));
     finish_update(data).catch(error => process.stderr.write(t(`更新收尾失败：{value1}
-`, { value1: error.message })));
+`, { value1: error.message })))
+      // After an update's own finish, which already synced the copy it installed.
+      .then(() => sync_stale_copy(data)).catch(error => process.stderr.write(t('程序副本没有自动同步：{value1}\n', { value1: error.message })));
   });
   // The icon that ships with the package, the same on every computer.
   const icon = join(ROOT, 'web', 'codiscuss.ico');
-  const tray = show_tray({ title: t('共议'), icon_path: existsSync(icon) ? icon : '', window_title: WINDOW_TITLE,
+  // A tray that fails to start must not leave `tray` uninitialised: shutdown (and so every update) reads it.
+  let tray = null;
+  try { tray = show_tray({ title: t('共议'), icon_path: existsSync(icon) ? icon : '', window_title: WINDOW_TITLE,
     host: join(data, 'launcher', '共议.exe'), on_action: action => {
     if (action === 'open') open_panel_window(data, panel_url(state), false);
     if (action === 'site') open_browser(signed_site_url(site_url(data), data));
@@ -1500,7 +1525,10 @@ function run_panel(data, port) {
         // The note goes with the icon, so it stays a moment before the icon closes.
         .finally(() => setTimeout(shutdown, 2500));
     }
-  } });
+  } }); } catch (error) {
+    process.stderr.write(t(`任务栏图标没有启动：{value1}
+`, { value1: error.message }));
+  }
   function shutdown(exit = true) {
     clearInterval(relay);
     clearInterval(finisher);
@@ -1526,9 +1554,12 @@ async function start_panel(data, port) {
     rmSync(state_path(data), { force: true });
     await new Promise(done => setTimeout(done, 800));
   }
+  // The failure message below points here, so the panel's output (its startup errors among it) has to land in this file.
   const log = join(data, 'admin-panel.log');
+  const output = openSync(log, 'w');
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'run', '--port', String(port)],
-    { detached: true, stdio: ['ignore', 'ignore', 'ignore'], windowsHide: true, env: { ...process.env, CODISCUSS_GATEWAY_HOME: data } });
+    { detached: true, stdio: ['ignore', output, output], windowsHide: true, env: { ...process.env, CODISCUSS_GATEWAY_HOME: data } });
+  closeSync(output);
   child.unref();
   for (let waited = 0; waited < 10_000; waited += 200) {
     await new Promise(done => setTimeout(done, 200));

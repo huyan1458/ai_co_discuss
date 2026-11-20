@@ -91,7 +91,9 @@ async function sync() {
   finally { syncing = false; }
 }
 
-provide("panel", { state, reload, notify, refreshed, updating });
+// Counts asks to bind the online site from elsewhere (the hosted relay card); "本机 → 线上网站" opens its dialog on each.
+const binding = ref(0);
+provide("panel", { state, reload, notify, refreshed, updating, binding });
 onMounted(reload);
 let sync_timer = 0;
 onMounted(() => {
@@ -102,8 +104,13 @@ onMounted(() => {
 onBeforeUnmount(() => { window.clearInterval(sync_timer); document.removeEventListener("visibilitychange", sync); window.removeEventListener("focus", sync); });
 // Notices close on their countdown whatever the pointer or the window does: the toast library pauses every countdown
 // while the window is in the background or the pointer is over a notice, which left them stuck on screen. Its pause is an
-// event sent to the notice area, stopped here on its way down.
-onMounted(() => document.addEventListener("toast.viewportPause", (event) => event.stopPropagation(), true));
+// event sent to the notice area, stopped here on its way down. Its resume restarts the countdown from the time left at the
+// pause, which without a pause is the whole duration, so moving the pointer off a notice started it over: stopped too.
+const stop_toast_event = (event) => event.stopPropagation();
+onMounted(() => {
+  document.addEventListener("toast.viewportPause", stop_toast_event, true);
+  document.addEventListener("toast.viewportResume", stop_toast_event, true);
+});
 </script>
 
 <template>

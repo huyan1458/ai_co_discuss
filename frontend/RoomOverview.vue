@@ -1,5 +1,5 @@
 <script setup>
-import { awaiting_member, copy_seat_link, revoke_member } from "./external-members.js";
+import { LEVELS, LEVEL_SHORT, awaiting_member, copy_seat_link, external_ai, external_of, remaining_label, revoke_member, room_operations } from "./external-members.js";
 /**
  * Everything about who is in the room and how it is set up, laid out in full: the rail's member menu is only the quick
  * entry to the same actions, so nothing here hides behind a menu.
@@ -19,6 +19,7 @@ import InviteDialog from "./InviteDialog.vue";
 import WorkflowControl from "./WorkflowControl.vue";
 import { active_workflow } from "./workflow-state.js";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
+import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import MemoBlock from "./memo-block.js";
 import { member_actions } from "./member-actions.js";
 import { access_label, access_options } from "../runner/expert_prompts.mjs";
@@ -264,7 +265,8 @@ const HOST_LABEL = t("设为主持人");
  * from the progress board, so there only the taking-part actions (instructions, credentials, description) apply.
  */
 function actions(member) {
-  const [taking_part, place, removal] = member_actions(live(member), { view: view.value, act, describe: (name) => { describing.value = name; },
+  const [taking_part, place = [], removal = []] = member_actions(live(member), { view: view.value, act, describe: (name) => { describing.value = name; },
+    external: open_external,
     revoke: (target) => revoke_member(bridge, act, view.value.room.id, target),
     copy_link: async (target) => { if (await copy_seat_link(bridge, view.value.room.id, target.id)) bridge.notify("info", t("已复制邀请链接")); } });
   if (!free.value) return { taking_part, host: null, place: [] };
@@ -282,6 +284,28 @@ function card_key(member) {
     grabbed.value === member.name, switching.value.has(member.name), in_workflow(member.name) && workflow.value.label, room.value.descriptions?.[member.name],
     identity?.icon, identity?.initials, identity?.style, bridge.display_name(member.name), bridge.participant_model(member.name, room.value, saved.value),
     bridge.participant_access(member.name, room.value), room.value.session?.status]);
+}
+
+// An external member's reading record and protections open in the same dialog as from the rail; an ended one opens on
+// its invitation back.
+const external_open = ref(false), external_member = ref(null), external_reinvite = ref(false);
+function open_external(member, reinvite = false) { external_member.value = member; external_reinvite.value = reinvite; external_open.value = true; }
+const ended_externals = computed(() => room.value.free?.ended_externals || []);
+const END_REASONS = { revoked: t("已撤销"), expired: t("已到期"), left: t("对方已退出") };
+/**
+ * What an external member may see on this computer, as a switch: it can be narrowed to room messages here; opening the
+ * project again takes a new invitation, as widening access stays with an invitation the owner issues.
+ */
+async function narrow_external(member, level) {
+  const info = external_of(live(member));
+  if (!info || level === info.level || level !== "discuss") return;
+  set_switching(member.name, true);
+  try {
+    await room_operations(bridge).update(room.value.id, member.id, { scope: "discuss" });
+    bridge.notify("info", t("已降为只讨论，之后不能再读项目文件"));
+    await act("refresh");
+  } catch (error) { bridge.notify("error", error.message); }
+  finally { set_switching(member.name, false); }
 }
 
 const inviting = ref(false);
@@ -347,6 +371,20 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <UBadge :color="unregistered(member) ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm">{{ unregistered(member) ? (member.access === 'external' ? t('待签到') : t('待注册')) : STATUS_LABELS[member.status] || member.status }}</UBadge>
           </header>
           <dl class="member-card-facts">
+            <template v-if="external_of(live(member))">
+              <div><dt>{{ t("接入") }}</dt><dd>{{ [t("外部"), external_of(live(member)).computer].filter(Boolean).join(" · ") }}</dd></div>
+              <div><dt>{{ t("模型") }}</dt><dd class="overview-model"><span>{{ external_ai(live(member)) || t("对方未说明") }}</span></dd></div>
+              <div><dt>{{ t("对方能看到") }}</dt><dd>
+                <div class="expert-card-modes overview-switch" :class="{ 'is-locked': !view.access?.can_manage || external_of(live(member)).level !== 'read' }" role="radiogroup"
+                  :aria-label="t('{name} 能看到的内容', { name: member.name })" :aria-busy="switching.has(member.name)" :title="external_of(live(member)).level === 'read' ? t('可改为只看消息；再开放项目须重新邀请') : t('再开放项目须重新邀请')">
+                  <button v-for="option in LEVELS" :key="option.value" type="button" role="radio" :aria-checked="external_of(live(member)).level === option.value" :title="option.description"
+                    :disabled="!view.access?.can_manage || external_of(live(member)).level !== 'read' || switching.has(member.name)" @click="narrow_external(member, option.value)">{{ option.label }}</button>
+                </div>
+              </dd></div>
+              <div class="overview-span"><dt>{{ t("剩余时间") }}</dt><dd :title="t('借出多久由对方决定，你可随时撤销')">{{ external_of(live(member)).pending ? t("由对方加入时决定") : [remaining_label(external_of(live(member)).expires_at) || "—", t("对方设定")].join(" · ") }}</dd></div>
+              <div v-if="external_of(live(member)).level === 'read' && external_of(live(member)).directories.length"><dt>{{ t("开放目录") }}</dt><dd>{{ external_of(live(member)).directories.join("、") }}</dd></div>
+            </template>
+            <template v-else>
             <div><dt>{{ t("接入") }}</dt><dd>
               <div v-if="access(live(member)).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !access(live(member)).editable }" role="radiogroup" :aria-label="t('{name} 的接入方式', { name: member.name })" :title="access(live(member)).hint">
                 <button v-for="option in CODEX_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="access(live(member)).value === option.value"
@@ -363,6 +401,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
             </dd></div>
+            </template>
             <div v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="bridge.display_path(saved.participants[member.name].outside_directory)">
               <UIcon name="i-lucide-triangle-alert" /><span>{{ t('在 {path} 工作，房间目录{access}', { path: bridge.display_path(saved.participants[member.name].outside_directory), access: saved.participants[member.name].outside_enforced ? t('只读') : t('只读（仅任务要求，程序拦不住）') }) }}</span></div>
             <!-- A host that keeps failing stalls the room; the owner is told how to hand the role to someone else (应 18). -->
@@ -377,6 +416,14 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           </footer>
         </li>
         </MemoBlock>
+      </ul>
+      <ul v-if="ended_externals.length" class="overview-ended" :aria-label="t('已离开的外部专家')">
+        <li v-for="member in ended_externals" :key="member.id">
+          <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
+          <span class="overview-ended-name">{{ bridge.display_name(member.name) }}</span>
+          <span class="overview-muted">{{ [t("外部"), END_REASONS[member.external?.end_reason] || t("已结束")].join(" · ") }}</span>
+          <UButton v-if="!room.archived && view.access?.can_manage" :label="t('重新邀请')" icon="i-lucide-user-round-plus" size="xs" variant="ghost" color="neutral" @click="open_external(member, true)" />
+        </li>
       </ul>
       <p class="overview-result">{{ t("复制说明或下载配置不代表 AI 已接入，以实际回答和运行记录为准。") }}</p>
     </section>
@@ -426,6 +473,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         </form>
       </template>
     </UModal>
+    <ExternalMemberDialog v-model:open="external_open" :member="external_member" :reinvite="external_reinvite" />
     <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
       :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
       @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
@@ -457,6 +505,13 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .member-card-facts dt { margin-bottom: 4px; color: var(--ui-text-muted); font-size: 12px; }
 .member-card-facts dd { display: flex; align-items: center; min-height: 28px; margin: 0; color: var(--ui-text); }
 .overview-model { gap: 2px; min-width: 0; }
+/* An external member's second row: how long it is lent takes the first two columns, its open directories the third. */
+.member-card-facts > .overview-span { grid-column: 1 / span 2; }
+/* External members that ended, under the cards: one quiet line each, with a way to invite them back. */
+.overview-ended { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
+.overview-ended li { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 8px; border: 1px dashed var(--ui-border); border-radius: 8px; opacity: .8; font-size: 12px; }
+.overview-ended-name { overflow: hidden; color: var(--ui-text-toned); white-space: nowrap; text-overflow: ellipsis; }
+.overview-ended li > :last-child { margin-left: auto; }
 .overview-workflow { display: flex; align-items: center; gap: 6px; }
 .overview-model > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .overview-model > button { padding: 2px; color: var(--ui-text-muted); }

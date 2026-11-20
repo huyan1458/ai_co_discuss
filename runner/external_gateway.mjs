@@ -33,9 +33,8 @@ const CODE_LENGTH = 12;
 const INVITE_CONTEXT = 'codiscuss-invite-v1';
 const LABEL_LIMIT = 80;
 const LOCAL_TIMEOUT_MS = 8000;
-// Whole-day durations; 3d is no longer offered on the page but seats and links made with it stay valid.
+// Invites made before the invited computer chose its own loan carry one of these; a redeem without an end still uses it.
 const DURATION_DAYS = { '3d': 3, '7d': 7, '30d': 30 };
-const DURATIONS = new Set(['1h', 'today', ...Object.keys(DURATION_DAYS)]);
 const LEVELS = new Set(['discuss', 'read']);
 // The only actions an external signer has; redeeming an invite is the one that goes without a registered key.
 export const EXTERNAL_SIGNED_ACTIONS = new Set(['external-api', 'external-repo', 'external-leave']);
@@ -168,8 +167,12 @@ async function local_call(room, method, path, { token, body, external = false, s
   return { status: response.status, json, body: json ? await response.json() : null, ...(tag ? { etag: tag } : {}) };
 }
 
-/** When a membership chosen at the invite ends, in seconds as the local website keeps it. */
-function membership_end(duration, now) {
+/**
+ * When the membership ends, in seconds as the local website keeps it: the end the invited computer chose (it decides how
+ * long it lends its AI), else, from a computer that does not send one, the duration an older invite carried, else an hour.
+ */
+function membership_end(chosen, duration, now) {
+  if (Number.isSafeInteger(chosen) && chosen * 1000 > now) return chosen;
   if (DURATION_DAYS[duration]) return Math.floor((now + DURATION_DAYS[duration] * DAY_MS) / 1000);
   if (duration === 'today') {
     const end = new Date(now);
@@ -199,7 +202,7 @@ async function invite_site(home, site_url) {
  * Issue an invite for one room: a 12-character code valid ten minutes, kept here only as its hash, and the link that
  * carries it with this computer's key fingerprint. The code and link are returned this once.
  */
-export async function create_invite(home, { room_id, token, level = 'read', folders, duration = '1h', site_url, member_id, by = 'computer' }, { fetcher } = {}) {
+export async function create_invite(home, { room_id, token, level = 'read', folders, site_url, member_id, by = 'computer' }, { fetcher } = {}) {
   const room = await owned_room(home, room_id, token, fetcher);
   if (member_id) {
     const path = `/api/rooms/${encodeURIComponent(room_id)}/external-members/${member_id}`;
@@ -211,11 +214,9 @@ export async function create_invite(home, { room_id, token, level = 'read', fold
       if (current.status !== 200) throw new GatewayError(current.status, current.body?.error || '外部成员不存在');
     }
     level = current.body.scope;
-    duration = current.body.duration;
     folders = current.body.directories.map(path => room.directories.indexOf(path));
   }
   if (!LEVELS.has(level)) throw new GatewayError(400, '开放等级须为 discuss 或 read');
-  if (!DURATIONS.has(duration)) throw new GatewayError(400, '有效期须为 1h、today、3d、7d 或 30d');
   const chosen = level === 'discuss' ? [] : folders === undefined ? [0] : folders;
   if (!Array.isArray(chosen) || (level === 'read' && !chosen.length) || chosen.some(index => !Number.isSafeInteger(index) || index < 0 || index >= room.directories.length)
       || new Set(chosen).size !== chosen.length) {
@@ -232,7 +233,7 @@ export async function create_invite(home, { room_id, token, level = 'read', fold
     const view = await call('GET', `/api/rooms/${encodeURIComponent(room_id)}`);
     const taken = new Set([...(view.free?.members || []), ...(listed.members || [])].map(member => member.name));
     const created = await call('POST', base, { pending: true, revision: listed.revision,
-      name: external_name('Custom', taken), scope: level, duration, directories: chosen.map(index => room.directories[index]) });
+      name: external_name('Custom', taken), scope: level, directories: chosen.map(index => room.directories[index]) });
     member_id = created.member.member_id;
   }
   let site, link;
@@ -254,20 +255,20 @@ export async function create_invite(home, { room_id, token, level = 'read', fold
     for (const [key, previous] of Object.entries(registry.invites)) {
       if (previous.room_id === room_id && previous.member_id === member_id) delete registry.invites[key];
     }
-    registry.invites[invite_id] = { member_id, invite_version: seat.invite_version, code_hash: invite_code_hash(code), room_id, level, folders: chosen, duration, site, by, created_at: now, expires_at: now + INVITE_MS, failures: 0 };
+    registry.invites[invite_id] = { member_id, invite_version: seat.invite_version, code_hash: invite_code_hash(code), room_id, level, folders: chosen, site, by, created_at: now, expires_at: now + INVITE_MS, failures: 0 };
     return { invite_id, member_id, expires_at: now + INVITE_MS };
   });
   audit(home, { event: 'invite.created', room: room_id, invite: invite.invite_id, level, by });
   const payload = { v: 1, site, machine: link.id, machine_name: link.name, fp: fingerprint, code, room_name, level, expires_at: invite.expires_at };
   return { ...invite, code: `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8)}`, url: `${site}/join#${b64url(Buffer.from(JSON.stringify(payload)))}`,
-    room_id, level, folders: chosen, duration, machine: { id: link.id, name: link.name, fingerprint }, site };
+    room_id, level, folders: chosen, machine: { id: link.id, name: link.name, fingerprint }, site };
 }
 
 /** The room's invites still waiting, without their codes. */
 export async function list_invites(home, { room_id, token }, { fetcher } = {}) {
   await owned_room(home, room_id, token, fetcher);
   return with_registry(home, registry => ({ invites: Object.entries(registry.invites).filter(([, invite]) => invite.room_id === room_id)
-    .map(([invite_id, { level, folders, duration, created_at, expires_at, by }]) => ({ invite_id, room_id, level, folders, duration, created_at, expires_at, by }))
+    .map(([invite_id, { level, folders, created_at, expires_at, by }]) => ({ invite_id, room_id, level, folders, created_at, expires_at, by }))
     .sort((left, right) => right.created_at - left.created_at) }));
 }
 
@@ -312,7 +313,7 @@ async function drop_external(home, ctx, external_id, reason) {
 }
 
 /** Take a proven invite; failed guesses cool down the signer without consuming any invitation. */
-function take_invite(home, machine_id, public_key, proof) {
+function take_invite(home, machine_id, public_key, proof, chosen_end) {
   const taken = with_registry(home, (registry, now) => {
     const supplied = Buffer.from(String(proof || ''));
     registry.redemptions ||= {};
@@ -338,7 +339,7 @@ function take_invite(home, machine_id, public_key, proof) {
           throw new GatewayError(409, '这把密钥已经加入过房间，请为新的邀请生成新密钥', {}, 'key_used');
         }
         registry.redemptions[id] = { ...invite, external_id,
-          member_expires_at: membership_end(invite.duration, Date.now()) };
+          member_expires_at: membership_end(chosen_end, invite.duration, Date.now()) };
         delete registry.invites[id];
         return { invite_id: id, ...registry.redemptions[id] };
       }
@@ -361,7 +362,7 @@ function external_name(platform, taken) {
  * local website to add the external member, and the key is registered and published at once.
  */
 async function redeem(home, ctx, id, sealed, request) {
-  const { public_key, proof, label, platform, adapter, model } = request.payload || {};
+  const { public_key, proof, label, platform, adapter, model, expires_at } = request.payload || {};
   let external_id;
   try { external_id = device_id_of(public_key); } catch { throw new GatewayError(400, '外部成员公钥须为 P-256'); }
   if (!await verify_signature(public_key, sealed.signature, `${id}\n${sealed.body}`)) throw new GatewayError(400, '外部成员签名无效', {}, 'bad_signature');
@@ -374,7 +375,7 @@ async function redeem(home, ctx, id, sealed, request) {
     const status = await local_call(previous_room, 'GET', `/api/rooms/${encodeURIComponent(previous.room_id)}/external-members/${previous.member_id}`, { token: previous_room.token, fetcher: ctx.fetcher });
     if (status.status === 404 || status.body?.status === 'removed') await drop_external(home, ctx, external_id, 'ended');
   }
-  const invite = take_invite(home, ctx.machine_id, public_key, proof);
+  const invite = take_invite(home, ctx.machine_id, public_key, proof, expires_at);
   const room = local_room(home, invite.room_id);
   if (!room) throw new GatewayError(404, '邀请对应的房间已不在这台电脑上');
   const directories = invite.folders.map(index => room.directories[index]);

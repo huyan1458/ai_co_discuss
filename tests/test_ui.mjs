@@ -10,7 +10,7 @@ import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { slash_insertion } from "../runner/slash_names.mjs";
 import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
 import { t } from "../frontend/i18n.js";
-import { declined, external_of, external_tag, extended_until, invited_items, remaining_label, take_join_fragment } from "../frontend/external-members.js";
+import { declined, external_of, external_tag, invited_items, remaining_label, take_join_fragment } from "../frontend/external-members.js";
 
 // Sliced component code calls t() for interface text; every sandbox gets the translator (Chinese here).
 const create_context = vm.createContext;
@@ -1941,10 +1941,6 @@ test("external members read the room view's external field, and only declined or
   assert.ok(declined({ status: "cancelled", cancel_reason: "no_reply", external_outcome: "declined" }));
   assert.ok(declined({ status: "cancelled", cancel_reason: "no_reply", external_outcome: "timeout" }));
   assert.ok(!declined({ status: "cancelled", cancel_reason: "no_reply" }), "an ordinary unanswered request is not the other side's refusal");
-  // 延长 counts from the later of now and the current end, in seconds as the room backend takes it.
-  assert.equal(extended_until(now / 1000 + 600, "1h", now), Math.floor(now / 1000) + 600 + 3600);
-  assert.equal(extended_until(now / 1000 - 600, "3d", now), Math.floor(now / 1000) + 3 * 86400);
-  assert.equal(extended_until(now / 1000 - 600, "30d", now), Math.floor(now / 1000) + 30 * 86400);
 });
 
 test("an external member's menu offers its read log and revoking, never credentials, launch or hosting", () => {

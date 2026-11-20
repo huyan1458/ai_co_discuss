@@ -22,6 +22,10 @@ import { t } from './i18n.mjs';
 export const WAKES = ['auto', 'ask'];
 // The single level records had before `wake` and `confined`, still accepted by `invited-trust` as a shorthand.
 const LEGACY_TRUST = { default: { wake: 'ask', confined: true }, borrow: { wake: 'auto', confined: true }, trusted: { wake: 'auto', confined: false } };
+// How long this computer lends its AI to a room: chosen here when joining and changed here later, at most three days.
+export const LEND_DURATIONS = ['1h', 'today', '3d'];
+const HOUR_MS = 3600000;
+const LEND_MAX_MS = 3 * 24 * HOUR_MS;
 export const APPROVAL_TIMEOUT_MS = 15 * 60000;
 export const POLL_MS = 5000;
 // The inviting room fails an execution whose lease lapses; renew it as the room runner does.
@@ -71,6 +75,7 @@ export const MEMBER_API = {
   answer: room => `${EXTERNAL_PREFIX(room)}/answer`,
   messages: room => `${EXTERNAL_PREFIX(room)}/messages`,
   ai: room => `${EXTERNAL_PREFIX(room)}/ai`,
+  expiry: room => `${EXTERNAL_PREFIX(room)}/expiry`,
 };
 
 // ---- Secrets: sealed with DPAPI for the signed-in Windows user, 0600 elsewhere (as machine-links.json). ----
@@ -439,10 +444,38 @@ function ai_identity(home, ai) {
   return { adapter: ai.adapter, platform: Object.hasOwn(API_PROVIDERS, platform) ? platform : 'Custom', model: String(ai.model || api?.model || '').slice(0, MODEL_LIMIT) };
 }
 
+/**
+ * When a loan chosen now ends, in epoch seconds: an hour, the end of today here (at least an hour away) or three days.
+ * The inviting room keeps the end it is given; the three-day ceiling is this computer's own rule.
+ */
+export function lend_until(duration, now = Date.now()) {
+  if (!LEND_DURATIONS.includes(duration)) throw failure('invalid_duration', '借出时间只能是 1h、today 或 3d');
+  if (duration === '3d') return Math.floor((now + LEND_MAX_MS) / 1000);
+  if (duration === 'today') {
+    const end = new Date(now);
+    end.setHours(23, 59, 59, 0);
+    return Math.floor(Math.min(Math.max(end.getTime(), now + HOUR_MS), now + LEND_MAX_MS) / 1000);
+  }
+  return Math.floor((now + HOUR_MS) / 1000);
+}
+
+/** Change how long this record's AI stays lent; the inviting room confirms the new end, which the record then keeps. */
+export async function lend(home, { id, duration }, deps = {}) {
+  const expires_at = lend_until(duration, deps.now?.() ?? Date.now());
+  const record = find_record(read_store(home), id);
+  if (record.status !== 'active') throw failure('record_ended', '这条被邀请记录已结束，不能再改借出时间');
+  const answer = await member_api(home, id, 'POST', MEMBER_API.expiry(record.room), { expires_at }, deps);
+  return change_record(home, id, (current, now, store) => {
+    current.expires_at = Number(answer?.expires_at || expires_at) * 1000;
+    return { record: record_view(current, store) };
+  });
+}
+
 /** Accept an invitation: check the computer's fingerprint when the link carries one, redeem with a new key, keep the record. */
 export async function join_invite(home, input, deps = {}) {
   const invite = parse_invite(input.invite, input);
   const ai = check_ai(input);
+  const expires_at = lend_until(input.duration || '1h', deps.now?.() ?? Date.now());
   // A conversation this computer's software already holds, picked to carry its context into the room.
   const session_id = String(input.session_id || '');
   const keys = await machine_keys(invite.site, invite.machine, deps);
@@ -462,7 +495,7 @@ export async function join_invite(home, input, deps = {}) {
   if (existing.records[attempt.id] && read_secrets(home)[attempt.id]?.token) return { record: record_view(existing.records[attempt.id], existing) };
   const pair = attempt.pair, key_id = key_id_of(pair.public_key), identity = ai_identity(home, ai);
   const answer = await relay_send({ site: invite.site, machine: keys.id, machine_key: keys.public_key }, { key_id, private_key: pair.private_key }, 'external-redeem',
-    { public_key: pair.public_key, proof: invite_proof(invite.code, keys.id, pair.public_key), label: String(input.label || hostname()).slice(0, 80), ...identity }, deps);
+    { public_key: pair.public_key, proof: invite_proof(invite.code, keys.id, pair.public_key), label: String(input.label || hostname()).slice(0, 80), expires_at, ...identity }, deps);
   if (answer.status >= 400) throw remote_failure(answer.body, 'invite_invalid', '邀请无效或已过期');
   const joined = answer.body || {};
   if (!ROOM_ID.test(joined.room?.id || '') || typeof joined.member?.name !== 'string' || typeof joined.token !== 'string') {
@@ -713,6 +746,7 @@ export async function invited_command(home, action, input = {}, deps = {}) {
   if (action === 'invited-pause') return change_record(home, id, (record, now, store) => { record.paused = input.paused !== false; return { record: record_view(record, store) }; });
   if (action === 'invited-approve') return approve(home, input);
   if (action === 'invited-refuse') return refuse_approval(home, input, deps);
+  if (action === 'invited-lend') return lend(home, input, deps);
   if (action === 'invited-leave') return leave(home, input, deps);
   if (action === 'invited-remove') return remove_record(home, input, deps);
   if (action === 'invited-room') return room_view(home, input, deps);
@@ -720,7 +754,7 @@ export async function invited_command(home, action, input = {}, deps = {}) {
 }
 
 export const INVITED_ACTIONS = new Set(['invited-list', 'invited-join', 'invited-trust', 'invited-ai', 'invited-pause', 'invited-approve',
-  'invited-refuse', 'invited-leave', 'invited-remove', 'invited-room']);
+  'invited-refuse', 'invited-lend', 'invited-leave', 'invited-remove', 'invited-room']);
 
 // ---- Pulling and waking (in the service) ----
 
@@ -1119,6 +1153,7 @@ function print_record(record) {
   const contact = { online: t('在线'), offline: t('不在线'), error: t('出错'), unknown: t('未知') }[record.contact?.state || 'unknown'];
   const lines = [t('{id}  {room}（{site}）成员 {member}', { id: record.id, room: record.room_title || record.room, site: record.site, member: record.member }),
     t('  被点名时：{wake}；在这台电脑上：{scope}；已唤醒 {wakes} 次；对方电脑：{contact}{paused}', { wake, scope, wakes: record.wakes, contact, paused: record.paused ? t('；已暂停') : '' })];
+  if (record.status === 'active' && record.expires_at) lines.push(t('  借出到 {time}', { time: new Date(record.expires_at).toLocaleString() }));
   for (const item of record.approvals) lines.push(t('  待确认 {approval}：消息 {messages}', { approval: item.id, messages: item.message_ids.map(n => `#${n}`).join(', ') }));
   if (record.status === 'left') lines.push(t('  已退出'));
   if (record.status === 'ended') lines.push(t('  对方已结束你的成员资格（{reason}）', { reason: record.end_reason }));
@@ -1128,11 +1163,12 @@ function print_record(record) {
 const HELP = () => t(`外部房间（本机 AI 作为外部成员参加另一台电脑上的房间）
 
 用法：
-  codiscuss join <链接|配对码> [--site 站点] [--machine 电脑编号] --adapter 软件 [--model M] [--effort E] [--session 会话] [--prompt 提示词]
+  codiscuss join <链接|配对码> [--site 站点] [--machine 电脑编号] --adapter 软件 [--model M] [--effort E] [--session 会话] [--prompt 提示词] [--duration 1h|today|3d]
   codiscuss invited list
   codiscuss invited trust ID auto|ask [--unconfined|--confined]
   codiscuss invited ai ID [--adapter 软件] [--model M] [--effort E] [--prompt 提示词]
   codiscuss invited pause ID | resume ID
+  codiscuss invited lend ID 1h|today|3d
   codiscuss invited approve ID 待确认编号 | refuse ID 待确认编号
   codiscuss invited leave ID
   codiscuss invited remove ID
@@ -1140,6 +1176,7 @@ const HELP = () => t(`外部房间（本机 AI 作为外部成员参加另一台
 
 被点名时：auto 直接回答；ask 每次先问你。
 本机权限：默认只在房间里发言（只能运行共议命令）；--unconfined 不受限，可读本机文件、联网。
+借出时间：加入时用 --duration 选择（默认 1h），之后用 lend 从现在起重新计算，最长 3 天。
 --session 续接这个软件已有的会话（带着原上下文加入）；--prompt 只发给它的专属提示词，空字符串表示不用软件预设。
 同意后由本机服务唤醒 AI，请保持 codiscuss 服务运行。加 --json 输出 JSON。
 `);
@@ -1159,7 +1196,7 @@ export async function external_main(command, args, { home, deps = {}, write = te
   const service = home || (await import('./discussion_service.mjs')).service_home();
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     site: { type: 'string' }, machine: { type: 'string' }, adapter: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' },
-    session: { type: 'string' }, prompt: { type: 'string' },
+    session: { type: 'string' }, prompt: { type: 'string' }, duration: { type: 'string' },
     label: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     unconfined: { type: 'boolean' }, confined: { type: 'boolean' },
     'access-file': { type: 'string' }, root: { type: 'string' }, offset: { type: 'string' }, limit: { type: 'string' }, 'max-bytes': { type: 'string' },
@@ -1180,17 +1217,17 @@ export async function external_main(command, args, { home, deps = {}, write = te
   const ai = { ...(values.adapter ? { adapter: values.adapter } : {}), ...(values.model !== undefined ? { model: values.model } : {}), ...(values.effort !== undefined ? { effort: values.effort } : {}),
     ...(values.prompt !== undefined ? { system_prompt: values.prompt } : {}) };
   let result;
-  if (command === 'join') result = await join_invite(service, { invite: positionals[0], site: values.site, machine: values.machine, label: values.label, ...(values.session ? { session_id: values.session } : {}), ...ai }, deps);
+  if (command === 'join') result = await join_invite(service, { invite: positionals[0], site: values.site, machine: values.machine, label: values.label, ...(values.session ? { session_id: values.session } : {}), ...(values.duration ? { duration: values.duration } : {}), ...ai }, deps);
   else {
     const [verb, id, extra] = positionals;
     const action = { list: 'invited-list', trust: 'invited-trust', ai: 'invited-ai', pause: 'invited-pause', resume: 'invited-pause', approve: 'invited-approve',
-      refuse: 'invited-refuse', leave: 'invited-leave', remove: 'invited-remove', room: 'invited-room' }[verb];
+      refuse: 'invited-refuse', lend: 'invited-lend', leave: 'invited-leave', remove: 'invited-remove', room: 'invited-room' }[verb];
     if (!action) return write(HELP());
     // `trust ID auto|ask` sets how it answers; the old single levels (default / borrow / trusted) are still understood.
     const setting = !extra ? {} : LEGACY_TRUST[extra] ? { trust: extra } : { wake: extra };
     const scope = values.unconfined ? { confined: false } : values.confined ? { confined: true } : {};
     const input = { id, ...(verb === 'trust' ? { ...setting, ...scope } : {}),
-      ...(verb === 'ai' ? ai : {}), ...(['pause', 'resume'].includes(verb) ? { paused: verb === 'pause' } : {}), ...(['approve', 'refuse'].includes(verb) ? { approval: extra } : {}) };
+      ...(verb === 'ai' ? ai : {}), ...(['pause', 'resume'].includes(verb) ? { paused: verb === 'pause' } : {}), ...(['approve', 'refuse'].includes(verb) ? { approval: extra } : {}), ...(verb === 'lend' ? { duration: extra } : {}) };
     result = await invited_command(service, action, input, deps);
   }
   if (values.json) return out(result);

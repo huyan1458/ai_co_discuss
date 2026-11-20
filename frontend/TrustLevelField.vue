@@ -3,10 +3,11 @@
  * How this computer's AI treats being named in a room on another computer: answer at once or ask first, and whether it
  * only speaks in the room or runs unrestricted. The join dialog and the invited room's rail share this one control.
  */
-import { SCOPES, WAKES } from "./external-members.js";
+import { LEND_DURATIONS, SCOPES, WAKES } from "./external-members.js";
 import { t } from "./i18n.js";
 
-// { wake, confined }
+// { wake, confined }, and in the invited room's rail `duration`: a new loan counted from now, "" keeping the current end.
+const KEEP_LOAN = { value: "", label: t("不变") };
 const value = defineModel({ type: Object, required: true });
 // `confine_reason`: why the chosen software cannot be confined, so it can only run unrestricted.
 const props = defineProps({ confine_reason: { type: String, default: "" } });
@@ -27,6 +28,12 @@ const disabled = (option) => option.value && Boolean(props.confine_reason);
       <div class="trust-segments" role="radiogroup" :aria-label="t('本机权限')">
         <button v-for="option in SCOPES" :key="String(option.value)" type="button" role="radio" :aria-checked="value.confined === option.value" :class="{ 'is-selected': value.confined === option.value }"
           :disabled="disabled(option)" :title="disabled(option) ? confine_reason : undefined" @click="set({ confined: option.value })">{{ option.label }}</button>
+      </div>
+    </div>
+    <div v-if="'duration' in value" class="trust-row">
+      <span class="trust-label" :title="t('从现在起重新计算，最长 3 天')">{{ t("借出时间") }}</span>
+      <div class="trust-segments" role="radiogroup" :aria-label="t('借出时间')">
+        <button v-for="option in [KEEP_LOAN, ...LEND_DURATIONS]" :key="option.value" type="button" role="radio" :aria-checked="value.duration === option.value" :class="{ 'is-selected': value.duration === option.value }" @click="set({ duration: option.value })">{{ option.label }}</button>
       </div>
     </div>
     <p v-if="!value.confined" class="trust-warning">{{ t("可读本机文件、联网；对方房间的内容可能诱导它这样做。") }}</p>

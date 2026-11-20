@@ -261,6 +261,15 @@ class OwnerGrantTests(ExternalMemberTests):
 
 
 class MemberScopeTests(ExternalMemberTests):
+    def test_the_lending_computer_sets_its_own_end_and_nothing_else(self):
+        member = self.create()
+        later = int(time.time()) + 2 * 86400
+        self.assertEqual(self.ext("expiry", {"expires_at": later}), (200, {"expires_at": later}))
+        owner = self.request(f"{self.owner_path}/{member['member_id']}", token=self.owner)[1]
+        self.assertEqual((owner["expires_at"], owner["scope"]), (later, "read"))
+        self.assertEqual(self.ext("expiry", {"expires_at": int(time.time()) - 1})[0], 400, "an end in the past is refused")
+        self.assertEqual(self.ext("expiry", {"expires_at": later}, token=uuid.uuid4().hex)[0], 403, "only with its own credential")
+
     def test_a_member_that_left_stays_listed_with_why(self):
         member = self.create()
         self.assertEqual(self.ext("leave", {})[0], 200)

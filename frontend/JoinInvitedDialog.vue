@@ -2,8 +2,8 @@
 /**
  * Join a room on another computer with an invitation link, typed in or read from a QR code (camera, image or pasted
  * screenshot): pick which AI of this computer goes, then set it up on its expert card (ExpertCard.vue in joining mode):
- * software, a new or resumed conversation, model, effort, its own prompt, and its local access and how it answers when
- * named (starting at 只在房间里发言 · 直接回答).
+ * software, a new or resumed conversation, model, effort, its own prompt, its local access, how it answers when named
+ * and how long it is lent (starting at 只在房间里发言 · 直接回答 · 1 小时).
  * The same as `codiscuss join <link>`.
  */
 import { computed, inject, ref, watch } from "vue";
@@ -18,7 +18,8 @@ const { view, bridge } = inject("discussion");
 const invited = use_invited_rooms();
 const open = invited.joining;
 const text = ref(""), platform = ref("");
-const trust = ref({ wake: "auto", confined: true });
+// How long it is lent (`duration`) is set beside the other two on the card's back; it goes with the join, not the trust.
+const trust = ref({ wake: "auto", confined: true, duration: "1h" });
 const INVITE_LINK = /^https?:\/\/[^#\s]+\/join#\S+$/i;
 /** Fill in a QR code's text when it is an invitation link. */
 function take_link(value) {
@@ -97,7 +98,7 @@ async function submit() {
   const link = text.value.trim();
   open.value = false;
   const result = await invited.join({ invite: link, room_title: link_room_title(link),
-    adapter: profile.value.adapter, model: profile.value.model || "", effort: profile.value.effort || "", trust: trust.value,
+    adapter: profile.value.adapter, model: profile.value.model || "", effort: profile.value.effort || "", trust: trust.value, duration: trust.value.duration,
     ...(profile.value.session_id ? { session_id: profile.value.session_id } : {}),
     ...(Object.hasOwn(profile.value, "system_prompt") ? { system_prompt: profile.value.system_prompt } : {}) });
   if (!result) return invited.start_join(link);

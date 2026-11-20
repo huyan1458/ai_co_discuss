@@ -11,19 +11,11 @@ import EntryWayCard from "./EntryWayCard.vue";
 import TunnelDialog from "./TunnelDialog.vue";
 import { t } from '../i18n.js';
 
-const { state, reload, notify } = inject("panel");
-const installing = ref(false);
-const runtime = computed(() => state.value.clis || {});
-const PARTS = [["claude", "Claude Code"], ["codex", "Codex"], ["agy", "Antigravity"], ["app", t('共议')], ["python", "Python"]];
-const runtime_ready = computed(() => PARTS.every(([key]) => runtime.value[key]));
-const runtime_stale = computed(() => runtime.value.app && runtime.value.app_version && runtime.value.app_version !== state.value.version);
-const runtime_outdated = computed(() => runtime.value.outdated || []);
-// An update of this program syncs the copy by itself: the row appears only when something is left for the owner to do.
-const runtime_needs_owner = computed(() => !runtime_ready.value || runtime_stale.value || runtime_outdated.value.length > 0);
+const { state, reload, notify, binding } = inject("panel");
 const entry = computed(() => state.value.entry || { running: false, port: 0, public_url: "", relay_enabled: false, tunnel_enabled: false, relay: {} });
 const entry_busy = ref(""), tunnel_open = ref(false);
 const WAYS = [
-  { key: "relay", icon: "i-lucide-cloud", label: t('经线上网站中转'), note: t('不需要域名：经共议线上网站中转到这台电脑，手机和外地的电脑都能打开。需要这台电脑已在“本机 → 线上网站”绑定。'), turned_on: t('已开启经线上网站中转'), turned_off: t('已关闭经线上网站中转') },
+  { key: "relay", icon: "i-lucide-cloud", label: t('经线上网站中转'), note: t('不需要域名：经共议线上网站中转到这台电脑，手机和外地的电脑都能打开。需要先把这台电脑绑定到线上网站。'), turned_on: t('已开启经线上网站中转'), turned_off: t('已关闭经线上网站中转') },
   { key: "tunnel", icon: "i-lucide-globe", label: t('自有域名'), note: t('用你托管在 Cloudflare 的域名，经 Cloudflare 隧道连到这台电脑。需要有自己的域名。'), turned_on: t('已开启自有域名'), turned_off: t('已关闭自有域名') },
 ];
 const enabled = (way) => Boolean(entry.value[`${way}_enabled`]);
@@ -88,17 +80,6 @@ function configure() {
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); notify("info", t('已复制')); } catch { notify("error", t('复制失败，请手动选中复制')); }
 }
-
-async function install() {
-  installing.value = true;
-  try {
-    const result = await call("clis/install", {});
-    const problems = [...(result.missing || []).map((item) => t('没有找到 {value1}', { value1: item })), ...(result.warnings || [])];
-    notify(problems.length ? "warning" : "info", problems.length ? problems.join("；") : t('程序副本已同步'));
-    await reload();
-  } catch (failure) { notify("error", failure.message); }
-  finally { installing.value = false; }
-}
 </script>
 
 <template>
@@ -113,6 +94,8 @@ async function install() {
         <USwitch :model-value="enabled(item.key)" :loading="entry_busy === item.key" :disabled="Boolean(entry_busy)" :aria-label="t('开启或关闭{value1}', { value1: item.label })" @update:model-value="(on) => toggle_way(item, on)" />
       </template>
       <template #actions>
+        <!-- Binding is the computer's (shared with the administrator's entry); the same dialog as "本机 → 线上网站" opens here. -->
+        <button v-if="item.key === 'relay' && !prepared('relay')" type="button" class="panel-button is-outline is-small" @click="binding++"><UIcon name="i-lucide-link" />{{ t('绑定') }}</button>
         <button v-if="enabled(item.key) && detail(item.key)?.address" type="button" class="panel-button is-outline is-small" @click="copy(detail(item.key).address)"><UIcon name="i-lucide-copy" />{{ t('复制地址') }}</button>
         <button v-if="item.key === 'tunnel'" type="button" class="panel-button is-small" :class="prepared(item.key) ? 'is-plain' : 'is-outline'" @click="configure"><UIcon :name="prepared(item.key) ? 'i-lucide-pencil' : 'i-lucide-settings-2'" />{{ prepared(item.key) ? t('修改') : t('配置') }}</button>
       </template>
@@ -120,21 +103,5 @@ async function install() {
   </div>
   <TunnelDialog v-model:open="tunnel_open" />
 
-  <div v-if="runtime_needs_owner" class="panel-rows entry-services">
-    <div class="panel-row">
-      <div class="panel-tile"><UIcon name="i-lucide-hard-drive-download" /></div>
-      <div class="panel-main">
-        <div class="panel-title">{{ t('程序副本') }} <span v-if="!runtime.app" class="panel-tag is-gray">{{ t('未安装') }}</span>
-          <span v-else-if="runtime_stale" class="panel-tag is-amber">{{ t('v{value1}，落后于本机 v{value2}', { value1: runtime.app_version, value2: state.version }) }}</span>
-          <span v-else-if="!runtime_ready" class="panel-tag is-amber">{{ t('缺少 {value1}', { value1: PARTS.filter(([key]) => !runtime[key]).map(([, label]) => label).join("、") }) }}</span>
-          <span v-else class="panel-tag is-amber">{{ t('{value1} 有新版本', { value1: runtime_outdated.join("、") }) }}</span></div>
-        <span class="panel-sub">{{ t('托管账号从这份副本运行。更新共议时会自动同步；Claude Code 等程序单独升级后，在这里同步一次。') }}</span>
-      </div>
-      <div class="panel-side">
-        <button type="button" class="panel-button is-small is-primary" :disabled="installing" @click="install">
-          <UIcon :name="installing ? 'i-lucide-loader' : 'i-lucide-refresh-cw'" :class="{ 'animate-spin': installing }" />{{ runtime.app ? t('同步') : t('安装') }}</button>
-      </div>
-    </div>
-  </div>
 </template>
 

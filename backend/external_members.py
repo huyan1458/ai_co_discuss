@@ -594,6 +594,13 @@ def report_ai(connection, member, payload):
     return {"reported": True}
 
 
+def lend_until(connection, member, payload):
+    """The member's computer sets how long it lends its AI; only its own end changes, never what it may read (red line 1 exception)."""
+    expires_at = checked_expiry(payload.get("expires_at"), int(time.time()))
+    connection.execute("UPDATE external_members SET expires_at=?,updated_at=? WHERE member_id=?", (expires_at, int(time.time()), member["id"]))
+    return {"expires_at": expires_at}
+
+
 def leave_room(connection, member):
     """The external member leaves on its own; its credential stops working at once."""
     end_member(connection, member, "left")
@@ -641,6 +648,8 @@ def external_api(connection, parts, params, method, token, read_payload, hooks):
         return hooks["answer"](connection, room_id, answer_payload(member, payload), member), 201
     if route == ["ai"]:
         return report_ai(connection, member, payload), 200
+    if route == ["expiry"]:
+        return lend_until(connection, member, payload), 200
     if route == ["leave"]:
         return leave_room(connection, member), 200
     raise LookupError(Text("地址不存在"))

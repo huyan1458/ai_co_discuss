@@ -1,13 +1,14 @@
 <script setup>
 /**
  * One external member's protections and reading record, opened from its rail row: what this computer recorded it
- * reading (file, bytes, allowed or refused), and revoke, extend or downgrade to discussion only. The record is this
- * computer's own audit, not anything the other side reports.
+ * reading (file, bytes, allowed or refused), and revoke or downgrade to discussion only. How long it stays is the
+ * invited computer's choice, shown here as it set it. The record is this computer's own audit, not anything the other
+ * side reports.
  */
-import { computed, inject, ref, useId, watch } from "vue";
+import { computed, inject, ref, watch } from "vue";
 import ExternalInviteCard from "./ExternalInviteCard.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
-import { DURATIONS, LEVEL_SHORT, extended_until, external_ai, external_of, remaining_label, room_operations, time_ms } from "./external-members.js";
+import { LEVEL_SHORT, external_ai, external_of, remaining_label, room_operations, time_ms } from "./external-members.js";
 import { t } from "./i18n.js";
 
 // `reinvite`: opened to invite an ended member back, so its invitation shows first.
@@ -19,13 +20,13 @@ const room = computed(() => view.value.room);
 // The member as the room shows it now: the opener passes a snapshot, while check-in arrives with a later room read.
 const live = computed(() => [...(room.value?.free?.members || []), ...(room.value?.free?.ended_externals || [])]
   .find((item) => item.id === props.member?.id) || props.member);
-// The member as this dialog last read it (`GET …/external-members/{id}`), else as the rail passed it: after 延长 or
-// 降为只讨论 the dialog reads again, so its header and buttons follow at once.
+// The member as this dialog last read it (`GET …/external-members/{id}`), else as the rail passed it: after 降为只讨论
+// the dialog reads again, so its header and buttons follow at once.
 const info = computed(() => detail.value ? { level: detail.value.scope === "read" ? "read" : "discuss", expires_at: time_ms(detail.value.expires_at),
   directories: (detail.value.directories || []).map((path) => String(path).split(/[\\/]/).filter(Boolean).pop() || path),
   computer: detail.value.machine_label || "", pending: detail.value.claimed_at === 0, ended: detail.value.status === "removed" } : external_of(live.value));
 const reads = ref([]), detail = ref(null), loading = ref(false), failure = ref("");
-const busy = ref(""), extend_to = ref("1h"), confirming = ref(false);
+const busy = ref(""), confirming = ref(false);
 // Inviting an ended member back: a new link brings the same member (name, label, history) back to its seat.
 const reinviting = ref(false);
 
@@ -62,8 +63,6 @@ async function change(action, extra, success) {
 const pending_expiry = computed(() => t("{count} 天内未签到自动结束", { count: Math.max(0, Math.ceil(((info.value?.expires_at || 0) - Date.now()) / 86400000)) }));
 const revoke_items = [t("立即生效：之后的请求与读取一律被拒，未完成的执行作废。"), t("已经读出去的内容收不回，会留在对方 AI 的会话里。")];
 const date = (value) => bridge.format_time(time_ms(value));
-// Ties the extend control to its visible label.
-const uid = useId();
 // Binary units, the same in both languages: whole numbers from 10 up, one decimal below (4 MiB, 1.5 KiB, 306 B).
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB"];
 function size(bytes) {
@@ -78,7 +77,7 @@ function size(bytes) {
   <UModal v-model:open="open" :title="t('外部成员 · {name}', { name: live ? bridge.display_name(live.name) : '' })"
     :description="info ? [info.computer, LEVEL_SHORT[info.level], info.ended ? t('已结束') : info.pending ? [t('待签到'), pending_expiry].join(' · ') : remaining_label(info.expires_at)].filter(Boolean).join(' · ') : ''" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
-      <ExternalInviteCard v-if="detail && ((detail.claimed_at === 0 && !info?.ended) || reinviting)" :key="member.id" :member-id="member.id" :settings="{ level: detail.scope, duration: detail.duration, directories: detail.directories, invite_version: detail.invite_version }" />
+      <ExternalInviteCard v-if="detail && ((detail.claimed_at === 0 && !info?.ended) || reinviting)" :key="member.id" :member-id="member.id" :settings="{ level: detail.scope, directories: detail.directories, invite_version: detail.invite_version }" />
       <!-- A seat awaiting check-in opens on its invitation: nothing else shows until that has been read. -->
       <div v-if="info?.pending && !detail && !failure" class="external-member-invite-loading" role="status" :aria-label="t('正在读取邀请')"><USkeleton class="external-member-invite-skeleton" /></div>
       <div v-else-if="info" class="external-member">
@@ -87,17 +86,10 @@ function size(bytes) {
           <div v-if="external_ai(live)"><dt>{{ t("对方的 AI") }}</dt><dd>{{ t("{name}（对方自报）", { name: external_ai(live) }) }}</dd></div>
           <div><dt>{{ t("对方能看到") }}</dt><dd>{{ LEVEL_SHORT[info.level] }}</dd></div>
           <div v-if="info.level === 'read'"><dt>{{ t("开放目录") }}</dt><dd :title="info.directories.join('、')">{{ info.directories.join("、") || "—" }}</dd></div>
-          <div v-if="!info.pending"><dt>{{ t("剩余时间") }}</dt><dd>{{ info.ended ? t("已结束") : remaining_label(info.expires_at) || "—" }}</dd></div>
+          <div v-if="!info.pending"><dt>{{ t("剩余时间") }}</dt><dd>{{ info.ended ? t("已结束") : [remaining_label(info.expires_at) || "—", t("对方设定")].join(" · ") }}</dd></div>
           <div v-if="!info.pending && detail?.usage"><dt>{{ t("用量") }}</dt><dd>{{ t("{used} / {limit} · 本小时 {hour} / {hour_limit} · 被拒 {denied} 次", { used: size(detail.usage.total_bytes), limit: size(detail.quota?.total_bytes), hour: size(detail.usage.hour_bytes), hour_limit: size(detail.quota?.hourly_bytes), denied: detail.usage.denied || 0 }) }}</dd></div>
         </dl>
         <section v-if="!info.ended" class="external-member-actions" :aria-label="t('调整')">
-          <div v-if="detail?.claimed_at" class="external-member-extend">
-            <span :id="`${uid}-extend`" class="external-member-label">{{ t("延长") }}</span>
-            <div class="expert-card-modes" role="radiogroup" :aria-labelledby="`${uid}-extend`">
-              <button v-for="option in DURATIONS" :key="option.value" type="button" role="radio" :aria-checked="extend_to === option.value" @click="extend_to = option.value">{{ option.label }}</button>
-            </div>
-            <UButton :label="t('延长')" icon="i-lucide-clock-plus" size="xs" color="neutral" variant="outline" class="pb-action" :loading="busy === 'extend'" :disabled="Boolean(busy)" @click="change('extend', { expires_at: extended_until(info.expires_at, extend_to) }, t('已延长'))" />
-          </div>
           <div class="external-member-buttons">
             <UButton v-if="!info.pending && info.level === 'read'" :label="t('改为只看消息')" icon="i-lucide-eye-off" size="xs" color="neutral" variant="outline" class="pb-action" :loading="busy === 'downgrade'" :disabled="Boolean(busy)" @click="change('downgrade', { scope: 'discuss' }, t('已降为只讨论，之后不能再读项目文件'))" />
             <UButton :label="info.pending ? t('移除席位') : t('撤销授权')" icon="i-lucide-ban" size="xs" color="error" variant="soft" :disabled="Boolean(busy)" @click="confirming = true" />
@@ -134,9 +126,8 @@ function size(bytes) {
 .external-member-facts dt { color: var(--ui-text-dimmed); white-space: nowrap; }
 .external-member-facts dd { margin: 0; color: var(--ui-text-toned); overflow-wrap: anywhere; }
 .external-member-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-block: 1px solid var(--ui-border-muted); }
-.external-member-extend, .external-member-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.external-member-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .external-member-label { color: var(--ui-text-dimmed); font-size: 11px; }
-.external-member-extend .expert-card-modes button { padding: 0 8px; white-space: nowrap; }
 .external-member-ended { display: flex; align-items: center; gap: 6px; margin: 0; padding: 8px 10px; border: 1px dashed var(--ui-border); border-radius: 8px; color: var(--ui-text-toned); font-size: 12px; }
 .external-member-ended > span { flex-shrink: 0; width: 14px; height: 14px; color: var(--ui-text-dimmed); }
 .external-member-reads h4 { margin: 0 0 8px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
@@ -157,7 +148,6 @@ function size(bytes) {
 .external-member-result > span { width: 12px; height: 12px; }
 .external-member-list li.is-denied .external-member-path, .external-member-list li.is-denied .external-member-result { color: var(--ui-error); }
 .external-member-note { margin: 0; color: var(--ui-text-dimmed); font-size: 11px; }
-@media (pointer: coarse) { .external-member-extend .expert-card-modes button { min-height: 32px; } }
 /* Phones: each read takes two lines (time and operation, then path and result) instead of squeezing four columns. */
 @media (max-width: 480px) {
   .external-member-facts > div { grid-template-columns: 5.5em minmax(0, 1fr); }

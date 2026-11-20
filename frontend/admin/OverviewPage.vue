@@ -15,6 +15,27 @@ const service = computed(() => state.value.service || {});
 const busy = ref("");
 const update = ref(null), checking = ref(false), confirming = ref(false);
 
+// The copy of the programs hosted accounts with their own Windows user run. The panel syncs it on start and on an update;
+// the row is here, whichever entry tab is open, only when that left something for the owner to do (user 2026-11-19).
+const installing = ref(false);
+const runtime = computed(() => state.value.clis || {});
+const PARTS = [["claude", "Claude Code"], ["codex", "Codex"], ["agy", "Antigravity"], ["app", t('共议')], ["python", "Python"]];
+const runtime_ready = computed(() => PARTS.every(([key]) => runtime.value[key]));
+const runtime_stale = computed(() => runtime.value.app && runtime.value.app_version && runtime.value.app_version !== state.value.version);
+const runtime_outdated = computed(() => runtime.value.outdated || []);
+const runtime_needs_owner = computed(() => state.value.hosting && (!runtime_ready.value || runtime_stale.value || runtime_outdated.value.length > 0));
+
+async function install_runtime() {
+  installing.value = true;
+  try {
+    const result = await call("clis/install", {});
+    const problems = [...(result.missing || []).map((item) => t('没有找到 {value1}', { value1: item })), ...(result.warnings || [])];
+    notify(problems.length ? "warning" : "info", problems.length ? problems.join("；") : t('程序副本已同步'));
+    await reload();
+  } catch (failure) { notify("error", failure.message); }
+  finally { installing.value = false; }
+}
+
 /** Open the owner's site in the default browser; the panel makes the link, which a protected site requires. */
 async function open_site() {
   try { await call("service/open", {}); } catch (failure) { notify("error", failure.message); }
@@ -97,6 +118,20 @@ watch(refreshed, () => check(true));
         </div>
       </div>
       <OnlineSiteRow />
+      <div v-if="runtime_needs_owner" class="panel-row">
+        <div class="panel-tile"><UIcon name="i-lucide-hard-drive-download" /></div>
+        <div class="panel-main">
+          <div class="panel-title">{{ t('程序副本') }} <span v-if="!runtime.app" class="panel-tag is-gray">{{ t('未安装') }}</span>
+            <span v-else-if="runtime_stale" class="panel-tag is-amber">{{ t('v{value1}，落后于本机 v{value2}', { value1: runtime.app_version, value2: state.version }) }}</span>
+            <span v-else-if="!runtime_ready" class="panel-tag is-amber">{{ t('缺少 {value1}', { value1: PARTS.filter(([key]) => !runtime[key]).map(([, label]) => label).join("、") }) }}</span>
+            <span v-else class="panel-tag is-amber">{{ t('{value1} 有新版本', { value1: runtime_outdated.join("、") }) }}</span></div>
+          <span class="panel-sub">{{ t('托管账号从这份副本运行。管理面板启动和更新共议时会自动同步；没有同步上时在这里同步。') }}</span>
+        </div>
+        <div class="panel-side">
+          <button type="button" class="panel-button is-small is-primary" :disabled="installing" @click="install_runtime">
+            <UIcon :name="installing ? 'i-lucide-loader' : 'i-lucide-refresh-cw'" :class="{ 'animate-spin': installing }" />{{ runtime.app ? t('同步') : t('安装') }}</button>
+        </div>
+      </div>
     </div>
 
     <EntryTabs />

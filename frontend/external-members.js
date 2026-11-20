@@ -23,6 +23,7 @@ export const OPERATIONS = {
   invited_join: "invited-join",
   invited_trust: "invited-trust",
   invited_pause: "invited-pause",
+  invited_lend: "invited-lend",
   invited_approve: "invited-approve",
   invited_refuse: "invited-refuse",
   invited_leave: "invited-leave",
@@ -43,15 +44,12 @@ export const LEVELS = [
 ];
 /** The short form for the rail and the records list. */
 export const LEVEL_SHORT = { discuss: t("房间消息"), read: t("消息和项目") };
-/** How long an invitation's member stays in the room. */
-export const DURATIONS = [
+/** How long the invited computer lends its AI: chosen when joining, changed later, three days at most (runner `lend_until`). */
+export const LEND_DURATIONS = [
   { value: "1h", label: t("1 小时") },
   { value: "today", label: t("今天") },
-  { value: "7d", label: t("7 天") },
-  { value: "30d", label: t("30 天") },
+  { value: "3d", label: t("3 天") },
 ];
-// Whole-day durations; 3d is no longer offered but seats and links made with it stay valid.
-const DURATION_DAYS = { "3d": 3, "7d": 7, "30d": 30 };
 /** A's two settings per invited room: how it answers when named, and how far its AI reaches on this computer. */
 export const WAKES = [{ value: "auto", label: t("直接回答") }, { value: "ask", label: t("先问我") }];
 export const SCOPES = [{ value: true, label: t("只在房间里发言") }, { value: false, label: t("不受限") }];
@@ -157,19 +155,6 @@ export function external_tag(member, now = Date.now(), { full = false } = {}) {
 /** Whether the invited computer turned a request down or let it time out (`external_outcome` on the request). */
 export const declined = (request) => request?.external_outcome === "declined" || request?.external_outcome === "timeout";
 
-/**
- * A later end for 延长, in seconds: an hour or the chosen days past the current end (or now, if already past), or the
- * end of today when that is later.
- */
-export function extended_until(expires_at, duration, now = Date.now()) {
-  const base = Math.max(time_ms(expires_at), now);
-  if (duration === "1h") return Math.floor((base + HOUR_MS) / 1000);
-  if (DURATION_DAYS[duration]) return Math.floor((base + DURATION_DAYS[duration] * DAY_MS) / 1000);
-  const tonight = new Date(now);
-  tonight.setHours(23, 59, 59, 0);
-  return Math.floor(Math.max(tonight.getTime(), base + MINUTE_MS) / 1000);
-}
-
 /** B's operations on its invitations and external members. */
 /**
  * An invitation the new-room panel asked for, waiting for the room it creates: `{ options, known, at }`, where `options`
@@ -182,7 +167,7 @@ export const invite_after_creation = shallowRef(null);
 export function seat_options(draft, paths) {
   const level = draft.level === "read" && !draft.directories?.length ? "discuss" : draft.level;
   const folders = (draft.directories || []).map((path) => paths.indexOf(path)).filter((index) => index >= 0);
-  return { level, duration: draft.duration, ...(level === "read" ? { folders } : {}) };
+  return { level, ...(level === "read" ? { folders } : {}) };
 }
 export const INVITE_AFTER_CREATION_MS = 120000;
 
@@ -437,6 +422,13 @@ function create_invited({ view, bridge }) {
     patch_record(id, () => ({ paused }));
     return run("pause", OPERATIONS.invited_pause, { id, paused }, paused ? t("已暂停") : t("已恢复"));
   }
+  /** Lend this record's AI for a new span counted from now; the other computer confirms the new end. */
+  async function lend(id, duration) {
+    const result = await run("lend", OPERATIONS.invited_lend, { id, duration }, t("借出时间已更新"));
+    // The other room's last view would otherwise keep showing the old end until the middle page reads it again.
+    if (result?.record && room_me.value[id]) room_me.value = { ...room_me.value, [id]: { ...room_me.value[id], expires_at: result.record.expires_at } };
+    return result;
+  }
   const settle_approval = (id, approval) => patch_record(id, (record) => ({ approvals: (record.approvals || []).filter((item) => item.id !== approval) }));
   function approve(id, approval) {
     settle_approval(id, approval);
@@ -483,7 +475,7 @@ function create_invited({ view, bridge }) {
   function start_join(text = "") { join_text.value = text; joining.value = true; }
 
   return { available, records, loaded, failure, page_open, selected_id, selected, joining, join_text, busy, room_me, room_messages, pending_join,
-    load, open, close, join, set_trust, set_paused, approve, refuse, leave, remove, read_room, start_join };
+    load, open, close, join, set_trust, set_paused, lend, approve, refuse, leave, remove, read_room, start_join };
 }
 
 /**

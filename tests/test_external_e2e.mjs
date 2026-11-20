@@ -54,7 +54,7 @@ async function computer_b_with_project(t) {
 /** B issues an invite with its local command (`room-invite`); resolves to `{ code, url, ... }`. */
 async function invite(b, options = {}) {
   const file = join(b.home, `invite-${randomUUID()}.json`);
-  writeFileSync(file, JSON.stringify({ room_id: b.room.room.id, token: b.room.owner, level: 'read', duration: '1h', site_url: b.relay.url, ...options }));
+  writeFileSync(file, JSON.stringify({ room_id: b.room.room.id, token: b.room.owner, level: 'read', site_url: b.relay.url, ...options }));
   const result = await run_codiscuss(b.home, ['launch', 'room-invite', '--file', file]);
   assert.equal(result.status, 0, `room-invite: ${result.stderr}${result.stdout}`);
   assert.match(result.json.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);

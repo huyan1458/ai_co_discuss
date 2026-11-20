@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync, writeFileSync } from 'node:fs';
+import { t } from './i18n.mjs';
 
 // Menu entries the icon offers: [label, action reported on standard output].
 const MENU = [['打开管理面板', 'open'], ['打开共议', 'site'], ['-', ''], ['重启服务', 'restart'], ['关闭服务', 'stop']];
@@ -150,8 +151,15 @@ export function show_tray({ title, on_action, icon_path = '', window_title = '',
   if (host && icon_path && existsSync(host)) {
     // The launcher exe hosts the icon, so Windows keeps the owner's "show on the taskbar" choice for it across restarts.
     // Standard input carries notes back to the icon (see notify below).
-    child = spawn_process(host, ['--tray', String(process.pid), icon_path, title, window_title || '-'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-  } else {
+    // Smart App Control or an App Control policy blocks the unsigned exe compiled here; Node then throws at once
+    // (UNKNOWN) instead of emitting 'error', and the signed powershell.exe below still runs (seen 2026-11-19).
+    try {
+      child = spawn_process(host, ['--tray', String(process.pid), icon_path, title, window_title || '-'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (error) {
+      process.stderr.write(t('任务栏图标程序被拒绝运行，改用 PowerShell 显示：{value1}\n', { value1: error.message }));
+    }
+  }
+  if (!child) {
     // Windows PowerShell 5.1 reads a script file without a byte-order mark in the ANSI code page, which garbles Chinese labels.
     const script = join(tmpdir(), `codiscuss-tray-${process.pid}.ps1`);
     writeFileSync(script, `﻿${tray_script(title, icon_path, process.pid, window_title)}`, 'utf8');
@@ -166,11 +174,18 @@ export function show_tray({ title, on_action, icon_path = '', window_title = '',
     buffer = lines.pop();
     for (const line of lines.map(text => text.trim())) if (ACTIONS.has(line)) on_action(line);
   });
-  child.on('error', () => {});
+  // The icon failing shows nothing on screen, so why it failed goes to the panel's log (admin-panel.log).
+  let closing = false, errors = '';
+  child.stderr?.setEncoding('utf8');
+  child.stderr?.on('data', chunk => { errors = (errors + chunk).slice(-2000); });
+  child.on('error', error => process.stderr.write(t('任务栏图标没有启动：{value1}\n', { value1: error.message })));
+  child.on('exit', (code, signal) => {
+    if (!closing) process.stderr.write(t('任务栏图标已退出（{value1}）：{value2}\n', { value1: signal || code, value2: errors.trim() || '-' }));
+  });
   child.stdin?.on('error', () => {});
   return {
     child,
-    close() { try { child.kill(); } catch {} },
+    close() { closing = true; try { child.kill(); } catch {} },
     /**
      * Show a note above the taskbar: kind 'busy' (stays), 'done' (goes after three seconds) or 'error' (stays until
      * clicked). Only the launcher exe shows notes; the PowerShell icon cannot read input without freezing its clicks.

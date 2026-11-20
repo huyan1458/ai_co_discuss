@@ -1,11 +1,12 @@
 <script setup>
 /**
  * The invite dialog's card for an AI on another computer: what it may do, which of this room's directories it reads,
- * how long it stays. A reserved seat shows its current link and QR code, or why a link is unavailable.
+ * how long it stays being the invited computer's choice. A reserved seat shows its current link and QR code, or why a
+ * link is unavailable.
  */
 import { computed, inject, onUnmounted, ref, useId, watch } from "vue";
 import { renderSVG } from "uqr";
-import { seat_invites, DURATIONS, LEVELS, room_operations, runner_message, runner_text, time_ms } from "./external-members.js";
+import { seat_invites, LEVELS, room_operations, runner_message, runner_text, time_ms } from "./external-members.js";
 import { t } from "./i18n.js";
 
 const emit = defineEmits(["remove"]);
@@ -13,7 +14,7 @@ const props = defineProps({ settings: { type: Object, default: null }, memberId:
 const { view, bridge, act } = inject("discussion");
 const operations = room_operations(bridge);
 const room = computed(() => view.value.room);
-const level = ref(props.settings?.level || props.start?.level || "read"), duration = ref(props.settings?.duration || props.start?.duration || "1h");
+const level = ref(props.settings?.level || props.start?.level || "read");
 // Only directories this room already has; the main one is chosen by default.
 const room_directories = computed(() => {
   const models = view.value.launch.room_models;
@@ -52,7 +53,7 @@ function generate() {
   return run("create", async () => {
     // Directories go by their place in the room's list (main first), never as paths.
     const folders = directories.value.map((path) => room_directories.value.indexOf(path)).filter((index) => index >= 0);
-    const result = await operations.create_invite(room.value.id, { member_id: seat_id.value || undefined, level: level.value, duration: duration.value,
+    const result = await operations.create_invite(room.value.id, { member_id: seat_id.value || undefined, level: level.value,
       ...(level.value === "read" ? { folders } : {}) });
     seat_id.value = result.member_id;
     // The link shows as soon as it exists; the roster catches up behind it.
@@ -117,12 +118,7 @@ const uid = useId();
         </div>
         <p class="external-invite-hint">{{ t("只读：已跟踪与未忽略的文件，固定排除 .env、密钥、凭据、data/ 与 .git。") }}</p>
       </div>
-      <div class="external-invite-field">
-        <span :id="`${uid}-duration`" class="external-invite-label">{{ t("有效期") }}</span>
-        <div class="expert-card-modes" role="radiogroup" :aria-labelledby="`${uid}-duration`">
-          <button v-for="option in DURATIONS" :key="option.value" type="button" role="radio" :aria-checked="duration === option.value" @click="duration = option.value">{{ option.label }}</button>
-        </div>
-      </div>
+      <p class="external-invite-hint">{{ t("借出多久由对方加入时决定，你可随时撤销。") }}</p>
       </template>
       <p v-if="seat_id" class="external-invite-hint">{{ t("待生成链接") }} · {{ t("链接只在生成时显示；请重新生成。未绑定线上网站时，需先在设置中绑定。") }}</p>
       <footer class="external-invite-footer">

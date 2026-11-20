@@ -75,6 +75,7 @@ function fake_b() {
     }
     if (path === MEMBER_API.answer(ROOM)) { state.answers.push(body); state.open.delete(body.execution_id); return { status: 201, body: { id: 77 } }; }
     if (path === MEMBER_API.ai(ROOM)) { state.ai_reports.push(body); return state.ai_refused ? { status: 404, body: { error: '地址不存在' } } : { status: 200, body: { reported: true } }; }
+    if (path === MEMBER_API.expiry(ROOM)) { state.lent = body.expires_at; return { status: 200, body: { expires_at: body.expires_at } }; }
     if (path === MEMBER_API.view(ROOM)) return { status: 200, body: { room: { id: ROOM }, me: state.me, latest_message_id: 150 } };
     if (path === `${MEMBER_API.messages(ROOM)}?after=50&limit=100`) return { status: 200, body: { messages: [{ id: 44, author: '用户', text: '再看' }, { id: 60, author: 'Codex', text: '别人的发言' }] } };
     if (path === `${MEMBER_API.messages(ROOM)}?after=0&limit=43`) return { status: 200, body: { messages: [{ id: 40, author: '用户', text: '@Claude-ext 看看' }, { id: 44, author: '用户', text: '再看' }] } };
@@ -181,6 +182,17 @@ async function wait_for(check, limit = 5000) {
 }
 const ended = (home, id, execution_id) => () => read_store(home).records[id].history.some(item => item.execution_id === execution_id && item.outcome !== 'woken');
 const reported = (b, action) => () => b.state.executions.some(item => item.action === action);
+
+test('this computer chooses how long it lends its AI, up to three days, and can change it later', async t => {
+  const b = fake_b();
+  const now = Date.now();
+  const { home, record } = await joined(t, b, { duration: '3d' });
+  assert.ok(Math.abs(b.state.redeemed.expires_at * 1000 - now - 3 * 86400000) < 60000, 'the chosen end goes with the redeem');
+  await assert.rejects(invited_command(home, 'invited-lend', { id: record.id, duration: '7d' }, { fetcher: b.fetcher }), error => error.code === 'invalid_duration');
+  const { record: lent } = await invited_command(home, 'invited-lend', { id: record.id, duration: '1h' }, { fetcher: b.fetcher });
+  assert.equal(lent.expires_at, b.state.lent * 1000);
+  assert.ok(Math.abs(b.state.lent * 1000 - Date.now() - 3600000) < 60000, 'a new loan counts from now');
+});
 
 test('joining keeps the key and credential out of the record and every command output', async t => {
   const b = fake_b();

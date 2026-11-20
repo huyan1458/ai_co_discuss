@@ -2,31 +2,32 @@
 /**
  * An external expert to be invited (new-room panel, invite dialog), laid out as a member card (ExpertCard.vue): the
  * front sums up the choices, 设置 turns to the back to edit them, 完成 keeps them and 取消 restores them.
- * `draft` holds `{ level, duration, directories }`; reading opens all of `paths` (the room's project directories).
+ * `draft` holds `{ level, directories }`; reading opens all of `paths` (the room's project directories). How long the
+ * expert stays is the invited computer's choice, made when it joins.
  */
 import { computed, ref, useId, watch } from "vue";
-import { DURATIONS, LEVELS } from "./external-members.js";
+import { LEVELS } from "./external-members.js";
 import { t } from "./i18n.js";
 
 const emit = defineEmits(["remove"]);
 const draft = defineModel("draft", { type: Object, required: true });
 const props = defineProps({ paths: { type: Array, default: () => [] } });
-const level = ref(draft.value.level || "read"), duration = ref(draft.value.duration || "1h");
+const level = ref(draft.value.level || "read");
 const paths = computed(() => props.paths.filter(Boolean));
-watch([level, duration, paths], () => { draft.value = { level: level.value, duration: duration.value, directories: [...paths.value] }; }, { immediate: true });
+watch([level, paths], () => { draft.value = { level: level.value, directories: [...paths.value] }; }, { immediate: true });
 // Reading needs a directory: without one it is invited for discussing, so the front says so.
 const shown_level = computed(() => level.value === "read" && !paths.value.length ? "discuss" : level.value);
 const leaf = (path) => path.split(/[\\/]/).filter(Boolean).pop() || path;
 const facts = computed(() => [
   { label: t("状态"), value: t("待签到"), tone: "warn" },
   { label: t("对方能看到"), value: shown_level.value === "read" ? t("消息和项目：{dirs}", { dirs: paths.value.map(leaf).join("、") }) : t("房间消息") },
-  { label: t("有效期"), value: DURATIONS.find((option) => option.value === duration.value)?.label },
+  { label: t("时长"), value: t("由对方决定") },
 ]);
 
 const back = ref(false);
 let saved = null;
-function open_back() { saved = { level: level.value, duration: duration.value }; back.value = true; }
-function cancel() { if (saved) { level.value = saved.level; duration.value = saved.duration; } back.value = false; }
+function open_back() { saved = { level: level.value }; back.value = true; }
+function cancel() { if (saved) level.value = saved.level; back.value = false; }
 const uid = useId();
 </script>
 
@@ -58,12 +59,6 @@ const uid = useId();
             </div>
           </div>
           <p v-if="level === 'read' && !paths.length" class="expert-card-empty">{{ t("还没有选项目目录，只能选“房间消息”。") }}</p>
-          <div class="expert-card-field">
-            <span :id="`${uid}-duration`">{{ t("有效期") }}</span>
-            <div class="expert-card-modes" role="radiogroup" :aria-labelledby="`${uid}-duration`">
-              <button v-for="option in DURATIONS" :key="option.value" type="button" role="radio" :aria-checked="duration === option.value" @click="duration = option.value">{{ option.label }}</button>
-            </div>
-          </div>
           <p class="expert-card-warning" role="note" :title="level === 'read' ? t('只读：已跟踪与未忽略的文件，固定排除 .env、密钥、凭据、data/ 与 .git。') : undefined"><UIcon name="i-lucide-triangle-alert" />{{ level === 'read' ? t("项目内容会发给对方模型服务商") : t("消息会发给对方模型服务商") }}</p>
         </div>
         <span class="expert-card-flip-actions">
@@ -115,7 +110,7 @@ const uid = useId();
 .expert-card-tools > button:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 .expert-card-heading strong { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .expert-card-heading strong > span { font-size: 10px; font-weight: 400; color: var(--ui-text-muted); }
-/* Labels are three characters here (有效期), so the column is wider than the member card's 26px. */
+/* Labels are up to five characters here (对方能看到, wrapping), so the column is wider than the member card's 26px. */
 .expert-card-field { display: grid; grid-template-columns: 3em minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
 .expert-card-field .expert-card-modes button { padding: 0 6px; white-space: nowrap; }
 .expert-card-empty { margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 20px; }

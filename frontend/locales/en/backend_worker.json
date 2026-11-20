@@ -37,7 +37,7 @@
   "这个账号开启了入口保护，但入口读不到它的密钥": "This account has entry protection enabled, but the entry cannot read its key",
   "实例没有按入口保护启动起来（启动失败，或密钥对不上）": "Instance did not start with entry protection (startup failed or the key does not match)",
   "实例没有启动起来": "Instance did not start",
-  "还没有安装隔离账号的程序副本，请先在“概览 → 登录入口 → 托管账号入口”中同步": "Program copies for isolated accounts are not installed yet. Sync them under Overview → Sign-in entry → Hosted account entry first.",
+  "还没有安装隔离账号的程序副本，请先在“概览 → 本机 → 程序副本”中安装": "Program copies for isolated accounts are not installed yet. Install them under Overview → This computer → Program copy first.",
   "技能库里没有 {value1}": "Skill library does not contain {value1}",
   "未知操作：{value1}": "Unknown action: {value1}",
   "未知程序：{value1}": "Unknown app: {value1}",

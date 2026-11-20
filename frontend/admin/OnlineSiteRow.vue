@@ -4,11 +4,11 @@
  * inviting external experts and hosted accounts signing in through the site all need it. Bind with an access code (on
  * the computer that deployed the site, its address alone), unbind, and on that computer make access codes for others.
  */
-import { computed, inject, ref } from "vue";
+import { computed, inject, ref, watch } from "vue";
 import { call } from "./api.js";
 import { t } from '../i18n.js';
 
-const { state, reload, notify } = inject("panel");
+const { state, reload, notify, binding } = inject("panel");
 const site = computed(() => state.value.online_site || "");
 // The dialog open: "bind", "unbind" or "make".
 const dialog = ref(""), busy = ref(""), code = ref("");
@@ -30,6 +30,8 @@ function start_binding() {
   code.value = "";
   dialog.value = "bind";
 }
+// The hosted relay card binds through this same dialog.
+watch(binding, () => { if (!site.value) start_binding(); });
 
 /** The access code maker starts from the deployment config and site last used here. */
 async function start_making() {

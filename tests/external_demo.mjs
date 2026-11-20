@@ -88,7 +88,7 @@ async function main() {
 
   // A spare invite made with B's command, for when the page cannot make one (it is single use and lasts 10 minutes).
   const input = join(b_home, 'demo-invite.json');
-  writeFileSync(input, JSON.stringify({ room_id: room.room.id, token: room.owner, level: 'read', duration: '1h', site_url: relay.url }));
+  writeFileSync(input, JSON.stringify({ room_id: room.room.id, token: room.owner, level: 'read', site_url: relay.url }));
   const invite = await run_codiscuss(b_home, ['launch', 'room-invite', '--file', input]);
   const spare = invite.status === 0 ? invite.json : null;
 

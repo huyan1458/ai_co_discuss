@@ -14,7 +14,7 @@ import ApiSettings from "./ApiSettings.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberTextDialog from "./MemberTextDialog.vue";
 import SessionBrowser from "./SessionBrowser.vue";
-import { SCOPES, WAKES, scope_label } from "./external-members.js";
+import { LEND_DURATIONS, SCOPES, WAKES, scope_label } from "./external-members.js";
 import { adapter_profile, same_session_family } from "../runner/adapters/profiles.mjs";
 import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
 
@@ -178,6 +178,7 @@ const facts = computed(() => preset.value ? [
   // The crown already offers hosting and the badge names the host, so only the refusal needs a row.
   ...props.hosting && !props.host && !props.hostable ? [{ label: t('主持'), value: host_fact.value }] : [],
   ...props.joining && trust.value ? [{ label: t('本机权限'), value: scope_label(trust.value.confined), ...(trust.value.confined ? {} : { tone: "warn" }) }] : [],
+  ...props.joining && trust.value?.duration ? [{ label: t('借出时间'), value: LEND_DURATIONS.find((option) => option.value === trust.value.duration)?.label }] : [],
 ]);
 // Ask only for connection values that are missing; a field stays while the back is open so typing does not hide it.
 const CONNECTION_FIELDS = { executable: { label: t('路径'), placeholder: t('可执行文件完整路径') },
@@ -496,6 +497,12 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
             <span>{{ t('被点名时') }}</span>
             <div class="expert-card-modes" role="radiogroup" :aria-label="t('被点名时')">
               <button v-for="option in WAKES" :key="option.value" type="button" role="radio" :aria-checked="trust.wake === option.value" @click="trust = { ...trust, wake: option.value }">{{ option.label }}</button>
+            </div>
+          </div>
+          <div v-if="trust.duration" class="expert-card-field">
+            <span :title="t('借出多久由你决定，最长 3 天；加入后可在外部房间里续期或改短。')">{{ t('借出时间') }}</span>
+            <div class="expert-card-modes" role="radiogroup" :aria-label="t('借出时间')">
+              <button v-for="option in LEND_DURATIONS" :key="option.value" type="button" role="radio" :aria-checked="trust.duration === option.value" @click="trust = { ...trust, duration: option.value }">{{ option.label }}</button>
             </div>
           </div>
         </template>

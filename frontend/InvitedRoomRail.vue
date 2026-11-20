@@ -1,7 +1,7 @@
 <script setup>
 /**
- * The right rail of an invited room: requests waiting for you, how it answers when named, time
- * left, how many times the AI was woken, and pause, adjust and leave.
+ * The right rail of an invited room: requests waiting for you, how it answers when named, how long it is lent (this
+ * computer's choice, renewable or shortened here), how many times the AI was woken, and pause, adjust and leave.
  */
 import { computed, ref, watch } from "vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
@@ -14,15 +14,18 @@ defineProps({ drawer: Boolean });
 const invited = use_invited_rooms();
 const record = invited.selected;
 const editing = ref(false), leaving = ref(false), removing = ref(false);
-const trust = ref({ wake: "auto", confined: true });
+const trust = ref({ wake: "auto", confined: true, duration: "" });
 watch(() => record.value?.id, () => { editing.value = false; });
 function start_edit() {
-  trust.value = { wake: record.value.wake || "ask", confined: record.value.confined !== false };
+  trust.value = { wake: record.value.wake || "ask", confined: record.value.confined !== false, duration: "" };
   editing.value = true;
 }
-function save() {
+/** Save how it answers and its local access, then, when a new loan was picked, ask the other computer for the new end. */
+async function save() {
   editing.value = false;
-  invited.set_trust(record.value.id, trust.value, t("设置已更新"));
+  const { duration, ...settings } = trust.value;
+  await invited.set_trust(record.value.id, settings, duration ? "" : t("设置已更新"));
+  if (duration) await invited.lend(record.value.id, duration);
 }
 const usage = computed(() => {
   const value = record.value;
@@ -96,6 +99,7 @@ const status = computed(() => {
         <div><dt>{{ t("你的 AI") }}</dt><dd>{{ [record.member_label || record.member, record.ai?.model, record.ai?.effort].filter(Boolean).join(" · ") }}</dd></div>
         <div><dt>{{ t("被点名时") }}</dt><dd>{{ WAKE_LABELS[record.wake] || record.wake }}</dd></div>
         <div><dt>{{ t("本机权限") }}</dt><dd>{{ scope_label(record.confined) }}</dd></div>
+        <div v-if="!ended && expires_at"><dt>{{ t("借出到") }}</dt><dd>{{ date(expires_at) }}</dd></div>
         <!-- Countdowns stop with the membership: an ended record says when it ended instead. -->
         <div v-if="ended && ended_at"><dt>{{ t("结束于") }}</dt><dd>{{ date(ended_at) }}</dd></div>
         <div v-if="ended"><dt>{{ t("唤醒") }}</dt><dd>{{ usage }}</dd></div>
@@ -108,7 +112,7 @@ const status = computed(() => {
         <TrustLevelField v-model="trust" :confine_reason="lockdown_problem(record.ai?.adapter)" />
         <div class="invited-edit-actions">
           <UButton :label="t('取消')" size="xs" color="neutral" variant="ghost" @click="editing = false" />
-          <UButton :label="t('保存')" size="xs" class="channel-primary-button" :loading="busy === 'trust'" :disabled="Boolean(busy)" @click="save" />
+          <UButton :label="t('保存')" size="xs" class="channel-primary-button" :loading="busy === 'trust' || busy === 'lend'" :disabled="Boolean(busy)" @click="save" />
         </div>
       </template>
       <div v-else class="invited-actions">

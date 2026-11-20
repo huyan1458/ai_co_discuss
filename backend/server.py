@@ -83,7 +83,7 @@ DIRECTORY_OPERATIONS = ("move", "folder")
 # Local entry commands for external members: the owner's invites (room credential) and this computer's invited records.
 INVITE_COMMANDS = ("room-invite", "room-invites", "room-invite-revoke")
 INVITED_COMMANDS = ("invited-list", "invited-join", "invited-trust", "invited-ai", "invited-pause", "invited-approve", "invited-refuse",
-                    "invited-leave", "invited-remove", "invited-room")
+                    "invited-lend", "invited-leave", "invited-remove", "invited-room")
 ADMIN_OPERATIONS = ("rename", "archive", "restore", "delete")
 DIRECTORY_PICKER_TIMEOUT = 600  # the folder dialog waits for the person at the computer
 # Files are streamed to players in pieces of this size.

@@ -104,11 +104,24 @@ async function deliver(env, { shared, frame }, options = {}) {
   return JSON.parse(gunzipSync(Buffer.from(plain)).toString());
 }
 
+test('the invited computer chooses when its membership ends; one that sends no end gets an hour', async t => {
+  for (const chosen of [Math.floor(Date.now() / 1000) + 2 * 86400, undefined]) {
+    const env = computer(t);
+    env.website = local_website(env.project);
+    const { code } = await create_invite(env.home, { room_id: ROOM, token: OWNER, level: 'read' }, { fetcher: env.website.fetcher });
+    const member = await invitee(env.link);
+    const answer = await deliver(env, await member.redeem(next_id(), code, chosen ? { expires_at: chosen } : {}));
+    assert.equal(answer.status, 200, answer.body.error);
+    if (chosen) assert.equal(answer.body.expires_at, chosen);
+    else assert.ok(Math.abs(answer.body.expires_at * 1000 - Date.now() - 3600000) < 60000, 'an hour without a chosen end');
+  }
+});
+
 /** A computer with one external member already joined through an invite. */
 async function joined(t) {
   const env = computer(t);
   env.website = local_website(env.project);
-  const { code } = await create_invite(env.home, { room_id: ROOM, token: OWNER, level: 'read', duration: '1h' }, { fetcher: env.website.fetcher });
+  const { code } = await create_invite(env.home, { room_id: ROOM, token: OWNER, level: 'read' }, { fetcher: env.website.fetcher });
   env.member = await invitee(env.link);
   const answer = await deliver(env, await env.member.redeem(next_id(), code));
   assert.equal(answer.status, 200, answer.body.error);
@@ -123,7 +136,7 @@ test('invites are issued only with the room owner credential, kept as a hash, li
   await assert.rejects(create_invite(home, { room_id: ROOM, token: 'x'.repeat(48) }),
     error => error.code === 'owner_required' && error.error_text.template === '需要本房间的控制凭据，且房间须在这台电脑上');
   await assert.rejects(create_invite(home, { room_id: ROOM, token: OWNER, folders: [3] }), /项目目录的序号/);
-  const invite = await create_invite(home, { room_id: ROOM, token: OWNER, level: 'read', duration: 'today' }, { fetcher: website_mock.fetcher });
+  const invite = await create_invite(home, { room_id: ROOM, token: OWNER, level: 'read' }, { fetcher: website_mock.fetcher });
   assert.match(invite.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
   assert.ok(invite.expires_at - Date.now() <= 10 * 60000 && invite.expires_at - Date.now() > 9 * 60000, 'ten minutes to redeem');
   const [base, fragment] = invite.url.split('#');
@@ -395,15 +408,12 @@ test('the local website\'s own page issues and lists invites without a credentia
   writeFileSync(env.config, JSON.stringify({ room: room.room.id, site: site.url, token: room.owner, cwd: env.project, extra_directories: [] }));
   // What the page sends: same-origin, marked local, no room credential; the website stands in for the owner.
   const local = (command, body) => site_json(site.url, `/api/local/${command}`, { body, headers: { 'X-CoDiscuss-Local': '1' } });
-  const issued = await local('room-invite', { room_id: room.room.id, level: 'read', duration: '1h' });
+  const issued = await local('room-invite', { room_id: room.room.id, level: 'read' });
   assert.equal(issued.status, 200, JSON.stringify(issued.body));
   assert.match(issued.body.code, /^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
   const listed = await local('room-invites', { room_id: room.room.id });
   assert.deepEqual(listed.body.invites.map(item => item.invite_id), [issued.body.invite_id]);
   assert.deepEqual((await local('room-invite-revoke', { room_id: room.room.id, invite_id: issued.body.invite_id })).body, { ok: true, revoked: true });
-  // The longest choice on the page passes both the gateway and the room backend.
-  const month = await local('room-invite', { room_id: room.room.id, level: 'read', duration: '30d' });
-  assert.equal(month.status, 200, JSON.stringify(month.body));
   // A credential the website does not accept for the owner is still refused, with a code and a translatable template.
   const forged = await local('room-invites', { room_id: room.room.id, token: 'f'.repeat(64) });
   assert.deepEqual([forged.status, forged.body.code, forged.body.error_text?.template], [400, 'owner_required', '需要本房间的控制凭据，且房间须在这台电脑上']);

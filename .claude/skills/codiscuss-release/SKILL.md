@@ -54,12 +54,14 @@ set -o pipefail; retry() { for i in 1 2 3 4 5; do "$@" 2>&1 | tail -3 && return 
 **第 4 阶段**（等待 GitHub Actions 发布 npm 并确认上线）。用 Bash 的 `run_in_background: true` 执行，等完成通知后再收尾，不轮询输出文件：
 
 ```bash
-V=<V>; R=; for i in $(seq 1 24); do R=$(gh run list --workflow publish.yml --branch "$V" --limit 1 --json databaseId --jq '.[0].databaseId'); [ -n "$R" ] && break; sleep 5; done; [ -n "$R" ] || { echo "publish: 未找到 $V 的工作流运行"; exit 1; }; if gh run watch "$R" --exit-status --interval 15 >/dev/null 2>&1; then echo "publish: 成功 (run $R)"; else gh run view "$R" --log-failed 2>&1 | tail -30; echo "publish: 失败 (run $R)"; exit 1; fi; for i in $(seq 1 40); do [ "$(npm view ai_co_discuss version 2>/dev/null)" = "${V#v}" ] && { echo "npm: ${V#v} 已上线"; exit 0; }; sleep 15; done; echo "npm: 10 分钟内未查到 ${V#v}，registry 可能仍在同步"
+V=<V>; R=; for i in $(seq 1 24); do R=$(gh run list --workflow publish.yml --branch "$V" --limit 1 --json databaseId --jq '.[0].databaseId'); [ -n "$R" ] && break; sleep 5; done; [ -n "$R" ] || { echo "publish: 未找到 $V 的工作流运行"; exit 1; }; if gh run watch "$R" --exit-status --interval 15 >/dev/null 2>&1; then echo "publish: 成功 (run $R)"; else gh run view "$R" --log-failed 2>&1 | tail -30; echo "publish: 失败 (run $R)"; exit 1; fi; T="https://registry.npmjs.org/ai_co_discuss/-/ai_co_discuss-${V#v}.tgz"; code() { curl -sI -o /dev/null -w '%{http_code}' "$1"; }; for i in $(seq 1 40); do [ "$(code "$T?t=$(date +%s)")" = 200 ] && break; sleep 15; done; for i in $(seq 1 40); do [ "$(code "$T")" = 200 ] && { echo "npm: ${V#v} 已上线，安装包可下载"; exit 0; }; sleep 15; done; echo "npm: 20 分钟内安装包仍不可下载，registry 或 CDN 可能仍在同步"
 ```
+
+“已上线”以安装包能下载为准，不以 `npm view` 查到版本号为准：版本信息比安装包先上线，此时安装会 404，且 CDN 会把这个 404 缓存 5 分钟（`max-age=300`）。所以先带查询参数绕过 CDN 等源站有了安装包，再查正常地址（`npm install` 实际请求的地址），返回 200 才报告；正常地址已被缓存 404 时会多等最多 5 分钟。
 
 - 工作流因网络类错误失败时，执行 `gh run rerun <run> --failed` 后重跑本阶段一次；仍失败则停止并报告日志末尾。
 - 认证类失败（`ENEEDAUTH`、`E401`、`E403`、OIDC 相关）说明 npm 上的 Trusted Publisher 配置（仓库 `huyan1458/ai_co_discuss`、工作流 `publish.yml`、已允许 `npm publish`）有问题，报告给用户，不在本机尝试 publish。
-- 只有 npm 查询超时、工作流已成功时，不算失败，收尾时说明版本仍在同步。
+- 只有安装包检查超时、工作流已成功时，不算失败，收尾时说明版本仍在同步、暂时还不能更新。
 
 **第 5 阶段**（更新本机，手动触发）。发版流程到第 4 阶段为止，收尾时不执行、不询问本机更新；只有用户明确要求更新本机（如“更新一下本机”“装上新版”）时才执行。用 Bash 的 `run_in_background: true` 执行，等完成通知后报告结果：
 

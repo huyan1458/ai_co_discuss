@@ -640,7 +640,8 @@ const recipient_hint = computed(() => {
   const named_group = (aliases) => aliases.some((alias) => MENTION_PATTERN(alias).test(draft_prose.value));
   if (free.value && named_group(SEQUENTIAL_ALIASES)) return t('依次发给 {value1}，前一位结束后下一位开始', { value1: in_turn(free_members.value).map((member) => bridge.display_name(member.name)).join(" → ") });
   if (free.value && named_group(ALL_ALIASES)) return t('发给 {value1}', { value1: free_members.value.map((member) => bridge.display_name(member.name)).join("、") });
-  const named = free_members.value.filter((member) => MENTION_PATTERN(member.name).test(draft_prose.value));
+  const found = bridge.mentioned_members(text.value, free_members.value.map((member) => member.name));
+  const named = free_members.value.filter((member) => found.has(member.name));
   if (named.length) return free.value ? t('{value1}发给 {value2}', { value1: named.length > 1 ? t('同时') : "", value2: named.map((member) => bridge.display_name(member.name)).join("、") })
     : t('直接提问 {value1}，不计讨论轮次；同一成员完成当前执行后回答', { value1: named.map((member) => bridge.display_name(member.name)).join("、") });
   if (free_members.value.length === 1) return t('发给 {value1}', { value1: bridge.display_name(free_members.value[0].name) });
@@ -836,7 +837,8 @@ const pending_routing = ref(new Set());
 function routes_by_scheduler(text) {
   if (!free.value || !view.value.launch?.room_models?.scheduler || free_members.value.length < 2 || /^\s*\//.test(text || "")) return false;
   const prose = String(text || "").replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, "");
-  return ![...ALL_ALIASES, ...SEQUENTIAL_ALIASES, ...free_members.value.map((member) => member.name)].some((name) => MENTION_PATTERN(name).test(prose));
+  return ![...ALL_ALIASES, ...SEQUENTIAL_ALIASES].some((name) => MENTION_PATTERN(name).test(prose))
+    && !bridge.mentioned_members(text || "", free_members.value.map((member) => member.name)).size;
 }
 // Only once the files are in and the message itself is on its way: a card for a message still uploading, or retrying
 // after a dropped send, would claim analysis the site has not started.
