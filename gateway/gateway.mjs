@@ -347,6 +347,9 @@ async function read_form(request) {
 function cross_origin(request) {
   const origin = request.headers.origin;
   if (!origin) return false;
+  // The instance's pages send no referrer, so their own forms post `Origin: null`; the browser still says it is the
+  // same site (#5688: signing out failed as "from another website").
+  if (origin === 'null' && request.headers['sec-fetch-site'] === 'same-origin') return false;
   try { return new URL(origin).host !== request.headers.host; } catch { return true; }
 }
 
@@ -437,17 +440,20 @@ export function create_gateway({ data, now = Date.now }) {
   async function login(request, response) {
     const form = await read_form(request);
     const name = String(form.get('name') || '').trim().toLowerCase();
-    const failed = failures.get(name);
+    // Counted per name and source: a stranger who knows the name only locks themselves out, not the account (#5696).
+    const source = String(request.headers['cf-connecting-ip'] || request.socket.remoteAddress || 'unknown');
+    const failure_key = `${name}|${source}`;
+    const failed = failures.get(failure_key);
     if (failed && failed.until > now()) return send(response, 429, { 'Content-Type': 'text/html; charset=utf-8' }, login_page({ action: LOGIN_PATH, refusal: 'locked', name }));
     // One snapshot both checks the password and fixes the session to it: a reset made meanwhile by the panel leaves this
     // session on the old version, so it never grants access.
     const account = NAME_PATTERN.test(name) ? read_accounts(data)[name] : null;
     if (!password_matches(account, form.get('password'))) {
       const count = (failed?.count || 0) + 1;
-      if (NAME_PATTERN.test(name)) failures.set(name, { count, until: count >= MAX_FAILURES ? now() + LOCK_MS : 0 });
+      if (NAME_PATTERN.test(name)) failures.set(failure_key, { count, until: count >= MAX_FAILURES ? now() + LOCK_MS : 0 });
       return send(response, 401, { 'Content-Type': 'text/html; charset=utf-8' }, login_page({ action: LOGIN_PATH, refusal: 'wrong', name }));
     }
-    failures.delete(name);
+    failures.delete(failure_key);
     if (account.disabled) return send(response, 403, { 'Content-Type': 'text/html; charset=utf-8' }, login_page({ action: LOGIN_PATH, refusal: 'disabled', name }));
     const token = randomBytes(32).toString('hex');
     sessions.set(token_key(token), { name, expires: now() + SESSION_SECONDS * 1000, hash: account.hash, version: session_version(account) });
@@ -467,10 +473,12 @@ export function create_gateway({ data, now = Date.now }) {
     const account = account_of(request);
     if (await direct(request, response, Boolean(account))) return;
     // The site asks this to tell a page opened through the entry from one opened at the instance itself.
-    if (path === SESSION_PATH && request.method === 'GET') return account ? send_json(response, 200, { signed_in: true }) : send_json(response, 401, { error: '请先登录' });
+    // It also names the account, so the site shows who is signed in when no display name was set (#5688).
+    if (path === SESSION_PATH && request.method === 'GET') return account ? send_json(response, 200, { signed_in: true, account: account.name }) : send_json(response, 401, { error: '请先登录', code: 'entry_login' });
     if (account) return forward(request, response, account.port, { protected: account.protected === true, key: account.protected === true ? instance_key(data, account.name) : '' });
     const page = request.method === 'GET' && String(request.headers.accept || '').includes('text/html');
-    return page ? send(response, 302, { Location: LOGIN_PATH }) : send_json(response, 401, { error: '请先登录' });
+    // A page goes to the sign-in; the site's own requests are told so, and it goes there itself (#5688).
+    return page ? send(response, 302, { Location: LOGIN_PATH }) : send_json(response, 401, { error: '请先登录', code: 'entry_login' });
   }
 
   return http.createServer((request, response) => {

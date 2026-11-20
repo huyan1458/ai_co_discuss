@@ -26,6 +26,7 @@ import { DiscussionStore, load_config, service_drafts, validate_config } from '.
 import { slash_insertion } from '../runner/slash_names.mjs';
 import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, named_workflows, request_attachments, member_drafts, member_extra_directories, member_folders, review_capability_version, room_goal, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
+import { capture_base } from '../runner/file_diff.mjs';
 
 import { EXPERT_PROMPT_PRESETS, expert_prompt, free_task_text, software_rules } from '../runner/expert_prompts.mjs';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
@@ -3319,6 +3320,15 @@ test('a free member that left is stopped while the other keeps working', async t
   assert.equal(children.Codex.killed, true);
   assert.equal(children.Claude.killed, false);
   assert.equal(runner.row('Codex').status, 'idle');
+});
+
+test('a changed path that is a directory (a modified submodule) has no line diff and stops no delivery', t => {
+  const project = mkdtempSync(join(tmpdir(), 'free-submodule-'));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  mkdirSync(join(project, 'engine'));
+  writeFileSync(join(project, 'note.md'), 'text');
+  const base = capture_base(project, new Map([['engine', ' M:x'], ['note.md', ' M:y'], ['gone.md', ' D:missing']]));
+  assert.deepEqual([base.get('engine'), base.get('note.md'), base.get('gone.md')], [{ skipped: 'binary' }, { text: 'text' }, { missing: true }]);
 });
 
 test('changed files in a Git working tree are reported after the member exits', async t => {

@@ -36,9 +36,9 @@ async function fixture(t) {
   const gateway = create_gateway({ data, now: () => clock });
   servers.push(gateway);
   const origin = `http://127.0.0.1:${await listen(gateway)}`;
-  const login = async (name, password) => {
+  const login = async (name, password, source = '') => {
     const response = await fetch(`${origin}/_entry/login`, { method: 'POST', redirect: 'manual',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ name, password }) });
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...(source ? { 'CF-Connecting-IP': source } : {}) }, body: new URLSearchParams({ name, password }) });
     return { status: response.status, cookie: (response.headers.get('set-cookie') || '').split(';')[0] };
   };
   // A second entry on the same account list, as after a restart.
@@ -114,6 +114,8 @@ test('sessions end with the account or on expiry, a reset replaces the password,
   assert.equal((await f.login('bob', f.bob.password)).status, 401);
   for (let attempt = 0; attempt < 4; attempt++) assert.equal((await f.login('bob', 'wrong')).status, 401);
   assert.equal((await f.login('bob', password)).status, 429);
+  // Locked per source: someone elsewhere who knows the name cannot keep the owner out (#5696).
+  assert.equal((await f.login('bob', password, '203.0.113.9')).status, 303);
   f.advance(11 * 60 * 1000);
   assert.equal((await f.login('bob', password)).status, 303);
 });
@@ -526,4 +528,19 @@ test('the panel\'s readiness check accepts a real protected instance only with i
   assert.equal(await instance_conforms(port, key), true);
   assert.equal(await instance_conforms(port, '6f'.repeat(32)), false, 'another key does not pass');
   assert.equal(await instance_conforms(port, ''), false, 'nor does treating it as unprotected');
+});
+
+test('a hosted page signs out with its own form, learns its account name, and is sent to sign in when its session ends', async t => {
+  const f = await fixture(t);
+  const { cookie } = await f.login('alice', f.alice.password);
+  const session = await fetch(`${f.origin}/_entry/session`, { headers: { Cookie: cookie } });
+  assert.deepEqual(await session.json(), { signed_in: true, account: 'alice' });
+  // The instance's pages send no referrer, so the browser posts their forms with Origin: null and says it is the same site.
+  const forged = await fetch(`${f.origin}/_entry/logout`, { method: 'POST', redirect: 'manual', headers: { Cookie: cookie, Origin: 'null' } });
+  assert.equal(forged.status, 403, 'a null origin the browser does not vouch for is refused');
+  const out = await fetch(`${f.origin}/_entry/logout`, { method: 'POST', redirect: 'manual', headers: { Cookie: cookie, Origin: 'null', 'Sec-Fetch-Site': 'same-origin' } });
+  assert.equal(out.status, 303);
+  const after = await fetch(`${f.origin}/api/rooms`, { headers: { Cookie: cookie } });
+  assert.equal(after.status, 401);
+  assert.equal((await after.json()).code, 'entry_login', 'the site is told to go to the sign-in');
 });

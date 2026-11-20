@@ -20,10 +20,14 @@ const GIT_TIMEOUT_MS = 15_000;
 
 /** A file's text, or a marker why it has no lines: missing, too large, or binary. */
 function read_text(file) {
-  let size;
-  try { size = statSync(file).size; } catch { return { missing: true }; }
-  if (size > MAX_DIFF_BYTES) return { skipped: 'large' };
-  const bytes = readFileSync(file);
+  let stat;
+  try { stat = statSync(file); } catch { return { missing: true }; }
+  // Git lists a changed submodule by its directory; like anything else that is not a readable file it has no line diff
+  // (reading it threw EISDIR, which failed every delivery in a project with a modified submodule, 2026-11-19 #5719).
+  if (!stat.isFile()) return { skipped: 'binary' };
+  if (stat.size > MAX_DIFF_BYTES) return { skipped: 'large' };
+  let bytes;
+  try { bytes = readFileSync(file); } catch { return { skipped: 'binary' }; }
   return bytes.includes(0) ? { skipped: 'binary' } : { text: bytes.toString('utf8') };
 }
 

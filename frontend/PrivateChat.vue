@@ -400,7 +400,13 @@ function on_scroll() {
 function set_touching(value) {
   touching = value;
 }
+/**
+ * A wheel turn counts as scrolling even when the screen cannot move (already at the bottom, so no scroll event fires):
+ * otherwise a running turn's new output lands mid-turn, on_resize writes scrollTop into the browser's smooth wheel
+ * animation, the animation pulls back to its old end, and the lines at the bottom jerk with every poll.
+ */
 function on_wheel(event) {
+  scrolled_at = performance.now();
   if (event.deltaY < 0) stick = false;
 }
 /** The rendered height changed: follow to the bottom, or keep the reader's line in place. */

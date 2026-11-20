@@ -149,6 +149,49 @@ test('a message the window takes between tool calls of a running turn is followe
   assert.equal(seen.exits, 1, 'a message folded into a running turn no longer hangs until the window closes');
 });
 
+test('a window turn that records no turn_duration ends once the registry goes idle after its last entry', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-idle-')); mkdirSync(join(home, 'sessions'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const set = (status, updatedAt) => writeFileSync(join(home, 'sessions', `${process.pid}.json`), JSON.stringify({ pid: process.pid, status, updatedAt }));
+  const at = Date.now();
+  set('idle', at - 1000);
+  const { file, seen } = follow(t, { marker: 'free-9.task.json', env: { CLAUDE_CONFIG_DIR: home } });
+  appendFileSync(file, line({ type: 'user', timestamp: new Date(at).toISOString(), message: { content: '读取 free-9.task.json' } }));
+  await delay(80);
+  assert.equal(seen.exits, 0, 'the idle state from before the window took the message does not end the turn');
+  const stamped = (entry, offset) => line({ ...entry, timestamp: new Date(at + offset).toISOString() });
+  set('busy', at + 10);
+  appendFileSync(file, stamped({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] } }, 20));
+  set('idle', at + 30);
+  await delay(80);
+  assert.equal(seen.exits, 0, 'an idle state while a tool call has not returned ends nothing');
+  appendFileSync(file, stamped({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } }, 40));
+  set('idle', at + 50);
+  await delay(80);
+  assert.equal(seen.exits, 0, 'after a tool result the assistant still has to write, so idle ends nothing');
+  // A bookkeeping entry stamped after the idle state does not hold the turn open.
+  appendFileSync(file, stamped({ type: 'assistant', message: { content: [{ type: 'text', text: '好' }] } }, 60));
+  set('idle', at + 70);
+  appendFileSync(file, stamped({ type: 'system', subtype: 'stop_hook_summary' }, 80));
+  await settled(seen);
+  assert.equal(seen.exits, 1);
+});
+
+test('a stopped room task whose window sits idle with no end in its log is given up as ended, not held busy', async t => {
+  const { env, set } = registry(t, 'waiting');
+  const { file, seen, watch } = follow(t, { marker: 'free-9.task.json', env, stop_poll: 10, stop_tool_wait: 60 });
+  // The log ends on a record the watch knows no end in, and the registry carries no usable time.
+  appendFileSync(file, line({ type: 'user', message: { content: '读取 free-9.task.json' } }) + text('好')
+    + line({ type: 'user', isMeta: true, message: { content: '回合后的记账' } }));
+  watch.stop();
+  await delay(200);
+  assert.equal(seen.exits, 0, 'a window waiting on a prompt is still in its turn');
+  set('idle');
+  watch.stop();
+  await settled(seen);
+  assert.equal(seen.exits, 1);
+});
+
 test('a chat turn waits for the turn that takes an interjection posted as it ended', async t => {
   const { file, seen, watch } = follow(t, { chat: true });
   appendFileSync(file, line({ type: 'user', message: { content: '[codiscuss:chat-3] 你好' } }) + text('第一段'));

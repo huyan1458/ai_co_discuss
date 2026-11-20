@@ -3629,7 +3629,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         elif parts[3:] == ["members"] and method == "POST":
             result = add_member(connection, room_id, token, self.read_payload(), utc_now())
         elif len(parts) == 5 and parts[3] == "members" and method == "POST":
-            result = member_action(connection, room_id, int(parts[4]), token, self.read_payload())
+            result = member_action(connection, room_id, int(parts[4]), token, {**self.read_payload(), "by_host": self.acting_host(connection, room_id)})
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "interrupt" and method == "POST":
             result = interrupt_member(connection, room_id, int(parts[4]), token, self.acting_host(connection, room_id))
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "chat" and method in ("GET", "POST"):

@@ -19,7 +19,7 @@
 |---|---|---|---|
 | Claude（Claude Code） | `claude-fable-5-2`、`claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-5-5` | Opus 主刀长任务、前端设计与审美；Fable 审计、诊断、卡住的难题；Sonnet 常规代码初审 | Fable 额度消耗约为 Opus 的 3–4 倍 |
 | GPT（Codex） | `gpt-6.2-astra`、`gpt-6.2-sol`、`gpt-6.1-terra`、`gpt-6-luna` | 推理、审查挑错、复杂排障；Astra 做前端版式与 3D；小修用 Sol | 易思考过度，强度从中档起步；中文常带防御腔，面向用户的中文让别家润色 |
-| Gemini（Antigravity） | `gemini-4-carbon`、`gemini-4-neon`、`gemini-4-argon`、`gemini-4-hydrogen` | 写小说、长篇中文用 Argon 或 Carbon；其他日常活用 Neon；Hydrogen 便宜跑量；幻觉低、超长文本强 | 执行慢，显示掉登录或额度耗尽多半是假的，多重试；输出排版差；`/swarm` 很费额度 |
+| Gemini（Antigravity） | `gemini-4-carbon`、`gemini-4-neon`、`gemini-4-argon`、`gemini-4-hydrogen` | 写小说、长篇中文用 Argon 或 Carbon，Hydrogen 可作便宜备选；Neon 快、前端和长任务强，是写作以外的日常首选，但写作偏平；Hydrogen 便宜跑量；幻觉低、超长文本强 | 执行慢，显示掉登录或额度耗尽多半是假的，多重试；输出排版差；`/swarm` 很费额度 |
 | DeepSeek | `deepseek-flash` | 便宜快速，多步执行稳，适合量大的简单活 | 复杂长链条任务容易原地打转；强度用 high 即可；`deepseek-v4-pro` 停在 8 月版本、比 Flash 旧，现阶段不用 |
 | Kimi | — | 规划、前端还原、多步工具调用 | 慢、贵、常限流；跑分有人称有水分 |
 | GLM | — | 后端逻辑少出错，中文古风文笔好 | 慢 |
@@ -37,6 +37,7 @@
 | 代码能否被合并（FrontierCode 2.0） | Fable 5.2（49%） | Opus 5.5、6.2 Astra、6.2 Sol 在 44–46% |
 | 综合（AA 智能指数，转述） | Fable 5.2、6.2 Astra、Neon、Carbon、Opus 5.5（59–65） | 6.2 Sol 57，Hydrogen 54 |
 | 专项 | 行业推理：Fable 5.2、Neon、Sonnet 5.5；超长文本：Neon；3D 建模：6.2 Astra | 幻觉率：Hydrogen 8%，Sonnet 5.5 43% |
+| 成本与速度（Vals Index 同一套题，每套成本 / 耗时） | 便宜又快：6.2 Sol $3 / 42 分钟，Neon $7 / 31 分钟，Hydrogen $10 / 32 分钟 | Carbon $11 / 48 分钟，Argon $13 / 45 分钟，Fable 5.2 $18 / 44 分钟；Sonnet 5.5 $16、Opus 5.5 $25，都要约 1.4 小时 |
 
 ## 生图模型
 
@@ -50,4 +51,12 @@
 
 ## 决策模型
 
-只做是非、选择、打分并给出概率，用于批量判断与分流。AA 决策指数：Drex Max v1.1、GLiDE v1.2 并列 73 分，Drex Max 成本最低；Jev 1.14、Gemini Decision 1 都是 66 分，Jev 更便宜，Gemini Decision 1 能处理音频和视频；OpenAI、微软的决策模型低于 66 分。
+只做是非、选择、打分并给出概率，用于批量判断与分流。
+
+| 模型 | AA 决策指数 | 成本 | 特点 |
+|---|---|---|---|
+| Drex Max v1.1（Nace.AI） | 73（并列第一） | 每百万任务 $103，约为 Gemini Decision 1 的三分之一 | — |
+| GLiDE v1.2（Fastino） | 73（并列第一） | 未查 | — |
+| Jev 1.14 | 66 | 比 Gemini Decision 1 便宜 | — |
+| `gemini-decision-1`（Google） | 66 | 输入 $0.10/百万 token，输出免费；每百万任务 $345 | 能处理音频和视频，知识推理强，分类与信息提取一般 |
+| OpenAI Decisions API、Microsoft-Decision-1 | 低于 66 | 与 Gemini Decision 1 同价（OpenAI） | — |

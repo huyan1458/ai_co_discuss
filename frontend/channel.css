@@ -535,8 +535,9 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-message-byline strong { font-size: 16px; font-weight: 650; color: var(--speaker-accent); }
 .channel-message-round { color: #bbc2cf; font-size: 11px; font-weight: 500; white-space: nowrap; }
 .channel-source { color: #929aa7 !important; background: transparent !important; border: 0; box-shadow: none !important; font-size: 11px !important; font-weight: 400; line-height: 15px; padding: 0 !important; }
-.channel-message-provenance { color: #929aa7; font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
-.channel-message-id { font-size: 11px !important; font-weight: 400; color: #929aa7; padding: 0 !important; }
+/* The time and message number take the source tag's line height: centred rows of unequal height put their text on different baselines. */
+.channel-message-provenance { color: #929aa7; font-size: 11px; font-weight: 400; line-height: 15px; font-variant-numeric: tabular-nums; }
+.channel-message-id { font-size: 11px !important; font-weight: 400; line-height: 15px !important; color: #929aa7; padding: 0 !important; }
 .channel-message-text { margin-top: 2px; color: #d7dbe3; font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
 /* Error/warning text gets its own box so a failure never reads like an answer; same left-bar tint as .access-failure. */
 .channel-message-text.channel-failure-reason { --failure-tone: var(--ui-error); margin: 0; padding: 1px 0 1px 12px; border-left: 2px solid color-mix(in srgb, var(--failure-tone) 60%, transparent); color: #b3bdcc; font-size: 14px; line-height: 1.65; white-space: pre-wrap; }

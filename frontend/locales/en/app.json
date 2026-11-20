@@ -394,5 +394,6 @@
   "这条排队消息已发出或已删除": "This queued message was already sent or deleted.",
   "未能编辑，消息仍在排队：{value1}": "Couldn't edit it. The message is still queued: {value1}",
   "消息仍在排队，输入框里是副本，发送前请先删除排队中的原消息": "The message is still queued and the composer holds a copy. Delete the queued original before sending.",
-  "未能确认这条排队消息的状态，内容已保留在输入框，请确认未发出后再发送": "Couldn't confirm this queued message's status. Its text is kept in the composer. Check that it wasn't sent before sending it again."
+  "未能确认这条排队消息的状态，内容已保留在输入框，请确认未发出后再发送": "Couldn't confirm this queued message's status. Its text is kept in the composer. Check that it wasn't sent before sending it again.",
+  "请先登录": "Please sign in"
 }

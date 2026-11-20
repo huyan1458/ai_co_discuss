@@ -279,9 +279,10 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
 .queued-leave-active { min-height: 0; overflow: hidden; transition: max-height .18s, opacity .18s; }
 .queued-leave-to { max-height: 0; opacity: 0; }
 .queued-leave-from { max-height: 40px; opacity: 1; }
-:global(.queued-tooltip) { max-width: 360px; text-align: center; white-space: normal; line-height: 1.4; }
+/* The tooltip's own fixed one-line height would let longer text spill out below its background. */
+:global(.queued-tooltip) { display: block; max-width: 360px; height: auto; padding: 6px 10px; text-align: center; white-space: normal; line-height: 1.4; }
 :global(.queued-tooltip-remedy) { opacity: .65; }
-:global(.queued-preview) { text-align: left; }
+:global(.queued-preview) { max-width: min(560px, 90vw); padding: 8px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; text-align: left; box-shadow: 0 6px 18px #0004; }
 :global(.queued-failure) { margin-bottom: 4px; color: var(--ui-warning); }
 :global(.queued-preview-body) { max-height: 40vh; overflow-y: auto; overscroll-behavior: contain; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 </style>

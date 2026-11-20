@@ -416,13 +416,15 @@ async function request_json(path, payload, access_token) {
   const response = await fetch(path, options);
   if (response.status === 304 && cached) return cached.body;
   const result = await response.json();
+  // The hosted account's session ended (signed out elsewhere, expired, password reset): back to the sign-in (#5688).
+  if (response.status === 401 && result?.code === "entry_login") { keep_draft_for_login(); window.location.assign("/_entry/login"); throw Object.assign(new Error(t('请先登录')), { status: 401 }); }
   if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('请求失败，请重试')), { preflight: response.status >= 400 && response.status < 500, status: response.status });
   return conditional ? remember(response.status, result, response.headers.get("ETag")) : localize(result);
 }
 
 /** The owner's public name and avatar replace the default "User" identity for every visitor. */
 function apply_admin_identity(profile) {
-  Object.assign(PLATFORM_IDENTITIES["用户"], { label: profile?.username || DEFAULT_USER_LABEL, icon: profile?.avatar || DEFAULT_USER_ICON });
+  Object.assign(PLATFORM_IDENTITIES["用户"], { label: profile?.username || state.entry_account || DEFAULT_USER_LABEL, icon: profile?.avatar || DEFAULT_USER_ICON });
   state.admin.identity_version++;
   if (!element("participants")) return;
   for (const id of ["author-select", "new-room-host"]) {
@@ -444,6 +446,11 @@ function apply_admin_state(info) {
 
 /** Read the public administrator state; a failure leaves the visitor view unchanged. */
 async function load_admin_state() {
+  // Opened through a hosted account's sign-in entry: the account's name stands in until a display name is set (#5688).
+  if (state.entry_account === undefined) {
+    try { const session = await fetch("/_entry/session", { credentials: "same-origin", cache: "no-store" }); state.entry_account = session.ok ? String((await session.json()).account || "") : ""; }
+    catch { state.entry_account = ""; }
+  }
   try { apply_admin_state(await request_json("/api/admin")); }
   catch { /* The directory request reports connection problems. */ }
 }
@@ -1312,6 +1319,22 @@ function remember_room(room_id) {
   request_json("/api/rooms/last", { room_id }).catch(() => {});
 }
 
+// A hosted account's sign-in that ran out sends the page to the entry's sign-in; the open room's unsent text waits in
+// this tab's storage and comes back when the room opens again (#5696).
+const LOGIN_DRAFT_KEY = "discuss-login-draft";
+function keep_draft_for_login() {
+  const text = element("message-input")?.value || "";
+  if (!state.room?.id || !text.trim()) return;
+  try { sessionStorage.setItem(LOGIN_DRAFT_KEY, JSON.stringify({ room: state.room.id, text })); } catch { /* Storage may be unavailable. */ }
+}
+function take_draft_after_login(room_id) {
+  let kept = null;
+  try { kept = JSON.parse(sessionStorage.getItem(LOGIN_DRAFT_KEY) || "null"); } catch { kept = null; }
+  if (!kept || kept.room !== room_id) return;
+  try { sessionStorage.removeItem(LOGIN_DRAFT_KEY); } catch { /* Nothing to clear. */ }
+  if (!element("message-input").value) element("message-input").value = kept.text;
+}
+
 // Each room keeps its unsent composer (text, files, reply) while another room is open, until this page closes.
 const room_composer_drafts = new Map();
 
@@ -1371,6 +1394,7 @@ async function select_room(room_id) {
   element("mention-filter").setAttribute("aria-pressed", "false");
   cancel_reply();
   restore_room_composer(state.room?.id);
+  if (state.room) take_draft_after_login(state.room.id);
   select_tab("discussion", { refresh: false });
   history.replaceState(null, "", state.room ? `/?room=${encodeURIComponent(room_id)}` : "/");
   if (state.room) remember_room(room_id);
@@ -6225,7 +6249,7 @@ function view_snapshot() {
     failed_sends: state.failed_sends.map((failed) => ({ id: failed.id, ...failed.preview })),
     mention_only: state.mention_only, host_only: state.host_only, authors: state.authors, card_kinds: state.card_kinds,
     source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, queued_taken: state.queued_taken,
-    access: access_snapshot(), admin: admin_snapshot(),
+    access: access_snapshot(), admin: admin_snapshot(), entry_account: state.entry_account || "",
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,

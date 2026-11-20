@@ -271,7 +271,7 @@ def add_topic(parser, create=False):
 
 # `message post` options only the host may use: plain `--help` folds them so a member sees what it can use (B6);
 # `--help-host` and `schema` still show all of them.
-HOST_POST_OPTIONS = ("--handoff", "--no-handoff", "--keep-working", "--continue", "--sequential", "--loop", "--checkpoint",
+HOST_POST_OPTIONS = ("--handoff", "--no-handoff", "--keep-working", "--force", "--continue", "--sequential", "--loop", "--checkpoint",
                      "--repeat", "--wait-user", "--detach", "--with", "--need-rounds", "--rounds-reason", "--next-review",
                      "--review-scope", "--review-roster")
 
@@ -381,6 +381,8 @@ def message_commands(subcommands, registry):
                            "做完照常回答（沿用本次凭据），派出的工作结束时以通知交回你；不能与 --continue、--sequential、--next-review 同用")
     post.add_argument("--proactive", action="store_true",
                       help="自由房间成员：不是房间派来的任务、而是你的用户在你自己的窗口里要你发言时用（主持人也可在需要主动说明、派活或补交失效执行的结果时自行使用）；不关联执行或请求，有进行中的执行或讨论进行中不可用；主持人还可同时 --to 派活或 --continue，从这条消息起算新任务链")
+    post.add_argument("--force", action="store_true",
+                      help="自由房间主持人：与 --proactive 同用，这次发言与等着你的请求无关、又必须现在说时用：还有待处理的请求也照样发言，这些请求不关闭，之后仍会交给你；发言就是某条普通请求的回答时改用 --also-request 关闭它")
     post.add_argument("--continue", dest="continue_reason", metavar="REASON",
                       help="自由房间主持人：房间没有其他进行中的工作时再唤醒你一次，写明继续做什么（≤300 字）；算本链一轮，用户发新消息或你下次回答不带它即取消")
     post.add_argument("--sequential", action="store_true",
@@ -395,7 +397,7 @@ def message_commands(subcommands, registry):
                       help="与 --sequential 同用：MEMBER 所在那一棒结束后等用户回答问题，不交回你；MEMBER 用 question ask（contract=handoff）交候选并出题，"
                            "用户回答该问题后接着往下一棒走，写了 =START 则从 START 所在那一棒再来一圈（最后一棒之后须写 START），答案交给下一棒先读；普通聊天不推进；可重复")
     post.add_argument("--also-request", dest="also_requests", type=positive_int, action="append", default=[], metavar="REQUEST",
-                      help="执行中又排队给你的普通请求（execution view 的 queued_requests）与本次任务相关、这条回答已一并交付时，用它同时关闭；可重复")
+                      help="执行中又排队给你的普通请求（execution view 的 queued_requests）与本次任务相关、这条回答已一并交付时，用它同时关闭；与 --proactive 同用时，关闭这次主动发言已回答的、还没交给你的普通请求（编号见被拒时的提示或 room view 的 free.requests）；可重复")
     post.add_argument("--detach", type=member_handle, action="append", default=[], metavar="MEMBER",
                       help="自由房间主持人：点名一位在后台工作、不等它的成员：不交回你、不占住房间（用户发消息不排队），也不计入交回或下一棒的等待；可单独用，也可与 --to 同用；它失败时程序通知你；可重复")
     post.add_argument("--with", dest="to", type=member_handle, action=JoinPreviousStep, metavar="MEMBER",
@@ -858,8 +860,12 @@ def plan_message(args):
         payload["handoff"] = True
     if args.continue_reason is not None:
         payload["continue"] = args.continue_reason
+    if args.force and not args.proactive:
+        raise CliError("--force 只与 --proactive 同用")
     if args.proactive:
         payload["proactive"] = True
+    if args.force:
+        payload["force"] = True
     if args.no_handoff:
         payload["no_handoff"] = True
     if args.keep_working:

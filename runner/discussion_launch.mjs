@@ -1153,7 +1153,7 @@ export async function room_member_access(home, raw) {
  * its session. An empty value goes back to the software's default; an API member has no default model, so an empty
  * model keeps its current one.
  */
-export async function room_member_model(home, raw) {
+export async function room_member_model(home, raw, headers = {}) {
   const { input, path } = await member_room_context(home, raw);
   const { name } = input;
   const model = typeof input.model === 'string' ? input.model.trim() : '';
@@ -1177,22 +1177,23 @@ export async function room_member_model(home, raw) {
     validate_config(updated, dirname(path));
     atomic_json(path, updated);
     const label = item => [item.model || '默认', item.effort].filter(Boolean).join(' · ');
-    const recorded = label(profile) === label(next) ? null : await record_model_change(input, name, label(profile), label(next));
+    const recorded = label(profile) === label(next) ? null : await record_model_change(input, name, label(profile), label(next), headers);
     return { room_id: input.room_id, member: name, model: next.model || '', effort, ...(recorded ? { notice_id: recorded } : {}) };
   } finally { release(); }
 }
 
 /**
  * Leave the room a system record of a model change (COVERAGE 9); the change is already saved, so a failed record only
- * leaves it unrecorded and is said in the log, never undone.
+ * leaves it unrecorded and is said in the log, never undone. `headers` are host-control's, by which the site names the
+ * host as the one who changed it.
  */
-async function record_model_change(input, name, from, to) {
+async function record_model_change(input, name, from, to, headers = {}) {
   try {
     const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
     const member = (room.free?.members || room.members || []).find(item => item.name === name);
     if (!member) return null;
     return (await site_request(input.site, `/api/rooms/${input.room_id}/members/${member.id}`, input.token,
-      { action: 'model_changed', from, to })).message_id || null;
+      { action: 'model_changed', from, to }, headers)).message_id || null;
   } catch (error) {
     console.error(`换模型已保存，但房间记录未写入：${error.message}`);
     return null;
@@ -2193,7 +2194,7 @@ const HOST_CONTROLS = {
   },
   back: (ctx, o) => room_member(ctx.home, { ...ctx.owner, action: 'rejoin', name: host_target(ctx, o.member).name }, false, ctx.headers),
   model: (ctx, o) => o.list ? host_model_list(ctx, o)
-    : room_member_model(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member, { self: true }).name, model: o.model || '', effort: o.effort || '' }),
+    : room_member_model(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member, { self: true }).name, model: o.model || '', effort: o.effort || '' }, ctx.headers),
   access: (ctx, o) => {
     if (!HOST_CARD_ACCESS.includes(o.access)) throw new Error('主持人只能把成员的项目权限设为 read 或 write');
     return room_member_access(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member).name, project_access: o.access });

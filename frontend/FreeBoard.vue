@@ -321,7 +321,7 @@ watch(() => room.value.id, () => { starting.value = false; });
           :loading="continuing === rounds" :disabled="Boolean(continuing)" @click="continue_chain(status.continue_chain, rounds)" />
       </div>
     </section>
-    <section v-if="goal" class="pb-section" aria-label="Goal">
+    <section v-if="goal" class="pb-section pb-goal" aria-label="Goal">
       <h4>Goal</h4>
       <div class="pb-goal-status" :class="goal.status !== 'active' ? 'is-paused' : goal.phase === 'pending' ? 'is-warning' : 'is-success'"><span class="pb-dot"></span><span role="status">{{ goal_phase }}</span></div>
       <p v-if="goal.status === 'active' && goal.phase !== 'doing' && goal.phase_note" class="pb-goal-usage">{{ goal.phase_note }}</p>
@@ -400,10 +400,12 @@ watch(() => room.value.id, () => { starting.value = false; });
 .pb-ended-members .pb-member::before { content: ""; }
 .pb-ended-members .pb-member-body { min-width: 0; line-height: 1.35; }
 /* A member from another computer: a dashed ring marks it apart from this computer's own AIs. */
-.pb-goal-status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+/* Laid out like the room status above it: the dot hangs at the edge, and everything else starts where the status text does. */
+.pb-goal-status { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .pb-goal-status.is-paused { color: var(--ui-text-muted); }
-.pb-goal-usage { margin: 4px 0 0; color: var(--ui-text-muted); font-size: 11px; }
-.pb-goal-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pb-goal > .pb-focus, .pb-goal > .pb-link { margin-left: 16px; }
+.pb-goal-usage { margin: 4px 0 0 16px; color: var(--ui-text-muted); font-size: 11px; }
+.pb-goal-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 16px; }
 /* Speaking-order rows stay compact: name, then the workflow tag and setup on one line, then the status. */
 .speaking-order-row .pb-member-body { line-height: 1.35; }
 .pb-workflow-member { color: var(--ui-text-muted); font-size: 10px; }

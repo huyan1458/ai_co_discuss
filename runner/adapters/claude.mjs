@@ -508,7 +508,7 @@ function window_state(pid, env = process.env) {
 
 /**
  * Follow a message posted into an open window through the session log, from `offset` on, until the turn that took it
- * ends (`system/turn_duration`) or the window closes: report the API error that turn ended on as a failure, otherwise its
+ * ends (`system/turn_duration`, or the window's registry staying idle after the turn's last assistant message) or the window closes: report the API error that turn ended on as a failure, otherwise its
  * end. For a room task it notes once when the window has not taken it by `unstarted_after`; an answer it never submitted
  * then fails the execution. Given a `log_path`, it reports the turn's steps there and its texts as notes. It waits past a
  * turn end while a background agent the turn launched has not reported. For a `chat` turn it waits also for every interjection `expect`ed, and fails with the reason when the window does not take the message in time,
@@ -524,7 +524,7 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     stop_poll = STOP_POLL_MS, stop_tool_wait = STOP_TOOL_WAIT_MS, stop_end_wait = STOP_END_WAIT_MS } = options;
   const since = Date.now(), awaited = new Set([marker]), open_tools = new Set(), background = new Set();
   let pending = Buffer.alloc(0), taken = false, noted = false, error = null, done = false, waiting_since = 0;
-  let stop_asked = 0, stop_sent = 0, stop_timer = null;
+  let stop_asked = 0, stop_sent = 0, stop_timer = null, last_message = null, idle_since = 0;
   // `ended` says why a room task's turn ended without finishing (interrupted, window closed): it is an exit, not a
   // failure to retry, and its last remark is not an answer.
   const finish = (reason = '', ended = '') => {
@@ -539,7 +539,8 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
   };
   const tick = () => {
     if (done) return;
-    for (const entry of read_appended()) {
+    const entries = read_appended();
+    for (const entry of entries) {
       for (const item of awaited) if (takes(entry, item)) { awaited.delete(item); taken = true; }
       if (!taken) continue;
       if (entry.type === 'user' && INTERRUPTED.test(prompt_text(entry.message?.content).trim())) {
@@ -551,7 +552,21 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
       if (!entry.isSidechain) { track_tools(entry); track_background(entry); }
       // A turn that left a background agent running ends while the window waits for it; its report starts the next turn.
       if (entry.type === 'system' && entry.subtype === 'turn_duration' && !awaited.size && !background.size) return finish();
+      // Only the turn's own messages count: bookkeeping entries (hook summaries, queue operations) may be stamped later.
+      if (!entry.isSidechain && ['assistant', 'user'].includes(entry.type) && entry.message) {
+        last_message = { type: entry.type, at: Date.parse(entry.timestamp) || 0 };
+      }
     }
+    // Claude Code after 2.1.322 records no `turn_duration`: the window's registry (`status`, `updatedAt` in ms) going idle
+    // after the turn's last message ends it too. That message must be the assistant's (a tool result is always followed
+    // by one), an idle state older than it is the one before the window took the message, and the state must hold for
+    // one poll interval with nothing new in the log, so a message still being written or a brief idle state ends nothing.
+    // (Counted in time, not polls: a requested stop polls every `stop_poll`.)
+    const resting = taken && !awaited.size && !background.size && !open_tools.size && last_message?.type === 'assistant'
+      ? window_state(pid, env) : null;
+    const idle = resting?.status === 'idle' && last_message.at > 0 && resting.updatedAt >= last_message.at;
+    if (!idle || entries.length) idle_since = idle ? Date.now() : 0;
+    else if (Date.now() - idle_since >= interval) return finish();
     if (!process_alive(pid)) return chat ? finish('这位成员的 Claude 窗口在这轮私聊结束前关闭了') : finish('', '所在的原窗口在这一轮结束前关闭了');
     if (stop_asked) return try_stop();
     const elapsed = Date.now() - since;
@@ -653,6 +668,9 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     clearInterval(stop_timer);
     stop_timer = null; stop_asked = 0; stop_sent = 0;
     if (log_path) task.on_output?.(log_path, `${JSON.stringify({ type: 'codiscuss.stop', sent: false, reason })}\n`);
+    // Nothing is left to stop in a window that sits idle with no tool running: the turn is over even when the log shows
+    // no end the watch knows (a later Claude Code may record turns differently), so the member is not held busy for good.
+    if (taken && !open_tools.size && window_state(pid, env)?.status === 'idle') finish('', '停止时原窗口已空闲');
   }
   return {
     get done() { return done; },

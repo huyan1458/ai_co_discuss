@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, onMounted, reactive, ref, watch } from "vue";
+import { computed, inject, reactive, ref, watch } from "vue";
 import DeviceSettings from "./DeviceSettings.vue";
 import { locale, t } from './i18n.js';
 
@@ -17,10 +17,7 @@ const name_changed = computed(() => display_name.value.trim() !== (profile.value
 const register_blocked = computed(() => state_key.value === "register" && !account.value.setup_available);
 // A hosted account's page opened through the account entry signs out there; opened at the instance itself (the computer
 // owner's direct link) there is no entry sign-in to end, so the section is not shown.
-const via_entry = ref(false);
-onMounted(async () => {
-  try { via_entry.value = (await fetch("/_entry/session", { credentials: "same-origin" })).ok; } catch { via_entry.value = false; }
-});
+const via_entry = computed(() => Boolean(view.value.entry_account));
 
 watch(() => profile.value?.username, (value) => { display_name.value = value || ""; }, { immediate: true });
 watch(state_key, () => { Object.assign(auth_form, { password: "", confirm: "", setup_key: "" }); });

@@ -1316,7 +1316,9 @@ def check_proactive(connection, room_id, member, payload):
     """A member speaking on its own, e.g. its user asked in its own window, bound to no request or execution.
 
     The host's may dispatch and ask to continue, starting a chain of its own; other members' only speak. Refused while
-    the member has a live execution (it answers through that, so the round limit holds) or a discussion runs.
+    the member has a live execution (it answers through that, so the round limit holds), a discussion runs, or requests
+    still wait for the member. A waiting request the post answers is named in `also_request_ids` and closed with it;
+    only the host may speak past the others with `force`, and those stay pending.
     """
     if payload["proactive"] is not True:
         raise ValueError(Text("proactive 的值须为 true"))
@@ -1327,14 +1329,28 @@ def check_proactive(connection, room_id, member, payload):
                          else Text("主动发言不关联请求，普通成员也不能派活，不能带：{fields}", fields="、".join(carried)))
     if connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')", (member["id"],)).fetchone():
         raise FileExistsError(Text("你有进行中的执行，请用本次执行回答，不能主动发言"))
-    pending = [row[0] for row in connection.execute("SELECT message_id FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id",
-                                                    (member["id"],))]
-    if pending:
+    force, answered = payload.get("force"), payload.get("also_request_ids")
+    if force not in (None, False) and (force is not True or member["role"] != "host"):
+        raise ValueError(Text("force 只能由主持人使用，值为 true"))
+    # Requests this post answers (`also_request_ids`, closed with it) do not hold it back; the rest do, unless the host
+    # says the post is none of their answer (`force`): they may stay undelivered for long, and the room must still hear it.
+    waiting = [row for row in connection.execute("SELECT id,message_id FROM member_requests WHERE member_id=? AND status='pending' ORDER BY id",
+                                                 (member["id"],)) if not isinstance(answered, list) or row["id"] not in answered]
+    if waiting and force is not True:
         # Otherwise the same question is answered here and again when the request is delivered.
-        requests = "、".join(f"#{item}" for item in pending)
-        raise FileExistsError(Text("你还有待处理的请求（{requests}），不能主动发言；用 --request 关闭它们后回答", requests=requests)
-                              if member["access"] == "manual" else
-                              Text("你还有待处理的请求（{requests}），不能主动发言；本机服务会把它们交给你，届时一并回答", requests=requests))
+        requests = "、".join(f"{row['id']}/#{row['message_id']}" for row in waiting)
+        if member["access"] == "manual":
+            raise FileExistsError(Text("你还有待处理的请求（请求编号/消息编号：{requests}），不能主动发言；用 --request 关闭它们后回答", requests=requests))
+        # Name the ones this post may close, so one refusal is enough to write the right options.
+        open_ids = {row["id"] for row in waiting}
+        closable = "、".join(str(item["id"]) for item in queued_requests(connection, member["id"]) if item["id"] in open_ids)
+        if member["role"] == "host" and closable:
+            raise FileExistsError(Text("你还有待处理的请求（请求编号/消息编号：{requests}），本机服务会把它们交给你，届时一并回答；这次发言就是请求 {closable} 的回答时，用 --also-request 请求编号 一并关闭（其余是交回、接力或评审类，不能这样关闭）；与待处理请求无关而确需现在说时加 --force，没关闭的请求仍会交给你", requests=requests, closable=closable))
+        if member["role"] == "host":
+            raise FileExistsError(Text("你还有待处理的请求（请求编号/消息编号：{requests}），本机服务会把它们交给你，届时一并回答；它们是交回、接力或评审类，不能由主动发言关闭；确需现在说时加 --force，这些请求仍会交给你", requests=requests))
+        if closable:
+            raise FileExistsError(Text("你还有待处理的请求（请求编号/消息编号：{requests}），本机服务会把它们交给你，届时一并回答；这次发言就是请求 {closable} 的回答时，用 --also-request 请求编号 一并关闭", requests=requests, closable=closable))
+        raise FileExistsError(Text("你还有待处理的请求（请求编号/消息编号：{requests}），不能主动发言；本机服务会把它们交给你，届时一并回答", requests=requests))
     if discussion.current_session(connection, room_id, active_only=True):
         raise FileExistsError(Text("讨论进行中，不能主动发言；按主持人的安排发言"))
     if payload.get("to"):
@@ -1349,6 +1365,8 @@ def check_proactive(connection, room_id, member, payload):
 def after_proactive(connection, room_id, message_id, member, payload):
     """Record a proactive post; the host's dispatch or continue starts a new chain at it, under the usual round limit."""
     connection.execute("INSERT INTO proactive_messages (message_id) VALUES (?)", (message_id,))
+    # The member's own waiting requests this post answers are closed with it, so they are not delivered and answered again.
+    close_also_requests(connection, room_id, member, message_id, payload.get("also_request_ids"))
     if member["role"] != "host":
         settle_batches(connection, room_id)
         return
@@ -1370,8 +1388,6 @@ def check_answer(connection, room_id, member, payload):
     Only the AI host dispatches work; other members' targets remain suggestions. A proactive post is checked apart.
     """
     if payload.get("proactive") is not None:
-        if payload.get("also_request_ids") is not None:
-            raise ValueError(Text("主动发言不关联执行，不能一并交付排队请求（also_request_ids）"))
         check_proactive(connection, room_id, member, payload)
         return None
     if payload.get("to") is not None:
@@ -3983,7 +3999,15 @@ def record_model_change(connection, room_id, member, payload):
     if not all(isinstance(value, str) and 0 < len(value.strip()) <= MODEL_TEXT_LIMIT for value in (before, after)):
         raise ValueError(Text("from 与 to 须为 1–100 字的模型说明"))
     name = member_display_names(connection, room_id).get(member["name"], member["name"])
-    text = Text("{name} 的模型已从 {before} 换为 {after}，下次执行起生效。", name=name, before=before.strip(), after=after.strip())
+    # Who changed it is part of the record: the host through host-control (named by the site from its credential), or
+    # else the owner (user 2026-11-19, #5682: a bare record left the owner asking whether the host meant it).
+    host = payload.get("by_host") or ""
+    if host == name:
+        text = Text("主持人 {host} 把自己的模型从 {before} 换为 {after}，下次执行起生效。", host=host, before=before.strip(), after=after.strip())
+    elif host:
+        text = Text("主持人 {host} 把 {name} 的模型从 {before} 换为 {after}，下次执行起生效。", host=host, name=name, before=before.strip(), after=after.strip())
+    else:
+        text = Text("用户把 {name} 的模型从 {before} 换为 {after}，下次执行起生效。", name=name, before=before.strip(), after=after.strip())
     message_id = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?,?,?,?,?,?)",
                                     (room_id, NOTICE_AUTHOR, text, "notice", f"model-{member['id']}-{uuid.uuid4().hex}",
                                      time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))).lastrowid

@@ -408,9 +408,12 @@ function escape(event) {
 // Dropdowns of the back's selects render outside the card, so they count as inside.
 const FLOATING_SELECTOR = "[role='listbox'], [role='menu'], [data-reka-popper-content-wrapper]";
 
-/** Clicking anywhere outside the open back keeps its edits and returns to the front. */
+const OPEN_DROPDOWN_SELECTOR = "[role='listbox'][data-state='open'], [role='menu'][data-state='open']";
+
+/** Clicking anywhere outside the open back keeps its edits and returns to the front; a click that only dismisses an open dropdown does not. */
 function close_on_outside(event) {
   if (prompt_open.value || describing.value || naming.value || browsing.value || card.value?.contains(event.target) || event.target.closest?.(FLOATING_SELECTOR)) return;
+  if (document.querySelector(OPEN_DROPDOWN_SELECTOR)) return;
   flip(false);
 }
 watch(back, (open) => {

@@ -325,7 +325,7 @@ class QueuedRequestTests(base.HostRoomTests):
         self.assertEqual(refused[0], 409, refused)
         proactive = self.request(f"{self.path}/messages", {"author": "Codex", "text": "主动说一句", "source": "cli", "submission_id": uuid.uuid4().hex,
                                                            "proactive": True, "also_request_ids": [step["id"]]}, self.codex)
-        self.assertEqual(proactive[0], 400, proactive)
+        self.assertEqual(proactive[0], 409, "with a live execution the answer goes through it, not a proactive post")
 
 
 class OneExitTests(base.HostRoomTests):

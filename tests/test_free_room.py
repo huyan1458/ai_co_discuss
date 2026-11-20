@@ -1423,7 +1423,15 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(self.request(path, {"action": "model_changed", "from": "a", "to": "b"}, self.member)[0], 403)
         status, result = self.request(path, {"action": "model_changed", "from": "opus · high", "to": "sonnet"}, self.owner)
         self.assertEqual(status, 200, result)
-        self.assertEqual(self.messages()[-1][1], "Claude 的模型已从 opus · high 换为 sonnet，下次执行起生效。")
+        self.assertEqual(self.messages()[-1][1], "用户把 Claude 的模型从 opus · high 换为 sonnet，下次执行起生效。")
+        # Through host-control the host's own credential rides along, and the record names the host instead.
+        host = next(member for member in self.request(self.path)[1]["free"]["members"] if member["role"] == "host")
+        if host["name"] == "Claude":
+            acting = Request(self.base + path, headers={"Content-Type": "application/json", "X-Discussion-Token": self.owner, "X-Acting-Member-Token": self.member},
+                             data=json.dumps({"action": "model_changed", "from": "sonnet", "to": "opus"}).encode())
+            with urlopen(acting) as response:
+                self.assertEqual(response.status, 200)
+            self.assertEqual(self.messages()[-1][1], "主持人 Claude 把自己的模型从 sonnet 换为 opus，下次执行起生效。")
         self.assertEqual(self.request(self.path)[1]["free"]["requests"], [])
 
     def test_quoted_mention_of_the_host_wakes_nobody(self):
@@ -2565,6 +2573,26 @@ class HostTests(HostRoomTests):
         self.assertEqual(chain, saved["message"]["id"], "the host's proactive dispatch starts its own chain")
         self.work("Antigravity")
         self.assertEqual(self.requests()[-1], ("Claude", "handoff", "pending"))
+        # With a request still waiting for it, only the host may speak anyway, and the request stays for delivery.
+        status, refused = post("Claude")
+        self.assertEqual(status, 409, refused)
+        self.assertIn("--force", refused["error"])
+        self.assertEqual(post("Antigravity", force=True)[0], 400, "only the host may force")
+        handoff = [item["id"] for item in self.request(self.path)[1]["free"]["requests"] if item["purpose"] == "handoff" and item["status"] == "pending"]
+        count = len(self.messages())
+        self.assertEqual(post("Claude", also_request_ids=handoff)[0], 409, "a hand-back is not closed by a proactive post")
+        self.assertEqual(len(self.messages()), count, "the refused post is not kept")
+        # Answering the user's waiting request while a hand-back also waits: close the one, speak past the other.
+        FreeRoomTests.say(self, "@Claude 看一看", to=["Claude"])
+        asked = [item["id"] for item in self.request(self.path)[1]["free"]["requests"] if item["purpose"] == "ask" and item["status"] == "pending"]
+        status, refused = post("Claude", also_request_ids=asked)
+        self.assertEqual(status, 409, "the hand-back still waits")
+        status, saved = post("Claude", also_request_ids=asked, force=True)
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(sorted(item[1:] for item in self.requests() if item[0] == "Claude" and item[2] == "pending"), [("handoff", "pending")])
+        status, saved = post("Claude", force=True)
+        self.assertEqual((status, saved["message"]["proactive"]), (201, 1), saved)
+        self.assertIn(("Claude", "handoff", "pending"), self.requests())
 
     def test_notices_skip_one_batch_join_a_waiting_request_and_cost_no_round(self):
         """A conflict inside one host batch waits for its hand-back; a notice while the host has a request waiting only
@@ -2592,7 +2620,13 @@ class HostTests(HostRoomTests):
         status, refused = self.request(f"{self.path}/messages", {"author": "Codex", "text": "主动说", "source": "cli", "proactive": True,
                                                                  "submission_id": uuid.uuid4().hex}, self.tokens["Codex"])
         self.assertEqual(status, 409, refused)
-        self.assertIn("待处理", refused["error"])
+        self.assertIn("--also-request", refused["error"])
+        # A proactive post that answers the waiting request closes it, so it is not delivered and answered again.
+        waiting = [item["id"] for item in self.request(self.path)[1]["free"]["requests"] if item["member"] == "Codex" and item["status"] == "pending"]
+        status, saved = self.request(f"{self.path}/messages", {"author": "Codex", "text": "看过了，没问题", "source": "cli", "proactive": True,
+                                                               "also_request_ids": waiting, "submission_id": uuid.uuid4().hex}, self.tokens["Codex"])
+        self.assertEqual((status, saved["message"]["proactive"]), (201, 1), saved)
+        self.assertEqual(self.requests()[-1], ("Codex", "ask", "completed"))
         token = uuid.uuid4().hex
         self.request(f"{self.path}/members", {"name": "Qwen", "token": token, "access": "manual"}, self.owner)
         self.request(f"{self.path}/register", {}, token)
