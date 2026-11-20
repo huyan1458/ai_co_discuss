@@ -427,23 +427,25 @@ test('refusing or letting a request time out tells the inviting room it was not 
   assert.deepEqual(read_store(home).records[record.id].history.map(item => item.outcome), ['refused', 'timeout']);
 });
 
-test('invited back to the same seat, a record still kept carries on; once deleted, a new one starts', async t => {
+test('every join is a record of its own; a record whose time ran out renews itself back, a revoked one cannot', async t => {
   const b = fake_b();
   const { home, record } = await joined(t, b);
   const path = join(home, 'external', 'invited.json');
-  const store = JSON.parse(readFileSync(path, 'utf8'));
-  Object.assign(store.records[record.id], { status: 'ended', end_reason: 'expired', wake: 'ask', history: [{ at: 1, outcome: 'ended', reason: 'expired' }] });
-  writeFileSync(path, JSON.stringify(store));
+  const set_status = (status, end_reason) => {
+    const store = JSON.parse(readFileSync(path, 'utf8'));
+    Object.assign(store.records[record.id], { status, end_reason });
+    writeFileSync(path, JSON.stringify(store));
+  };
+  set_status('ended', 'expired');
+  const renewed = (await invited_command(home, 'invited-lend', { id: record.id, duration: '1h' }, { fetcher: b.fetcher })).record;
+  assert.deepEqual([renewed.status, renewed.end_reason], ['active', undefined], 'active again at once');
+  set_status('ended', 'revoked');
+  await assert.rejects(invited_command(home, 'invited-lend', { id: record.id, duration: '1h' }, { fetcher: b.fetcher }), error => error.code === 'record_ended');
+  // Invited back to the same seat: a new record with the AI picked now, the old one left as it ended.
   const back = (await invited_command(home, 'invited-join', { invite: link(b.fingerprint, LATER_CODES[0]), adapter: 'claude' }, { fetcher: b.fetcher })).record;
-  assert.equal(back.id, record.id, 'the same record');
-  assert.deepEqual([back.status, back.end_reason, back.wake, back.history.length], ['active', undefined, 'ask', 1], 'history and settings carry on');
-  assert.notEqual(back.key_id, record.key_id, 'with a fresh key');
-
-  await invited_command(home, 'invited-leave', { id: record.id }, { fetcher: b.fetcher });
-  await invited_command(home, 'invited-remove', { id: record.id });
-  const fresh = (await invited_command(home, 'invited-join', { invite: link(b.fingerprint, LATER_CODES[1]), adapter: 'claude' }, { fetcher: b.fetcher })).record;
-  assert.notEqual(fresh.id, record.id);
-  assert.deepEqual([fresh.wake, fresh.history.length], ['auto', 0]);
+  assert.notEqual(back.id, record.id);
+  assert.deepEqual([back.status, back.wake, back.history.length], ['active', 'auto', 0]);
+  assert.equal(read_store(home).records[record.id].status, 'ended');
 });
 
 test('answering at once has no wake limit, even for a room that had one before', async t => {

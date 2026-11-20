@@ -12,7 +12,7 @@ from urllib.error import HTTPError
 from unittest import mock
 from urllib.request import Request, urlopen
 
-from backend.external_members import EXTERNAL_HEADER, usage_of
+from backend.external_members import EXTERNAL_HEADER
 from backend.server import ADMIN_OPERATIONS, DIRECTORY_OPERATIONS, INVITE_COMMANDS, INVITED_COMMANDS, DiscussionHandler
 from tests.test_free_room import FreeRoomTests
 
@@ -106,7 +106,7 @@ class OwnerGrantTests(ExternalMemberTests):
         self.assertEqual(self.ext("ai", {"adapter": "claude", "platform": "Claude", "model": "claude-opus-5-5"})[0], 200)
         self.assertEqual((shown()["adapter"], shown()["external"]["platform"], shown()["external"]["model"]), ("claude", "Claude", "claude-opus-5-5"))
         after = self.request(path, token=self.owner)[1]
-        self.assertEqual([after[key] for key in ("scope", "directories", "expires_at", "quota")], [before[key] for key in ("scope", "directories", "expires_at", "quota")])
+        self.assertEqual([after[key] for key in ("scope", "directories", "expires_at")], [before[key] for key in ("scope", "directories", "expires_at")])
         self.assertEqual(self.ext("ai", {"adapter": "claude", "platform": "NotAVendor"})[0], 200)
         self.assertEqual(shown()["external"]["platform"], "", "an unknown vendor reads as none")
         self.assertEqual(self.ext("ai", {"platform": "Claude"})[0], 400)
@@ -206,7 +206,7 @@ class OwnerGrantTests(ExternalMemberTests):
         self.assertEqual((status, body.get("code")), (409, "stale_revision"), body)
         self.assertEqual(self.request(self.owner_path, {**payload, "revision": "x"}, self.member)[0], 403)
         member = self.create()
-        self.assertEqual((member["scope"], member["quota"]["hourly_reads"], member["status"]), ("read", 600, "active"))
+        self.assertEqual((member["scope"], member["status"]), ("read", "active"))
         status, again = self.request(self.owner_path, {**payload, "revision": "stale"}, self.owner)
         self.assertEqual((status, again["member"]["member_id"]), (200, member["member_id"]))
         # Visible in the room view without its local path; delivered by nobody on this computer.
@@ -225,7 +225,7 @@ class OwnerGrantTests(ExternalMemberTests):
         base = {"revision": revision, "name": EXTERNAL, "token": self.external, "machine": "fp:test", "scope": "read",
                 "directories": ["D:/work/app"], "expires_at": int(time.time()) + 3600}
         for change in ({"scope": "write"}, {"directories": []}, {"scope": "discuss"}, {"expires_at": int(time.time()) - 1},
-                       {"quota": {"hourly_bytes": 0}}, {"name": "Claude"}, {"token": self.member}, {"name": "Someone"}):
+                       {"name": "Claude"}, {"token": self.member}, {"name": "Someone"}):
             status, body = self.request(self.owner_path, {**base, **change}, self.owner)
             self.assertIn(status, (400, 409), (change, body))
 
@@ -241,8 +241,9 @@ class OwnerGrantTests(ExternalMemberTests):
     def test_update_and_revoke_void_live_work(self):
         member = self.create()
         member_url = f"{self.owner_path}/{member['member_id']}"
-        status, updated = self.request(member_url, {"action": "update", "quota": {"hourly_reads": 5}, "expires_at": int(time.time()) + 7200}, self.owner)
-        self.assertEqual((status, updated["quota"]["hourly_reads"], updated["quota"]["hourly_bytes"]), (200, 5, 4 * 1024 * 1024), updated)
+        later = int(time.time()) + 7200
+        status, updated = self.request(member_url, {"action": "update", "expires_at": later}, self.owner)
+        self.assertEqual((status, updated["expires_at"]), (200, later), updated)
         status, narrowed = self.request(member_url, {"action": "update", "scope": "discuss"}, self.owner)
         self.assertEqual((status, narrowed["directories"]), (200, []), narrowed)
         self.assertEqual(self.request(f"{self.path}/members/{member['member_id']}", {"action": "role", "role": "host"}, self.owner)[0], 400)
@@ -273,11 +274,24 @@ class MemberScopeTests(ExternalMemberTests):
     def test_the_lending_computer_sets_its_own_end_and_nothing_else(self):
         member = self.create()
         later = int(time.time()) + 2 * 86400
-        self.assertEqual(self.ext("expiry", {"expires_at": later}), (200, {"expires_at": later}))
+        self.assertEqual(self.ext("expiry", {"expires_at": later}), (200, {"expires_at": later, "revived": False}))
         owner = self.request(f"{self.owner_path}/{member['member_id']}", token=self.owner)[1]
         self.assertEqual((owner["expires_at"], owner["scope"]), (later, "read"))
         self.assertEqual(self.ext("expiry", {"expires_at": int(time.time()) - 1})[0], 400, "an end in the past is refused")
         self.assertEqual(self.ext("expiry", {"expires_at": later}, token=uuid.uuid4().hex)[0], 403, "only with its own credential")
+
+    def test_a_member_whose_time_ran_out_renews_itself_back_but_a_revoked_one_cannot(self):
+        member = self.create()
+        with closing(self.db()) as connection, connection:
+            connection.execute("UPDATE external_members SET expires_at=? WHERE member_id=?", (int(time.time()) - 1, member["member_id"]))
+        self.assertEqual(self.ext("view")[1].get("reason"), "expired")
+        later = int(time.time()) + 3600
+        self.assertEqual(self.ext("expiry", {"expires_at": later}), (200, {"expires_at": later, "revived": True}))
+        self.assertEqual(self.ext("view")[0], 200, "back in the room with the same credential")
+        self.assertIn(EXTERNAL, [item["name"] for item in self.request(self.path, token=self.owner)[1]["free"]["members"]])
+        self.assertEqual(self.request(f"{self.owner_path}/{member['member_id']}", {"action": "revoke"}, self.owner)[0], 200)
+        status, body = self.ext("expiry", {"expires_at": later})
+        self.assertEqual((status, body.get("reason")), (403, "revoked"), "the owner's revocation stands")
 
     def test_a_member_that_left_stays_listed_with_why(self):
         member = self.create()
@@ -430,26 +444,23 @@ class ReadAuditTests(ExternalMemberTests):
         return self.request(f"{self.owner_path}/{member_id}/reads", {"op": "read", "root": 0, "path": "a.py", "bytes": 10, "outcome": "ok", **payload},
                             self.owner)
 
-    def test_audit_then_quota_persisted(self):
-        member = self.create(quota={"hourly_bytes": 100, "total_bytes": 150, "hourly_reads": 2})
+    def test_every_read_is_audited_and_none_is_limited_by_amount(self):
+        member = self.create()
         member_id = member["member_id"]
-        self.assertEqual(self.read(member_id, bytes=60)[1]["allowed"], True)
-        status, refused = self.read(member_id, bytes=50)
-        self.assertEqual((status, refused["allowed"], refused["code"], refused["recorded"]), (200, False, "quota_hour_bytes", True), refused)
+        # Reads are not limited (user 2026-11-19): large and repeated reads pass; only the open scope refuses.
+        for _ in range(3):
+            self.assertEqual(self.read(member_id, bytes=60 * 1024 * 1024)[1]["allowed"], True)
         self.assertEqual(self.read(member_id, outcome="denied", reason="敏感文件", path=".env")[1]["code"], "engine_denied")
         self.assertEqual(self.read(member_id, root=3)[1]["code"], "bad_root")
-        self.assertEqual(self.read(member_id, bytes=10)[1]["allowed"], True)
-        self.assertEqual(self.read(member_id, bytes=1)[1]["code"], "quota_hour_reads")
         self.assertEqual(self.request(f"{self.owner_path}/{member_id}/reads", {"op": "read", "root": 0, "path": "a", "bytes": 1, "outcome": "ok"},
                                       self.member)[0], 403)
         reads = self.request(f"{self.owner_path}/{member_id}/reads?after=0", token=self.owner)[1]
-        self.assertEqual([(item["code"], item["directory"]) for item in reads["reads"]][:2], [("ok", "D:/work/app"), ("quota_hour_bytes", "D:/work/app")])
-        self.assertEqual(len(reads["reads"]), 6)
-        # Counts come from the stored audit, so a new process sees the same usage; each read is in the room's event log.
+        self.assertEqual([(item["code"], item["directory"]) for item in reads["reads"]][:1], [("ok", "D:/work/app")])
+        self.assertEqual(len(reads["reads"]), 5)
+        # Each read is in the room's event log.
         with closing(self.db()) as connection:
-            self.assertEqual(usage_of(connection, member_id)["total_bytes"], 70)
             events = [json.loads(row[0]) for row in connection.execute("SELECT data FROM room_events WHERE kind='external.read' ORDER BY id")]
-        self.assertEqual([event["allowed"] for event in events], [True, False, False, False, True, False])
+        self.assertEqual([event["allowed"] for event in events], [True, True, True, False, False])
         self.assertEqual(events[0]["path"], "a.py")
 
     def test_discussion_only_member_cannot_read(self):

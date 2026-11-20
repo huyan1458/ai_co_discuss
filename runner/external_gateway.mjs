@@ -304,8 +304,12 @@ export function external_entries(home, site) {
     .map(([id, entry]) => ({ id, x: entry.public_key.x, y: entry.public_key.y, kind: 'external', room: entry.room_id, expires_at: entry.key_expires_at }));
 }
 
-/** Forget an external member's key, so the website stops letting it through. */
+/**
+ * Forget an external member's key, so the website stops letting it through. A member whose time ran out keeps its key: it
+ * may renew itself back (the room backend's `/expiry`), and the key still lapses on its own after KEY_DAYS unused.
+ */
 async function drop_external(home, ctx, external_id, reason) {
+  if (reason === 'expired') return;
   const dropped = with_registry(home, registry => {
     const existed = Boolean(registry.externals[external_id]);
     delete registry.externals[external_id];
@@ -501,7 +505,7 @@ async function external_repo(home, ctx, external_id, entry, room, payload) {
   if (!result.ok) return { status: 403, body: { ...text_of('读取被拒绝（{reason}）', { reason: result.reason }), code: 'engine_denied', reason: result.reason } };
   if (record.status !== 200 || record.body?.allowed !== true || record.body?.recorded !== true) {
     return { status: record.status === 200 ? 403 : record.status >= 500 ? 503 : record.status,
-      body: { ...(record.body?.allowed === false ? text_of('读取超出配额或不被允许（{reason}）', { reason: record.body.code || '' }) : text_of('读取记录写入失败，未返回内容')),
+      body: { ...(record.body?.allowed === false ? text_of('读取不被允许（{reason}）', { reason: record.body.code || '' }) : text_of('读取记录写入失败，未返回内容')),
         code: record.body?.code || 'audit_failed',
         reason: record.body?.code || 'audit_failed' } };
   }

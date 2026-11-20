@@ -183,7 +183,6 @@
   "无法读取这个邀请链接": "This invitation link can't be read",
   "链接可能被截断或改动过。请让对方重新复制完整链接发给你。": "The link may have been cut off or changed. Ask them to copy the complete link and send it again.",
   "对方电脑上的 AI，只读本房间开放的内容": "An AI on their computer; reads only what this room opens",
-  "用量": "Usage",
   "正在读取读取记录": "Loading the read log",
   "对方电脑在时限内没有确认唤醒": "Their computer did not confirm the run in time",
   "对方电脑拒绝了这次唤醒": "Their computer declined this run",
@@ -192,7 +191,6 @@
   "剩 {count} 天": "{count}d",
   "剩 {count} 小时": "{count}h",
   "剩 {count} 分": "{count}m",
-  "{used} / {limit} · 本小时 {hour} / {hour_limit} · 被拒 {denied} 次": "{used} / {limit} · this hour {hour} / {hour_limit} · {denied} refused",
   "外部专家 · 待签到": "External expert · Awaiting check-in",
   "待签到": "Awaiting check-in",
   "重新生成链接": "Regenerate link",
@@ -234,11 +232,12 @@
   "绑定了多个线上网站，生成链接时选择": "Several hosted sites connected; choose one when making the link",
   "未绑定线上网站，无法生成链接": "No hosted site connected; a link cannot be made",
   "目录": "Folders",
-  "读取": "Reads",
-  "只读 · 每小时 {hourly} · 共 {total}": "Read only · {hourly} per hour · {total} in all",
   "中转": "Relay",
   "调整「{room}」的设置": "Settings for “{room}”",
   "只影响你这台电脑上的 AI，对方房间的开放范围由对方决定。": "Only affects your AI on this computer; what the other room opens is up to its owner.",
   "当前借出到 {time}": "Currently lent until {time}",
-  "正在添加席位…": "Adding the seat…"
+  "正在添加席位…": "Adding the seat…",
+  "借出时间已到；点“续期”即可回到对方房间。": "The loan time is up; choose Renew to go back to the other room.",
+  "续期": "Renew",
+  "借出时间已到，保存后立即回到对方房间。": "The loan time is up; saving takes you back to the other room at once."
 }

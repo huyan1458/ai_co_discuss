@@ -459,14 +459,22 @@ export function lend_until(duration, now = Date.now()) {
   return Math.floor((now + HOUR_MS) / 1000);
 }
 
-/** Change how long this record's AI stays lent; the inviting room confirms the new end, which the record then keeps. */
+/**
+ * Change how long this record's AI stays lent; the inviting room confirms the new end, which the record then keeps. A
+ * record whose time ran out renews the same way and is active again at once; one revoked there, or left here, cannot.
+ */
 export async function lend(home, { id, duration }, deps = {}) {
   const expires_at = lend_until(duration, deps.now?.() ?? Date.now());
   const record = find_record(read_store(home), id);
-  if (record.status !== 'active') throw failure('record_ended', '这条被邀请记录已结束，不能再改借出时间');
+  const lapsed = record.status === 'ended' && record.end_reason === 'expired';
+  if (record.status !== 'active' && !lapsed) throw failure('record_ended', '这条被邀请记录已结束，不能再改借出时间');
   const answer = await member_api(home, id, 'POST', MEMBER_API.expiry(record.room), { expires_at }, deps);
   return change_record(home, id, (current, now, store) => {
     current.expires_at = Number(answer?.expires_at || expires_at) * 1000;
+    if (lapsed) {
+      current.status = 'active';
+      delete current.end_reason;
+    }
     return { record: record_view(current, store) };
   });
 }
@@ -505,11 +513,9 @@ export async function join_invite(home, input, deps = {}) {
     const name = joined.machine?.name || keys.name || invite.machine_name;
     const machine = store.machines[keys.fingerprint] ||= {};
     Object.assign(machine, { machine: keys.id, site: invite.site, machine_name: name, updated_at: now });
-    // Invited back as the same member of the same room: the record this computer still keeps carries on, with its
-    // history and settings; once deleted, a new record starts.
-    const previous = Object.values(store.records).find(record => record.id !== attempt.id && record.machine_fingerprint === keys.fingerprint
-      && record.room === joined.room.id && record.member === joined.member.name && (record.member_id ?? null) === (joined.member.id ?? null));
-    const id = previous?.id || attempt.id;
+    // Every join starts a record of its own with the AI and settings picked for it, even when invited back as a member
+    // this computer already has a record of (user 2026-11-19): the earlier record stays as it ended.
+    const id = attempt.id;
     const fresh = { id, site: invite.site, machine: keys.id, machine_name: name, machine_fingerprint: keys.fingerprint,
       machine_key: keys.public_key, fingerprint_checked: Boolean(invite.fingerprint), room: joined.room.id, room_title: String(joined.room.name || invite.room_name),
       member: joined.member.name, member_id: joined.member.id ?? null, key_id, open_level: joined.level || invite.level || 'read',
@@ -517,13 +523,8 @@ export async function join_invite(home, input, deps = {}) {
       expires_at: Number(joined.expires_at) ? Number(joined.expires_at) * 1000 : null, ai, ai_reported: JSON.stringify(identity),
       limits: null, paused: false, status: 'active', contact: { at: now, state: 'online', error: '' }, approvals: [], running: null,
       ...(session_id ? { session_id } : {}) };
-    if (previous) {
-      const { end_reason, leave_pending, ...kept } = previous;
-      store.records[id] = { ...kept, ...fresh, rejoined_at: now };
-    } else {
-      // Accepting the invitation is the consent: a new record answers at once, confined.
-      store.records[id] = { ...fresh, wake: 'auto', confined: true, wakes: 0, last_wake_at: null, history: [], joined_at: now };
-    }
+    // Accepting the invitation is the consent: a new record answers at once, confined.
+    store.records[id] = { ...fresh, wake: 'auto', confined: true, wakes: 0, last_wake_at: null, history: [], joined_at: now };
     const values = secrets.get();
     values[id] = { private_key: pair.private_key, token: joined.token };
     // A retry of this join finds the record it ended up in.

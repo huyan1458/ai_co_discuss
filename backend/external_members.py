@@ -1,8 +1,8 @@
 """External members: AIs that run on another computer and reach this room only through the runner's gateway.
 
 An external member is a `room_members` row with `access='external'` plus one `external_members` row holding where it
-runs, what it may read, until when, and its read quota. This module is the room-side authority (DESIGN D4): it decides
-validity, expiry and revocation, keeps the read audit and quota counts, and serves the only routes an external
+runs, what it may read and until when. This module is the room-side authority (DESIGN D4): it decides validity,
+expiry and revocation, keeps the read audit, and serves the only routes an external
 credential may use (`/api/external/rooms/{room}/...`). Every other route refuses an external credential or a request
 the gateway marked as external; see `guard_route`. Contract: .dev/plans/远程协作与多人房间/子Task1_B侧后端/CONTRACT.md.
 """
@@ -24,9 +24,7 @@ EXTERNAL_PREFIX = ["api", "external", "rooms"]
 SCOPES = ("discuss", "read")
 # How many ended external members the roster still lists.
 MAX_ENDED_SHOWN = 10
-QUOTA_KEYS = ("hourly_bytes", "total_bytes", "hourly_reads")
-DEFAULT_QUOTA = {"hourly_bytes": 4 * 1024 * 1024, "total_bytes": 64 * 1024 * 1024, "hourly_reads": 600}
-MAX_QUOTA = {"hourly_bytes": 1024 ** 3, "total_bytes": 100 * 1024 ** 3, "hourly_reads": 100000}
+# Reads are no longer limited (user 2026-11-19); the old quota columns stay in the table, written as 0 and never read.
 MAX_EXTERNAL_SECONDS = 365 * 86400
 PENDING_SEAT_SECONDS = 7 * 86400
 MAX_DIRECTORIES = 20
@@ -35,7 +33,6 @@ MAX_MACHINE = 200
 MAX_MACHINE_LABEL = 80
 MAX_ADAPTER = 40
 MAX_MODEL = 120
-HOUR_SECONDS = 3600
 READ_OPS = ("ls", "read", "grep")
 READ_OUTCOMES = ("ok", "denied")
 MAX_READ_PATH = 1000
@@ -90,20 +87,6 @@ def guard_route(connect, headers, parts):
         raise classified(PermissionError, Text("外部成员只能使用成员范围接口"), "external_route_forbidden")
 
 
-def quota_of(row):
-    """The member's three quota limits."""
-    return {key: row[key] for key in QUOTA_KEYS}
-
-
-def usage_of(connection, member_id, now=None):
-    """Read counts from the persisted audit: allowed bytes and reads in the last hour, allowed bytes in total, denials."""
-    since = ((now or int(time.time())) - HOUR_SECONDS) * 1000
-    row = connection.execute("""SELECT COALESCE(SUM(CASE WHEN allowed=1 AND at>? THEN bytes END),0),
-        COALESCE(SUM(CASE WHEN allowed=1 AND at>? THEN 1 END),0),COALESCE(SUM(CASE WHEN allowed=1 THEN bytes END),0),
-        COALESCE(SUM(CASE WHEN allowed=0 THEN 1 END),0) FROM external_reads WHERE member_id=?""", (since, since, member_id)).fetchone()
-    return {"hour_bytes": row[0], "hour_reads": row[1], "total_bytes": row[2], "denied": row[3]}
-
-
 def directory_names(directories):
     """Directory roots by number with only their last segment, for views that must not show local paths."""
     return [{"root": index, "name": posixpath.basename(path.replace("\\", "/").rstrip("/")) or path}
@@ -111,12 +94,12 @@ def directory_names(directories):
 
 
 def owner_view(connection, row):
-    """Describe one external member for the owner, with full directory paths and current usage."""
+    """Describe one external member for the owner, with full directory paths."""
     labels = free_room.member_display_names(connection, row["room_id"])
     return {"member_id": row["id"], "name": row["name"], "label": labels.get(row["name"], row["name"]), "adapter": row["adapter"],
             "status": row["status"], "machine": row["machine"], "machine_label": row["machine_label"], "platform": row["platform"],
-            "model": row["model"], "scope": row["scope"], "directories": json.loads(row["directories"]), "expires_at": row["expires_at"], "quota": quota_of(row),
-            "usage": usage_of(connection, row["id"]), "created_at": row["created_at"], "updated_at": row["updated_at"],
+            "model": row["model"], "scope": row["scope"], "directories": json.loads(row["directories"]), "expires_at": row["expires_at"],
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
             "ended_at": row["ended_at"], "end_reason": row["end_reason"],
             "claimed_at": row["claimed_at"], "invite_version": row["invite_version"], "duration": row["invite_duration"]}
 
@@ -204,20 +187,6 @@ def checked_expiry(value, now):
     return value
 
 
-def checked_quota(value, current):
-    """Merge given quota limits over `current`; each is a positive integer within its maximum."""
-    if value is None:
-        return dict(current)
-    if not isinstance(value, dict) or set(value) - set(QUOTA_KEYS):
-        raise ValueError(Text("quota 只能包含 hourly_bytes、total_bytes、hourly_reads"))
-    merged = dict(current)
-    for key, item in value.items():
-        if type(item) is not int or not 0 < item <= MAX_QUOTA[key]:
-            raise ValueError(Text("配额 {key} 须为 1–{limit} 的整数", key=key, limit=MAX_QUOTA[key]))
-        merged[key] = item
-    return merged
-
-
 def checked_text(value, limit, field, required=False):
     """Validate a bounded single-line text field."""
     if value is None and not required:
@@ -284,7 +253,6 @@ def create_external(connection, room_id, token, payload, now):
     label = checked_text(payload.get("machine_label"), MAX_MACHINE_LABEL, "machine_label")
     directories = checked_scope(payload.get("scope"), payload.get("directories", []))
     expires_at = now + PENDING_SEAT_SECONDS if pending else checked_expiry(payload.get("expires_at"), now)
-    quota = checked_quota(payload.get("quota"), DEFAULT_QUOTA)
     if connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND name=? AND status<>'removed'", (room_id, name)).fetchone():
         raise FileExistsError(Text("{name} 已是本房间成员", name=name))
     if connection.execute("SELECT COUNT(*) FROM room_members WHERE room_id=? AND status<>'removed'", (room_id,)).fetchone()[0] >= MAX_ROOM_AGENTS:
@@ -296,7 +264,7 @@ def create_external(connection, room_id, token, payload, now):
     connection.execute("""INSERT INTO external_members (member_id,room_id,token_hash,machine,machine_label,scope,directories,expires_at,
         hourly_bytes,total_bytes,hourly_reads,created_at,updated_at,claimed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                        (cursor.lastrowid, room_id, hashed, machine, label, payload["scope"], json.dumps(directories, ensure_ascii=False),
-                        expires_at, quota["hourly_bytes"], quota["total_bytes"], quota["hourly_reads"], now, now, 0 if pending else now))
+                        expires_at, 0, 0, 0, now, now, 0 if pending else now))
     if pending:
         duration = payload.get("duration", "1h")
         if duration not in ("1h", "today", "3d", "7d", "30d"):
@@ -337,11 +305,9 @@ def update_external(connection, room_id, member_id, token, payload, now):
     directories = payload.get("directories", [] if scope == "discuss" and "directories" not in payload else json.loads(row["directories"]))
     directories = checked_scope(scope, directories)
     expires_at = checked_expiry(payload["expires_at"], now) if "expires_at" in payload else row["expires_at"]
-    quota = checked_quota(payload.get("quota"), quota_of(row))
     label = checked_text(payload["machine_label"], MAX_MACHINE_LABEL, "machine_label") if "machine_label" in payload else row["machine_label"]
-    connection.execute("""UPDATE external_members SET scope=?,directories=?,expires_at=?,hourly_bytes=?,total_bytes=?,hourly_reads=?,
-        machine_label=?,updated_at=? WHERE member_id=?""", (scope, json.dumps(directories, ensure_ascii=False), expires_at,
-                                                          quota["hourly_bytes"], quota["total_bytes"], quota["hourly_reads"], label, now, member_id))
+    connection.execute("""UPDATE external_members SET scope=?,directories=?,expires_at=?,machine_label=?,updated_at=? WHERE member_id=?""",
+                       (scope, json.dumps(directories, ensure_ascii=False), expires_at, label, now, member_id))
     return owner_view(connection, external_row(connection, room_id, member_id))
 
 
@@ -457,8 +423,8 @@ def checked_read(payload):
     return op, root, path, size, outcome, reason
 
 
-def read_decision(row, root, size, outcome, reason, usage):
-    """Decide one read: (allowed, code, reason). Only reads the engine served count toward the quota."""
+def read_decision(row, root, outcome, reason):
+    """Decide one read: (allowed, code, reason)."""
     if row["status"] != "active":
         return False, "member_ended", ENDED_TEXTS.get(row["end_reason"], ENDED_TEXTS["revoked"])
     if outcome == "denied":
@@ -467,17 +433,11 @@ def read_decision(row, root, size, outcome, reason, usage):
         return False, "not_readable", Text("该外部成员只讨论，未开放读取项目")
     if root >= len(json.loads(row["directories"])):
         return False, "bad_root", Text("该目录未对外部成员开放")
-    if usage["hour_reads"] + 1 > row["hourly_reads"]:
-        return False, "quota_hour_reads", Text("本小时读取次数已达上限")
-    if usage["hour_bytes"] + size > row["hourly_bytes"]:
-        return False, "quota_hour_bytes", Text("本小时读取量已达上限")
-    if usage["total_bytes"] + size > row["total_bytes"]:
-        return False, "quota_total_bytes", Text("读取总量已达上限")
     return True, "ok", ""
 
 
 def record_read(connection, room_id, member_id, token, payload):
-    """Audit one read, then judge it against the persisted quota, and commit before the gateway may return content.
+    """Audit one read, then judge it, and commit before the gateway may return content.
 
     The audit row and the room event are written first (as not allowed), the decision updates them in the same
     transaction, and the transaction commits here: a failure anywhere raises, so the gateway returns nothing.
@@ -495,14 +455,13 @@ def record_read(connection, room_id, member_id, token, payload):
     read_id = cursor.lastrowid
     event = connection.execute("INSERT INTO room_events (room_id,at,kind,data) VALUES (?,?,'external.read',?)",
                                (room_id, at, json.dumps({"member_id": member_id, "read_id": read_id}))).lastrowid
-    allowed, code, why = read_decision(row, root, size, outcome, reason, usage_of(connection, member_id))
+    allowed, code, why = read_decision(row, root, outcome, reason)
     connection.execute("UPDATE external_reads SET allowed=?,code=?,reason=? WHERE id=?", (int(allowed), code, str(why), read_id))
     data = {"member_id": member_id, "member": row["name"], "read_id": read_id, "op": op, "root": root, "directory": directory,
             "path": path, "bytes": size, "allowed": allowed, "code": code, "reason": str(why)}
     connection.execute("UPDATE room_events SET data=? WHERE id=?", (json.dumps(data, ensure_ascii=False), event))
     connection.commit()
-    return {"allowed": allowed, "code": code, "reason": why, "reason_text": text_payload(why), "read_id": read_id, "recorded": True,
-            "usage": usage_of(connection, member_id)}
+    return {"allowed": allowed, "code": code, "reason": why, "reason_text": text_payload(why), "read_id": read_id, "recorded": True}
 
 
 def require_external(connection, room_id, token):
@@ -540,8 +499,7 @@ def member_room_view(connection, room_id, member):
     latest = connection.execute("""SELECT COALESCE(MAX(id),0) FROM messages m WHERE room_id=?
         AND NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)""", (room_id,)).fetchone()[0]
     me = {"member_id": member["id"], "name": member["name"], "label": labels.get(member["name"], member["name"]), "scope": member["scope"],
-          "expires_at": member["expires_at"], "directories": directory_names(json.loads(member["directories"])),
-          "quota": quota_of(member), "usage": usage_of(connection, member["id"])}
+          "expires_at": member["expires_at"], "directories": directory_names(json.loads(member["directories"]))}
     return {"room": {"id": room["id"], "title": room["title"], "goal": room["goal"], "archived": bool(room["archived"])},
             "me": me, "members": members, "latest_message_id": latest}
 
@@ -598,11 +556,35 @@ def report_ai(connection, member, payload):
     return {"reported": True}
 
 
-def lend_until(connection, member, payload):
-    """The member's computer sets how long it lends its AI; only its own end changes, never what it may read (red line 1 exception)."""
-    expires_at = checked_expiry(payload.get("expires_at"), int(time.time()))
-    connection.execute("UPDATE external_members SET expires_at=?,updated_at=? WHERE member_id=?", (expires_at, int(time.time()), member["id"]))
-    return {"expires_at": expires_at}
+def lend_until(connection, room_id, token, payload):
+    """The member's computer sets how long it lends its AI; only its own end changes, never what it may read (red line 1 exception).
+
+    A member whose time ran out comes back at once with the new end (user 2026-11-19): how long it is lent was its own
+    choice, so letting it lapse is not a decision of the owner's. One the owner revoked, or that left, stays ended.
+    """
+    begin_write(connection)
+    now = int(time.time())
+    expires_at = checked_expiry(payload.get("expires_at"), now)
+    hashed = token_hash(token)
+    row = connection.execute(f"{EXTERNAL_SQL} WHERE x.room_id=? AND x.token_hash=?", (room_id, hashed)).fetchone() if hashed else None
+    if not row or not row["claimed_at"]:
+        raise classified(PermissionError, Text("需要本房间外部成员的凭证"), "external_credential_required")
+    revived = row["status"] != "active"
+    if revived:
+        if row["end_reason"] != "expired":
+            raise classified(PermissionError, ENDED_TEXTS.get(row["end_reason"], ENDED_TEXTS["revoked"]), "external_ended",
+                             reason=row["end_reason"] or "revoked")
+        if connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND name=? AND status<>'removed' AND id<>?",
+                              (room_id, row["name"], row["id"])).fetchone():
+            raise FileExistsError(Text("{name} 已是本房间成员", name=row["name"]))
+        if connection.execute("SELECT COUNT(*) FROM room_members WHERE room_id=? AND status<>'removed'", (room_id,)).fetchone()[0] >= MAX_ROOM_AGENTS:
+            raise FileExistsError(Text("房间成员已满"))
+        connection.execute("UPDATE room_members SET status='active' WHERE id=?", (row["id"],))
+        connection.execute("UPDATE external_members SET ended_at=0,end_reason='' WHERE member_id=?", (row["id"],))
+    connection.execute("UPDATE external_members SET expires_at=?,updated_at=? WHERE member_id=?", (expires_at, now, row["id"]))
+    if revived:
+        free_room.sync_participants(connection, room_id)
+    return {"expires_at": expires_at, "revived": revived}
 
 
 def leave_room(connection, member):
@@ -624,6 +606,9 @@ def external_api(connection, parts, params, method, token, read_payload, hooks):
         (body, status)
     """
     room_id, route = parts[3], parts[4:]
+    # Renewing is the one route a member whose time ran out may still use: it brings the member back.
+    if method == "POST" and route == ["expiry"]:
+        return lend_until(connection, room_id, token, read_payload()), 200
     member = require_external(connection, room_id, token)
     reading = {key: params[key] for key in MESSAGE_PARAMS if key in params}
     if method == "GET" and route == ["view"]:
@@ -652,8 +637,6 @@ def external_api(connection, parts, params, method, token, read_payload, hooks):
         return hooks["answer"](connection, room_id, answer_payload(member, payload), member), 201
     if route == ["ai"]:
         return report_ai(connection, member, payload), 200
-    if route == ["expiry"]:
-        return lend_until(connection, member, payload), 200
     if route == ["leave"]:
         return leave_room(connection, member), 200
     raise LookupError(Text("地址不存在"))

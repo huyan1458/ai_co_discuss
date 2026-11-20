@@ -1,8 +1,9 @@
 <script setup>
 /**
- * This computer's binding to the online site, in one place (user 2026-11-19, #5494): other devices using it from outside,
- * inviting external experts and hosted accounts signing in through the site all need it. Bind with an access code (on
- * the computer that deployed the site, its address alone), unbind, and on that computer make access codes for others.
+ * This computer's binding to the online site, in one place (user 2026-11-19, #5494). Its explanation says only what is
+ * true here, by the routes this computer actually takes (#5786): hosted accounts go through the owner's own domain while
+ * it is on and through this binding only without one. Bind with an access code (on the computer that deployed the site,
+ * its address alone), unbind, and on that computer make access codes for others.
  */
 import { computed, inject, ref, watch } from "vue";
 import { call } from "./api.js";
@@ -10,6 +11,13 @@ import { t } from '../i18n.js';
 
 const { state, reload, notify, binding } = inject("panel");
 const site = computed(() => state.value.online_site || "");
+// The own domain counts as on as the hosted accounts' entry cards judge it (HostingCards.vue): set up and switched on.
+const own_domain = computed(() => Boolean(state.value.entry?.tunnel_enabled && state.value.entry?.tunnel));
+const usage = computed(() => !state.value.hosting ? t('在外面用其他设备使用这台电脑、邀请外部专家时需要')
+  // With the relay on beside the domain, accounts get the domain's address yet the relay's still signs them in (#5789).
+  : own_domain.value ? (state.value.entry?.relay_enabled ? t('你在外面使用这台电脑、邀请外部专家时经过它；托管账号默认走自有域名，也可以经它登录')
+    : t('只供你自己在外面使用这台电脑、邀请外部专家；托管账号走自有域名，不经过它'))
+    : t('你在外面使用这台电脑，以及托管账号的登录和邀请外部专家，都经过它'));
 // The dialog open: "bind", "unbind" or "make".
 const dialog = ref(""), busy = ref(""), code = ref("");
 const maker = ref({ config: "", site: "", made: "" });
@@ -58,7 +66,7 @@ const close = (open) => { if (!open) dialog.value = ""; };
     <div class="panel-tile"><UIcon name="i-lucide-cloud" /></div>
     <div class="panel-main">
       <div class="panel-title">{{ t('线上网站') }} <span class="panel-tag" :class="site ? 'is-green' : 'is-gray'"><UIcon :name="site ? 'i-lucide-check' : 'i-lucide-minus'" />{{ site ? t('已绑定') : t('未绑定') }}</span></div>
-      <span class="panel-sub"><template v-if="site">{{ site }} · </template>{{ t('其他设备远程使用、邀请外部专家、托管账号经线上网站登录都需要') }}</span>
+      <span class="panel-sub"><template v-if="site">{{ site }} · </template>{{ usage }}</span>
     </div>
     <div class="panel-side">
       <template v-if="site">

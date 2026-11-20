@@ -87,7 +87,6 @@ function size(bytes) {
           <div><dt>{{ t("对方能看到") }}</dt><dd>{{ LEVEL_SHORT[info.level] }}</dd></div>
           <div v-if="info.level === 'read'"><dt>{{ t("开放目录") }}</dt><dd :title="info.directories.join('、')">{{ info.directories.join("、") || "—" }}</dd></div>
           <div v-if="!info.pending"><dt>{{ t("剩余时间") }}</dt><dd>{{ info.ended ? t("已结束") : [remaining_label(info.expires_at) || "—", t("对方设定")].join(" · ") }}</dd></div>
-          <div v-if="!info.pending && detail?.usage"><dt>{{ t("用量") }}</dt><dd>{{ t("{used} / {limit} · 本小时 {hour} / {hour_limit} · 被拒 {denied} 次", { used: size(detail.usage.total_bytes), limit: size(detail.quota?.total_bytes), hour: size(detail.usage.hour_bytes), hour_limit: size(detail.quota?.hourly_bytes), denied: detail.usage.denied || 0 }) }}</dd></div>
         </dl>
         <section v-if="!info.ended" class="external-member-actions" :aria-label="t('调整')">
           <div class="external-member-buttons">

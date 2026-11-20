@@ -507,7 +507,7 @@ export default {
   "读取操作须为 ls、read 或 grep": "The read operation must be ls, read or grep",
   "读取被拒绝（{reason}）": "Read refused ({reason})",
   "读取记录写入失败，未返回内容": "The read could not be recorded, so no content was returned",
-  "读取超出配额或不被允许（{reason}）": "The read exceeds the quota or is not allowed ({reason})",
+  "读取不被允许（{reason}）": "The read is not allowed ({reason})",
   "这个目录没有对你开放": "This folder is not open to you",
   "这位外部成员只能讨论，不能读取项目": "This external member can discuss but cannot read the project",
   "这位外部成员未登记或已移除": "This external member is not registered or has been removed",

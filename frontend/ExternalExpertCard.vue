@@ -1,13 +1,13 @@
 <script setup>
 /**
  * An external expert to be invited (new-room panel, invite dialog), laid out as a member card (ExpertCard.vue): the
- * front sums up what the inviter grants and what protects it (what it opens, the read limits, the online site
+ * front sums up what the inviter grants and what protects it (what it opens, the online site
  * the link goes through), 设置 turns to the back to change what it opens, 完成 keeps it and 取消 restores it.
  * `draft` holds `{ level, directories }`; reading opens all of `paths` (the room's project directories). How long the
  * expert stays is the invited computer's choice, made when it joins.
  */
 import { computed, inject, ref, useId, watch } from "vue";
-import { DEFAULT_READ_QUOTA, LEVELS, READ_EXCLUDED } from "./external-members.js";
+import { LEVELS, READ_EXCLUDED } from "./external-members.js";
 import { t } from "./i18n.js";
 
 const emit = defineEmits(["remove"]);
@@ -33,7 +33,6 @@ const facts = computed(() => [
   { label: t("开放"), value: LEVELS.find((option) => option.value === shown_level.value)?.label },
   ...shown_level.value === "read" ? [
     { label: t("目录"), value: paths.value.map(leaf).join("、") },
-    { label: t("读取"), value: t("只读 · 每小时 {hourly} · 共 {total}", DEFAULT_READ_QUOTA), title: READ_EXCLUDED },
   ] : [],
   ...relay.value ? [{ label: t("中转"), ...relay.value }] : [],
 ]);
@@ -76,7 +75,7 @@ const uid = useId();
           <template v-if="level === 'read'">
             <div v-if="paths.length" class="expert-card-field is-top">
               <span>{{ t("目录") }}</span>
-              <ul class="expert-card-dirs"><li v-for="path in paths" :key="path" :title="path"><UIcon name="i-lucide-folder" />{{ leaf(path) }}</li></ul>
+              <ul class="expert-card-dirs"><li v-for="path in paths" :key="path" :title="path">{{ leaf(path) }}</li></ul>
             </div>
             <p v-if="paths.length" class="expert-card-hint">{{ READ_EXCLUDED }}</p>
             <p v-else class="expert-card-empty">{{ t("还没有选项目目录，只能选“房间消息”。") }}</p>
@@ -140,7 +139,6 @@ const uid = useId();
 .expert-card-hint { margin: -4px 0 0 calc(3.5em + 8px); color: var(--ui-text-muted); font-size: 11px; line-height: 16px; }
 .expert-card-dirs { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin: 0; padding: 0; list-style: none; color: var(--ui-text-toned); }
 .expert-card-dirs li { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 18px; }
-.expert-card-dirs li > span { flex: none; width: 12px; height: 12px; color: var(--ui-text-dimmed); }
 .expert-card-field .expert-card-modes button { padding: 0 6px; white-space: nowrap; }
 .expert-card-empty { margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 20px; }
 .expert-card-warning { display: flex; gap: 6px; margin: auto 0 0; color: var(--ui-warning, #e0a33a); font-size: 11px; line-height: 16px; }

@@ -42,8 +42,6 @@ export const LEVELS = [
   { value: "discuss", label: t("房间消息"), description: t("只看点名给它的消息") },
   { value: "read", label: t("消息和项目"), description: t("另可只读本房间的项目目录") },
 ];
-/** The read limits a new external member gets (backend/external_members.py `DEFAULT_QUOTA`), as the card shows them. */
-export const DEFAULT_READ_QUOTA = { hourly: "4 MiB", total: "64 MiB" };
 /** What reading never returns (runner/repo_read.mjs), in the words the invite cards use. */
 export const READ_EXCLUDED = t("只读：已跟踪与未忽略的文件，固定排除 .env、密钥、凭据、data/ 与 .git。");
 /** The short form for the rail and the records list. */

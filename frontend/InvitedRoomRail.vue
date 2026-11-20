@@ -16,8 +16,10 @@ const record = invited.selected;
 const editing = ref(false), leaving = ref(false), removing = ref(false);
 const trust = ref({ wake: "auto", confined: true, duration: "" });
 watch(() => record.value?.id, () => { editing.value = false; });
+// A record whose time ran out renews here and is back at once (user 2026-11-19): the dialog opens on a new loan of an hour.
+const lapsed = computed(() => record.value?.status === "ended" && record.value.end_reason === "expired");
 function start_edit() {
-  trust.value = { wake: record.value.wake || "ask", confined: record.value.confined !== false, duration: "" };
+  trust.value = { wake: record.value.wake || "ask", confined: record.value.confined !== false, duration: lapsed.value ? "1h" : "" };
   editing.value = true;
 }
 /** Save how it answers and its local access, then, when a new loan was picked, ask the other computer for the new end. */
@@ -105,21 +107,10 @@ const status = computed(() => {
         <div v-if="ended"><dt>{{ t("唤醒") }}</dt><dd>{{ usage }}</dd></div>
       </dl>
       <p v-if="!record.fingerprint_checked" class="fine-print">{{ t("用配对码加入，未核对对方电脑的公钥指纹。") }}</p>
-      <p v-if="ended" class="fine-print">{{ t("这台电脑保留这条记录与历史；要再参加，请对方重新邀请。") }}</p>
+      <p v-if="lapsed" class="fine-print">{{ t("借出时间已到；点“续期”即可回到对方房间。") }}</p>
+      <p v-else-if="ended" class="fine-print">{{ t("这台电脑保留这条记录与历史；要再参加，请对方重新邀请。") }}</p>
     </section>
     <section v-if="!ended" class="pb-section" :aria-label="t('调整')">
-      <!-- Too much for the narrow rail beside the facts it repeats, so the settings open in a dialog (user 2026-11-19). -->
-      <UModal v-model:open="editing" :title="t('调整「{room}」的设置', { room: record.room_title || '' })" :description="t('只影响你这台电脑上的 AI，对方房间的开放范围由对方决定。')"
-        :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
-        <template #body>
-          <TrustLevelField v-model="trust" :confine_reason="lockdown_problem(record.ai?.adapter)" />
-          <p v-if="expires_at" class="fine-print invited-edit-note">{{ t("当前借出到 {time}", { time: date(expires_at) }) }}</p>
-          <div class="invited-edit-actions">
-            <UButton :label="t('取消')" size="sm" color="neutral" variant="ghost" @click="editing = false" />
-            <UButton :label="t('保存')" size="sm" class="channel-primary-button" :loading="busy === 'trust' || busy === 'lend'" :disabled="Boolean(busy)" @click="save" />
-          </div>
-        </template>
-      </UModal>
       <div class="invited-actions">
         <UButton :label="t('调整设置')" icon="i-lucide-shield" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block" data-tone="accent" @click="start_edit" />
         <div class="invited-action-row">
@@ -131,9 +122,23 @@ const status = computed(() => {
       </div>
     </section>
     <section v-else class="pb-section" :aria-label="t('删除记录')">
+      <UButton v-if="lapsed" :label="t('续期')" icon="i-lucide-clock-plus" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block invited-renew" data-tone="accent" :disabled="Boolean(busy)" @click="start_edit" />
       <UButton :label="t('删除记录')" icon="i-lucide-trash-2" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block invited-leave" data-tone="danger"
         :title="record.leave_pending ? t('退出通知还没送达对方电脑，送达后才能删除记录') : undefined" :loading="busy === 'remove'" :disabled="Boolean(busy) || record.leave_pending" @click="removing = true" />
     </section>
+    <!-- Too much for the narrow rail beside the facts it repeats, so the settings open in a dialog (user 2026-11-19). -->
+      <UModal v-model:open="editing" :title="t('调整「{room}」的设置', { room: record.room_title || '' })" :description="t('只影响你这台电脑上的 AI，对方房间的开放范围由对方决定。')"
+        :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+        <template #body>
+          <TrustLevelField v-model="trust" :confine_reason="lockdown_problem(record.ai?.adapter)" />
+          <p v-if="lapsed" class="fine-print invited-edit-note">{{ t("借出时间已到，保存后立即回到对方房间。") }}</p>
+          <p v-else-if="expires_at" class="fine-print invited-edit-note">{{ t("当前借出到 {time}", { time: date(expires_at) }) }}</p>
+          <div class="invited-edit-actions">
+            <UButton :label="t('取消')" size="sm" color="neutral" variant="ghost" @click="editing = false" />
+            <UButton :label="t('保存')" size="sm" class="channel-primary-button" :loading="busy === 'trust' || busy === 'lend'" :disabled="Boolean(busy)" @click="save" />
+          </div>
+        </template>
+      </UModal>
     <ConfirmDialog v-model:open="leaving" :title="t('退出「{room}」', { room: record.room_title || '' })" :items="leave_items" :confirm-label="t('退出房间')" danger @confirm="invited.leave(record.id)" />
     <ConfirmDialog v-model:open="removing" :title="t('删除「{room}」的记录', { room: record.room_title || '' })" :items="remove_items" :confirm-label="t('删除记录')" danger @confirm="invited.remove(record.id)" />
   </div>
@@ -158,5 +163,6 @@ const status = computed(() => {
 /* Leaving is rare: it stays quiet beside 暂停 and turns red only when pointed at. */
 .invited-edit-actions { margin-top: 16px; }
 .invited-edit-note { margin: 10px 0 0; }
+.invited-renew { margin-bottom: 6px; }
 .invited-rail .fine-print { margin: 10px 0 0; font-size: 11.5px; line-height: 1.5; }
 </style>
