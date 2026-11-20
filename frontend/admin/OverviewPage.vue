@@ -10,7 +10,7 @@ import OnlineSiteRow from "./OnlineSiteRow.vue";
 import LanguagePicker from "../LanguagePicker.vue";
 import { t } from '../i18n.js';
 
-const { state, reload, notify, refreshed } = inject("panel");
+const { state, reload, notify, refreshed, updating } = inject("panel");
 const service = computed(() => state.value.service || {});
 const busy = ref("");
 const update = ref(null), checking = ref(false), confirming = ref(false);
@@ -40,12 +40,14 @@ const report = ref(null);
 async function install() {
   confirming.value = false;
   busy.value = "update";
+  // This page shows the report itself and reloads when it is closed, so the panel's own reload onto a new version waits.
+  updating.value = true;
   try {
     // The panel goes away while npm installs and comes back on the new version; every step is listed once it is done,
     // and closing the report reloads onto the new page.
     await call("update", {});
     report.value = await update_done();
-  } catch (failure) { notify("error", failure.message); }
+  } catch (failure) { updating.value = false; notify("error", failure.message); }
   finally { busy.value = ""; }
 }
 

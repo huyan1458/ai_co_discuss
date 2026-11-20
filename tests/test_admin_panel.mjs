@@ -514,8 +514,9 @@ test('the admin command line works the panel with the owner key only, and does w
 });
 
 
-test('one switch lets a hosted account invite external experts: the panel binds its own service home under this computer', async () => {
+test('every hosted account can invite external experts: the panel binds its own service home under this computer, and releases it on leaving', async () => {
   const { machine_links } = await import('../runner/remote_launch.mjs');
+  const { reconcile_external } = await import('../runner/admin_panel.mjs');
   const { data, ops } = fixture();
   const owner = 'a'.repeat(32), site = 'https://site.example';
   writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: { [site]: { id: owner, private_key: 'key', token: 'b'.repeat(64) } } }));
@@ -526,48 +527,66 @@ test('one switch lets a hosted account invite external experts: the panel binds 
     return Response.json(String(url).endsWith('/setup') ? { setup_key: 'c'.repeat(64), expires_at: 0 } : { launches: [] });
   };
   after(() => { globalThis.fetch = real; });
-  const { request } = await serve(data, ops);
-  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
-  const post = async (path, body = {}) => { const answer = await request(`/api/${path}`, { cookie, body }); return { status: answer.status, body: await answer.json() }; };
-  const turned = await post('accounts/demo/external', { on: true });
-  assert.equal(turned.status, 200, turned.body.error);
+  await reconcile_external(data, { log: () => {} });
   assert.deepEqual(seen[0], { path: `/api/machines/${owner}/setup`, token: 'b'.repeat(64), body: {} }, 'the token is asked for with this computer\'s own credential');
   const bound = seen.find(item => item.path === '/api/machines');
   assert.equal(bound.body.setup_key, 'c'.repeat(64));
   assert.notEqual(bound.body.id, owner, 'the account binds as a computer of its own');
   assert.equal(machine_links(instance_home(data, 'demo')).sites[site]?.id, bound.body.id, 'the binding is in the account\'s own service home');
-  assert.match((await post('site/disconnect')).body.error, /允许邀请外部专家/, 'the owner cannot leave the site from under the account');
-  assert.match((await post('accounts/demo/os-user')).body.error, /允许邀请外部专家/, 'nor change which Windows user its binding is sealed for');
-  assert.deepEqual((await post('accounts/demo/external', { on: false })).body, { external: false });
-  assert.deepEqual(seen.find(item => item.path.endsWith('/release')), { path: `/api/machines/${owner}/release`, token: 'b'.repeat(64), body: { machine: bound.body.id } },
-    'turning it off gives the slot on the site back');
+  // Leaving the online site releases the account's slot first instead of refusing.
+  const { request } = await serve(data, ops);
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  const left = await request('/api/site/disconnect', { cookie, body: {} });
+  assert.deepEqual(await left.json(), { disconnected: site });
+  assert.deepEqual(seen.find(item => item.path.endsWith('/release')), { path: `/api/machines/${owner}/release`, token: 'b'.repeat(64), body: { machine: bound.body.id } });
   assert.equal(machine_links(instance_home(data, 'demo')).sites[site], undefined);
 });
 
-test('with the owner\'s domain on, the switch gives the account a direct identity instead of the online site', async () => {
+test('with the owner\'s domain on, every account gets a direct identity that follows the domain, and none once it is off', async () => {
   const { direct_link } = await import('../runner/remote_launch.mjs');
-  const { data, ops } = fixture();
-  writeFileSync(join(data, 'gateway-settings.json'), JSON.stringify({ tunnel: { name: 'n', host: 'codiscuss.example', id: 'i', credentials: 'c' }, tunnel_enabled: true }));
+  const { reconcile_external } = await import('../runner/admin_panel.mjs');
+  const { data } = fixture();
+  const settings = host => writeFileSync(join(data, 'gateway-settings.json'), JSON.stringify({ tunnel: { name: 'n', host, id: 'i', credentials: 'c' }, tunnel_enabled: Boolean(host) }));
+  const mapping = () => JSON.parse(readFileSync(join(data, 'direct-accounts.json'), 'utf8'));
   const real = globalThis.fetch, outside = [];
   globalThis.fetch = async (url, init) => { if (!String(url).startsWith('http://127.0.0.1')) outside.push(String(url)); return real(url, init); };
   after(() => { globalThis.fetch = real; });
-  const { request } = await serve(data, ops);
-  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
-  const post = async (path, body = {}) => { const answer = await request(`/api/${path}`, { cookie, body }); return { status: answer.status, body: await answer.json() }; };
-  const turned = await post('accounts/demo/external', { on: true });
-  assert.deepEqual(turned.body, { external: true, site: 'https://codiscuss.example' }, turned.body.error);
+  settings('codiscuss.example');
+  await reconcile_external(data, { log: () => {} });
   assert.deepEqual(outside, [], 'no online site is asked');
   const link = direct_link(instance_home(data, 'demo'));
   assert.equal(link.site, 'https://codiscuss.example');
-  assert.deepEqual(JSON.parse(readFileSync(join(data, 'direct-accounts.json'), 'utf8')), { [link.id]: 'demo' }, 'the entry learns which id is which account');
-  assert.deepEqual((await post('accounts/demo/external', { on: true })).body, { external: true, site: 'https://codiscuss.example' }, 'turning it on again keeps the same way');
-  assert.equal(direct_link(instance_home(data, 'demo')).id, link.id);
-  // The domain stays while accounts are reached through it; the online site is not held by them.
-  assert.match((await post('entry/way', { way: 'tunnel', enabled: false })).body.error, /允许邀请外部专家/);
-  assert.match((await post('tunnel/setup', { host: 'other.example', name: 'n' })).body.error, /允许邀请外部专家/);
-  writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: { 'https://site.example': { id: 'f'.repeat(32), private_key: 'key', token: 'b'.repeat(64) } } }));
-  assert.deepEqual((await post('site/disconnect')).body, { disconnected: 'https://site.example' });
-  assert.deepEqual((await post('accounts/demo/external', { on: false })).body, { external: false });
+  assert.deepEqual(mapping(), { [link.id]: 'demo' }, 'the entry learns which id is which account');
+  await reconcile_external(data, { log: () => {} });
+  assert.equal(direct_link(instance_home(data, 'demo')).id, link.id, 'an identity that fits is kept');
+  settings('other.example');
+  await reconcile_external(data, { log: () => {} });
+  const moved = direct_link(instance_home(data, 'demo'));
+  assert.equal(moved.site, 'https://other.example', 'a new domain gives a new identity, so invites name it');
+  assert.deepEqual(mapping(), { [moved.id]: 'demo' });
+  settings('');
+  await reconcile_external(data, { log: () => {} });
   assert.equal(direct_link(instance_home(data, 'demo')), null);
-  assert.deepEqual(JSON.parse(readFileSync(join(data, 'direct-accounts.json'), 'utf8')), {});
+  assert.deepEqual(mapping(), {});
+});
+
+test('an account whose side cannot be taken down keeps its record, gets no second one, and is not switched to another Windows user', async () => {
+  const { reconcile_external } = await import('../runner/admin_panel.mjs');
+  const { data, ops } = fixture();
+  const settings = host => writeFileSync(join(data, 'gateway-settings.json'), JSON.stringify({ tunnel: { name: 'n', host, id: 'i', credentials: 'c' }, tunnel_enabled: true }));
+  const records = () => JSON.parse(readFileSync(join(data, 'account-sites.json'), 'utf8'));
+  settings('codiscuss.example');
+  await reconcile_external(data, { log: () => {} });
+  // The account's identity file can no longer be opened: taking it down fails.
+  writeFileSync(join(instance_home(data, 'demo'), 'machine-links.json'), '{ broken');
+  settings('other.example');
+  await reconcile_external(data, { log: () => {} });
+  assert.equal(records().demo.site, 'https://codiscuss.example', 'the record stays, to be taken down on a later pass');
+  let switched = false;
+  ops.create_os_user = () => { switched = true; return {}; };
+  const { request } = await serve(data, ops);
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  const answer = await request('/api/accounts/demo/os-user', { cookie, body: {} });
+  assert.notEqual(answer.status, 200);
+  assert.equal(switched, false, 'the Windows user is not changed while its identity is left behind');
 });

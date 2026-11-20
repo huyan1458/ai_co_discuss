@@ -979,6 +979,7 @@ def recent_executions(connection, room_id, span=None):
         (SELECT COUNT(*) FROM execution_segments WHERE source='free' AND execution_id=e.id
             AND phase IN ('command','tool','editing')) AS step_count,
         (SELECT COUNT(*) FROM execution_segments WHERE source='free' AND execution_id=e.id AND phase='command') AS command_count,
+        (SELECT COUNT(*) FROM execution_segments WHERE source='free' AND execution_id=e.id AND phase='editing') AS edit_count,
         (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,{CAPABILITY_COLUMNS},
         (SELECT failure_class FROM execution_failures WHERE execution_id=e.id) AS failure_class,
         (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer,
@@ -1000,7 +1001,7 @@ def recent_executions(connection, room_id, span=None):
             "edited": json.loads(row["edited"]) if row["edited"] else None, "diff_stats": diff_stats(row["diffs"]),
             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"],
             "layout_after": row["layout_after"], "layout_at": row["layout_at"] or row["created_at"], "requests": requests,
-            "notes": row["note_count"], "steps": row["step_count"], "commands": row["command_count"], "denials": json.loads(row["denials"] or "[]"), "failure_class": row["failure_class"] or "",
+            "notes": row["note_count"], "steps": row["step_count"], "commands": row["command_count"], "edits": row["edit_count"], "denials": json.loads(row["denials"] or "[]"), "failure_class": row["failure_class"] or "",
             "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None, "background": bool(row["background"]),
             "retried": bool(row["retried"]),

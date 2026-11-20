@@ -5,7 +5,7 @@
  * "账号" is one account at a time: the owner ("我"), and with hosting on every hosted account, each with its sign-ins,
  * API keys and skills.
  */
-import { computed, onMounted, provide, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, provide, ref } from "vue";
 import { useToast } from "@nuxt/ui/composables";
 import { en, zh_cn } from "@nuxt/ui/locale";
 import { locale, t } from "../i18n.js";
@@ -69,8 +69,35 @@ async function refresh_all() {
   if (ok) notify("info", t('已刷新'));
 }
 
-provide("panel", { state, reload, notify, refreshed });
+// The panel is also changed from outside this page (codiscuss admin, another window, an update that restarts it), so
+// the state is read again when the window comes back to the front and every few seconds while it shows. A panel of
+// another version serves another page: this one reloads onto it. A page running the update itself waits for its
+// report instead (`updating`).
+const SYNC_MS = 15000;
+const updating = ref(false);
+let syncing = false;
+async function sync() {
+  if (syncing || loading.value || refreshing.value || updating.value || !ready.value || document.hidden) return;
+  syncing = true;
+  try {
+    const fresh = await call("state");
+    if (updating.value || loading.value) return;
+    if (state.value.version && fresh.version && fresh.version !== state.value.version) { window.location.reload(); return; }
+    // The entry's network checks are not part of the state; the last answer stays until the next full reload.
+    if (JSON.stringify({ ...fresh, entry: undefined }) !== JSON.stringify({ ...state.value, entry: undefined })) state.value = { ...fresh, entry: fresh.entry ?? state.value.entry };
+  } catch { /* The panel is restarting or stopped; the next round asks again. */ }
+  finally { syncing = false; }
+}
+
+provide("panel", { state, reload, notify, refreshed, updating });
 onMounted(reload);
+let sync_timer = 0;
+onMounted(() => {
+  sync_timer = window.setInterval(sync, SYNC_MS);
+  document.addEventListener("visibilitychange", sync);
+  window.addEventListener("focus", sync);
+});
+onBeforeUnmount(() => { window.clearInterval(sync_timer); document.removeEventListener("visibilitychange", sync); window.removeEventListener("focus", sync); });
 // Notices close on their countdown whatever the pointer or the window does: the toast library pauses every countdown
 // while the window is in the background or the pointer is over a notice, which left them stuck on screen. Its pause is an
 // event sent to the notice area, stopped here on its way down.

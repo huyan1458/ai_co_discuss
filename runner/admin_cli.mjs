@@ -67,7 +67,6 @@ export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面
                                            中途失败时解决后重新执行同一命令，从缺少的步骤接着做
   account start|stop|disable|enable|remove|password <名>
   account isolate|unisolate|protect|unprotect <名>
-  account external|unexternal <名>              允许或停止该账号邀请外部专家（自动替它绑定这台电脑绑定的线上网站）
 
 命令行登录（目标 owner 为管理员自己，否则为托管账号名）
   login status <目标>                       各程序的登录状态，以及每个程序可用的登录方式
@@ -152,7 +151,6 @@ async function account_command(call, [action, name], values) {
   need(name, t('account {value1} <名>', { value1: action }));
   if (action === 'add') return add_account(call, name, { isolate: !values['no-isolate'], start: !values['no-start'] });
   if (action === 'protect' || action === 'unprotect') return call(`accounts/${name}/protect`, { on: action === 'protect' });
-  if (action === 'external' || action === 'unexternal') return call(`accounts/${name}/external`, { on: action === 'external' });
   if (!ACCOUNT_ACTIONS[action]) throw new Error(HELP);
   return call(`accounts/${name}/${ACCOUNT_ACTIONS[action]}`, {});
 }

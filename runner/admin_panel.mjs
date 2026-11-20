@@ -656,13 +656,15 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, check_package, begin_update,
-    set_account_external, autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_way, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
+    set_account_external, reconcile_external, autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_way, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
   async function api(method, path, body) {
     const parts = path.split('/').filter(Boolean).slice(1);
     const [section, name, action, extra] = parts;
     const account = () => { if (!read_accounts(data)[name]) throw panel_error('账号不存在：{value1}', { value1: name }); return name; };
+    // Accounts follow the way external members can reach them, in the background (#5660).
+    const after_change = () => { op.reconcile_external(data).catch(() => {}); };
     const hosting = hosting_enabled(data);
     if (method === 'GET' && section === 'state') {
       const windows = process.platform === 'win32';
@@ -728,8 +730,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (method === 'POST' && action === 'remove') { remove_library_skill(data, name); return { ok: true }; }
     }
     // The owner's own online site: bound, checked and left here whether or not this computer hosts accounts.
-    if (method === 'POST' && section === 'site' && name === 'connect') return bind_online_site(data, body, op.connect_site);
-    if (method === 'POST' && section === 'site' && name === 'disconnect') return disconnect_site(data);
+    if (method === 'POST' && section === 'site' && name === 'connect') { const bound = await bind_online_site(data, body, op.connect_site); after_change(); return bound; }
+    if (method === 'POST' && section === 'site' && name === 'disconnect') { const left = await disconnect_site(data); after_change(); return left; }
     // Hosting: only once the owner turned it on in setup.
     if (!hosting) throw panel_error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”');
     if (method === 'POST' && section === 'clis' && name === 'install') return op.install_runtime(data);
@@ -743,8 +745,9 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     }
     // How people outside reach the entry, the relay's entry address, and binding this computer to an online site.
     if (method === 'POST' && section === 'entry' && name === 'way') {
-      if (body.way === 'tunnel' && body.enabled !== true) keep_direct_domain(data);
-      return op.set_entry_way(data, String(body.way || ''), body.enabled === true);
+      const overview = await op.set_entry_way(data, String(body.way || ''), body.enabled === true);
+      after_change();
+      return overview;
     }
     if (method === 'POST' && section === 'entry' && name === 'relay') return op.set_relay_url(data, body.url);
     // The access code: made on the computer that deployed the online site, pasted on a hosting computer.
@@ -754,8 +757,6 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // The outside address: a Cloudflare tunnel set up by a job of its own (it waits for the owner in the browser).
     if (section === 'tunnel' && name === 'setup') {
       if (method === 'GET') return tunnel_setup_state(data);
-      // Another domain would leave the accounts reached through this one with invites to the old address.
-      if (method === 'POST' && String(body.host || '').toLowerCase() !== String(entry_settings(data).tunnel?.host || '').toLowerCase()) keep_direct_domain(data);
       if (method === 'POST') return op.start_tunnel_setup(data, body.host, body.name);
     }
     if (method === 'POST' && section === 'entry' && name === 'settings') { save_entry_settings(data, { public_url: body.public_url }); return op.entry_overview(data); }
@@ -765,7 +766,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (method === 'POST') { save_hosted_prompt(data, body.text); return { ok: true }; }
     }
     if (section !== 'accounts') throw panel_error('接口不存在');
-    if (method === 'POST' && !name) return op.add_account(data, String(body.name || '').trim());
+    if (method === 'POST' && !name) { const added = await op.add_account(data, String(body.name || '').trim()); after_change(); return added; }
     account();
     if (method === 'POST' && action === 'password') return { password: op.reset_password(data, name) };
     if (method === 'POST' && action === 'protect') return op.protect_account(data, name, body.on !== false);
@@ -774,20 +775,22 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && action === 'remove') {
       await op.run_instance(data, name, 'stop');
       // Its online-site binding goes first, or the owner could never unbind the computer afterwards.
-      await op.set_account_external(data, name, false, undefined, { removing: true }).catch(() => {});
+      await change_external(data, name, false, { removing: true }).catch(() => {});
       op.remove_account(data, name);
       return { removed: name, kept: account_home(data, name) };
     }
-    if (method === 'POST' && action === 'external') return op.set_account_external(data, name, body.on !== false);
     // A start is reported only once the instance serves as the account is set (protected or not).
     if (method === 'POST' && action === 'start') { await op.start_verified(data, name); return { ok: true }; }
     if (method === 'POST' && action === 'stop') { await op.run_instance(data, name, action); return { ok: true }; }
-    // Its binding file is sealed for whichever Windows user wrote it: changing that user would leave it unreadable.
-    if (method === 'POST' && action === 'os-user' && read_account_sites(data)[name]) throw panel_error('请先关闭该账号的“允许邀请外部专家”，再更改隔离');
-    if (method === 'POST' && action === 'os-user' && extra === 'remove') { op.remove_os_user(data, name); return { ok: true }; }
+    // Its identity file is sealed for whichever Windows user wrote it: it goes before that user changes, and is made
+    // again for the new one by the next reconcile (#5660).
+    // Taken down first and for real: a failure stops the change, or the new user could never open what is left (#5666).
+    if (method === 'POST' && action === 'os-user') await change_external(data, name, false);
+    if (method === 'POST' && action === 'os-user' && extra === 'remove') { op.remove_os_user(data, name); after_change(); return { ok: true }; }
     if (method === 'POST' && action === 'os-user') {
       const result = op.create_os_user(data, name, account_home(data, name));
       op.use_shared_programs(data, name);
+      after_change();
       return result;
     }
     // Its AI environment: set up (safe to repeat), what is installed, chosen library skills, its system prompt.
@@ -1045,12 +1048,13 @@ async function bind_online_site(data, { site, setup_key }, connect) {
 }
 
 /** Leave the online site: its paired devices can no longer reach this computer. The hosted accounts' address depends on it. */
-function disconnect_site(data) {
+async function disconnect_site(data) {
   const bound = bound_site(data);
   if (!bound) return { disconnected: '' };
   if (entry_settings(data).relay_enabled) throw panel_error('托管账号入口的线上网站还开着，请先关闭它');
-  // Accounts reached on the owner's domain do not use the online site; only the ones bound to it hold it (#5617).
-  if (Object.values(read_account_sites(data)).some(record => !record.direct)) throw panel_error('还有托管账号开着“允许邀请外部专家”，请先在“账号”页关闭');
+  // The accounts bound under this computer are released first (a failure stops here, to be retried); those reached on
+  // the owner's domain do not use the online site (#5617, #5660).
+  for (const [name, record] of Object.entries(read_account_sites(data))) if (!record.direct) await change_external(data, name, false);
   save_site_connection(data, bound.site);
   return { disconnected: bound.site };
 }
@@ -1130,10 +1134,48 @@ async function set_account_external(data, name, on, bind = bind_account_site, { 
   return { external: true, site: bound.site };
 }
 
-/** Refuse a change to the owner's domain while accounts are reached through it: their members would be cut off (#5617). */
-function keep_direct_domain(data) {
-  if (Object.values(read_account_sites(data)).some(record => record.direct)) {
-    throw panel_error('还有托管账号经自有域名邀请外部专家，请先在“账号”页关闭它们的“允许邀请外部专家”');
+/**
+ * Every hosted account can invite external experts, with no switch (user 2026-11-19, #5660): reached on the owner's
+ * domain while it is on, else bound under this computer's online site while that is bound, else neither. Run every
+ * minute and after changes that affect the way: an account whose record no longer fits (the domain changed or went off,
+ * the account is gone) is taken down, and accounts without one get one. A failure is retried after a pause.
+ */
+const reconcile_failures = new Map();
+const RECONCILE_RETRY_MS = 10 * 60 * 1000;
+// Every change to an account's way runs in one queue, so a reconcile and a direct call (removal, isolation, leaving the
+// online site) never read and write account-sites.json across each other's waits (#5666).
+let external_queue = Promise.resolve(), reconcile_queued = false;
+function serial(task) {
+  const run = external_queue.then(task, task);
+  external_queue = run.catch(() => {});
+  return run;
+}
+/** Take an account's way down or set it up, in the queue. */
+export function change_external(data, name, on, options) {
+  return serial(() => set_account_external(data, name, on, undefined, options));
+}
+export function reconcile_external(data, options = {}) {
+  if (reconcile_queued) return external_queue;
+  reconcile_queued = true;
+  return serial(() => { reconcile_queued = false; return reconcile_now(data, options); });
+}
+async function reconcile_now(data, { now = Date.now, log = message => process.stderr.write(`${message}\n`) } = {}) {
+  if (!hosting_enabled(data)) return;
+  const accounts = read_accounts(data), settings = entry_settings(data), bound = bound_site(data);
+  const direct_site = settings.tunnel_enabled && settings.tunnel?.host ? `https://${settings.tunnel.host}` : '';
+  for (const [name, record] of Object.entries(read_account_sites(data))) {
+    const fits = accounts[name] && (record.direct ? record.site === direct_site : !direct_site && bound?.site === record.site);
+    if (fits) continue;
+    // Only a removed account lets go of its record whatever happens; an existing one keeps it until its own side is
+    // really taken down, so no identity is left behind that invites would still use (#5666).
+    try { await set_account_external(data, name, false, undefined, { removing: !accounts[name] }); }
+    catch (error) { log(t('外部专家入口没有拆除（{value1}）：{value2}', { value1: name, value2: error.message })); }
+  }
+  if (!direct_site && !bound) return;
+  for (const name of Object.keys(accounts)) {
+    if (read_account_sites(data)[name] || now() - (reconcile_failures.get(name) || 0) < RECONCILE_RETRY_MS) continue;
+    try { await set_account_external(data, name, true); reconcile_failures.delete(name); }
+    catch (error) { reconcile_failures.set(name, now()); log(t('外部专家入口没有建立（{value1}）：{value2}', { value1: name, value2: error.message })); }
   }
 }
 
@@ -1414,7 +1456,7 @@ function run_panel(data, port) {
   // The entry's outside address runs on its own; the panel keeps it as set now and every minute (restarted if it stopped
   // or its settings changed, stopped when the entry is off).
   const keep = () => keep_tunnel(data).catch(error => process.stderr.write(t(`隧道：{value1}
-`, { value1: error.message })));
+`, { value1: error.message }))).then(() => reconcile_external(data)).catch(() => {});
   keep();
   const keeper = setInterval(keep, TUNNEL_CHECK_MS);
   // Hosted accounts' failures reach the owner's Weixin; one pass at a time.

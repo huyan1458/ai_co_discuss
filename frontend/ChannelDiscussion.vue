@@ -747,6 +747,11 @@ const request_badges = stable_computed(() => {
   }
   return badges;
 });
+// How long a finished execution's card waits for its file changes; a runner that never reports them (no git there, or
+// it stopped) leaves no placeholder behind.
+const TALLY_WAIT_SECONDS = 60;
+const tally_now = ref(Math.floor(Date.now() / 1000));
+let tally_timer = 0;
 /** Attach each terminal execution to its answer, or to the original request when it has no answer. */
 const execution_reports = stable_computed(() => {
   const reports = new Map();
@@ -756,15 +761,25 @@ const execution_reports = stable_computed(() => {
     // A clean completion adds nothing to the message header; only failures, files the member changed or may have changed
     // by running commands, and refused operations earn a card. Without commands, other files changing are someone else's.
     const listed_changes = execution.changes?.some((path) => execution.commands > 0 || execution.edited?.includes(path));
-    if (execution.status === "completed" && !listed_changes && !execution.denials?.length) continue;
+    // The runner counts the changed files once the member's software has exited, seconds after the answer: a member
+    // that edited files holds the card's place meanwhile, so the list does not appear from nothing (user 2026-11-19, #5665).
+    const tallying = execution.status === "completed" && execution.edits > 0 && execution.changes_recorded === false
+      && tally_now.value - execution.finished_at < TALLY_WAIT_SECONDS;
+    if (execution.status === "completed" && !listed_changes && !execution.denials?.length && !tallying) continue;
     // A failed free-room execution keeps its own card in the slot it worked in, and so does a delivered one that was voided.
     if (execution.status === "failed" || (execution.status === "cancelled" && execution.capabilities)) continue;
     const message_id = execution.answer_id || execution.request_message_id;
-    const report = { ...execution, label: execution.status === "cancelled" ? bridge.stop_label(execution) : { completed: t('已完成'), failed: t('失败') }[execution.status] };
+    const report = { ...execution, tallying, label: execution.status === "cancelled" ? bridge.stop_label(execution) : { completed: t('已完成'), failed: t('失败') }[execution.status] };
     reports.set(message_id, [...(reports.get(message_id) || []), report]);
   }
   return reports;
 });
+// A placeholder still shown is looked at again when its wait is over.
+watch(execution_reports, (reports) => {
+  window.clearTimeout(tally_timer);
+  if (![...reports.values()].some((list) => list.some((report) => report.tallying))) return;
+  tally_timer = window.setTimeout(() => { tally_now.value = Math.floor(Date.now() / 1000); }, TALLY_WAIT_SECONDS * 1000);
+}, { immediate: true });
 /** A user's message is waiting for the host while it is at or after the relay hold. */
 const waits_for_host = (message) => message.author === "用户" && room.value?.held_since > 0 && message.id >= room.value.held_since;
 /** Smart scheduling's recommendations count down from when the room view arrived; an expired open one disappears. */
@@ -3075,6 +3090,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <section v-for="{ report, allowable, failed } in card.report_rows" :key="report.id" class="channel-execution-report" :aria-label="t('执行报告 #{value1}', { value1: report.id })">
               <div><strong>{{ t('执行 #{value1} · {value2}', { value1: report.id, value2: report.label }) }}</strong></div>
               <ExecutionChanges v-if="report.changes?.length" :report="report" :room-id="room.id" />
+              <p v-else-if="report.tallying" class="channel-execution-tallying" role="status"><UIcon name="i-lucide-loader" class="animate-spin" />{{ t('正在统计文件改动…') }}</p>
               <p v-if="report.status !== 'completed' && report.result">{{ report.result }}</p>
               <ExecutionDenials v-if="report.denials?.length" :denials="report.denials" :allowable="allowable"
                 :busy="card.allowing === report.id" :error="card.allow_errors?.[report.id]" @allow="allow_and_resend(report)" />
