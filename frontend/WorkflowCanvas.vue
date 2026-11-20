@@ -45,12 +45,12 @@ const icons_only = computed(() => narrow.value);
 // Sizes the layout leaves for each kind of node, and the gaps between columns and rows.
 // Member, host and sub-workflow cards are squares (the drag bar is inside the member's square).
 // A card on the canvas only says who it is (user 2026-11-17); its settings live in the 专家配置 panel.
-const NODE_WIDTH = { card: 240, start: 84, host: 136, sub: 136 };
-const NODE_HEIGHT = { card: 96, start: 40, host: 136, sub: 136 };
+const NODE_WIDTH = { card: 240, start: 96, host: 136, sub: 136 };
+const NODE_HEIGHT = { card: 96, start: 60, host: 136, sub: 136 };
 const COLUMN_GAP = 120, ROW_GAP = 28;
 // How far below a node's top its round connection points sit: in its middle. Layout lines these up, not the nodes'
 // tops, so arrows between nodes of different heights run straight.
-const HANDLE_Y = { card: 48, start: 20, host: 68, sub: 68 };
+const HANDLE_Y = { card: 48, start: 30, host: 68, sub: 68 };
 // An arrow's note sits on its middle: the gap it crosses leaves this much on each side of the note (ports, arrowhead).
 const NOTE_CHAR = 11, NOTE_PAD = 16, NOTE_MARGIN = 36;
 // A column an arrow skips over is lifted this far clear of the line the arrow runs along (room for its note too).
@@ -972,6 +972,12 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 :deep(.workflow-canvas-controls .vue-flow__controls-button:hover) { background: var(--ui-bg-accented); }
 .workflow-canvas.is-compact :deep(.workflow-canvas-controls) { border-radius: 9px; }
 .workflow-canvas.is-compact :deep(.workflow-canvas-controls .vue-flow__controls-button) { width: 28px; height: 28px; }
+/* Narrow canvas (phone portrait, or desktop squeezed beside drawers): stack zoom vertically below the top toolbar so they never collide. */
+.workflow-canvas.is-tight .workflow-canvas-toolbar { max-width: calc(100% - 20px); overflow-x: auto; }
+.workflow-canvas.is-tight :deep(.workflow-canvas-controls) { top: 44px; flex-direction: column; }
+@media (pointer: coarse) { .workflow-canvas.is-tight :deep(.workflow-canvas-controls) { top: 56px; } }
+.workflow-canvas.is-tight :deep(.workflow-canvas-controls .vue-flow__controls-button) { border-right: 0; border-bottom: 1px solid var(--ui-border-muted); }
+.workflow-canvas.is-tight :deep(.workflow-canvas-controls .vue-flow__controls-button:last-child) { border-bottom: 0; }
 :deep(.workflow-canvas-minimap) { border: 1px solid var(--ui-border-muted); border-radius: 8px; overflow: hidden; background: var(--ui-bg-elevated); }
 :deep(.workflow-canvas-minimap .vue-flow__minimap-node) { fill: var(--ui-bg-accented); stroke: none; }
 :deep(.workflow-canvas-minimap .vue-flow__minimap-mask) { fill: color-mix(in srgb, var(--ui-bg) 60%, transparent); }

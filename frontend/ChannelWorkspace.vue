@@ -530,7 +530,7 @@ function resize_nav_by_key(event) {
         <div class="channel-composer-dock"><div class="channel-composer-column">
           <UChatPrompt model-value="" disabled :autofocus="false" :rows="1" :placeholder="t('发消息到 # {value1}', { value1: creating_preview.title })" :aria-label="t('留言正文')" variant="outline" color="neutral" class="channel-composer" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }">
             <template #footer>
-              <UButton type="button" icon="i-lucide-paperclip" :aria-label="t('添加附件')" color="neutral" variant="ghost" size="sm" disabled />
+              <UButton type="button" icon="i-lucide-paperclip" class="channel-attach-button" :aria-label="t('添加附件')" color="neutral" variant="ghost" size="sm" disabled />
               <UButton v-if="creating_speech_ready" type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :aria-label="t('开启语音播报')" disabled />
               <UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" :aria-label="t('语音输入')" disabled />
               <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('发送')" disabled />

@@ -2973,6 +2973,13 @@ function attachment_shortcut(event) {
   send();
 }
 
+/** Handle files chosen from the composer's own file input, anchored on the button so iOS Safari places its menu there. */
+function pick_attachments(event) {
+  const input = event.target;
+  if (input?.files?.length) bridge.add_attachments(input.files, prompt.value?.textareaRef);
+  if (input) input.value = "";
+}
+
 /** Copy a durable reference to the original record. */
 function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.value.id}/messages/${message.id}`); }
 
@@ -3072,11 +3079,15 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <!-- and the notes below as a subordinate thread, folded to the latest note with the count after it. -->
         <div v-else-if="message.slot_card && !message.failure && !message.retry" :id="`execution-${message.id}`" class="channel-working-strip" :class="message.marks?.edge" :data-author="bridge.identities[message.author]?.style">
           <div class="channel-working-head">
-            <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="2xs" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
-            <strong class="channel-working-name">{{ bridge.display_name(message.author) }}</strong>
-            <UBadge v-for="badge in message.marks?.badges || []" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge>
-            <UTooltip v-if="message.background" :text="t('后台进行：主持人没有等它，接着在做别的')"><UIcon name="i-lucide-split" class="channel-working-background" role="img" :aria-label="t('后台进行：主持人没有等它')" /></UTooltip>
-            <small class="channel-working-elapsed">{{ message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) : '' }) : t('已用 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) }}{{ message.steps ? t(' · 已执行 {value1} 步', { value1: message.steps }) : '' }}{{ message.attempt ? t(' · 第 {value1}/{value2} 次重试', { value1: message.attempt, value2: MAX_DELIVERY_RETRIES }) : '' }}</small>
+            <!-- The same byline as the answered card: name and tags, then the start time, with the elapsed time at the right end. -->
+            <div class="channel-message-byline">
+              <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
+              <div class="channel-message-meta">
+                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><UBadge v-for="badge in message.marks?.badges || []" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UTooltip v-if="message.background" :text="t('后台进行：主持人没有等它，接着在做别的')"><UIcon name="i-lucide-split" class="channel-working-background" role="img" :aria-label="t('后台进行：主持人没有等它')" /></UTooltip></div>
+                <div v-if="message.created_at" class="channel-message-provenance"><time :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time></div>
+              </div>
+              <span class="channel-message-provenance channel-message-elapsed">{{ message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) : '' }) : t('已用 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) }}{{ message.steps ? t(' · 已执行 {value1} 步', { value1: message.steps }) : '' }}{{ message.attempt ? t(' · 第 {value1}/{value2} 次重试', { value1: message.attempt, value2: MAX_DELIVERY_RETRIES }) : '' }}</span>
+            </div>
             <UTooltip v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" :text="t('私聊：查看它正在做什么')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="t('私聊 {value1}：查看本次执行过程', { value1: bridge.display_name(message.author) })" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
           <span v-if="view.access?.can_manage" class="channel-working-actions">
               <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
@@ -3449,7 +3460,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UTooltip :text="ENTER_SENDS ? t('完成，转成文字 · Enter') : t('完成，转成文字')"><UButton type="button" icon="i-lucide-check" color="neutral" size="sm" class="channel-primary-button channel-round-button" :aria-label="t('结束录音并转成文字')" :loading="voice.state.status !== 'recording'" @click="voice.toggle()" /></UTooltip>
           </template>
           <template v-else>
-            <UButton type="button" icon="i-lucide-paperclip" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" color="neutral" variant="ghost" size="sm" @click="act('choose_attachments', prompt?.textareaRef)" />
+            <label class="channel-attach-button"><UIcon name="i-lucide-paperclip" class="size-4" aria-hidden="true" /><input type="file" multiple class="channel-attach-input" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" @change="pick_attachments"></label>
             <UTooltip v-if="speech_ready" :text="broadcast.on.value ? t('关闭语音播报') : t('语音播报：新回复自动朗读摘要')"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? t('关闭语音播报') : t('开启语音播报')" @click="broadcast.toggle()" /></UTooltip>
             <UTooltip :text="ENTER_SENDS ? t('语音输入 · 也可按住空格说话') : t('按住说话，或轻点开始')"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" :aria-label="t('语音输入')" :disabled="view.sending_message" @pointerdown="voice_press.pointerdown" @click="voice_press.click" @contextmenu.prevent /></UTooltip>
             <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('发送')" :title="t('发送 · Enter')" :disabled="!has_draft" @click="send" />

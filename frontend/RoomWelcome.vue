@@ -45,6 +45,13 @@ const voice = use_voice_input({ bridge, on_text: (spoken) => {
 const voice_press = use_voice_press({ voice, textarea: () => prompt.value?.textareaRef, text: draft, busy: () => creating.value });
 onBeforeUnmount(() => voice.cancel());
 
+/** Handle files chosen from the composer's own file input, anchored on the button so iOS Safari places its menu there. */
+function pick_attachments(event) {
+  const input = event.target;
+  if (input?.files?.length) bridge.add_attachments(input.files, prompt.value?.textareaRef);
+  if (input) input.value = "";
+}
+
 /** Create the room and post the message; a failed creation keeps the draft and files here for another try. */
 async function start() {
   if (!has_draft.value || pending.value) return;
@@ -82,7 +89,7 @@ async function start() {
             <UTooltip :text="ENTER_SENDS ? t('完成，转成文字 · Enter') : t('完成，转成文字')"><UButton type="button" icon="i-lucide-check" color="neutral" size="sm" class="channel-primary-button channel-round-button" :aria-label="t('结束录音并转成文字')" :loading="voice.state.status !== 'recording'" @click="voice.toggle()" /></UTooltip>
           </template>
           <template v-else>
-            <UButton type="button" icon="i-lucide-paperclip" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" color="neutral" variant="ghost" size="sm" :disabled="creating" @click="act('choose_attachments', prompt?.textareaRef)" />
+            <label class="channel-attach-button" :class="{ 'is-disabled': creating }"><UIcon name="i-lucide-paperclip" class="size-4" aria-hidden="true" /><input type="file" multiple class="channel-attach-input" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" :disabled="creating" @change="pick_attachments"></label>
             <UTooltip :text="ENTER_SENDS ? t('语音输入 · 也可按住空格说话') : t('按住说话，或轻点开始')"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" :aria-label="t('语音输入')" :disabled="creating" @pointerdown="voice_press.pointerdown" @click="voice_press.click" @contextmenu.prevent /></UTooltip>
             <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('新建房间并发送')" :title="t('发送 · Enter')" :loading="creating" :disabled="!has_draft || Boolean(pending)" @click="start" />
           </template>

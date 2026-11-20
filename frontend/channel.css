@@ -683,14 +683,18 @@ html[data-theme^="channel"] .channel-composer:is(:focus, :focus-within, :has(:fo
 /* Press-and-hold on touch: no scrolling, text selection or long-press menu may take the gesture. */
 .channel-voice-mic { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 /* Footer controls are quiet ghost chips; only hover and the open menu give them a surface. */
-.channel-composer-footer > button[aria-label="添加附件"] { width: 30px; height: 30px; justify-content: center; border-radius: 8px; color: var(--ui-text-muted); }
-.channel-composer-footer > button[aria-label="添加附件"]:hover:not(:disabled) { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
+.channel-composer-footer > .channel-attach-button { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; overflow: hidden; border-radius: 8px; color: var(--ui-text-muted); cursor: pointer; transition: background .12s, color .12s; }
+.channel-composer-footer > .channel-attach-button:hover:not(:disabled, .is-disabled) { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
+.channel-composer-footer > .channel-attach-button.is-disabled { opacity: .5; pointer-events: none; }
+/* Overlay the real file input on the button so iOS Safari anchors its picker popover right above the paperclip. */
+.channel-attach-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; font-size: 0; cursor: pointer; }
+.channel-attach-input::file-selector-button { cursor: pointer; }
 html[data-theme^="channel"] .channel-round-button { width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0; justify-content: center; border-radius: 50%; transition: background .12s, transform .1s; }
 html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transform: scale(.95); }
 .channel-round-button > [class*="icon"] { width: 16px; height: 16px; }
 /* Touch screens: footer keys get finger-sized targets. */
 @media (pointer: coarse) {
-  .channel-composer-footer > :is(.channel-voice-button, button[aria-label="添加附件"]) { width: 38px; height: 38px; }
+  .channel-composer-footer > :is(.channel-voice-button, .channel-attach-button) { width: 38px; height: 38px; }
   html[data-theme^="channel"] .channel-composer-footer > .channel-round-button { width: 38px; height: 38px; min-width: 38px; min-height: 38px; }
   /* Keep root-level grips out of the iOS edge-swipe-back zone. */
   .channel-root-rooms { padding-left: 12px; }
@@ -1243,7 +1247,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-answer .markdown-body :is(th, td) { border-color: var(--ui-border); }
   .channel-answer .markdown-body th { background: #f6f6f6; }
   .channel-composer { --composer-surface: #fff; background: #fff !important; border-color: #c9c9c9; box-shadow: none !important; }
-  .channel-composer-footer > button[aria-label="添加附件"]:hover:not(:disabled) { background: var(--channel-ghost-hover); }
+  .channel-composer-footer > .channel-attach-button:hover:not(:disabled, .is-disabled) { background: var(--channel-ghost-hover); }
   .channel-key-hint kbd { border-color: #0000001f; }
   .channel-draft-length .is-near-limit { color: #9a6700; }
   .channel-reply-draft { color: #0969da; background: #f3f7fd; border-color: var(--ui-border-muted); }
@@ -1533,12 +1537,14 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-message.is-branch-line, .channel-working-strip.is-branch-line { border-left: 2px dashed var(--ui-border-accented); }
 .channel-line-badge { flex: none; }
 .channel-working-strip .channel-avatar { flex-shrink: 0; width: var(--working-avatar); height: var(--working-avatar); font-size: 9px; }
-.channel-working-name { flex-shrink: 0; color: var(--speaker-accent); font-size: 13px; font-weight: 650; }
-.channel-working-elapsed { flex-shrink: 0; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* The head is the answered card's byline (user 2026-11-20, #6140): same name size, plain tags, time, and the elapsed
+   time at the right end. It keeps the strip's tight spacing, and its gap matches the status line's indent below. */
+.channel-working-head > .channel-message-byline { flex: 1; min-width: 0; margin-bottom: 0; column-gap: 8px; }
+@media (min-width: 701px) { .channel-working-head > .channel-message-byline { padding-right: 0; } }
 .channel-working-main { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-top: 4px; padding-left: calc(var(--working-avatar) + 8px); }
 .channel-working-status { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .channel-working-strip .channel-working-actions { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; }
-.channel-working-tools { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 0; padding: 0 34px 0 calc(var(--working-avatar) + 8px); color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; list-style: none; font-variant-numeric: tabular-nums; }
+.channel-working-tools { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 0; padding: 0 34px 0 0; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; list-style: none; font-variant-numeric: tabular-nums; }
 .channel-working-tools li { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .channel-working-tool-count { display: inline-flex; flex-shrink: 0; gap: 1px; }
 .channel-working-notes { margin-top: 8px; padding: 8px 0 0; border-top: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; }
@@ -1573,7 +1579,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
    so it centres on the status line's first 24px instead of riding above it (user 2026-11-17). */
 .channel-working-head > .channel-working-actions { margin-left: auto; }
 .channel-working-strip .channel-corner-key { flex-shrink: 0; margin-left: auto; width: 24px; height: 24px; padding: 4px; }
-.channel-working-head > .channel-corner-key + .channel-working-actions { position: absolute; top: calc(10px + max(var(--working-avatar), 24px) + 4px + 12px); right: 10px; transform: translateY(-50%); }
+.channel-working-strip { --working-head: max(var(--working-avatar), 28px); }
+.channel-working-head > .channel-corner-key + .channel-working-actions { position: absolute; top: calc(10px + var(--working-head) + 4px + 12px); right: 10px; transform: translateY(-50%); }
 .channel-working-strip:has(.channel-corner-key) .channel-working-main { padding-right: 36px; }
 .channel-working-strip:has(.channel-corner-key + .channel-working-actions > :nth-child(2)) .channel-working-main { padding-right: 68px; }
 @media (pointer: coarse) {
@@ -1581,6 +1588,11 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 }
 @media (max-width: 700px) {
   .channel-corner-key [class*="icon"], .channel-message-toolbar .channel-private-chat-key [class*="icon"] { width: 12px; height: 12px; }
+  /* Phone: the byline is two lines (20px name, 1px gap, 16px time), as on the answered card. Private chat sits in the
+     strip's top-right corner beside the name line, where the answered card has its toolbar, so the elapsed time below
+     it ends flush with the strip's right edge. */
+  .channel-working-strip { --working-head: 37px; }
+  .channel-working-strip .channel-corner-key { position: absolute; top: 4px; right: 10px; }
 }
 /* Placed after the base rules above so the mouse layout overrides them. */
 @media (min-width: 701px) and (hover: hover) and (pointer: fine) {
