@@ -394,7 +394,8 @@ watch(() => room.value.id, () => { starting.value = false; });
 
 <style scoped>
 .pb-member.is-away { opacity: .6; }
-.pb-ended-members { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
+/* The speaking order bleeds 8px past the section on each side (SpeakingOrder.vue); this list does the same so rows line up. */
+.pb-ended-members { display: flex; flex-direction: column; gap: 6px; margin: 6px -8px 0; padding: 0; list-style: none; }
 /* Same columns as a speaking-order row, with its empty place column, so avatars and names line up. */
 .pb-ended-members .pb-member { grid-template-columns: 18px auto minmax(0, 1fr) auto; gap: 8px; min-height: 0; padding: 4px 8px; }
 .pb-ended-members .pb-member::before { content: ""; }

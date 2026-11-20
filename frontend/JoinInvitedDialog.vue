@@ -10,7 +10,7 @@ import { computed, inject, ref, watch } from "vue";
 import PlatformConfigDialog from "./PlatformConfigDialog.vue";
 import RosterAdd from "./RosterAdd.vue";
 import ExpertCard from "./ExpertCard.vue";
-import { LEVEL_SHORT, lockdown_problem, use_invited_rooms } from "./external-members.js";
+import { LEVEL_SHORT, PENDING_JOIN_ID, lockdown_problem, use_invited_rooms } from "./external-members.js";
 import { read_qr_image, use_qr_camera } from "./qr-scan.js";
 import { t } from "./i18n.js";
 
@@ -50,6 +50,10 @@ watch(open, (value) => {
   if (!value) return stop_scan();
   check_camera();
   text.value = invited.join_text.value;
+  // Each opening starts empty: no card from the last join, and the settings back at their defaults (user 2026-11-19).
+  platform.value = "";
+  trust.value = { wake: "auto", confined: true, duration: "1h" };
+  forced = false;
 });
 const platforms = computed(() => Object.keys(bridge.launch_clients));
 // As in the new-room panel, software not set up yet stays grey at the end of the row and its chip opens the setup.
@@ -92,20 +96,24 @@ function link_payload(link) {
 const offered = computed(() => is_link.value ? link_payload(text.value.trim()) : {});
 const link_room_title = (link) => String(link_payload(link).room_name || "");
 
-// The dialog closes at once: joining crosses the relay, and the sidebar shows it under way. A failure reopens it with the link.
+// The dialog closes and the middle opens on the room being joined at once (user 2026-11-19): joining crosses the relay,
+// so the page shows it under way and moves on to the record when it arrives. A failure reopens the dialog with the link.
 async function submit() {
   if (!ready.value) return;
   const link = text.value.trim();
   open.value = false;
-  const result = await invited.join({ invite: link, room_title: link_room_title(link),
+  const joining = invited.join({ invite: link, room_title: link_room_title(link),
     adapter: profile.value.adapter, model: profile.value.model || "", effort: profile.value.effort || "", trust: trust.value, duration: trust.value.duration,
     ...(profile.value.session_id ? { session_id: profile.value.session_id } : {}),
     ...(Object.hasOwn(profile.value, "system_prompt") ? { system_prompt: profile.value.system_prompt } : {}) });
+  // `join` marks the join as under way before its first wait, so the page has something to open on.
+  invited.open(PENDING_JOIN_ID);
+  const result = await joining;
   if (!result) return invited.start_join(link);
   // The resumed conversation now belongs to the joined record; this software's next card starts a new one.
   if (profile.value.session_id) bridge.write_launch(platform.value, "session_id", null);
+  // The page already moved on to the record if it was still showing the join; one the user left elsewhere stays there.
   bridge.notify("info", t("已加入「{room}」", { room: result.record?.room_title || "" }));
-  if (result.record?.id) invited.open(result.record.id);
 }
 </script>
 

@@ -118,7 +118,6 @@ const uid = useId();
         </div>
         <p class="external-invite-hint">{{ t("只读：已跟踪与未忽略的文件，固定排除 .env、密钥、凭据、data/ 与 .git。") }}</p>
       </div>
-      <p class="external-invite-hint">{{ t("借出多久由对方加入时决定，你可随时撤销。") }}</p>
       </template>
       <p v-if="seat_id" class="external-invite-hint">{{ t("待生成链接") }} · {{ t("链接只在生成时显示；请重新生成。未绑定线上网站时，需先在设置中绑定。") }}</p>
       <footer class="external-invite-footer">

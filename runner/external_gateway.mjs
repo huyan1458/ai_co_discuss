@@ -198,6 +198,12 @@ async function invite_site(home, site_url) {
   return { site: found[0], link: found[1] };
 }
 
+/** The site an invite would name now: `{ site }`, or `{ problem }` (`site_missing` / `site_required`) when none can be picked. */
+export async function invite_site_state(home) {
+  try { return { site: (await invite_site(home)).site }; }
+  catch (error) { return { problem: error.code || 'site_missing' }; }
+}
+
 /**
  * Issue an invite for one room: a 12-character code valid ten minutes, kept here only as its hash, and the link that
  * carries it with this computer's key fingerprint. The code and link are returned this once.

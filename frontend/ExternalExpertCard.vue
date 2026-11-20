@@ -1,27 +1,41 @@
 <script setup>
 /**
  * An external expert to be invited (new-room panel, invite dialog), laid out as a member card (ExpertCard.vue): the
- * front sums up the choices, 设置 turns to the back to edit them, 完成 keeps them and 取消 restores them.
+ * front sums up what the inviter grants and what protects it (what it opens, the read limits, the online site
+ * the link goes through), 设置 turns to the back to change what it opens, 完成 keeps it and 取消 restores it.
  * `draft` holds `{ level, directories }`; reading opens all of `paths` (the room's project directories). How long the
  * expert stays is the invited computer's choice, made when it joins.
  */
-import { computed, ref, useId, watch } from "vue";
-import { LEVELS } from "./external-members.js";
+import { computed, inject, ref, useId, watch } from "vue";
+import { DEFAULT_READ_QUOTA, LEVELS, READ_EXCLUDED } from "./external-members.js";
 import { t } from "./i18n.js";
 
 const emit = defineEmits(["remove"]);
 const draft = defineModel("draft", { type: Object, required: true });
 const props = defineProps({ paths: { type: Array, default: () => [] } });
+const { view } = inject("discussion");
 const level = ref(draft.value.level || "read");
 const paths = computed(() => props.paths.filter(Boolean));
 watch([level, paths], () => { draft.value = { level: level.value, directories: [...paths.value] }; }, { immediate: true });
 // Reading needs a directory: without one it is invited for discussing, so the front says so.
 const shown_level = computed(() => level.value === "read" && !paths.value.length ? "discuss" : level.value);
 const leaf = (path) => path.split(/[\\/]/).filter(Boolean).pop() || path;
+// The online site the invitation link would go through, as this computer's service reports it (`invite_site`).
+const relay = computed(() => {
+  const state = view.value.launch.invite_site;
+  if (state?.site) { try { return { value: new URL(state.site).host }; } catch { return { value: state.site }; } }
+  if (state?.problem === "site_required") return { value: t("绑定了多个线上网站，生成链接时选择"), tone: "warn" };
+  return state ? { value: t("未绑定线上网站，无法生成链接"), tone: "danger" } : null;
+});
+// Two-character labels, as on a member card's front, so the two kinds of cards line up.
 const facts = computed(() => [
-  { label: t("状态"), value: t("待签到"), tone: "warn" },
-  { label: t("对方能看到"), value: shown_level.value === "read" ? t("消息和项目：{dirs}", { dirs: paths.value.map(leaf).join("、") }) : t("房间消息") },
-  { label: t("时长"), value: t("由对方决定") },
+  { label: t("状态"), value: t("待签到"), tone: "warn", dot: true },
+  { label: t("开放"), value: LEVELS.find((option) => option.value === shown_level.value)?.label },
+  ...shown_level.value === "read" ? [
+    { label: t("目录"), value: paths.value.map(leaf).join("、") },
+    { label: t("读取"), value: t("只读 · 每小时 {hourly} · 共 {total}", DEFAULT_READ_QUOTA), title: READ_EXCLUDED },
+  ] : [],
+  ...relay.value ? [{ label: t("中转"), ...relay.value }] : [],
 ]);
 
 const back = ref(false);
@@ -41,7 +55,7 @@ const uid = useId();
             <span class="expert-card-names"><span><strong>{{ t("外部专家") }}</strong></span><small :title="t('对方电脑上的 AI，只读本房间开放的内容')">{{ t("对方电脑上的 AI，只读本房间开放的内容") }}</small></span>
           </span>
           <dl class="expert-card-facts">
-            <div v-for="fact in facts" :key="fact.label"><dt>{{ fact.label }}</dt><dd :class="fact.tone ? ['expert-card-status', `is-${fact.tone}`] : ''" :title="fact.value"><i v-if="fact.tone" aria-hidden="true" />{{ fact.value }}</dd></div>
+            <div v-for="fact in facts" :key="fact.label"><dt>{{ fact.label }}</dt><dd :class="fact.tone ? ['expert-card-status', `is-${fact.tone}`] : ''" :title="fact.title || fact.value"><i v-if="fact.dot" aria-hidden="true" />{{ fact.value }}</dd></div>
           </dl>
           <span class="expert-card-flip is-open"><UIcon name="i-lucide-settings-2" /><span>{{ t("设置") }}</span></span>
         </button>
@@ -53,13 +67,21 @@ const uid = useId();
         <div class="expert-card-back-body">
           <div class="expert-card-heading"><strong>{{ t("外部专家") }}<span>{{ t("设置") }}</span></strong></div>
           <div class="expert-card-field">
-            <span :id="`${uid}-level`">{{ t("对方能看到") }}</span>
+            <span :id="`${uid}-level`" :title="t('对方能看到')">{{ t("开放") }}</span>
             <div class="expert-card-modes" role="radiogroup" :aria-labelledby="`${uid}-level`">
               <button v-for="option in LEVELS" :key="option.value" type="button" role="radio" :title="option.description" :aria-checked="level === option.value" @click="level = option.value">{{ option.label }}</button>
             </div>
           </div>
-          <p v-if="level === 'read' && !paths.length" class="expert-card-empty">{{ t("还没有选项目目录，只能选“房间消息”。") }}</p>
-          <p class="expert-card-warning" role="note" :title="level === 'read' ? t('只读：已跟踪与未忽略的文件，固定排除 .env、密钥、凭据、data/ 与 .git。') : undefined"><UIcon name="i-lucide-triangle-alert" />{{ level === 'read' ? t("项目内容会发给对方模型服务商") : t("消息会发给对方模型服务商") }}</p>
+          <p class="expert-card-hint">{{ LEVELS.find((option) => option.value === level)?.description }}</p>
+          <template v-if="level === 'read'">
+            <div v-if="paths.length" class="expert-card-field is-top">
+              <span>{{ t("目录") }}</span>
+              <ul class="expert-card-dirs"><li v-for="path in paths" :key="path" :title="path"><UIcon name="i-lucide-folder" />{{ leaf(path) }}</li></ul>
+            </div>
+            <p v-if="paths.length" class="expert-card-hint">{{ READ_EXCLUDED }}</p>
+            <p v-else class="expert-card-empty">{{ t("还没有选项目目录，只能选“房间消息”。") }}</p>
+          </template>
+          <p class="expert-card-warning" role="note"><UIcon name="i-lucide-triangle-alert" />{{ level === 'read' ? t("项目内容会发给对方模型服务商") : t("消息会发给对方模型服务商") }}</p>
         </div>
         <span class="expert-card-flip-actions">
           <button type="button" class="expert-card-flip is-cancel" @click="cancel">{{ t("取消") }}</button>
@@ -88,8 +110,10 @@ const uid = useId();
 .expert-card-names > span { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .expert-card-names > small { overflow: hidden; color: var(--ui-text-muted); font-size: 11px; line-height: 16px; white-space: nowrap; text-overflow: ellipsis; }
 .expert-card-identity strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
-.expert-card-facts { display: grid; gap: 4px; width: 100%; margin: 0; padding-top: 10px; border-top: 1px solid var(--ui-border-muted); font-size: 11px; }
-.expert-card-facts > div { display: grid; grid-template-columns: 3em minmax(0, 1fr); gap: 8px; }
+.expert-card-facts { display: grid; gap: 3px; width: 100%; margin: 0; padding-top: 8px; border-top: 1px solid var(--ui-border-muted); font-size: 11px; line-height: 16px; }
+.expert-card-facts > div { display: grid; grid-template-columns: 3.5em minmax(0, 1fr); gap: 8px; }
+.expert-card-facts .is-warn { color: var(--ui-warning, #e0a33a); }
+.expert-card-facts .is-danger { color: var(--ui-error); }
 .expert-card-facts dt { color: var(--ui-text-dimmed); white-space: nowrap; }
 .expert-card-facts dd { overflow: hidden; margin: 0; color: var(--ui-text-toned); white-space: nowrap; text-overflow: ellipsis; }
 .expert-card-facts .expert-card-status > i { display: inline-block; margin: 0 5px 1px 0; vertical-align: middle; width: 5px; height: 5px; border-radius: 50%; background: var(--ui-warning, #e0a33a); }
@@ -110,8 +134,13 @@ const uid = useId();
 .expert-card-tools > button:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 .expert-card-heading strong { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .expert-card-heading strong > span { font-size: 10px; font-weight: 400; color: var(--ui-text-muted); }
-/* Labels are up to five characters here (对方能看到, wrapping), so the column is wider than the member card's 26px. */
-.expert-card-field { display: grid; grid-template-columns: 3em minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
+/* Two-character labels in Chinese; 3.5em leaves room for the English ones (Folders, Status). */
+.expert-card-field { display: grid; grid-template-columns: 3.5em minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
+.expert-card-field.is-top { align-items: start; }
+.expert-card-hint { margin: -4px 0 0 calc(3.5em + 8px); color: var(--ui-text-muted); font-size: 11px; line-height: 16px; }
+.expert-card-dirs { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin: 0; padding: 0; list-style: none; color: var(--ui-text-toned); }
+.expert-card-dirs li { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 18px; }
+.expert-card-dirs li > span { flex: none; width: 12px; height: 12px; color: var(--ui-text-dimmed); }
 .expert-card-field .expert-card-modes button { padding: 0 6px; white-space: nowrap; }
 .expert-card-empty { margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 20px; }
 .expert-card-warning { display: flex; gap: 6px; margin: auto 0 0; color: var(--ui-warning, #e0a33a); font-size: 11px; line-height: 16px; }

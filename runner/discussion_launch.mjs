@@ -2399,6 +2399,8 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
     scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), managed_api_keys: restricted ? managed_api_keys(home) : [], projects: launch_projects(home).projects, projects_restricted: restricted, full_access_only: ADAPTER_IDS.filter(id => adapter_capabilities(id).no_sandbox), workspace: space.workspace, user_home: restricted ? homedir() : '', ...expert_presets(home), ...workflow_library(home) };
+  // The online site an invitation would use, so an external expert's card says before the room exists whether a link can be made.
+  if (positionals[0] === 'settings') result.invite_site = await (await import('./external_gateway.mjs')).invite_site_state(home);
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
   else if (positionals[0] === 'presets') result = input ? save_expert_presets(home, input) : expert_presets(home);
   else if (positionals[0] === 'workflows') result = await workflows_command(home, input || {});

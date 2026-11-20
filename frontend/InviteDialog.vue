@@ -48,10 +48,13 @@ const EXTERNAL_CHIP = "external:computer";
 const invited_manual = ref([]);
 // Member ids of just-added external seats, listed beside the manual members in that step.
 const invited_external = ref([]);
+// External cards whose seats are being added: the dialog moves to that step at once, as for manual members, and each
+// row turns into its seat when it exists (user 2026-11-19); a failure puts the unadded cards back.
+const adding_seats = ref([]);
 const seat_record = (id) => (room.value.members || []).find((member) => member.id === id);
-const invited_any_seat = computed(() => (invited_manual.value.length || invited_external.value.length) && !invite_picks.value.length && !external_drafts.value.length);
+const invited_any_seat = computed(() => (invited_manual.value.length || invited_external.value.length || adding_seats.value.length) && !invite_picks.value.length && !external_drafts.value.length);
 const launch_lead = computed(() => {
-  const manual = invited_manual.value.length, external = invited_external.value.length;
+  const manual = invited_manual.value.length, external = invited_external.value.length + adding_seats.value.length;
   if (manual && external) return t("成员已加入：手动成员把启动指令交给各自的 AI 会话，外部专家把邀请链接发给对方；注册或签到后才算到场。");
   if (external) return external > 1 ? t("{count} 个外部专家席位已加好，把邀请链接分别发给对方，对方签到后才算到场。", { count: external })
     : t("外部专家席位已加好，把邀请链接发给对方，对方签到后才算到场。");
@@ -105,6 +108,7 @@ watch(inviting, async (open) => {
   invite_tried.value = false;
   invited_manual.value = [];
   invited_external.value = [];
+  adding_seats.value = [];
   if (props.workflowId) await choose_workflow(props.workflowId);
 });
 watch(() => room.value.id, () => { inviting.value = false; invite_picks.value = []; });
@@ -217,21 +221,30 @@ async function submit_invitation() {
     if (!await act("enable_room_workflow", { id: workflow.id, members: workflow.members })) return await refresh_after(invited_any);
     invite_workflow.value = null;
   }
-  if (!invite_picks.value.length && !invited_manual.value.length && !invited_external.value.length) inviting.value = false;
+  // A seat that failed keeps its card here for a retry instead of closing the dialog on it.
+  if (!invite_picks.value.length && !invited_manual.value.length && !invited_external.value.length && !external_drafts.value.length) inviting.value = false;
   await refresh_after(invited_any);
 }
 
 /** Add each external expert's seat in turn; stop at the first failure and keep the rest. True once any was added. */
 async function add_external_seats() {
+  const queue = [...external_drafts.value];
   let added = false;
-  for (const item of [...external_drafts.value]) {
+  external_drafts.value = [];
+  adding_seats.value = queue;
+  for (const [index, item] of queue.entries()) {
     try {
       const seat = await room_operations(bridge).create_invite(room.value.id, seat_options(item.draft, room_directories.value));
       invited_external.value = [...invited_external.value, seat.member_id];
-      external_drafts.value = external_drafts.value.filter((entry) => entry !== item);
+      adding_seats.value = queue.slice(index + 1);
       added = true;
-    } catch (error) { bridge.notify("error", runner_text(error.message)); break; }
+    } catch (error) {
+      bridge.notify("error", runner_text(error.message));
+      external_drafts.value = queue.slice(index);
+      break;
+    }
   }
+  adding_seats.value = [];
   return added;
 }
 
@@ -261,9 +274,15 @@ async function refresh_after(invited_any) {
             <small :class="{ 'is-registered': seat_record(id) && !external_of(seat_record(id)).pending }">{{ seat_record(id) && !external_of(seat_record(id)).pending ? t('已签到') : t('待签到') }}</small>
             <UButton :icon="launch_copied === `seat:${id}` ? 'i-lucide-check' : 'i-lucide-link'" :label="launch_copied === `seat:${id}` ? t('已复制') : t('复制邀请链接')" size="sm" :color="launch_copied === `seat:${id}` ? 'success' : 'primary'" variant="soft" class="pb-launch-button" @click="copy_seat(id)" />
           </li>
+          <li v-for="item in adding_seats" :key="`adding-${item.id}`" role="status">
+            <UAvatar src="/icons/external-expert.svg" :alt="t('外部专家')" size="xs" class="channel-avatar external" />
+            <strong>{{ t('外部专家') }}</strong>
+            <small>{{ t('正在添加席位…') }}</small>
+            <UButton icon="i-lucide-link" :label="t('复制邀请链接')" size="sm" color="primary" variant="soft" class="pb-launch-button" loading disabled />
+          </li>
         </ul>
         <p v-if="invited_manual.length" class="fine-print">{{ t("指令含该成员的凭证，只交给对应的会话；关闭后仍可在参与者列表中复制。") }}</p>
-        <p v-if="invited_external.length" class="fine-print">{{ t("邀请链接只发给要邀请的人；关闭后仍可在输入框上方或成员菜单的“邀请详情”里复制。") }}</p>
+        <p v-if="invited_external.length || adding_seats.length" class="fine-print">{{ t("邀请链接只发给要邀请的人；关闭后仍可在输入框上方或成员菜单的“邀请详情”里复制。") }}</p>
         <div class="pb-invite-footer"><UButton :label="t('完成')" class="channel-primary-button" @click="inviting = false" /></div>
       </div>
       <form v-else class="pb-invite" :aria-label="t('邀请专家')" @submit.prevent="invite">

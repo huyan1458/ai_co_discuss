@@ -221,8 +221,6 @@
   "借出时间": "Lent for",
   "借出多久由你决定，最长 3 天；加入后可在外部房间里续期或改短。": "You decide how long to lend it, up to 3 days; after joining you can renew or shorten it in the external room.",
   "借出时间已更新": "Loan time updated",
-  "由对方决定": "Set by the invitee",
-  "借出多久由对方加入时决定，你可随时撤销。": "The invitee decides how long to lend its AI when joining; you can revoke at any time.",
   "对方设定": "set by the invitee",
   "借出到": "Lent until",
   "对方未说明": "Not stated",
@@ -232,5 +230,15 @@
   "借出多久由对方决定，你可随时撤销": "The invitee decides how long it is lent; you can revoke at any time",
   "由对方加入时决定": "Set by the invitee when joining",
   "不变": "Unchanged",
-  "从现在起重新计算，最长 3 天": "Counted again from now, 3 days at most"
+  "从现在起重新计算，最长 3 天": "Counted again from now, 3 days at most",
+  "绑定了多个线上网站，生成链接时选择": "Several hosted sites connected; choose one when making the link",
+  "未绑定线上网站，无法生成链接": "No hosted site connected; a link cannot be made",
+  "目录": "Folders",
+  "读取": "Reads",
+  "只读 · 每小时 {hourly} · 共 {total}": "Read only · {hourly} per hour · {total} in all",
+  "中转": "Relay",
+  "调整「{room}」的设置": "Settings for “{room}”",
+  "只影响你这台电脑上的 AI，对方房间的开放范围由对方决定。": "Only affects your AI on this computer; what the other room opens is up to its owner.",
+  "当前借出到 {time}": "Currently lent until {time}",
+  "正在添加席位…": "Adding the seat…"
 }

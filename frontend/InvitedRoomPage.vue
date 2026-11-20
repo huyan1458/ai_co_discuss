@@ -13,7 +13,7 @@ import { locale, t } from "./i18n.js";
 const { bridge } = inject("discussion");
 const invited = use_invited_rooms();
 const record = invited.selected;
-const messages = ref([]), error = ref(""), loading = ref(false), failure = ref("");
+const messages = ref([]), roster = ref([]), error = ref(""), loading = ref(false), failure = ref("");
 // Whether the other room has messages before the first one shown, and whether they are being read.
 const earlier = ref(false), loading_older = ref(false);
 const REFRESH_MS = 5000;
@@ -32,9 +32,17 @@ const OUTCOMES = {
 };
 // The record being read: a read crosses the relay and can outlast the refresh, so the next one waits for it to finish.
 let reading = "";
+/**
+ * Several records of this computer can sit in the same room (one per AI it lent), so what was read of the room is kept by
+ * the room, not the record: switching between them shows the same latest messages; only each AI's own outcomes differ.
+ */
+function room_key(id) {
+  const found = invited.records.value.find((item) => item.id === id);
+  return found ? `${found.site}|${found.room}` : id;
+}
 function show_messages(id, list) {
   messages.value = list;
-  invited.room_messages.set(id, list);
+  invited.room_messages.set(room_key(id), list);
 }
 /** The latest page replaces what it covers; earlier pages the reader already scrolled to stay above it. */
 function merge_latest(list) {
@@ -58,6 +66,7 @@ async function load() {
       if (!older_shown) earlier.value = Boolean(result.earlier);
     } else if (!messages.value.length && result.messages?.length) show_messages(id, result.messages);
     if (result.room?.me) invited.room_me.value = { ...invited.room_me.value, [id]: result.room.me };
+    if (Array.isArray(result.room?.members)) { roster.value = result.room.members; invited.room_roster.set(room_key(id), result.room.members); }
     error.value = runner_message(result.error_text, result.error || "");
     misses.value = result.error ? misses.value + 1 : 0;
     if (!result.error) reached.value = true;
@@ -87,7 +96,8 @@ async function load_older() {
 }
 /** Open a record: what is already known shows at once, and the other room is read behind it. */
 function open_record(id) {
-  messages.value = invited.room_messages.get(id) || [];
+  messages.value = invited.room_messages.get(room_key(id)) || [];
+  roster.value = invited.room_roster.get(room_key(id)) || [];
   error.value = failure.value = "";
   misses.value = 0;
   reached.value = false;
@@ -171,9 +181,20 @@ const BY = { user: t("对方房主"), host: t("对方主持人") };
 const OWNER_AUTHOR = "用户";
 const author = (message) => message.author === OWNER_AUTHOR ? BY.user : message.author_label || message.author;
 const mine = (message) => message.author === record.value?.member;
-/** Avatar and accent as a room shows that author: this AI with the external mark, others by their software. */
-const identity = (message) => mine(message) ? { icon: AI_ICON, style: "external" } : bridge.identities[message.author] || {};
-const speaker = (message) => mine(message) ? ai_name.value : author(message);
+/**
+ * Avatar and accent as the other room shows that author: this AI with the external mark, another external member by the
+ * vendor its computer reported, the other room's own members by their software. Never this computer's identities by name:
+ * a room here may have a member of the same name (Custom-ext) that runs other software.
+ */
+function identity(message) {
+  if (mine(message)) return { icon: AI_ICON, style: "external" };
+  if (message.author === OWNER_AUTHOR) return bridge.identities[OWNER_AUTHOR] || {};
+  const member = roster.value.find((item) => item.name === message.author);
+  if (member?.external) return (member.platform && member.platform !== "Custom" && bridge.platform_identity(member.platform)) || { icon: AI_ICON, style: "external" };
+  return bridge.platform_identity(bridge.platform_of(message.author)) || {};
+}
+// This AI is called by the label the other room gave it, as everyone there reads it.
+const speaker = (message) => mine(message) ? message.author_label || ai_name.value : author(message);
 /**
  * Who a card speaks for: the people who asked when their messages are known, who named the AI while it waits, else
  * the AI itself, since what is left (a run that failed, a refusal by the software) is this computer's own result.

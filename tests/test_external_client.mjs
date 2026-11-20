@@ -350,6 +350,8 @@ test('a run whose execution is closed there while its software never exits is st
   b.state.pending = [{ id: 1, message_id: 10 }];
   const start = Date.now();
   const { execution_id } = await poll_record(home, record.id, deps(b, delivery, { now: () => start }));
+  // Unrestricted runs as usual, outside any sandbox: a sandbox account could not open the record's credential.
+  assert.equal(delivery.runs[0].profile.project_access, 'full');
   let kills = 0;
   delivery.runs[0].task.on_process({ kill: () => { kills += 1; } });
   await proxy_request(home, { access: { transport: 'external', record: record.id, room: ROOM }, method: 'POST', path: `/api/rooms/${ROOM}/messages`,

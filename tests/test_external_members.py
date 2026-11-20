@@ -229,6 +229,15 @@ class OwnerGrantTests(ExternalMemberTests):
             status, body = self.request(self.owner_path, {**base, **change}, self.owner)
             self.assertIn(status, (400, 409), (change, body))
 
+    def test_revoking_the_member_the_room_waits_for_sends_the_queued_messages(self):
+        member = self.create()
+        self.say("请看一下", to=[EXTERNAL])
+        self.assertEqual(self.say("下一条", queue=True)[0], 201)
+        texts = lambda: [row["text"] for row in self.request(f"{self.path}/messages", token=self.owner)[1]["messages"]]
+        self.assertNotIn("下一条", texts(), "queued while the external member still has the request")
+        self.assertEqual(self.request(f"{self.owner_path}/{member['member_id']}", {"action": "revoke"}, self.owner)[0], 200)
+        self.assertIn("下一条", texts(), "the room is free once the member is revoked")
+
     def test_update_and_revoke_void_live_work(self):
         member = self.create()
         member_url = f"{self.owner_path}/{member['member_id']}"

@@ -42,6 +42,10 @@ export const LEVELS = [
   { value: "discuss", label: t("房间消息"), description: t("只看点名给它的消息") },
   { value: "read", label: t("消息和项目"), description: t("另可只读本房间的项目目录") },
 ];
+/** The read limits a new external member gets (backend/external_members.py `DEFAULT_QUOTA`), as the card shows them. */
+export const DEFAULT_READ_QUOTA = { hourly: "4 MiB", total: "64 MiB" };
+/** What reading never returns (runner/repo_read.mjs), in the words the invite cards use. */
+export const READ_EXCLUDED = t("只读：已跟踪与未忽略的文件，固定排除 .env、密钥、凭据、data/ 与 .git。");
 /** The short form for the rail and the records list. */
 export const LEVEL_SHORT = { discuss: t("房间消息"), read: t("消息和项目") };
 /** How long the invited computer lends its AI: chosen when joining, changed later, three days at most (runner `lend_until`). */
@@ -328,6 +332,8 @@ function create_invited({ view, bridge }) {
   const room_me = ref({});
   // The texts last read for each record, shown at once when it is opened again.
   const room_messages = new Map();
+  // The other room's roster last read (`/view` members), by room as messages are.
+  const room_roster = new Map();
   // The invitation being accepted, listed in the sidebar while its answer crosses the relay: `{ room_title, known }`,
   // `known` being the record ids before it, so the joined record is recognised however it first arrives.
   const pending_join = ref(null);
@@ -474,7 +480,7 @@ function create_invited({ view, bridge }) {
   /** Open the join dialog, optionally filled with a link or code. */
   function start_join(text = "") { join_text.value = text; joining.value = true; }
 
-  return { available, records, loaded, failure, page_open, selected_id, selected, joining, join_text, busy, room_me, room_messages, pending_join,
+  return { available, records, loaded, failure, page_open, selected_id, selected, joining, join_text, busy, room_me, room_messages, room_roster, pending_join,
     load, open, close, join, set_trust, set_paused, lend, approve, refuse, leave, remove, read_room, start_join };
 }
 

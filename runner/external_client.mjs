@@ -869,7 +869,10 @@ async function start_run(home, record, execution, { lockdown, software, end, res
     role: 'member', cwd: null, project_access: 'read', draft_directory: drafts, open_level: record.open_level, directories,
     skills: ['discuss-participant/SKILL.md', 'discuss-participant/references/room.md'].map(file => join(skills_directory, file)),
     cli, subcommands: TASK_SUBCOMMANDS, access_file: access_path, tool_lockdown: lockdown, instructions });
-  const profile = { adapter: record.ai.adapter, ...software, model: record.ai.model || software.model || '', effort: record.ai.effort, cwd: workdir, project_access: 'read',
+  // 不受限 means the AI works on this computer as usual (全放开): a sandbox would run its commands as another Windows
+  // account, which cannot open the record's credential (DPAPI, current user), so its `codiscuss` calls would all fail.
+  // A locked-down run is confined by the tool rules instead and keeps read-only.
+  const profile = { adapter: record.ai.adapter, ...software, model: record.ai.model || software.model || '', effort: record.ai.effort, cwd: workdir, project_access: lockdown ? 'read' : 'full',
     ...(Object.hasOwn(record.ai, 'system_prompt') ? { system_prompt: record.ai.system_prompt } : {}) };
   const log_path = join(base, `external-${execution.id}.log`);
   const deliver = deps.deliver || (await import('./adapters/index.mjs')).deliver_task;

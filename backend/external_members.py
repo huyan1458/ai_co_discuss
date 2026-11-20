@@ -529,9 +529,13 @@ def member_room_view(connection, room_id, member):
     room = connection.execute("SELECT r.id,r.title,r.goal,d.archived FROM rooms r JOIN room_directory d ON d.room_id=r.id WHERE r.id=?",
                               (room_id,)).fetchone()
     labels = free_room.member_display_names(connection, room_id)
+    # An external member carries the vendor its computer reported (`platform`, display only), so the other computer's page
+    # can show it as this room does; local members are known by their platform names.
     members = [{"name": row["name"], "label": labels.get(row["name"], row["name"]), "role": row["role"], "status": row["status"],
-                "external": row["access"] == "external"}
-               for row in connection.execute(f"SELECT name,role,status,access FROM room_members WHERE room_id=? AND status<>'removed' AND {free_room.REGISTERED_MEMBER} ORDER BY id",
+                "external": row["access"] == "external", **({"platform": row["platform"] or ""} if row["access"] == "external" else {})}
+               for row in connection.execute(f"""SELECT room_members.name,room_members.role,room_members.status,room_members.access,ext.platform
+                   FROM room_members LEFT JOIN external_members ext ON ext.member_id=room_members.id
+                   WHERE room_members.room_id=? AND room_members.status<>'removed' AND {free_room.REGISTERED_MEMBER} ORDER BY room_members.id""",
                                              (room_id,))]
     latest = connection.execute("""SELECT COALESCE(MAX(id),0) FROM messages m WHERE room_id=?
         AND NOT EXISTS (SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)""", (room_id,)).fetchone()[0]

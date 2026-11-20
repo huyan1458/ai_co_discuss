@@ -108,14 +108,19 @@ const status = computed(() => {
       <p v-if="ended" class="fine-print">{{ t("这台电脑保留这条记录与历史；要再参加，请对方重新邀请。") }}</p>
     </section>
     <section v-if="!ended" class="pb-section" :aria-label="t('调整')">
-      <template v-if="editing">
-        <TrustLevelField v-model="trust" :confine_reason="lockdown_problem(record.ai?.adapter)" />
-        <div class="invited-edit-actions">
-          <UButton :label="t('取消')" size="xs" color="neutral" variant="ghost" @click="editing = false" />
-          <UButton :label="t('保存')" size="xs" class="channel-primary-button" :loading="busy === 'trust' || busy === 'lend'" :disabled="Boolean(busy)" @click="save" />
-        </div>
-      </template>
-      <div v-else class="invited-actions">
+      <!-- Too much for the narrow rail beside the facts it repeats, so the settings open in a dialog (user 2026-11-19). -->
+      <UModal v-model:open="editing" :title="t('调整「{room}」的设置', { room: record.room_title || '' })" :description="t('只影响你这台电脑上的 AI，对方房间的开放范围由对方决定。')"
+        :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+        <template #body>
+          <TrustLevelField v-model="trust" :confine_reason="lockdown_problem(record.ai?.adapter)" />
+          <p v-if="expires_at" class="fine-print invited-edit-note">{{ t("当前借出到 {time}", { time: date(expires_at) }) }}</p>
+          <div class="invited-edit-actions">
+            <UButton :label="t('取消')" size="sm" color="neutral" variant="ghost" @click="editing = false" />
+            <UButton :label="t('保存')" size="sm" class="channel-primary-button" :loading="busy === 'trust' || busy === 'lend'" :disabled="Boolean(busy)" @click="save" />
+          </div>
+        </template>
+      </UModal>
+      <div class="invited-actions">
         <UButton :label="t('调整设置')" icon="i-lucide-shield" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block" data-tone="accent" @click="start_edit" />
         <div class="invited-action-row">
           <UButton :label="record.paused ? t('恢复唤醒') : t('暂停')" :icon="record.paused ? 'i-lucide-play' : 'i-lucide-pause'" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block" :data-tone="record.paused ? 'success' : 'warning'"
@@ -151,6 +156,7 @@ const status = computed(() => {
 .invited-actions { display: flex; flex-direction: column; gap: 6px; }
 .invited-action-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; }
 /* Leaving is rare: it stays quiet beside 暂停 and turns red only when pointed at. */
-.invited-edit-actions { margin-top: 10px; }
+.invited-edit-actions { margin-top: 16px; }
+.invited-edit-note { margin: 10px 0 0; }
 .invited-rail .fine-print { margin: 10px 0 0; font-size: 11.5px; line-height: 1.5; }
 </style>

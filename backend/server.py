@@ -3202,6 +3202,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
         if parts[3:4] == ["external-members"]:
             result, status = external_owner_api(connection, room_id, parts[4:], params, method, token, self.read_payload)
+            # Revoking (or finding expired) the member that held the room frees it: messages queued behind it go now.
+            if method == "POST":
+                drain_room_queue(connection, room_id)
             connection.commit()
             return self.respond(result, status)
         if parts[3:] == ["discussion"]:
