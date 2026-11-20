@@ -219,7 +219,9 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 /* The composer floats over the transcript's lower edge: the transcript runs under it, padded by the composer's height,
    and only the strip below the composer fades out, so cards scroll on right up to the composer's top edge. */
 .channel-conversation .channel-transcript { grid-row: 2 / 4; padding-bottom: calc(var(--channel-composer-height, 0px) + 28px); }
-.channel-conversation .channel-composer-dock { position: relative; z-index: 4; background: linear-gradient(transparent 55%, var(--channel-fade-bg, var(--ui-bg)) 85%); }
+/* Messages fade out above the composer only: from its top edge down the dock is solid, so no cut line of text shows
+   between the composer and the note under it (user 2026-11-20, #6124). */
+.channel-conversation .channel-composer-dock { position: relative; z-index: 4; background: linear-gradient(transparent, var(--channel-fade-bg, var(--ui-bg)) 24px); }
 .channel-body-discussion :is(.channel-filter-summary, .channel-message-map) { margin-top: var(--channel-topbar-height, 0px); }
 /* A filter summary already sits below the bar, so the transcript under it needs no extra offset. */
 .channel-body-discussion .channel-conversation:has(.channel-filter-summary) .channel-transcript { --channel-topbar-height: 0px; }
@@ -261,7 +263,13 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-title > :not(.channel-title-copy) { flex-shrink: 0; }
 .channel-title-copy { display: grid; gap: 1px; min-width: 0; }
 .channel-title h1 { color: #f1f2f5; font-size: 16px; font-weight: 650; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.channel-header-context { display: flex; align-items: center; gap: 8px; padding-left: 15px; margin-left: 5px; border-left: 1px solid #ffffff13; color: #929ba9; font-size: 12px; white-space: nowrap; }
+.channel-header-context { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; padding-left: 15px; margin-left: 5px; border-left: 1px solid #ffffff13; color: #929ba9; font-size: 12px; white-space: nowrap; }
+/* The room's name comes before its context: when the header is narrow (a window, or a tablet with the file preview docked
+   beside the messages; user 2026-11-20, #6121), the context gives way first and goes once the header is too narrow for it.
+   Then the name shrinks, to about six characters at least, so the buttons at the right always stay in the header (#6124). */
+.channel-header { container-type: inline-size; }
+.channel-title { flex-shrink: 1; min-width: min(6em, 30%); }
+@container (max-width: 760px) { .channel-header-context { display: none; } }
 .channel-header-context > span { color: #656d7b; }
 .channel-header-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .channel-search { display: flex; align-items: center; flex-shrink: 0; }
@@ -763,7 +771,7 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 /* Adding a selection to the chat: a comment box beside it, the selection kept highlighted, then a number mark at its end. */
 .selection-comment { position: fixed; z-index: 40; display: flex; align-items: flex-end; gap: 4px; width: 340px; min-height: 40px; padding: 5px 5px 5px 14px; border: 1px solid var(--ui-border-accented);
   border-radius: 20px; background: var(--ui-bg-elevated); box-shadow: 0 8px 24px #0006; }
-.selection-comment.is-docked { inset: auto 12px calc(env(safe-area-inset-bottom) + 12px); width: auto; }
+.selection-comment.is-docked { inset: auto 12px calc(max(var(--keyboard-inset, 0px), env(safe-area-inset-bottom)) + 12px); width: auto; }
 .selection-comment textarea { flex: 1; align-self: center; min-width: 0; max-height: 120px; padding: 0; border: 0; outline: none; resize: none; field-sizing: content; background: transparent;
   color: var(--ui-text); font-size: 13px; line-height: 20px; }
 .selection-comment textarea::placeholder { color: var(--ui-text-dimmed); }
@@ -1032,7 +1040,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   /* Phone: one title row; search is rarely used there, so it gives way to the work status. */
   .channel-header { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto 36px; height: auto; padding: 2px 10px; gap: 8px; }
   .channel-mobile-nav { grid-column: 1; grid-row: 1; }
-  .channel-title { grid-column: 2; grid-row: 1; }
+  .channel-title { grid-column: 2; grid-row: 1; max-width: none; }
   .channel-header-actions { grid-column: 3; grid-row: 1; min-width: 0; max-width: 52vw; margin-left: 0; gap: 3px; }
   .channel-info-button { grid-column: 4; grid-row: 1; }
   .channel-title-icon, .channel-search { display: none; }

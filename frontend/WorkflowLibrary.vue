@@ -119,7 +119,8 @@ function start_resize(event) {
             <UButton :icon="experts_missing ? 'i-lucide-triangle-alert' : 'i-lucide-sliders-horizontal'" :label="iconsOnly ? undefined : t('专家配置')" :aria-label="t('专家配置')" :size="stacked ? 'xs' : 'sm'" :color="experts_missing ? 'warning' : 'neutral'" variant="ghost" @click="experts_focus = ''; experts_open = true" /></span></UTooltip>
           <UTooltip v-if="!skill_open && !stacked" :text="t('展开 SKILL.md：主持人照它派活')"><UButton icon="i-lucide-panel-right-open" :label="iconsOnly ? undefined : 'SKILL.md'" :aria-label="t('展开 SKILL.md')" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
           <UTooltip :text="dirty ? t('保存（Ctrl+S）：有未保存的修改') : t('没有未保存的修改')"><span class="workflow-library-save">
-            <UButton icon="i-lucide-save" :label="iconsOnly ? undefined : t('保存')" :aria-label="t('保存')" :size="stacked ? 'xs' : 'sm'" :class="{ 'channel-primary-button': !stacked }" :color="stacked ? 'primary' : undefined" :variant="stacked ? 'ghost' : undefined" :disabled="!dirty" :loading="busy" @click="library.save()" />
+            <!-- Unsaved changes show on the button itself: worded and filled, even where the toolbar is icons only. -->
+            <UButton icon="i-lucide-save" :label="iconsOnly && !dirty ? undefined : t('保存')" :aria-label="t('保存')" :size="stacked ? 'xs' : 'sm'" :class="{ 'channel-primary-button': !stacked || dirty }" :color="stacked && !dirty ? 'primary' : undefined" :variant="stacked && !dirty ? 'ghost' : undefined" :disabled="!dirty" :loading="busy" @click="library.save()" />
             <i v-if="dirty" class="workflow-library-dirty" /></span></UTooltip>
         </template>
       </WorkflowCanvas>

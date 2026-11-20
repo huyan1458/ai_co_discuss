@@ -71,5 +71,6 @@ Shutdown and sleep interrupt local execution. During an internet outage, the loc
 | Language · 语言 | 简体中文, English | Choose the display language. Changes take effect immediately. |
 | Conversation width | Narrow, Default, Wide | Set the width of the conversation for reading. |
 | Visual effects | Full, Compact | Compact turns off background blur and layered shadows for smoother scrolling on slower devices. |
+| Folding long answers | Relaxed, Standard, Eager, Never | How long an answer must be before it folds, and how much stays visible, measured against the screen height. Relaxed is the default; the choice applies to this device only. |
 | Speech | Text-to-speech service, General voice, voices by platform and for files, Speed, Tone, Voice input, Local process | [Local and cloud speech](voice.md#read-aloud-and-voice-input-local-and-cloud-options) |
 | WeChat notifications | Scan to link, Send test, Unlink | [WeChat notifications](voice.md#wechat-notifications) |

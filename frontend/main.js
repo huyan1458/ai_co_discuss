@@ -43,9 +43,14 @@ function fit_workspace_to_keyboard() {
   const root = document.documentElement.style;
   if (viewport.scale > 1.01 || window.innerHeight - viewport.height < KEYBOARD_MIN_HEIGHT_PX) {
     root.removeProperty("--keyboard-viewport-height");
+    root.removeProperty("--keyboard-inset");
     return;
   }
   root.setProperty("--keyboard-viewport-height", `${Math.round(viewport.height)}px`);
+  // Bars fixed to the window's bottom (the docked annotation bar) rise by this much to sit above the keyboard too.
+  // Left behind it, the browser pans the visible area down to reveal the focused bar, and the fitted workspace then
+  // ends halfway up the screen over an empty band (user 2026-11-20, #6103).
+  root.setProperty("--keyboard-inset", `${Math.max(0, Math.round(window.innerHeight - viewport.height))}px`);
   if (window.scrollY) window.scrollTo(0, 0);
 }
 window.visualViewport?.addEventListener("resize", fit_workspace_to_keyboard);
@@ -57,7 +62,8 @@ window.visualViewport?.addEventListener("resize", fit_workspace_to_keyboard);
  */
 function keep_page_pinned() {
   if (!document.documentElement.style.getPropertyValue("--keyboard-viewport-height")) return;
-  if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+  // Android Chrome pans the visible area without scrolling the page, so only the viewport's offset shows it.
+  if (window.scrollX || window.scrollY || window.visualViewport?.offsetTop) window.scrollTo(0, 0);
 }
 window.addEventListener("scroll", keep_page_pinned, { passive: true });
 window.visualViewport?.addEventListener("scroll", keep_page_pinned);

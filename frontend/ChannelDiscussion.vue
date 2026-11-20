@@ -40,6 +40,8 @@ const pending_seat = ref(null), pending_seat_open = ref(false);
 const emit = defineEmits(["detail", "edit"]);
 let topic_card = null;
 const { view, bridge, field, act, pending } = inject("discussion");
+// The 设置 → 外观 folding level (ChannelWorkspace.vue FOLD_LEVELS); read where messages fold.
+const fold_level = inject("fold_level", ref(null));
 // Typing publishes no snapshot: a publish re-renders the whole transcript, hundreds of milliseconds per key in a long room.
 const text = field("message-input", { quiet: true });
 const text_length = computed(() => [...text.value].length);
@@ -269,13 +271,19 @@ onMounted(() => {
   speech_configured().then(set_speech_ready);
 });
 onBeforeUnmount(() => { document.removeEventListener("selectionchange", schedule_listen); document.removeEventListener("pointerdown", press); document.removeEventListener("pointerup", release); document.removeEventListener("pointercancel", release); window.removeEventListener("resize", place_marks); window.clearTimeout(listen_timer); narrow_query.removeEventListener("change", track_narrow); reader.stop(); voice.cancel(); hold_selection(null); });
-const MESSAGE_PREVIEW_LENGTH = 160;
-const MESSAGE_PREVIEW_MIN_LENGTH = 100;
-const MESSAGE_PREVIEW_CODE_LINES = 4;
-const MESSAGE_PREVIEW_TABLE_ROWS = 3;
-// A message folds only when shown whole it would take more than this share of the window, so what counts as long follows
-// the screen it is read on (user 2026-11-18, #4871: an answer of a few lines was folded for passing a character count).
-const MESSAGE_FOLD_SCREEN_SHARE = 0.7;
+// A folded excerpt ends at a sentence boundary when one falls past this share of its length.
+const MESSAGE_PREVIEW_BOUNDARY_SHARE = 0.6;
+// The least of a block cut by the fold that is still worth showing; less, and the excerpt ends before the block.
+const MESSAGE_PREVIEW_PART_MIN_ROWS = 2;
+const MESSAGE_PREVIEW_PART_MIN_LINES = 2;
+// When that would leave the excerpt under half its height, it may run this far past it to show the block's least part
+// (a phone's table rows are several lines tall each, and dropping the table would leave only the opening line).
+const MESSAGE_PREVIEW_STRETCH = 1.5;
+// Both what counts as long and how much a folded message keeps follow the screen it is read on (user 2026-11-18, #4871:
+// an answer of a few lines was folded for passing a character count; user 2026-11-20, #6099: a fixed 160-character
+// excerpt kept too little, and how readily messages fold is a reader's choice). Without a level the first one applies.
+// `fold`: a message folds when shown whole it is taller than this share of the window; `keep`: the excerpt's share.
+const MESSAGE_FOLD_LEVELS = { loose: { fold: 1.2, keep: 0.5 }, standard: { fold: 0.7, keep: 0.35 }, compact: { fold: 0.5, keep: 0.2 }, off: null };
 // The message text's size in px (frontend/channel.css `.channel-message-text`), for estimating its height without laying it out.
 const MESSAGE_FONT_PX = 16;
 const MESSAGE_LINE_PX = 26;
@@ -295,10 +303,18 @@ const MESSAGE_BLOCK_TAGS = /^(P|H[1-6]|UL|OL|PRE|TABLE|BLOCKQUOTE|HR|DIV|SECTION
 
 /** The text width of a message card and the height above which it folds, for this window. */
 function read_fold_area(box) {
+  const level = Object.hasOwn(MESSAGE_FOLD_LEVELS, fold_level.value) ? MESSAGE_FOLD_LEVELS[fold_level.value] : MESSAGE_FOLD_LEVELS.loose;
+  if (!level) return { off: true, width: 0 };
   const reading = box ? parseFloat(getComputedStyle(box).getPropertyValue("--channel-reading-width")) || MESSAGE_READING_WIDTH_PX : MESSAGE_READING_WIDTH_PX;
   const column = Math.min(box?.clientWidth || window.innerWidth, reading);
   const width = Math.max(MESSAGE_FOLD_WIDTH_STEP_PX, column - (narrow_query.matches ? MESSAGE_CARD_INSET_NARROW_PX : MESSAGE_CARD_INSET_PX));
-  return { width: Math.round(width / MESSAGE_FOLD_WIDTH_STEP_PX) * MESSAGE_FOLD_WIDTH_STEP_PX, limit: Math.round(window.innerHeight * MESSAGE_FOLD_SCREEN_SHARE) };
+  const stepped = Math.round(width / MESSAGE_FOLD_WIDTH_STEP_PX) * MESSAGE_FOLD_WIDTH_STEP_PX;
+  const keep_lines = Math.max(3, Math.floor(window.innerHeight * level.keep / MESSAGE_LINE_PX));
+  return {
+    width: stepped,
+    limit: Math.round(window.innerHeight * level.fold),
+    keep_height: keep_lines * MESSAGE_LINE_PX,
+  };
 }
 
 /** How wide a run of text stands on one line, in px. */
@@ -313,15 +329,31 @@ function estimated_text_height(text, width, line = MESSAGE_LINE_PX) {
   return Math.max(1, Math.ceil(estimated_text_width(text) / Math.max(MESSAGE_FONT_PX, width))) * line;
 }
 
+/** How many characters from the start of `text` fill `width` px of lines, Latin letters counting narrower than Chinese. */
+function characters_within(text, width) {
+  let used = 0, count = 0;
+  for (const character of text) {
+    used += character.codePointAt(0) > 0x2E7F ? MESSAGE_FONT_PX : MESSAGE_FONT_PX * MESSAGE_LATIN_WIDTH;
+    if (used > width) break;
+    count += 1;
+  }
+  return count;
+}
+
 /** The height of one table: columns share the width by how much they hold, and a table too wide for the card scrolls sideways. */
 function estimated_table_height(table, width) {
+  return estimated_table_rows(table, width).reduce((total, row) => total + row, 0);
+}
+
+/** The height of each row of a table, header rows included, in document order. */
+function estimated_table_rows(table, width) {
   const rows = [...table.querySelectorAll("tr")].map((row) => [...row.children].map((cell) => estimated_text_width(cell.textContent)));
   const columns = [];
   for (const row of rows) row.forEach((cell, index) => { columns[index] = Math.max(columns[index] || 0, cell); });
   const content = columns.reduce((total, column) => total + column, 0) || 1;
   const share = (index) => Math.max(MESSAGE_TABLE_COLUMN_MIN_PX, width * columns[index] / content - MESSAGE_TABLE_CELL_PADDING_PX);
-  return rows.reduce((height, row) => height + MESSAGE_TABLE_ROW_PADDING_PX
-    + Math.max(MESSAGE_LINE_PX, ...row.map((cell, index) => Math.ceil(cell / share(index)) * MESSAGE_LINE_PX)), 0);
+  return rows.map((row) => MESSAGE_TABLE_ROW_PADDING_PX
+    + Math.max(MESSAGE_LINE_PX, ...row.map((cell, index) => Math.ceil(cell / share(index)) * MESSAGE_LINE_PX)));
 }
 
 /** The height of one block element, margins included. */
@@ -355,6 +387,7 @@ const fold_area_observer = new ResizeObserver(() => {
   // Only a new width refolds: a phone's keyboard or address bar changes the height alone, and must not refold what is being read.
   if (area.width !== fold_area.value.width) fold_area.value = area;
 });
+watch(fold_level, () => { fold_area.value = read_fold_area(transcript.value); });
 onMounted(() => { if (transcript.value) { fold_area.value = read_fold_area(transcript.value); fold_area_observer.observe(transcript.value); } });
 onBeforeUnmount(() => fold_area_observer.disconnect());
 const answer_preview_cache = new WeakMap();
@@ -1419,20 +1452,83 @@ const mention_anchor = computed(() => {
   };
 });
 
-/** End a structured excerpt after complete code lines or table rows. */
-function trim_preview_blocks(fragment) {
-  for (const block of fragment.querySelectorAll('pre code, tbody')) {
-    const range = fragment.ownerDocument.createRange();
-    if (block.tagName === 'TBODY') {
-      if (block.children.length <= MESSAGE_PREVIEW_TABLE_ROWS) continue;
-      range.setStartAfter(block.children[MESSAGE_PREVIEW_TABLE_ROWS - 1]);
-    } else {
-      const lines = block.textContent.trimEnd().split('\n');
-      if (lines.length <= MESSAGE_PREVIEW_CODE_LINES) continue;
-      range.setStart(block.firstChild, lines.slice(0, MESSAGE_PREVIEW_CODE_LINES).join('\n').length);
-    }
-    range.setEnd(fragment, fragment.childNodes.length);
+/**
+ * Clip the text under `root` to about `limit` characters while keeping valid markup. Unless `exact`, end at a sentence
+ * boundary when one falls late enough, and mark a cut mid-sentence with an ellipsis.
+ */
+function clip_text(root, limit, exact = false) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => node.parentElement?.closest('.katex-mathml') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  const characters = [...nodes.map((node) => node.textContent).join("").trimEnd()];
+  if (characters.length <= limit) return;
+  const prefix = characters.slice(0, limit).join("");
+  const boundary = exact ? null : [...prefix.matchAll(/[。！？；]\s*|[.!?;](?:\s|$)|\n/gu)].at(-1);
+  const boundary_end = boundary ? boundary.index + boundary[0].length : 0;
+  const natural_end = exact || [...prefix.slice(0, boundary_end)].length >= limit * MESSAGE_PREVIEW_BOUNDARY_SHARE;
+  let remaining = exact ? prefix.length : natural_end ? boundary_end : prefix.length;
+  for (const node of nodes) {
+    if (remaining > node.textContent.length) { remaining -= node.textContent.length; continue; }
+    const range = document.createRange();
+    const formula = node.parentElement?.closest('.katex');
+    const row = node.parentElement?.closest('tr');
+    if (row?.previousElementSibling) range.setStartBefore(row);
+    else if (row) range.setStartAfter(row);
+    else if (formula) range.setStartAfter(formula.closest('.katex-display') || formula);
+    else range.setStart(node, remaining);
+    range.setEnd(root, root.childNodes.length);
     range.deleteContents();
+    if (!natural_end && !formula && !row) node.textContent += "…";
+    return;
+  }
+}
+
+/**
+ * Keep the part of one block that fits in `room` px, in whole rows, lines or list items. False when too little of it
+ * would show to tell the reader anything; the excerpt then ends before the block (user 2026-11-20, #6101: one table row
+ * with a scrollbar under a cut heading did not help decide whether to expand).
+ */
+function clip_block(block, area, room) {
+  const lines = Math.floor(room / MESSAGE_LINE_PX);
+  const tag = block.tagName;
+  if (tag === "TABLE") {
+    // Rows are as tall as their longest cell wraps, so they are added up one by one rather than counted.
+    const rows = [...block.querySelectorAll("tr")], heights = estimated_table_rows(block, area.width);
+    const body = rows.filter((row) => row.parentElement.tagName !== "THEAD");
+    let used = MESSAGE_FONT_PX, fit = 0;
+    rows.forEach((row, index) => { if (row.parentElement.tagName === "THEAD") used += heights[index]; });
+    for (const row of body) {
+      used += heights[rows.indexOf(row)];
+      if (used > room) break;
+      fit += 1;
+    }
+    if (fit < MESSAGE_PREVIEW_PART_MIN_ROWS) return false;
+    for (const row of body.slice(fit)) row.remove();
+    return true;
+  }
+  if (tag === "PRE") {
+    const code = block.querySelector("code") || block;
+    const fit = lines - 2; // A code block's padding and margins take about two lines.
+    if (fit < MESSAGE_PREVIEW_PART_MIN_LINES) return false;
+    clip_text(code, code.textContent.split("\n").slice(0, fit).join("\n").length, true);
+    return true;
+  }
+  if (tag === "UL" || tag === "OL") {
+    let used = 22, kept = 0;
+    for (const item of block.children) {
+      used += estimated_blocks_height(item, area.width - 30) + 4;
+      if (used > room) break;
+      kept += 1;
+    }
+    if (!kept) return false;
+    for (const item of [...block.children].slice(kept)) item.remove();
+    return true;
+  }
+  if (tag === "P" || tag === "BLOCKQUOTE") {
+    if (lines < MESSAGE_PREVIEW_PART_MIN_LINES) return false;
+    clip_text(block, characters_within(block.textContent, lines * (tag === "P" ? area.width : area.width - 35)));
     return true;
   }
   return false;
@@ -1455,42 +1551,40 @@ function keep_table_columns(fragment, html) {
   clipped.replaceWith(whole);
 }
 
-/** Clip rendered text that is too tall for this screen at a nearby sentence boundary while keeping valid markup. */
+/**
+ * Fold a message too tall for this screen: keep whole blocks from its start while they fit the excerpt's height, then
+ * whatever part of the next block can still be read on its own, so the excerpt never ends inside a structure.
+ */
 function build_answer_preview(message, area) {
   const full = { truncated: false, html: message.rendered_text };
-  if (message.kind === "receipt") return full;
+  if (message.kind === "receipt" || area.off) return full;
   const template = document.createElement("template");
   template.innerHTML = message.rendered_text;
-  if (estimated_blocks_height(template.content, area.width) <= area.limit) return full;
-  const clipped_blocks = trim_preview_blocks(template.content);
-  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) => node.parentElement?.closest('.katex-mathml') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
-  });
-  const nodes = [];
-  while (walker.nextNode()) nodes.push(walker.currentNode);
-  const characters = [...nodes.map((node) => node.textContent).join("").trimEnd()];
-  if (characters.length <= MESSAGE_PREVIEW_LENGTH) {
-    if (clipped_blocks) keep_table_columns(template.content, message.rendered_text);
-    return { truncated: clipped_blocks, html: template.innerHTML };
+  const height = estimated_blocks_height(template.content, area.width);
+  if (height <= area.limit) return full;
+  const parts = [...template.content.childNodes].filter((node) => node.nodeType === Node.ELEMENT_NODE || node.textContent.trim());
+  const part_height = (node) => node.nodeType === Node.ELEMENT_NODE ? estimated_block_height(node, area.width) : estimated_text_height(node.textContent, area.width);
+  let used = 0, index = 0;
+  for (; index < parts.length; index += 1) {
+    const next = part_height(parts[index]);
+    if (used + next > area.keep_height) break;
+    used += next;
   }
-  const prefix = characters.slice(0, MESSAGE_PREVIEW_LENGTH).join("");
-  const boundary = [...prefix.matchAll(/[。！？；]\s*|[.!?;](?:\s|$)|\n/gu)].at(-1);
-  const boundary_end = boundary ? boundary.index + boundary[0].length : 0;
-  const natural_end = [...prefix.slice(0, boundary_end)].length >= MESSAGE_PREVIEW_MIN_LENGTH;
-  let remaining = natural_end ? boundary_end : prefix.length;
-  for (const node of nodes) {
-    if (remaining > node.textContent.length) { remaining -= node.textContent.length; continue; }
-    const range = template.content.ownerDocument.createRange();
-    const formula = node.parentElement?.closest('.katex');
-    const row = node.parentElement?.closest('tr');
-    if (row?.previousElementSibling) range.setStartBefore(row);
-    else if (row) range.setStartAfter(row);
-    else if (formula) range.setStartAfter(formula.closest('.katex-display') || formula);
-    else range.setStart(node, remaining);
-    range.setEnd(template.content, template.content.childNodes.length);
-    range.deleteContents();
-    if (!natural_end && !formula && !row) node.textContent += "…";
-    break;
+  if (index >= parts.length) return full;
+  const cut = parts[index];
+  const partial = cut.nodeType === Node.ELEMENT_NODE && (clip_block(cut, area, area.keep_height - used)
+    || (used < area.keep_height / 2 && clip_block(cut, area, area.keep_height * MESSAGE_PREVIEW_STRETCH - used)));
+  const range = document.createRange();
+  if (partial) range.setStartAfter(cut); else range.setStartBefore(cut);
+  range.setEnd(template.content, template.content.childNodes.length);
+  range.deleteContents();
+  // A heading left last would introduce nothing.
+  let kept = [...template.content.children];
+  while (kept.length > 1 && /^H[1-6]$/.test(kept.at(-1).tagName)) { kept.at(-1).remove(); kept = [...template.content.children]; }
+  if (!template.content.textContent.trim()) {
+    // The first block alone is taller than the excerpt and cannot be clipped whole: fall back to characters.
+    template.innerHTML = message.rendered_text;
+    clip_text(template.content, characters_within(template.content.textContent, area.keep_height / MESSAGE_LINE_PX * area.width));
   }
   keep_table_columns(template.content, message.rendered_text);
   return { truncated: true, html: template.innerHTML };

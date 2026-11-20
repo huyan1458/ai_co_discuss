@@ -23,8 +23,23 @@ const open = ref(false);
 const narrow_query = window.matchMedia("(max-width: 640px)");
 const wrap = ref(narrow_query.matches);
 // Narrow screens move the file's own actions down to the breadcrumb row, leaving the tab strip to the tabs.
-const narrow = ref(narrow_query.matches);
-const track_narrow = (event) => { narrow.value = event.matches; };
+// A touch screen with a shorter side than this is a phone (web/index.html tells tablets apart the same way).
+const TABLET_MIN_SIDE = 600;
+// A phone keeps the phone head on its side too: wider than 640px there, it took the tablet head, whose file actions left
+// the tabs a third of the row (user 2026-11-20, #6128).
+const IS_PHONE = matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) < TABLET_MIN_SIDE;
+const narrow = ref(IS_PHONE || narrow_query.matches);
+const track_narrow = (event) => { narrow.value = IS_PHONE || event.matches; };
+// Below this width the head's one row leaves the tabs no room (a tablet's split pane; user 2026-11-20, #6125): the file's
+// actions move down beside the breadcrumbs, still in sight, and the tabs take the top row up to the window buttons.
+const TIGHT_HEAD_PX = 760;
+// Narrower still (a pane dragged to its narrowest), the second row has no room for them either: they fold into "...".
+const FOLDED_HEAD_PX = 520;
+const head_element = ref(null), head_width = ref(Infinity);
+const head_watcher = new ResizeObserver(([entry]) => { head_width.value = entry.contentRect.width; });
+const tight_head = computed(() => head_width.value < TIGHT_HEAD_PX);
+const folded_actions = computed(() => narrow.value || head_width.value < FOLDED_HEAD_PX);
+watch(head_element, (element, previous) => { if (previous) head_watcher.unobserve(previous); if (element) head_watcher.observe(element); });
 // Text size of the preview and source, kept per device: phones and desktops want different sizes.
 const FONT_SCALE_KEY = "ai-codiscuss-file-font-scale";
 const FONT_SCALE_MIN = 0.5;
@@ -215,7 +230,7 @@ const file_menu = computed(() => {
   if (can_render.value) rest.push(source.value ? { label: t('预览'), icon: "i-lucide-eye", onSelect: () => { source.value = false; } } : { label: t('源码'), icon: "i-lucide-code-xml", onSelect: () => { source.value = true; } });
   if (rest.length) groups.push(rest);
   // Kept out of the head so it is not mistaken for the active tab's own close button.
-  if (tabs.value.length > 1) groups.push([{ label: t('关闭全部文件'), icon: "i-lucide-x", onSelect: () => close_all() }]);
+  if (narrow.value && tabs.value.length > 1) groups.push([{ label: t('关闭全部文件'), icon: "i-lucide-x", onSelect: () => close_all() }]);
   return groups;
 });
 
@@ -394,8 +409,6 @@ const DOCK_MIN_WINDOW = 1024;
 const DOCK_MIN = 400;
 const DOCK_CHAT_MIN = 420;
 const DOCK_STEP = 24;
-// A touch screen with a shorter side than this is a phone (web/index.html tells tablets apart the same way).
-const TABLET_MIN_SIDE = 600;
 // The width the user dragged the pane to on this device; 0 until then, which splits the room evenly.
 const dock_preferred = ref(read_dock_width());
 // The width right of the room list that the messages and the pane share; 0 when the window is too narrow to split.
@@ -995,6 +1008,7 @@ onBeforeUnmount(() => {
   publish_dock(0);
   window.removeEventListener("resize", place_float);
   narrow_query.removeEventListener("change", track_narrow);
+  head_watcher.disconnect();
   window.removeEventListener("resize", place_file_marks);
   globalThis.CSS?.highlights?.delete(MARKED_HIGHLIGHT);
   hold_selection(null);
@@ -1015,7 +1029,7 @@ onBeforeUnmount(() => {
      <div ref="frame" class="project-editor-frame" :class="{ 'is-docked': docked }" @touchstart.passive="pull_start" @touchmove="pull_move" @touchend="pull_end" @touchcancel="pull_end">
       <div v-if="docked" class="file-dock-resizer" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="t('调整文件预览宽度')" :aria-valuemin="DOCK_MIN" :aria-valuemax="dock_max" :aria-valuenow="dock_width"
         :title="t('拖动调整文件预览宽度，也可使用左右方向键')" @pointerdown="dock_press" @pointermove="dock_move" @pointerup="dock_release" @pointercancel="dock_release" @keydown="dock_key"></div>
-      <div class="project-editor-head">
+      <div ref="head_element" class="project-editor-head" :class="{ 'is-tight': tight_head && !folded_actions }">
         <div class="project-editor-tablist" role="tablist" :aria-label="t('已打开的文件')">
           <div v-for="item in tabs" :key="item.id" class="project-editor-tab" :class="{ 'is-active': item.id === active_id }" :title="item.path">
             <button type="button" role="tab" class="project-editor-tab-name" :aria-selected="item.id === active_id" @click="activate(item.id)">
@@ -1024,7 +1038,7 @@ onBeforeUnmount(() => {
             <button type="button" class="project-editor-tab-close" :aria-label="t('关闭 {value1}', { value1: name_of(item.path) })" :title="t('关闭')" @click="close_tab(item.id)"><UIcon name="i-lucide-x" /></button>
           </div>
         </div>
-        <div v-if="!narrow" class="project-editor-file-actions">
+        <div v-if="!folded_actions" class="project-editor-file-actions">
           <div v-if="can_scale" class="project-editor-font" role="group" :aria-label="t('字号')">
             <button type="button" :title="t('缩小字号')" :aria-label="t('缩小字号')" :disabled="font_scale <= FONT_SCALE_MIN" @click="change_font_scale(-1)"><UIcon name="i-lucide-a-arrow-down" /></button>
             <button type="button" class="project-editor-font-value" :title="t('恢复默认字号')" :aria-label="t('恢复默认字号')" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
@@ -1042,7 +1056,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="project-editor-window-actions">
-          <UDropdownMenu v-if="narrow && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('文件操作')" :title="t('字号、朗读、显示方式')" /></UDropdownMenu>
+          <UDropdownMenu v-if="folded_actions && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('文件操作')" :title="t('字号、朗读、显示方式')" /></UDropdownMenu>
           <UButton v-if="can_dock" :icon="docked ? 'i-lucide-picture-in-picture-2' : 'i-lucide-panel-right'" color="neutral" variant="ghost" size="sm" :title="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" :aria-label="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" @click="toggle_dock" />
           <UButton :icon="narrow ? 'i-lucide-chevron-down' : 'i-lucide-minus'" color="neutral" variant="ghost" size="sm" :title="t('收起到屏幕边缘（手机上也可下拉收起）')" :aria-label="t('收起预览')" @click="fold" />
           <UButton v-if="!narrow" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" :aria-label="tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" @click="close_all" />
@@ -1173,6 +1187,8 @@ onBeforeUnmount(() => {
 .project-editor-head { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: 38px 26px;
   grid-template-areas: "tabs file window" "crumbs crumbs crumbs"; }
 .project-editor-head > :is(.project-editor-tablist, .project-editor-file-actions, .project-editor-window-actions) { background: var(--ui-bg-elevated); border-bottom: 1px solid var(--ui-border); }
+.project-editor-head.is-tight { grid-template-rows: 38px minmax(30px, auto); grid-template-areas: "tabs tabs window" "crumbs file file"; }
+.project-editor-head.is-tight > .project-editor-file-actions { justify-content: flex-end; padding-right: 6px; border-left: 0; background: transparent; border-bottom: 0; }
 .project-editor-tablist { grid-area: tabs; display: flex; min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; }
 .project-editor-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; max-width: 240px; font-size: 13px; color: var(--ui-text-muted); border-right: 1px solid var(--ui-border); }
 .project-editor-tab.is-active { background: var(--ui-bg); color: var(--ui-text-highlighted); }
@@ -1236,7 +1252,7 @@ onBeforeUnmount(() => {
 .file-offer-marks .channel-listen-mark { position: static; }
 /* The shared comment box (channel.css), placed inside the dialog instead of on the page. */
 .file-comment { position: absolute; z-index: 4; }
-.file-comment.is-docked { inset: auto 12px 12px; }
+.file-comment.is-docked { inset: auto 12px calc(var(--keyboard-inset, 0px) + 12px); }
 .file-listen-dock { position: absolute; inset: auto 0 12px; z-index: 3; display: flex; justify-content: center; gap: 8px; pointer-events: none; }
 .project-html-preview { display: block; flex: 1; width: 100%; border: 0; background: white; }
 .project-editor-status { display: flex; align-items: center; gap: 16px; flex-shrink: 0; height: 26px; padding: 0 14px; font-size: 11.5px; color: var(--ui-text-muted);
@@ -1261,11 +1277,11 @@ onBeforeUnmount(() => {
 @media (max-width: 640px) {
   :global(.project-editor) { width: 100vw; height: 100dvh; }
   .project-editor-frame { border: 0; border-radius: 0; }
-  .project-editor-tab { max-width: 160px; }
   .project-editor-tab-name { padding-left: 10px; }
-  .project-editor-tab-close { opacity: 1; }
-  /* The file's actions live in the "..." menu beside the window buttons, so the breadcrumbs get the whole second row. */
-  .project-editor-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 42px 40px; grid-template-areas: "tabs window" "crumbs crumbs"; }
+  /* The tabs get the whole first row (user 2026-11-20, #6131): the "..." menu and fold button sit at the right of the
+     breadcrumbs, which seldom fill their row. The file's actions live in that menu. */
+  .project-editor-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 42px 40px; grid-template-areas: "tabs tabs" "crumbs window"; }
+  .project-editor-head > .project-editor-window-actions { background: transparent; border-bottom: 0; }
   .project-editor-window-actions { gap: 4px; padding: 0 4px; border-left: 0 !important; }
   /* 40px touch targets; the file name is already on its tab, so the breadcrumbs end at its folder. */
   .project-editor-window-actions > button { justify-content: center; width: 40px; height: 40px; padding: 0; }
@@ -1284,15 +1300,30 @@ onBeforeUnmount(() => {
 }
 /* A phone on its side is wide but short: the window fills the screen as in portrait instead of floating with margins
    around it (user 2026-11-16: "横屏区域本来就很小"); the sides keep clear of the notch. */
+/* Phone tabs, either way up: one open file shows its whole name; of several, the open one gets most of the row and the
+   others a short name each. Only the open tab has a close button (a phone has no hover): tap a tab, then its ×. */
+@media (max-width: 640px), (pointer: coarse) and (max-height: 500px) {
+  .project-editor-tab { max-width: 60%; }
+  .project-editor-tab:only-child { max-width: 100%; }
+  .project-editor-tab:not(.is-active) { max-width: 100px; }
+  .project-editor-tab:not(.is-active) .project-editor-tab-close { display: none; }
+  .project-editor-tab:not(.is-active) .project-editor-tab-name { padding-right: 12px; }
+  .project-editor-tab.is-active .project-editor-tab-close { width: 32px; height: 32px; margin-right: 4px; opacity: 1; }
+}
 @media (pointer: coarse) and (max-height: 500px) {
   :global(.project-editor) { width: 100vw; height: 100dvh; }
   .project-editor-frame { border: 0; border-radius: 0; box-shadow: none; padding-inline: env(safe-area-inset-left) env(safe-area-inset-right); }
+  /* One 40px row of tabs and window buttons, then a slim breadcrumb row: the height is the text's. */
+  .project-editor-head { grid-template-rows: 40px 28px; }
+  .project-editor-head .project-editor-window-actions > button { justify-content: center; width: 40px; height: 40px; padding: 0; }
 }
-/* Tablets keep the one-row head, with touch-sized buttons. */
-@media (min-width: 641px) and (pointer: coarse) {
+/* Tablets keep the one-row head, with touch-sized buttons (a phone on its side, as wide but short, has its own rules above). */
+@media (min-width: 641px) and (min-height: 501px) and (pointer: coarse) {
   .project-editor-head { grid-template-rows: 44px 30px; }
+  .project-editor-head.is-tight { grid-template-rows: 44px 44px; }
   .project-editor-head :is(.project-editor-file-actions, .project-editor-window-actions) > button { justify-content: center; width: 40px; height: 40px; padding: 0; }
   .project-editor-modes button { height: 36px; padding: 0 12px; }
+  .project-editor-font button { height: 40px; min-width: 36px; }
   .project-editor-tab-close { width: 28px; height: 28px; opacity: 1; }
 }
 </style>

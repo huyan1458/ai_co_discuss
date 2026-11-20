@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
 import ChannelDiscussion from "./ChannelDiscussion.vue";
 import TopicPanel from "./TopicPanel.vue";
 import WorkspaceDialogs from "./WorkspaceDialogs.vue";
@@ -61,6 +61,8 @@ const brief = field("brief-input");
 const search = field("search-input");
 const LAYOUT_KEY = "ai-codiscuss-channel-layout";
 const EFFECT_OPTIONS = [{ value: "full", label: t("完整") }, { value: "reduced", label: t("精简") }];
+// How readily long answers fold; ChannelDiscussion.vue MESSAGE_FOLD_LEVELS gives each level's heights.
+const FOLD_OPTIONS = [{ value: "loose", label: t("宽松") }, { value: "standard", label: t("标准") }, { value: "compact", label: t("紧凑") }, { value: "off", label: t("不折叠") }];
 const READING_WIDTHS = { narrow: { label: t("窄"), width: 720 }, default: { label: t("默认"), width: 960 }, wide: { label: t("宽"), width: 1240 } };
 const RAIL_MIN = 220;
 const RAIL_MAX = 440;
@@ -77,6 +79,8 @@ const DIVIDER_WIDTH = 0;
 const saved_layout = read_layout();
 const reading_width = ref(saved_layout.reading);
 const effects = ref(saved_layout.effects);
+const fold_level = ref(saved_layout.fold);
+provide("fold_level", fold_level);
 const rail_width = ref(saved_layout.rail);
 const nav_width = ref(saved_layout.nav);
 const viewport_width = ref(typeof window === "undefined" ? NAV_DEFAULT + CONTENT_MIN + DIVIDER_WIDTH : window.innerWidth);
@@ -174,6 +178,7 @@ const width_options = Object.entries(READING_WIDTHS).map(([value, option]) => ({
 watch(reading_width, (value) => { document.documentElement.style.setProperty("--channel-reading-width", `${READING_WIDTHS[value].width}px`); save_layout(); }, { immediate: true });
 // Portalled menus and dialogs sit outside the shell, so the preference marks the document root.
 watch(effects, (value) => { document.documentElement.dataset.effects = value; save_layout(); }, { immediate: true });
+watch(fold_level, save_layout);
 watch(nav_collapsed, save_layout);
 watch(rail_collapsed, save_layout);
 onMounted(() => window.addEventListener("resize", update_viewport_width));
@@ -317,6 +322,7 @@ function read_layout() {
     return {
       reading: Object.hasOwn(READING_WIDTHS, saved.reading) ? saved.reading : "default",
       effects: saved.effects === "reduced" ? "reduced" : "full",
+      fold: FOLD_OPTIONS.some((option) => option.value === saved.fold) ? saved.fold : "loose",
       rail: Number.isFinite(saved.rail) ? Math.min(RAIL_MAX, Math.max(RAIL_MIN, saved.rail)) : RAIL_DEFAULT,
       nav: Number.isFinite(saved.nav) ? Math.min(NAV_MAX, Math.max(NAV_MIN, saved.nav)) : default_nav_width(),
       collapsed: saved.collapsed === true,
@@ -324,7 +330,7 @@ function read_layout() {
       rail_collapsed: saved.rail_collapsed === true,
       rail_chosen: typeof saved.rail_collapsed === "boolean",
     };
-  } catch { return { reading: "default", effects: "full", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false, rail_collapsed: false, rail_chosen: false }; }
+  } catch { return { reading: "default", effects: "full", fold: "loose", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false, rail_collapsed: false, rail_chosen: false }; }
 }
 
 /** Preserve the existing responsive navigation width on first use. */
@@ -335,7 +341,7 @@ function default_nav_width() {
 
 /** Keep layout preferences local without blocking adjustments when storage is unavailable. */
 function save_layout() {
-  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ reading: reading_width.value, effects: effects.value, rail: rail_width.value, nav: nav_width.value, collapsed: nav_collapsed.value, brief_collapsed: brief_collapsed.value, rail_collapsed: rail_collapsed.value })); }
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ reading: reading_width.value, effects: effects.value, fold: fold_level.value, rail: rail_width.value, nav: nav_width.value, collapsed: nav_collapsed.value, brief_collapsed: brief_collapsed.value, rail_collapsed: rail_collapsed.value })); }
   catch { /* The current page can still use the selected layout. */ }
 }
 
@@ -583,6 +589,6 @@ function resize_nav_by_key(event) {
       <template #body><InvitedRoomRail v-if="invited_page" drawer /><FreeBoard v-else @history="info_open = false; open_consensus()" /></template>
     </USlideover>
     <JoinInvitedDialog />
-    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
+    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" v-model:fold-level="fold_level" :fold-options="FOLD_OPTIONS" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
   </div>
 </template>

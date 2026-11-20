@@ -10,10 +10,11 @@ import WeixinSettings from "./WeixinSettings.vue";
 import LanguagePicker from "./LanguagePicker.vue";
 import { t } from "./i18n.js";
 
-const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] } });
+const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] }, foldOptions: { type: Array, default: () => [] } });
 const mode = defineModel({ type: String, default: "" });
 const reading_width = defineModel("readingWidth", { type: String, default: "default" });
 const effects = defineModel("effects", { type: String, default: "full" });
+const fold_level = defineModel("foldLevel", { type: String, default: "loose" });
 const rendered_mode = ref(mode.value);
 watch(mode, (value) => { if (value) rendered_mode.value = value; });
 const { view, bridge, act, pending } = inject("discussion");
@@ -292,6 +293,11 @@ const keep_open = (event) => event.preventDefault();
           <h3 id="channel-effects-label">{{ t("视觉效果") }}</h3>
           <div class="channel-reading-options channel-effect-options" role="group" aria-labelledby="channel-effects-label"><UButton v-for="option in effectOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: effects === option.value }" :aria-pressed="effects === option.value" @click="effects = option.value" /></div>
           <p class="fine-print">{{ t("精简模式关闭毛玻璃模糊与多层阴影，适合配置较低或需要更流畅滚动的设备。") }}</p>
+        </section>
+        <section class="channel-reading-setting">
+          <h3 id="channel-fold-label">{{ t("长回答折叠") }}</h3>
+          <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-label"><UButton v-for="option in foldOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_level === option.value }" :aria-pressed="fold_level === option.value" @click="fold_level = option.value" /></div>
+          <p class="fine-print">{{ t("宽松：超过 1.2 屏才折叠，折后保留半屏；标准：超过 0.7 屏折叠；紧凑：超过半屏就折叠，只留开头。按当前屏幕高度计算，只对本设备生效。") }}</p>
         </section>
         <SpeechSettings />
         <WeixinSettings />

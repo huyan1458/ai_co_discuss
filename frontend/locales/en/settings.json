@@ -678,6 +678,8 @@
   "配置 {value1}": "Configure {value1}",
   "配置：软件、模型、描述与专属提示词（也可双击卡片）": "Configure: software, model, description and expert prompt (or double-click the card)",
   "从工作流移除这张卡片": "Remove this card from the workflow",
+  "再点一次移除 {value1}": "Press again to remove {value1}",
+  "再点一次，从工作流移除这位成员": "Press again to remove this member from the workflow",
   "每张卡片的角色、软件、模型与专属提示词；改完点工作流页的“保存”写入。": "Each card's role, software, model and expert prompt; click Save on the workflow page to write the changes.",
   "工作流里的卡片": "Cards in this workflow",
   "角色名": "Role name",

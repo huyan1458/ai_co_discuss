@@ -40,7 +40,8 @@ const tool_size = computed(() => (props.compact ? "xs" : "sm"));
 // (a wide window can still leave a narrow canvas beside the sidebar and the SKILL.md panel).
 const LABELLED_TOOLBAR_WIDTH = 680;
 const narrow = ref(false);
-const icons_only = computed(() => props.compact || narrow.value);
+// Whether the toolbar shows words goes by the canvas's own width only: a portrait tablet stacks the page yet has room for them.
+const icons_only = computed(() => narrow.value);
 // Sizes the layout leaves for each kind of node, and the gaps between columns and rows.
 // Member, host and sub-workflow cards are squares (the drag bar is inside the member's square).
 // A card on the canvas only says who it is (user 2026-11-17); its settings live in the 专家配置 panel.
@@ -54,9 +55,11 @@ const HANDLE_Y = { card: 48, start: 20, host: 68, sub: 68 };
 const NOTE_CHAR = 11, NOTE_PAD = 16, NOTE_MARGIN = 36;
 // A column an arrow skips over is lifted this far clear of the line the arrow runs along (room for its note too).
 const BYPASS_CLEARANCE = 44;
-// A card moves only by its top bar, with a mouse or a finger alike; its body works like the card on the new-room page.
-// A swipe on the body pans the canvas on touch (touch_start); with a mouse the body neither pans nor drags, so its text can be selected.
-const CARD_HANDLE = ".workflow-card-grip";
+// Every node moves only by its top bar, with a mouse or a finger alike (user 2026-11-20, #6109); a card's body works like
+// the card on the new-room page. Dragging a body pans the canvas, with a finger (touch_start) or a mouse (edge_press);
+// its buttons and note still take presses, and its text is not selectable anyway (Vue Flow's nodes are user-select: none).
+const NODE_HANDLE = ".workflow-card-grip";
+const NODE_BODY = ".workflow-card-body, .workflow-node-body";
 // The whole-workflow view (double click, the fit button): as far out as it takes, on a phone further still.
 const FIT = { padding: 0.08, maxZoom: 1, minZoom: 0.25 };
 const COMPACT_FIT = { ...FIT, minZoom: 0.15 };
@@ -76,15 +79,26 @@ const PRESET_FIELDS = ["label", "description", "project_access", "model", "effor
 /** A stored node as Vue Flow draws it; a card is dragged by its top bar so its own buttons and swipes keep working. */
 function to_node(item) {
   const base = { id: item.id, type: item.type, position: { x: item.x || 0, y: item.y || 0 } };
-  if (item.type === "card") return { ...base, data: { card: item.card }, dragHandle: CARD_HANDLE };
-  if (item.type === "host") return { ...base, data: { label: item.label || "" } };
-  if (item.type === "sub") return { ...base, data: { sub: item.sub } };
-  return { ...base, deletable: false };
+  // Not by Delete: the key would take the card off the canvas but leave the member in the workflow (its × removes both).
+  if (item.type === "card") return { ...base, data: { card: item.card }, dragHandle: NODE_HANDLE, deletable: false };
+  if (item.type === "host") return { ...base, data: { label: item.label || "" }, dragHandle: NODE_HANDLE };
+  if (item.type === "sub") return { ...base, data: { sub: item.sub }, dragHandle: NODE_HANDLE };
+  return { ...base, deletable: false, dragHandle: NODE_HANDLE };
 }
 
 /** A stored arrow as Vue Flow draws it; its note (if any) rides in `data`. */
 function to_edge({ source, target, label }) {
   return { id: `${source}>${target}`, source, target, type: "flow", data: { label: label || "" }, markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 } };
+}
+
+// A member card's × asks twice, as deleting a sub-workflow does: removing it takes the member out of the workflow.
+const removing_card = ref(""), REMOVE_ARMED_MS = 3000;
+let removing_timer = 0;
+function press_remove(card) {
+  clearTimeout(removing_timer);
+  if (removing_card.value === card) { removing_card.value = ""; remove_card(card); return; }
+  removing_card.value = card;
+  removing_timer = setTimeout(() => { removing_card.value = ""; }, REMOVE_ARMED_MS);
 }
 
 /** Set the note on a host node or an arrow (trimmed when stored); `kind` is "nodes" or "edges". */
@@ -492,8 +506,48 @@ function view_settled() {
   requestAnimationFrame(() => requestAnimationFrame(() => { layered.value = true; }));
 }
 let pinch = null, pinch_frame = 0, pinch_target = null, touch_positions = null;
-// One finger on a card's body pans the view here: Vue Flow marks every draggable node `nopan`, so its own pan never starts there.
+// A finger or a mouse on a node's body or on an arrow pans the view here: Vue Flow marks every node and every
+// arrow `nopan`, so its own pan never starts there (user 2026-11-20, #6111: the long loop arrows covered much of the canvas).
 let card_pan = null, card_pan_frame = 0;
+// A press that moved this far is a pan, so the click it ends in does not select the arrow under it.
+const PAN_CLICK_REACH_PX = 4;
+
+// Controls inside a node's body keep their own presses.
+const BODY_CONTROL = "button, input, textarea, select, label, a";
+
+/** Whether `target` is an arrow's line (its note is drawn apart and keeps its own input and delete button). */
+function on_edge_line(target) {
+  return Boolean(target.closest?.(".vue-flow__edge"));
+}
+
+/** Whether a press on `target` pans the view: an arrow's line, or a node's body away from its controls. */
+function pans_view(target) {
+  return on_edge_line(target) || Boolean(target.closest?.(NODE_BODY) && !target.closest(BODY_CONTROL));
+}
+
+/** A mouse (or pen) press on an arrow or a node's body pans the view until it is released; touches are panned in touch_start. */
+function edge_press(event) {
+  if (event.button !== 0 || event.pointerType === "touch" || !instance.value || !pans_view(event.target)) return;
+  const from = { x: event.clientX, y: event.clientY };
+  card_pan = { from, to: null, view: instance.value.getViewport() };
+  const move = (moved) => {
+    card_pan.to = { x: moved.clientX, y: moved.clientY };
+    if (!card_pan_frame) card_pan_frame = requestAnimationFrame(apply_card_pan);
+  };
+  const release = (released) => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", release);
+    window.removeEventListener("pointercancel", release);
+    card_pan = null;
+    if (Math.hypot(released.clientX - from.x, released.clientY - from.y) <= PAN_CLICK_REACH_PX) return;
+    const swallow = (click) => { click.stopPropagation(); click.preventDefault(); };
+    window.addEventListener("click", swallow, { capture: true, once: true });
+    setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", release);
+  window.addEventListener("pointercancel", release);
+}
 
 /** The touches currently down on the canvas. */
 function canvas_touches(event) {
@@ -510,7 +564,7 @@ function touch_start(event) {
   const touches = canvas_touches(event);
   if (!pinch && touches.length === 1) {
     touch_positions = new Map(nodes.value.map((node) => [node.id, { ...node.position }]));
-    const on_body = instance.value && event.target.closest?.(".workflow-card-body");
+    const on_body = instance.value && pans_view(event.target);
     card_pan = on_body ? { from: { x: touches[0].clientX, y: touches[0].clientY }, to: null, view: instance.value.getViewport() } : null;
   }
   if (touches.length < 2 || !instance.value) return;
@@ -652,7 +706,7 @@ function history_key(event) {
   if (key === "y" || event.shiftKey) redo(); else undo();
 }
 window.addEventListener("keydown", history_key);
-onBeforeUnmount(() => { window.removeEventListener("keydown", history_key); clearTimeout(timer); });
+onBeforeUnmount(() => { window.removeEventListener("keydown", history_key); clearTimeout(timer); clearTimeout(removing_timer); });
 
 /** A card being dragged would repaint the whole one-layer canvas every frame, so the layer waits until it is let go. */
 function drag_start() { dragging = true; layered.value = false; }
@@ -660,14 +714,15 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 </script>
 
 <template>
-  <div ref="canvas_element" class="workflow-canvas" :class="{ 'is-layered': layered, 'is-compact': props.compact }" @dblclick="pane_double_click" @pointerdown.capture="middle_press">
+  <div ref="canvas_element" class="workflow-canvas" :class="{ 'is-layered': layered, 'is-compact': props.compact }" @dblclick="pane_double_click" @pointerdown.capture="middle_press" @pointerdown="edge_press">
     <VueFlow v-model:nodes="nodes" v-model:edges="edges" :min-zoom="ZOOM.min" :max-zoom="ZOOM.max" :delete-key-code="['Delete', 'Backspace']" :zoom-on-double-click="false"
       :is-valid-connection="valid_connection" elevate-nodes-on-select @connect="connect" @connect-start="connect_start" @connect-end="connect_end"
       @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once" @move-start="view_moved" @move-end="view_settled" @node-double-click="node_double_click">
       <template #node-start>
         <UTooltip :text="t('从右侧圆点拖线连到成员，示意谁先接手；拖到空白处可直接添加')">
           <div class="workflow-pill is-start">
-            <UIcon name="i-lucide-play" class="workflow-icon" /><span>{{ t('开始') }}</span>
+            <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" /></div>
+            <div class="workflow-node-body nodrag"><UIcon name="i-lucide-play" class="workflow-icon" /><span>{{ t('开始') }}</span></div>
             <Handle type="source" :position="Position.Right" class="workflow-handle" :class="{ 'is-calling': !edges.some((edge) => edge.source === 'start') }" />
           </div>
         </UTooltip>
@@ -676,11 +731,14 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
         <UTooltip :text="t('主持人：示意这里交回主持人判断；选中后可写上做什么')">
           <div class="workflow-host" :class="{ 'is-selected': node.selected }">
             <Handle type="target" :position="Position.Left" class="workflow-handle" />
-            <UIcon name="i-lucide-crown" class="workflow-host-icon" /><strong>{{ t('主持人') }}</strong>
-            <input v-if="node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input nodrag" :maxlength="MAX_HOST_LABEL" :placeholder="t('做什么')"
-              :aria-label="t('主持人在这里做什么')" @input="set_note('nodes', node.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
-            <p v-else-if="node.data.label" class="workflow-host-note">{{ node.data.label }}</p>
-            <button type="button" class="workflow-pill-close nodrag" :aria-label="t('删除主持人节点')" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
+            <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" /></div>
+            <div class="workflow-node-body nodrag">
+              <UIcon name="i-lucide-crown" class="workflow-host-icon" /><strong>{{ t('主持人') }}</strong>
+              <input v-if="node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input" :maxlength="MAX_HOST_LABEL" :placeholder="t('做什么')"
+                :aria-label="t('主持人在这里做什么')" @input="set_note('nodes', node.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
+              <p v-else-if="node.data.label" class="workflow-host-note">{{ node.data.label }}</p>
+              <button type="button" class="workflow-pill-close" :aria-label="t('删除主持人节点')" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
+            </div>
             <Handle type="source" :position="Position.Right" class="workflow-handle" />
           </div>
         </UTooltip>
@@ -688,20 +746,21 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       <template #node-sub="node">
         <div v-if="sub_of(node.data.sub)" class="workflow-sub" :class="{ 'is-selected': node.selected }" :title="sub_of(node.data.sub).description || undefined">
           <Handle type="target" :position="Position.Left" class="workflow-handle" />
-          <span class="workflow-sub-kind"><UIcon name="i-lucide-git-branch" class="workflow-icon" />{{ t('子工作流') }}</span>
-          <strong>{{ sub_of(node.data.sub).label || node.data.sub }}</strong>
-          <small>{{ t('{value1} 位成员', { value1: sub_of(node.data.sub).agents.length }) }}</small>
-          <button type="button" class="workflow-sub-enter nodrag" :title="t('进入这个子工作流（也可双击）')" @click.stop="open_sub(node.data.sub)">{{ t('进入') }}<UIcon name="i-lucide-arrow-right" class="workflow-icon" /></button>
-          <button type="button" class="workflow-pill-close nodrag" :aria-label="t('从画布移除子工作流节点')" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
+          <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" /></div>
+          <div class="workflow-node-body nodrag">
+            <span class="workflow-sub-kind"><UIcon name="i-lucide-git-branch" class="workflow-icon" />{{ t('子工作流') }}</span>
+            <strong>{{ sub_of(node.data.sub).label || node.data.sub }}</strong>
+            <small>{{ t('{value1} 位成员', { value1: sub_of(node.data.sub).agents.length }) }}</small>
+            <button type="button" class="workflow-sub-enter" :title="t('进入这个子工作流（也可双击）')" @click.stop="open_sub(node.data.sub)">{{ t('进入') }}<UIcon name="i-lucide-arrow-right" class="workflow-icon" /></button>
+            <button type="button" class="workflow-pill-close" :aria-label="t('从画布移除子工作流节点')" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
+          </div>
           <Handle type="source" :position="Position.Right" class="workflow-handle" />
         </div>
       </template>
       <template #node-card="node">
         <div v-if="agent_of(node.data.card)" class="workflow-card" :class="{ 'is-selected': node.selected }">
           <Handle type="target" :position="Position.Left" class="workflow-handle" />
-          <div class="workflow-card-grip" :title="t('按住拖动')">
-            <UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
-          </div>
+          <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" /></div>
           <div v-for="agent in [agent_of(node.data.card)]" :key="agent.card" class="workflow-card-body nodrag" :title="agent.description || undefined"
             @dblclick="emit('configure', agent.card)">
             <UAvatar :src="bridge.identities[bridge.platform_of(agent.name)]?.icon" :text="bridge.identities[bridge.platform_of(agent.name)]?.initials || '?'" size="md"
@@ -713,7 +772,9 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
             </div>
             <div class="workflow-card-tools">
               <UButton icon="i-lucide-sliders-horizontal" size="xs" color="neutral" variant="ghost" :aria-label="t('配置 {value1}', { value1: agent.label || agent.card })" :title="t('配置：软件、模型、描述与专属提示词（也可双击卡片）')" @click="emit('configure', agent.card)" />
-              <UButton icon="i-lucide-x" size="xs" color="neutral" variant="ghost" :aria-label="t('移除 {value1}', { value1: agent.label || agent.card })" :title="t('从工作流移除这张卡片')" @click="remove_card(agent.card)" />
+              <UButton :icon="removing_card === agent.card ? 'i-lucide-trash-2' : 'i-lucide-x'" size="xs" :color="removing_card === agent.card ? 'error' : 'neutral'" :variant="removing_card === agent.card ? 'soft' : 'ghost'"
+                :aria-label="removing_card === agent.card ? t('再点一次移除 {value1}', { value1: agent.label || agent.card }) : t('移除 {value1}', { value1: agent.label || agent.card })"
+                :title="removing_card === agent.card ? t('再点一次，从工作流移除这位成员') : t('从工作流移除这张卡片')" @click="press_remove(agent.card)" />
             </div>
             <label v-if="agent_of(node.data.card).requested_access" class="workflow-card-grant">
               <input type="checkbox" :checked="agent_of(node.data.card).project_access !== 'read'" @change="grant(agent_of(node.data.card), $event.target.checked)" /> {{ t('允许「{value1}」', { value1: access_label(agent_of(node.data.card).requested_access) }) }}</label>
@@ -748,7 +809,8 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
         <UTooltip :text="t('自动整理')"><UButton icon="i-lucide-wand-sparkles" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('自动整理')" @click="arrange" /></UTooltip>
         <template v-if="$slots.actions"><span class="workflow-canvas-divider" /><slot name="actions" :icons-only="icons_only" /></template>
       </Panel>
-      <Panel v-if="!props.compact" position="bottom-left" class="workflow-canvas-status">
+      <!-- The arrows only illustrate: kept on phones too, where the bottom left holds the main line / sub-workflow switch. -->
+      <Panel :position="props.compact ? 'bottom-right' : 'bottom-left'" class="workflow-canvas-status">
         <UIcon name="i-lucide-info" class="workflow-icon" /><span>{{ t('连线只作示意，派活以') }}</span>
         <button type="button" class="workflow-canvas-skill" @click="emit('open-skill')">SKILL.md</button><span>{{ t('为准') }}</span>
       </Panel>
@@ -794,42 +856,51 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 .workflow-canvas.is-compact :deep(.vue-flow__panel) { margin: 10px; }
 .workflow-canvas.is-compact .workflow-canvas-toolbar { gap: 0; padding: 2px; border-radius: 9px; }
 .workflow-canvas.is-compact .workflow-canvas-divider { height: 14px; margin: 0 2px; }
+.workflow-canvas.is-compact .workflow-canvas-status { max-width: calc(100% - 190px); padding: 4px 10px; font-size: 11px; white-space: normal; }
 .workflow-canvas-status { display: flex; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid var(--ui-border-muted); border-radius: 999px;
   background: var(--ui-bg-elevated); color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; }
 .workflow-canvas.is-layered :deep(.vue-flow__transformationpane) { will-change: transform; }
 
-/* Start: a small pill. */
-.workflow-pill { position: relative; display: flex; width: max-content; align-items: center; gap: 6px; height: 40px; padding: 0 16px; border: 1px solid var(--ui-border-accented);
-  border-radius: 999px; background: var(--ui-bg-elevated); box-shadow: 0 2px 8px rgb(0 0 0 / .12); font-size: 13px; font-weight: 500; white-space: nowrap; }
-.workflow-pill.is-start { color: var(--channel-accent, var(--ui-primary)); border-color: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 50%, var(--ui-border)); }
-.workflow-pill-close { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--ui-text-dimmed); opacity: 0; transition: opacity .15s; }
-.workflow-host:hover .workflow-pill-close, .workflow-host.is-selected .workflow-pill-close { opacity: 1; }
+/* Start: a small card, its drag bar on top like every node's. */
+.workflow-pill { --workflow-card-edge: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 50%, var(--ui-border)); position: relative; display: flex; flex-direction: column;
+  width: max-content; min-width: 96px; border: 1px solid var(--workflow-card-edge); border-radius: 12px; background: var(--ui-bg-elevated); box-shadow: 0 2px 8px rgb(0 0 0 / .12);
+  font-size: 13px; font-weight: 500; white-space: nowrap; }
+.workflow-pill > .workflow-card-grip { border-radius: 11px 11px 0 0; }
+.workflow-pill > .workflow-node-body { display: flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 16px; }
+.workflow-pill.is-start { color: var(--channel-accent, var(--ui-primary)); }
+/* A node's body: pressing it neither drags the node nor (with a mouse) pans the canvas. */
+.workflow-node-body { cursor: default; }
+/* Hidden until hovered or selected, and not pressable while hidden: a phone has no hover, so a tap there removed the node unseen. */
+.workflow-pill-close { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--ui-text-dimmed); opacity: 0; pointer-events: none; transition: opacity .15s; }
+.workflow-host:hover .workflow-pill-close, .workflow-host.is-selected .workflow-pill-close { opacity: 1; pointer-events: auto; }
 .workflow-pill-close:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 .workflow-pill-close > .workflow-icon { width: 11px; height: 11px; }
 
 /* Host: a small gold square, its note under the title. */
-.workflow-host { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; width: 136px; height: 136px; padding: 12px;
-  border: 1.5px solid color-mix(in srgb, #e0b44a 70%, var(--ui-border)); border-radius: 12px; background: color-mix(in srgb, #e0b44a 10%, var(--ui-bg-elevated));
+.workflow-host { --workflow-grip-tint: #e0b44a; --workflow-card-edge: color-mix(in srgb, #e0b44a 70%, var(--ui-border)); position: relative; display: flex; flex-direction: column; width: 136px; height: 136px;
+  border: 1.5px solid var(--workflow-card-edge); border-radius: 12px; background: color-mix(in srgb, #e0b44a 10%, var(--ui-bg-elevated));
   box-shadow: 0 6px 18px rgb(0 0 0 / .28); color: #d6a63a; text-align: center; }
 .workflow-host.is-selected { box-shadow: 0 0 0 3px color-mix(in srgb, #e0b44a 45%, transparent), 0 6px 18px rgb(0 0 0 / .28); }
+.workflow-host > .workflow-node-body { position: relative; display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 0; padding: 8px 12px; }
 .workflow-host-icon { width: 26px; height: 26px; }
-.workflow-host > strong { font-size: 14px; font-weight: 600; }
+.workflow-host strong { font-size: 14px; font-weight: 600; }
 .workflow-host-note { display: -webkit-box; max-width: 100%; margin: 0; overflow: hidden; color: var(--ui-text-toned); font-size: 12px; line-height: 17px;
   -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
 .workflow-host-input { width: 100%; text-align: center; }
-.workflow-host > .workflow-pill-close { position: absolute; top: 6px; right: 6px; }
+.workflow-host .workflow-pill-close { position: absolute; top: 4px; right: 4px; }
 
 /* Sub-workflow: a violet square that enters it. */
-.workflow-sub { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 136px; height: 136px; padding: 10px 12px;
-  border: 1.5px solid color-mix(in srgb, #9b7cf0 70%, var(--ui-border)); border-radius: 12px; background: color-mix(in srgb, #9b7cf0 12%, var(--ui-bg-elevated));
+.workflow-sub { --workflow-grip-tint: #9b7cf0; --workflow-card-edge: color-mix(in srgb, #9b7cf0 70%, var(--ui-border)); position: relative; display: flex; flex-direction: column; width: 136px; height: 136px;
+  border: 1.5px solid var(--workflow-card-edge); border-radius: 12px; background: color-mix(in srgb, #9b7cf0 12%, var(--ui-bg-elevated));
   box-shadow: 0 6px 18px rgb(0 0 0 / .28); color: #b49cf5; text-align: center; }
 .workflow-sub.is-selected { box-shadow: 0 0 0 3px color-mix(in srgb, #9b7cf0 45%, transparent), 0 6px 18px rgb(0 0 0 / .28); }
-.workflow-sub:hover .workflow-pill-close, .workflow-sub.is-selected .workflow-pill-close { opacity: 1; }
-.workflow-sub > .workflow-pill-close { position: absolute; top: 6px; right: 6px; }
+.workflow-sub:hover .workflow-pill-close, .workflow-sub.is-selected .workflow-pill-close { opacity: 1; pointer-events: auto; }
+.workflow-sub > .workflow-node-body { position: relative; display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 0; padding: 6px 12px; }
+.workflow-sub .workflow-pill-close { position: absolute; top: 4px; right: 4px; }
 .workflow-sub-kind { display: flex; align-items: center; gap: 4px; font-size: 11px; }
-.workflow-sub > strong { display: -webkit-box; max-width: 100%; overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; line-height: 18px;
+.workflow-sub strong { display: -webkit-box; max-width: 100%; overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; line-height: 18px;
   -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
-.workflow-sub > small { color: var(--ui-text-muted); font-size: 11px; }
+.workflow-sub small { color: var(--ui-text-muted); font-size: 11px; }
 .workflow-sub-enter { display: inline-flex; align-items: center; gap: 3px; margin-top: 2px; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, #9b7cf0 22%, transparent);
   color: inherit; font-size: 11px; }
 .workflow-sub-enter:hover { background: color-mix(in srgb, #9b7cf0 36%, transparent); color: var(--ui-text-highlighted); }
@@ -840,8 +911,25 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
   position: relative; display: flex; flex-direction: column; width: 240px; height: 96px; border: 1.5px solid var(--workflow-card-edge); border-radius: 12px;
   background: var(--ui-bg-elevated); box-shadow: 0 6px 18px rgb(0 0 0 / .28); color: var(--ui-text); }
 .workflow-card-grip { display: flex; flex-shrink: 0; align-items: center; justify-content: center; height: 22px; border-bottom: 1px solid var(--workflow-card-edge); border-radius: 10px 10px 0 0;
-  background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 16%, var(--ui-bg-elevated)); color: var(--ui-text-muted); cursor: grab; }
+  background: color-mix(in srgb, var(--workflow-grip-tint, var(--channel-accent, var(--ui-primary))) 16%, var(--ui-bg-elevated)); color: var(--ui-text-muted); cursor: grab; }
 .workflow-card-grip:active { cursor: grabbing; }
+/* A finger needs about 40px, and the bar and ports shrink with the view: on touch screens both reach further than they show. */
+@media (pointer: coarse) {
+  .workflow-card-grip { position: relative; }
+  .workflow-card-grip::before { content: ""; position: absolute; inset: -14px -10px -4px; }
+  /* Ports reach out from the card only: reaching in, they covered the card's configure button. */
+  :deep(.workflow-handle)::after { content: ""; position: absolute; }
+  :deep(.workflow-handle.vue-flow__handle-left)::after { inset: -12px 0 -12px -16px; }
+  :deep(.workflow-handle.vue-flow__handle-right)::after { inset: -12px -16px -12px 0; }
+  /* Every control on the canvas takes a finger: about 40px, or as near as fits inside a card. */
+  .workflow-canvas-toolbar :deep(button) { min-width: 40px; min-height: 40px; justify-content: center; }
+  :deep(.workflow-canvas-controls .vue-flow__controls-button) { width: 40px; height: 40px; }
+  .workflow-canvas.is-compact :deep(.workflow-canvas-controls .vue-flow__controls-button) { width: 40px; height: 40px; }
+  .workflow-card-tools :deep(button) { min-width: 32px; min-height: 32px; justify-content: center; }
+  .workflow-card-tools { gap: 0; }
+  .workflow-pill-close { width: 28px; height: 28px; }
+  .workflow-edge-delete { width: 32px; height: 32px; }
+}
 .workflow-card.is-selected { border-color: var(--channel-accent, var(--ui-primary)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 30%, transparent), 0 6px 18px rgb(0 0 0 / .28); }
 /* Who the card is: avatar, role, software, then model and project access in one dim line; its tools at the right. */
 .workflow-card-body { display: flex; flex: 1; align-items: center; gap: 10px; min-height: 0; padding: 0 6px 0 12px; cursor: default; }
@@ -875,7 +963,9 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 .workflow-edge-delete > .workflow-icon { width: 11px; height: 11px; }
 :deep(.vue-flow__connection-path) { stroke: var(--channel-accent, var(--ui-primary)); stroke-width: 1.8; stroke-dasharray: 5 4; }
 :deep(.vue-flow__edge-path) { fill: none; }
-:deep(.vue-flow__node) { cursor: grab; }
+:deep(.vue-flow__node) { cursor: default; }
+:deep(.vue-flow__edge) { cursor: grab; }
+:deep(.vue-flow__edge:active) { cursor: grabbing; }
 :deep(.workflow-canvas-controls) { display: flex; border: 1px solid var(--ui-border-muted); border-radius: 10px; overflow: hidden; box-shadow: 0 6px 20px rgb(0 0 0 / .14); }
 :deep(.workflow-canvas-controls .vue-flow__controls-button) { width: 34px; height: 34px; border-bottom: 0; border-right: 1px solid var(--ui-border-muted); background: var(--ui-bg-elevated); fill: var(--ui-text-muted); color: var(--ui-text-muted); }
 :deep(.workflow-canvas-controls .vue-flow__controls-button:last-child) { border-right: 0; }
