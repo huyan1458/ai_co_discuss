@@ -298,10 +298,11 @@ const creating_speech_ready = (() => { try { return localStorage.getItem("ai-cod
 /** Open the shared creation form from either navigation surface. */
 function create_channel(folder = null) {
   if (workflow_page.value) { workflow_library.close_page(() => create_channel(folder)); return; }
-  invited_rooms.close();
   nav_open.value = false;
   bridge.reset_create_form(folder); target_folder.value = folder; modal.value = "create";
 }
+// Leave an invited room only once a new room is actually submitted, not when opening the dialog and cancelling.
+watch(() => view.value.creating_room?.opened, (opened) => { if (opened) invited_rooms.close(); });
 
 /** Open folder creation after closing the mobile directory. */
 function create_folder() { target_folder.value = null; nav_open.value = false; modal.value = "folder"; }
@@ -522,7 +523,6 @@ function resize_nav_by_key(event) {
         <div v-if="view.tab === 'private'" v-keep-reading class="content-page private-page">
           <PrivateChat :key="room.id" />
         </div>
-        <FilePreview />
         </div>
       </div>
       <div v-else-if="creating_preview && !middle_page" class="channel-body channel-body-discussion"><div class="channel-content"><section class="channel-conversation"><div class="channel-transcript" role="status" :aria-label="t('正在创建：{name}', { name: creating_preview.title })"><div class="channel-message-group channel-topic-group"><TopicCard :preview="creating_preview" /></div>
@@ -588,6 +588,7 @@ function resize_nav_by_key(event) {
     <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :content="{ onInteractOutside: keep_drawer_for_file_float }" :title="invited_page ? t('外部房间') : room.title" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.host ? t('{value1} 主持', { value1: bridge.display_name(room.host) }) : ''" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
       <template #body><InvitedRoomRail v-if="invited_page" drawer /><FreeBoard v-else @history="info_open = false; open_consensus()" /></template>
     </USlideover>
+    <FilePreview />
     <JoinInvitedDialog />
     <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" v-model:fold-level="fold_level" :fold-options="FOLD_OPTIONS" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
   </div>

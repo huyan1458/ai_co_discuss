@@ -940,11 +940,13 @@ async function start_comment() {
 function cancel_comment() { commenting.value = null; hold_selection(null); }
 
 /** Put the selection (and comment) in the composer of the room shown now as an excerpt, fold the window and go to the messages. */
-function add_excerpt() {
+async function add_excerpt() {
   const { text, start, end, from, to, in_source = false } = commenting.value;
   const excerpt = { path: reference_path.value, name: preview_name.value, start, end, text, from, to, in_source, comment: comment.value.trim() };
   cancel_comment();
   clear_selection();
+  if (!view.value.room) await to_tab_room();
+  if (!view.value.room) return;
   act("tab", "discussion");
   if (docked.value) put_excerpt(excerpt);
   else fold(() => put_excerpt(excerpt));

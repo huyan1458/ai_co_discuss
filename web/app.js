@@ -1341,15 +1341,16 @@ function take_draft_after_login(room_id) {
 // Each room keeps its unsent composer (text, files, reply) while another room is open, until this page closes.
 const room_composer_drafts = new Map();
 
-/** Keep the open room's unsent text, files and reply aside; true when there was something to keep. */
+/** Keep the open room's unsent text, files, reply and stashed drafts aside; true when there was something to keep. */
 function keep_room_composer() {
   const room_id = state.room?.id;
   if (!room_id) return false;
   const text = element("message-input").value;
   const reply = state.reply_to ? { id: state.reply_to, label: element("reply-label").textContent } : null;
-  if (!text.trim() && !state.attachment_drafts.length && !reply) { room_composer_drafts.delete(room_id); return false; }
-  room_composer_drafts.set(room_id, { text, drafts: state.attachment_drafts, reply });
+  if (!text.trim() && !state.attachment_drafts.length && !reply && !state.stashed_drafts.length) { room_composer_drafts.delete(room_id); return false; }
+  room_composer_drafts.set(room_id, { text, drafts: state.attachment_drafts, reply, stashed: state.stashed_drafts });
   state.attachment_drafts = [];
+  state.stashed_drafts = [];
   return true;
 }
 
@@ -1358,6 +1359,7 @@ function restore_room_composer(room_id) {
   const kept = room_id && room_composer_drafts.get(room_id);
   if (!kept) return;
   room_composer_drafts.delete(room_id);
+  state.stashed_drafts = kept.stashed || [];
   fill_composer(kept.text, kept.drafts, kept.reply);
 }
 

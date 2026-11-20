@@ -1,3 +1,13 @@
+<script>
+import { ref as module_ref } from "vue";
+// Kept outside the component so creating a room or visiting the welcome page (which unmounts this view while no room
+// is open) does not refold expanded messages, rewinds or execution notes when returning to the previous room.
+const expanded_answers = module_ref(new Set());
+const expanded_rewinds = module_ref(new Set());
+const open_working_notes = module_ref(new Set());
+const execution_notes = module_ref(new Map());
+</script>
+
 <script setup>
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import ScheduleCard from "./ScheduleCard.vue";
@@ -51,7 +61,6 @@ const RETRACT_ESCAPE_WINDOW_MS = 500;
 const near_length_limit = computed(() => text_length.value >= bridge.max_message_length * LENGTH_WARNING_RATIO);
 const search = field("search-input");
 const transcript = ref(null);
-const expanded_answers = ref(new Set());
 // Speech settings kept by the local service, read at most once a minute: whether a key is set, each platform's voice, following.
 const SPEECH_CHECK_MS = 60000;
 // Voices are re-read when a reading starts, so a change in settings is heard right away.
@@ -569,8 +578,6 @@ watch(() => free_busy.value.length > 0, (busy, _previous, cleanup) => {
   cleanup(() => clearInterval(timer));
 }, { immediate: true });
 const free_working = computed(() => view.value.query ? [] : free_busy.value);
-/** Progress notes per execution id; only counts come with the room, so texts are read when a card shows more or a fold opens. */
-const execution_notes = ref(new Map());
 /** Late text is owner-only and fetched only when its fold opens; never cache it across rooms or loss of access. */
 const late_answers = ref(new Map());
 watch(() => [room.value.id, view.value.access?.can_manage], () => { late_answers.value = new Map(); });
@@ -635,7 +642,6 @@ function run_note_preloads() {
   }
 }
 /** Execution ids whose working notes are unfolded; folded by default to the latest note. */
-const open_working_notes = ref(new Set());
 function toggle_working_notes(execution_id) {
   const open = new Set(open_working_notes.value);
   if (!open.delete(execution_id)) open.add(execution_id);
@@ -728,14 +734,16 @@ function stash_room_quotes(room_id) {
   if (room_id && (file_refs.value.length || file_preview.excerpts.length)) room_quotes.set(room_id, { refs: file_refs.value, excerpts: file_preview.excerpts });
   else if (room_id) room_quotes.delete(room_id);
 }
+let quotes_room_id = "";
 watch(() => room.value?.id, (next, previous) => {
-  stash_room_quotes(previous);
+  stash_room_quotes(previous || quotes_room_id);
+  quotes_room_id = next || "";
   const kept = next && room_quotes.get(next);
   if (kept) room_quotes.delete(next);
   file_refs.value = kept?.refs || [];
   file_preview.excerpts = kept?.excerpts || [];
 }, { immediate: true });
-onBeforeUnmount(() => { stash_room_quotes(room.value?.id); file_preview.excerpts = []; });
+onBeforeUnmount(() => { stash_room_quotes(quotes_room_id || room.value?.id); quotes_room_id = ""; file_preview.excerpts = []; });
 const file_refs_line = () => file_refs.value.length
   ? t('引用文件：{value1}', { value1: file_refs.value.map((ref) => `\`${ref.path}${ref.kind === "directory" ? "/" : ""}\``).join("、") }) : "";
 // Passages quoted from the file preview ("添加到对话") wait as cards and go out after the text, each as a quote with its comment.
@@ -1671,7 +1679,6 @@ function undeliverable_requests() {
       created_at: request.created_at, request_message_id: request.message_id, layout_after: request.layout_after, layout_at: request.created_at,
       failure: { role: blocked.get(request.member_id).role, result: blocked.get(request.member_id).adopt_error } }));
 }
-const expanded_rewinds = ref(new Set());
 /** Consecutive rewound messages share one box at the first of them, which lists them when expanded; a retracted one is a line of its own. */
 const rewound_runs = stable_computed(() => {
   const runs = new Map(), hidden = new Set();
