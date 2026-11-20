@@ -283,7 +283,7 @@ const MESSAGE_PREVIEW_STRETCH = 1.5;
 // an answer of a few lines was folded for passing a character count; user 2026-11-20, #6099: a fixed 160-character
 // excerpt kept too little, and how readily messages fold is a reader's choice). Without a level the first one applies.
 // `fold`: a message folds when shown whole it is taller than this share of the window; `keep`: the excerpt's share.
-const MESSAGE_FOLD_LEVELS = { loose: { fold: 1.2, keep: 0.5 }, standard: { fold: 0.7, keep: 0.35 }, compact: { fold: 0.5, keep: 0.2 }, off: null };
+const MESSAGE_FOLD_LEVELS = { loose: { fold: 1.2, keep: 0.5 }, standard: { fold: 0.7, keep: 0.35 }, compact: { fold: 0.5, keep: 0.2 } };
 // The message text's size in px (frontend/channel.css `.channel-message-text`), for estimating its height without laying it out.
 const MESSAGE_FONT_PX = 16;
 const MESSAGE_LINE_PX = 26;
@@ -304,7 +304,6 @@ const MESSAGE_BLOCK_TAGS = /^(P|H[1-6]|UL|OL|PRE|TABLE|BLOCKQUOTE|HR|DIV|SECTION
 /** The text width of a message card and the height above which it folds, for this window. */
 function read_fold_area(box) {
   const level = Object.hasOwn(MESSAGE_FOLD_LEVELS, fold_level.value) ? MESSAGE_FOLD_LEVELS[fold_level.value] : MESSAGE_FOLD_LEVELS.loose;
-  if (!level) return { off: true, width: 0 };
   const reading = box ? parseFloat(getComputedStyle(box).getPropertyValue("--channel-reading-width")) || MESSAGE_READING_WIDTH_PX : MESSAGE_READING_WIDTH_PX;
   const column = Math.min(box?.clientWidth || window.innerWidth, reading);
   const width = Math.max(MESSAGE_FOLD_WIDTH_STEP_PX, column - (narrow_query.matches ? MESSAGE_CARD_INSET_NARROW_PX : MESSAGE_CARD_INSET_PX));
@@ -1557,7 +1556,7 @@ function keep_table_columns(fragment, html) {
  */
 function build_answer_preview(message, area) {
   const full = { truncated: false, html: message.rendered_text };
-  if (message.kind === "receipt" || area.off) return full;
+  if (message.kind === "receipt") return full;
   const template = document.createElement("template");
   template.innerHTML = message.rendered_text;
   const height = estimated_blocks_height(template.content, area.width);
@@ -3242,7 +3241,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <span v-else-if="item.status === 'waiting'">{{ t('智能调度：主持人答完后请 {value1} 回答', { value1: bridge.display_name(item.member) }) }}</span>
                 <span v-else>{{ t('智能调度：{value1}', { value1: item.mode === 'interrupt' ? t('已打断主持人，改由 {value1} 回答', { value1: bridge.display_name(item.member) }) : t('已请 {value1} 回答', { value1: bridge.display_name(item.member) }) }) }}</span>
                 <template v-if="item.can_adopt">
-                  <UButton v-if="!card.adopting" :label="t('采纳')" icon="i-lucide-check" size="xs" variant="soft" color="primary" :aria-label="t('采纳建议，请 {value1} 回答 #{value2}', { value1: item.member, value2: item.message_id })" @click="item.host_busy ? adopting = item.message_id : adopt(item.message_id, 'after')" />
+                  <UButton v-if="!card.adopting" :label="t('采纳')" icon="i-lucide-check" size="xs" variant="soft" color="primary" :aria-label="t('采纳建议，请 {value1} 回答 #{value2}', { value1: bridge.display_name(item.member), value2: item.message_id })" @click="item.host_busy ? adopting = item.message_id : adopt(item.message_id, 'after')" />
                   <template v-else>
                     <UButton :label="t('打断主持人，改由 {value1} 回答', { value1: bridge.display_name(item.member) })" size="xs" variant="soft" color="warning" @click="adopt(item.message_id, 'interrupt')" />
                     <UButton :label="t('主持人答完后再请 {value1}', { value1: bridge.display_name(item.member) })" size="xs" variant="soft" color="neutral" @click="adopt(item.message_id, 'after')" />

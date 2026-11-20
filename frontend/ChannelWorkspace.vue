@@ -62,7 +62,7 @@ const search = field("search-input");
 const LAYOUT_KEY = "ai-codiscuss-channel-layout";
 const EFFECT_OPTIONS = [{ value: "full", label: t("完整") }, { value: "reduced", label: t("精简") }];
 // How readily long answers fold; ChannelDiscussion.vue MESSAGE_FOLD_LEVELS gives each level's heights.
-const FOLD_OPTIONS = [{ value: "loose", label: t("宽松") }, { value: "standard", label: t("标准") }, { value: "compact", label: t("紧凑") }, { value: "off", label: t("不折叠") }];
+const FOLD_OPTIONS = [{ value: "loose", label: t("宽松") }, { value: "standard", label: t("标准") }, { value: "compact", label: t("紧凑") }];
 const READING_WIDTHS = { narrow: { label: t("窄"), width: 720 }, default: { label: t("默认"), width: 960 }, wide: { label: t("宽"), width: 1240 } };
 const RAIL_MIN = 220;
 const RAIL_MAX = 440;

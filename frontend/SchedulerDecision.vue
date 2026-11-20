@@ -20,6 +20,32 @@ const SOME_PREFIX = "__some__:";
 const UNSET_CORRECTION = "__unset__";
 const option_name = (name) => DECISION_OPTIONS[name]
   || (String(name).startsWith(SOME_PREFIX) ? t('{value1} 各自回应', { value1: String(name).slice(SOME_PREFIX.length).split("、").map(bridge.display_name).join("、") }) : bridge.display_name(name));
+const ESCAPE_REGEX = /[.*+?^${}()|[\]\\]/g;
+/** Replace stored member IDs inside a saved decision label with their current display names. */
+const decision_label = computed(() => {
+  const raw = String(props.decision.label || "");
+  if (!raw) return raw;
+  const ids = new Set([
+    ...(view.value.room?.members || []).map((member) => member.name),
+    ...Object.keys(view.value.room?.labels || {}),
+    ...Object.keys(bridge.identities || {}),
+  ]);
+  for (const item of props.decision.detail || []) {
+    for (const value of item.choices || []) {
+      if (String(value).startsWith(SOME_PREFIX)) {
+        for (const member of String(value).slice(SOME_PREFIX.length).split("、")) ids.add(member);
+      } else if (!DECISION_OPTIONS[value]) {
+        ids.add(value);
+      }
+    }
+  }
+  const replacements = [...ids]
+    .filter((id) => id && bridge.display_name(id) && bridge.display_name(id) !== id)
+    .sort((left, right) => right.length - left.length);
+  if (!replacements.length) return raw;
+  const pattern = new RegExp(`(^|[^A-Za-z0-9_-])(${replacements.map((id) => id.replace(ESCAPE_REGEX, "\\$&")).join("|")})(?![A-Za-z0-9_-])`, "g");
+  return raw.replace(pattern, (_, prefix, match) => `${prefix}${bridge.display_name(match)}`);
+});
 
 /** Every option of one question with its probability, most likely first, so a close call is visible at a glance. */
 function decision_odds(item) {
@@ -107,7 +133,7 @@ const correction_options = computed(() => [{ label: t('未指定'), value: UNSET
 
 <template>
   <ScheduleCard icon="i-lucide-zap" :skipped="free ? true : !decision.applied" :title="decision.title" :label="t('智能调度决策')" :toggle-label="t('展开或收起判断详情')" :expandable="Boolean(decision.detail?.length)">
-    <template #text>{{ t('智能调度：{value1}', { value1: decision.label }) }}<small v-if="decision.confidence !== null">{{ t('置信度 {value1}', { value1: Number(decision.confidence).toFixed(2) }) }}</small><small v-if="decision.duration">{{ t('耗时 {value1}', { value1: decision.duration }) }}</small></template>
+    <template #text>{{ t('智能调度：{value1}', { value1: decision_label }) }}<small v-if="decision.confidence !== null">{{ t('置信度 {value1}', { value1: Number(decision.confidence).toFixed(2) }) }}</small><small v-if="decision.duration">{{ t('耗时 {value1}', { value1: decision.duration }) }}</small></template>
     <template #actions>
       <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': feedback === 'good' }" :aria-pressed="feedback === 'good'" :aria-label="t('这次调度判断得好')" :title="t('判断得好')" @click="rate('good')"><UIcon name="i-lucide-thumbs-up" /></button>
       <button v-if="view.access?.can_manage" type="button" class="channel-schedule-rate" :class="{ 'is-on': feedback === 'bad' }" :aria-pressed="feedback === 'bad'" :aria-label="t('这次调度判断得不好')" :title="t('判断得不好')" @click="rate('bad')"><UIcon name="i-lucide-thumbs-down" /></button>

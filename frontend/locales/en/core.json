@@ -476,7 +476,6 @@
   "宽松": "Relaxed",
   "标准": "Standard",
   "紧凑": "Eager",
-  "不折叠": "Never",
   "长回答折叠": "Folding long answers",
   "宽松：超过 1.2 屏才折叠，折后保留半屏；标准：超过 0.7 屏折叠；紧凑：超过半屏就折叠，只留开头。按当前屏幕高度计算，只对本设备生效。": "Relaxed folds answers taller than 1.2 screens and keeps half a screen; Standard folds past 0.7 of a screen; Eager folds past half a screen and keeps only the opening. Measured against this screen's height, and saved on this device only."
 }

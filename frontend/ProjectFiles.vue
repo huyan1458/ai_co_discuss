@@ -59,6 +59,11 @@ const breadcrumbs = computed(() => {
   const parts = current_path.value.split("/").filter(Boolean);
   return [{ name: root_name.value, path: "" }, ...parts.map((name, index) => ({ name, path: parts.slice(0, index + 1).join("/") }))];
 });
+const path_nav = ref(null);
+watch([breadcrumbs, mode], async () => {
+  await nextTick();
+  if (path_nav.value) path_nav.value.scrollLeft = path_nav.value.scrollWidth;
+});
 
 /** Remember where the list is, for coming back to this room's files. */
 function remember() {
@@ -405,19 +410,19 @@ const deleted_time = (value) => modified_time(value);
     </div>
 
     <div class="project-explorer" :aria-busy="loading || busy">
-      <nav class="project-explorer-path" :aria-label="t('文件路径')">
+      <nav ref="path_nav" class="project-explorer-path" :aria-label="t('文件路径')">
         <button type="button" :aria-current="mode === 'roots' ? 'location' : undefined" :disabled="mode === 'roots'" :title="t('所有项目与草稿')" @click="show_roots()">
-          <UIcon name="i-lucide-folders" />{{ t('项目') }}
+          {{ t('项目') }}
         </button>
         <template v-if="mode === 'folder'">
           <template v-for="(part, index) in breadcrumbs" :key="part.path">
             <UIcon name="i-lucide-chevron-right" class="project-crumb-separator" />
             <button type="button" :disabled="index === breadcrumbs.length - 1" :aria-current="index === breadcrumbs.length - 1 ? 'location' : undefined" @click="read_directory(part.path)">
-              <UIcon v-if="!index" name="i-lucide-folder-root" />{{ part.name }}
+              {{ part.name }}
             </button>
           </template>
         </template>
-        <template v-else-if="mode === 'trash'"><UIcon name="i-lucide-chevron-right" class="project-crumb-separator" /><button type="button" disabled aria-current="location"><UIcon name="i-lucide-trash-2" />{{ t('回收区') }}</button></template>
+        <template v-else-if="mode === 'trash'"><UIcon name="i-lucide-chevron-right" class="project-crumb-separator" /><button type="button" disabled aria-current="location">{{ t('回收区') }}</button></template>
       </nav>
 
       <form v-if="naming" class="project-files-naming" @submit.prevent="finish_naming">
@@ -520,12 +525,12 @@ const deleted_time = (value) => modified_time(value);
 .project-files-upload-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ui-text); }
 .project-files-upload-error { color: var(--ui-error); }
 .project-explorer { overflow: hidden; border: 1px solid var(--ui-border); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); }
-.project-explorer-path { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 42px; padding: 6px 10px; border-bottom: 1px solid var(--ui-border); font-size: 13px; }
-.project-explorer-path button { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 5px; color: var(--ui-text-muted); cursor: pointer; overflow-wrap: anywhere; }
+.project-explorer-path { display: flex; flex-wrap: nowrap; align-items: center; gap: 1px; min-height: 38px; padding: 4px 10px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--ui-border); font-size: 13px; }
+.project-explorer-path > * { flex-shrink: 0; }
+.project-explorer-path button { display: inline-flex; align-items: center; padding: 3px 5px; border-radius: 5px; color: var(--ui-text-muted); white-space: nowrap; cursor: pointer; }
 .project-explorer-path button:hover:not(:disabled) { background: var(--ui-bg-accented); color: var(--ui-text); }
 .project-explorer-path button[aria-current] { color: var(--ui-text-highlighted); font-weight: 600; cursor: default; }
 .project-explorer-path button:disabled:not([aria-current]) { cursor: default; }
-.project-explorer-path button > span { width: 15px; height: 15px; color: var(--ui-primary); }
 .project-files-naming { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-bottom: 1px solid var(--ui-border); }
 .project-files-naming input { flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--ui-border-accented); border-radius: 6px; background: var(--ui-bg); font-size: 13px; }
 .project-files-group { margin: 8px 10px 2px; color: var(--ui-text-dimmed); font-size: 11px; letter-spacing: .02em; }
@@ -549,6 +554,8 @@ const deleted_time = (value) => modified_time(value);
 .project-files-empty.is-small { padding: 8px 12px; justify-content: flex-start; font-size: 12px; }
 
 @media (max-width: 640px) {
+  .project-explorer-path { min-height: 36px; padding: 4px 8px; font-size: 12px; }
+  .project-explorer-path button { padding: 3px 4px; }
   .project-files-columns, .project-file-row { grid-template-columns: minmax(0, 1fr) 64px auto; gap: 8px; }
   .project-files-columns > :last-child, .project-file-row time, .project-file-date { display: none; }
 }
