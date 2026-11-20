@@ -1677,6 +1677,10 @@ class MultiMemberTests(FreeRoomTests):
             return self.request(f"{self.path}/executions/{execution['id']}", {"action": "report", "changes": files}, self.owner)
         self.assertEqual(report(claude, ["index.html", "a.css"])[0], 200)
         self.assertEqual(report(claude, ["b.css"])[0], 409)
+        # What had changed when the answer arrived is replaced once by the report after the software exits.
+        early = {"action": "report", "provisional": True, "changes": ["early.css"]}
+        self.assertEqual(self.request(f"{self.path}/executions/{codex['id']}", early, self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/executions/{codex['id']}", early, self.owner)[0], 409)
         self.assertEqual(report(codex, "x")[0], 400)
         self.assertEqual(report(codex, ["index.html"])[0], 200)
         self.assertEqual(self.request(self.path)[1]["free"]["conflicts"], [])

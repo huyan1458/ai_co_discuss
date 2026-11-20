@@ -48,6 +48,7 @@ async function reload() {
   loading.value = true;
   try {
     state.value = await call("state");
+    if (outdated(state.value.version)) { window.location.reload(); return true; }
     if (state.value.hosting) check_entry(); else entry_check += 1;
     return true;
   }
@@ -62,12 +63,13 @@ function choose(key) { chosen.value = key; history.replaceState(null, "", `#${ke
 // and says when it is done, so a quick refresh is still visibly a refresh.
 const refreshed = ref(0), refreshing = ref(false);
 async function refresh_all() {
+  // A full reload: the page and its scripts come again from the panel, so what an update changed shows at once (#5679).
   refreshing.value = true;
-  refreshed.value += 1;
-  const [ok] = await Promise.all([reload(), new Promise((done) => setTimeout(done, 500))]);
-  refreshing.value = false;
-  if (ok) notify("info", t('已刷新'));
+  window.location.reload();
 }
+// The version this page was served as; a panel of another version means this page is old and loads the new one.
+const PAGE_VERSION = document.querySelector('meta[name="codiscuss-version"]')?.content || "";
+const outdated = (version) => Boolean(PAGE_VERSION && version && version !== PAGE_VERSION);
 
 // The panel is also changed from outside this page (codiscuss admin, another window, an update that restarts it), so
 // the state is read again when the window comes back to the front and every few seconds while it shows. A panel of
@@ -82,7 +84,7 @@ async function sync() {
   try {
     const fresh = await call("state");
     if (updating.value || loading.value) return;
-    if (state.value.version && fresh.version && fresh.version !== state.value.version) { window.location.reload(); return; }
+    if ((state.value.version && fresh.version && fresh.version !== state.value.version) || outdated(fresh.version)) { window.location.reload(); return; }
     // The entry's network checks are not part of the state; the last answer stays until the next full reload.
     if (JSON.stringify({ ...fresh, entry: undefined }) !== JSON.stringify({ ...state.value, entry: undefined })) state.value = { ...fresh, entry: fresh.entry ?? state.value.entry };
   } catch { /* The panel is restarting or stopped; the next round asks again. */ }

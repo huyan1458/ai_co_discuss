@@ -3336,13 +3336,13 @@ test('changed files in a Git working tree are reported after the member exits', 
   await runner.tick();
   assert.equal(state.executions[0].cwd, cwd_key(project));
   writeFileSync(join(project, 'index.html'), 'new');
-  writeFileSync(join(project, 'added.css'), 'x');
   state.executions[0].status = 'completed';
   await runner.tick();
-  assert.equal(state.reports[1], undefined, 'reporting waits for the process to exit');
+  assert.deepEqual(state.reports[1], ['index.html'], 'what changed by the answer is reported at once, the process still running');
+  writeFileSync(join(project, 'added.css'), 'x');
   child.emit('close');
   await runner.tick();
-  assert.deepEqual(state.reports[1], ['added.css', 'index.html']);
+  assert.deepEqual(state.reports[1], ['added.css', 'index.html'], 'the report after the process exits replaces it');
   state.executions.push({ ...state.executions[0], id: 2 });
   runner.snapshots.set(2, { member: 'Claude', directory: project, before: workspace_snapshot(project) });
   await runner.report_finished(new Set());

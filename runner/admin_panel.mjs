@@ -844,6 +844,11 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       const file = join(WEB, name);
       if (!existsSync(file)) return send_json(response, 404, error_body(panel_error('页面尚未构建，请运行 npm run build')));
       response.writeHead(200, { 'Content-Type': TYPES[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+      // The page names its own version and asks for its scripts by version, so a page left open across an update
+      // can tell it is old and nothing cached is taken for the new one (user 2026-11-19, #5679).
+      if (name === 'admin.html') return response.end(readFileSync(file, 'utf8').replace('<head>', `<head>
+  <meta name="codiscuss-version" content="${VERSION}">`)
+        .replace(/(href|src)="\/(admin\.css|i18n\.js|admin\.js)"/g, `$1="/$2?v=${VERSION}"`));
       response.end(readFileSync(file));
     } catch (error) {
       if (response.headersSent) response.destroy();

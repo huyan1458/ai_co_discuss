@@ -297,6 +297,8 @@ CREATE TABLE IF NOT EXISTS member_executions (
     finished_at INTEGER NOT NULL DEFAULT 0,
     result TEXT NOT NULL DEFAULT '',
     changes TEXT NOT NULL DEFAULT '',
+    -- 1 while `changes` is what had changed when the answer arrived; the report after the software exits replaces it.
+    changes_provisional INTEGER NOT NULL DEFAULT 0,
     -- The changed files the member's own edit tools wrote; '' when its software could not tell (see possible_conflicts).
     edited TEXT NOT NULL DEFAULT '',
     cwd TEXT NOT NULL DEFAULT '',

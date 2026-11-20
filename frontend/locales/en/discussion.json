@@ -216,6 +216,7 @@
   "主持人答完后再请 {value1}": "Ask {value1} after the host replies",
   "取消采纳": "Cancel acceptance",
   "执行报告 #{value1}": "Run report #{value1}",
+  "正在统计文件改动…": "Counting file changes…",
   "执行 #{value1} · {value2}": "Run #{value1} · {value2}",
   "文件变化：{value1}": "File changes: {value1}",
   "重发": "Resend",

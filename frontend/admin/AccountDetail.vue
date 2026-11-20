@@ -120,13 +120,13 @@ async function copy(text) {
           <div class="panel-tile"><UIcon name="i-lucide-id-card" /></div>
           <div class="panel-main">
             <div class="panel-title">{{ t('登录信息') }}</div>
-            <span class="panel-sub"><template v-if="address">{{ t('入口') }} <a class="panel-link" :href="address" target="_blank" rel="noopener">{{ address }}</a> </template>{{ t('· 账号') }} <b class="detail-name">{{ account.name }}</b> {{ t('· 密码仅在重设时显示一次') }}</span>
+            <span class="panel-sub detail-login"><b class="detail-name">{{ account.name }}</b><template v-if="address"> · <a class="panel-link" :href="address" target="_blank" rel="noopener">{{ address }}</a></template></span>
             <span v-if="!state.entry?.address" class="panel-sub detail-warn">{{ t('登录入口没有开启线上网站或自有域名，其他设备打不开') }}</span>
             <span v-else-if="!state.entry?.running" class="panel-sub detail-warn">{{ t('登录入口未运行，使用者暂时无法登录，请到“概览”启动') }}</span>
           </div>
           <div class="panel-side">
             <button v-if="address" type="button" class="panel-button is-outline is-small" @click="copy(t('地址 {value1}，账号 {value2}', { value1: address, value2: account.name }))"><UIcon name="i-lucide-copy" />{{ t('复制') }}</button>
-            <button type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="act('password')"><UIcon name="i-lucide-key-round" />{{ t('重设密码') }}</button>
+            <button type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" :title="t('密码仅在重设时显示一次')" @click="act('password')"><UIcon name="i-lucide-key-round" />{{ t('重设密码') }}</button>
           </div>
         </div>
       </div>
@@ -207,4 +207,5 @@ async function copy(text) {
 .detail-name { color: var(--panel-text); font-weight: 600; }
 .detail-warn { color: var(--panel-amber); }
 .detail-op { min-height: 64px; }
+.detail-login { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 </style>

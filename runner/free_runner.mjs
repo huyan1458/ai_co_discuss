@@ -1575,11 +1575,18 @@ export class FreeRoomRunner {
       return false;
     }
   }
-  /** Report observed file changes once an execution has ended and its member's processes have exited. */
+  /**
+   * Report observed file changes once an execution has ended. Its software is often still closing its turn then (the
+   * answer is posted from inside it), so what has changed so far is reported at once as provisional, for the answer's
+   * card to list without the wait (user 2026-11-19, #5669); the report after its processes have exited replaces it.
+   */
   async report_finished(active) {
     for (const [execution_id, snapshot] of this.snapshots) {
-      if (active.has(execution_id) || this.execution_processes.get(execution_id)?.size) continue;
-      this.snapshots.delete(execution_id);
+      if (active.has(execution_id)) continue;
+      const running = this.execution_processes.get(execution_id)?.size > 0;
+      if (running && snapshot.reported_early) continue;
+      if (running) snapshot.reported_early = true;
+      else this.snapshots.delete(execution_id);
       const after = snapshot.before ? workspace_snapshot(snapshot.directory) : null;
       if (!after && !snapshot.extras?.length) continue;
       const extra = (snapshot.extras || []).flatMap(item => {
@@ -1593,7 +1600,7 @@ export class FreeRoomRunner {
       // Line counts and patches of the files in the member's own working tree, for the card's "edited N files".
       let diffs = [];
       try { diffs = file_diffs(snapshot.directory, own.slice(0, 200), snapshot.base); } catch { /* The card then lists names only. */ }
-      try { await api(this.config, `/executions/${execution_id}`, { action: 'report', changes, ...edited, ...(diffs.length ? { diffs } : {}) }); }
+      try { await api(this.config, `/executions/${execution_id}`, { action: 'report', ...(running ? { provisional: true } : {}), changes, ...edited, ...(diffs.length ? { diffs } : {}) }); }
       catch (error) { if (!/HTTP (404|409)/.test(error.message)) throw error; }
     }
   }

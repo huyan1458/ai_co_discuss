@@ -190,7 +190,7 @@ def reported_capabilities(row):
 LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "session_mode": "TEXT NOT NULL DEFAULT 'new'"},
                  "external_members": {"platform": "TEXT NOT NULL DEFAULT ''", "model": "TEXT NOT NULL DEFAULT ''"},
                  "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "edited": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
-                                       "diffs": "TEXT NOT NULL DEFAULT ''",
+                                       "diffs": "TEXT NOT NULL DEFAULT ''", "changes_provisional": "INTEGER NOT NULL DEFAULT 0",
                                        "activity": "TEXT NOT NULL DEFAULT ''", "activity_at": "INTEGER NOT NULL DEFAULT 0",
                                        "paused_at": "INTEGER NOT NULL DEFAULT 0"},
                  "member_requests": {"chain_id": "INTEGER NOT NULL DEFAULT 0", "batch_id": "INTEGER NOT NULL DEFAULT 0",
@@ -3488,12 +3488,14 @@ def execution_action(connection, room_id, execution_id, token, payload, member=N
         raise PermissionError(Text("只能报告自己执行的失败") if action == "fail" else Text("执行编号不属于本成员"))
     now = int(time.time())
     if action == "report":
-        # Observed after the process ends, so the execution may already be complete; recorded once.
-        if row["changes"]:
+        # Observed after the process ends, so the execution may already be complete; recorded once. A provisional report
+        # (what had changed when the answer arrived, the software still closing its turn) is replaced by that final one.
+        provisional = payload.get("provisional") is True
+        if row["changes"] and (provisional or not row["changes_provisional"]):
             raise FileExistsError(Text("本次执行的改动已记录"))
         changes = changed_files(payload)
-        connection.execute("UPDATE member_executions SET changes=?,edited=?,diffs=? WHERE id=?",
-                           (json.dumps(changes, ensure_ascii=False), edited_files(payload, changes), file_diffs(payload, changes), execution_id))
+        connection.execute("UPDATE member_executions SET changes=?,edited=?,diffs=?,changes_provisional=? WHERE id=?",
+                           (json.dumps(changes, ensure_ascii=False), edited_files(payload, changes), file_diffs(payload, changes), int(provisional), execution_id))
     elif action == "denials":
         # Like file changes, read from the software's output once its process ends; recorded once.
         saved = connection.execute("INSERT OR IGNORE INTO execution_denials (execution_id,room_id,denials) VALUES (?,?,?)",

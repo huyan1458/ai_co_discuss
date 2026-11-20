@@ -764,7 +764,7 @@ const execution_reports = stable_computed(() => {
     // The runner counts the changed files once the member's software has exited, seconds after the answer: a member
     // that edited files holds the card's place meanwhile, so the list does not appear from nothing (user 2026-11-19, #5665).
     const tallying = execution.status === "completed" && execution.edits > 0 && execution.changes_recorded === false
-      && tally_now.value - execution.finished_at < TALLY_WAIT_SECONDS;
+      && Math.max(tally_now.value, Math.floor(Date.now() / 1000)) - execution.finished_at < TALLY_WAIT_SECONDS;
     if (execution.status === "completed" && !listed_changes && !execution.denials?.length && !tallying) continue;
     // A failed free-room execution keeps its own card in the slot it worked in, and so does a delivered one that was voided.
     if (execution.status === "failed" || (execution.status === "cancelled" && execution.capabilities)) continue;

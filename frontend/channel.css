@@ -242,6 +242,7 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-execution-report > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
 .channel-execution-report strong { font-weight: 500; }
 .channel-execution-report p { margin: 2px 0 0; }
+.channel-execution-report .channel-execution-tallying { display: flex; align-items: center; gap: 6px; }
 .channel-execution-denials ul { margin: 0 0 6px; padding-left: 18px; list-style: disc; }
 .channel-execution-denials code { margin-right: 4px; }
 .channel-answer-summary > small { color: #939ba8; font-size: 12px; font-weight: 400; line-height: 1.7; }

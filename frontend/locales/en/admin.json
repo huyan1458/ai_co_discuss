@@ -384,5 +384,6 @@
   "绑定共议线上网站（形如 https://xxx.pages.dev），不是你的自有域名": "Bind the CoDiscuss online site (like https://xxx.pages.dev), not your own domain",
   "在部署线上网站的电脑上生成（它的管理面板“本机 → 线上网站 → 生成接入码”，或运行 codiscuss admin entry code），只能用一次。就在那台电脑上绑定时，只填站点地址即可。": "Generate it on the computer that deployed the online site (its management panel: This computer → Online site → Generate access code, or run codiscuss admin entry code); each code works once. On that computer itself, the site address alone is enough.",
   "发给要绑定的电脑，在它的管理面板“本机 → 线上网站 → 绑定”里粘贴。只能用一次；再生成一个会让之前没用过的作废。": "Send it to the computer to bind and paste it in its management panel under This computer → Online site → Bind. It works once; generating another voids any unused earlier one.",
-  "不需要域名：经共议线上网站中转到这台电脑，手机和外地的电脑都能打开。": "No domain needed: relayed through the CoDiscuss online site to this computer, so phones and computers elsewhere can open it."
+  "不需要域名：经共议线上网站中转到这台电脑，手机和外地的电脑都能打开。": "No domain needed: relayed through the CoDiscuss online site to this computer, so phones and computers elsewhere can open it.",
+  "密码仅在重设时显示一次": "The password is shown only when it is reset"
 }
