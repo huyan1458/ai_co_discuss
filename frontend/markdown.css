@@ -114,7 +114,7 @@ html[data-theme="channel-light"] .markdown-body {
 .attachment-download { display: grid; padding: 0; background: none; border: 0; cursor: pointer; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border-radius: 5px; color: #707b8c; text-decoration: none; }
 .attachment-download svg { width: 18px; height: 18px; }
 .attachment-download:hover { color: #3868d9; background: #edf2fc; }
-.attachment-drafts { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0; padding: 16px 14px 6px; }
+.attachment-drafts { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; margin: 0; padding: 16px 14px 6px; }
 .attachment-drafts:empty { display: none; }
 .attachment-draft-image { position: relative; width: 88px; height: 88px; border-radius: 7px; background: #edf0f4; }
 .attachment-draft-image img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }

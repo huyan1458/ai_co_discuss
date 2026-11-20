@@ -13,7 +13,7 @@ OWNER_PROXY_PREFIX = secrets.token_hex(16) + ":"
 LIMIT_DEFAULTS = {"max_rounds": 0, "max_minutes": 0, "execution_minutes": 0}
 # Phase segments the runner reports for the execution timeline: the phases, how many one execution keeps and one report
 # carries, a tool name's length, and how long after its end an execution still takes its last report.
-SEGMENT_PHASES = ("thinking", "command", "tool", "editing", "writing")
+SEGMENT_PHASES = ("thinking", "command", "tool", "editing", "writing", "waiting")
 MAX_EXECUTION_SEGMENTS = 400
 MAX_SEGMENTS_PER_REPORT = 40
 MAX_SEGMENT_TOOL = 60

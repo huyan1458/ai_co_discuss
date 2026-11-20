@@ -221,3 +221,19 @@ test('an App room task is not stopped from here but its end is heard', async t =
   assert.equal(await heard, true);
   assert.ok(f.app.steps.length > 1, 'only after the new turn added its steps and the App went idle');
 });
+
+test('agy gets the thinking level only through the model ID: a stored effort is never passed beside it', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'agy-effort-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  let args = null;
+  const spawn_process = (_executable, argv) => { args = argv; throw new Error('spawned'); };
+  // agy 1.5 refuses `--model gemini-4-neon-xhigh --effort medium` outright, so every retry of such a member failed.
+  const config = { adapter: 'antigravity_cli', executable: process.execPath, session_id: 'conv-9', cwd: home, model: 'gemini-4-neon-xhigh', effort: 'medium' };
+  const access_path = join(home, 'chat-2.access.json');
+  writeFileSync(access_path, '{}');
+  const task = { id: 'chat-2', chat: true, directory: home, draft_directory: home, skill_directories: [], access_path, prompt: 'hi' };
+  await deliver_task(config, { session_id: 'conv-9' }, task, spawn_process, home).catch(() => {});
+  assert.ok(args, 'agy was started');
+  assert.equal(args[args.indexOf('--model') + 1], 'gemini-4-neon-xhigh');
+  assert.ok(!args.includes('--effort'));
+});

@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path';
+import { basename, dirname, isAbsolute, join, posix, relative, resolve, win32 } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
@@ -11,7 +11,8 @@ import { parseArgs } from 'node:util';
 
 import { account_projects, account_space, create_or_restore_account_project, draft_folder, hide_account_projects, listed_account_projects } from './account_space.mjs';
 import { atomic_json } from './files.mjs';
-import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, read_only_enforced, read_project_files, read_project_folders, room_directories, search_project_roots } from './project_files.mjs';
+import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, project_root, read_only_enforced, read_project_files, read_project_folders, room_directories, search_project_roots } from './project_files.mjs';
+import { delete_entry, make_folder, paste_entry, read_text, RecycleArea, rename_entry, save_text, upload_part } from './project_manage.mjs';
 import { guard_remote_request, list_remote_directories, remote_allows, remote_roots } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
@@ -113,9 +114,9 @@ start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和�
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论；quick 为 true 时不查询 agy 的默认模型（较慢），该成员标 defaults_pending。
 room-skills 只读指定成员本机安装的技能，须提供 site、room_id、token、name；软件与项目目录只取本机已保存配置，不启动 AI。
-room-files 只读房间已保存的项目目录，须提供 site、room_id、token，可选相对 path 和目录分页 offset；文件返回最多前 128 KiB 文本；给 query 时改为按名称搜索整个项目（含 / 时按路径），最多返回 50 项。
+room-files 读取或整理房间已保存的项目目录，须提供 site、room_id、token，可选相对 path 和目录分页 offset；文件返回最多前 128 KiB 文本；给 query 时改为按名称搜索整个项目（含 / 时按路径），最多返回 50 项。root 为房间目录序号（0 为主目录），或 op roots 列出的项目、草稿 id。带 op 时改文件：roots 列出项目与草稿；mkdir（path、name）；rename（path、name）；delete（path，移进回收区）；paste（mode copy|move、source {root, path}、目标 path，可选 conflict replace|keep_both，不带时同名答 conflict）；upload（path、name、upload_id、index、total、size、base64 data，单个最多 20 MB）；read / save（path，save 带 text 与 read 返回的 version，文件已变答 conflict）；trash 列出回收区（保留 30 天）、restore（id）；new-project（name，仅托管账号）；delete-root（root，草稿或托管账号的项目，有房间在用时拒绝）。项目与草稿文件夹本身不能改名、移动，链接不能改动。
 room-page 只读项目目录里的一个 HTML 文件（path，可选 root），把它按相对路径引用的样式、脚本、图片、字体与音视频内联为 data URL，以 base64 的 data 返回（最多 8 MiB）；Markdown 文件则返回它按相对路径引用的项目图片 {项目路径: data URL} 的 JSON；其他设备经中转时分段返回，按 offset 续读并核对 version；未能载入的引用列在 missing（不存在或在项目目录外）与 skipped（超出大小）。
-room-media 核对项目目录里的一个图片、视频或音频文件（path，可选 root）可读：本机网站凭它登记一个 10 分钟有效的播放地址，按 Range 直接读盘，网页拿不到文件路径；其他设备经中转时分段返回 base64 的 data（按 offset 续读并核对 version），最多 64 MB。
+room-media 核对项目目录里的一个图片、视频或音频文件（path，可选 root；带 download: true 时任何普通文件都可读，本机地址以下载方式发送）可读：本机网站凭它登记一个 10 分钟有效的播放地址，按 Range 直接读盘，网页拿不到文件路径；其他设备经中转时分段返回 base64 的 data（按 offset 续读并核对 version），最多 64 MB。
 execution-details 只读房间某次执行的过程细节（中间说明、命令与输出、搜索、改动、工具调用），由本机日志还原，须提供 site、room_id、token、execution_id；细节只留在本机，不写入网站。
 models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
 sessions 浏览某个软件（adapter）保存在这台电脑上的历史会话，供挑选新成员要续接的会话，不启动 AI：action 为 list（默认；可选 cwd 只看该目录的会话、query 按标题 / 目录 / 会话 ID 筛选、offset 续读下一页，返回 sessions 与 next_offset）或 preview（须带 session_id，返回该会话末尾的对话）；软件不支持浏览时 available 为 false。其他设备只能看到常用项目目录内的会话。
@@ -169,7 +170,7 @@ JSON 指定 site、entry（conversation/web）、room（建房内容，含 submi
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
 conversation 还须 current_session_id，当前会话接手首个主持任务。
 已有受保护房间使用 access_file。路径、凭据只保存在本机。
-详见 docs/runner.md 的“两种讨论入口与启动配置”。
+用法见用户手册 docs/guide/first-run.md 的“从已有的 Claude Code 或 Codex 对话建房”。
 `;
 
 // Windows PowerShell 5.1 ships WinForms. A background process cannot take the foreground, so the owner must be
@@ -455,17 +456,129 @@ function room_workflow_status(config, home) {
 }
 
 /**
- * Read the owner's saved room projects, never a directory supplied by the request: `root` picks one of the room's
- * directories by index (0, the main one, by default), and a search covers all of them.
+ * The folders the file page may reach above the room's own: an ordinary account's projects and drafts, or the computer
+ * owner's saved projects and drafts. Each is named by an id made from its path, so the page never sees the path.
+ * `kind` is `project` or `draft`; `deletable` says whether the page may move the whole folder into the recycle area
+ * (drafts, and an ordinary account's projects; never the owner's saved projects, which are folders of their own).
+ */
+export function account_roots(home) {
+  const { projects_root, workspace } = account_space(home);
+  const id = path => createHash('sha256').update(resolve(path).toLowerCase()).digest('hex').slice(0, 16);
+  const projects = (projects_root ? listed_account_projects(home, projects_root) : launch_projects(home).projects || [])
+    .filter(project => typeof project?.path === 'string' && existsSync(project.path))
+    .map(project => ({ id: id(project.path), name: project.name || basename(project.path), path: project.path, kind: 'project', deletable: Boolean(projects_root) }));
+  const drafts = existsSync(workspace) ? readdirSync(workspace, { withFileTypes: true }).filter(entry => entry.isDirectory())
+    .map(entry => ({ id: id(join(workspace, entry.name)), name: entry.name, path: join(workspace, entry.name), kind: 'draft', deletable: true })) : [];
+  return [...projects, ...drafts];
+}
+
+/** Which registered rooms work in a folder (as main or extra directory, or inside it), by room id. */
+function rooms_using(home, folder) {
+  // Real paths, so a room saved under a linked spelling of the folder still counts.
+  const real = path => { try { return realpathSync(path); } catch { return resolve(path); } };
+  const key = path => process.platform === 'win32' ? real(path).toLowerCase() : real(path);
+  const inside = (outer, inner) => { const rest = relative(key(outer), key(inner)); return !rest || (!rest.startsWith('..') && !isAbsolute(rest)); };
+  return read_registry(home).flatMap(path => {
+    try {
+      const config = configuration_snapshot(path).config;
+      return room_directories(config).some(directory => inside(folder, directory)) ? [config.room] : [];
+    } catch { return []; }
+  });
+}
+
+/**
+ * The folder a file request names: `root` is the index of one of the room's own directories (0, the main one, by
+ * default), or the id of one of `account_roots`.
+ */
+function files_root(home, config, root = 0) {
+  if (typeof root === 'string') {
+    const item = account_roots(home).find(entry => entry.id === root);
+    if (!item) throw new Error('项目或草稿文件夹已不存在，请刷新后重试');
+    return item.path;
+  }
+  const directories = room_directories(config);
+  if (!Number.isSafeInteger(root) || root < 0 || root >= Math.max(1, directories.length)) throw new Error('项目目录编号无效，请刷新后重试');
+  return directories[root];
+}
+
+/** The account's projects and non-empty drafts as the file page lists them, drafts most recently changed first. */
+function list_account_roots(home) {
+  const listed = account_roots(home).map(item => {
+    let modified_at = null, empty = true;
+    try { modified_at = statSync(item.path).mtime.toISOString(); empty = !readdirSync(item.path).length; } catch { /* Shown without a time. */ }
+    return { id: item.id, name: item.name, kind: item.kind, deletable: item.deletable, modified_at, empty, rooms: rooms_using(home, item.path) };
+  });
+  return { kind: 'roots', projects: listed.filter(item => item.kind === 'project'),
+    drafts: listed.filter(item => item.kind === 'draft' && !item.empty).sort((left, right) => String(right.modified_at).localeCompare(String(left.modified_at))),
+    can_create_project: Boolean(account_space(home).projects_root) };
+}
+
+/** The recycle area of this instance: beside its draft space, outside every project. */
+function recycle_area(home) {
+  const { projects_root, workspace } = account_space(home);
+  return new RecycleArea(projects_root ? join(dirname(projects_root), 'trash') : `${workspace}-trash`);
+}
+
+/**
+ * Read or change the owner's room projects, never a directory supplied by the request: `root` picks one of the room's
+ * directories by index (0, the main one, by default) or one of the account's projects and drafts by id (see
+ * `account_roots`), and a search covers the room's directories. Without `op` it lists a folder or previews a file;
+ * `op` changes files (see FILE_OPERATIONS).
  */
 export async function room_files(home, raw, { trust = false } = {}) {
   const { input, config } = await member_room_context(home, raw, { trust });
+  if (input.op) return { room_id: input.room_id, ...file_operation(home, config, input) };
   const directories = room_directories(config);
   if (input.query) return { room_id: input.room_id, ...search_project_roots(directories, input.query) };
   const root = input.root ?? 0;
-  if (!Number.isSafeInteger(root) || root < 0 || (directories.length && root >= directories.length)) throw new Error('项目目录编号无效，请刷新后重试');
-  if (input.folders) return { room_id: input.room_id, root, folders: read_project_folders(directories[root], input.folders) };
-  return { room_id: input.room_id, root, ...read_project_files(directories[root], input.path, input.offset) };
+  const directory = files_root(home, config, root);
+  if (input.folders) return { room_id: input.room_id, root, folders: read_project_folders(directory, input.folders) };
+  return { room_id: input.room_id, root, ...read_project_files(directory, input.path, input.offset) };
+}
+
+/** The file page's changes; each names its folder by `root` and a relative `path`, as reading does. */
+const FILE_OPERATIONS = ['roots', 'mkdir', 'rename', 'delete', 'paste', 'upload', 'read', 'save', 'trash', 'restore', 'new-project', 'delete-root'];
+
+function file_operation(home, config, input) {
+  if (!FILE_OPERATIONS.includes(input.op)) throw new Error(`文件操作只能为 ${FILE_OPERATIONS.join('/')}`);
+  const recycle = recycle_area(home);
+  const root = () => project_root(files_root(home, config, input.root ?? 0));
+  // A folder some room works in keeps its place: renaming, moving, replacing or deleting it is refused.
+  const rooms_in = folder => rooms_using(home, folder);
+  if (input.op === 'roots') return list_account_roots(home);
+  if (input.op === 'mkdir') return make_folder(root(), input.path, input.name);
+  if (input.op === 'rename') return rename_entry(root(), input.path, input.name, rooms_in);
+  if (input.op === 'delete') return delete_entry(root(), input.path, recycle, rooms_in);
+  if (input.op === 'paste') {
+    return paste_entry({ source_root: project_root(files_root(home, config, input.source?.root ?? 0)), source_path: input.source?.path,
+      root: root(), path: input.path, mode: input.mode, conflict: input.conflict, recycle, rooms_in });
+  }
+  if (input.op === 'upload') {
+    return upload_part({ root: root(), path: input.path, name: input.name, upload_id: input.upload_id, index: input.index, total: input.total,
+      size: input.size, data: input.data, conflict: input.conflict, parts_directory: join(home, 'file-uploads'), recycle });
+  }
+  if (input.op === 'read') return read_text(root(), input.path);
+  if (input.op === 'save') return save_text(root(), input.path, input.text, input.version);
+  if (input.op === 'trash') return { entries: recycle.list() };
+  if (input.op === 'restore') {
+    const key = path => { try { return realpathSync(path).toLowerCase(); } catch { return ''; } };
+    const reachable = [...account_roots(home).map(item => item.path), ...room_directories(config), account_space(home).workspace,
+      account_space(home).projects_root].filter(Boolean).map(key).filter(Boolean);
+    return recycle.restore(input.id, origin => reachable.includes(key(origin)));
+  }
+  if (input.op === 'new-project') {
+    const { projects_root } = account_space(home);
+    if (!projects_root) throw new Error('这台电脑的常用项目请在设置里添加');
+    const created = create_or_restore_account_project(home, projects_root, input.name);
+    return { name: created.name, root: account_roots(home).find(item => resolve(item.path).toLowerCase() === resolve(created.path).toLowerCase())?.id ?? null };
+  }
+  // delete-root: a whole draft (or an ordinary account's project) into the recycle area, once no room works there.
+  const item = account_roots(home).find(entry => entry.id === input.root);
+  if (!item) throw new Error('项目或草稿文件夹已不存在，请刷新后重试');
+  if (!item.deletable) throw new Error('常用项目是这台电脑上的文件夹，不能在网页上删除；请在设置里把它移出常用项目');
+  const rooms = rooms_using(home, item.path);
+  if (rooms.length) throw new Error(`还有 ${rooms.length} 个房间在使用这个文件夹，请先删除这些房间或改用其他目录`);
+  return { trash_id: recycle.keep(realpathSync(item.path), { root: realpathSync(dirname(item.path)), path: item.name, kind: 'directory' }) };
 }
 
 /**
@@ -489,13 +602,12 @@ const PAGE_PART_BYTES = 192 * 1024;
  */
 export async function room_page(home, raw, { trust = false, parts = false } = {}) {
   const { input, config } = await member_room_context(home, raw, { trust });
-  const directories = room_directories(config);
   const root = input.root ?? 0;
   const offset = input.offset ?? 0;
-  if (!Number.isSafeInteger(root) || root < 0 || root >= Math.max(1, directories.length)) throw new Error('项目目录编号无效，请刷新后重试');
+  const directory = files_root(home, config, root);
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('页面读取位置无效');
   const bundle = /\.(md|markdown)$/i.test(String(input.path || '')) ? bundle_project_markdown : bundle_project_page;
-  const { bytes, ...page } = bundle(directories[root], input.path);
+  const { bytes, ...page } = bundle(directory, input.path);
   const part = bytes.subarray(offset, parts ? offset + PAGE_PART_BYTES : bytes.length);
   return { room_id: input.room_id, root, ...page, total: bytes.length, offset, data: part.toString('base64') };
 }
@@ -511,14 +623,18 @@ export const REMOTE_MEDIA_MAX_BYTES = 64 * 1024 * 1024;
  */
 export async function room_media(home, raw, { trust = false, parts = false } = {}) {
   const { input, config } = await member_room_context(home, raw, { trust });
-  const directories = room_directories(config);
   const root = input.root ?? 0;
   const offset = input.offset ?? 0;
-  if (!Number.isSafeInteger(root) || root < 0 || root >= Math.max(1, directories.length)) throw new Error('项目目录编号无效，请刷新后重试');
+  const directory = files_root(home, config, root);
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('文件读取位置无效');
-  const { file, ...media } = project_media(directories[root], input.path);
+  // `download` reads any regular file for saving, not only the kinds the preview shows.
+  const { file, ...media } = project_media(directory, input.path, { download: input.download === true });
   if (!parts) return { room_id: input.room_id, root, ...media, file };
-  if (media.size > REMOTE_MEDIA_MAX_BYTES) throw new Error(`文件 ${Math.ceil(media.size / 1024 / 1024)} MB，超过其他设备可播放的 ${REMOTE_MEDIA_MAX_BYTES / 1024 / 1024} MB 上限；请在这台电脑上打开`);
+  if (media.size > REMOTE_MEDIA_MAX_BYTES) {
+    throw new Error(input.download === true
+      ? `文件 ${Math.ceil(media.size / 1024 / 1024)} MB，超过其他设备可下载的 ${REMOTE_MEDIA_MAX_BYTES / 1024 / 1024} MB 上限；请在这台电脑上取用，或让 AI 处理`
+      : `文件 ${Math.ceil(media.size / 1024 / 1024)} MB，超过其他设备可播放的 ${REMOTE_MEDIA_MAX_BYTES / 1024 / 1024} MB 上限；请在这台电脑上打开`);
+  }
   const part = Buffer.alloc(Math.max(0, Math.min(PAGE_PART_BYTES, media.size - offset)));
   const handle = openSync(file, 'r');
   try { readSync(handle, part, 0, part.length, offset); } finally { closeSync(handle); }

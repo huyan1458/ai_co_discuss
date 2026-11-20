@@ -44,7 +44,7 @@
 
 ## 连接本机
 
-本机安装已就绪（SKILL.md“验收”通过）后，在运行 AI 的同一台电脑执行 `codiscuss local connect <实际网址>`，由用户在打开的网页完成连接。连接链接不转发；撤销用 `codiscuss local disconnect <实际网址>`。细节见 [docs/runner.md](../../../../docs/runner.md#线上网页连接本机)。
+本机安装已就绪（SKILL.md“验收”通过）后，在运行 AI 的同一台电脑执行 `codiscuss local connect <实际网址>`，由用户在打开的网页完成连接。连接链接不转发；撤销用 `codiscuss local disconnect <实际网址>`。细节见 [手机与外出](../../../../docs/guide/remote.md)。
 
 ## 常见问题
 

@@ -468,7 +468,14 @@ export async function lend(home, { id, duration }, deps = {}) {
   const record = find_record(read_store(home), id);
   const lapsed = record.status === 'ended' && record.end_reason === 'expired';
   if (record.status !== 'active' && !lapsed) throw failure('record_ended', '这条被邀请记录已结束，不能再改借出时间');
-  const answer = await member_api(home, id, 'POST', MEMBER_API.expiry(record.room), { expires_at }, deps);
+  let answer;
+  try { answer = await member_api(home, id, 'POST', MEMBER_API.expiry(record.room), { expires_at }, deps); }
+  catch (error) {
+    // The other site no longer lets this record's key through: before 0.4.97 the inviting computer forgot the key of a
+    // member whose time ran out, so such a record can only come back through a new invitation.
+    if (lapsed && error.status === 401) throw failure('renew_key_gone', '对方电脑已不再认可这条记录，无法续期；请让对方点“重新邀请”发新链接');
+    throw error;
+  }
   return change_record(home, id, (current, now, store) => {
     current.expires_at = Number(answer?.expires_at || expires_at) * 1000;
     if (lapsed) {

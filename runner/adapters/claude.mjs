@@ -511,7 +511,7 @@ function window_state(pid, env = process.env) {
  * ends (`system/turn_duration`, or the window's registry staying idle after the turn's last assistant message) or the window closes: report the API error that turn ended on as a failure, otherwise its
  * end. For a room task it notes once when the window has not taken it by `unstarted_after`; an answer it never submitted
  * then fails the execution. Given a `log_path`, it reports the turn's steps there and its texts as notes. It waits past a
- * turn end while a background agent the turn launched has not reported. For a `chat` turn it waits also for every interjection `expect`ed, and fails with the reason when the window does not take the message in time,
+ * turn end while a background agent or shell command the turn launched has not reported. For a `chat` turn it waits also for every interjection `expect`ed, and fails with the reason when the window does not take the message in time,
  * waits on a prompt for `waiting_after`, closes, or runs past `turn_limit`. A turn Esc ended (`[Request interrupted by
  * user…]`, which records no `turn_duration`) ends the watch too. `stop()` asks the turn to stop: `stop_key()` sends one
  * Esc key, only while the registry says the window is busy, the turn has not ended, and no tool call waits for its result
@@ -522,9 +522,9 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
   const { interval = WINDOW_POLL_MS, unstarted_after = INBOX_CHECK_MS, chat = false, start_after = CHAT_START_MS,
     waiting_after = CHAT_WAITING_MS, turn_limit = CHAT_TURN_MS, env = process.env, on_end, stop_key,
     stop_poll = STOP_POLL_MS, stop_tool_wait = STOP_TOOL_WAIT_MS, stop_end_wait = STOP_END_WAIT_MS } = options;
-  const since = Date.now(), awaited = new Set([marker]), open_tools = new Set(), background = new Set();
+  const since = Date.now(), awaited = new Set([marker]), open_tools = new Set(), background = new Map();
   let pending = Buffer.alloc(0), taken = false, noted = false, error = null, done = false, waiting_since = 0;
-  let stop_asked = 0, stop_sent = 0, stop_timer = null, last_message = null, idle_since = 0;
+  let stop_asked = 0, stop_sent = 0, stop_timer = null, last_message = null, idle_since = 0, waiting_noted = false;
   // `ended` says why a room task's turn ended without finishing (interrupted, window closed): it is an exit, not a
   // failure to retry, and its last remark is not an answer.
   const finish = (reason = '', ended = '') => {
@@ -550,7 +550,7 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
       error = api_error || error;
       if ((chat || log_path) && !api_error) report(entry);
       if (!entry.isSidechain) { track_tools(entry); track_background(entry); }
-      // A turn that left a background agent running ends while the window waits for it; its report starts the next turn.
+      // A turn that left a background task running ends while the window waits for it; its report starts the next turn.
       if (entry.type === 'system' && entry.subtype === 'turn_duration' && !awaited.size && !background.size) return finish();
       // Only the turn's own messages count: bookkeeping entries (hook summaries, queue operations) may be stamped later.
       if (!entry.isSidechain && ['assistant', 'user'].includes(entry.type) && entry.message) {
@@ -567,6 +567,9 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     const idle = resting?.status === 'idle' && last_message.at > 0 && resting.updatedAt >= last_message.at;
     if (!idle || entries.length) idle_since = idle ? Date.now() : 0;
     else if (Date.now() - idle_since >= interval) return finish();
+    // The turn is over but its background tasks run on: say so once, until the window works again.
+    if (entries.some(entry => !entry.isSidechain && ['assistant', 'user'].includes(entry.type))) waiting_noted = false;
+    if (!waiting_noted && resting_on_background()) { waiting_noted = true; task.on_activity?.('waiting'); }
     if (!process_alive(pid)) return chat ? finish('这位成员的 Claude 窗口在这轮私聊结束前关闭了') : finish('', '所在的原窗口在这一轮结束前关闭了');
     if (stop_asked) return try_stop();
     const elapsed = Date.now() - since;
@@ -599,7 +602,7 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     }
     if (!['assistant', 'user'].includes(entry.type)) return;
     if (log_path) task.on_output?.(log_path, `${JSON.stringify({ type: entry.type, timestamp: entry.timestamp, message: entry.message,
-      ...(entry.toolUseResult?.isAsync ? { background: true } : {}) })}\n`);
+      ...(launches_background(entry) ? { background: true } : {}) })}\n`);
     // Only entries of the turn that took the message reach here, so this is the window's own work, never "not started yet".
     const phase = events.phase(entry);
     if (phase) task.on_activity?.(phase, events.tool(entry), events.call(entry));
@@ -631,17 +634,31 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     }
   }
   /**
-   * Note the background agents the turn launched (an `Agent` result marked `isAsync`) and drop each once its
-   * `<task-notification>` naming that tool call reaches the window. Background shell commands are not awaited: a
-   * server started in the background never reports.
+   * Note the background tasks the turn launched (see `launches_background`), by tool call and task ID, and drop each
+   * once its `<task-notification>` naming that tool call reaches the window, or a `TaskStop` result names its task (a
+   * stopped task never reports). A shell command left running in the background (a server) reports only when it exits
+   * or Claude Code stops it at its timeout; a stop the runner asks for meanwhile ends the watch (`try_stop`).
    */
   function track_background(entry) {
-    if (entry.type === 'user' && entry.toolUseResult?.isAsync) {
-      for (const block of Array.isArray(entry.message?.content) ? entry.message.content : []) {
-        if (block?.type === 'tool_result') background.add(block.tool_use_id);
-      }
+    const blocks = Array.isArray(entry.message?.content) ? entry.message.content : [];
+    if (launches_background(entry)) {
+      const result = entry.toolUseResult, task_id = result.backgroundTaskId || result.taskId || result.agentId || '';
+      for (const block of blocks) if (block?.type === 'tool_result') background.set(block.tool_use_id, task_id);
     }
+    const stopped = entry.type === 'user' && entry.toolUseResult?.task_id
+      && blocks.some(block => block?.type === 'tool_result' && !block.is_error) ? entry.toolUseResult.task_id : '';
+    for (const [id, task_id] of background) if (stopped && task_id === stopped) background.delete(id);
     for (const { id } of task_notifications(entry)) background.delete(id);
+  }
+  /**
+   * Whether the turn is over and the window only waits for its background tasks: the turn's last message is the
+   * assistant's, no tool call is open, and the window registered idle no earlier than that message (as the turn end
+   * checks), so a stale idle state from before the turn's last step is not taken for it.
+   */
+  function resting_on_background() {
+    if (!taken || !background.size || open_tools.size || last_message?.type !== 'assistant' || !(last_message.at > 0)) return false;
+    const state = window_state(pid, env);
+    return state?.status === 'idle' && state.updatedAt >= last_message.at;
   }
   /** Send the one Esc key of a stop once the turn can take it, or say why the turn was not stopped. */
   function try_stop() {
@@ -650,6 +667,8 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
       if (now - stop_sent >= stop_end_wait) unstopped('已向 Claude 窗口发送停止键，但这一轮仍未结束');
       return;
     }
+    // A window resting while its background tasks run has no turn to stop: the watch ends, and the tasks run on.
+    if (resting_on_background()) return finish('', '停止时原窗口在等后台任务，后台任务仍在运行');
     const ready = taken && !open_tools.size && window_state(pid, env)?.status === 'busy';
     if (!ready) {
       if (now - stop_asked >= stop_tool_wait) unstopped(open_tools.size ? '工具仍在执行，未能停止' : !taken ? '消息还在 Claude 窗口的队列里，未能停止' : 'Claude 窗口一直没有处于执行中，未能停止');
@@ -683,6 +702,17 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     },
     cancel() { done = true; clearInterval(timer); clearInterval(stop_timer); },
   };
+}
+
+/**
+ * Whether a session-log entry is the result of a tool call that goes on in the background and reports later through a
+ * `<task-notification>`: an `Agent` result marked `isAsync`, a `Bash` result naming its `backgroundTaskId`, or a
+ * `Monitor` result naming its `taskId` and `timeoutMs`. A `persistent` monitor runs as long as the session and is not waited for; its
+ * events come as notifications without a tool call and end nothing.
+ */
+function launches_background(entry) {
+  const result = entry.type === 'user' ? entry.toolUseResult : null;
+  return Boolean(result?.isAsync || result?.backgroundTaskId || (result?.taskId && result.timeoutMs && !result.persistent));
 }
 
 /**
@@ -751,13 +781,21 @@ async function deliver(config, binding, task, spawn_process = spawn, user_home, 
   task.on_recovery?.({ kind: 'claude_process', session_id, log_path,
     offset: existsSync(log_path) ? statSync(log_path).size : 0 });
   let partial_line = '';
+  // Background tasks the process started and has not reported: it stays up for them after its result, and says so.
+  const background = new Set();
   child.stdout.on('data', chunk => {
     output += chunk;
     task.on_output(log_path, chunk);
     // With streamed input Claude waits for more after its result; closing stdin lets it exit.
     const lines = (partial_line + chunk).split('\n');
     partial_line = lines.pop();
-    if (!child.stdin.writableEnded && lines.some(line => json_line(line)?.type === 'result')) child.stdin.end();
+    const parsed = lines.map(json_line).filter(Boolean);
+    for (const event of parsed) {
+      if (event.type === 'system' && event.subtype === 'task_started' && event.is_backgrounded) background.add(event.task_id);
+      if (event.type === 'system' && event.subtype === 'task_notification') background.delete(event.task_id);
+      if (event.type === 'result' && background.size) task.on_activity?.('waiting');
+    }
+    if (!child.stdin.writableEnded && parsed.some(event => event.type === 'result')) child.stdin.end();
   });
   child.stdin.on('error', () => { /* A process that already exited takes no more input. */ });
   child.stderr.on('data', chunk => task.on_output(log_path, chunk));

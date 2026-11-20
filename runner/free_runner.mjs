@@ -373,6 +373,8 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(model_change ? { model_change: { ...model_change, note: `你的模型已从 ${model_change.from} 换为 ${model_change.to}；不要按之前的自述判断自己用的是哪个模型。` } } : {}),
     // What became of the @s in this member's previous answer: quoted, waiting, queued for the host or picked up.
     ...(execution.mentions?.length ? { mentions: execution.mentions } : {}),
+    // The host's view of lines the owner opened by naming members directly: who works on which message, so it keeps clear of them.
+    ...(execution.branches?.length ? { branches: execution.branches } : {}),
     ...(named ? { named_workflows: named } : {}),
     ...(stopped.length ? { stopped_executions: stopped } : {}),
     role: member.role || 'member',
@@ -1068,7 +1070,9 @@ export class FreeRoomRunner {
     const extras = member_extra_directories(this.config, adapter).filter(item => item.access === 'write')
       .map(item => ({ directory: item.path, before: workspace_snapshot(item.path) })).filter(item => item.before);
     // A resumed execution keeps the snapshot of its first delivery, so changes made before the pause are reported too.
-    if ((before || extras.length) && !this.snapshots.has(execution.id)) {
+    // One with nothing to watch (read-only, no git) is still tracked, so its end reports an empty list and the page stops
+    // waiting for one (user 2026-11-20, #5956).
+    if (!this.snapshots.has(execution.id)) {
       // The text of files already changed, so the card's line counts cover only what this execution did to them.
       this.snapshots.set(execution.id, { member: member.name, directory, before, extras, base: capture_base(directory, before) });
     }
@@ -1352,8 +1356,14 @@ export class FreeRoomRunner {
     const changed = activity && (activity.phase !== activity.sent_phase || activity.at !== activity.sent_at);
     const elapsed = Date.now() - row.last_renew;
     if (elapsed >= RENEW_MS || (changed && elapsed >= ACTIVITY_REPORT_MS)) {
-      await api(this.config, `/executions/${execution.id}`, { action: 'renew',
-        ...(activity ? { activity: activity.phase, activity_at: Math.floor(activity.at / 1000) } : {}) });
+      const renew = phase => api(this.config, `/executions/${execution.id}`, { action: 'renew',
+        ...(activity ? { activity: phase, activity_at: Math.floor(activity.at / 1000) } : {}) });
+      try { await renew(activity?.phase); }
+      catch (error) {
+        // A website older than this runner refuses a phase it does not know yet: renew without the phase rather than lose the lease.
+        if (activity?.phase !== 'waiting' || !/^HTTP 400\b/.test(error.message)) throw error;
+        await renew('');
+      }
       if (activity) Object.assign(activity, { sent_phase: activity.phase, sent_at: activity.at });
       this.save(member.name, { last_renew: Date.now() });
     }
@@ -1588,7 +1598,6 @@ export class FreeRoomRunner {
       if (running) snapshot.reported_early = true;
       else this.snapshots.delete(execution_id);
       const after = snapshot.before ? workspace_snapshot(snapshot.directory) : null;
-      if (!after && !snapshot.extras?.length) continue;
       const extra = (snapshot.extras || []).flatMap(item => {
         const current = workspace_snapshot(item.directory);
         return current ? changed_between(item.before, current).map(path => extra_change(item.directory, path)) : [];
@@ -1599,7 +1608,7 @@ export class FreeRoomRunner {
       const edited = snapshot.edited ? { edited: edited_changes(changes, snapshot.edited) } : {};
       // Line counts and patches of the files in the member's own working tree, for the card's "edited N files".
       let diffs = [];
-      try { diffs = file_diffs(snapshot.directory, own.slice(0, 200), snapshot.base); } catch { /* The card then lists names only. */ }
+      if (own.length) try { diffs = file_diffs(snapshot.directory, own.slice(0, 200), snapshot.base); } catch { /* The card then lists names only. */ }
       try { await api(this.config, `/executions/${execution_id}`, { action: 'report', ...(running ? { provisional: true } : {}), changes, ...edited, ...(diffs.length ? { diffs } : {}) }); }
       catch (error) { if (!/HTTP (404|409)/.test(error.message)) throw error; }
     }

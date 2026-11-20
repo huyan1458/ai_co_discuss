@@ -1,4 +1,4 @@
-/** Read-only directory and text previews, confined to a room's saved project directories. */
+/** Read-only directory and text previews, confined to a room's saved project directories; changes are `project_manage.mjs`. */
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, posix, relative, resolve } from 'node:path';
@@ -14,7 +14,7 @@ const FOLDER_BATCH_LIMIT = 100;
 const FOLDER_BATCH_BYTES = 192 * 1024;
 
 /** Resolve a relative project path, including links, without allowing an escape from the project. */
-function project_path(root, path) {
+export function project_path(root, path) {
   if (typeof path !== 'string' || /[\0:]/.test(path) || isAbsolute(path) || path.replaceAll('\\', '/').split('/').includes('..')) {
     throw new Error('只能读取项目目录内的相对路径');
   }
@@ -194,7 +194,7 @@ export function read_only_enforced(profile) {
 }
 
 /** The room's project root, resolved through links and required to be a folder. */
-function project_root(cwd) {
+export function project_root(cwd) {
   if (!cwd?.trim()) throw new Error('本房间未设置项目目录');
   const root = realpathSync(cwd);
   if (!statSync(root).isDirectory()) throw new Error('项目目录不是文件夹');
@@ -409,12 +409,13 @@ export const MEDIA_TYPES = {
 
 /**
  * One image, video, audio, Office or compressed edit-project file of a project, checked like any preview: inside the project, a regular file of a
- * known media type. Returns its real path (for the local site to stream), size, type and a version that changes with it.
+ * known media type (any regular file with `download`, as plain bytes). Returns its real path (for the local site to
+ * stream), size, type and a version that changes with it.
  */
-export function project_media(cwd, path) {
+export function project_media(cwd, path, { download = false } = {}) {
   const root = project_root(cwd);
   const target = project_path(root, path);
-  const content_type = MEDIA_TYPES[posix.extname(target.replaceAll('\\', '/')).slice(1).toLowerCase()];
+  const content_type = MEDIA_TYPES[posix.extname(target.replaceAll('\\', '/')).slice(1).toLowerCase()] || (download ? 'application/octet-stream' : '');
   if (!content_type) throw new Error('只能打开图片、音视频、Office 文档或剪辑工程文件');
   const info = statSync(target);
   if (!info.isFile()) throw new Error('只能预览普通文件');

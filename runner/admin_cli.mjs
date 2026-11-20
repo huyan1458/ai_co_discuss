@@ -28,7 +28,7 @@ import { t } from './i18n.mjs';
 const STATE_FILE = 'admin-panel.json';
 const OWNER = 'owner';
 // What needs administrator rights (creating or removing an account's Windows user, which registers its instance task).
-const ELEVATED_PATHS = /^accounts\/[^/]+\/os-user(\/remove)?$/;
+const ELEVATED_PATHS = /^(accounts\/[^/]+\/os-user(\/remove)?|drives\/restrict)$/;
 const LOGIN_WAIT_MS = 60_000, UPDATE_WAIT_MS = 10 * 60_000, START_WAIT_MS = 90_000, POLL_MS = 1500;
 const RUNNER = dirname(fileURLToPath(import.meta.url));
 const DESKTOP_TASK = 'CoDiscuss start (one time)';
@@ -60,6 +60,7 @@ export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面
   entry tunnel <域名> [隧道名]              设置自有域名（Cloudflare 隧道），输出授权链接；域名须已托管在 Cloudflare
   entry tunnel status                      查看自有域名设置的进度
   runtime sync                             同步隔离账号的程序副本
+  drives restrict                          只允许隔离账号用系统盘：其他固定磁盘对它们的 Windows 用户拒绝访问（需管理员权限，之后重启它们的实例）
 
 托管账号
   account list
@@ -424,6 +425,7 @@ export async function admin_cli(args, { client = panel_client, print = text => p
     site: () => site_command(call, rest),
     entry: () => entry_command(call, rest, values),
     runtime: () => (rest[0] === 'sync' ? call('clis/install', {}) : Promise.reject(new Error(HELP))),
+    drives: () => (rest[0] === 'restrict' ? call('drives/restrict', {}) : Promise.reject(new Error(HELP))),
     account: () => account_command(call, rest, values),
     login: () => login_command(call, rest, values),
     logout: () => call(`logins/${is_owner(need(rest[0], t('目标'))) ? '_' : rest[0]}/${need(rest[1], t('程序'))}/logout`, {}),

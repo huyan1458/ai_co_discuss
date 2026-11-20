@@ -22,7 +22,7 @@ import { format_voice_time, use_voice_input, use_voice_press } from "./voice-inp
 import ExcerptEditCard from "./ExcerptEditCard.vue";
 import AnswerFiles from "./AnswerFiles.vue";
 import ExecutionChanges from "./ExecutionChanges.vue";
-import { add_excerpt, excerpt_mark_place, excerpt_range, inner_scroll_follower, excerpt_source, excerpts_markdown, file_preview, hold_selection, text_offset } from "./file-preview.js";
+import { add_excerpt, excerpt_mark_place, excerpt_range, inner_scroll_follower, excerpt_source, excerpts_markdown, file_preview, hold_selection, room_quotes, text_offset } from "./file-preview.js";
 import { keep_reading_position } from "./scroll-anchor.js";
 import { guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
 import { FILE_MENTION_PATTERN } from "./file-mention.mjs";
@@ -503,7 +503,7 @@ const all_decisions = computed(() => with_history("scheduler_decisions", room.va
 const all_arrangements = computed(() => with_history("host_arrangements", room.value.host_arrangements));
 const all_cancelled_turns = computed(() => with_history("cancelled_turns", room.value.cancelled_turns));
 /** What the runner last saw a member's software doing; unknown phases keep the generic text. Declared before `free_busy`, which an immediate watch reads during setup. */
-const ACTIVITY_LABELS = { thinking: t('正在执行'), command: t('正在运行命令'), tool: t('正在调用工具'), editing: t('正在修改文件'), writing: t('正在撰写回答') };
+const ACTIVITY_LABELS = { thinking: t('正在执行'), command: t('正在运行命令'), tool: t('正在调用工具'), editing: t('正在修改文件'), writing: t('正在撰写回答'), waiting: t('正在等待后台任务') };
 /** All room work uses member executions; queued requests stay in the side panel. */
 const free_busy = computed(() => {
   if (room.value.archived) return [];
@@ -522,7 +522,8 @@ const free_busy = computed(() => {
         activity: execution.activity, activity_at: execution.activity_at, notes: execution.notes || 0, steps: execution.steps || 0, tools: execution.tools || [],
         execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id, layout_after: reports.get(execution.id)?.layout_after,
         layout_at: reports.get(execution.id)?.layout_at ?? execution.created_at, background: Boolean(reports.get(execution.id)?.background),
-        discussion_request: reports.get(execution.id)?.requests?.find((request) => request.discussion_session_id) }];
+        discussion_request: reports.get(execution.id)?.requests?.find((request) => request.discussion_session_id),
+        marks: line_marks(member.name, reports.get(execution.id)) }];
     }
     return [];
   }).sort((left, right) => (left.created_at ?? Infinity) - (right.created_at ?? Infinity));
@@ -618,6 +619,43 @@ function answer_execution(message) {
   return all_executions.value.find((item) => item.answer_id === message.id);
 }
 /**
+ * Which line a card's work belongs to (user 2026-11-20, "多线开发"): the main line is the speaking order the host or the
+ * owner set (relay steps, members in turn); a branch is work the owner or host named a member for directly, alongside it.
+ * The host's own cards are marked as the host's. Returns the badges for the card header and the class for its edge.
+ */
+function line_marks(author, execution, kind = "") {
+  // A host note already carries 主持人.
+  const host = free_host.value?.name === author && kind !== "moderation";
+  const line = execution?.line;
+  const badges = [];
+  if (host) badges.push({ key: "host", label: t('主持'), title: t('主持人：接收未点名的消息并分派工作') });
+  if (line?.kind === "main") {
+    badges.push({ key: "main", label: line.by === "user" ? t('主线 · 第 {value1} 位', { value1: line.step }) : t('主线 · 第 {value1} 棒', { value1: line.step }),
+      title: t('按发言顺序推进的主线') });
+  } else if (line?.kind === "branch") {
+    badges.push({ key: "branch", label: t('支线'), title: line.by === "user" ? t('用户直接点名，不占发言顺序，与主线并行') : t('主持人直接点名，不占发言顺序，与主线并行') });
+  }
+  return { badges, edge: line?.kind === "branch" ? "is-branch-line" : host ? "is-host-line" : "" };
+}
+const dispatches = computed(() => new Map((room.value.free?.dispatches || []).map((item) => [item.message_id, item])));
+/** What becomes of a host dispatch once its members end (user 2026-11-20), shown on the dispatch message itself. */
+function dispatch_badges(message_id) {
+  const dispatch = dispatches.value.get(message_id);
+  if (!dispatch) return [];
+  const marks = {
+    relay: { label: t('接力，最后交回主持'), title: t('按顺序一棒接一棒，最后一棒做完交回主持人') },
+    handoff: { label: t('做完交回主持'), title: t('派出的成员都结束后（含失败）唤醒主持人，由它决定下一步') },
+    direct: { label: t('做完直接给你'), title: t('成员的回答直接给你，不再交回；失败时仍交回主持人') },
+    detach: { label: t('后台，不交回'), title: t('后台进行，谁也不等它；做完不交回，失败时通知主持人') },
+  };
+  const badges = [{ key: "dispatch", ...marks[dispatch.mode] }];
+  if (dispatch.detached.length) {
+    badges.push({ key: "detached", label: t('另有后台：{value1}', { value1: dispatch.detached.map((name) => bridge.display_name(name)).join('、') }),
+      title: t('这些成员在后台进行，做完不交回') });
+  }
+  return badges;
+}
+/**
  * The working card's one status line: the phase while output keeps coming, a warning only after a long silence.
  * Silence while a command runs is expected, so it is named as such instead of a possible hang.
  */
@@ -629,6 +667,7 @@ function working_status(message) {
   if (message.paused) return { text: message.text, live: false };
   if (!message.working || !shows_progress(message) || silent < STALL_SECONDS) return { text: message.text, live: message.working };
   if (message.activity === "command") return { text: t('命令已运行 {value1}', { value1: format_elapsed(silent) }), live: true };
+  if (message.activity === "waiting") return { text: t('正在等待后台任务，已 {value1}', { value1: format_elapsed(silent) }), live: true };
   // Deep reasoning reports nothing until it ends; only a much longer silence there suggests a hang.
   if (message.activity === "thinking" && silent < THINKING_STALL_SECONDS) return { text: t('正在执行，已 {value1}无中间输出', { value1: format_elapsed(silent) }), live: true };
   return { text: t('已 {value1}无输出，可能卡住', { value1: format_elapsed(silent) }), live: false, warning: true };
@@ -651,16 +690,20 @@ const recipient_hint = computed(() => {
 /** Project files picked after @: their @path stays in the draft, and they also show as cards and go out as a trailing line of paths (code-quoted, so they never wake a member). */
 const file_refs = ref([]);
 // Each room keeps its unsent file cards and quoted passages while another room is open, as its text is kept (app.js
-// `room_composer_drafts`), until this page closes.
-const room_quotes = new Map();
+// `room_composer_drafts`), until this page closes. The store outlives this view, which unmounts while no room is open
+// (the new-room panel), so the open room's cards are set aside on unmount and taken back on mount.
+function stash_room_quotes(room_id) {
+  if (room_id && (file_refs.value.length || file_preview.excerpts.length)) room_quotes.set(room_id, { refs: file_refs.value, excerpts: file_preview.excerpts });
+  else if (room_id) room_quotes.delete(room_id);
+}
 watch(() => room.value?.id, (next, previous) => {
-  if (previous && (file_refs.value.length || file_preview.excerpts.length)) room_quotes.set(previous, { refs: file_refs.value, excerpts: file_preview.excerpts });
-  else if (previous) room_quotes.delete(previous);
+  stash_room_quotes(previous);
   const kept = next && room_quotes.get(next);
   if (kept) room_quotes.delete(next);
   file_refs.value = kept?.refs || [];
   file_preview.excerpts = kept?.excerpts || [];
-});
+}, { immediate: true });
+onBeforeUnmount(() => { stash_room_quotes(room.value?.id); file_preview.excerpts = []; });
 const file_refs_line = () => file_refs.value.length
   ? t('引用文件：{value1}', { value1: file_refs.value.map((ref) => `\`${ref.path}${ref.kind === "directory" ? "/" : ""}\``).join("、") }) : "";
 // Passages quoted from the file preview ("添加到对话") wait as cards and go out after the text, each as a quote with its comment.
@@ -2002,7 +2045,14 @@ onBeforeUnmount(() => clearTimeout(settle_timer));
 // The transcript's scroll position while it glides to a newly sent message; a later retarget keeps its velocity.
 const glide = useSpring(0, SEND_SPRING);
 glide.on("change", (value) => { if (transcript.value) write_scroll(transcript.value, value); });
-glide.on("animationComplete", () => track_scroll());
+// The end can move while the glide runs (the scheduler's "analysing" card giving way to its decision, an image taking its
+// size); a glide that stopped short of it left the page above the end and turned following off (2026-11-20 recording).
+glide.on("animationComplete", () => {
+  const element = transcript.value;
+  const bottom = element && element.scrollHeight - element.clientHeight;
+  if (element && follow_tail.value && Math.abs(element.scrollTop - bottom) > 1) write_scroll(element, bottom);
+  track_scroll();
+});
 
 /** Reveal saved messages without interrupting a reader of earlier records; `smooth` glides there on the send spring. */
 async function follow_messages(smooth = false) {
@@ -2470,10 +2520,12 @@ onMounted(() => composer_dock.value && dock_observer.observe(composer_dock.value
 // lands there again. Reading earlier cards where the browser does not keep the position (WebKit), growth above the
 // reading line (an image taking its size, a report filling in) is offset by hand (keep_reading). Neither moves the page
 // while the reader scrolls: a snap to the end during a swipe's momentum fought the reader and jumped the page
-// (2026-11-17 recording); both run once they stop (release_reader). A send glide keeps its own course.
+// (2026-11-17 recording); both run once they stop (release_reader). A send glide keeps its course, retargeted to the
+// end as it moves, so it lands at the end rather than where the end was when it set out.
 const growth_observer = new ResizeObserver(() => {
   const element = transcript.value;
-  if (!element || glide.isAnimating() || toggle_hold) return;
+  if (!element || toggle_hold) return;
+  if (glide.isAnimating()) { if (follow_tail.value) glide.set(element.scrollHeight - element.clientHeight); return; }
   if (!follow_tail.value) { keep_reading(); return; }
   if (reader_busy()) { follow_pending = true; arm_settle(); return; }
   const bottom = element.scrollHeight - element.clientHeight;
@@ -2703,7 +2755,11 @@ function message_card(message) {
     launch_available: reports ? view.value.launch?.available : null, report_messages: reports ? view.value.messages : null,
     armed: armed_cards.has(message.id), menu_open: menu_open_id.value === message.id,
   };
-  card.deps = Object.values(card);
+  // Set after the dependencies are read: a fresh object each time would re-render every card; its text and edge stand in for it.
+  const line = line_marks(message.author, execution, message.kind);
+  line.badges.push(...dispatch_badges(message.id));
+  card.deps = [...Object.values(card), ...line.badges.map((badge) => badge.label), line.edge];
+  card.line = line;
   card.actions = message_actions(message);
   card.report_rows = card.reports.map((report) => ({ report, allowable: Boolean(denial_allowance(report)), failed: Boolean(failed_request_message(report)) }));
   return card;
@@ -2920,10 +2976,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </UChatMessage>
         <!-- Work in progress is a compact card: who and how long, the stage as the main line with the stop key at its end, -->
         <!-- and the notes below as a subordinate thread, folded to the latest note with the count after it. -->
-        <div v-else-if="message.slot_card && !message.failure && !message.retry" :id="`execution-${message.id}`" class="channel-working-strip" :data-author="bridge.identities[message.author]?.style">
+        <div v-else-if="message.slot_card && !message.failure && !message.retry" :id="`execution-${message.id}`" class="channel-working-strip" :class="message.marks?.edge" :data-author="bridge.identities[message.author]?.style">
           <div class="channel-working-head">
             <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="2xs" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
             <strong class="channel-working-name">{{ bridge.display_name(message.author) }}</strong>
+            <UBadge v-for="badge in message.marks?.badges || []" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge>
             <UTooltip v-if="message.background" :text="t('后台进行：主持人没有等它，接着在做别的')"><UIcon name="i-lucide-split" class="channel-working-background" role="img" :aria-label="t('后台进行：主持人没有等它')" /></UTooltip>
             <small class="channel-working-elapsed">{{ message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) : '' }) : t('已用 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) }}{{ message.steps ? t(' · 已执行 {value1} 步', { value1: message.steps }) : '' }}{{ message.attempt ? t(' · 第 {value1}/{value2} 次重试', { value1: message.attempt, value2: MAX_DELIVERY_RETRIES }) : '' }}</small>
             <UTooltip v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" :text="t('私聊：查看它正在做什么')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="t('私聊 {value1}：查看本次执行过程', { value1: bridge.display_name(message.author) })" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
@@ -3041,12 +3098,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <!-- Each card keeps its own render cache and reads only its card object; a room refresh re-renders only the cards whose inputs changed. -->
         <template v-for="card in [message_card(message)]" :key="message.id">
         <MemoBlock :deps="card.deps">
-        <UChatMessage :id="String(message.id)" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" @pointerenter="card.armed || arm_card(message.id, $event)" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage :id="String(message.id)" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" @pointerenter="card.armed || arm_card(message.id, $event)" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="card.line.edge" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta">
-                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ card.round_label }}</span><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('主持人') }}</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('运行回执') }}</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求')">{{ t('主动发言') }}</UBadge><UBadge v-if="card.waits" size="xs" color="warning" variant="soft" class="channel-source" :title="card.speaking_expert ? t('{value1} 说完后交给主持人处理', { value1: bridge.display_name(card.speaking_expert) }) : t('等待主持人处理')">{{ t('待主持人处理') }}</UBadge><RequestStatus v-if="card.badges?.length" :badges="card.badges" @locate="(id) => locate({ id })" /></div>
+                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ card.round_label }}</span><UBadge v-for="badge in card.line.badges" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UBadge size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'moderation'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('主持人') }}</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('运行回执') }}</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求')">{{ t('主动发言') }}</UBadge><UBadge v-if="card.waits" size="xs" color="warning" variant="soft" class="channel-source" :title="card.speaking_expert ? t('{value1} 说完后交给主持人处理', { value1: bridge.display_name(card.speaking_expert) }) : t('等待主持人处理')">{{ t('待主持人处理') }}</UBadge><RequestStatus v-if="card.badges?.length" :badges="card.badges" @locate="(id) => locate({ id })" /></div>
                 <div class="channel-message-provenance"><time :title="new Date(message.created_at).toLocaleString(locale)">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="t('查看原文 #{value1}', { value1: message.id })" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')">{{ t('{value1} 代发', { value1: bridge.display_name(message.submitted_by) }) }}</span><span v-if="message.source === 'auto'" :title="t('成员结束时没有提交回答，本机服务把它最后一段回复收录为本次回答')">{{ t('自动收录') }}</span></div>
               </div>
               <span v-if="card.elapsed !== null" class="channel-message-provenance channel-message-elapsed">{{ t('耗时 {value1}', { value1: format_elapsed(card.elapsed) }) }}</span>

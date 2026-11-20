@@ -10,11 +10,12 @@ the gateway marked as external; see `guard_route`. Contract: .dev/plans/远程�
 import hashlib
 import json
 import posixpath
+import re
 import time
 from datetime import datetime, timezone
 
 from . import free_room
-from .identity import AI_PLATFORMS, MAX_ROOM_AGENTS, PLATFORM_NICKNAMES, is_ai
+from .identity import AI_PLATFORMS, JOINED_NICKNAMES, MAX_ROOM_AGENTS, PLATFORM_NICKNAMES, is_ai
 from .runtime import begin_write, require_owner, token_hash
 from .texts import Text, text_payload
 
@@ -378,19 +379,28 @@ def save_label(connection, room_id, name, label, now):
         ON CONFLICT(room_id,name) DO UPDATE SET label=excluded.label,updated_at=excluded.updated_at""", (room_id, name, label, now))
 
 
-def name_joined(connection, row, now):
-    """On first joining, a seat still under its pending name takes its AI's (外部 Claude, 外部 Claude2 …).
+# A name this module gave after the AI (外部 Claude, 外部 Gemini2 …): the owner or host has not renamed it.
+AUTO_LABEL = re.compile(rf"外部 ({'|'.join(map(re.escape, sorted(JOINED_NICKNAMES, key=len, reverse=True)))})\d*")
 
-    A name the owner gave is kept, and so is the pending one when the AI is unknown or a custom API, which has no
-    name of its own. Only the label changes; the member name that requests and records use stays.
+
+def name_joined(connection, row, now):
+    """Name an external member after its AI (外部 Claude, 外部 Claude2 …), on joining and whenever its AI changes.
+
+    A seat still under its pending name takes the AI's, and so does a name given earlier after another AI: the other
+    computer switched AI, or the member was invited back and sent a different one (user 2026-11-19, #5835). A name the
+    owner or host gave is kept, and so is the current one when the AI is unknown or a custom API, which has no name of
+    its own. Only the label changes; the member name that requests and records use stays.
     """
     platform = connection.execute("SELECT platform FROM external_members WHERE member_id=?", (row["id"],)).fetchone()[0]
     current = free_room.member_labels(connection, row["room_id"]).get(row["name"])
     legacy = "另一台电脑" + row["name"].removeprefix("Custom-ext")
-    if platform in ("", "Custom") or current not in (pending_label(row["name"], row["id"]), legacy):
+    automatic = AUTO_LABEL.fullmatch(current or "")
+    if platform in ("", "Custom") or (current not in (pending_label(row["name"], row["id"]), legacy) and not automatic):
         return
     nickname = PLATFORM_NICKNAMES.get(platform, platform)
-    taken = set(free_room.member_display_names(connection, row["room_id"]).values())
+    if automatic and automatic.group(1) == nickname:
+        return
+    taken = set(free_room.member_display_names(connection, row["room_id"]).values()) - {current}
     label = next(candidate for number in range(1, MAX_ROOM_AGENTS + 2)
                  if (candidate := f"外部 {nickname}{number if number > 1 else ''}") not in taken)
     save_label(connection, row["room_id"], row["name"], label, now)
@@ -552,7 +562,9 @@ def answer_payload(member, payload):
 def report_ai(connection, member, payload):
     """The member's computer switched its AI: only what the room displays changes, never what the member may do."""
     checked_text(payload.get("adapter"), MAX_ADAPTER, "adapter", required=True)
-    save_ai(connection, member["id"], payload, int(time.time()))
+    now = int(time.time())
+    save_ai(connection, member["id"], payload, now)
+    name_joined(connection, member, now)
     return {"reported": True}
 
 

@@ -513,6 +513,8 @@ html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--u
 .channel-topic-person small, .channel-topic-bounds { color: var(--ui-text-dimmed); font-size: 11px; }
 .channel-topic-person small { line-height: inherit; }
 .channel-topic-bounds { display: block; margin-top: 5px; }
+button.channel-topic-bounds { padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
+button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration: underline; }
 .channel-date-divider { padding: 12px 24px 14px; }
 .channel-date-divider [data-slot="border"] { border-color: #ffffff0d; }
 .channel-date-divider [data-slot="label"] { color: #959eab; background: transparent; font-size: 11px; font-weight: 500; padding: 0 3px; }
@@ -862,6 +864,7 @@ html[data-theme^="channel"] .channel-settings-modal .dialog-body { padding: 0 20
 html[data-theme^="channel"] .channel-manage-modal .fine-print { margin: 0; }
 html[data-theme^="channel"] .channel-folder-modal input { height: 40px; font-size: 13px; outline: none; }
 html[data-theme^="channel"] .studio-modal.channel-create-modal { width: calc(100vw - 32px); max-width: 920px; }
+html[data-theme^="channel"] .studio-modal.channel-message-modal { width: calc(100vw - 32px); max-width: var(--channel-reading-width, 960px); }
 html[data-theme^="channel"] .studio-modal.pb-invite-modal { width: calc(100vw - 32px); max-width: 920px; }
 html[data-theme^="channel"] .studio-modal.session-browser-modal { width: calc(100vw - 32px); max-width: 920px; }
 @media (max-width: 720px) {
@@ -1517,6 +1520,10 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-working-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 /* The avatar matches the message byline's at each width, so a member looks the same working and answered. */
 .channel-working-strip { --working-avatar: 28px; }
+/* Lines of work (user 2026-11-20): the host's cards and branch cards differ from main-line ones only by a thin left edge. */
+.channel-message.is-host-line, .channel-working-strip.is-host-line { border-left: 2px solid color-mix(in srgb, var(--ui-primary) 70%, transparent); }
+.channel-message.is-branch-line, .channel-working-strip.is-branch-line { border-left: 2px dashed var(--ui-border-accented); }
+.channel-line-badge { flex: none; }
 .channel-working-strip .channel-avatar { flex-shrink: 0; width: var(--working-avatar); height: var(--working-avatar); font-size: 9px; }
 .channel-working-name { flex-shrink: 0; color: var(--speaker-accent); font-size: 13px; font-weight: 650; }
 .channel-working-elapsed { flex-shrink: 0; color: var(--ui-text-dimmed); font-variant-numeric: tabular-nums; white-space: nowrap; }

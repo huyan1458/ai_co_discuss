@@ -121,6 +121,42 @@ function open_html_tab() {
 }
 const can_render = computed(() => preview.value?.text != null && (format.value !== "text" || Boolean(media_kind.value)) && !(format.value === "html" && preview.value.truncated && !tab.value?.page));
 const showing_source = computed(() => preview.value?.text != null && (!can_render.value || source.value));
+// A project's text file can be edited from its source view; the computer reads it again in full to edit.
+// A file past the preview's first part is read whole when editing starts; the computer refuses one over its edit limit.
+const can_edit = computed(() => showing_source.value && !tab.value?.attachment && !tab.value?.edit);
+
+/** Read the open file whole and turn its source view into an editor. */
+async function start_edit() {
+  const item = tab.value;
+  if (!item) return;
+  try {
+    const answer = await bridge.manage_room_files(item.room_id, { op: "read", root: item.root || 0, path: item.path });
+    item.edit = { text: answer.text, version: answer.version, saving: false };
+  } catch (error) { bridge.notify("error", t('无法编辑：{value1}', { value1: error.message })); }
+}
+
+/** Save the edited text; when an AI member changed the file meanwhile, nothing is written and the text stays in the editor. */
+async function save_edit() {
+  const item = tab.value, edit = item?.edit;
+  if (!edit || edit.saving) return;
+  edit.saving = true;
+  try {
+    const answer = await bridge.manage_room_files(item.room_id, { op: "save", root: item.root || 0, path: item.path, text: edit.text, version: edit.version });
+    if (answer.conflict) { bridge.notify("warning", t('文件在你编辑期间被修改过，未保存；你的内容仍在编辑框里，可复制后点“放弃修改”重新读取')); return; }
+    item.edit = null;
+    bridge.notify("info", t('已保存 {value1}', { value1: name_of(item.path) }));
+    load(item);
+  } catch (error) { bridge.notify("error", t('保存失败：{value1}', { value1: error.message })); }
+  finally { if (item.edit) item.edit.saving = false; }
+}
+
+/** Leave the editor without saving and read the file again. */
+function cancel_edit() {
+  const item = tab.value;
+  if (!item) return;
+  item.edit = null;
+  load(item);
+}
 // One gutter string keeps line numbers to a single DOM node even for the largest previews.
 const lines = computed(() => preview.value?.text == null ? [] : preview.value.text.split("\n"));
 const line_count = computed(() => lines.value.length);
@@ -173,6 +209,7 @@ const file_menu = computed(() => {
   ]);
   const rest = [];
   if (showing_source.value) rest.push({ label: wrap.value ? t('关闭自动换行') : t('自动换行'), icon: "i-lucide-wrap-text", onSelect: () => { wrap.value = !wrap.value; } });
+  if (can_edit.value) rest.push({ label: t('编辑'), icon: "i-lucide-pencil", onSelect: () => start_edit() });
   if (can_read.value) rest.push(reader.state.reading ? { label: t('停止朗读'), icon: "i-lucide-square", onSelect: () => reader.stop() } : { label: t('朗读'), icon: "i-lucide-volume-2", onSelect: () => read_file() });
   if (can_open_html.value) rest.push({ label: t('在新标签页打开'), icon: "i-lucide-external-link", onSelect: () => open_html_tab() });
   if (can_render.value) rest.push(source.value ? { label: t('预览'), icon: "i-lucide-eye", onSelect: () => { source.value = false; } } : { label: t('源码'), icon: "i-lucide-code-xml", onSelect: () => { source.value = true; } });
@@ -642,6 +679,7 @@ async function reveal_folder(path) {
   if (!docked.value) fold();
   await to_tab_room();
   file_preview.reveal_root = tab.value?.root || 0;
+  file_preview.reveal_name = tab.value?.directory || "";
   file_preview.reveal_path = path;
   act("tab", "files");
 }
@@ -992,6 +1030,7 @@ onBeforeUnmount(() => {
             <button type="button" class="project-editor-font-value" :title="t('恢复默认字号')" :aria-label="t('恢复默认字号')" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
             <button type="button" :title="t('放大字号')" :aria-label="t('放大字号')" :disabled="font_scale >= FONT_SCALE_MAX" @click="change_font_scale(1)"><UIcon name="i-lucide-a-arrow-up" /></button>
           </div>
+          <UButton v-if="can_edit" icon="i-lucide-pencil" color="neutral" variant="ghost" size="sm" :title="t('编辑')" :aria-label="t('编辑此文件')" @click="start_edit" />
           <UButton v-if="showing_source" icon="i-lucide-wrap-text" color="neutral" :variant="wrap ? 'soft' : 'ghost'" size="sm" :aria-pressed="wrap"
             :title="wrap ? t('关闭自动换行') : t('自动换行')" :aria-label="t('自动换行')" @click="wrap = !wrap" />
           <UButton v-if="can_read" :icon="reader.state.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" color="neutral" variant="ghost" size="sm"
@@ -1017,7 +1056,12 @@ onBeforeUnmount(() => {
           </template>
         </nav>
       </div>
-      <p v-if="preview?.truncated && !(format === 'html' && tab?.page && !source) && !(media_kind && !source) && !office_kind" class="project-editor-banner"><UIcon name="i-lucide-info" />{{ t('文件较大，仅显示前 {value1}（共 {value2}）', { value1: file_size(preview.limit), value2: file_size(preview.size) }) }}<template v-if="format === 'html'">{{ t('，HTML 不渲染不完整的内容') }}</template></p>
+      <div v-if="tab?.edit" class="project-editor-banner is-editing">
+        <UIcon name="i-lucide-pencil" /><span class="project-editor-banner-text">{{ t('正在编辑') }}</span>
+        <UButton :label="t('保存')" size="xs" :loading="tab.edit.saving" @click="save_edit" />
+        <UButton :label="t('放弃修改')" color="neutral" variant="ghost" size="xs" :disabled="tab.edit.saving" @click="cancel_edit" />
+      </div>
+      <p v-else-if="preview?.truncated && !(format === 'html' && tab?.page && !source) && !(media_kind && !source) && !office_kind" class="project-editor-banner"><UIcon name="i-lucide-info" />{{ t('文件较大，仅显示前 {value1}（共 {value2}）', { value1: file_size(preview.limit), value2: file_size(preview.size) }) }}<template v-if="format === 'html'">{{ t('，HTML 不渲染不完整的内容') }}</template></p>
       <p v-else-if="html_notice && !source" class="project-editor-banner" :title="html_notice"><UIcon name="i-lucide-info" /><span class="project-editor-banner-text">{{ html_notice }}</span></p>
 
       <div ref="editor_body" class="project-editor-body" :style="{ '--file-font-scale': font_scale }">
@@ -1034,6 +1078,7 @@ onBeforeUnmount(() => {
           <PreviewLoading v-else :label="tab.media_progress ? t('正在经电脑读取… {value1}%', { value1: Math.round(tab.media_progress * 100) }) : t('正在打开…')" :progress="tab.media_progress || 0" />
         </template>
         <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason || t('这个格式只能下载后用本机软件打开') }}</p></div>
+        <textarea v-else-if="tab?.edit" v-model="tab.edit.text" class="project-code-editor" spellcheck="false" :aria-label="t('文件内容')" @keydown.ctrl.s.prevent="save_edit" @keydown.meta.s.prevent="save_edit"></textarea>
         <div v-else-if="showing_source && wrap" ref="code_scroll" class="project-code is-wrapped" tabindex="0" @scroll.passive="schedule_offer" @click="open_mark_at" :aria-label="t('文件内容')" :style="{ '--digits': String(line_count).length }">
           <div v-for="(line, index) in lines" :key="index" class="project-code-row" :data-line="index + 1"><span class="project-code-number" aria-hidden="true">{{ index + 1 }}</span><span class="project-code-line">{{ line }}</span></div>
           <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button>
@@ -1175,6 +1220,9 @@ onBeforeUnmount(() => {
 .project-code pre { margin: 0; padding: 10px 0 24px; white-space: pre; font: inherit; }
 .project-code-gutter { position: sticky; left: 0; z-index: 1; flex-shrink: 0; min-width: 52px; padding-inline: 16px 14px !important; text-align: right; color: var(--ui-text-dimmed); background: var(--ui-bg); user-select: none; }
 .project-code-text { flex: 1; padding-right: 32px !important; color: var(--ui-text); }
+.project-code-editor { display: block; width: 100%; height: 100%; padding: 12px 16px; border: 0; outline: none; resize: none; background: transparent; color: var(--ui-text);
+  font: calc(13px * var(--file-font-scale, 1)) / 1.6 ui-monospace, Consolas, monospace; tab-size: 4; white-space: pre; overflow: auto; }
+.project-editor-banner.is-editing { gap: 8px; }
 /* Wrapped: one row per source line keeps each number level with the first visual row of its line. */
 .project-code.is-wrapped { display: block; padding: 10px 0 24px; }
 .project-code-row { display: flex; }

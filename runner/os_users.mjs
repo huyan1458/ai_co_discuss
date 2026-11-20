@@ -205,11 +205,63 @@ export function create_os_user(data, account, account_folder, { run = run_powers
 if (Get-LocalUser -Name ${quote(user)} -ErrorAction SilentlyContinue) { Set-LocalUser -Name ${quote(user)} -Password $secure }
 else { New-LocalUser -Name ${quote(user)} -Password $secure -PasswordNeverExpires -UserMayNotChangePassword -Description 'AI CoDiscuss hosted account' | Out-Null }
 if (-not (Get-LocalGroupMember -Group 'Users' -Member ${quote(user)} -ErrorAction SilentlyContinue)) { Add-LocalGroupMember -Group 'Users' -Member ${quote(user)} }
+# Once the other drives are closed to hosted accounts (restrict_other_drives), a new account is closed out too.
+if ((Get-LocalGroup -Name ${quote(HOSTED_GROUP)} -ErrorAction SilentlyContinue) -and -not (Get-LocalGroupMember -Group ${quote(HOSTED_GROUP)} -Member ${quote(user)} -ErrorAction SilentlyContinue)) { Add-LocalGroupMember -Group ${quote(HOSTED_GROUP)} -Member ${quote(user)} }
 icacls ${quote(account_folder)} /grant ${quote(`${user}:(OI)(CI)M`)} /T /C /Q | Out-Null
 ${register_task_script(account, user, '$secure', owner_sid({ run }))}
 'ok'`, { elevated: true });
   write_os_users(data, { ...read_os_users(data), [account]: { user, secret } });
   return { user };
+}
+
+// Every account's Windows user joins this group; drives other than the system drive deny it, not Users, so the owner
+// and other people on the computer keep their access.
+export const HOSTED_GROUP = 'CoDiscussHosted';
+
+/** The drive letter of a path (`D:`), upper case; '' for a path without one. */
+const drive_of = path => { const match = /^([a-z]):/i.exec(String(path)); return match ? `${match[1].toUpperCase()}:` : ''; };
+
+/**
+ * The paths hosted accounts need that lie on another drive than the system drive. Denying that drive would leave
+ * their instances unable to start, so the restriction is refused while any is listed.
+ *
+ * Args:
+ *   paths: What the accounts run and keep: the shared programs, Node, the owner's service directory, the account folders.
+ */
+export function blocking_paths(paths, system_drive = process.env.SystemDrive || 'C:') {
+  const system = drive_of(system_drive) || 'C:';
+  return [...new Set(paths.filter(Boolean).map(path => { try { return realpathSync(path); } catch { return path; } }))]
+    .filter(path => drive_of(path) && drive_of(path) !== system);
+}
+
+/**
+ * Keep every account's Windows user off the drives other than the system drive: the users join `HOSTED_GROUP`, and the
+ * root of each other fixed drive denies that group (inherited by what lies below). Safe to repeat; an account given its
+ * Windows user later joins the group when it is created. A user's new group takes effect at its next sign-in, so
+ * running instances are restarted by the caller.
+ *
+ * Returns:
+ *   { drives: ['D:', …], users: ['cd-…', …] }.
+ */
+export function restrict_other_drives(data, needed, { run = run_powershell } = {}) {
+  if (process.platform !== 'win32') throw new Error('只有 Windows 托管机需要限制磁盘');
+  // Claude Code on Windows runs Git's bash: where Git lies matters as much as the programs themselves.
+  const git = process.platform === 'win32' ? on_path('git.exe', process.env) : '';
+  const blocking = blocking_paths([SHARED_ROOT, dirname(process.execPath), data, git && dirname(git), ...needed]);
+  if (blocking.length) throw new Error(`以下托管账号要用的位置不在系统盘上，限制后实例将无法启动，请先移到系统盘：${blocking.join('；')}`);
+  const users = Object.values(read_os_users(data)).map(record => record.user);
+  const output = run(`if (-not (Get-LocalGroup -Name ${quote(HOSTED_GROUP)} -ErrorAction SilentlyContinue)) { New-LocalGroup -Name ${quote(HOSTED_GROUP)} -Description 'AI CoDiscuss hosted accounts' | Out-Null }
+foreach ($user in @(${users.map(quote).join(', ')})) {
+  if (-not (Get-LocalGroupMember -Group ${quote(HOSTED_GROUP)} -Member $user -ErrorAction SilentlyContinue)) { Add-LocalGroupMember -Group ${quote(HOSTED_GROUP)} -Member $user }
+}
+$system = $env:SystemDrive.TrimEnd('\\').ToUpper()
+$drives = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object { $_.DeviceID.ToUpper() } | Where-Object { $_ -ne $system })
+foreach ($drive in $drives) {
+  icacls "$drive\\" /deny ${quote(`${HOSTED_GROUP}:(OI)(CI)F`)} /C /Q | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "无法修改 $drive 的权限" }
+}
+$drives -join ','`, { elevated: true });
+  return { drives: output ? output.split(',').filter(Boolean) : [], users };
 }
 
 /** Delete one account's Windows user and its profile folder; the account's own folder stays. */

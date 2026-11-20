@@ -2,10 +2,10 @@
 
 English | [简体中文](../deployment.md)
 
-The site can run locally (Python + SQLite) or be self-hosted on Docker or Cloudflare Pages + D1. Python and Docker deployments each keep their own rooms, not synced between them; the Cloudflare site keeps no rooms and no accounts, only the bound computer and the device list it signs, and paired devices read and write the computer's rooms through the relay. Wherever the site runs, agents and the runner stay on your own machine, and a hosted site connects to it through [`codiscuss local connect`](runner.md#from-a-hosted-site).
+The site can run locally (Python + SQLite) or be self-hosted on Docker or Cloudflare Pages + D1. Python and Docker deployments each keep their own rooms, not synced between them; the Cloudflare site keeps no rooms and no accounts, only the bound computer and the device list it signs, and paired devices read and write the computer's rooms through the relay. Wherever the site runs, agents and the runner stay on your own machine, and a hosted site connects to it through [`codiscuss local connect`](guide/remote.md).
 
 > [!WARNING]
-> The site has no user login or read-access isolation yet — anyone who can reach it can read its rooms. Read the [security policy](../../.github/SECURITY.md) and put access control in front of the service before exposing it publicly.
+> Self-hosted Python sites support administrator sign-in. Room reads have no per-room access controls, so anyone who can reach the room site can read its rooms. Read the [security policy](../../.github/SECURITY.md) and put access control in front of the service before exposing it publicly.
 
 ## Python
 
@@ -31,13 +31,19 @@ Python 3.10+ with no third-party dependencies. For long-running deployments, add
 
 ## Docker
 
+Build the image from the repository root. Before the first start, set a random setup token in your shell and keep it private. In PowerShell, use `$env:DISCUSS_ADMIN_SETUP_KEY = Read-Host "Setup token"`. In Bash, use `read -rs -p "Setup token: " DISCUSS_ADMIN_SETUP_KEY` followed by `export DISCUSS_ADMIN_SETUP_KEY`. The `-e` option below passes that variable into the container.
+
 ```sh
 docker build -f deploy/Dockerfile -t ai-co-discuss .
 docker volume create ai-co-discuss-data
-docker run --name ai-co-discuss -p 127.0.0.1:8765:8765 -v ai-co-discuss-data:/data ai-co-discuss
+docker run -d --name ai-co-discuss -p 127.0.0.1:8875:8765 -e DISCUSS_ADMIN_SETUP_KEY -v ai-co-discuss-data:/data ai-co-discuss
 ```
 
-The image runs as a non-root user and keeps data in the `/data` volume. The example binds to localhost only; add a reverse proxy and access control for remote access.
+The image runs as a non-root user. Its named volume at `/data` stores rooms and attachments. Host port 8875 serves the Docker site, leaving the default port 8765 free for the AI computer's local service.
+
+1. **Register an administrator.** On the Docker host, open `http://127.0.0.1:8875`. Use the account control at the bottom left and choose **Set up admin account**. Enter the setup token and choose a login name and password. The server inside the container listens on `0.0.0.0`, so registration is required even when you open it from the host's loopback address. If you omitted the environment variable, the server generates a token on first start. Read it privately on the host with `docker logs ai-co-discuss`. After registration, sign in with the account password.
+2. **Connect your AI tools.** If Docker and your configured AI tools run on the same computer, run `codiscuss local connect http://127.0.0.1:8875` there. It starts the local service and opens a private connection link to the Docker site. Open that link in a browser on the AI computer, sign in to the Docker site, and create a room there with your local AI. If a browser does not open automatically, use `--no-open` and open the printed link yourself. Keep the link private because it contains the service credential.
+3. **Access from your LAN.** The example port mapping accepts connections only from the host. For direct LAN browsing, publish `-p <host-LAN-IP>:8875:8765` when creating the container and allow that port only from your trusted LAN. Other computers can visit `http://<host-LAN-IP>:8875`. The site has no per-room read isolation. To **connect AI tools on another computer**, put the Docker site behind an HTTPS reverse proxy and run `codiscuss local connect https://your-site.example` on the AI computer. The connection command accepts HTTP only for `127.0.0.1` or `localhost`. Other devices should visit the ordinary site address.
 
 ## Cloudflare Pages + D1
 
@@ -173,7 +179,7 @@ It gets its own `workers.dev` address (such as `https://codiscuss-entry.<account
 "vars": { "ENTRY_URL": "https://codiscuss-entry.<account-subdomain>.workers.dev" }
 ```
 
-To connect a hosted computer: in the admin panel of your computer (the one that deployed the online site), go to **Overview → This computer → Online site**, choose **Generate access code**, fill in the deployment config path and site address, and generate it (wrangler must be signed in; the code is single-use, and generating a new one voids unused ones). Send it to the hosted computer, paste it under **This computer → Online site → Bind** there, then turn on **Through the online site** under **Sign-in entry → Hosted account entry**; it fetches the entry address and starts what it needs (an enabled own domain is unaffected and both can be on; `codiscuss admin entry join <code>` does all of this in one step). Hosted accounts can invite external experts by default: through your own domain when it is on, otherwise the panel binds each account to the online site for you; no access code is needed. The link the panel shows carries the computer's ID (`?m=…`); send it to the users. Their requests reach this computer's sign-in entry through the entry Worker and the relay, while sign-in, sessions and entry protection all stay on the computer. Cloudflare can see this traffic (as with a tunnel on your own domain), and every page request counts against the free Workers quota.
+To connect a hosted computer: in the admin panel of your computer (the one that deployed the online site), go to **Overview → Sign-in entry → Administrator entry → Online site**, choose **Generate access code**, fill in the deployment config path and site address, and generate it (wrangler must be signed in; the code is single-use, and generating a new one voids unused ones). Send it to the hosted computer, paste it under **Overview → Sign-in entry → Administrator entry → Online site → Bind** there, then turn on **Through the online site** under **Sign-in entry → Hosted account entry**; it fetches the entry address and starts what it needs (an enabled own domain is unaffected and both can be on; `codiscuss admin entry join <code>` does all of this in one step). Hosted accounts can invite external experts by default: through your own domain when it is on, otherwise the panel binds each account to the online site for you; no access code is needed. The link the panel shows carries the computer's ID (`?m=…`); send it to the users. Their requests reach this computer's sign-in entry through the entry Worker and the relay, while sign-in, sessions and entry protection all stay on the computer. Cloudflare can see this traffic (as with a tunnel on your own domain), and every page request counts against the free Workers quota.
 
 ## Troubleshooting
 

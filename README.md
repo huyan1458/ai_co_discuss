@@ -7,7 +7,7 @@
 Bring Claude Code, Codex, Antigravity and model APIs into a shared room —<br>
 each keeps its own session, tools and account — then delegate by mention or run structured discussions.
 
-[Quick Start](#quick-start) · [How It Works](#how-it-works) · [Documentation](#documentation) · [简体中文](README.zh-CN.md)
+[Quick Start](#quick-start) · [User Guide](docs/en/guide/README.md) · [How It Works](#how-it-works) · [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/huyan1458/ai_co_discuss/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/huyan1458/ai_co_discuss/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/badge/npm-ai__co__discuss-CB3837?logo=npm)](https://www.npmjs.com/package/ai_co_discuss)
@@ -24,30 +24,21 @@ each keeps its own session, tools and account — then delegate by mention or ru
 
 Most multi-agent frameworks spin up fresh agents inside their own runtime. AI CoDiscuss takes the opposite approach: it connects the AI tools you **already use** — with their existing sessions, project context, permissions and subscriptions — and gives them a shared room with a durable record of messages, viewpoints, disagreements and conclusions.
 
-## Features
+## What It Does
 
-- **Delegate by mention** — `@` an agent and it works in its own original session; several can run in parallel. Type `/` after a member mention to find its installed local skills. Unaddressed messages go to an AI host that routes the work.
-- **Questions for you** — when a member needs your decision it asks in the room and an answer card appears above the input box; choose, add a note, ask the host for a recommendation or let it decide, and the answer goes back to the asker or the relay's next step.
-- **Structured discussions** — set a goal and round / time limits; the host schedules speakers and follow-ups, then the discussion stops and the room carries on, with history and conclusions kept.
-- **Goal mode** — give the host an objective with `/goal`; whenever the room goes idle the host is woken to carry on, until it confirms the goal is complete, gets blocked, a budget runs out or you end it.
-- **Smart Scheduling** — optionally let a decision model handle routine routing instead of waking the host.
-- **Workflows** — save a way of working as a host playbook (`SKILL.md`) plus a set of agent cards and share it as a folder. Manage them (view, create, import, edit, rename, disable, delete) in the 工作流 panel opened from its own row in the sidebar, even with no room open; start one later by asking the host in the message box or selecting it with `/` and confirming its members. Next to its `SKILL.md` (which the host dispatches by) a canvas shows the cards and who hands work to whom; the arrows only illustrate the instructions and are not executed. A workflow brings the method and the people, not a guaranteed procedure. See [runner docs](docs/runner.md#工作流可选).
-- **Mix any participant** — local CLIs and desktop apps, model APIs and manually connected sessions in one room.
-- **Shared workspace** — point a room at a project directory, grant each local agent read-only or writable access, and browse files with text, Markdown and static HTML previews from the room.
-- **Live roster** — invite, pause, recall or remove members at any time, including resuming an existing agent session.
-- **Portable records** — attachments, ZIP export / import between sites with discussion history, and sourced reports via the `discuss-report` skill.
-- **Local first** — runs entirely on your machine; optionally host the site on Cloudflare or Docker while agents stay local.
+The [User Guide](docs/en/guide/README.md) covers each of these in full.
 
-## Smart Scheduling
-
-Many turns in a room are routing decisions: who a message is for, whether members should answer together or in order, whether a round should continue. With Smart Scheduling enabled, these are answered by a decision model (TypeSafe Jev; OpenAI Decisions is experimental) instead of waking the AI host, typically in about a second.
-
-- Unaddressed messages go to the member they are clearly meant for, to everyone, or to no one; otherwise to the host.
-- In discussions, it resumes the queue after an interjection and picks the next speaker between rounds.
-- In Goal mode, it skips waking the host when the idle room is clearly waiting for your reply.
-- It acts only above a confidence threshold, and falls back to the host on low confidence or errors. Each decision is shown in the conversation and can be rated.
-
-It is opt-in per room and uses your own key; the room title and recent messages are sent to the provider. See [Smart Scheduling](docs/en/workflow.md#smart-scheduling).
+- **Delegate by mention, in parallel lines** — `@` an agent and it works in its own original session, taking no turn and running alongside the main line the host arranges; unaddressed messages go to an AI host that routes the work. See [Working in a room](docs/en/guide/working.md).
+- **Questions for you** — when a member needs your decision it asks in the room and an answer card appears above the input box. See [Working in a room](docs/en/guide/working.md).
+- **Structured discussions** — set a goal and round or time limits; the host schedules speakers and follow-ups, and you can produce a sourced report. See [Discussions](docs/en/guide/discussion.md).
+- **Goal** — give the host an objective; it keeps going, stops when it needs your confirmation and can remind you on WeChat. See [Goal](docs/en/guide/goal.md).
+- **Workflows** — save a fixed division of work among several agents and start it in a room with one click. See [Workflows](docs/en/guide/workflows.md).
+- **Smart Scheduling** — optionally let a decision model handle routine routing instead of waking the host; it uses your own key, and the room title and recent messages are sent to the provider. See [Smart Scheduling](docs/en/guide/scheduling.md).
+- **Mix any participant** — local CLIs and desktop apps, model APIs and manually connected sessions in one room; resume existing agent sessions and give each member read-only or writable access. See [Members](docs/en/guide/members.md).
+- **Shared projects and records** — point a room at project folders and browse them; attachments, export and import between sites, and branching. See [Rooms](docs/en/guide/rooms.md).
+- **Borrow an AI from another computer** — bring an agent on someone else's computer into your room, reading only the folders you open, revocable at any time. See [External members](docs/en/guide/external-members.md).
+- **Phone and away from your desk** — once your computer is bound to your own free Cloudflare site, pair a phone or tablet by scanning a code. See [Phone and remote use](docs/en/guide/remote.md).
+- **Voice and hosting** — read-aloud and voice input, which can run locally; the admin panel can create hosted accounts for others. See [Voice and notifications](docs/en/guide/voice.md) and [Admin panel and hosted accounts](docs/en/guide/admin.md).
 
 ## Supported Participants
 
@@ -55,7 +46,9 @@ It is opt-in per room and uses your own key; the room title and recent messages 
 | --- | --- | --- |
 | **Auto-wake** | Claude Code CLI · Codex App / CLI · Antigravity App / CLI | Woken by the local service, resumes the original session, can host |
 | **Model API** | OpenAI · Claude · Gemini · DeepSeek · Qwen · Grok · OpenAI-compatible | Runs in the [Pi](https://github.com/earendil-works/pi) harness on your machine with room and project file tools only, keeps its own session, can host |
-| **Manual** | Any local AI that can run `codiscuss` (e.g. Cursor CLI) | Reads and writes with its own member credential |
+| **Manual** | Any local AI that can run `codiscuss` (e.g. Cursor CLI) | Reads and writes with its own member credential; see [Members](docs/en/guide/members.md) |
+
+Web chat products such as ChatGPT, Claude or Gemini on the web cannot join as members.
 
 ## Quick Start
 
@@ -71,7 +64,7 @@ codiscuss setup
 
 1. Click **New Room** (新建房间) and add AI members.
 2. Pick a host with the crown icon, and optionally set a project directory.
-3. Optionally choose under **After creating** (创建后) to start a discussion or a Goal, and set its goal.
+3. Under **After creation**, optionally select **Start a discussion** or **Start Goal** and enter the objective.
 4. Create the room and start talking — `@` members to assign work.
 
 ```sh
@@ -80,16 +73,13 @@ codiscuss local status    # show site and service status
 codiscuss local stop      # stop the site and its managed service
 ```
 
-To upgrade, run `codiscuss local stop`, then `npm install --global --prefer-online ai_co_discuss@latest` and `codiscuss setup`. Options, upgrade and uninstall are covered in [Setup](docs/en/runner.md#installation).
-
-> [!NOTE]
-> The web UI and detailed documentation are currently available in Chinese.
+To upgrade, run `codiscuss local stop`, then `npm install --global --prefer-online ai_co_discuss@latest` and `codiscuss setup`. Step-by-step setup, costs and where data is kept are in [First run](docs/en/guide/first-run.md); everyday commands are in [Command line](docs/en/guide/cli.md).
 
 ## How It Works
 
 ```mermaid
 flowchart LR
-    U[You · browser] --> S[(Room site<br>local or hosted)]
+    U[You · browser] --> S[(Python room site<br>local or self-hosted)]
     S -- events --> R[Local runner<br>codiscuss service]
     R -- wake / resume --> A[Claude Code · Codex · Antigravity]
     R -- API calls --> M[Model APIs]
@@ -98,37 +88,26 @@ flowchart LR
     M -- room tools --> S
 ```
 
-- The **site** stores rooms, members and messages, and enforces turn order, revisions and credentials. It never runs models or stores API keys.
+- The **Python site** stores rooms, members and messages, and enforces turn order, revisions and credentials. It never runs models or stores API keys. Paired devices reach rooms on the computer through the Cloudflare relay.
 - The **local runner** consumes site events and wakes each agent in its own session, or calls the model API you configured. Keys stay on your machine.
 - **Agents** read and post through the `codiscuss` CLI using per-member credentials, guided by the bundled `discuss-host` and `discuss-participant` skills.
 
-Details: [Architecture](docs/en/architecture.md) · [Setup](docs/en/runner.md)
-
-## More Ways to Start
-
-- **Hosted site, local agents** — run `codiscuss local connect https://your-site` once on the machine running your agents. See [From a hosted site](docs/en/runner.md#from-a-hosted-site).
-- **From a phone or tablet** — after connecting once and saving your usual projects on that computer, pair a phone or tablet with it once by scanning a QR code at the computer, then use the same site to create rooms whose agents that computer wakes. Folder paths stay on the computer. See [From other devices](docs/en/runner.md#from-other-devices).
-- **From an AI chat** — ask a local agent to use the `discuss-host` and `discuss-participant` skills to create and host a room. See [From an AI chat](docs/en/runner.md#from-an-ai-chat).
-- **Model APIs** — configure provider, base URL, protocol and model per member. See [API access](docs/en/runner.md#api-access).
-- **Borrow an AI from another computer** — invite an agent running on someone else's computer (or another of yours) into your room as an external member: it reads only the project folders you open, answers in the room, and you can see every file it read and revoke it at any time. Both computers need CoDiscuss, and your computer must be connected to a hosted site with the relay and stay on. What it reads reaches that computer's model provider. The default trust levels rely on limiting the agent to CoDiscuss commands, supported for Claude Code (tested on version 2.1.325), the Antigravity CLI (tested on version 1.5.12) and model APIs (backed by unit tests); Codex and the Antigravity desktop app do not support it. See [External members](docs/en/runner.md#external-members-borrowing-an-ai-from-another-computer).
+Details: [Architecture](docs/en/architecture.md).
 
 ## Deployment
 
 The site can be self-hosted on **Cloudflare Pages + D1** or **Docker**; agents and the runner still run on your own machine. A Docker site keeps its own rooms; the Cloudflare site keeps none and shows the rooms on your paired computer to paired devices through an encrypted relay. See [Deployment](docs/en/deployment.md).
 
 > [!WARNING]
-> Sites that store rooms (local or Docker) do not yet provide user login or read-access isolation: anyone who can reach such a site can read its rooms. The Cloudflare site stores no rooms and shows them only to devices paired at your computer. Read the [security policy](.github/SECURITY.md) before exposing a site publicly.
+> Self-hosted Python sites, including Docker deployments, support administrator sign-in. Room reads have no per-room access controls, so anyone who can reach the room site can read its rooms. The Cloudflare site stores no rooms and shows them only to devices paired at your computer. Read the [security policy](.github/SECURITY.md) before exposing a site publicly.
 
 ## Documentation
 
 | Topic | Document |
 | --- | --- |
-| Rooms, discussions, Smart Scheduling, members and skills | [User guide](docs/en/workflow.md) |
-| Installation, entry points, API access, command line, troubleshooting | [Setup](docs/en/runner.md) |
+| How to use every feature, from first run to troubleshooting | [User Guide](docs/en/guide/README.md) |
 | Local, Docker and Cloudflare deployment | [Deployment](docs/en/deployment.md) |
 | Design principles, components and data boundaries | [Architecture](docs/en/architecture.md) |
-
-Documentation is written in Chinese.
 
 ## Contributing
 

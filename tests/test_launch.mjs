@@ -367,6 +367,39 @@ test('room files use the saved project and require the authenticated bridge and 
   await assert.rejects(room_files(f.home, input), /未设置项目目录/);
 });
 
+test('the file page reaches an account\'s projects and drafts by id, and a folder a room works in cannot be deleted', async t => {
+  const f = await fixture(t);
+  const projects = join(f.directory, 'alice', 'projects');
+  mkdirSync(join(projects, '年度方案'), { recursive: true });
+  mkdirSync(f.home, { recursive: true });
+  writeFileSync(join(f.home, 'local-settings.json'), JSON.stringify({ workspace: join(f.directory, 'alice', 'workspace'), projects_root: projects }));
+  const launched = await launch_discussion(f.home, { ...f.input, cwd: join(projects, '年度方案') }, f.options);
+  const config = load_config(launched.config_path);
+  const input = { site: f.site, room_id: config.room, token: config.token };
+  mkdirSync(join(f.directory, 'alice', 'workspace', '草稿-abc'), { recursive: true });
+  writeFileSync(join(f.directory, 'alice', 'workspace', '草稿-abc', '笔记.txt'), '草稿');
+  mkdirSync(join(f.directory, 'alice', 'workspace', '空草稿'), { recursive: true });
+  const listed = await room_files(f.home, { ...input, op: 'roots' });
+  assert.deepEqual(listed.projects.map(item => [item.name, item.rooms]), [['年度方案', [config.room]]]);
+  assert.deepEqual(listed.drafts.map(item => item.name), ['草稿-abc'], 'an empty draft is not listed');
+  assert.ok(!JSON.stringify(listed).includes(f.directory), 'the page never sees where the folders are');
+  // Copy a draft's file into the room's project, by the draft's id; then the draft can go to the recycle area, the project cannot.
+  const draft = listed.drafts[0].id;
+  assert.deepEqual((await room_files(f.home, { ...input, op: 'paste', mode: 'copy', source: { root: draft, path: '笔记.txt' }, root: 0, path: '' })).path, '笔记.txt');
+  assert.equal(readFileSync(join(projects, '年度方案', '笔记.txt'), 'utf8'), '草稿');
+  await assert.rejects(room_files(f.home, { ...input, op: 'delete-root', root: listed.projects[0].id }), /1 个房间/);
+  await room_files(f.home, { ...input, op: 'delete-root', root: draft });
+  assert.ok(!existsSync(join(f.directory, 'alice', 'workspace', '草稿-abc')));
+  const [kept] = (await room_files(f.home, { ...input, op: 'trash' })).entries;
+  assert.equal(kept.name, '草稿-abc');
+  await room_files(f.home, { ...input, op: 'restore', id: kept.id });
+  assert.ok(existsSync(join(f.directory, 'alice', 'workspace', '草稿-abc', '笔记.txt')));
+  await assert.rejects(room_files(f.home, { ...input, op: 'mkdir', root: 'not-a-folder-id', path: '', name: '新' }), /已不存在/);
+  // A download reads a file the preview would not open.
+  const saved = await room_media(f.home, { ...input, path: '笔记.txt', download: true });
+  assert.equal(saved.content_type, 'application/octet-stream');
+});
+
 test('room skills require owner authentication and ignore caller supplied software and directories, locally and over relay', async t => {
   const f = await fixture(t);
   const launched = await launch_discussion(f.home, { ...f.input, cwd: f.directory }, f.options);

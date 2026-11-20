@@ -356,7 +356,6 @@ function invocation(config, binding, task, user_home) {
     ...(project ? ['--project', project.project_id, '--settings', project.settings_path] : []));
   if (binding.session_id) args.push('--conversation', binding.session_id);
   if (config.model) args.push('--model', config.model);
-  if (config.effort) args.push('--effort', config.effort);
   args.push('-p', task.prompt);
   // The codiscuss CLI is told it runs confined, so its file arguments may name only the drafts.
   const env = task.tool_lockdown ? { CODISCUSS_TOOL_LOCKDOWN: '1', CODISCUSS_LOCKDOWN_DIRECTORY: task.draft_directory } : null;
@@ -597,13 +596,12 @@ export function database_settings(file) {
   return null;
 }
 
-/** agy's native slash commands answer without an agent turn: /effort lists levels, /model names the current model. */
+/** agy's native slash command /model names the current model without an agent turn. */
 function slash_command(profile, command, options) {
-  const args = ['-p', `/${command}`, '--output-format', 'json', ...(command === 'effort' && profile.model ? ['--model', profile.model] : [])];
+  const args = ['-p', `/${command}`, '--output-format', 'json'];
   return query_catalog(profile, args, (send, finish) => ({ start: () => {}, line: line => {
     const reply = json_line(line), data = reply?.command?.data;
     if (reply?.status !== 'SUCCESS' || reply.command?.name !== command || !data) return;
-    if (command === 'effort' && Array.isArray(data.available)) finish(null, data.adjustable ? data.available.filter(level => typeof level === 'string') : []);
     if (command === 'model') finish(null, { model: MODEL_PATTERN.test(data.id || '') ? data.id : '', effort: typeof data.effort === 'string' ? data.effort : '' });
   } }), options);
 }
@@ -617,12 +615,6 @@ function models(profile, options) {
       if (fields.length >= 2) list.push(model_entry(fields[0], fields.slice(1).join(' ')));
     } };
   }, options);
-}
-
-/** The effort levels agy offers for the selected model. */
-function effort(profile, options) {
-  if (!isAbsolute(profile.executable || '') || (profile.model && !MODEL_PATTERN.test(profile.model))) return Promise.reject(new Error('无法读取所选模型的思考档位'));
-  return slash_command(profile, 'effort', options);
 }
 
 /** What agy runs with when the card leaves model or effort empty, from its native /model. */
@@ -732,6 +724,6 @@ export const antigravity_cli = {
   invocation, lifecycle, events, failure_class: reason => agy_failure_class(reason),
   session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings,
     list: list_sessions, preview: preview_session },
-  models: { list: models, effort, defaults, defaults_stamp },
+  models: { list: models, defaults, defaults_stamp },
   skills: agy_skills,
 };

@@ -1022,7 +1022,7 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
   mkdirSync(draft_directory);
   const access_path = join(directory, 'access.json');
   writeFileSync(access_path, JSON.stringify({ token: 'test-only', session_id: '' }));
-  const bindings = []; const errors = []; const failure_options = []; const denials = []; let exits = 0;
+  const bindings = []; const errors = []; const failure_options = []; const denials = []; const activities = []; let exits = 0;
   const process_fixture = fake_cli(options.events || cli_events(adapter), options);
   t.after(async () => {
     for (const call of [...process_fixture.calls, ...process_fixture.config_calls]) {
@@ -1036,11 +1036,11 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
   const task = { id: 'event-1', participant: 'Antigravity', directory, member_directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
     skill_directories: [join(directory, 'skills')],
     on_binding: session => bindings.push(session), on_process: () => {},
-    on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: (error, options) => { errors.push(error); failure_options.push(options); }, on_exit: () => { exits++; }, on_denials: list => denials.push(...list) };
+    on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: (error, options) => { errors.push(error); failure_options.push(options); }, on_exit: () => { exits++; }, on_denials: list => denials.push(...list), on_activity: phase => activities.push(phase) };
   const config = { adapter, executable: process.execPath, ...options.config };
   const result = await deliver_task(config, options.binding || {}, task, process_fixture.spawn_process, user_home);
   await process_fixture.calls[0].closed;
-  return { directory, user_home, config, access_path, task, result, bindings, errors, failure_options, denials, exits, ...process_fixture };
+  return { directory, user_home, config, access_path, task, result, bindings, errors, failure_options, denials, exits, activities, ...process_fixture };
 }
 
 test('Codex classifies software error codes without interpreting prose or retrying the delivery', async t => {
@@ -1453,6 +1453,16 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
   if (process.platform === 'win32') assert.equal(claude_rule_path('C:\\Data\\room'), '//c/Data/room');
 });
 
+test('claude says it waits for background tasks its process left running after its result', async t => {
+  // Shapes recorded by Claude Code 2.1.326 (2026-11-20, -p stream-json): the process outlives its result until they report.
+  const started = { type: 'system', subtype: 'task_started', task_id: 'b1', tool_use_id: 'toolu_1', is_backgrounded: true };
+  const reported = { type: 'system', subtype: 'task_notification', task_id: 'b1', tool_use_id: 'toolu_1', status: 'completed' };
+  const f = await cli_delivery_fixture(t, 'claude', { events: [started, { type: 'result', is_error: false, result: '已开始' }, reported,
+    { type: 'result', is_error: false, result: '完成' }] });
+  assert.deepEqual(f.errors, []);
+  assert.deepEqual(f.activities.filter(phase => phase === 'waiting'), ['waiting'], 'only the result left waiting says so');
+});
+
 test('claude background runtime limit ends a hung process without retrying or capturing success', async t => {
   const previous = process.env.CODISCUSS_CLI_MAX_MS;
   process.env.CODISCUSS_CLI_MAX_MS = '100';
@@ -1601,6 +1611,48 @@ test('a Claude window turn that ends on a usage limit fails without retry, and o
   appendFileSync(file, reported + turn_end);
   for (let waited = 0; !seen.length && waited < 2000; waited += 20) await delay(20);
   assert.deepEqual(seen, ['exit']);
+  // Shapes recorded by Claude Code 2.1.319-2.1.326: a background Bash or Monitor names its task and its report starts a
+  // turn; a Monitor's events come without a tool call; a persistent Monitor lasts as long as the session, so nothing waits.
+  const notice = (id, task) => line({ type: 'user', message: { role: 'user',
+    content: `<task-notification>
+<task-id>${task}</task-id>
+${id ? `<tool-use-id>${id}</tool-use-id>
+<status>completed</status>
+` : ''}<summary>Monitor event</summary>
+</task-notification>` } });
+  const launch = (name, result) => line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_t', name, input: {} }] } })
+    + line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_t', content: 'running in background' }] }, toolUseResult: result });
+  for (const [name, result, waits] of [['Bash', { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' }, true],
+    ['Monitor', { taskId: 'b1', timeoutMs: 1_800_000, persistent: false }, true], ['Monitor', { taskId: 'b1', persistent: true }, false]]) {
+    const task_file = join(home, `${randomUUID()}.jsonl`), task_seen = [];
+    writeFileSync(task_file, '');
+    watch_window_turn({ file: task_file, offset: 0, pid: process.pid, marker: 'free-9.task.json' }, { on_exit: () => task_seen.push('exit') }, { interval: 10 });
+    appendFileSync(task_file, prompt + launch(name, result) + turn_end + notice('', 'b1') + turn_end);
+    await delay(100);
+    assert.deepEqual(task_seen, waits ? [] : ['exit'], `${name} ${JSON.stringify(result)}`);
+    if (!waits) continue;
+    appendFileSync(task_file, notice('toolu_t', 'b1') + turn_end);
+    for (let waited = 0; !task_seen.length && waited < 2000; waited += 20) await delay(20);
+    assert.deepEqual(task_seen, ['exit']);
+  }
+  // A task the turn stopped itself (TaskStop) never reports; a stop asked while the window rests on its tasks ends the watch.
+  const bash = launch('Bash', { stdout: '', stderr: '', backgroundTaskId: 'b1' });
+  const task_stop = line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_s', name: 'TaskStop', input: { task_id: 'b1' } }] } })
+    + line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_s', content: 'stopped' }] },
+      toolUseResult: { message: 'Successfully stopped task: b1', task_id: 'b1', task_type: 'local_bash' } });
+  mkdirSync(join(home, 'sessions'), { recursive: true });
+  writeFileSync(join(home, 'sessions', `${process.pid}.json`), JSON.stringify({ status: 'idle', updatedAt: Date.now() + 60_000 }));
+  for (const stopped of [true, false]) {
+    const task_file = join(home, `${randomUUID()}.jsonl`), task_seen = [], phases = [];
+    writeFileSync(task_file, '');
+    const watch = watch_window_turn({ file: task_file, offset: 0, pid: process.pid, marker: 'free-9.task.json' },
+      { on_exit: reason => task_seen.push(reason || 'exit'), on_activity: phase => phases.push(phase) }, { interval: 10, env: { CLAUDE_CONFIG_DIR: home } });
+    appendFileSync(task_file, prompt + bash + (stopped ? task_stop : '') + line({ type: 'assistant', timestamp: new Date().toISOString(), message: { content: [{ type: 'text', text: '好' }] } }) + turn_end);
+    await delay(100);
+    if (!stopped) { assert.deepEqual([task_seen, phases], [[], ['waiting']], 'a window resting on its background tasks says so once'); watch.stop(); }
+    for (let waited = 0; !task_seen.length && waited < 2000; waited += 20) await delay(20);
+    assert.deepEqual(task_seen, [stopped ? 'exit' : '停止时原窗口在等后台任务，后台任务仍在运行']);
+  }
 });
 
 test('a Claude window turn reports its own work as activity, so its last remark can be captured', async t => {

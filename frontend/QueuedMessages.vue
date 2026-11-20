@@ -91,7 +91,8 @@ async function send_now(item) {
 
 function menu(item) {
   return [[
-    { label: t('编辑消息'), icon: "i-lucide-pencil", onSelect: () => act("queue_edit", item) },
+    // A share of a message already posted is not a draft: editing it would post it again to those who already have it.
+    ...item.message_id ? [] : [{ label: t('编辑消息'), icon: "i-lucide-pencil", onSelect: () => act("queue_edit", item) }],
     { label: props.queue.queueing ? t('关闭排队') : t('开启排队'), icon: "i-lucide-list-end", onSelect: () => act("queue_toggle", !props.queue.queueing) },
   ]];
 }
@@ -220,7 +221,8 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
             <div class="queued-preview-body">{{ item.text || summary(item) }}</div>
           </template>
         </UTooltip>
-        <span v-if="view.queue_reading === item.id" class="queued-sending-status" role="status">{{ t('正在取回附件…') }}</span>
+        <span v-if="item.message_id && !item.failure && sending !== item.id" class="queued-sending-status">{{ t('#{value1} 已发出，等 {value2} 空闲后交给它', { value1: item.message_id, value2: item.waiting_for.map((name) => bridge.display_name(name)).join('、') }) }}</span>
+        <span v-else-if="view.queue_reading === item.id" class="queued-sending-status" role="status">{{ t('正在取回附件…') }}</span>
         <span v-else-if="sending === item.id || item.failure" class="queued-sending-status">{{ sending === item.id ? t('投递中') : t('失败') }}</span>
         <span class="queued-actions">
           <UTooltip :text="item.failure ? t('再次尝试发送这条排队消息') : t('立即发出；接收者正忙时先打断它这一轮，再处理这条（无法打断的成员继续排队）')" :ui="{ content: 'queued-tooltip' }">

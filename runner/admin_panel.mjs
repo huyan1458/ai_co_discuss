@@ -26,7 +26,7 @@ import { ensure_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } 
 import { machine_links } from './remote_launch.mjs';
 import { DIRECT_ACCOUNTS_FILE } from '../gateway/direct.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
-import { clear_instance_flag, create_os_user, install_shared_runtime, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
+import { clear_instance_flag, create_os_user, install_shared_runtime, restrict_other_drives, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
   start_instance_as_user } from './os_users.mjs';
 import { install_workflows, shipped_workflows } from './discussion_skills.mjs';
 import { list_workflows, workflows_home } from './workflows.mjs';
@@ -674,7 +674,7 @@ function cookie(request, name) {
  *   ops: Injected for tests; defaults to the real account and Windows operations.
  */
 export function create_panel({ data, key, port, ops = {}, sessions = new Set() }) {
-  const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user,
+  const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user, restrict_other_drives,
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, check_package, begin_update,
     set_account_external, reconcile_external, autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_way, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
@@ -756,6 +756,10 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // Hosting: only once the owner turned it on in setup.
     if (!hosting) throw panel_error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”');
     if (method === 'POST' && section === 'clis' && name === 'install') return op.install_runtime(data);
+    // Hosted accounts' Windows users kept off every drive but the system drive; what they run must already lie there.
+    if (method === 'POST' && section === 'drives' && name === 'restrict') {
+      return op.restrict_other_drives(data, Object.keys(read_os_users(data)).filter(account => read_accounts(data)[account]).map(account => account_home(data, account)));
+    }
     // The account entry customers sign in at: started and stopped here, and started again with the panel if it was left on.
     if (method === 'POST' && section === 'entry' && (name === 'start' || name === 'stop')) {
       await (name === 'start' ? op.start_entry(data) : op.stop_entry(data));

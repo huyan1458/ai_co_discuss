@@ -12,7 +12,10 @@ import { locale, t } from './i18n.js';
  * `focus_composer` counts requests to focus it; `dock_width` is the width in pixels the preview takes beside the messages
  * as a split pane, 0 while it is not docked.
  */
-export const file_preview = reactive({ open: null, reveal_path: null, reveal_root: 0, excerpts: [], focus_composer: 0, dock_width: 0 });
+// `reveal_root` is a room directory's index or an account folder's id (named by `reveal_name`).
+export const file_preview = reactive({ open: null, reveal_path: null, reveal_root: 0, reveal_name: "", excerpts: [], focus_composer: 0, dock_width: 0 });
+/** Unsent file cards and excerpts of the rooms not open now, by room ID (ChannelDiscussion), kept until this page closes. */
+export const room_quotes = new Map();
 let excerpt_serial = 0;
 // Name of the CSS highlight that keeps a selection visible while its comment is typed.
 const PENDING_HIGHLIGHT = "excerpt-pending";

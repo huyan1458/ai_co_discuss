@@ -179,6 +179,8 @@
   "{value1} 须为 {value2}–{value3} 的整数": "{value1} must be an integer from {value2} to {value3}",
   "这条排队消息已发出或已删除": "This queued message was sent or deleted",
   "排队消息已变化，请刷新后再调整顺序": "Queued messages changed; refresh before reordering",
+  "点名的成员已不在房间": "The members it names are no longer in the room",
+  "这条消息已发出，只是还在等忙碌的成员；可以删除后重新发送": "This message is already posted and only waits for busy members; delete it and send again instead",
   "action 须为 {value1} 之一": "action must be one of {value1}",
   "enabled 须为 true 或 false": "enabled must be true or false",
   "/{mode} 命令只能 @ 主持人；要请其他成员参与，开启后由主持人安排": "The /{mode} command can only @ the host; to involve other members, let the host arrange it once it starts",

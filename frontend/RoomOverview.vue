@@ -436,13 +436,11 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <template v-else>{{ scheduler }}</template></dd></div>
         <div v-if="saved?.registered"><dt>{{ t("生图") }}</dt><dd>
           <ImageService compact :enabled="Boolean(saved.image_generation)" :disabled="!view.access?.can_manage || room.archived" @update:enabled="bridge.set_room_image_generation($event).catch(() => {})" /></dd></div>
-        <div v-if="saved?.registered"><dt>{{ t("联网搜索") }}</dt><dd>
-          <WebSearchSettings compact :disabled="!view.access?.can_manage || room.archived || !(view.launch.available || view.launch.remote)" /></dd></div>
         <div><dt>{{ t("工作流") }}</dt><dd class="overview-workflow">
           <WorkflowControl v-if="workflow" :workflow="workflow" />
           <span v-else class="overview-muted">{{ t("没有进行中的工作流；在输入框打 / 或邀请成员时选择") }}</span>
         </dd></div>
-        <div v-if="saved?.registered"><dt>{{ t("主持人自建工作流") }}</dt><dd>
+        <div v-if="saved?.registered"><dt>{{ t("主持人完整权限") }}</dt><dd>
           <HostWorkflowSwitch :model-value="Boolean(saved.host_workflows)" :disabled="!view.access?.can_manage || room.archived" @update:model-value="act('set_room_host_workflows', $event)" />
         </dd></div>
         <div v-if="room.free?.max_rounds != null"><dt>{{ t("连续派活上限") }}</dt><dd>
@@ -450,6 +448,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 </template>
           <span v-else-if="room.free.max_rounds">{{ t("{count} 轮后停下等你", { count: room.free.max_rounds }) }}</span>
           <span v-else>{{ t("不限轮数") }}</span></dd></div>
+        <div v-if="saved?.registered"><dt>{{ t("联网搜索") }}</dt><dd>
+          <WebSearchSettings compact :disabled="!view.access?.can_manage || room.archived || !(view.launch.available || view.launch.remote)" /></dd></div>
         <div v-if="saved?.registered"><dt>{{ t("API 请求上限") }}</dt><dd>
           <ApiRequestsField :model-value="requests_shown" :disabled="!view.access?.can_manage || room.archived || saving_requests" @update:model-value="save_requests" /></dd></div>
         <div v-if="!free"><dt>{{ t("逐人追问") }}</dt><dd>{{ room.named_followup ? t('开启：主持人每轮给每位专家写针对性追问') : t('关闭：首轮后请专家回应上一轮观点') }}</dd></div>

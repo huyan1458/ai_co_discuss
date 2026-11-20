@@ -170,7 +170,8 @@ const layout_style = computed(() => ({
   paddingRight: file_preview.dock_width ? `${file_preview.dock_width}px` : "",
 }));
 const width_options = Object.entries(READING_WIDTHS).map(([value, option]) => ({ value, label: option.label }));
-watch(reading_width, save_layout);
+// The message source dialog is portalled too, and matches the cards' width (user 2026-11-20, #5988).
+watch(reading_width, (value) => { document.documentElement.style.setProperty("--channel-reading-width", `${READING_WIDTHS[value].width}px`); save_layout(); }, { immediate: true });
 // Portalled menus and dialogs sit outside the shell, so the preference marks the document root.
 watch(effects, (value) => { document.documentElement.dataset.effects = value; save_layout(); }, { immediate: true });
 watch(nav_collapsed, save_layout);

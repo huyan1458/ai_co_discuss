@@ -12,12 +12,17 @@ import { t } from "./i18n.js";
 
 // More files than this and the list starts folded.
 const FOLDED_ABOVE = 5;
-// Mouse preview: how long the pointer rests before it opens and may wander before it closes; its widest width, the room
-// it wants below the row before it opens above instead, and its distance from the row and the window edges.
+// Mouse preview: how long the pointer rests before it opens and may wander before it closes; its narrowest and widest
+// width, the room it wants beside the file list before it sits beside the row instead, and its distance from the list
+// and the window edges.
 const PREVIEW_OPEN_MS = 250;
 const PREVIEW_CLOSE_MS = 200;
-const PREVIEW_MAX_WIDTH = 720;
-const PREVIEW_MIN_BELOW = 260;
+// With a preview open, a row must hold the pointer this long to take over, so crossing rows on the way to the panel
+// keeps the file being read.
+const PREVIEW_SWITCH_MS = 150;
+const PREVIEW_MIN_WIDTH = 720;
+const PREVIEW_MAX_WIDTH = 1000;
+const PREVIEW_MIN_HEIGHT = 240;
 const PREVIEW_GAP = 4;
 const PREVIEW_MARGIN = 16;
 
@@ -71,14 +76,24 @@ const mouse = window.matchMedia("(hover: hover) and (pointer: fine)");
 // The floating preview: which file, whether a click pinned it, and where it sits (fixed, beside its row).
 const floating = ref(""), pinned = ref(false), place = ref({});
 let panel = null, anchor = null, open_timer = 0, close_timer = 0;
-/** Place the preview under its row, or above it when the window has too little room below. */
+/**
+ * Place the preview below or above the whole file list, on the side with more room, so the other rows stay in reach
+ * while it is open; it is at least as wide as the list and as tall as that side allows (user 2026-11-20, #5931). A list
+ * too tall to leave room on either side falls back to the row itself.
+ */
 function position() {
   if (!anchor?.isConnected) return close_preview();
-  const rect = anchor.getBoundingClientRect();
-  const width = Math.min(PREVIEW_MAX_WIDTH, window.innerWidth - PREVIEW_MARGIN * 2);
-  const left = Math.max(PREVIEW_MARGIN, Math.min(rect.left, window.innerWidth - PREVIEW_MARGIN - width));
-  const edge = window.innerHeight - rect.bottom >= PREVIEW_MIN_BELOW
-    ? { top: `${rect.bottom + PREVIEW_GAP}px` } : { bottom: `${window.innerHeight - rect.top + PREVIEW_GAP}px` };
+  const list = anchor.closest("ul")?.getBoundingClientRect();
+  const row = anchor.getBoundingClientRect();
+  const room_of = (rect) => ({ below: window.innerHeight - rect.bottom - PREVIEW_GAP - PREVIEW_MARGIN, above: rect.top - PREVIEW_GAP - PREVIEW_MARGIN });
+  const fits = (space) => Math.max(space.below, space.above) >= PREVIEW_MIN_HEIGHT;
+  const rect = list && fits(room_of(list)) ? list : row;
+  const space = room_of(rect);
+  const width = Math.min(Math.max(PREVIEW_MIN_WIDTH, (list || row).width), PREVIEW_MAX_WIDTH, window.innerWidth - PREVIEW_MARGIN * 2);
+  const left = Math.max(PREVIEW_MARGIN, Math.min((list || row).left, window.innerWidth - PREVIEW_MARGIN - width));
+  const edge = space.below >= space.above
+    ? { top: `${rect.bottom + PREVIEW_GAP}px`, maxHeight: `${Math.max(space.below, 0)}px` }
+    : { bottom: `${window.innerHeight - rect.top + PREVIEW_GAP}px`, maxHeight: `${Math.max(space.above, 0)}px` };
   place.value = { left: `${left}px`, width: `${width}px`, ...edge };
 }
 function show_preview(path, row) {
@@ -103,13 +118,13 @@ function close_preview() {
   document.removeEventListener("pointerdown", outside_press, true);
   document.removeEventListener("keydown", escape_key);
 }
-/** Resting on a row opens its preview after a moment (at once when another preview is showing). */
+/** Resting on a row opens its preview after a moment (sooner when another preview is showing). */
 function enter_row(path, event) {
   if (!mouse.matches || pinned.value) return;
   window.clearTimeout(close_timer);
   window.clearTimeout(open_timer);
   const row = event.currentTarget;
-  open_timer = window.setTimeout(() => show_preview(path, row), floating.value ? 0 : PREVIEW_OPEN_MS);
+  open_timer = window.setTimeout(() => show_preview(path, row), floating.value ? PREVIEW_SWITCH_MS : PREVIEW_OPEN_MS);
 }
 /** Leaving the row and the panel closes an unpinned preview. */
 function leave() {
@@ -245,7 +260,10 @@ function patch_lines(patch) {
 .execution-changes-patch .is-ctx { color: var(--ui-text-muted); }
 .execution-changes-patch > p { padding: 6px 10px; }
 /* The mouse preview floats over the page beside its row; once a click pins it, its header has a close key. */
-.execution-changes-patch.is-floating { --patch-bg: var(--ui-bg); position: fixed; z-index: 60; margin: 0; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-bg); box-shadow: 0 12px 32px rgb(0 0 0 / .35); overflow: hidden; font-size: 12px; line-height: 1.4; }
+.execution-changes-patch.is-floating { --patch-bg: var(--ui-bg); position: fixed; z-index: 60; display: flex; flex-direction: column; margin: 0; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-bg); box-shadow: 0 12px 32px rgb(0 0 0 / .35); overflow: hidden; font-size: 12px; line-height: 1.4; }
+/* Floating, the patch takes whatever height the panel was given instead of the inline 360px. */
+.execution-changes-patch.is-floating pre { flex: 1 1 auto; min-height: 0; max-height: none; font-size: 12px; }
+.execution-changes-patch.is-floating .execution-changes-preview-head { flex-shrink: 0; }
 .execution-changes-preview-head { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 3px 6px 3px 10px; border-bottom: 1px solid var(--ui-border-muted); background: var(--ui-bg-elevated); }
 .execution-changes-preview-head .execution-changes-path { direction: ltr; }
 .execution-changes-close { display: inline-flex; padding: 3px; border-radius: 4px; color: var(--ui-text-dimmed); cursor: pointer; }

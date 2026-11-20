@@ -7,7 +7,7 @@
 把 Claude Code、Codex、Antigravity 和模型 API 拉进共享房间——<br>
 各自保留原有会话、工具与账号，按点名分工，或围绕目标多轮讨论。
 
-[快速开始](#快速开始) · [工作原理](#工作原理) · [文档](#文档) · [English](README.md)
+[快速开始](#快速开始) · [用户手册](docs/guide/README.md) · [工作原理](#工作原理) · [English](README.md)
 
 [![CI](https://github.com/huyan1458/ai_co_discuss/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/huyan1458/ai_co_discuss/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/badge/npm-ai__co__discuss-CB3837?logo=npm)](https://www.npmjs.com/package/ai_co_discuss)
@@ -24,27 +24,21 @@
 
 多数多智能体框架在自己的运行时里新建 Agent。AI CoDiscuss 反过来：接入你**已经在用**的 AI 软件——连同它们现有的会话、项目上下文、权限和订阅——为它们提供一个共享房间，持久保存消息、观点、分歧与结论。
 
-## 特性
+## 能做什么
 
-- **点名分工**：`@` 哪位 AI，它就在自己的原会话中处理，多位可并行；未点名的消息由 AI 主持人分派。
-- **向你提问**：需要你拍板时，成员在房间里提问，输入框上方出现答题卡；可直接选择、补充意见，或请主持人先给推荐、交给主持人决定，答案交回提问者或接力的下一棒。
-- **结构化讨论**：设定目标与轮次 / 时长上限，主持人安排发言与追问；结束后回到自由协作，记录与结论保留。
-- **智能调度**：可选由决策模型处理日常分派，不必每次唤醒主持人。
-- **混合接入**：本地 CLI 与桌面 App、模型 API、手动接入的会话可同房协作。
-- **共享项目**：为房间指定项目目录，并为每位本地 AI 设置只读或可写。房间“文件”页可浏览目录，悬浮预览文本、Markdown 和静态 HTML。
-- **随时调整成员**：随时邀请、暂离、请回或移除成员，也可以续接一个已有的 AI 会话。
-- **可迁移记录**：附件、包含讨论历史的跨站点 ZIP 导出 / 导入，并可用 `discuss-report` 技能生成带来源的报告。
-- **本机优先**：完全在本机运行；也可将网站部署到 Cloudflare 或 Docker，AI 仍在本机执行。
+每项的完整用法见[用户手册](docs/guide/README.md)。
 
-## 智能调度
-
-房间里的许多轮次只是分派：消息是对谁说的、成员同时还是依次回答、讨论是否继续下一轮。开启智能调度后，这些判断由决策模型（TypeSafe Jev；OpenAI Decisions 为实验性）完成，不必唤醒 AI 主持人，通常约一秒。
-
-- 未点名的消息：明确对某位成员说时直接交给他，或请全体回答、无需回应；其余仍交给主持人。
-- 讨论中：用户插话后继续原有安排，轮次之间选出下一位发言人。
-- 只在置信度达到阈值时执行，把握不足或出错时交回主持人；每次判断都显示在对话中，可评价。
-
-按房间开启，使用你自己的密钥；房间标题与最近消息会发给所选供应商。详见 [智能调度](docs/runner.md#智能调度可选)。
+- **点名分工，多线并行**：`@` 哪位 AI，它就在自己的原会话里处理，不占发言顺序，与主持人安排的主线并行；未点名的消息由 AI 主持人分派。见[在房间里干活](docs/guide/working.md)。
+- **向你提问**：需要你拍板时，成员在房间里提问，输入框上方出现答题卡。见[在房间里干活](docs/guide/working.md)。
+- **结构化讨论**：设定目标与轮次或时长上限，主持人安排发言与追问，可生成带来源的报告。见[讨论](docs/guide/discussion.md)。
+- **Goal**：交给主持人一个目标，它持续推进，需要你确认时停下，可发微信提醒。见 [Goal](docs/guide/goal.md)。
+- **工作流**：把固定的多人分工存成工作流，在房间里一键启用。见[工作流](docs/guide/workflows.md)。
+- **智能调度**：可选由决策模型处理日常分派，不必每次唤醒主持人；使用你自己的密钥，房间标题与最近消息会发给所选供应商。见[智能调度](docs/guide/scheduling.md)。
+- **混合接入**：本地 CLI 与桌面 App、模型 API、手动接入的会话同房协作；可续接已有的 AI 会话，为每位成员设置只读或可写。见[成员](docs/guide/members.md)。
+- **共享项目与记录**：为房间指定项目目录并在“文件”页浏览；附件、跨站点导出导入与分支。见[房间目录与建房](docs/guide/rooms.md)。
+- **借用另一台电脑上的 AI**：把别人电脑上的 AI 请进你的房间，只读你开放的目录，随时撤销。见[跨电脑协作](docs/guide/external-members.md)。
+- **手机与外出**：电脑绑定自托管的免费 Cloudflare 站点后，手机或平板扫码配对即可远程使用。见[手机与外出](docs/guide/remote.md)。
+- **语音与托管**：朗读与语音输入，可在本机运行；管理面板可给别人开托管账号。见[语音与通知](docs/guide/voice.md)、[管理面板与托管账号](docs/guide/admin.md)。
 
 ## 支持的参与者
 
@@ -52,7 +46,9 @@
 | --- | --- | --- |
 | **自动唤醒** | Claude Code CLI · Codex App / CLI · Antigravity App / CLI | 由本机服务唤醒并续接原会话，可担任主持人 |
 | **模型 API** | OpenAI · Claude · Gemini · DeepSeek · Qwen · Grok · OpenAI 兼容服务 | 在本机的 [Pi](https://github.com/earendil-works/pi) 中运行，只有房间与项目文件工具，有自己的会话，可担任主持人 |
-| **手动接入** | 任何可运行 `codiscuss` 的本地 AI（如 Cursor CLI） | 凭自己的成员凭证读写 |
+| **手动接入** | 任何可运行 `codiscuss` 的本地 AI（如 Cursor CLI） | 凭自己的成员凭证读写，见[手动接入](docs/guide/members.md#手动接入) |
+
+网页版 ChatGPT、Claude、Gemini 不能作为成员接入。
 
 ## 快速开始
 
@@ -68,7 +64,7 @@ codiscuss setup
 
 1. 点击 **新建房间**，添加 AI 成员。
 2. 点皇冠指定主持人，按需填写项目目录。
-3. 需要多轮讨论时勾选 **创建后开启讨论** 并写下目标。
+3. 需要多轮讨论或持续推进目标时，在“创建后”选择“开启讨论”或“开启 Goal”，并填写目标。
 4. 创建房间，用 `@` 点名成员开始协作。
 
 ```sh
@@ -77,13 +73,13 @@ codiscuss local status    # 查看网站与服务状态
 codiscuss local stop      # 停止网站及其管理的服务
 ```
 
-升级时先 `codiscuss local stop`，再运行 `npm install --global --prefer-online ai_co_discuss@latest` 和 `codiscuss setup`。安装选项、升级与卸载见 [安装与接入](docs/runner.md#npm-安装与本机配置)。
+升级时先 `codiscuss local stop`，再运行 `npm install --global --prefer-online ai_co_discuss@latest` 和 `codiscuss setup`。逐步说明、费用与数据位置见[第一次使用](docs/guide/first-run.md)，常用命令见[命令行](docs/guide/cli.md)。
 
 ## 工作原理
 
 ```mermaid
 flowchart LR
-    U[你 · 浏览器] --> S[(房间网站<br>本机或线上)]
+    U[你 · 浏览器] --> S[(Python 房间网站<br>本机或自托管)]
     S -- 事件 --> R[本机接入服务<br>codiscuss service]
     R -- 唤醒 / 续接 --> A[Claude Code · Codex · Antigravity]
     R -- API 调用 --> M[模型 API]
@@ -92,33 +88,24 @@ flowchart LR
     M -- 房间工具 --> S
 ```
 
-- **网站**保存房间、成员与消息，校验发言安排、版本与凭据；不运行模型，也不保存 API 密钥。
+- **Python 网站**保存房间、成员与消息，校验发言安排、版本与凭据；不运行模型，也不保存 API 密钥。配对设备经 Cloudflare 中转访问电脑上的房间。
 - **本机接入服务**消费网站事件，在各 AI 的原会话中唤醒它，或调用你配置的模型 API；密钥只留在本机。
 - **AI 成员**按随包提供的 `discuss-host`、`discuss-participant` 技能，凭各自的成员凭证通过 `codiscuss` CLI 读写房间。
 
-详见 [架构](docs/architecture.md) · [安装与接入](docs/runner.md)
-
-## 更多入口
-
-- **线上网站 + 本机 AI**：在运行 AI 的电脑上执行一次 `codiscuss local connect https://你的站点`。见 [线上网页连接本机](docs/runner.md#线上网页连接本机)。
-- **手机或平板建房**：在电脑上连接一次并保存常用项目后，在电脑前扫码配对一次手机或平板，之后用同一网站即可新建房间，由那台电脑唤醒 AI，项目路径只留在电脑上。见 [其他设备经已配对电脑建房](docs/runner.md#其他设备经已配对电脑建房)。
-- **从 AI 对话发起**：让本地 AI 使用 `discuss-host` 和 `discuss-participant` 技能建房并主持。见 [从 AI 对话发起](docs/runner.md#从-ai-对话发起)。
-- **模型 API**：按成员配置供应商、Base URL、请求协议与模型。见 [API 接入](docs/runner.md#api-接入)。
-- **借用另一台电脑上的 AI**：邀请别人电脑（或你自己另一台电脑）上的 AI 作为外部成员进入你的房间，它只读你开放的项目目录、在房间里回答，你能看到它读过的每个文件并随时撤销。两台电脑都要安装共议，你的电脑须连接带中转的线上网站并保持开机；它读到的内容会发送给对方的模型服务商。默认的信任等级依赖把对方 AI 限制为只用共议命令，目前支持 Claude Code（已在 2.1.325 版实测）、Antigravity CLI（已在 1.5.12 版实测）与模型 API（以单元测试为据），Codex 与 Antigravity 桌面版不支持。见 [外部成员](docs/runner.md#外部成员借用另一台电脑上的-ai)。
+详见 [架构](docs/architecture.md)。
 
 ## 部署
 
 网站支持自托管于 **Cloudflare Pages + D1** 或 **Docker**；AI 与接入服务仍在你的电脑运行。Docker 站点自己保存房间；Cloudflare 站点不保存房间，已配对的设备经加密中转看到电脑上的房间。见 [部署指南](docs/deployment.md)。
 
 > [!WARNING]
-> 保存房间的站点（本机或 Docker）暂无用户登录与读取权限隔离，能访问该站点的人即可阅读其中的房间。Cloudflare 站点不保存房间，只向在电脑前配对过的设备显示。公开部署前请阅读 [安全说明](.github/SECURITY.md)。
+> 自托管 Python 站点（含 Docker）支持管理员登录。房间没有逐房间的读取权限隔离，能访问房间站点的人即可阅读其中的房间。Cloudflare 站点不保存房间，只向在电脑前配对过的设备显示。公开部署前请阅读 [安全说明](.github/SECURITY.md)。
 
 ## 文档
 
 | 主题 | 文档 |
 | --- | --- |
-| 房间、讨论、智能调度、成员与技能 | [使用指南](docs/workflow.md) |
-| 安装、入口、API 接入、命令行与故障排查 | [安装与接入](docs/runner.md) |
+| 全部功能的用法，从第一次使用到常见问题 | [用户手册](docs/guide/README.md) |
 | 本地、Docker 与 Cloudflare 部署 | [部署](docs/deployment.md) |
 | 设计原则、组成与数据边界 | [架构](docs/architecture.md) |
 

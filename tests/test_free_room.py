@@ -1859,6 +1859,129 @@ class HostTests(HostRoomTests):
         self.work("Claude")
         self.assertEqual(queued(), [], "an idle room posts the rest")
 
+    def test_side_questions_go_to_free_members_beside_a_relay_and_plain_messages_wait_for_the_idle_room(self):
+        """2026-11-20: @member is a side question that takes no turn: it goes as soon as that member is free, even while
+        others work; a member busy with one takes its relay turn after it; a plain message waits for the whole room."""
+        queued = lambda: [(item["text"], item.get("waiting_for")) for item in self.request(self.path)[1]["free"]["queued_messages"]["items"]]
+        def answer(name, execution):
+            status, saved = self.request(f"{self.path}/messages", {"author": name, "text": f"{name} 答", "source": "cli",
+                                                                   "submission_id": uuid.uuid4().hex, "execution_id": execution["id"]}, self.tokens[name])
+            self.assertEqual(status, 201, saved)
+        FreeRoomTests.say(self, "两人接力")
+        self.work("Claude", to=["Antigravity", "Codex"], sequential=True)
+        relay_turn = self.reserve_for("Antigravity")[1]
+        for text, extra in (("普通", {}), ("问 Antigravity", {"to": ["Antigravity"]})):
+            self.assertTrue(FreeRoomTests.say(self, text, queue=True, **extra)[1].get("queued"))
+        status, sent = FreeRoomTests.say(self, "问 Codex", queue=True, to=["Codex"])
+        self.assertEqual((status, "queued" in sent), (201, False), "a free member answers at once, though the room is busy")
+        side_turn = self.reserve_for("Codex")[1]
+        answer("Antigravity", relay_turn)
+        self.assertEqual(queued(), [("普通", None)], "the member who finished its turn takes its side question at once")
+        self.assertIn(("Antigravity", "ask", "pending"), self.requests())
+        self.assertIn(("Codex", "ask", "pending"), self.requests(), "the relay waits at Codex until its side question is answered")
+        answer("Codex", side_turn)
+        self.work("Codex")
+        self.work("Antigravity")
+        self.assertEqual(queued(), [("普通", None)], "the host still has the relay's hand-back")
+        self.work("Claude")
+        self.assertEqual(queued(), [], "an idle room posts the plain message")
+
+    def test_a_side_question_naming_a_free_and_a_busy_member_goes_to_each_when_it_is_free(self):
+        """The message is posted once: the free member answers now, the busy one's share waits in the queue for it."""
+        FreeRoomTests.say(self, "Antigravity 先写")
+        self.host_dispatch(to=["Antigravity"])
+        running = self.reserve_for("Antigravity")[1]
+        status, sent = FreeRoomTests.say(self, "你们俩看看", queue=True, to=["Antigravity", "Codex"])
+        self.assertEqual(status, 201, sent)
+        self.assertEqual([(item["message_id"], item["waiting_for"]) for item in sent["queue"]["items"]], [(sent["message"]["id"], ["Antigravity"])])
+        self.assertIn(("Codex", "ask", "pending"), self.requests())
+        status, refused = self.request(f"{self.path}/queue", {"action": "edit", "id": sent["queue"]["items"][0]["id"], "text": "改"}, self.owner)
+        self.assertEqual(status, 409, refused)
+        self.request(f"{self.path}/messages", {"author": "Antigravity", "text": "写完", "source": "cli", "submission_id": uuid.uuid4().hex,
+                                               "execution_id": running["id"]}, self.gemini)
+        self.assertEqual(self.request(self.path)[1]["free"]["queued_messages"]["items"], [])
+        asked = [item for item in self.request(self.path)[1]["free"]["requests"] if item["member"] == "Antigravity" and item["status"] == "pending"]
+        self.assertEqual([item["message_id"] for item in asked], [sent["message"]["id"]])
+
+    def test_a_branch_for_another_member_keeps_the_hosts_continue_and_the_host_sees_it(self):
+        """2026-11-20: naming another member opens its own line; the host's plan to carry on stays, and the host is told of it."""
+        FreeRoomTests.say(self, "自己推进")
+        self.work("Claude", to=["Antigravity"], no_handoff=True, **{"continue": "复查"})
+        FreeRoomTests.say(self, "顺便看下日志", to=["Codex"])
+        self.work("Antigravity")
+        self.work("Codex")
+        self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"), "the host's continue survives the owner's branch")
+        self.work("Claude")
+        FreeRoomTests.say(self, "再看下配置", to=["Codex"])
+        FreeRoomTests.say(self, "进度如何")
+        detail = self.reserve_for("Claude")[1]
+        self.assertEqual([(item["member"], item["status"]) for item in detail["branches"]], [("Codex", "pending")])
+
+    def test_a_branch_goes_alone_before_its_members_relay_turn_and_cards_tell_the_lines_apart(self):
+        """2026-11-20: one line per execution: named work first, the relay turn in the next one; each card knows its line."""
+        FreeRoomTests.say(self, "两人接力")
+        self.work("Claude", to=["Antigravity", "Codex"], sequential=True)
+        FreeRoomTests.say(self, "Codex 先看下这个", to=["Codex"])
+        self.work("Antigravity")
+        branch = self.reserve_for("Codex")[1]
+        self.assertEqual([request["purpose"] for request in branch["requests"]], ["ask"])
+        self.assertEqual(len(branch["requests"]), 1, "the relay turn waits for the next execution")
+        self.request(f"{self.path}/messages", {"author": "Codex", "text": "看完了", "source": "cli", "submission_id": uuid.uuid4().hex,
+                                               "execution_id": branch["id"]}, self.codex)
+        relay = self.work("Codex")
+        lines = {item["id"]: item["line"] for item in self.request(self.path)[1]["free"]["executions"]}
+        self.assertEqual((lines[branch["id"]], lines[relay["id"]]), ({"kind": "branch", "by": "user"}, {"kind": "main", "step": 2, "by": "host"}))
+
+    def test_one_line_per_execution_never_leaves_an_execution_empty_and_keeps_owner_and_host_branches_apart(self):
+        """Review #5938: a review waiting beside a relay turn is not counted as a branch, so the delivery is never empty;
+        work the owner and the host named the same member for goes one after the other."""
+        FreeRoomTests.say(self, "两人接力")
+        self.work("Claude", to=["Antigravity", "Codex"], sequential=True)
+        self.work("Antigravity")
+        review = FreeRoomTests.say(self, "Codex 评审一下", to=["Codex"])[1]["message"]["id"]
+        self.database_value(f"""INSERT INTO review_plans (room_id,batch_id,chain_id,host_id,reviewer_id,reviewer_name,config_version,
+            member_revision,scope,implementers,review_batch_id) VALUES ('{self.room["id"]}',{review},{review},{self.member_id('Claude')},
+            {self.member_id('Codex')},'Codex','v','r','评审','[]',{review})""")
+        delivered = self.reserve_for("Codex")[1]
+        self.assertEqual(len(delivered["requests"]), 1, "never an execution without requests")
+        FreeRoomTests.say(self, "Antigravity 看下日志", to=["Antigravity"])
+        FreeRoomTests.say(self, "插一句")
+        self.work("Claude", to=["Antigravity"])
+        first = self.reserve_for("Antigravity")[1]
+        self.assertEqual([request["created_by"] for request in first["requests"]], ["user"], "the host's branch waits for the next execution")
+
+    def test_the_room_view_says_what_becomes_of_each_host_dispatch(self):
+        """2026-11-20: hand back to the host, straight to the owner, background only, or a relay; background members named."""
+        FreeRoomTests.say(self, "分派")
+        handoff = self.host_dispatch(to=["Codex"], detach=["Antigravity"])
+        self.work("Codex")
+        direct = self.host_dispatch(to=["Codex"], no_handoff=True)
+        self.work("Codex")
+        FreeRoomTests.say(self, "再来")
+        detached = self.host_dispatch(detach=["Codex"])
+        FreeRoomTests.say(self, "接力")
+        relay = self.host_dispatch(to=["Antigravity", "Codex"], sequential=True)
+        modes = {item["message_id"]: (item["mode"], item["detached"]) for item in self.request(self.path)[1]["free"]["dispatches"]}
+        self.assertEqual([modes[handoff], modes[direct], modes[detached], modes[relay]],
+                         [("handoff", ["Antigravity"]), ("direct", []), ("detach", []), ("relay", [])])
+
+    def test_a_taken_back_message_drops_its_share_and_a_message_for_departed_members_does_not_hold_the_queue(self):
+        """The share of a retracted message leaves the queue; a queued message whose members all left waits for the owner."""
+        FreeRoomTests.say(self, "Antigravity 先写")
+        self.host_dispatch(to=["Antigravity"])
+        running = self.reserve_for("Antigravity")[1]
+        sent = FreeRoomTests.say(self, "你们俩看看", queue=True, to=["Antigravity", "Codex"])[1]
+        self.assertEqual(self.request(f"{self.path}/messages/{sent['message']['id']}/retract", {}, self.owner)[0], 200)
+        self.assertEqual(self.request(self.path)[1]["free"]["queued_messages"]["items"], [])
+        FreeRoomTests.say(self, "给 Antigravity", queue=True, to=["Antigravity"])
+        FreeRoomTests.say(self, "普通", queue=True)
+        self.request(f"{self.path}/members/{self.member_id('Antigravity')}", {"action": "remove"}, self.owner)
+        self.request(f"{self.path}/messages", {"author": "Antigravity", "text": "写完", "source": "cli", "submission_id": uuid.uuid4().hex,
+                                               "execution_id": running["id"]}, self.gemini)
+        self.work("Claude")
+        items = [item["text"] for item in self.request(self.path)[1]["free"]["queued_messages"]["items"]]
+        self.assertEqual(items, ["给 Antigravity"], "the plain message behind it went out")
+
     def test_background_work_does_not_hold_the_owners_messages(self):
         """2026-11-16: a member the host left working in the background does not queue the owner's next message."""
         FreeRoomTests.say(self, "Antigravity 写，Codex 在后台记账")

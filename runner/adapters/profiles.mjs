@@ -8,8 +8,9 @@
  * - `label`: display name. `kind`: `cli` (a process the runner starts), `app` (a desktop App) or `api` (a model API the runner calls through Pi).
  * - `location`: the config field locating the installed software (`executable`, `ipc_directory`), or '' when none.
  * - `fields`: further config fields the user may set for it.
- * - `efforts`: thinking levels it accepts, or null when chosen inside the App; `efforts_per_model`: the levels are read
- *   from the software for the chosen model. `models`: whether its CLI lists models (an API member's model is a typed ID).
+ * - `efforts`: thinking levels it accepts, or null when chosen inside the App or with the model itself; `efforts_per_model`:
+ *   the levels are read from the software for the chosen model. `models`: whether its CLI lists models (an API member's
+ *   model is a typed ID).
  * - `access_levels`: project access levels it can enforce per run, or null when the App or API decides; `access_hints`
  *   says what each level does in it (measured headless on Claude Code 2.1.312, Codex CLI 0.163, agy 1.4.10; not yet
  *   rechecked on Claude Code 2.1.319 or agy 1.5.2) and
@@ -121,7 +122,9 @@ export const ADAPTER_PROFILES = {
   },
   antigravity_cli: {
     platform: 'Antigravity', label: 'Antigravity CLI', kind: 'cli', location: 'executable', fields: ['project_id', 'project_name'],
-    efforts: ['low', 'medium', 'high', 'xhigh', 'max'], efforts_per_model: true, models: true, defaults_by_query: true,
+    // agy names the thinking level inside the model ID (gemini-4-neon-xhigh) and, since 1.5, refuses a separate --effort
+    // that disagrees with it, so the level is chosen with the model and no effort is offered.
+    efforts: null, models: true, defaults_by_query: true,
     // Headless agy refuses `--mode auto` ("not available for this account", 1.4.10–1.4.11), so 自动 is not offered.
     access_levels: ['read', 'write', 'full'], per_tool_allow: true,
     access_hints: { read: '只放行网站命令；碰到未放行的命令会直接结束本轮', write: '可写项目，命令全部放行（在 agy 沙箱内）',

@@ -114,14 +114,25 @@ watch(() => invited.selected_id.value, open_record, { immediate: true });
 const timer = setInterval(() => { if (!record.value?.status || record.value.status === "active") load(); }, REFRESH_MS);
 onBeforeUnmount(() => clearInterval(timer));
 
-const items = computed(() => invited_items(record.value, messages.value));
+// An ended record shows the room as it was when it ended: later messages, read for another record of this computer in
+// the same room (they share what was read), are not its own (user 2026-11-20, #5826).
+const ended_at = computed(() => {
+  if (!record.value?.status || record.value.status === "active") return 0;
+  const noted = time_ms((record.value.history || []).findLast((entry) => ["ended", "left"].includes(entry.outcome))?.at || 0);
+  // This computer may learn of an expiry only later; the lending had ended at its own end.
+  const lapsed = record.value.end_reason === "expired" ? time_ms(record.value.expires_at) : 0;
+  return lapsed && noted ? Math.min(lapsed, noted) : lapsed || noted;
+});
+const shown_messages = computed(() => ended_at.value
+  ? messages.value.filter((message) => !message.created_at || time_ms(message.created_at) <= ended_at.value) : messages.value);
+const items = computed(() => invited_items(record.value, shown_messages.value));
 /**
  * The chat, oldest first: each message once, the latest shown request of each item carrying it (next to the answer),
  * every request to this AI marked, and each item none of whose messages is shown placed by its time (one older than
  * the first message shown waits until the reader scrolls up to its place).
  */
 const timeline = computed(() => {
-  const shown = new Set(messages.value.map((message) => message.id));
+  const shown = new Set(shown_messages.value.map((message) => message.id));
   const owner = new Map(), asked = new Set(), loose = [];
   for (const item of [...items.value].reverse()) {
     const ids = item.message_ids.filter((id) => shown.has(id));
@@ -130,7 +141,7 @@ const timeline = computed(() => {
     if (last !== undefined && !owner.has(last)) owner.set(last, item);
     else if (last === undefined && !item.answers.some((answer) => shown.has(answer.id))) loose.push({ key: item.key, at: time_ms(item.at), item });
   }
-  const entries = messages.value.map((message) => ({ key: `m${message.id}`, at: message.created_at ? time_ms(message.created_at) : 0, message,
+  const entries = shown_messages.value.map((message) => ({ key: `m${message.id}`, at: message.created_at ? time_ms(message.created_at) : 0, message,
     item: owner.get(message.id) || null, asked: asked.has(message.id) }));
   const start = entries.find((entry) => entry.at)?.at || 0;
   for (const entry of loose.sort((a, b) => a.at - b.at)) {

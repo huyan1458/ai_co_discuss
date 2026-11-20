@@ -9,7 +9,7 @@ import { after, test } from 'node:test';
 import { add_account, instance_home, read_accounts, save_entry_settings, stop_entry } from '../gateway/gateway.mjs';
 import { managed_api_keys, save_api_key } from '../runner/discussion_api.mjs';
 import { create_panel, instance_conforms, instance_state, list_keys, protect_account, relay_operator_events, update_step } from '../runner/admin_panel.mjs';
-import { instance_key_file, os_user_name, place_instance_key, secure_folder, secure_shared_root } from '../runner/os_users.mjs';
+import { blocking_paths, instance_key_file, os_user_name, place_instance_key, secure_folder, secure_shared_root } from '../runner/os_users.mjs';
 import { tray_script } from '../runner/tray.mjs';
 import { admin_cli } from '../runner/admin_cli.mjs';
 
@@ -589,4 +589,9 @@ test('an account whose side cannot be taken down keeps its record, gets no secon
   const answer = await request('/api/accounts/demo/os-user', { cookie, body: {} });
   assert.notEqual(answer.status, 200);
   assert.equal(switched, false, 'the Windows user is not changed while its identity is left behind');
+});
+
+test('closing the other drives to hosted accounts is refused while what they run lies on one', () => {
+  assert.deepEqual(blocking_paths(['C:\ProgramData\CoDiscuss', 'c:\Users\alice', '', 'D:\tools\node'], 'C:'), ['D:\tools\node']);
+  assert.deepEqual(blocking_paths(['C:\ProgramData\CoDiscuss'], 'C:'), []);
 });

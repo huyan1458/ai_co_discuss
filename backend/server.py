@@ -49,7 +49,7 @@ from .free_room import review_ready, advance_review, late_answer, execution_diff
 from .free_room import checked_sequence, continue_sequence, sequence_view
 from . import questions
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label_text, is_ai, is_participant
-from .message_queue import drain as drain_queue, enqueue, queue_action, queue_view, should_queue
+from .message_queue import drain as drain_queue, enqueue, enqueue_share, queue_action, queue_split, queue_view
 from .room_import import import_room, imported_attachment
 from .runtime import (begin_write, limit_values, owner_proxy_token, require_owner, token_hash,
                      enforce_session_limits, room_limits_view, session_limits_view)
@@ -67,6 +67,8 @@ UPDATE_HEARTBEAT_SECONDS = 15
 # Changes remembered for streams that fall behind; one further back is reported as a change to the whole site.
 UPDATE_LOG_SIZE = 256
 MAX_BODY_BYTES = 512 * 1024
+# The file page uploads to a project in parts of up to 3 MiB on the computer itself (base64 in JSON).
+MAX_FILE_PART_BODY_BYTES = 5 * 1024 * 1024
 MAX_IMPORT_BYTES = 32 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 # Files uploaded while the message is still being written are dropped if never sent within this time.
@@ -1715,8 +1717,12 @@ def append_free_message(connection, room, payload, actor):
     check_message_attachments(connection, room_id, submitted_by, identifiers)
     # `/goal` and `/discuss` are commands: checked before saving, never queued, and not routed to members.
     mode_command = check_mode_command(connection, room_id, payload) if actor == "用户" else None
-    if actor == "用户" and not mode_command and should_queue(connection, room_id, payload):
+    waiting = queue_split(connection, room_id, payload) if actor == "用户" and not mode_command else None
+    if waiting == "all":
         return {**enqueue(connection, room_id, payload), "queue": queue_view(connection, room_id)}
+    if waiting:
+        # A side question naming free and busy members: the free ones answer now, the busy ones' share waits in the queue.
+        queued_share, payload = payload, {**payload, "to": [name for name in payload["to"] if name not in waiting]}
     if actor != "用户":
         check_answer(connection, room_id, actor, payload)
     review_plan = checked_review_plan(connection, room_id, actor, payload)
@@ -1742,6 +1748,9 @@ def append_free_message(connection, room, payload, actor):
     if payload.get("proactive") is not True:
         complete_session_requests(connection, room_id, payload, actor, cursor.lastrowid)
     saved_message = connection.execute(f"{MESSAGE_QUERY} WHERE messages.id=?", (cursor.lastrowid,)).fetchone()
+    if waiting:
+        enqueue_share(connection, room_id, queued_share, cursor.lastrowid, waiting)
+        return {"message": message_with_attachments(connection, saved_message), "duplicate": False, "queue": queue_view(connection, room_id)}
     return {"message": message_with_attachments(connection, saved_message), "duplicate": False}
 
 
@@ -2858,7 +2867,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if method == "POST":
             if self.headers.get_content_type() != "application/json":
                 raise ValueError(Text('本机操作须使用 application/json'))
-            payload = self.read_payload()
+            payload = self.read_payload(MAX_FILE_PART_BODY_BYTES if command == "room-files" else MAX_BODY_BYTES)
             if command in ("start", "room-config", "room-models", "room-skills", "room-files", "room-page", "room-media", "execution-details", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows"):
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
@@ -2903,7 +2912,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 del tickets[key]
             while len(tickets) >= MAX_MEDIA_TICKETS:
                 del tickets[next(iter(tickets))]
-            tickets[ticket] = (path, info.st_size, info.st_mtime_ns, result["content_type"], path.name, now + MEDIA_TICKET_SECONDS)
+            # A download is saved by the browser instead of shown.
+            disposition = "attachment" if payload.get("download") is True else "inline"
+            tickets[ticket] = (path, info.st_size, info.st_mtime_ns, result["content_type"], path.name, now + MEDIA_TICKET_SECONDS, disposition)
         return self.respond({**result, "url": f"/api/local/media/{ticket}"})
 
     def serve_media_ticket(self, ticket):
@@ -2912,14 +2923,14 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             item = self.server.media_tickets.get(ticket)
         if not item or item[5] <= time.time():
             raise LookupError(Text('播放地址已过期，请重新打开文件'))
-        path, size, mtime_ns, content_type, name, _ = item
+        path, size, mtime_ns, content_type, name, _, disposition = item
         try:
             info = path.stat()
         except OSError:
             raise LookupError(Text('文件已不存在')) from None
         if (info.st_size, info.st_mtime_ns) != (size, mtime_ns):
             raise FileExistsError(Text('文件已变化，请重新打开'))
-        self.send_file(path, content_type, name, "inline")
+        self.send_file(path, content_type, name, disposition)
 
     def save_local_room_configuration(self, command, payload):
         """Keep session pause/revision validation and local file replacement in one boundary."""

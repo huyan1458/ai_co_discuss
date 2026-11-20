@@ -99,7 +99,7 @@ TIMELINE_NOTES_SQL = f"""SELECT execution_id,created_at FROM execution_notes
 RECENT_CHANGES = 50
 MAX_CHANGED_FILES = 200
 # What a member's software last showed it doing, as reported by the runner with each renewal.
-ACTIVITY_PHASES = ("", "thinking", "command", "tool", "editing", "writing")
+ACTIVITY_PHASES = ("", "thinking", "command", "tool", "editing", "writing", "waiting")
 # Progress notes per execution, their length, and how many one renewal may carry.
 MAX_EXECUTION_NOTES = 50
 MAX_NOTE_LENGTH = 500
@@ -991,11 +991,14 @@ def recent_executions(connection, room_id, span=None):
     else:
         rows = connection.execute(f"{query} ORDER BY e.id DESC LIMIT ?", (room_id, RECENT_EXECUTIONS))
     executions = []
+    positions = relay_positions(connection, room_id)
     for row in rows:
         requests = []
-        for request in connection.execute("SELECT id,message_id,purpose,status,answer_id FROM member_requests WHERE execution_id=? ORDER BY id", (row["id"],)):
-            request_data = {**dict(request), **session_request_source(connection, request["id"], request["message_id"])}
-            requests.append(request_data)
+        line = None
+        for request in connection.execute("SELECT id,room_id,member_id,message_id,batch_id,purpose,created_by,status,answer_id FROM member_requests WHERE execution_id=? ORDER BY id", (row["id"],)):
+            line = line or line_of(connection, request, positions)
+            request_data = {key: request[key] for key in ("id", "message_id", "purpose", "status", "answer_id")}
+            requests.append({**request_data, **session_request_source(connection, request["id"], request["message_id"])})
         executions.append({**public_execution(row), "texts": execution_texts(connection, row["id"]), "member": row["member"], "cwd": row["cwd"], "changes": json.loads(row["changes"] or "[]"),
             "changes_recorded": bool(row["changes"]), "request_ids": json.loads(row["request_ids"]),
             "edited": json.loads(row["edited"]) if row["edited"] else None, "diff_stats": diff_stats(row["diffs"]),
@@ -1004,7 +1007,7 @@ def recent_executions(connection, room_id, span=None):
             "notes": row["note_count"], "steps": row["step_count"], "commands": row["command_count"], "edits": row["edit_count"], "denials": json.loads(row["denials"] or "[]"), "failure_class": row["failure_class"] or "",
             "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None, "background": bool(row["background"]),
-            "retried": bool(row["retried"]),
+            "retried": bool(row["retried"]), "line": line,
             "interjections": execution_interjections(connection, row["id"], row["status"]),
             "retry": execution_retry(connection, row["id"])})
     return executions
@@ -1149,7 +1152,8 @@ def free_view(connection, room_id):
             "requests": requests[::-1], "executions": recent_executions(connection, room_id),
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_rounds": max_rounds,
             "chain_rounds": progress, "recommendations": recent_recommendations(connection, room_id, now)[::-1],
-            "queued_messages": queue_view(connection, room_id), "questions": questions.room_questions_view(connection, room_id)}
+            "queued_messages": queue_view(connection, room_id), "questions": questions.room_questions_view(connection, room_id),
+            "dispatches": dispatch_modes(connection, room_id, {row["message_id"] for row in requests if row["created_by"] == "host"})}
 
 
 def require_member(connection, room_id, token, name=None):
@@ -2586,16 +2590,94 @@ def answered_chain(connection, payload, actor):
     return row[0] or 0
 
 
+def reaches_host(connection, room_id, payload):
+    """An owner message the host takes: unnamed, for everyone, in turn, or naming the host."""
+    named = payload.get("to")
+    if named is None or payload.get("order") == "auto" or payload.get("sequential") is True:
+        return True
+    host = connection.execute("SELECT name FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    return bool(host) and host[0] in named
+
+
+def relay_positions(connection, room_id):
+    """Every relay step batch of the room with its step number, read once per view."""
+    return {entry[2]: entry[3] + 1 for sequence in connection.execute("SELECT steps FROM free_sequences WHERE room_id=?", (room_id,))
+            for entry in json.loads(sequence["steps"])}
+
+
+def line_of(connection, request, positions=None):
+    """Which line a member request works on: a step of the speaking order (`main`, counted from 1), work its member was
+    named for outside it (`branch`, by the owner or the host), or None for the host's own requests (route, hand-back...).
+
+    Returns:
+        {"kind": "main", "step": n, "by": "host" (a relay) | "user" (in turn)} | {"kind": "branch", "by": "user" | "host"} | None
+    """
+    if request["purpose"] != "ask":
+        return None
+    positions = relay_positions(connection, request["room_id"]) if positions is None else positions
+    if request["batch_id"]:
+        if request["batch_id"] in positions:
+            return {"kind": "main", "step": positions[request["batch_id"]], "by": "host"}
+    else:
+        order = [row[0] for row in connection.execute("SELECT member_id FROM free_queue WHERE message_id=? ORDER BY id", (request["message_id"],))]
+        if request["member_id"] in order:
+            return {"kind": "main", "step": order.index(request["member_id"]) + 1, "by": "user"}
+    if connection.execute("SELECT 1 FROM session_requests WHERE member_request_id=?", (request["id"],)).fetchone():
+        return None
+    # The host asked directly is a side question, not a branch; a room that never had a speaking order has no main line
+    # for anything to branch off.
+    if connection.execute("SELECT 1 FROM room_members WHERE id=? AND role='host'", (request["member_id"],)).fetchone() or not (
+            positions or connection.execute("SELECT 1 FROM free_queue WHERE room_id=? LIMIT 1", (request["room_id"],)).fetchone()):
+        return None
+    return {"kind": "branch", "by": request["created_by"]}
+
+
+def dispatch_modes(connection, room_id, message_ids):
+    """What becomes of each host dispatch once its members end (user 2026-11-20): `relay` (step by step, the last hands
+    back), `handoff` (back to the host, the default), `direct` (`no_handoff`: straight to the owner, a failure still back)
+    or `detach` (background only: nothing waits, nothing comes back); `detached` names background members sent beside it.
+    A relay's later steps hang on members' answers and are not the host's dispatch messages, so they are left out."""
+    modes = []
+    for message_id in sorted(message_ids):
+        detached = [row[0] for row in connection.execute("""SELECT m.name FROM member_requests r JOIN room_members m ON m.id=r.member_id
+            WHERE r.room_id=? AND r.message_id=? AND r.created_by='host' AND r.purpose='ask' AND r.batch_id=0 ORDER BY r.id""", (room_id, message_id))]
+        if connection.execute("SELECT 1 FROM free_sequences WHERE room_id=? AND message_id=?", (room_id, message_id)).fetchone():
+            mode = "relay"
+        elif connection.execute("SELECT 1 FROM free_relay_steps WHERE room_id=? AND batch_id=?", (room_id, message_id)).fetchone():
+            continue
+        elif connection.execute("SELECT 1 FROM free_batches WHERE room_id=? AND batch_id=?", (room_id, message_id)).fetchone():
+            direct = connection.execute("SELECT 1 FROM free_direct_batches WHERE room_id=? AND batch_id=?", (room_id, message_id)).fetchone()
+            mode = "direct" if direct else "handoff"
+        elif detached:
+            mode, detached = "detach", []
+        else:
+            continue
+        modes.append({"message_id": message_id, "mode": mode, "detached": detached})
+    return modes
+
+
+def open_branches(connection, room_id, host_id):
+    """Work the owner named members for directly, still waiting or under way: lines the host did not send and is not
+    handed back, listed so it does not send conflicting work."""
+    return [dict(row) for row in connection.execute("""SELECT m.name AS member,r.message_id,r.status FROM member_requests r
+        JOIN room_members m ON m.id=r.member_id WHERE r.room_id=? AND r.member_id<>? AND r.status IN ('pending','delivering')
+        AND r.purpose='ask' AND r.created_by='user' AND r.batch_id=0
+        AND NOT EXISTS(SELECT 1 FROM free_queue f WHERE f.message_id=r.message_id AND f.member_id=r.member_id)
+        AND NOT EXISTS(SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id) ORDER BY r.id""", (room_id, host_id))]
+
+
 def after_free_message(connection, room_id, message_id, actor, payload):
     """Create requests for the owner's message, or close what the member's answer covers."""
     now = int(time.time())
     if actor == "用户":
         # New owner input lets an active goal wake the host again once the room falls idle, and answers whatever the
         # host was waiting on: the goal is back to being worked on and a later pending gets its fallback again.
-        connection.execute("""UPDATE room_goals SET armed=1,phase='doing',phase_note='',phase_until=0,pending_fallback=0
-            WHERE room_id=? AND status='active'""", (room_id,))
-        # It also replaces whatever the host meant to continue with.
-        connection.execute("DELETE FROM free_host_continues WHERE room_id=?", (room_id,))
+        # A message the host takes also replaces whatever it meant to continue with. One naming other members only
+        # starts their own lines: it answers nothing the host asked, so the host's plan and goal state stay (user 2026-11-20).
+        if reaches_host(connection, room_id, payload):
+            connection.execute("""UPDATE room_goals SET armed=1,phase='doing',phase_note='',phase_until=0,pending_fallback=0
+                WHERE room_id=? AND status='active'""", (room_id,))
+            connection.execute("DELETE FROM free_host_continues WHERE room_id=?", (room_id,))
         if discussion.hold_user_message(connection, room_id, message_id, payload):
             return
         if resume_user_gate(connection, room_id, message_id, payload):
@@ -3178,6 +3260,25 @@ def claim_execution(connection, room_id, member, payload):
     return open_execution(connection, room_id, member, payload, request_ids)
 
 
+# A pending request that is a turn of the speaking order: the current step of a host's relay, or a member's turn of an
+# owner's message in turn (`free_queue`). Written against `member_requests` without an alias.
+MAIN_LINE = """(member_requests.purpose='ask' AND (
+    (member_requests.batch_id>0 AND EXISTS(SELECT 1 FROM free_sequences q WHERE q.room_id=member_requests.room_id AND q.batch_id=member_requests.batch_id))
+    OR (member_requests.batch_id=0 AND EXISTS(SELECT 1 FROM free_queue f WHERE f.message_id=member_requests.message_id AND f.member_id=member_requests.member_id))))"""
+
+
+def one_line(connection, member_id, request_filter, request_values):
+    """Narrow what an execution takes to one line (user 2026-11-20): work the member was named for goes first, its turn
+    in the speaking order waits for the next execution, and work named by the owner and by the host go one after the
+    other (whoever named it first), so stopping or withdrawing one never takes another with it. The member's other
+    requests (the host's route, hand-back, notice) still ride along. Decided over the same candidates it delivers."""
+    branch = connection.execute(f"""SELECT created_by FROM member_requests WHERE member_id=? AND status='pending' AND {request_filter}
+        AND purpose='ask' AND NOT {MAIN_LINE} ORDER BY id LIMIT 1""", (member_id, *request_values)).fetchone()
+    if not branch:
+        return request_filter, request_values
+    return (f"{request_filter} AND NOT {MAIN_LINE} AND NOT (purpose='ask' AND created_by<>?)", (*request_values, branch[0]))
+
+
 def open_execution(connection, room_id, member, payload, request_ids=None):
     """Open one execution over a checked member's pending requests, or only over `request_ids` among them."""
     client_id = str(payload.get("client_id", ""))
@@ -3211,6 +3312,11 @@ def open_execution(connection, room_id, member, payload, request_ids=None):
     if request_ids is not None:
         request_filter += f" AND id IN ({','.join('?' * len(request_ids))})"
         request_values = (*request_values, *request_ids)
+    if not session_purpose and not pending[0]["review"]:
+        request_filter, request_values = one_line(connection, member["id"], request_filter, request_values)
+    if not connection.execute(f"SELECT 1 FROM member_requests WHERE member_id=? AND status='pending' AND {request_filter}",
+                              (member["id"], *request_values)).fetchone():
+        raise FileExistsError(Text("该成员没有待投递的请求"))
     now = int(time.time())
     cursor = connection.execute("""INSERT INTO member_executions (room_id,member_id,client_id,lease_until,created_at,cwd)
         VALUES (?,?,?,?,?,?)""", (room_id, member["id"], client_id, now + LEASE_SECONDS, now, str(payload.get("cwd") or "")[:MAX_PATH_LENGTH]))
@@ -3235,8 +3341,9 @@ def execution_detail(connection, row):
     quota = quota_failure(connection, row["id"])
     failure = failure_class_of(connection, row["id"])
     mentions = mention_outcomes(connection, member["id"], row["id"])
+    branches = open_branches(connection, row["room_id"], member["id"]) if member["role"] == "host" else []
     return {**detail, "member": member["name"], "read_until": member["read_until"], "requests": requests,
-            **({"mentions": mentions} if mentions else {}),
+            **({"mentions": mentions} if mentions else {}), **({"branches": branches} if branches else {}),
             **({"queued_requests": queued_requests(connection, member["id"])} if row["status"] in ACTIVE else {}),
             "rewound_executions": member_rewinds(connection, member["id"]), "retry": execution_retry(connection, row["id"]),
             **({"failure": {"class": "quota", "resets": quota["resets"] or None, "reset_at": quota["reset_at"] or None,

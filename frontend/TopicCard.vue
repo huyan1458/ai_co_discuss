@@ -5,7 +5,7 @@ import { computed, inject, nextTick, ref, watch } from "vue";
 // preview: a room still being created, shown from what the new-room panel already knows.
 const props = defineProps({ preview: { type: Object, default: null } });
 const emit = defineEmits(["edit"]);
-const { view, bridge } = inject("discussion");
+const { view, bridge, act } = inject("discussion");
 const TOPIC_BODY_MAX_HEIGHT = 240;
 const topic_expanded = ref(false);
 const topic_body = ref(null);
@@ -18,10 +18,29 @@ const topic = computed(() => {
   const experts = Object.entries(value.experts || {}).map(([name]) => ({ name, mode: bridge.participant_access(name, value) }));
   const limits = value.limits || {};
   const discussing = ["active", "paused"].includes(value.session?.status);
-  const bounds = [discussing ? t('本场讨论') : t('下次讨论默认上限'),
-    limits.max_rounds ? t('{value1} 轮', { value1: limits.max_rounds }) : t('轮次不限'), limits.max_minutes ? t('{value1} 分钟', { value1: limits.max_minutes }) : t('时长不限')].join(" · ");
-  return { request, goal: value.session?.goal || value.goal, boundaries: value.boundaries, host: value.host, experts, bounds };
+  const bounds = discussing ? [t('本场讨论'), limits.max_rounds ? t('{value1} 轮', { value1: limits.max_rounds }) : t('轮次不限'),
+    limits.max_minutes ? t('{value1} 分钟', { value1: limits.max_minutes }) : t('时长不限')].join(" · ") : settings_summary(value);
+  return { request, goal: value.session?.goal || value.goal, boundaries: value.boundaries, host: value.host, experts, bounds, discussing };
 });
+
+/**
+ * Outside a discussion, the settings that shape everyday collaboration: only what is switched on, plus the chain-round
+ * limit; the API members' search and request limit only when the room has an API member. Empty when nothing is known.
+ */
+function settings_summary(value) {
+  const saved = !props.preview && view.value.launch?.room_models?.room_id === value.id ? view.value.launch.room_models : null;
+  const items = [];
+  if (saved?.scheduler) items.push(t('智能调度'));
+  if (saved?.image_generation) items.push(t('生图'));
+  if (saved?.host_workflows) items.push(t('主持人完整权限'));
+  if (value.free?.max_rounds != null) items.push(value.free.max_rounds ? t('连续派活 {count} 轮', { count: value.free.max_rounds }) : t('连续派活不限'));
+  const has_api = Object.values(saved?.participants || {}).some((member) => member?.adapter === "api");
+  if (has_api) {
+    if (Object.keys(view.value.launch.api_keys || {}).some((root) => { try { return new URL(root).hostname === "api.deepseek.com"; } catch { return false; } })) items.push(t('联网搜索'));
+    items.push(saved.api_max_requests ? t('API 请求 {count} 次', { count: saved.api_max_requests }) : t('API 请求不限'));
+  }
+  return items.join(" · ");
+}
 
 /** Show "展开全文" only when the whole topic body is taller than its folded height. */
 async function measure() {
@@ -49,6 +68,7 @@ defineExpose({ measure });
     </div>
     <UButton v-if="topic_overflows || topic_expanded" :label="topic_expanded ? t('收起') : t('展开全文')" :trailing-icon="topic_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" @click="topic_expanded = !topic_expanded" />
     <div class="channel-topic-section channel-topic-config"><h3>{{ t('参与配置') }}</h3><div class="channel-topic-people">
-      <span v-for="person in topic.experts" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small>{{ person.name === topic.host ? t('主持 · {value1}', { value1: person.mode }) : person.mode }}</small></span>    </div><small class="channel-topic-bounds">{{ topic.bounds }}</small></div>
+      <span v-for="person in topic.experts" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small>{{ person.name === topic.host ? t('主持 · {value1}', { value1: person.mode }) : person.mode }}</small></span>    </div><small v-if="topic.bounds && (topic.discussing || preview)" class="channel-topic-bounds">{{ topic.bounds }}</small>
+      <button v-else-if="topic.bounds" type="button" class="channel-topic-bounds" :title="t('查看协作设置')" @click="act('tab', 'overview')">{{ topic.bounds }}</button></div>
   </section>
 </template>

@@ -54,6 +54,8 @@ const BACK_ANGLE = 180;
 const angle = useSpring(0, FLIP_SPRING);
 const card = ref(null), front_button = ref(null), back_button = ref(null);
 const back = ref(false), visible_back = ref(false);
+// 3D only while turning: a face left in a 3D layer re-rasterizes its text on every edit and visibly wobbles.
+const turning = ref(false);
 const profile = computed(() => preset.value ? {
   ...view.value.launch.profiles[bridge.platform_of(props.name)],
   model: "", effort: "", system_prompt: "", project_access: "read", ...preset.value,
@@ -209,7 +211,11 @@ function reveal(degrees) {
 }
 const stop_observing = angle.on("change", reveal);
 // A rapid reversal can settle without ever crossing the edge.
-const stop_settling = angle.on("animationComplete", focus_face);
+const stop_settling = angle.on("animationComplete", () => {
+  // At rest the card is drawn flat (no 3D transform), so a spring that stops a hair short of its target shows no tilt.
+  turning.value = false;
+  focus_face();
+});
 
 /** Retarget the same spring so a reversal carries its current angle and velocity. */
 // Opening the back remembers this instance's settings so Cancel can restore them exactly.
@@ -423,7 +429,7 @@ watch(back, (open) => {
 });
 
 // The flip always plays, even under prefers-reduced-motion: the user asked to keep it.
-watch(back, (next) => angle.set(next ? BACK_ANGLE : 0));
+watch(back, (next) => { turning.value = true; angle.set(next ? BACK_ANGLE : 0); });
 // Prefetch as soon as the card can use a catalog, so flipping does not wait on a slow CLI query.
 watch(() => [configurable.value, view.value.launch.available, profile.value.adapter],
   ([enabled, available]) => { if (enabled && available) load_models(); }, { immediate: true });
@@ -431,7 +437,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 </script>
 
 <template>
-  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host, 'is-static': !automatic, 'is-manual': manual, 'is-joining': joining }"
+  <div ref="card" class="expert-card" :class="{ 'is-configurable': configurable, 'is-host': host, 'is-static': !automatic, 'is-manual': manual, 'is-joining': joining, 'is-turning': turning }"
     :data-identity="bridge.identities[name]?.style" :data-face="visible_back ? 'back' : 'front'" tabindex="-1" @keydown.esc="escape">
     <motion.div class="expert-card-turn" :style="{ rotateY: angle }">
       <div class="expert-card-face expert-card-front" :inert="visible_back" :aria-hidden="visible_back">
@@ -571,6 +577,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card.is-host .expert-card-front { border-color: color-mix(in srgb, #e0b44a 45%, var(--ui-border)); }
 .expert-card-front { position: relative; display: flex; flex-direction: column; }
 .expert-card-back { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 8px; transform: rotateY(180deg); }
+/* At rest the card lies flat: both rotations cancel out, and dropping them keeps text out of a 3D layer. */
+.expert-card:not(.is-turning) .expert-card-turn, .expert-card:not(.is-turning) .expert-card-back { transform: none !important; }
 .expert-card-back-body { display: flex; flex: 1; flex-direction: column; gap: 8px; min-height: 0; padding: 2px; overflow-y: auto; scrollbar-width: thin; }
 .expert-card:hover .expert-card-face { border-color: var(--ui-border-accented); }
 .expert-card-open { display: flex; flex: 1; flex-direction: column; gap: 10px; width: 100%; min-width: 0; padding: 12px 12px 48px; text-align: left; border-radius: inherit; outline: none; }

@@ -154,7 +154,10 @@ const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => external
 
 /** An external member shows the vendor its computer reports; a custom endpoint, or none reported yet, shows the external mark. */
 function external_member_identity(name) {
-  const platform = state.room?.free?.members?.find(member => member.name === name)?.external?.platform;
+  // One that has ended (expired, left, revoked) is no longer among the members but its earlier messages still show: it
+  // keeps the vendor it reported, from the room's list of ended external members.
+  const free = state.room?.free;
+  const platform = [...free?.members || [], ...free?.ended_externals || []].find(member => member.name === name)?.external?.platform;
   const vendor = platform && platform !== "Custom" ? PLATFORM_IDENTITIES[platform] : null;
   return { label: t('外部专家'), icon: vendor?.icon || EXTERNAL_ICON, style: vendor?.style || 'external', description: t('外部专家') };
 }
@@ -2221,11 +2224,13 @@ async function send_message(event) {
   state.sending_drafts = drafts;
   state.attachment_drafts = [];
   // A message the site will likely queue shows at once as a row in the queue tray instead of a card in the transcript,
-  // which would flash before moving above the composer. Like the site, a message naming only a host that is not busy is not queued.
+  // which would flash before moving above the composer. Like the site, a message naming members (not everyone, not in turn)
+  // goes at once to those not busy and with nothing queued for them; only when none of them is free does it wait.
   const queue = state.room.free?.queued_messages;
-  const named = new Set(payload.to || []);
-  const only_host = named.size === 1 && (state.room.free?.members || []).some(member => named.has(member.name) && member.role === "host" && member.status === "active");
-  const likely_queued = payload.queue && !(only_host && !queue?.host_busy) && (queue?.busy || queue?.items?.length);
+  const named = [...new Set(payload.to || [])];
+  const side = named.length && !payload.sequential && payload.order !== "auto";
+  const waits = name => (queue?.busy_members || []).includes(name) || (queue?.items || []).some(item => (item.to || []).includes(name));
+  const likely_queued = payload.queue && (side ? named.every(waits) : (queue?.busy || queue?.items?.length));
   state.sending_preview = likely_queued ? null : preview;
   // The rows already queued, so the first snapshot listing a new one swaps it in for this row (see publish_view).
   state.queueing_preview = likely_queued ? { ...preview, queued_ids: (queue.items || []).map(item => item.id) } : null;
@@ -4252,6 +4257,64 @@ function read_room_files(room_id, path = "", offset = 0, query = "", root = 0, f
   return local_launch_request("room-files", { room_id, path, offset, ...(query ? { query } : { root }), ...(folders ? { folders } : {}), token: localStorage.getItem(`discuss-access:${room_id}`) });
 }
 
+/**
+ * Change the room's project or draft folders from the file page: `payload.op` is one of the runner's file operations
+ * (`roots`, `mkdir`, `rename`, `delete`, `paste`, `read`, `save`, `trash`, `restore`, `new-project`, `delete-root`), with
+ * `root` (an index of the room's directories or an account folder's id) and a relative `path`.
+ */
+function manage_room_files(room_id, payload) {
+  return local_launch_request("room-files", { room_id, ...payload, token: localStorage.getItem(`discuss-access:${room_id}`) });
+}
+
+// Upload parts: small enough for the relay's frame when the computer is reached through it, larger on the computer itself.
+const PROJECT_UPLOAD_RELAY_PART_BYTES = 128 * 1024;
+const PROJECT_UPLOAD_LOCAL_PART_BYTES = 3 * 1024 * 1024;
+const PROJECT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+const PROJECT_UPLOAD_RETRY_MS = [1000, 3000];
+
+/**
+ * Upload one file into a folder of the room's projects in parts, one at a time; `conflict` (`replace` / `keep_both`)
+ * says what happens to a file of the same name. `on_progress(share)` follows the parts the computer took.
+ */
+async function upload_project_file(room_id, { root, path, file, conflict, on_progress = () => {} }) {
+  if (file.size > PROJECT_UPLOAD_MAX_BYTES) throw new Error(t('单个文件不能超过 {value1} MB', { value1: PROJECT_UPLOAD_MAX_BYTES / 1024 / 1024 }));
+  const relayed = Boolean(relay_machine && (!local_connection || computer_rooms_only()));
+  const part_bytes = relayed ? PROJECT_UPLOAD_RELAY_PART_BYTES : PROJECT_UPLOAD_LOCAL_PART_BYTES;
+  const total = Math.max(1, Math.ceil(file.size / part_bytes)), upload_id = crypto.randomUUID().replaceAll("-", "");
+  let answer = null;
+  for (let index = 0; index < total; index += 1) {
+    const bytes = new Uint8Array(await file.slice(index * part_bytes, (index + 1) * part_bytes).arrayBuffer());
+    const part = { op: "upload", root, path, name: file.name, upload_id, index, total, size: file.size, data: bytes_to_base64(bytes), ...(conflict ? { conflict } : {}) };
+    // A part lost on the way (the relay reconnecting) is sent again; the computer answers a resent last part with the file it wrote.
+    for (let attempt = 0; ; attempt += 1) {
+      try { answer = await manage_room_files(room_id, part); break; }
+      catch (error) {
+        if (attempt >= PROJECT_UPLOAD_RETRY_MS.length) throw error;
+        await new Promise((resolve) => setTimeout(resolve, PROJECT_UPLOAD_RETRY_MS[attempt]));
+      }
+    }
+    on_progress((index + 1) / total);
+  }
+  return answer;
+}
+
+/** Save one file of the room's projects to this device: a download address on the computer, else the whole file through the relay. */
+async function download_project_file(room_id, path, root = 0) {
+  const media = await read_room_media(room_id, path, root, () => {}, true);
+  const link = document.createElement("a");
+  link.href = media.url;
+  link.download = path.split("/").pop() || "file";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  if (media.blob) setTimeout(() => URL.revokeObjectURL(media.url), 60000);
+}
+
+/** A room's name for messages that list rooms by id. */
+function room_title(room_id) {
+  return state.rooms.find((room) => room.id === room_id)?.title || room_id;
+}
+
 /** Read the selected member's local skill catalog through the same owner-authenticated connection. */
 function read_member_skills(room_id, name) {
   return local_launch_request("room-skills", { room_id, name, token: localStorage.getItem(`discuss-access:${room_id}`) });
@@ -4261,11 +4324,13 @@ function read_member_skills(room_id, name) {
  * Open one image, video or audio file of the room's project for the preview's viewer and players. The computer's own
  * page gets a short-lived address its website streams from disk (seeking reads only what is needed); another device
  * gets the whole file through the relay in parts, up to the computer's limit, as a Blob URL the caller revokes.
- * `{ url, content_type, size, blob }`; `on_progress(loaded, total)` follows a relayed read.
+ * `{ url, content_type, size, blob }`; `on_progress(loaded, total)` follows a relayed read. With `download` any
+ * regular file is read, and the computer's address saves it instead of showing it.
  */
-async function read_room_media(room_id, path, root = 0, on_progress = () => {}) {
+async function read_room_media(room_id, path, root = 0, on_progress = () => {}, download = false) {
   const token = localStorage.getItem(`discuss-access:${room_id}`);
-  let answer = await local_launch_request("room-media", { room_id, path, root, offset: 0, token });
+  const flag = download ? { download: true } : {};
+  let answer = await local_launch_request("room-media", { room_id, path, root, offset: 0, token, ...flag });
   if (answer.url) return { url: `${local_connection?.endpoint || ""}${answer.url}`, content_type: answer.content_type, size: answer.size, blob: false };
   const parts = [], version = answer.version;
   let offset = 0;
@@ -4277,7 +4342,7 @@ async function read_room_media(room_id, path, root = 0, on_progress = () => {}) 
     offset += bytes.length;
     on_progress(offset, answer.total);
     if (offset >= answer.total) break;
-    answer = await local_launch_request("room-media", { room_id, path, root, offset, token });
+    answer = await local_launch_request("room-media", { room_id, path, root, offset, token, ...flag });
   }
   return { url: URL.createObjectURL(new Blob(parts, { type: answer.content_type })), content_type: answer.content_type, size: answer.total, blob: true };
 }
@@ -4473,8 +4538,8 @@ function launch_model_state(name, launch = state.launch, profile = launch.profil
   if (profile.model && !selected) items.push({ label: profile.model, value: profile.model, disabled: true });
   const loading = Boolean(catalog?.loading && !models.length);
   return { supported: MODEL_CLIENTS.includes(profile.adapter), items, defaults, loading, refreshing: Boolean(catalog?.loading),
-    efforts: profile.adapter === "antigravity_cli" ? catalog?.efforts : selected?.efforts, source: MODEL_SOURCE_LABELS[catalog?.source] || catalog?.source || "",
-    effort_note: profile.adapter === "antigravity_cli" ? catalog?.effort_error || (loading ? t('正在读取原生思考档位…') : t('默认强度由 CLI 决定。')) : !selected
+    efforts: selected?.efforts, source: MODEL_SOURCE_LABELS[catalog?.source] || catalog?.source || "",
+    effort_note: !selected
       ? t('选择模型后显示可用思考强度；默认值由软件决定。') : t('所选模型不提供单独思考强度。'),
     error: catalog?.error || (!launch.available ? t('连接本机服务后读取模型列表') : !catalog ? t('尚未读取此软件的模型列表') : "") };
 }
@@ -6526,7 +6591,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, platform_identity: name => PLATFORM_IDENTITIES[name], display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_member_skills, read_room_files, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, room_title, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

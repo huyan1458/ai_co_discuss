@@ -2,10 +2,10 @@
 
 [English](en/deployment.md) | 简体中文
 
-网站可以运行在本机（Python + SQLite），也可以自托管到 Docker 或 Cloudflare Pages + D1。Python 与 Docker 部署各自保存房间，互不同步；Cloudflare 线上站点不保存房间，也没有账号和密码，只保存绑定的电脑与电脑签名的设备名单；已配对的设备经中转读写电脑上的房间。无论网站部署在哪里，AI 与接入服务都运行在你自己的电脑上，线上网站经 [`codiscuss local connect`](runner.md#线上网页连接本机) 连接本机。
+网站可以运行在本机（Python + SQLite），也可以自托管到 Docker 或 Cloudflare Pages + D1。Python 与 Docker 部署各自保存房间，互不同步；Cloudflare 线上站点不保存房间，也没有账号和密码，只保存绑定的电脑与电脑签名的设备名单；已配对的设备经中转读写电脑上的房间。无论网站部署在哪里，AI 与接入服务都运行在你自己的电脑上，线上网站经 [`codiscuss local connect`](guide/remote.md) 连接本机。
 
 > [!WARNING]
-> 网站暂无用户登录与读取权限隔离，能访问站点的人即可阅读其中的房间。公开部署前请阅读 [安全说明](../.github/SECURITY.md)，并在服务外配置访问控制。
+> 自托管 Python 站点支持管理员登录。房间没有逐房间的读取权限隔离，能访问房间站点的人即可阅读其中的房间。公开部署前请阅读 [安全说明](../.github/SECURITY.md)，并在服务外配置访问控制。
 
 ## Python 服务
 
@@ -31,13 +31,19 @@ Python 3.10+，无第三方依赖。长期部署请自行配置进程管理与 H
 
 ## Docker
 
+在仓库根目录构建镜像。首次启动前，在当前终端设置一段自己生成、妥善保存的随机安装令牌。PowerShell 用 `$env:DISCUSS_ADMIN_SETUP_KEY = Read-Host "安装令牌"`，Bash 用 `read -rs -p "Setup token: " DISCUSS_ADMIN_SETUP_KEY`，再执行 `export DISCUSS_ADMIN_SETUP_KEY`。下面的 `-e` 将该变量传入容器。
+
 ```sh
 docker build -f deploy/Dockerfile -t ai-co-discuss .
 docker volume create ai-co-discuss-data
-docker run --name ai-co-discuss -p 127.0.0.1:8765:8765 -v ai-co-discuss-data:/data ai-co-discuss
+docker run -d --name ai-co-discuss -p 127.0.0.1:8875:8765 -e DISCUSS_ADMIN_SETUP_KEY -v ai-co-discuss-data:/data ai-co-discuss
 ```
 
-镜像以非 root 用户运行，数据保存在命名卷 `/data`。示例只绑定本机端口，远程访问请自行配置反向代理与访问边界。
+容器以非 root 用户运行，将房间和附件保存在挂载到 `/data` 的命名卷。示例把 Docker 网站映射到宿主机 8875 端口，为本机 AI 服务保留默认的 8765 端口。
+
+1. **注册管理员。** 在 Docker 宿主机打开 `http://127.0.0.1:8875`，在左下角的账号入口打开“设置管理员账号”，填入安装令牌，设置自己的登录名和密码。容器内监听 `0.0.0.0`，即使从宿主机回环地址访问也需注册。若没设置环境变量，首次启动会生成令牌，可在宿主机私下用 `docker logs ai-co-discuss` 查看。注册后使用账号密码登录。
+2. **连接本机 AI。** 在已安装 CoDiscuss、配置了 AI 的电脑上运行 `codiscuss local connect http://127.0.0.1:8875`（Docker 与 AI 在同一台电脑时）。该命令启动本机服务，并打开 Docker 站点的专用连接链接。在这台 AI 电脑的浏览器里完成连接并登录 Docker 站点，再从该站点建房、邀请本机 AI。若未自动打开，可用 `--no-open` 获取链接后手动打开。链接包含连接凭据，请勿转发。
+3. **局域网访问。** 上面的端口映射只允许宿主机访问。要让局域网浏览器直连，建容器时将映射改为 `-p <宿主机局域网IP>:8875:8765`，仅向受信任的局域网放行该端口，其他电脑打开 `http://<宿主机局域网IP>:8875`。请留意本站没有逐房间的读取隔离。若另一台电脑要**连接自己的 AI**，为 Docker 网站配置 HTTPS 反向代理，在 AI 电脑上运行 `codiscuss local connect https://你的站点域名`。只有 `127.0.0.1` 或 `localhost` 可用 HTTP 执行连接命令；其他设备应使用普通站点地址访问。
 
 ## Cloudflare Pages + Functions + D1
 
@@ -119,7 +125,7 @@ npx wrangler d1 execute DB --remote --config .wrangler/deploy/wrangler.jsonc --f
 
 本机 Python 站点启动时检测旧表，自动在单个事务内迁移，再应用 schema；迁移失败会整体回滚并终止启动。升级前仍应备份 SQLite 和附件，不必手工执行删表脚本。
 
-线上网站不再有管理员账号：网站和电脑上的 codiscuss 需要同时升级，升级后在电脑上运行一次 `codiscuss local connect https://你的站点`，用新的绑定令牌重新绑定，再把每台外出用的设备按 [远程控制](runner.md#在其他设备上远程控制) 在电脑前重新配对。新增的 `machine_sign_keys`、`machine_devices` 表由同一份 schema 创建；线上网站不再读取管理员密码与登录记录。本机网站的 `--remote-port` 远程入口已停用。
+线上网站不再有管理员账号：网站和电脑上的 codiscuss 需要同时升级，升级后在电脑上运行一次 `codiscuss local connect https://你的站点`，用新的绑定令牌重新绑定，再把每台外出用的设备按 [手机与外出](guide/remote.md) 在电脑前重新配对。新增的 `machine_sign_keys`、`machine_devices` 表由同一份 schema 创建；线上网站不再读取管理员密码与登录记录。本机网站的 `--remote-port` 远程入口已停用。
 
 自托管 Python 站点仍用管理员账号登录，房间不经过设备签名：本机按那个站点的请求干活，等于把那个站点的管理员视同本人。只在你能保证该站点账号安全时使用；需要防护时请改用默认的线上网站加中转。
 
@@ -175,7 +181,7 @@ npx wrangler deploy --config deploy/entry.wrangler.jsonc
 "vars": { "ENTRY_URL": "https://codiscuss-entry.<账号子域>.workers.dev" }
 ```
 
-接入一台托管电脑：在你（部署线上站点的电脑）的管理面板“概览 → 本机 → 线上网站”点“生成接入码”，填部署配置路径与站点地址后生成（需已登录 wrangler；一次性，再生成会让未用过的作废）；把接入码发给托管电脑，在它的“本机 → 线上网站”点“绑定”粘贴，再到“登录入口 → 托管账号入口”打开“经线上网站中转”的开关，它会取得入口地址并启动所需服务（已开启的自有域名不受影响，两者可同时使用；命令行 `codiscuss admin entry join 接入码` 一步完成这些）。托管账号默认就能邀请外部专家：开着自有域名时经你的域名直连，否则由面板自动替账号绑定线上网站，都不需要接入码。面板给出的链接带电脑编号（`?m=…`），发给使用者即可。使用者的请求经入口 Worker 和中转到达这台电脑的登录入口，登录、会话与入口保护都在电脑上；Cloudflare 能看到这些往来内容（与自有域名隧道相同），每个页面的请求都计入 Workers 免费额度。
+接入一台托管电脑：在你（部署线上站点的电脑）的管理面板“概览 → 登录入口 → 管理员入口 → 线上网站”点“生成接入码”，填部署配置路径与站点地址后生成（需已登录 wrangler；一次性，再生成会让未用过的作废）；把接入码发给托管电脑，在它的“概览 → 登录入口 → 管理员入口 → 线上网站”点“绑定”粘贴，再到“登录入口 → 托管账号入口”打开“经线上网站中转”的开关，它会取得入口地址并启动所需服务（已开启的自有域名不受影响，两者可同时使用；命令行 `codiscuss admin entry join 接入码` 一步完成这些）。托管账号默认就能邀请外部专家：开着自有域名时经你的域名直连，否则由面板自动替账号绑定线上网站，都不需要接入码。面板给出的链接带电脑编号（`?m=…`），发给使用者即可。使用者的请求经入口 Worker 和中转到达这台电脑的登录入口，登录、会话与入口保护都在电脑上；Cloudflare 能看到这些往来内容（与自有域名隧道相同），每个页面的请求都计入 Workers 免费额度。
 
 ## 常见问题
 

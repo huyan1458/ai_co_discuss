@@ -224,8 +224,6 @@
   "官方推荐，可输入其他模型 ID": "Official recommendations. Other model IDs can be entered.",
   "软件默认 · {value1}": "Software default · {value1}",
   "软件默认模型": "Software default model",
-  "正在读取原生思考档位…": "Loading native effort levels…",
-  "默认强度由 CLI 决定。": "The CLI determines the default effort.",
   "选择模型后显示可用思考强度；默认值由软件决定。": "Choose a model to see available effort levels. The software determines the default.",
   "所选模型不提供单独思考强度。": "This model has no separate effort setting.",
   "连接本机服务后读取模型列表": "Connect the local service to load models",

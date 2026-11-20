@@ -133,6 +133,24 @@ class OwnerGrantTests(ExternalMemberTests):
         self.assertEqual([labels()[name] for name in ("Custom-ext", "Custom-ext2", "Custom-ext3", "Custom-ext4", "Custom-ext5")],
                          ["外部专家", "外部 Claude", "外部 Claude2", "外部专家4", "小王的助手"])
 
+    def test_a_name_given_after_the_ai_follows_its_ai_but_a_name_the_owner_gave_stays(self):
+        labels = lambda: self.request(self.path, token=self.owner)[1]["labels"]
+        seat = self.create(pending=True)
+        path = f"{self.owner_path}/{seat['member_id']}"
+        version = self.request(path, {"action": "invite"}, self.owner)[1]["invite_version"]
+        binding = {"invite_version": version, "token": self.external, "machine": "ext:test", "expires_at": int(time.time()) + 3600,
+                   "adapter": "antigravity_cli", "platform": "Antigravity"}
+        self.request(path, {**binding, "action": "bind"}, self.owner)
+        self.request(path, {**binding, "action": "activate"}, self.owner)
+        self.assertEqual(labels()[EXTERNAL], "外部 Gemini")
+        self.ext("ai", {"adapter": "claude", "platform": "Claude"})
+        self.assertEqual(labels()[EXTERNAL], "外部 Claude", "the other computer switched AI")
+        self.ext("ai", {"adapter": "api", "platform": "Custom"})
+        self.assertEqual(labels()[EXTERNAL], "外部 Claude", "a custom API has no name of its own")
+        self.request(f"{self.path}/labels", {"labels": {EXTERNAL: "小王的助手"}}, self.owner)
+        self.ext("ai", {"adapter": "codex_cli", "platform": "Codex"})
+        self.assertEqual(labels()[EXTERNAL], "小王的助手", "a name the owner gave stays")
+
     def test_databases_from_before_reported_ai_gain_its_columns_and_keep_their_members(self):
         from backend.free_room import migrate_free_tables
         member = self.create()

@@ -5,9 +5,9 @@ import { t } from './i18n.js';
  * Pure functions, so the page and the tests share them.
  */
 
-export const PHASE_LABELS = { thinking: t('思考'), command: t('命令'), tool: t('工具'), editing: t('编辑'), writing: t('撰写') };
+export const PHASE_LABELS = { thinking: t('思考'), command: t('命令'), tool: t('工具'), editing: t('编辑'), writing: t('撰写'), waiting: t('等待后台任务') };
 /** Bars are colored by member and shaded by kind, as in a trace: the model's own turns dark, its tool work light. */
-export const PHASE_KINDS = { thinking: "model", writing: "model", command: "tool", tool: "tool", editing: "tool" };
+export const PHASE_KINDS = { thinking: "model", writing: "model", command: "tool", tool: "tool", editing: "tool", waiting: "tool" };
 export const STATE_LABELS = { running: t('进行中'), done: t('完成'), failed: t('失败'), cancelled: t('已撤销') };
 /** Idle stretches longer than this fold into a band; each band takes this share of the axis. */
 export const FOLD_GAP_MS = 5 * 60_000;
@@ -118,7 +118,8 @@ export function row_status(row, now_ms) {
   const silent = Math.max(0, now_ms - last_output);
   const phase = last_segment ? t('{value1}{value2}中', { value1: PHASE_LABELS[last_segment.phase], value2: last_segment.tool ? ` ${last_segment.tool}` : "" }) : t('处理中');
   if (silent >= STALL_MS) {
-    // A long command prints nothing while it runs; that is not a stall.
+    // A long command prints nothing while it runs, nor does software waiting on its background tasks; neither is a stall.
+    if (last_segment?.phase === "waiting") return { tone: "live", text: t('{value1} · 已等待 {value2}', { value1: phase, value2: format_duration(silent) }) };
     if (last_segment?.phase === "command") return { tone: "warn", text: t('{value1} · 命令已运行 {value2}', { value1: phase, value2: format_duration(silent) }) };
     if (last_segment?.phase === "thinking" && silent < THINKING_STALL_MS) return { tone: "live", text: t('{value1} · 已 {value2} 无中间输出', { value1: phase, value2: format_duration(silent) }) };
     return { tone: "warn", text: t('可能卡住 · 已 {value1} 无输出', { value1: format_duration(silent) }) };

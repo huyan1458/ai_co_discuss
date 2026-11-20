@@ -34,12 +34,12 @@
 | `backend/` | Python 后端 `server.py`（根目录 `server.py` 为启动入口，唯一的房间后端）、Cloudflare Worker `worker.mjs`（只管电脑绑定、设备名单与中转入口，不存房间）、中转 Durable Object `updates.mjs`、共用 `schema.sql` | 房间协议只改 Python 并补测试；设备配对与认证协议在 Worker、runner、网页三处同改 |
 | `frontend/` | Vue、Markdown、备份页源码 | 运行 `npm run build`，生成 `web/` 资源与 `dist/pages/` |
 | `web/` | 直接运行的静态网页与构建产物 | 不手改产物（如 `web/modern.js`） |
-| `runner/` | `codiscuss` CLI 与本机接入程序（房间编排 `free_runner.mjs`、常驻服务、启动配置、智能调度 `scheduler.mjs`） | `Ref_技术细节.md`“接入程序”、`tests/test_runner.mjs`；影响使用时同步 `docs/runner.md` |
+| `runner/` | `codiscuss` CLI 与本机接入程序（房间编排 `free_runner.mjs`、常驻服务、启动配置、智能调度 `scheduler.mjs`） | `Ref_技术细节.md`“接入程序”、`tests/test_runner.mjs`；影响使用时同步 `docs/guide/` 对应页 |
 | `runner/adapters/` | **适配层**：`profiles.mjs` 各软件的静态事实（显示名、配置字段、档位、能力；不依赖 Node，网页也引用），每家软件一个行为模块（投递、停止能力、会话截断与分叉、模型读取），`index.mjs` 是对外唯一入口 | 新接一家软件只在这里新增 profile 与行为模块；`Ref_外部软件通信.md` 对应小节；`Ref_技术细节.md`“适配能力”；`tests/test_runner.mjs`、`tests/test_session_cut.mjs` |
 | `.agents/skills/` | 分发技能 discuss-host / discuss-participant / discuss-session / discuss-goal / discuss-report / workflow-creator / local-tts-setup / local-stt-setup；`codiscuss-setup` 仅在源码仓库使用，不进 npm 包、不由安装器复制 | 只有 `.gitignore` 白名单内的技能入库，新增分发技能同步白名单 |
 | `workflows/` | 随包发布的房间工作流（现为 `story-serial`、`decision-council`、`trpg-classic`），只有在 `codiscuss setup` 的“安装配置”里勾选或加 `--workflows` 才装入用户工作流库（覆盖同名、先备份，选择不记住）。**只是副本，不在仓库里改**（见 §5“随包工作流”） | 复制后跑 `tests/test_setup.mjs` |
 | `tests/`、`scripts/`、`deploy/` | 测试、构建脚本、部署配置 | — |
-| `docs/` | 对外精简文档 | 见 §6 |
+| `docs/` | 用户手册 `guide/` 与部署、架构说明 | 见 §6 |
 | `.dev/docs/`、`.dev/plans/` | 开发文档、任务计划（gitignore） | 见 §6 |
 
 ## 3. 动手前读什么
@@ -97,8 +97,9 @@
 
 ## 6. 文档约定
 
-- `README.md`：用户选方案和首次使用所需的信息（推进方式、支持的软件与前提、接入步骤、可选项目/cwd、讨论上限、数据与访问边界）。文案对应当前界面，不把未实现或未验证的能力写成承诺。
-- `docs/`：对外精简说明，按 README 的风格写，不重复协议细节，不写开发思路。源码结构概要在 `docs/architecture.md`。
+- `README.md`：用户选方案和首次使用所需的信息：是什么、为什么、每个功能一行并链接到手册、支持的软件与前提、快速开始、数据与访问边界（2026-11-20 用户确认）。文案对应当前界面，不把未实现或未验证的能力写成承诺。
+- `docs/guide/`：完整的用户手册，按“我想做什么”分页，每页写能做什么、怎么操作、要注意什么，不写协议细节和开发思路。新增或改动用户可见的功能时，同回合更新对应手册页的中英文（`docs/en/guide/`）。正文统一叫“成员”；引用界面按钮、标签、菜单时照抄界面原文并加引号。
+- `docs/deployment.md`、`docs/architecture.md`：部署说明与源码结构概要，保持精简。
 - `.dev/docs/`：开发文档，只存用户指定的内容；新内容优先并入已有文档，确有必要才新建。命名、维护与快照、一处为准等约定见 `.dev/docs/README.md`。维护文档与代码不一致视为缺陷，改动触及时同回合更新；快照文档默认不读。
 - 本文件：只放长期规则，不写操作流水账；细节写进上述文档，这里只留指向。
 
