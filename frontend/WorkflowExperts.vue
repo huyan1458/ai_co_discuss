@@ -93,6 +93,7 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
 
 <template>
   <UModal v-model:open="open" :title="t('专家配置')" :description="t('每张卡片的角色、软件、模型与专属提示词；改完点工作流页的“保存”写入。')"
+    :content="{ onInteractOutside: (event) => event.preventDefault() }"
     :ui="{ content: 'glass-panel studio-modal workflow-experts-modal', body: 'dialog-body workflow-experts-body' }">
     <template #body>
       <p v-if="!view.launch.available" class="workflow-experts-note">{{ t('连接本机服务后才能读取模型列表与本机已配置的软件。') }}</p>

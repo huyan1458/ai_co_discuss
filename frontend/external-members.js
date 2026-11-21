@@ -339,13 +339,15 @@ function create_invited({ view, bridge }) {
   const hidden = new Set();
   const busy = ref("");
   const announced = new Set();
-  let timer = 0;
+  let timer = 0, list_serial = 0, writes_pending = 0;
 
   /** Read the records; newly waiting default-level requests raise a notice once each. */
   async function load() {
-    if (!available.value) return;
+    if (!available.value || writes_pending) return;
+    const serial = ++list_serial;
     try {
       const result = await bridge.local_request(OPERATIONS.invited_list, {});
+      if (serial !== list_serial) return;
       // Ended and left records stay: their history and why they ended remain readable. One being deleted stays out.
       records.value = (result.records || []).filter((record) => !hidden.has(record.id));
       failure.value = "";
@@ -360,8 +362,8 @@ function create_invited({ view, bridge }) {
           if (loaded.value) bridge.notify("warning", t("「{room}」点名了你的 AI，等你同意", { room: record.room_title || record.room || "" }));
         }
       }
-    } catch (error) { failure.value = runner_text(error.message); }
-    finally { loaded.value = true; }
+    } catch (error) { if (serial === list_serial) failure.value = runner_text(error.message); }
+    finally { if (serial === list_serial) loaded.value = true; }
   }
   watch(available, (ready) => {
     clearInterval(timer);
@@ -378,16 +380,19 @@ function create_invited({ view, bridge }) {
   async function run(name, operation, payload, success = "") {
     if (busy.value) { load(); return null; }
     busy.value = name;
+    list_serial++;
+    writes_pending++;
     try {
       const result = await bridge.local_request(operation, payload);
       if (success) bridge.notify("info", success);
-      await load();
       return result || {};
     } catch (error) {
       bridge.notify("error", runner_text(error.message));
-      load();
       return null;
-    } finally { busy.value = ""; }
+    } finally {
+      writes_pending--;
+      try { await load(); } finally { busy.value = ""; }
+    }
   }
 
   const open = (id) => { selected_id.value = id; page_open.value = true; };
@@ -400,13 +405,17 @@ function create_invited({ view, bridge }) {
   }
   /** Join, then apply the chosen settings. */
   async function join({ trust, room_title = "", ...payload }) {
+    list_serial++;
     pending_join.value = { room_title, known: new Set(records.value.map((record) => record.id)) };
     try {
       const result = await bridge.local_request(OPERATIONS.invited_join, payload);
       if (result?.record) settle_join(result.record);
       if (result?.record && trust) {
+        list_serial++;
+        writes_pending++;
         patch_record(result.record.id, () => ({ wake: trust.wake, confined: trust.confined, lockdown: trust.confined }));
-        await bridge.local_request(OPERATIONS.invited_trust, trust_payload(result.record.id, trust));
+        try { await bridge.local_request(OPERATIONS.invited_trust, trust_payload(result.record.id, trust)); }
+        finally { writes_pending--; }
       }
       await load();
       return result || {};
@@ -444,6 +453,8 @@ function create_invited({ view, bridge }) {
   }
   /** Leave at once on the page; telling the other computer follows, and a failure puts the record back as it was. */
   async function leave(id) {
+    list_serial++;
+    writes_pending++;
     patch_record(id, () => ({ status: "left", paused: true }));
     if (selected_id.value === id) page_open.value = false;
     try {
@@ -454,10 +465,11 @@ function create_invited({ view, bridge }) {
     } catch (error) {
       bridge.notify("error", runner_text(error.message));
       return null;
-    } finally { load(); }
+    } finally { writes_pending--; load(); }
   }
   /** Delete an ended record: it leaves the list at once, and comes back only if this computer refuses. */
   async function remove(id) {
+    list_serial++;
     hidden.add(id);
     records.value = records.value.filter((record) => record.id !== id);
     if (selected_id.value === id) page_open.value = false;

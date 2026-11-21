@@ -32,6 +32,7 @@ const OUTCOMES = {
 };
 // The record being read: a read crosses the relay and can outlast the refresh, so the next one waits for it to finish.
 let reading = "";
+let record_serial = 0;
 /**
  * Several records of this computer can sit in the same room (one per AI it lent), so what was read of the room is kept by
  * the room, not the record: switching between them shows the same latest messages; only each AI's own outcomes differ.
@@ -81,21 +82,24 @@ async function load() {
 async function load_older() {
   const id = invited.selected_id.value, first = messages.value[0];
   if (!earlier.value || loading_older.value || !first || first.kept) return;
+  const serial = record_serial;
   loading_older.value = true;
   try {
     const result = await invited.read_room(id, { before: first.id });
-    if (invited.selected_id.value !== id || result.error) return;
+    if (serial !== record_serial || invited.selected_id.value !== id || result.error) return;
     const known = new Set(messages.value.map((message) => message.id));
     const element = page.value, from_bottom = element ? element.scrollHeight - element.scrollTop : 0;
     show_messages(id, [...(result.messages || []).filter((message) => !known.has(message.id)), ...messages.value]);
     earlier.value = Boolean(result.earlier);
     await nextTick();
-    if (element) element.scrollTop = element.scrollHeight - from_bottom;
+    if (serial === record_serial && element) element.scrollTop = element.scrollHeight - from_bottom;
   } catch { /* The next scroll to the top tries again. */ }
-  finally { loading_older.value = false; }
+  finally { if (serial === record_serial) loading_older.value = false; }
 }
 /** Open a record: what is already known shows at once, and the other room is read behind it. */
 function open_record(id) {
+  record_serial++;
+  loading_older.value = false;
   messages.value = invited.room_messages.get(room_key(id)) || [];
   roster.value = invited.room_roster.get(room_key(id)) || [];
   error.value = failure.value = "";
@@ -331,6 +335,7 @@ function reason_class(item) {
 .invited-empty p { margin: 6px 0 0; color: var(--ui-text-muted); font-size: 13px; }
 
 .invited-item { margin: 8px 24px; overflow: hidden; border: 1px solid #ffffff0d; border-radius: 10px; background: #313338; }
+:global(:root[data-theme="channel-light"] .invited-item) { border-color: #d6d6d6; border-radius: 8px; background: #fff; }
 .invited-turn { padding: 14px 18px; }
 .invited-byline { display: flex; align-items: center; gap: 10px; min-height: 28px; margin-bottom: 8px; }
 .invited-byline:last-child { margin-bottom: 0; }

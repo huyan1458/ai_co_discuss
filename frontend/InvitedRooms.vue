@@ -1,3 +1,8 @@
+<script>
+import { ref as module_ref } from "vue";
+const section_open = module_ref(true);
+</script>
+
 <script setup>
 /** The sidebar's 外部房间: rooms on other computers this computer's AIs joined; a row opens it in the middle. */
 import { computed, ref } from "vue";
@@ -8,7 +13,6 @@ import { t } from "./i18n.js";
 const emit = defineEmits(["open"]);
 const invited = use_invited_rooms();
 const { records, page_open, selected_id, available, loaded, failure } = invited;
-const section_open = ref(true);
 function open(id) { emit("open", id); }
 // Rooms joined from one inviter often share a title: name the row by the inviting computer and when it was joined.
 const pad = (value) => String(value).padStart(2, "0");

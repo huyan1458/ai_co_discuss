@@ -41,11 +41,17 @@ const back = ref(false);
 let saved = null;
 function open_back() { saved = { level: level.value }; back.value = true; }
 function cancel() { if (saved) level.value = saved.level; back.value = false; }
+function escape(event) {
+  if (!back.value) return;
+  event.stopPropagation();
+  event.preventDefault();
+  cancel();
+}
 const uid = useId();
 </script>
 
 <template>
-  <div class="expert-card" :data-face="back ? 'back' : 'front'" @keydown.esc="back && cancel()">
+  <div class="expert-card" :data-face="back ? 'back' : 'front'" @keydown.esc="escape">
     <div class="expert-card-turn">
       <div class="expert-card-face expert-card-front" :inert="back" :aria-hidden="back">
         <button type="button" class="expert-card-open" :aria-label="t('邀请外部专家')" :title="t('点击翻面设置')" @click="open_back">

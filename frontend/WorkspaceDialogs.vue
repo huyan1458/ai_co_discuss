@@ -33,6 +33,7 @@ const archive_results = computed(() => filter_archived_channels(view.value.rooms
   { query: archive_query.value, content: archive_content.value }));
 const archive_delete_id = ref(null);
 const archive_delete_all = ref(false);
+const archives_deleting = ref(false);
 const archive_delete_room = computed(() => archived_rooms.value.find((room) => room.id === archive_delete_id.value));
 watch(mode, value => {
   archive_delete_id.value = null;
@@ -72,9 +73,13 @@ async function delete_archive() {
 
 /** Delete every archived channel in the current list, one request at a time. */
 async function delete_all_archives() {
+  if (archives_deleting.value) return;
   const rooms = archive_results.value.filter((room) => !archive_busy(room));
   archive_delete_all.value = false;
-  for (const room of rooms) await act("manage_channel", { id: room.id, action: "delete" });
+  archives_deleting.value = true;
+  try {
+    for (const room of rooms) await act("manage_channel", { id: room.id, action: "delete" });
+  } finally { archives_deleting.value = false; }
 }
 
 const management_title = ref("");
@@ -146,6 +151,9 @@ const detail = ref(null);
 const detail_error = ref("");
 let detail_request = 0, detail_target = null;
 onBeforeUnmount(() => { detail_request++; });
+// The project access the first member of a new room (its host by default) starts with; kept in the local service's create preferences.
+const HOST_ACCESS_OPTIONS = [{ value: "read", label: t("只读") }, { value: "write", label: t("可写") }, { value: "auto", label: t("自动") }, { value: "full", label: t("全放开") }];
+const host_access = computed(() => view.value.launch.create_preferences?.host_project_access || "read");
 const themes = [{ value: "channel", title: t("协作频道"), description: t("深灰界面 · 房间导航 · 成员侧栏") }, { value: "channel-light", title: t("协作频道 · 浅色"), description: t("纯白界面 · 中性灰阶 · 清晰阅读") }];
 
 /** Map the topic form onto the existing controller's draft fields. */
@@ -224,7 +232,7 @@ const keep_open = (event) => event.preventDefault();
         <div class="channel-archive-toolbar">
           <UInput v-model="archive_query" icon="i-lucide-search" :placeholder="t('搜索已存档房间')" :aria-label="t('搜索已存档房间')" class="channel-archive-search" />
           <USelect v-model="archive_content" :items="archive_content_options" icon="i-lucide-list-filter" :aria-label="t('筛选房间内容')" />
-          <UButton :label="t('全部删除（{count}）', { count: archive_results.length })" icon="i-lucide-trash-2" color="error" variant="soft" size="sm" class="channel-archive-delete-all" :disabled="!archive_results.length" @click="archive_delete_all = true; archive_delete_id = null" />
+          <UButton :label="t('全部删除（{count}）', { count: archive_results.length })" icon="i-lucide-trash-2" color="error" variant="soft" size="sm" class="channel-archive-delete-all" :loading="archives_deleting" :disabled="archives_deleting || !archive_results.length" @click="archive_delete_all = true; archive_delete_id = null" />
         </div>
         <div v-if="archive_delete_all && archive_results.length" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("将永久删除当前列表中的 {count} 个房间及其全部记录，无法撤销。", { count: archive_results.length }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_all = false" /><UButton :label="t('全部删除')" color="error" size="xs" @click="delete_all_archives" /></div>
         <div v-keep-reading class="channel-archive-results">
@@ -298,6 +306,12 @@ const keep_open = (event) => event.preventDefault();
           <h3 id="channel-fold-label">{{ t("长回答折叠") }}</h3>
           <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-label"><UButton v-for="option in foldOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_level === option.value }" :aria-pressed="fold_level === option.value" @click="fold_level = option.value" /></div>
           <p class="fine-print">{{ t("宽松：超过 1.2 屏才折叠，折后保留半屏；标准：超过 0.7 屏折叠；紧凑：超过半屏就折叠，只留开头。按当前屏幕高度计算，只对本设备生效。") }}</p>
+        </section>
+        <h3 class="account-appearance-heading">{{ t("房间偏好") }}</h3>
+        <section class="channel-reading-setting">
+          <h3 id="channel-host-access-label">{{ t("主持人项目权限") }}</h3>
+          <div class="channel-reading-options channel-access-options" role="group" aria-labelledby="channel-host-access-label"><UButton v-for="option in HOST_ACCESS_OPTIONS" :key="option.value" :label="option.label" color="neutral" variant="ghost" :disabled="!view.launch.available" :class="{ chosen: host_access === option.value }" :aria-pressed="host_access === option.value" @click="bridge.write_create_preferences({ host_project_access: option.value })" /></div>
+          <p class="fine-print">{{ view.launch.available ? t("新建房间时，第一位加入的成员（默认主持人）使用的项目权限；该软件不支持所选档位时仍为只读。保存在这台电脑的本机服务里，升级后保留。") : t("连接本机服务后可设置。") }}</p>
         </section>
         <SpeechSettings />
         <WeixinSettings />

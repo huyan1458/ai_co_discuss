@@ -143,11 +143,13 @@ const can_edit = computed(() => showing_source.value && !tab.value?.attachment &
 /** Read the open file whole and turn its source view into an editor. */
 async function start_edit() {
   const item = tab.value;
-  if (!item) return;
+  if (!can_edit.value || item.starting_edit) return;
+  item.starting_edit = true;
   try {
     const answer = await bridge.manage_room_files(item.room_id, { op: "read", root: item.root || 0, path: item.path });
     item.edit = { text: answer.text, version: answer.version, saving: false };
   } catch (error) { bridge.notify("error", t('无法编辑：{value1}', { value1: error.message })); }
+  finally { item.starting_edit = false; }
 }
 
 /** Save the edited text; when an AI member changed the file meanwhile, nothing is written and the text stays in the editor. */
@@ -224,7 +226,7 @@ const file_menu = computed(() => {
   ]);
   const rest = [];
   if (showing_source.value) rest.push({ label: wrap.value ? t('关闭自动换行') : t('自动换行'), icon: "i-lucide-wrap-text", onSelect: () => { wrap.value = !wrap.value; } });
-  if (can_edit.value) rest.push({ label: t('编辑'), icon: "i-lucide-pencil", onSelect: () => start_edit() });
+  if (can_edit.value) rest.push({ label: t('编辑'), icon: "i-lucide-pencil", disabled: tab.value.starting_edit, onSelect: () => start_edit() });
   if (can_read.value) rest.push(reader.state.reading ? { label: t('停止朗读'), icon: "i-lucide-square", onSelect: () => reader.stop() } : { label: t('朗读'), icon: "i-lucide-volume-2", onSelect: () => read_file() });
   if (can_open_html.value) rest.push({ label: t('在新标签页打开'), icon: "i-lucide-external-link", onSelect: () => open_html_tab() });
   if (can_render.value) rest.push(source.value ? { label: t('预览'), icon: "i-lucide-eye", onSelect: () => { source.value = false; } } : { label: t('源码'), icon: "i-lucide-code-xml", onSelect: () => { source.value = true; } });
@@ -680,8 +682,7 @@ function close_all() {
 }
 
 /** Go back to the room the active file was opened in, when another room is shown now. */
-async function to_tab_room() {
-  const room_id = tab.value?.room_id;
+async function to_tab_room(room_id = tab.value?.room_id) {
   if (!room_id || view.value.room?.id === room_id) return;
   await act("room", room_id);
   await nextTick();
@@ -689,10 +690,12 @@ async function to_tab_room() {
 
 /** Jump the file list (of the file's room) to a folder named in the breadcrumb, folding the window away. */
 async function reveal_folder(path) {
+  const { room_id, root, directory } = tab.value;
   if (!docked.value) fold();
-  await to_tab_room();
-  file_preview.reveal_root = tab.value?.root || 0;
-  file_preview.reveal_name = tab.value?.directory || "";
+  await to_tab_room(room_id);
+  if (view.value.room?.id !== room_id) return;
+  file_preview.reveal_root = root || 0;
+  file_preview.reveal_name = directory || "";
   file_preview.reveal_path = path;
   act("tab", "files");
 }
@@ -1046,7 +1049,7 @@ onBeforeUnmount(() => {
             <button type="button" class="project-editor-font-value" :title="t('恢复默认字号')" :aria-label="t('恢复默认字号')" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
             <button type="button" :title="t('放大字号')" :aria-label="t('放大字号')" :disabled="font_scale >= FONT_SCALE_MAX" @click="change_font_scale(1)"><UIcon name="i-lucide-a-arrow-up" /></button>
           </div>
-          <UButton v-if="can_edit" icon="i-lucide-pencil" color="neutral" variant="ghost" size="sm" :title="t('编辑')" :aria-label="t('编辑此文件')" @click="start_edit" />
+          <UButton v-if="can_edit" icon="i-lucide-pencil" color="neutral" variant="ghost" size="sm" :title="t('编辑')" :aria-label="t('编辑此文件')" :loading="tab.starting_edit" :disabled="tab.starting_edit" @click="start_edit" />
           <UButton v-if="showing_source" icon="i-lucide-wrap-text" color="neutral" :variant="wrap ? 'soft' : 'ghost'" size="sm" :aria-pressed="wrap"
             :title="wrap ? t('关闭自动换行') : t('自动换行')" :aria-label="t('自动换行')" @click="wrap = !wrap" />
           <UButton v-if="can_read" :icon="reader.state.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" color="neutral" variant="ghost" size="sm"
@@ -1058,7 +1061,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="project-editor-window-actions">
-          <UDropdownMenu v-if="folded_actions && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('文件操作')" :title="t('字号、朗读、显示方式')" /></UDropdownMenu>
+          <UDropdownMenu v-if="folded_actions && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('文件操作')" :title="t('字号、朗读、显示方式')" :loading="tab?.starting_edit" /></UDropdownMenu>
           <UButton v-if="can_dock" :icon="docked ? 'i-lucide-picture-in-picture-2' : 'i-lucide-panel-right'" color="neutral" variant="ghost" size="sm" :title="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" :aria-label="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" @click="toggle_dock" />
           <UButton :icon="narrow ? 'i-lucide-chevron-down' : 'i-lucide-minus'" color="neutral" variant="ghost" size="sm" :title="t('收起到屏幕边缘（手机上也可下拉收起）')" :aria-label="t('收起预览')" @click="fold" />
           <UButton v-if="!narrow" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" :aria-label="tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" @click="close_all" />

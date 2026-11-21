@@ -55,7 +55,13 @@ function pick_attachments(event) {
 /** Create the room and post the message; a failed creation keeps the draft and files here for another try. */
 async function start() {
   if (!has_draft.value || pending.value) return;
-  if (await act("quick_create", draft.value)) draft.value = "";
+  const text = draft.value;
+  draft.value = "";
+  try {
+    await act("quick_create", text);
+  } finally {
+    if (!view.value.room && !draft.value) draft.value = text;
+  }
 }
 </script>
 

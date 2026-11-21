@@ -72,5 +72,6 @@ Shutdown and sleep interrupt local execution. During an internet outage, the loc
 | Conversation width | Narrow, Default, Wide | Set the width of the conversation for reading. |
 | Visual effects | Full, Compact | Compact turns off background blur and layered shadows for smoother scrolling on slower devices. |
 | Folding long answers | Relaxed, Standard, Eager | How long an answer must be before it folds, and how much stays visible, measured against the screen height. Relaxed is the default; the choice applies to this device only. |
+| Room preferences → Host's project access | Read-only, Can write, Automatic, Full access | The project access the first member added to a new room (the host by default) starts with; Read-only by default. If its software doesn't support the chosen level, it stays read-only. Saved in the local service, kept across updates; needs the local service connected. |
 | Speech | Text-to-speech service, General voice, voices by platform and for files, Speed, Tone, Voice input, Local process | [Local and cloud speech](voice.md#read-aloud-and-voice-input-local-and-cloud-options) |
 | WeChat notifications | Scan to link, Send test, Unlink | [WeChat notifications](voice.md#wechat-notifications) |

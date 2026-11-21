@@ -4,6 +4,7 @@ import { ref as module_ref } from "vue";
 // it opens, and keeping them inside it forgot them on every close (user 2026-11-16). A reload starts afresh with only
 // the shown room's folder open (user 2026-11-15).
 const open_folders = module_ref(new Set());
+const rooms_open = module_ref(true);
 // The room whose folder was last opened for it, so mounting the drawer again is not taken for opening that room.
 let revealed_for = "";
 // Sorted by recent activity, each folder first lists this many rooms, and each "show more" reveals this many again. How far
@@ -163,7 +164,6 @@ function folder_head(folder, index) {
   head.key = JSON.stringify([folder, head.collapsed, head.active, head.creating, head.running, items.map((group) => group.map((item) => [item.label, item.disabled]))]);
   return head;
 }
-const rooms_open = ref(true);
 // Folders stay as the user left them. Opening a room whose folder is closed opens that folder once; nothing is ever
 // closed for the user. The key is a string, so the many view updates that leave the room as it was change nothing:
 // a list compared each time looked new on every poll and reopened a folder the user had just closed.

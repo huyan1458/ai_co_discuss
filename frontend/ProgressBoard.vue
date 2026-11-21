@@ -1,3 +1,8 @@
+<script>
+import { reactive } from "vue";
+const expanded_focus = reactive(new Set());
+</script>
+
 <script setup>
 import { t } from './i18n.js';
 /** The session layer of the shared room board: progress, focus and discussion controls. */
@@ -20,7 +25,10 @@ const paused = computed(() => session.value?.status === "paused");
 const turn = computed(() => room.value.current_turn);
 const can_control = computed(() => Boolean(view.value.access?.can_manage) && !room.value.archived);
 const ending = ref(false);
-const focus_expanded = ref(false);
+const focus_expanded = computed({
+  get: () => expanded_focus.has(room.value.id),
+  set: (expanded) => expanded ? expanded_focus.add(room.value.id) : expanded_focus.delete(room.value.id),
+});
 const FOCUS_PREVIEW_LENGTH = 90;
 const focus = computed(() => turn.value?.question || room.value.focus || session.value?.goal || room.value.goal || "");
 const status = computed(() => {

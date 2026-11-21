@@ -733,5 +733,9 @@
   "还原": "Restore",
   "回收区是空的": "The recycle bin is empty",
   "{value1} 的操作": "Actions for {value1}",
-  "单个文件不能超过 {value1} MB": "Each file must be {value1} MB or less"
+  "单个文件不能超过 {value1} MB": "Each file must be {value1} MB or less",
+  "房间偏好": "Room preferences",
+  "主持人项目权限": "Host's project access",
+  "新建房间时，第一位加入的成员（默认主持人）使用的项目权限；该软件不支持所选档位时仍为只读。保存在这台电脑的本机服务里，升级后保留。": "The project access the first member added to a new room (the host by default) starts with. If its software doesn't support the chosen level, it stays read-only. Saved in this computer's local service and kept across updates.",
+  "连接本机服务后可设置。": "Available once the local service is connected."
 }

@@ -40,7 +40,7 @@ You can create or import a ZIP file or folder with the “+” on the Workflows 
 
 Select a workflow on the Workflows page. The canvas opens in the center, and its SKILL.md appears on the right. Click “Edit,” then “Save” or press Ctrl+S to save changes.
 
-- **The canvas is a diagram:** You can move cards, add host nodes, connect nodes to show order or loops, add notes to connections, or choose “Auto arrange.” The program does not execute canvas connections, and the host cannot see the canvas.
+- **The canvas is a diagram:** You can move cards, add host nodes, connect nodes to show order or loops, add notes to connections, or choose “Auto arrange.” Click a connection or its note to select it before editing; once a gold loop is selected, drag it up or down to change its height. Dragging an unselected connection or note just pans the canvas. The program does not execute canvas connections, and the host cannot see the canvas.
 - **The host follows SKILL.md:** The skill file defines order, parallel work, when to return to the host, and when to revise. The host follows those written instructions. When workflow-creator creates or edits a workflow, it updates the canvas to reflect the skill file.
 
 ### 5. “Full host control” and workflows

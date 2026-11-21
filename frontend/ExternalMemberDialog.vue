@@ -30,20 +30,28 @@ const busy = ref(""), confirming = ref(false);
 // Inviting an ended member back: a new link brings the same member (name, label, history) back to its seat.
 const reinviting = ref(false);
 
+let load_serial = 0;
 async function load() {
-  if (!props.member || !room.value) return;
+  const serial = ++load_serial;
+  const room_id = room.value?.id, member_id = props.member?.id;
+  if (!open.value || !room_id || !member_id) return;
   loading.value = true;
   failure.value = "";
   try {
-    const record = await operations.member(room.value.id, props.member.id);
-    const result = record.claimed_at === 0 ? { reads: [] } : await operations.reads(room.value.id, props.member.id);
+    const record = await operations.member(room_id, member_id);
+    if (serial !== load_serial) return;
+    const result = record.claimed_at === 0 ? { reads: [] } : await operations.reads(room_id, member_id);
+    if (serial !== load_serial) return;
     detail.value = record;
     // Newest first: the latest reads are what the owner checks.
     reads.value = [...(result.reads || [])].reverse();
-  } catch (error) { failure.value = error.message; }
-  finally { loading.value = false; }
+  } catch (error) { if (serial === load_serial) failure.value = error.message; }
+  finally { if (serial === load_serial) loading.value = false; }
 }
-watch(open, (value) => { if (!value) return; reads.value = []; detail.value = null; reinviting.value = props.reinvite; load(); });
+watch([open, () => room.value?.id, () => props.member?.id], () => {
+  reads.value = []; detail.value = null; reinviting.value = props.reinvite;
+  load();
+}, { immediate: true });
 // Checked in while the invitation shows: read again, so the dialog turns into the member's details and reading record.
 watch(() => external_of(live.value)?.pending, (pending, was) => { if (open.value && was && pending === false) load(); });
 
@@ -74,7 +82,7 @@ function size(bytes) {
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="t('外部成员 · {name}', { name: live ? bridge.display_name(live.name) : '' })"
+  <UModal v-model:open="open" :content="{ onInteractOutside: (event) => event.preventDefault() }" :title="t('外部成员 · {name}', { name: live ? bridge.display_name(live.name) : '' })"
     :description="info ? [info.computer, LEVEL_SHORT[info.level], info.ended ? t('已结束') : info.pending ? [t('待签到'), pending_expiry].join(' · ') : remaining_label(info.expires_at)].filter(Boolean).join(' · ') : ''" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
       <ExternalInviteCard v-if="detail && ((detail.claimed_at === 0 && !info?.ended) || reinviting)" :key="member.id" :member-id="member.id" :settings="{ level: detail.scope, directories: detail.directories, invite_version: detail.invite_version }" />
@@ -96,10 +104,10 @@ function size(bytes) {
         </section>
         <div v-else-if="!reinviting" class="external-member-ended" role="status"><UIcon name="i-lucide-circle-slash" /><span>{{ t("这位外部成员已结束。") }}</span>
           <UButton v-if="!room?.archived" :label="t('重新邀请')" icon="i-lucide-user-round-plus" size="xs" color="neutral" variant="outline" class="pb-action" @click="reinviting = true" /></div>
-        <section v-if="!info.pending" class="external-member-reads" :aria-label="t('读取记录')">
+        <p v-if="failure" class="external-member-error" role="alert"><UIcon name="i-lucide-circle-alert" /><span>{{ failure }}</span><UButton :label="t('重试')" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="ghost" @click="load" /></p>
+        <section v-if="!info.pending && !failure" class="external-member-reads" :aria-label="t('读取记录')">
           <h4>{{ t("读取记录") }}</h4>
           <div v-if="loading && !reads.length" role="status" :aria-label="t('正在读取读取记录')"><USkeleton v-for="row in 3" :key="row" class="external-member-skeleton" /></div>
-          <p v-else-if="failure" class="external-member-error" role="alert"><UIcon name="i-lucide-circle-alert" /><span>{{ failure }}</span><UButton :label="t('重试')" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="ghost" @click="load" /></p>
           <p v-else-if="!reads.length" class="external-member-empty">{{ t("还没有读取记录") }}</p>
           <ul v-else class="external-member-list">
             <li v-for="(entry, index) in reads" :key="entry.id || index" :class="{ 'is-denied': !entry.allowed }">

@@ -17,6 +17,7 @@ import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
 import ExternalExpertCard from "./ExternalExpertCard.vue";
 import PlatformConfigDialog from "./PlatformConfigDialog.vue";
 import { invite_after_creation } from "./external-members.js";
+import { access_options } from "../runner/expert_prompts.mjs";
 import { t } from "./i18n.js";
 
 const props = defineProps({ targetFolder: { type: Object, default: null } });
@@ -171,6 +172,7 @@ const library_items = computed(() => [...experts.map((name) => ({ value: name, n
 /** Admit one library role, woken by the local service until its card says otherwise; a preset adds its own named instance. */
 function add_expert(name) {
   if (name === EXTERNAL_CHIP) { external_drafts.value = [...external_drafts.value, { id: ++external_seq, draft: {} }]; return; }
+  if (!selected_names.value.length) nextTick(apply_host_access);
   if (name.startsWith(PRESET_PREFIX)) {
     const preset = bridge.expert_presets().find((item) => item.name === name.slice(PRESET_PREFIX.length));
     if (preset) bridge.add_preset(EXPERT_CONTAINER, preset, "cli");
@@ -182,6 +184,17 @@ function add_expert(name) {
   if (instance_count(name)) bridge.add_instance(EXPERT_CONTAINER, name, "cli");
   else set_expert_mode(name, "cli");
   ensure_host();
+}
+
+/** The first member of a new room starts with the 房间偏好 host access, unless its card already asks for more or its software lacks that level. */
+function apply_host_access() {
+  const level = view.value.launch.create_preferences?.host_project_access;
+  const [name] = selected_names.value;
+  if (!name || !level || level === "read" || !bridge.launch_can_set_access(name, view.value.launch)) return;
+  const profile = view.value.launch.profiles[name] || {};
+  if ((profile.project_access || "read") !== "read") return;
+  if (access_options(profile.adapter, bridge.full_only_hint(profile.adapter)).find((option) => option.value === level)?.disabled) return;
+  bridge.write_launch(name, "project_access", level);
 }
 
 /** Remove a role, repair the host and return keyboard focus to the library entry. */

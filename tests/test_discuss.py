@@ -256,6 +256,15 @@ class CliTests(unittest.TestCase):
         codex = self.invoke(args, environment={"CLAUDE_CODE_SESSION_ID": "", "CODEX_THREAD_ID": "01a1694f-764d-7141-b2b8-47c433be027c"})
         self.assertEqual(json.loads(codex.stdout)["data"]["body"]["session_client"], "codex")
 
+    def test_message_post_refuses_a_long_inline_body(self):
+        """An inline --body cannot carry line breaks, so a long answer must come from a Markdown draft file."""
+        args = ["message", "post", self.room, "--as", "用户", "--dry-run"]
+        self.assertIn("--body-file", self.rejected([*args, "--body", "长" * 201])["message"])
+        draft = Path(tempfile.mkdtemp()) / "answer.md"
+        draft.write_text("长" * 201, encoding="utf-8")
+        posted = self.invoke(["--site", self.base, *args, "--body-file", str(draft)])
+        self.assertEqual(json.loads(posted.stdout)["data"]["body"]["text"], "长" * 201)
+
     def test_message_post_derives_a_stable_submission_id_from_the_draft(self):
         """Without --submission-id, resending the same draft reuses one ID and different content gets another."""
         args = ["--site", self.base, "message", "post", self.room, "--as", "用户", "--dry-run"]

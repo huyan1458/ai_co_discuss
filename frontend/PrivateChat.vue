@@ -74,6 +74,7 @@ let timer = null;
 // Whether the screen follows new output (false once the owner scrolls up to read).
 let stick = true;
 let serial = 0;
+let sending_chat_id = "";
 // The scrolling screen and its content (see "Scrolling" below).
 const screen = ref(null);
 const content = ref(null);
@@ -171,7 +172,7 @@ async function refresh() {
         const next = (await bridge.read_member_chat(room_id, target.id)).chats;
         if (current !== serial) return;
         // A line still on its way to the site stays on screen through a poll that does not hold it yet.
-        const unsent = chats.value.filter((chat) => chat.status === "sending" && !chat.saved);
+        const unsent = chats.value.filter((chat) => chat.id === sending_chat_id);
         if (unsent.length) next.push(...unsent);
         if (JSON.stringify(next) !== JSON.stringify(chats.value)) chats.value = next;
       }
@@ -447,7 +448,7 @@ function to_bottom() {
 /** Keep this member's lines and steps, so coming back to it (or to this page) shows them at once. */
 function save_session() {
   if (!session_key) return;
-  SESSIONS.set(session_key, { chats: chats.value, details: details.value, open_output: open_output.value });
+  SESSIONS.set(session_key, { chats: chats.value.filter((chat) => chat.status !== "sending"), details: details.value, open_output: open_output.value });
 }
 /** Open the turn a message card asked for ("查看这次执行的过程") at the top of the screen, marked for a moment. */
 function jump_to_execution() {
@@ -478,29 +479,34 @@ const draft = ref("");
 const sending = ref(false);
 const history = [];
 let history_index = -1;
-let submission_id = "";
+let retry = null;
 
 /** Send the line; a failed send keeps the text and its submission id for the retry. */
 async function send() {
   const text = draft.value.trim();
   if (!text || sending.value || unsupported.value) return;
-  submission_id ||= crypto.randomUUID();
+  const room_id = room.value.id, member_id = member.value.id;
+  const submission_id = retry?.text === text && retry.room_id === room_id && retry.member_id === member_id
+    ? retry.submission_id : crypto.randomUUID();
+  retry = { text, room_id, member_id, submission_id };
   sending.value = true;
   // The line shows at once, marked as sending, and the field is free again: the screen answers the tap, not the relay.
   // The next read replaces it with the saved line; a failed send takes it back out and returns the text to the field.
   const local = { id: `sending-${submission_id}`, text, status: "sending", created_at: Date.now() / 1000, updated_at: Date.now() / 1000 };
+  sending_chat_id = local.id;
   chats.value = [...chats.value, local];
   draft.value = "";
   history.push(text);
   history_index = -1;
   to_bottom();
   try {
-    await bridge.send_member_chat(room.value.id, member.value.id, text, submission_id);
-    local.saved = true;
-    submission_id = "";
+    await bridge.send_member_chat(room_id, member_id, text, submission_id);
+    sending_chat_id = "";
+    retry = null;
     await refresh();
   } catch (failure) {
-    chats.value = chats.value.filter((chat) => chat !== local);
+    sending_chat_id = "";
+    chats.value = chats.value.filter((chat) => chat.id !== local.id);
     if (!draft.value) draft.value = text;
     bridge.notify("error", failure.message || t('未能发出'));
   } finally { sending.value = false; }

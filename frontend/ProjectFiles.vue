@@ -25,6 +25,7 @@ const loading = ref(false);
 const mode = ref(shown?.mode === "roots" ? "roots" : "folder");
 const roots = ref(null);
 const trash = ref(null);
+const section_failed = ref(false);
 const busy = ref(false);
 // A name being typed: `{ kind: "mkdir" | "rename" | "project", entry, value }`.
 const naming = ref(null);
@@ -37,7 +38,7 @@ const file_input = ref(null);
 // A question about a name already taken: `{ name, many, resolve }`, answered "replace", "keep_both" or null (skip).
 const asking = ref(null);
 const ask_all = ref(false);
-let directory_request = 0;
+let listing_request = 0;
 // The whole project's listings are kept current behind the page, top folders first: each pass asks only whether a folder
 // changed, so an unchanged project costs a few small requests. Generated folders are read when they are opened.
 const SWEEP_BATCH = 100, SWEEP_FOLDER_LIMIT = 10000, SWEEP_SETTLE_MS = 3000;
@@ -72,9 +73,11 @@ function remember() {
 
 /** Show a folder of the current project from its saved listings, then bring the project's listings up to date. */
 async function open_project(path) {
+  const request = ++listing_request;
   mode.value = "folder";
+  loading.value = true;
   await folder_listings.load(directory.value);
-  if (left_page) return;
+  if (request !== listing_request) return;
   read_directory(path);
   sweep_folders();
 }
@@ -94,26 +97,29 @@ function open_account_root(item) {
   open_project("");
 }
 
-/** Show the account's projects and drafts. */
-async function show_roots() {
-  mode.value = "roots";
+/** Read the account's projects and drafts or recycle area, replacing only the active request. */
+async function read_section(section) {
+  if (left_page) return;
+  const request = ++listing_request;
+  sweep_run++;
+  mode.value = section;
   naming.value = null;
-  remember();
-  busy.value = true;
-  try { roots.value = await bridge.manage_room_files(room_id, { op: "roots" }); }
-  catch (error) { bridge.notify("error", t('读取项目列表失败：{value1}', { value1: error.message })); }
-  finally { busy.value = false; }
+  if (section === "roots") remember();
+  section_failed.value = false;
+  loading.value = true;
+  try {
+    const answer = await bridge.manage_room_files(room_id, { op: section });
+    if (request !== listing_request) return;
+    if (section === "roots") roots.value = answer;
+    else trash.value = answer.entries;
+  } catch (error) {
+    if (request !== listing_request) return;
+    section_failed.value = true;
+    bridge.notify("error", section === "roots" ? t('读取项目列表失败：{value1}', { value1: error.message }) : t('读取回收区失败：{value1}', { value1: error.message }));
+  } finally { if (request === listing_request) loading.value = false; }
 }
-
-/** Show the recycle area. */
-async function show_trash() {
-  mode.value = "trash";
-  naming.value = null;
-  busy.value = true;
-  try { trash.value = (await bridge.manage_room_files(room_id, { op: "trash" })).entries; }
-  catch (error) { bridge.notify("error", t('读取回收区失败：{value1}', { value1: error.message })); }
-  finally { busy.value = false; }
-}
+const show_roots = () => read_section("roots");
+const show_trash = () => read_section("trash");
 
 /** Show a folder the preview's breadcrumb asked for, now or once this list is shown. */
 function take_reveal() {
@@ -146,8 +152,9 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   left_page = true;
-  directory_request++;
+  listing_request++;
   sweep_run++;
+  answer_conflict(null);
   clearTimeout(sweep_timer);
   document.removeEventListener("visibilitychange", sweep_when_visible);
 });
@@ -185,7 +192,7 @@ async function sweep_folders() {
 
 /** Show one folder at once (from the cache when it is there) and read it again; a failed refresh keeps what is shown. */
 async function read_directory(path = "", append = false) {
-  const request = ++directory_request;
+  const request = ++listing_request;
   if (!append) {
     mode.value = "folder";
     naming.value = null;
@@ -196,12 +203,12 @@ async function read_directory(path = "", append = false) {
   loading.value = true;
   try {
     const result = await bridge.read_room_files(room_id, path, append ? listing.value.next_offset : 0, "", root.value);
-    if (request !== directory_request) return;
+    if (request !== listing_request) return;
     listing.value = { ...result, entries: append ? [...listing.value.entries, ...result.entries] : result.entries };
     folder_listings.set(cache_key(path), listing.value);
   } catch (error) {
-    if (request === directory_request) bridge.notify("error", t('读取目录失败，{value1}', { value1: error.message }));
-  } finally { if (request === directory_request) loading.value = false; }
+    if (request === listing_request) bridge.notify("error", t('读取目录失败，{value1}', { value1: error.message }));
+  } finally { if (request === listing_request) loading.value = false; }
 }
 
 /** Run one change and show the folder again; the computer's message is shown when it is refused. */
@@ -296,6 +303,7 @@ async function upload_files(files) {
     let conflict = null;
     if (taken.has(file.name)) {
       conflict = for_all || await ask_conflict(file.name, list.length > 1);
+      if (left_page) return;
       if (ask_all.value && conflict) for_all = conflict;
       if (!conflict) continue;
     }
@@ -303,16 +311,20 @@ async function upload_files(files) {
   }
   let uploaded = 0;
   for (const { file, conflict } of plans) {
+    if (left_page) return;
     const item = { id: crypto.randomUUID(), name: file.name, progress: 0, error: "" };
     uploads.value = [...uploads.value, item];
-    const update = (patch) => { uploads.value = uploads.value.map((entry) => entry.id === item.id ? { ...entry, ...patch } : entry); };
+    const update = (patch) => {
+      if (!left_page) uploads.value = uploads.value.map((entry) => entry.id === item.id ? { ...entry, ...patch } : entry);
+    };
     try {
       await bridge.upload_project_file(room_id, { ...target, file, conflict, on_progress: (progress) => update({ progress }) });
+      if (left_page) return;
       uploads.value = uploads.value.filter((entry) => entry.id !== item.id);
       uploaded += 1;
     } catch (error) { update({ error: error.message }); }
   }
-  if (uploaded) {
+  if (uploaded && !left_page) {
     bridge.notify("info", t('已上传 {value1} 个文件', { value1: uploaded }));
     if (mode.value === "folder" && root.value === target.root && current_path.value === target.path) read_directory(current_path.value);
   }
@@ -378,7 +390,7 @@ const deleted_time = (value) => modified_time(value);
           <UButton v-if="clipboard" icon="i-lucide-clipboard-paste" color="neutral" variant="soft" size="sm" :label="t('粘贴')" :title="t('粘贴 {value1}', { value1: clipboard.name })" :disabled="busy" @click="paste" />
           <input ref="file_input" type="file" multiple hidden @change="upload_files($event.target.files)" />
         </template>
-        <UButton v-if="mode === 'roots' && roots?.can_create_project" icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="sm" :label="t('新建项目')" :disabled="busy" @click="start_naming('project')" />
+        <UButton v-if="mode === 'roots' && roots?.can_create_project" icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="sm" :label="t('新建项目')" :disabled="loading || busy" @click="start_naming('project')" />
         <UButton icon="i-lucide-trash-2" color="neutral" :variant="mode === 'trash' ? 'soft' : 'ghost'" size="sm" :aria-label="t('回收区')" :title="t('回收区')" @click="mode === 'trash' ? open_project(current_path) : show_trash()" />
         <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" :aria-label="t('刷新')" :title="t('刷新')" :loading="loading || busy"
           @click="mode === 'roots' ? show_roots() : mode === 'trash' ? show_trash() : (read_directory(current_path), sweep_folders())" />
@@ -433,7 +445,12 @@ const deleted_time = (value) => modified_time(value);
         <UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="naming = null" />
       </form>
 
-      <template v-if="mode === 'roots'">
+      <div v-if="mode !== 'folder' && loading && (mode === 'roots' ? !roots : !trash)" class="project-files-rows" role="status" :aria-label="t('正在读取…')">
+        <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
+      </div>
+      <p v-if="mode !== 'folder' && section_failed" class="project-files-empty"><UButton :label="t('重试')" icon="i-lucide-refresh-cw" color="neutral" variant="ghost" @click="read_section(mode)" /></p>
+
+      <template v-if="mode === 'roots' && roots">
         <div class="project-files-rows">
           <template v-for="group in [{ key: 'projects', label: t('项目') }, { key: 'drafts', label: t('草稿') }]" :key="group.key">
             <p class="project-files-group">{{ group.label }}</p>
@@ -445,12 +462,11 @@ const deleted_time = (value) => modified_time(value);
               <span class="project-file-actions">
                 <time :datetime="item.modified_at">{{ modified_time(item.modified_at) }}</time>
                 <UButton icon="i-lucide-trash-2" color="neutral" variant="ghost" size="xs" :aria-label="t('删除 {value1}', { value1: item.name })"
-                  :title="root_lock(item) || t('移到回收区')" :disabled="busy || Boolean(root_lock(item))" @click="remove_root(item)" />
+                  :title="root_lock(item) || t('移到回收区')" :disabled="loading || busy || Boolean(root_lock(item))" @click="remove_root(item)" />
               </span>
             </div>
             <p v-if="roots && !roots[group.key].length" class="project-files-empty is-small">{{ group.key === 'projects' ? t('还没有项目') : t('没有草稿') }}</p>
           </template>
-          <p v-if="!roots && busy" class="project-files-empty" role="status">{{ t('正在读取…') }}</p>
         </div>
       </template>
 
@@ -461,14 +477,14 @@ const deleted_time = (value) => modified_time(value);
             <span class="project-file-size">{{ file_size(item.size) }}</span>
             <span class="project-file-actions">
               <time :datetime="item.deleted_at">{{ deleted_time(item.deleted_at) }}</time>
-              <UButton icon="i-lucide-undo-2" color="neutral" variant="ghost" size="xs" :label="t('还原')" :disabled="busy" @click="restore(item)" />
+              <UButton icon="i-lucide-undo-2" color="neutral" variant="ghost" size="xs" :label="t('还原')" :disabled="loading || busy" @click="restore(item)" />
             </span>
           </div>
           <p v-if="trash && !trash.length" class="project-files-empty"><UIcon name="i-lucide-trash" />{{ t('回收区是空的') }}</p>
         </div>
       </template>
 
-      <template v-else>
+      <template v-else-if="mode === 'folder'">
         <div class="project-files-columns" aria-hidden="true"><span>{{ t('名称') }}</span><span>{{ t('大小') }}</span><span>{{ t('修改时间') }}</span></div>
         <!-- Rows change only with the listing; the room's directories arrive as a new array on every view publish. -->
         <div v-memo="[listing, loading, directory, root, busy]" class="project-files-rows">

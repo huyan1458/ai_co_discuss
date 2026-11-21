@@ -545,6 +545,10 @@ const all_arrangements = computed(() => with_history("host_arrangements", room.v
 const all_cancelled_turns = computed(() => with_history("cancelled_turns", room.value.cancelled_turns));
 /** What the runner last saw a member's software doing; unknown phases keep the generic text. Declared before `free_busy`, which an immediate watch reads during setup. */
 const ACTIVITY_LABELS = { thinking: t('正在执行'), command: t('正在运行命令'), tool: t('正在调用工具'), editing: t('正在修改文件'), writing: t('正在撰写回答'), waiting: t('正在等待后台任务') };
+/** Active members a free-room message can name; chips appear only when there is a choice. */
+const free_members = computed(() => (room.value.free?.members || []).filter((member) => member.status === "active" && !awaiting_member(member)));
+/** Declared before `free_busy` too: its cards' line marks (line_marks) read the host. */
+const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
 /** All room work uses member executions; queued requests stay in the side panel. */
 const free_busy = computed(() => {
   if (room.value.archived) return [];
@@ -760,13 +764,10 @@ watch(() => view.value.queued_taken, (count) => count && nextTick(() => {
 function remove_excerpt(excerpt) { file_preview.excerpts = file_preview.excerpts.filter((item) => item.id !== excerpt.id); }
 // The excerpt whose comment is being edited in the composer's excerpt list.
 const editing_excerpt = ref(0);
-/** Active members a free-room message can name; chips appear only when there is a choice. */
-const free_members = computed(() => (room.value.free?.members || []).filter((member) => member.status === "active" && !awaiting_member(member)));
-const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
 /** In a discussion, an @mention of an active member is a direct question: it wakes that member outside turns, rounds and limits. */
 const mention_pool = computed(() => [...(mention_all.value ? [...ALL_ALIASES, ...SEQUENTIAL_ALIASES].map((name) => ({ name })) : []), ...free_members.value]);
 /** A draft @mentions a member only outside code and quotes. */
-const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:])@${name}(?![\\w-])`, "u");
+const MENTION_PATTERN = (name) => new RegExp(`(^|[\\s(（，,。；;：:、])@${name}(?![\\w-])`, "u");
 const draft_prose = computed(() => text.value.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, ""));
 const SCHEDULER_LABELS = { jev: "TypeSafe Jev", decisions: "OpenAI Decisions" };
 /** What the runner can do with how an execution reached its member's software: stop it, see its progress. */
@@ -1270,7 +1271,7 @@ function file_handle(path) {
 function find_mention(value, start, end = start) {
   if (start !== end) return null;
   const prefix = value.slice(0, start);
-  const match = prefix.match(/(?:^|[\s(（，,。；;：:])@([^\s@`，,。；;：:()（）]*)$/u);
+  const match = prefix.match(/(?:^|[\s(（，,。；;：:、])@([^\s@`，,。；;：:、()（）]*)$/u);
   if (!match) return null;
   const prose = prefix.replace(/```[\s\S]*?```/g, "");
   const line = prose.split("\n").at(-1);

@@ -13,6 +13,7 @@ import { t } from "./i18n.js";
 defineProps({ drawer: Boolean });
 const invited = use_invited_rooms();
 const record = invited.selected;
+const saving = ref(false);
 const editing = ref(false), leaving = ref(false), removing = ref(false);
 const trust = ref({ wake: "auto", confined: true, duration: "" });
 watch(() => record.value?.id, () => { editing.value = false; });
@@ -24,10 +25,15 @@ function start_edit() {
 }
 /** Save how it answers and its local access, then, when a new loan was picked, ask the other computer for the new end. */
 async function save() {
-  editing.value = false;
+  if (saving.value || !record.value) return;
+  const id = record.value.id;
   const { duration, ...settings } = trust.value;
-  await invited.set_trust(record.value.id, settings, duration ? "" : t("设置已更新"));
-  if (duration) await invited.lend(record.value.id, duration);
+  saving.value = true;
+  try {
+    if (!await invited.set_trust(id, settings, duration ? "" : t("设置已更新"))) return;
+    if (duration && !await invited.lend(id, duration)) return;
+    if (record.value?.id === id) editing.value = false;
+  } finally { saving.value = false; }
 }
 const usage = computed(() => {
   const value = record.value;
@@ -127,7 +133,7 @@ const status = computed(() => {
         :title="record.leave_pending ? t('退出通知还没送达对方电脑，送达后才能删除记录') : undefined" :loading="busy === 'remove'" :disabled="Boolean(busy) || record.leave_pending" @click="removing = true" />
     </section>
     <!-- Too much for the narrow rail beside the facts it repeats, so the settings open in a dialog (user 2026-11-19). -->
-      <UModal v-model:open="editing" :title="t('调整「{room}」的设置', { room: record.room_title || '' })" :description="t('只影响你这台电脑上的 AI，对方房间的开放范围由对方决定。')"
+      <UModal v-model:open="editing" :content="{ onInteractOutside: (event) => event.preventDefault() }" :title="t('调整「{room}」的设置', { room: record.room_title || '' })" :description="t('只影响你这台电脑上的 AI，对方房间的开放范围由对方决定。')"
         :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
         <template #body>
           <TrustLevelField v-model="trust" :confine_reason="lockdown_problem(record.ai?.adapter)" />
@@ -135,7 +141,7 @@ const status = computed(() => {
           <p v-else-if="expires_at" class="fine-print invited-edit-note">{{ t("当前借出到 {time}", { time: date(expires_at) }) }}</p>
           <div class="invited-edit-actions">
             <UButton :label="t('取消')" size="sm" color="neutral" variant="ghost" @click="editing = false" />
-            <UButton :label="t('保存')" size="sm" class="channel-primary-button" :loading="busy === 'trust' || busy === 'lend'" :disabled="Boolean(busy)" @click="save" />
+            <UButton :label="t('保存')" size="sm" class="channel-primary-button" :loading="saving" :disabled="saving || Boolean(busy)" @click="save" />
           </div>
         </template>
       </UModal>

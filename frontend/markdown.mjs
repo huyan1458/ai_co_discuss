@@ -10,7 +10,7 @@ const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true })
 
 // Platform skills the "/" menu inserts as `$id` (keep in step with PLATFORM_SKILL_COMMANDS in ChannelDiscussion.vue).
 const PLATFORM_SKILLS = ["workflow-creator"];
-const SKILL_PATTERN = new RegExp(`(^|[\\s(（，,。；;：:])(\\$(?:${PLATFORM_SKILLS.join("|")}))(?![\\w-])`, "gu");
+const SKILL_PATTERN = new RegExp(`(^|[\\s(（，,。；;：:、])(\\$(?:${PLATFORM_SKILLS.join("|")}))(?![\\w-])`, "gu");
 const SKILL_ICON = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>';
 
 // `#123` in room text names message 123; the page opens it on a delegated click on [data-message-ref].
@@ -89,6 +89,6 @@ markdown.renderer.rules.fence = (...args) => `<div class="markdown-code"><button
 export function render_markdown(text, mentions = [], { source_lines = false, message_refs = false } = {}) {
   const handles = [...new Set(mentions.filter(Boolean))].sort((left, right) => right.length - left.length)
     .map(handle => markdown.utils.escapeHtml(handle).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const mention = handles.length ? new RegExp(`(^|[\\s(（，,。；;：:])(@(?:${handles.join("|")}))(?![\\w-])`, "gu") : null;
+  const mention = handles.length ? new RegExp(`(^|[\\s(（，,。；;：:、])(@(?:${handles.join("|")}))(?![\\w-])`, "gu") : null;
   return markdown.render(text, { mention, source_lines, message_refs });
 }

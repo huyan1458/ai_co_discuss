@@ -1,3 +1,9 @@
+<script>
+import { reactive } from "vue";
+const expanded_goals = reactive(new Set());
+const expanded_tasks = reactive(new Set());
+</script>
+
 <script setup>
 import { awaiting_member } from "./external-members.js";
 import { t } from './i18n.js';
@@ -48,7 +54,10 @@ const goal_phase = computed(() => {
   if (value.phase === "waiting") return t('等待后台工作{value1}', { value1: until });
   return value.idle ? t('进行中 · 空闲，稍后唤醒主持人') : t('进行中');
 });
-const goal_expanded = ref(false);
+const goal_expanded = computed({
+  get: () => expanded_goals.has(room.value.id),
+  set: (expanded) => expanded ? expanded_goals.add(room.value.id) : expanded_goals.delete(room.value.id),
+});
 const goal_dialog = ref(false);
 const current_round = computed(() => discussion.value ? room.value.current_turn?.round || (room.value.completed_rounds || 0) + 1 : 0);
 const host = computed(() => (free.value.members || []).find((member) => member.role === "host" && member.status === "active"));
@@ -224,7 +233,10 @@ const task = computed(() => {
   if (message?.source === "goal") return "";
   return message ? message.text : `#${request.message_id}`;
 });
-const task_expanded = ref(false);
+const task_expanded = computed({
+  get: () => expanded_tasks.has(room.value.id),
+  set: (expanded) => expanded ? expanded_tasks.add(room.value.id) : expanded_tasks.delete(room.value.id),
+});
 watch(() => room.value.id, () => { task_expanded.value = false; });
 
 /**

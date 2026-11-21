@@ -135,7 +135,7 @@ const uid = useId();
         <p v-else>{{ t("把链接或二维码发给对方。") }}</p>
         <div class="external-invite-copy">
           <UButton v-if="invite.url" :icon="copied === 'url' ? 'i-lucide-check' : 'i-lucide-copy'" :label="copied === 'url' ? t('已复制') : t('复制链接')" size="xs" :color="copied === 'url' ? 'success' : 'neutral'" variant="outline" @click="copy('url', invite.url)" />
-          <UButton :label="invite.url || settings?.invite_version ? t('重新生成链接') : t('生成链接')" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="ghost" @click="generate" />
+          <UButton :label="invite.url || settings?.invite_version ? t('重新生成链接') : t('生成链接')" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="ghost" :loading="busy === 'create'" :disabled="Boolean(busy) || !view.launch.available && !view.launch.remote" @click="generate" />
         </div>
         <p v-if="invite.url" class="external-invite-hint">{{ t("{time} 前兑换有效，只能用一次。对方兑换后完成签到，你会收到提示，可随时撤销。", { time: date(invite.expires_at) }) }}</p>
       </div>

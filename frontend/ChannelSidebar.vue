@@ -1,5 +1,11 @@
+<script>
+import { ref } from "vue";
+const tools_open = ref(true);
+const workflows_open = ref(true);
+</script>
+
 <script setup>
-import { computed, inject, ref } from "vue";
+import { computed, inject } from "vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
 import InvitedRooms from "./InvitedRooms.vue";
 import { use_invited_rooms } from "./external-members.js";
@@ -11,8 +17,6 @@ const props = defineProps({ tabs: { type: Array, required: true } });
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "workflows", "invited", "tab", "settings"]);
 const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
-const tools_open = ref(true);
-const workflows_open = ref(true);
 const library = use_workflow_library();
 const { workflows, available, draft, saved_id, page_open, renaming, rename_text, pending_items } = library;
 

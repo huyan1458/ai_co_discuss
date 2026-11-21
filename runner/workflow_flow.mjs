@@ -12,6 +12,8 @@ const NODE_ID = /^[A-Za-z0-9_-]{1,40}$/;
 // Short notes drawn on the canvas: what the host does at a host node ("验收"), what an arrow means ("返工", "不等交回").
 export const MAX_HOST_LABEL = 12;
 export const MAX_EDGE_LABEL = 16;
+// How far the user may move a loop arrow up or down from where the canvas draws it (`offset`, canvas pixels).
+export const MAX_LOOP_OFFSET = 2000;
 
 /** A note's text, trimmed; empty means none. */
 function note(value, max, where) {
@@ -53,7 +55,8 @@ export function normalize_flow(flow) {
     if (seen.has(key)) throw new Error('两个节点之间只能有一条同向连线');
     seen.add(key);
     const label = note(edge.label, MAX_EDGE_LABEL, `连线 ${key} `);
-    return { source: edge.source, target: edge.target, ...(label ? { label } : {}) };
+    const offset = Number.isFinite(edge.offset) ? Math.max(-MAX_LOOP_OFFSET, Math.min(MAX_LOOP_OFFSET, Math.round(edge.offset))) : 0;
+    return { source: edge.source, target: edge.target, ...(label ? { label } : {}), ...(offset ? { offset } : {}) };
   });
   return { nodes, edges };
 }

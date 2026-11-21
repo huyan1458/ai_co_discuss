@@ -711,6 +711,7 @@ function validate_create_preferences(input) {
       const [minimum, maximum] = CREATE_PREFERENCE_RANGES[field];
       valid = Number.isInteger(value) && value >= minimum && value <= maximum;
     } else if (field === 'drive') valid = ['free', 'discussion', 'goal'].includes(value);
+    else if (field === 'host_project_access') valid = ['read', 'write', 'auto', 'full'].includes(value);
     else if (field === 'workflow_id') valid = typeof value === 'string' && (!value || WORKFLOW_ID_PATTERN.test(value));
     else if (field === 'scheduler') valid = valid_scheduler_preference(value);
     if (!valid) throw new Error(`建房偏好字段无效：${field}`);

@@ -85,8 +85,7 @@ export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mo
  * The limit on a quick answer given inline with --body: a run allowed only codiscuss commands refuses a command line
  * carrying shell symbols, and PowerShell rewrites `$` and backticks inside quotes. The participant skill says the same.
  */
-export const INLINE_BODY_RULE = '--body 的正文不能含反引号、英文括号、$、;、&、|、<、> 或换行，含这些时写草稿再用 --body-file';
-
+export const INLINE_BODY_RULE = '--body 只用于不超过 200 字的短答，不能含反引号、英文括号、$、;、&、|、<、> 或换行，否则写草稿再用 --body-file';
 // How many times one execution is resumed to correct commands it can fix itself (2026-11-19 user: three).
 export const MAX_REFUSAL_RETRIES = 3;
 const REFUSED_COMMAND_SHOWN = 200;

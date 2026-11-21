@@ -37,6 +37,9 @@ READ_ONLY_HEADER = "X-Discussion-Read-Only"
 CROSS_ROOM_READ_PATH = re.compile(r"/api/rooms(?:/[^/]+(?:/.*)?)?|/r/[^/]+(?:/.*)?")
 MAX_TEXT_LENGTH = 32000
 MAX_SUMMARY_LENGTH = 1000
+# An inline `message post --body` is for a one- or two-sentence reply: it cannot carry line breaks, so a longer answer
+# given this way loses its Markdown layout and reaches the room as one paragraph (2026-11-20 user: refuse it).
+MAX_INLINE_BODY_LENGTH = 200
 MAX_BRIEF_LENGTH = 1600
 MAX_MEMBER_HANDLE = 80
 PARTICIPANTS = ("用户", "Codex", "Claude", "Antigravity", "DeepSeek", "Qwen", "Grok", "OpenAI", "Custom")
@@ -700,6 +703,9 @@ def split_summary_header(text):
 def message_text_and_summary(args):
     """Read body and summary; a body file may hold the summary in its header instead of `--summary(-file)`."""
     body = text_field(args, "body") or ""
+    if getattr(args, "body_file", None) is None and len(body.strip()) > MAX_INLINE_BODY_LENGTH:
+        raise CliError(f"--body 只用于不超过 {MAX_INLINE_BODY_LENGTH} 字的短答；较长的回答写成 Markdown 草稿"
+                       "（分段、标题或列表），用 --body-file 草稿 提交")
     summary = text_field(args, "summary")
     if getattr(args, "body_file", None) is not None:
         header, rest = split_summary_header(body)

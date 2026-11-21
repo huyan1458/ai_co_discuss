@@ -766,7 +766,7 @@ test('new-room preferences persist separately from software defaults through loc
   save_launch_settings(f.home, { participants: f.input.participants });
   const preferences = { drive: 'goal', max_rounds: 5, max_minutes: 45, named_followup: true,
     goal_max_continues: 8, goal_max_minutes: 90, chain_rounds: 6, host_workflows: true, advanced_open: true,
-    workflow_id: 'writing', scheduler: { enabled: false, provider: 'jev', model: 'jev-latest', mode: 'stable' } };
+    workflow_id: 'writing', host_project_access: 'full', scheduler: { enabled: false, provider: 'jev', model: 'jev-latest', mode: 'stable' } };
   const saved = await request(f.site, '/api/local/settings', { create_preferences: preferences }, { 'X-CoDiscuss-Local': '1' });
   assert.equal(saved.status, 200, saved.body.error);
   assert.deepEqual(launch_settings(f.home), { participants: f.input.participants, create_preferences: preferences });
@@ -786,7 +786,7 @@ test('new-room preferences persist separately from software defaults through loc
   assert.throws(() => save_launch_settings(f.home, { participant_choices: { 'Codex-2': { model: 'gpt-6-astra' } } }), /按平台保存/);
   const before =readFileSync(join(f.home, 'launch-settings.json'), 'utf8');
   for (const invalid of [{ title: 'one room' }, { cwd: f.directory }, { participants: {} }, { host: 'Codex' },
-    { session_id: 'session' }, { goal: 'room objective' }, { chain_rounds: 101 }, { max_minutes: 1441 },
+    { session_id: 'session' }, { goal: 'room objective' }, { chain_rounds: 101 }, { max_minutes: 1441 }, { host_project_access: 'own' },
     { scheduler: { api_key: 'must-not-persist' } }, { scheduler: { api_key_ref: 'key-ref' } }]) {
     assert.throws(() => save_launch_settings(f.home, { create_preferences: invalid }), /建房偏好字段无效/);
     assert.equal(readFileSync(join(f.home, 'launch-settings.json'), 'utf8'), before);

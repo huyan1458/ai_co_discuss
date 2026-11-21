@@ -1542,7 +1542,7 @@ def save_suggestions(connection, room_id, message_id, member, payload):
     prose = mention_prose(str(payload.get("text", "")))
     for handle, name in member_handles(connection, room_id).items():
         if name in active and name != member["name"] and re.search(
-                r"(^|[\s(（，,。；;：:])@" + re.escape(handle) + r"(?![A-Za-z0-9_\-\u4e00-\u9fff])", prose):
+                r"(^|[\s(（，,。；;：:、])@" + re.escape(handle) + r"(?![A-Za-z0-9_\-\u4e00-\u9fff])", prose):
             targets.add(active[name]["id"])
     for target_id in targets:
         connection.execute("INSERT INTO member_suggestions (message_id,member_id) VALUES (?,?)", (message_id, target_id))

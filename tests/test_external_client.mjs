@@ -596,7 +596,7 @@ test('the external task text points the AI at repo and its own access file', () 
   assert.match(discuss.prompt, /没有开放项目文件/);
   assert.match(prompt, /只能在 \/x\/drafts 写草稿/);
   // The quick inline answer stays, with the symbols a limited run refuses on the command line spelled out.
-  assert.match(prompt, /可用 --body "回答"；--body 的正文不能含反引号、英文括号/);
+  assert.match(prompt, /可用 --body "回答"；--body 只用于不超过 200 字的短答，不能含反引号、英文括号/);
   assert.match(prompt, /codiscuss room view --access-file/, 'names a room command that exists');
 });
 

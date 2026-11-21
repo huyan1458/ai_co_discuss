@@ -1328,9 +1328,10 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(dispatched, ["Antigravity"])
         self.say("请 Claude 看看")
         work = self.reserve_for("Claude")[1]
-        status, saved = self.answer(work["id"], "建议 @Gemini 核对连续性。")
+        # A 、-separated list names every member in it, not just the first.
+        status, saved = self.answer(work["id"], "建议 @Codex、@Gemini 核对连续性。")
         self.assertEqual(status, 201, saved)
-        self.assertEqual([item["member"] for item in saved["message"]["suggestions"]], ["Antigravity"])
+        self.assertEqual(sorted(item["member"] for item in saved["message"]["suggestions"]), ["Antigravity", "Codex"])
 
     def test_member_suggestion_requires_owner_and_converts_once_with_fresh_chain(self):
         """A suggestion for an ordinary member stays inert, then one owner confirmation creates a deliverable request."""

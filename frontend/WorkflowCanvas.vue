@@ -18,7 +18,7 @@ import "@vue-flow/controls/dist/style.css";
 import "@vue-flow/minimap/dist/style.css";
 import RosterAdd from "./RosterAdd.vue";
 import { access_label as source_access_label } from "../runner/expert_prompts.mjs";
-import { MAX_EDGE_LABEL, MAX_HOST_LABEL, empty_flow, flow_shape } from "../runner/workflow_flow.mjs";
+import { MAX_EDGE_LABEL, MAX_HOST_LABEL, MAX_LOOP_OFFSET, empty_flow, flow_shape } from "../runner/workflow_flow.mjs";
 import { t } from './i18n.js';
 const access_label = level => ({ read: t('只读'), write: t('可写'), auto: t('自动'), full: t('全放开'), own: t('自行决定') }[level] || source_access_label(level));
 
@@ -86,9 +86,9 @@ function to_node(item) {
   return { ...base, deletable: false, dragHandle: NODE_HANDLE };
 }
 
-/** A stored arrow as Vue Flow draws it; its note (if any) rides in `data`. */
-function to_edge({ source, target, label }) {
-  return { id: `${source}>${target}`, source, target, type: "flow", data: { label: label || "" }, markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 } };
+/** A stored arrow as Vue Flow draws it; its note and a loop's up-or-down offset (if any) ride in `data`. */
+function to_edge({ source, target, label, offset }) {
+  return { id: `${source}>${target}`, source, target, type: "flow", data: { label: label || "", offset: offset || 0 }, markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 } };
 }
 
 // A member card's × asks twice, as deleting a sub-workflow does: removing it takes the member out of the workflow.
@@ -149,7 +149,8 @@ const live = computed(() => {
   return { nodes: nodes.value.map((node) => ({ id: node.id, type: node.type, ...(node.type === "card" ? { card: node.data.card } : {}),
     ...(node.type === "sub" ? { sub: node.data.sub } : {}),
     ...(node.type === "host" ? noted(node) : {}), x: Math.round(node.position.x), y: Math.round(node.position.y) })),
-    edges: edges.value.filter((edge) => ids.has(edge.source) && ids.has(edge.target)).map((edge) => ({ source: edge.source, target: edge.target, ...noted(edge) })) };
+    edges: edges.value.filter((edge) => ids.has(edge.source) && ids.has(edge.target)).map((edge) => ({ source: edge.source, target: edge.target, ...noted(edge),
+      ...(edge.data?.offset ? { offset: Math.round(edge.data.offset) } : {}) })) };
 });
 // The saved form (and through it the undo history, the loop layout and the page's unsaved check) follows the canvas,
 // but not on every frame of a drag: that is taken once the card is let go, so dragging stays smooth.
@@ -304,6 +305,14 @@ function remove_node(id) {
   edges.value = edges.value.filter((edge) => edge.source !== id && edge.target !== id);
 }
 
+/** Select an arrow by its note: an unselected note only pans the view and takes a click (user 2026-11-20). */
+function select_edge(id) {
+  const edge = instance.value?.findEdge(id);
+  if (!edge) return;
+  instance.value.removeSelectedElements();
+  instance.value.addSelectedEdges([edge]);
+}
+
 function remove_edge(id) {
   edges.value = edges.value.filter((edge) => edge.id !== id);
 }
@@ -338,12 +347,28 @@ function grant(agent, allowed) {
   agent.project_access = allowed ? agent.requested_access : "read";
 }
 
-/** A loop runs out right, down below every node it spans, back left and up into its target, with rounded corners. */
-function loop_path({ id, sourceX, sourceY, targetX, targetY }) {
-  const left = targetX - LOOP_OUT, right = sourceX + LOOP_OUT, radius = LOOP_RADIUS;
+/**
+ * How low a loop runs: `auto` clears every node it spans and the loops inside it; the user's offset moves it from there
+ * (user 2026-11-20), but never above `floor`, where its corners would cross its own ends.
+ */
+function loop_depth({ id, sourceX, sourceY, targetX, targetY, data }) {
+  const left = targetX - LOOP_OUT, right = sourceX + LOOP_OUT;
   const spanned = nodes.value.filter((node) => node.position.x < right && node.position.x + NODE_WIDTH[node.type] > left);
-  const below = Math.max(sourceY, targetY, ...spanned.map((node) => node.position.y + NODE_HEIGHT[node.type])) + LOOP_CLEARANCE
+  const auto = Math.max(sourceY, targetY, ...spanned.map((node) => node.position.y + NODE_HEIGHT[node.type])) + LOOP_CLEARANCE
     + (loop_rank.value.get(id) || 0) * LOOP_STACK;
+  const floor = Math.max(sourceY, targetY) + 2 * LOOP_RADIUS;
+  return { auto, floor, below: Math.max(floor, auto + (data?.offset || 0)) };
+}
+
+/** Whether a loop goes around underneath (its source well right of its target); a short one is a plain step path. */
+function loops_under(edge) {
+  return shape.value.loops.has(edge.id) && edge.sourceX > edge.targetX + 2 * LOOP_OUT;
+}
+
+/** A loop runs out right, down below every node it spans, back left and up into its target, with rounded corners. */
+function loop_path(edge) {
+  const { sourceX, sourceY, targetX, targetY } = edge;
+  const left = targetX - LOOP_OUT, right = sourceX + LOOP_OUT, radius = LOOP_RADIUS, { below } = loop_depth(edge);
   const path = `M ${sourceX} ${sourceY} H ${right - radius} Q ${right} ${sourceY} ${right} ${sourceY + radius} V ${below - radius}`
     + ` Q ${right} ${below} ${right - radius} ${below} H ${left + radius} Q ${left} ${below} ${left} ${below - radius}`
     + ` V ${targetY + radius} Q ${left} ${targetY} ${left + radius} ${targetY} H ${targetX}`;
@@ -361,7 +386,7 @@ const loop_rank = computed(() => {
 /** A loop goes around underneath the cards it repeats; other arrows are curves. */
 function edge_path(edge) {
   if (!shape.value.loops.has(edge.id)) return getBezierPath(edge);
-  return edge.sourceX > edge.targetX + 2 * LOOP_OUT ? loop_path(edge) : getSmoothStepPath({ ...edge, borderRadius: LOOP_RADIUS, offset: LOOP_OUT });
+  return loops_under(edge) ? loop_path(edge) : getSmoothStepPath({ ...edge, borderRadius: LOOP_RADIUS, offset: LOOP_OUT });
 }
 
 /** Lay the canvas out in columns by step, members of one step stacked, then fit it in view. */
@@ -491,8 +516,9 @@ function middle_press(event) {
 // that starts on a card to the card's drag, so a pinch half on a card panned and dragged at once). The browser never
 // zooms the page from the canvas: pinches and Ctrl+wheel (a touchpad pinch) stop here. ──
 const ZOOM = { min: 0.2, max: 1.8 };
-// The canvas is one layer the GPU only shifts and scales while the view pans or zooms, instead of being repainted every
-// frame. A layer keeps the scale it was drawn at, so after a zoom it is dropped for two frames to draw the text sharp.
+// The canvas is one layer the GPU only shifts while the view pans, instead of being repainted every frame. A layer keeps
+// the scale it was drawn at, so scaling it blurs the text: once the zoom changes the layer is dropped until the view
+// settles, and every frame of the zoom is drawn sharp at its own scale.
 const layered = ref(true);
 let zoom_at_start = 1;
 
@@ -500,10 +526,12 @@ function view_moved() {
   zoom_at_start = instance.value?.getViewport().zoom ?? 1;
 }
 
+function view_moving({ flowTransform }) {
+  if (layered.value && flowTransform.zoom !== zoom_at_start) layered.value = false;
+}
+
 function view_settled() {
-  if (!instance.value || instance.value.getViewport().zoom === zoom_at_start) return;
-  layered.value = false;
-  requestAnimationFrame(() => requestAnimationFrame(() => { layered.value = true; }));
+  if (!layered.value) requestAnimationFrame(() => { layered.value = true; });
 }
 let pinch = null, pinch_frame = 0, pinch_target = null, touch_positions = null;
 // A finger or a mouse on a node's body or on an arrow pans the view here: Vue Flow marks every node and every
@@ -525,9 +553,60 @@ function pans_view(target) {
   return on_edge_line(target) || Boolean(target.closest?.(NODE_BODY) && !target.closest(BODY_CONTROL));
 }
 
-/** A mouse (or pen) press on an arrow or a node's body pans the view until it is released; touches are panned in touch_start. */
+/** The click a press that moved ends in selects nothing. */
+function swallow_click() {
+  const swallow = (click) => { click.stopPropagation(); click.preventDefault(); };
+  window.addEventListener("click", swallow, { capture: true, once: true });
+  setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+}
+
+/**
+ * The loop under `target` when it is selected and goes around underneath: only then does a press on its line move it up
+ * or down. Unselected, a press on it pans like anywhere else, so panning never moves a line by accident (user 2026-11-20).
+ */
+function selected_loop(target) {
+  const id = target.closest?.(".vue-flow__edge.selected")?.getAttribute("data-id");
+  const edge = id && instance.value?.findEdge(id);
+  return edge && loops_under(edge) ? edge : null;
+}
+
+// The loop being moved up or down: its ID, where the press began, its offset then, and how far up it may go.
+let loop_drag = null;
+
+/** Move a selected loop up or down with the pointer, by mouse, pen or finger, until it is let go. */
+function start_loop_drag(edge, event) {
+  const { auto, floor, below } = loop_depth(edge);
+  loop_drag = { id: edge.id, from: event.clientY, offset: below - auto, min: floor - auto, zoom: instance.value.getViewport().zoom, moved: false };
+  drag_start();
+  const move = (moved) => {
+    if (!loop_drag) return;
+    const offset = Math.min(MAX_LOOP_OFFSET, Math.max(loop_drag.min, Math.round(loop_drag.offset + (moved.clientY - loop_drag.from) / loop_drag.zoom)));
+    loop_drag.moved ||= Math.abs(moved.clientY - loop_drag.from) > PAN_CLICK_REACH_PX;
+    edges.value = edges.value.map((item) => item.id === loop_drag.id ? { ...item, data: { ...item.data, offset } } : item);
+  };
+  const release = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", release);
+    window.removeEventListener("pointercancel", release);
+    if (loop_drag?.moved) swallow_click();
+    loop_drag = null;
+    drag_stop();
+  };
+  loop_drag.release = release;
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", release);
+  window.addEventListener("pointercancel", release);
+}
+
+/**
+ * A press on a selected loop's line moves it; a mouse (or pen) press on any other arrow or on a node's body pans the view
+ * until it is released (touches are panned in touch_start).
+ */
 function edge_press(event) {
-  if (event.button !== 0 || event.pointerType === "touch" || !instance.value || !pans_view(event.target)) return;
+  if (event.button !== 0 || !instance.value) return;
+  const loop = selected_loop(event.target);
+  if (loop) { start_loop_drag(loop, event); return; }
+  if (event.pointerType === "touch" || !pans_view(event.target)) return;
   const from = { x: event.clientX, y: event.clientY };
   card_pan = { from, to: null, view: instance.value.getViewport() };
   const move = (moved) => {
@@ -539,10 +618,7 @@ function edge_press(event) {
     window.removeEventListener("pointerup", release);
     window.removeEventListener("pointercancel", release);
     card_pan = null;
-    if (Math.hypot(released.clientX - from.x, released.clientY - from.y) <= PAN_CLICK_REACH_PX) return;
-    const swallow = (click) => { click.stopPropagation(); click.preventDefault(); };
-    window.addEventListener("click", swallow, { capture: true, once: true });
-    setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+    if (Math.hypot(released.clientX - from.x, released.clientY - from.y) > PAN_CLICK_REACH_PX) swallow_click();
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", release);
@@ -564,11 +640,12 @@ function touch_start(event) {
   const touches = canvas_touches(event);
   if (!pinch && touches.length === 1) {
     touch_positions = new Map(nodes.value.map((node) => [node.id, { ...node.position }]));
-    const on_body = instance.value && pans_view(event.target);
+    const on_body = instance.value && pans_view(event.target) && !loop_drag;
     card_pan = on_body ? { from: { x: touches[0].clientX, y: touches[0].clientY }, to: null, view: instance.value.getViewport() } : null;
   }
   if (touches.length < 2 || !instance.value) return;
   card_pan = null;
+  loop_drag?.release();
   event.stopPropagation();
   event.preventDefault();
   if (!pinch) {
@@ -590,7 +667,7 @@ function begin_pinch(touches) {
 /** Follow the fingers, one viewport change per frame. */
 function touch_move(event) {
   const touches = canvas_touches(event);
-  if (touches.length >= 2) event.preventDefault();
+  if (touches.length >= 2 || loop_drag) event.preventDefault();
   if (card_pan && touches.length === 1) {
     event.preventDefault();
     card_pan.to = { x: touches[0].clientX, y: touches[0].clientY };
@@ -717,7 +794,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
   <div ref="canvas_element" class="workflow-canvas" :class="{ 'is-layered': layered, 'is-compact': props.compact }" @dblclick="pane_double_click" @pointerdown.capture="middle_press" @pointerdown="edge_press">
     <VueFlow v-model:nodes="nodes" v-model:edges="edges" :min-zoom="ZOOM.min" :max-zoom="ZOOM.max" :delete-key-code="['Delete', 'Backspace']" :zoom-on-double-click="false"
       :is-valid-connection="valid_connection" elevate-nodes-on-select @connect="connect" @connect-start="connect_start" @connect-end="connect_end"
-      @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once" @move-start="view_moved" @move-end="view_settled" @node-double-click="node_double_click">
+      @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once" @move-start="view_moved" @move="view_moving" @move-end="view_settled" @node-double-click="node_double_click">
       <template #node-start>
         <UTooltip :text="t('从右侧圆点拖线连到成员，示意谁先接手；拖到空白处可直接添加')">
           <div class="workflow-pill is-start">
@@ -784,9 +861,10 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       </template>
       <template #edge-flow="edge">
         <BaseEdge :id="edge.id" :path="edge_path(edge)[0]" :marker-end="edge.markerEnd" class="workflow-edge"
-          :class="{ 'is-loop': shape.loops.has(edge.id), 'is-selected': edge.selected }" />
+          :class="{ 'is-loop': shape.loops.has(edge.id), 'is-under': loops_under(edge), 'is-selected': edge.selected }" />
         <EdgeLabelRenderer>
-          <div v-if="edge.selected || edge.data?.label" class="workflow-edge-note nodrag nopan" :class="{ 'is-loop': shape.loops.has(edge.id), 'is-selected': edge.selected }"
+          <div v-if="edge.selected || edge.data?.label" class="workflow-edge-note" :class="{ 'is-loop': shape.loops.has(edge.id), 'is-selected': edge.selected, nopan: edge.selected }"
+            @click.stop="edge.selected || select_edge(edge.id)"
             :style="{ transform: `translate(-50%, -50%) translate(${edge_path(edge)[1]}px, ${edge_path(edge)[2]}px)` }">
             <template v-if="edge.selected">
               <input :value="edge.data?.label" class="workflow-note-input" :maxlength="MAX_EDGE_LABEL" :placeholder="t('说明，如“返工”')" :aria-label="t('这条连线的说明')"
@@ -951,6 +1029,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 @media (prefers-reduced-motion: reduce) { :deep(.workflow-handle.is-calling) { animation: none; } }
 :deep(.workflow-edge) { stroke: var(--ui-text-dimmed); stroke-width: 1.6; }
 :deep(.workflow-edge.is-loop) { stroke: #c99a2e; stroke-dasharray: 6 5; }
+:deep(.vue-flow__edge.selected:has(.workflow-edge.is-under)) { cursor: ns-resize; }
 :deep(.workflow-edge.is-selected) { stroke: var(--channel-accent, var(--ui-primary)); stroke-width: 2.2; }
 .workflow-edge-note { position: absolute; display: flex; align-items: center; gap: 4px; padding: 1px 7px; border: 1px solid var(--ui-border-muted); border-radius: 999px;
   background: var(--ui-bg-elevated); color: var(--ui-text-toned); font-size: 11px; line-height: 18px; white-space: nowrap; pointer-events: all; }

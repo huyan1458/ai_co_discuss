@@ -1518,7 +1518,7 @@ function mentioned_members(text, names) {
     .sort((left, right) => right.handle.length - left.handle.length);
   const found = new Set();
   for (const { name, handle } of handles) {
-    const pattern = new RegExp(`(^|[\\s(（，,。；;：:])@${handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "gu");
+    const pattern = new RegExp(`(^|[\\s(（，,。；;：:、])@${handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "gu");
     prose = prose.replace(pattern, (match, lead) => { found.add(name); return lead + " ".repeat(match.length - lead.length); });
   }
   return found;
@@ -1527,7 +1527,7 @@ function mentioned_members(text, names) {
 /** Whether plain text (not code or quotes) names a member with @, so a typed mention selects it. */
 function mentioned(text, name) {
   const prose = text.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/^>.*$/gm, "");
-  return new RegExp(`(^|[\\s(（，,。；;：:])@${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "u").test(prose);
+  return new RegExp(`(^|[\\s(（，,。；;：:、])@${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "u").test(prose);
 }
 
 /** Clear this room's text, project and roster, then restore the user's last reusable choices. */
@@ -4539,9 +4539,11 @@ function launch_model_state(name, launch = state.launch, profile = launch.profil
   const items = [{ label: defaults.model ? t('软件默认 · {value1}', { value1: defaults.model }) : t('软件默认模型'), value: "__default__" }, ...models.map(model => ({ label: model.id, value: model.id }))];
   if (profile.model && !selected) items.push({ label: profile.model, value: profile.model, disabled: true });
   const loading = Boolean(catalog?.loading && !models.length);
+  // "Software default" offers the levels of the model the software's own settings name, when the list has it.
+  const effective = selected || (!profile.model && models.find(model => model.id === defaults.model));
   return { supported: MODEL_CLIENTS.includes(profile.adapter), items, defaults, loading, refreshing: Boolean(catalog?.loading),
-    efforts: selected?.efforts, source: MODEL_SOURCE_LABELS[catalog?.source] || catalog?.source || "",
-    effort_note: !selected
+    efforts: effective?.efforts, source: MODEL_SOURCE_LABELS[catalog?.source] || catalog?.source || "",
+    effort_note: !effective
       ? t('选择模型后显示可用思考强度；默认值由软件决定。') : t('所选模型不提供单独思考强度。'),
     error: catalog?.error || (!launch.available ? t('连接本机服务后读取模型列表') : !catalog ? t('尚未读取此软件的模型列表') : "") };
 }

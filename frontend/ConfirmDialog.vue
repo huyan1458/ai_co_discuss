@@ -20,7 +20,7 @@ function confirm() {
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="title" :description="description" :ui="{ content: 'glass-panel studio-modal channel-folder-modal channel-manage-modal', body: 'dialog-body' }">
+  <UModal v-model:open="open" :title="title" :description="description" :content="{ onInteractOutside: (event) => event.preventDefault() }" :ui="{ content: 'glass-panel studio-modal channel-folder-modal channel-manage-modal', body: 'dialog-body' }">
     <template #body>
       <ul v-if="items.length" class="confirm-dialog-items">
         <li v-for="item in items" :key="item">{{ item }}</li>

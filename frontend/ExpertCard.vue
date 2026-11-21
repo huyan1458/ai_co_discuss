@@ -49,7 +49,9 @@ const emit = defineEmits(["remove", "mode", "host"]);
 const { view, bridge } = inject("discussion");
 // Feel.words("smooth, crisp"): 2.615 Hz reads as a deliberate turn; ζ .96 avoids bounce.
 // Unit mass: this is a button-controlled angular spring, with no drag-weight effect.
-const FLIP_SPRING = { mass: 1, stiffness: 270.0323764138049, damping: 31.550710806760762 };
+// Settle within 1° and below 30°/s: the default 0.5°, 2°/s tail keeps text in a 3D layer for ~0.45s
+// after the turn looks done, so it shimmers and then jumps a pixel when the card goes flat.
+const FLIP_SPRING = { mass: 1, stiffness: 270.0323764138049, damping: 31.550710806760762, restDelta: 1, restSpeed: 30 };
 const BACK_ANGLE = 180;
 const angle = useSpring(0, FLIP_SPRING);
 const card = ref(null), front_button = ref(null), back_button = ref(null);

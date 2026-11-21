@@ -474,7 +474,7 @@ function resize_nav_by_key(event) {
             </button>
             <form v-if="!middle_page && view.tab === 'discussion'" class="channel-search" @submit.prevent="act('filter', { query: search })">
               <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" :placeholder="t('搜索消息')" :aria-label="t('搜索讨论记录')" :disabled="!room" class="channel-search-input">
-                <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="t('清除搜索')" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" :aria-label="t('搜索')" :disabled="!room" /></template>
+                <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="channel-search-clear" :aria-label="t('清除搜索')" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" :aria-label="t('搜索')" :disabled="!room" /></template>
               </UInput>
             </form>
             <UDropdownMenu v-if="!middle_page && view.tab === 'discussion'" :items="source_filter_items" :disabled="!room" :content="source_filter_content" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" :aria-label="t('筛选消息与卡片')" :title="t('筛选消息与卡片')" :disabled="!room" /></UDropdownMenu>
