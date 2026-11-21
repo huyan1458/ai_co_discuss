@@ -53,10 +53,10 @@ Shutdown and sleep interrupt local execution. During an internet outage, the loc
 
 - **A member does not respond or keeps waiting.** Run `codiscuss local status`. If other work is in progress, look for the new message in the queue above the composer. For a stuck room, run `codiscuss room events <ROOM_ID>` to see what happened.
 - **Delivery failed.** Read the original cause on the failure card. If sign-in has expired, sign in again in the AI tool or under **Account → CLI sign-ins** in the admin panel, then choose **Retry now**. Delivery can retry automatically up to three times.
-- **Quota exhausted.** Wait for the quota to reset, switch the member's model under **Room → Members and settings** in the left sidebar, or reassign the work.
+- **Quota exhausted.** Wait for the quota to reset, switch the member's model under **Room → Members and settings** in the tabs at the top of the room, or reassign the work.
 - **Output limit or context compression failure.** For an output limit, ask for a shorter answer or split the task. For a compression failure, shorten the input. The next run starts a fresh session.
 - **Provider policy refusal.** Review the content and the provider's requirements before trying again. Policy refusals and compression failures do not trigger automatic retries.
-- **Codex reports that the session is in use.** Codex App may already have the conversation open. Switch the connection to Codex App in the right sidebar or under **Room → Members and settings** in the left sidebar, or use a fresh session.
+- **Codex reports that the session is in use.** Codex App may already have the conversation open. Switch the connection to Codex App in the right sidebar or under **Room → Members and settings** in the tabs at the top of the room, or use a fresh session.
 - **A run has an unknown outcome after restart.** If the original process has exited, the service checks the records. It collects an eligible answer when it can confirm normal completion. If you see **Unable to confirm the previous run outcome after restart**, check the original conversation before retrying.
 - **Windows reports two data directories.** Manage the service from a regular terminal, or set `DISCUSS_SERVICE_HOME` explicitly so both processes use the same directory.
 
@@ -70,8 +70,11 @@ Shutdown and sleep interrupt local execution. During an internet outage, the loc
 | Appearance | Channel, Channel · Light | Choose a theme. Changes take effect immediately. |
 | Language · 语言 | 简体中文, English | Choose the display language. Changes take effect immediately. |
 | Conversation width | Narrow, Default, Wide | Set the width of the conversation for reading. |
+| Card text size | Small, Medium, Large | Text size inside message cards. Medium is the default; the choice applies to this device only. |
 | Visual effects | Full, Compact | Compact turns off background blur and layered shadows for smoother scrolling on slower devices. |
 | Folding long answers | Relaxed, Standard, Eager | How long an answer must be before it folds, and how much stays visible, measured against the screen height. Relaxed is the default; the choice applies to this device only. |
 | Room preferences → Host's project access | Read-only, Can write, Automatic, Full access | The project access the first member added to a new room (the host by default) starts with; Read-only by default. If its software doesn't support the chosen level, it stays read-only. Saved in the local service, kept across updates; needs the local service connected. |
 | Speech | Text-to-speech service, General voice, voices by platform and for files, Speed, Tone, Voice input, Local process | [Local and cloud speech](voice.md#read-aloud-and-voice-input-local-and-cloud-options) |
 | WeChat notifications | Scan to link, Send test, Unlink | [WeChat notifications](voice.md#wechat-notifications) |
+
+The site controls animations for work status, member card flips, and opening, minimizing, or switching the layout of the file preview window. Your system's reduced-motion setting does not change these animations. The hosted sign-in page always plays its brand animation.

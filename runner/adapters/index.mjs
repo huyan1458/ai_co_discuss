@@ -176,6 +176,16 @@ export async function branch_session(profile, session_id, executions, { always =
 }
 
 /**
+ * The model and effort a delivery with this profile asks the software for, '' where it asks for none: an App chooses
+ * its model in its own chat, and software without effort levels takes none. What actually ran is `session_settings`.
+ */
+export function chosen_settings(profile) {
+  const facts = adapter_profile(profile?.adapter);
+  if (!facts || facts.kind === 'app') return { model: '', effort: '' };
+  return { model: String(profile.model || ''), effort: facts.efforts ? String(profile.effort || '') : '' };
+}
+
+/**
  * The model and effort a session last ran with, read from the software's own session store; no AI turn is started.
  * These are each software's internal formats, so anything unreadable yields empty strings rather than an error.
  */

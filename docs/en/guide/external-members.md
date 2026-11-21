@@ -37,7 +37,7 @@ Invite an AI running on another computer to your room. It can read the project f
 
 - **Renew from the lending computer:** Change the loan duration in the external room’s right sidebar. The new duration starts when saved and can also shorten the loan. After natural expiry, select **Renew**, choose a duration, and select **Save** to rejoin. A loan revoked by the room owner cannot be renewed.
 - **Pause or leave from the lending computer:** In the external room’s right sidebar, select **Pause** or **Resume**. Use the room menu to **Leave room**. After the room ends, **Delete record** removes it from the local list. Paired phones and tablets can also change these settings.
-- **Inspect access and revoke from the room owner’s computer:** In the right sidebar, open the member menu and select **Read log and access**. The same controls appear on the external expert card under **Room → Members and settings** in the left sidebar. Review the files it read, narrow access to **Messages only**, or select **Revoke** to end access. For a seat still awaiting check-in, select “Remove seat”.
+- **Inspect access and revoke from the room owner’s computer:** In the right sidebar, open the member menu and select **Read log and access**. The same controls appear on the external expert card under **Room → Members and settings** in the tabs at the top of the room. Review the files it read, narrow access to **Messages only**, or select **Revoke** to end access. For a seat still awaiting check-in, select “Remove seat”.
 - **Invite again:** Ended members appear dimmed below the active list with a reason. If the invitee left or you revoked access, select **Invite back** to make a new link. The member name and history remain.
 
 ## What the other computer can and cannot read

@@ -31,7 +31,6 @@ async function write(fields) {
     const preset = providers[next.provider];
     next.model = preset?.models[0] || "";
     next.api_key_ref = preset ? view.value.launch.api_keys?.[preset.base_url] || "" : "";
-    next.mode ||= view.value.launch.scheduler_default_mode || "";
   }
   if (next.enabled && !(next.provider && next.model && next.api_key_ref)) { room_draft.value = next; return; }
   room_draft.value = next;
@@ -77,7 +76,7 @@ function cancel_settings() {
   // A room puts back what it had saved, or drops a choice that was never saved.
   room_draft.value = null;
   const now = room_saved.value;
-  if (["enabled", "provider", "model", "mode"].some((field) => (before[field] || "") !== (now[field] || ""))) {
+  if (["enabled", "provider", "model"].some((field) => (before[field] || "") !== (now[field] || ""))) {
     const complete = before.enabled && before.provider && before.model && before.api_key_ref;
     bridge.set_room_scheduler(complete ? before : null).catch((failure) => bridge.notify("error", failure.message));
   }
@@ -101,10 +100,10 @@ async function toggle(enabled) {
   await write({ enabled });
   if (enabled && status.value.tone !== "ready") open_settings();
 }
-// The compact row's one line: provider, model and judging style, or what is still missing; off, the providers to pick from.
+// The compact row's one line: provider and model, or what is still missing; off, the providers to pick from.
 const summary = computed(() => !active.value ? [t('未开启'), providers.value.map((item) => item.label).join("、")].filter(Boolean).join(t(' · 可用 '))
   : status.value.tone !== "ready" ? `${provider_label.value} · ${status.value.text}`
-  : [provider_label.value, scheduler.value.model, view.value.launch.scheduler_modes?.[mode.value]].filter(Boolean).join(" · "));
+  : [provider_label.value, scheduler.value.model].filter(Boolean).join(" · "));
 const provider_label = computed(() => providers.value.find((item) => item.value === scheduler.value.provider)?.label || t('未选择'));
 const status = computed(() => !scheduler.value.model ? { tone: "warn", text: t('未选模型') } : !scheduler.value.api_key_ref ? { tone: "warn", text: t('缺少密钥') } : { tone: "ready", text: t('已配置') });
 // A key saved earlier is never sent back to the page, so only a masked mark stands in for it.
@@ -123,10 +122,6 @@ async function check_config() {
   try { await bridge.check_scheduler(scheduler.value); check.value = { state: "ok" }; bridge.notify("info", t('检查通过：决策模型已响应')); }
   catch (failure) { check.value = { state: "error" }; bridge.notify("error", failure.message); }
 }
-// How the routing question is worded: the experimental guided wording is the default while it is being refined.
-const modes = computed(() => Object.entries(view.value.launch.scheduler_modes || {}).map(([value, label]) => ({ value, label })));
-const mode = computed(() => scheduler.value.mode || view.value.launch.scheduler_default_mode || "");
-const MODE_HINTS = { guided: t('试验：说明目的与依据，由模型权衡；正在打磨，可能判错'), stable: t('稳定：按固定顺序逐条核对，已通过回归评测') };
 const description = computed(() => props.free
   ? t('接入决策模型，推荐更适合回答的成员，由你一键采纳。')
   : t('接入决策模型，自动安排插话回应与下一轮发言。'));
@@ -199,13 +194,6 @@ async function save_key() {
     </div>
     </div>
     </div>
-    <div v-if="active && free && modes.length > 1 && (!compact || editing)" class="scheduler-mode">
-      <span>{{ t('判断方式') }}</span>
-      <div class="expert-card-modes" role="radiogroup" :aria-label="t('智能调度判断方式')">
-        <button v-for="option in modes" :key="option.value" type="button" role="radio" :title="MODE_HINTS[option.value]"
-          :aria-checked="mode === option.value" @click="write({ mode: option.value })">{{ option.label }}</button>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -264,9 +252,6 @@ async function save_key() {
 .scheduler-heading strong { color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; }
 .scheduler-heading strong > span { margin-left: 6px; color: var(--ui-text-muted); font-size: 10px; font-weight: 400; }
 .scheduler-field { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
-.scheduler-mode { display: flex; align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
-.scheduler-mode > span { flex: none; white-space: nowrap; }
-.scheduler-mode > .expert-card-modes { width: 220px; max-width: 100%; }
 .scheduler-note { margin: 0; color: var(--ui-text-muted); font-size: 10px; line-height: 1.5; }
 .scheduler-settings :deep(.scheduler-key-masked) { -webkit-text-security: disc; }
 .scheduler-title { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 500; }

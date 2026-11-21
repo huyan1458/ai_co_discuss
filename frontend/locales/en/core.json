@@ -5,7 +5,6 @@
   "未登录 · 点击登录": "Signed out · Click to sign in",
   "房间导航": "Room navigation",
   "共议": "CoDiscuss",
-  "频道工具": "Channel tools",
   "房间视图": "Room views",
   "工作流": "Workflows",
   "新建或导入工作流": "New or import workflow",
@@ -350,7 +349,6 @@
   "消息原文": "Original message",
   "重命名房间": "Rename room",
   "删除房间": "Delete room",
-  "管理员账号与界面外观。": "Admin account and appearance.",
   "邀请 AI 一起协作；需要深入讨论时，可在创建时或之后随时开启。": "Invite AI to work together; start a discussion now or any time later when you need to go deeper.",
   "维护话题目标、背景与讨论默认上限。": "Maintain the topic's goal, background and default discussion limits.",
   "保留作者、来源、提交人和引用关系。": "Keeps author, source, submitter and reply links.",
@@ -477,5 +475,14 @@
   "标准": "Standard",
   "紧凑": "Eager",
   "长回答折叠": "Folding long answers",
-  "宽松：超过 1.2 屏才折叠，折后保留半屏；标准：超过 0.7 屏折叠；紧凑：超过半屏就折叠，只留开头。按当前屏幕高度计算，只对本设备生效。": "Relaxed folds answers taller than 1.2 screens and keeps half a screen; Standard folds past 0.7 of a screen; Eager folds past half a screen and keeps only the opening. Measured against this screen's height, and saved on this device only."
+  "卡片文字大小": "Card text size",
+  "小": "Small",
+  "中": "Medium",
+  "大": "Large",
+  "调整消息卡片里正文的字号，只对本设备生效。": "Sets the text size inside message cards. Saved on this device only.",
+  "宽松：超过 1.2 屏才折叠，折后保留半屏；标准：超过 0.7 屏折叠；紧凑：超过半屏就折叠，只留开头。按当前屏幕高度计算，只对本设备生效。": "Relaxed folds answers taller than 1.2 screens and keeps half a screen; Standard folds past 0.7 of a screen; Eager folds past half a screen and keeps only the opening. Measured against this screen's height, and saved on this device only.",
+  "关联房间互传上限": "Linked-room message limit",
+  "关联房间互传条数": "Messages between linked rooms",
+  "条": "messages",
+  "主持人新建的房间与原房间之间，两边主持人从你上次发言起最多互传几条消息；对本机所有关联房间生效。": "How many messages the hosts of a room and the rooms its host created may pass each other after your last message; applies to every linked room on this computer."
 }

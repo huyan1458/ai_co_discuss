@@ -89,7 +89,7 @@ TIMELINE_SQL = f"""SELECT x.*,(SELECT COALESCE(NULLIF(s.text,''),substr(a.text,1
         (SELECT substr(q.text,1,160) FROM messages q WHERE q.id=(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=e.id)) AS task,
         (SELECT MAX(r.answer_id) FROM member_requests r WHERE r.execution_id=e.id) AS answer_id,
         (SELECT n.text FROM execution_notes n WHERE n.execution_id=e.id ORDER BY n.seq DESC LIMIT 1) AS last_note,
-        CASE WHEN e.changes='' THEN NULL ELSE json_array_length(e.changes) END AS changes
+        CASE WHEN e.changes='' THEN NULL ELSE json_array_length(e.changes) END AS changes,e.model,e.effort
     FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.id IN ({TIMELINE_FREE_IDS})) x"""
 TIMELINE_SEGMENTS_SQL = f"""SELECT source,execution_id,phase,tool,start_ms,end_ms FROM execution_segments WHERE room_id=?1
     AND source='free' AND execution_id IN ({TIMELINE_FREE_IDS}) ORDER BY source,execution_id,seq"""
@@ -155,7 +155,9 @@ SESSION_MODES = ("new", "borrowed")
 FREE_OPERATIONS = ("messages", "attachments", "move", "folder", "rename", "archive", "restore", "delete")
 MEMBER_FIELDS = ("id", "name", "adapter", "role", "status", "access", "session_mode", "read_until")
 EXECUTION_FIELDS = ("id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result",
-                    "activity", "activity_at", "paused_at")
+                    "activity", "activity_at", "paused_at", "model", "effort")
+# Longest model ID or effort name an execution keeps; longer reports are cut.
+MAX_MODEL_LENGTH = 100
 # What the runner found when a voided execution's software was to stop; '' until it reports.
 STOP_RESULTS = ("stopped", "unstoppable", "unconfirmed")
 # How long a member voided where the runner could not stop it gets no new delivery unless its late answer shows the turn ended.
@@ -192,7 +194,8 @@ LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "s
                  "member_executions": {"changes": "TEXT NOT NULL DEFAULT ''", "edited": "TEXT NOT NULL DEFAULT ''", "cwd": "TEXT NOT NULL DEFAULT ''",
                                        "diffs": "TEXT NOT NULL DEFAULT ''", "changes_provisional": "INTEGER NOT NULL DEFAULT 0",
                                        "activity": "TEXT NOT NULL DEFAULT ''", "activity_at": "INTEGER NOT NULL DEFAULT 0",
-                                       "paused_at": "INTEGER NOT NULL DEFAULT 0"},
+                                       "paused_at": "INTEGER NOT NULL DEFAULT 0", "model": "TEXT NOT NULL DEFAULT ''",
+                                       "effort": "TEXT NOT NULL DEFAULT ''"},
                  "member_requests": {"chain_id": "INTEGER NOT NULL DEFAULT 0", "batch_id": "INTEGER NOT NULL DEFAULT 0",
                                      "purpose": "TEXT NOT NULL DEFAULT 'ask'", "created_by": "TEXT NOT NULL DEFAULT 'user'"},
                  "free_chain_holds": {"asked_rounds": "INTEGER NOT NULL DEFAULT 0", "asked_reason": "TEXT NOT NULL DEFAULT ''"},
@@ -1489,9 +1492,9 @@ def keep_working(connection, room_id, host, message_id, chain_id, execution_id):
     hanging on it, carries the same software turn on, so that work shows as its own card under the dispatch."""
     now = int(time.time())
     previous = connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone()
-    next_id = connection.execute("""INSERT INTO member_executions (room_id,member_id,client_id,session_id,lease_until,created_at,cwd)
-        VALUES (?,?,?,?,?,?,?)""", (room_id, host["id"], f"keep-working-{execution_id}", previous["session_id"],
-                                    now + LEASE_SECONDS, now, previous["cwd"])).lastrowid
+    next_id = connection.execute("""INSERT INTO member_executions (room_id,member_id,client_id,session_id,lease_until,created_at,cwd,model,effort)
+        VALUES (?,?,?,?,?,?,?,?,?)""", (room_id, host["id"], f"keep-working-{execution_id}", previous["session_id"],
+                                        now + LEASE_SECONDS, now, previous["cwd"], previous["model"], previous["effort"])).lastrowid
     connection.execute("""INSERT INTO execution_capabilities (execution_id,room_id,stoppable,progress,steer,resume)
         SELECT ?,room_id,stoppable,progress,steer,resume FROM execution_capabilities WHERE execution_id=?""", (next_id, execution_id))
     insert_request(connection, room_id, host["id"], message_id, chain_id, "keep_working", "host")
@@ -2624,10 +2627,10 @@ def line_of(connection, request, positions=None):
             return {"kind": "main", "step": order.index(request["member_id"]) + 1, "by": "user"}
     if connection.execute("SELECT 1 FROM session_requests WHERE member_request_id=?", (request["id"],)).fetchone():
         return None
-    # The host asked directly is a side question, not a branch; a room that never had a speaking order has no main line
-    # for anything to branch off.
-    if connection.execute("SELECT 1 FROM room_members WHERE id=? AND role='host'", (request["member_id"],)).fetchone() or not (
-            positions or connection.execute("SELECT 1 FROM free_queue WHERE room_id=? LIMIT 1", (request["room_id"],)).fetchone()):
+    # The host asked directly is a side question, not a branch. A member named directly works beside whatever the host
+    # and the others do, relay or not (user 2026-11-21, #6512); only a room of a single member has nothing to branch off.
+    if connection.execute("SELECT 1 FROM room_members WHERE id=? AND role='host'", (request["member_id"],)).fetchone() or \
+            connection.execute("SELECT COUNT(*) FROM room_members WHERE room_id=? AND status<>'removed'", (request["room_id"],)).fetchone()[0] < 2:
         return None
     return {"kind": "branch", "by": request["created_by"]}
 
@@ -3619,6 +3622,15 @@ def execution_action(connection, room_id, execution_id, token, payload, member=N
         changes = changed_files(payload)
         connection.execute("UPDATE member_executions SET changes=?,edited=?,diffs=?,changes_provisional=? WHERE id=?",
                            (json.dumps(changes, ensure_ascii=False), edited_files(payload, changes), file_diffs(payload, changes), int(provisional), execution_id))
+    elif action == "model":
+        # What the runner's adapter says this execution ran with: the chosen model on delivery, then the session log's
+        # after it ends, so a finished execution may still report. An empty field keeps what was reported before.
+        values = {field: payload.get(field, "") for field in ("model", "effort")}
+        if any(not isinstance(value, str) for value in values.values()):
+            raise ValueError(Text("model 与 effort 须为字符串"))
+        for field, value in values.items():
+            if value.strip():
+                connection.execute(f"UPDATE member_executions SET {field}=? WHERE id=?", (value.strip()[:MAX_MODEL_LENGTH], execution_id))
     elif action == "denials":
         # Like file changes, read from the software's output once its process ends; recorded once.
         saved = connection.execute("INSERT OR IGNORE INTO execution_denials (execution_id,room_id,denials) VALUES (?,?,?)",
@@ -4094,6 +4106,84 @@ def adopt_manual_member(connection, room_id, member, payload):
     if payload.get("token") is not None:
         require_fresh_member_token(connection, room_id, payload["token"])
         connection.execute("UPDATE room_members SET token_hash=? WHERE id=?", (token_hash(payload["token"]), member["id"]))
+
+
+ROOM_LINK_RELATIONS = ("child", "parent")
+ROOM_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def linked_room_values(connection, room_id, other, host):
+    """Check another room on this site and the host's display name a cross-room record names; returns the trimmed host."""
+    if not isinstance(other, str) or not ROOM_ID_PATTERN.fullmatch(other) or other == room_id \
+            or not connection.execute("SELECT 1 FROM rooms WHERE id=?", (other,)).fetchone():
+        raise ValueError(Text("关联的房间不存在"))
+    if not isinstance(host, str) or not 0 < len(host.strip()) <= MODEL_TEXT_LIMIT:
+        raise ValueError(Text("host 须为 1–100 字的主持人名称"))
+    return host.strip()
+
+
+def record_room_link(connection, room_id, token, payload):
+    """Leave a card naming a room this room's host created (`child`) or the room whose host created this one (`parent`).
+
+    The runner writes one on each side with each room's owner credential after `host-control create-room`; nobody is
+    woken. A retry for the same pair returns the card already there.
+    """
+    require_owner(connection, room_id, token)
+    relation = payload.get("relation")
+    if relation not in ROOM_LINK_RELATIONS:
+        raise ValueError(Text("relation 须为 child 或 parent"))
+    host = linked_room_values(connection, room_id, payload.get("room_id"), payload.get("host"))
+    begin_write(connection)
+    existing = connection.execute("SELECT message_id FROM room_links WHERE room_id=? AND other_room_id=?", (room_id, payload["room_id"])).fetchone()
+    if existing:
+        return {"message_id": existing[0], "duplicate": True}
+    title = connection.execute("SELECT title FROM rooms WHERE id=?", (payload["room_id"],)).fetchone()[0]
+    text = (Text("主持人 {host} 新建了房间「{title}」。", host=host, title=title) if relation == "child"
+            else Text("本房间由房间「{title}」的主持人 {host} 新建。", host=host, title=title))
+    message_id = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?,?,?,?,?,?)",
+                                    (room_id, NOTICE_AUTHOR, text, "room_link", f"room-link-{payload['room_id']}",
+                                     time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))).lastrowid
+    save_text(connection, "message", message_id, "text", text)
+    connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)", (message_id, "notice", NOTICE_AUTHOR))
+    connection.execute("INSERT INTO room_links (message_id,room_id,other_room_id,relation,host) VALUES (?,?,?,?,?)",
+                       (message_id, room_id, payload["room_id"], relation, host))
+    return {"message_id": message_id, "duplicate": False}
+
+
+# The largest limit a relay may carry on how many messages two linked rooms' hosts pass each other (0 is unlimited).
+MAX_RELAY_LIMIT = 100
+
+
+def check_relay(connection, room_id, relay):
+    """Check a message another room's host sends here: the rooms are linked, and the hosts have not passed the limit.
+
+    `relay.limit` is the owner's limit the runner reads from this computer's preferences (0 or absent: unlimited, user
+    2026-11-21). It counts both directions since the owner's own last message in either room; past it the write is a 409
+    until the owner speaks. Returns the trimmed host name.
+    """
+    if not isinstance(relay, dict):
+        raise ValueError(Text("relay 须为含 room_id 与 host 的对象"))
+    host = linked_room_values(connection, room_id, relay.get("room_id"), relay.get("host"))
+    source, limit = relay["room_id"], relay.get("limit", 0)
+    if type(limit) is not int or not 0 <= limit <= MAX_RELAY_LIMIT:
+        raise ValueError(Text("relay.limit 须为 0–100 的整数，0 表示不限"))
+    if not connection.execute("SELECT 1 FROM room_links WHERE room_id=? AND other_room_id=?", (room_id, source)).fetchone():
+        raise PermissionError(Text("只有互相关联的房间之间才能代主持人发言"))
+    if not limit:
+        return host
+    spoke = connection.execute("""SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE m.room_id IN (?,?) AND m.author='用户'
+        AND NOT EXISTS (SELECT 1 FROM message_relays r WHERE r.message_id=m.id)""", (room_id, source)).fetchone()[0]
+    passed = connection.execute("""SELECT COUNT(*) FROM message_relays r JOIN messages m ON m.id=r.message_id WHERE m.id>?
+        AND ((m.room_id=? AND r.source_room_id=?) OR (m.room_id=? AND r.source_room_id=?))""", (spoke, room_id, source, source, room_id)).fetchone()[0]
+    if passed >= limit:
+        raise FileExistsError(Text("两个房间的主持人自用户上次发言后已互传 {count} 条消息，达到上限；请等用户在任一房间发言后再继续", count=passed))
+    return host
+
+
+def save_message_relay(connection, room_id, message_id, relay):
+    """Label an owner-credential message the host of another room sent: `relay = {room_id, host}`."""
+    host = check_relay(connection, room_id, relay)
+    connection.execute("INSERT INTO message_relays (message_id,source_room_id,host) VALUES (?,?,?)", (message_id, relay["room_id"], host))
 
 
 def record_model_change(connection, room_id, member, payload):

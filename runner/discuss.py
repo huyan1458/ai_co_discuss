@@ -69,6 +69,8 @@ ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "create
 # A posted message echoes only what proves where it landed; the full text stays one `message view` away.
 RECEIPT_FIELDS = ("id", "author", "kind", "execution_id", "request_message_id", "reply_to", "submission_id",
                   "created_at", "summary", "proactive")
+# Shown with every post receipt: members otherwise repeat the whole answer in their own window, paying for it twice.
+RECEIPT_NOTE = "正文已送达房间。在当前会话只回一句（如“已提交 #编号”），不要复述正文。"
 # Arguments a task credential binds; `schema` reports them as required only when no bound credential is used.
 CREDENTIAL_FIELDS = {"room": "room", "actor": "member", "execution": "execution_id"}
 EXIT_CODES = {"0": "成功", "1": "HTTP/API 错误", "2": "参数或输入错误",
@@ -1457,12 +1459,13 @@ def project_result(value, plan, site):
         return inline_attachments(value)
     if plan.view == "message_receipt" and isinstance(value.get("receipt"), dict):
         # The service's own receipt, the same one API members get (spec #3262 item 4).
-        return {**{key: item for key, item in value.items() if key not in ("message", "receipt")}, "message": value["receipt"]}
+        return {**{key: item for key, item in value.items() if key not in ("message", "receipt")},
+                "message": value["receipt"], "note": RECEIPT_NOTE}
     if plan.view == "message_receipt" and isinstance(value.get("message"), dict):
         message = value["message"]
         receipt = {**select_fields(message, RECEIPT_FIELDS), "text_chars": len(message.get("text") or ""),
                    "attachments": len(message.get("attachments") or [])}
-        return {**{key: item for key, item in value.items() if key != "message"}, "message": receipt}
+        return {**{key: item for key, item in value.items() if key != "message"}, "message": receipt, "note": RECEIPT_NOTE}
     return value
 
 

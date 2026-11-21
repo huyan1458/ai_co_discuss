@@ -66,15 +66,14 @@ onBeforeUnmount(() => clearTimeout(beat_timer));
 .working-chars span { white-space: pre; }
 .working-dots { margin-left: 1px; }
 .working-dots i { font-style: normal; opacity: 0; }
-/* Working-state motion always plays, regardless of the system reduced-motion setting. */
 /* Chinese labels are only a few characters long, so each one lags well behind the last for the wave to show. */
 html[data-theme^="channel"] .working-text:not(.is-muted) .working-chars span {
-  animation: working-wave 1.6s ease-in-out calc(var(--working-phase) + var(--i) * .18s) infinite !important;
+  animation: working-wave 1.6s ease-in-out calc(var(--working-phase) + var(--i) * .18s) infinite;
 }
 html[data-theme^="channel"] .working-dots i {
-  animation: working-dot 1.6s ease-in-out calc(var(--working-phase) + var(--i) * .3s) infinite !important;
+  animation: working-dot 1.6s ease-in-out calc(var(--working-phase) + var(--i) * .3s) infinite;
 }
-html[data-theme^="channel"] .working-text.is-beat { animation: working-beat .9s ease-out !important; }
+html[data-theme^="channel"] .working-text.is-beat { animation: working-beat .9s ease-out; }
 @keyframes working-wave { 0%, 100% { opacity: var(--wave-low, .4); } 50% { opacity: 1; } }
 @keyframes working-dot { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
 @keyframes working-beat { from { color: var(--channel-accent, var(--ui-text-highlighted)); } }

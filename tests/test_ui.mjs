@@ -10,6 +10,7 @@ import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { slash_insertion } from "../runner/slash_names.mjs";
 import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
 import { t } from "../frontend/i18n.js";
+import { ATTACHMENT_TEXT_LIMIT, create_inline_html_preview, read_attachment } from "../frontend/file-preview.js";
 import { declined, external_of, external_tag, invited_items, remaining_label, take_join_fragment } from "../frontend/external-members.js";
 
 // Sliced component code calls t() for interface text; every sandbox gets the translator (Chinese here).
@@ -319,10 +320,96 @@ test("attachment retries retain files and reuse both upload and message receipts
   assert.equal(posts[1][1].submission_id, first_id);
   assert.equal(posts[1][1].text, "[图片 #1]", "a files-only message carries the placeholder the file put in the text");
   assert.deepEqual(Array.from(state.messages, message => message.id), [1], "the saved message shows before the room is read again");
-  assert.equal(state.sending_preview, null, "the retry replaces the failed card with the saved message");
+  assert.equal(context.room_sending_previews().length, 0, "the retry replaces the failed card with the saved message");
   assert.equal(state.failed_sends.length, 0);
   assert.equal(state.attachment_drafts.length, 0);
   assert.deepEqual(fixture.revoked, ["blob:test"]);
+});
+
+test("consecutive sends survive a room switch and retry in order without changing the next draft", async () => {
+  const { context, state, element, notified } = attachment_fixture();
+  const room = { ...state.room, title: "原房间" };
+  state.room = room;
+  const saved_notices = [];
+  context.show_toast = message => saved_notices.push(message);
+  const started = Promise.withResolvers(), reply = Promise.withResolvers(), requests = [];
+  context.request_json = async (path, payload) => {
+    requests.push({ path, text: payload.text, id: payload.submission_id });
+    if (requests.length === 1) { started.resolve(); return reply.promise; }
+    if (requests.length === 2) throw new Error("拒绝");
+    return { message: { id: requests.length } };
+  };
+  const send = text => {
+    element("message-input").value = text;
+    return context.send_message({ preventDefault() {} });
+  };
+  const first = send("甲"), second = send("甲");
+  await started.promise;
+  assert.deepEqual(Array.from(context.room_sending_previews(), card => card.text), ["甲", "甲"]);
+  assert.equal(requests.length, 1);
+  state.room = { id: "two" };
+  assert.equal(context.room_sending_previews().length, 0);
+  const third = send("乙");
+  reply.reject(new TypeError("Failed to fetch"));
+  await assert.rejects(first, /拒绝/);
+  await Promise.all([second, third]);
+  assert.deepEqual(requests.map(item => item.path), ["/api/rooms/one/messages", "/api/rooms/one/messages", "/api/rooms/one/messages", "/api/rooms/two/messages"]);
+  assert.equal(requests[0].id, requests[1].id);
+  assert.notEqual(requests[0].id, requests[2].id);
+  assert.match(notified[0][1], /原房间/);
+  assert.match(saved_notices[0], /原房间.*#3/);
+  assert.equal(state.failed_sends[0].room_id, room.id);
+  state.room = room;
+  const fourth = send("丙");
+  element("message-input").value = "草稿";
+  const retry = context.retry_sending(state.failed_sends[0].id);
+  assert.deepEqual(Array.from(context.room_sending_previews(), card => card.text), ["丙", "甲"]);
+  await Promise.all([fourth, retry]);
+  assert.equal(requests.at(-1).id, requests[0].id);
+  assert.equal(element("message-input").value, "草稿");
+  assert.equal(state.failed_sends.length, 0);
+});
+
+test("a busy room previews consecutive sends in the queue and reconciles push and POST receipts", async () => {
+  const { context, state, element } = attachment_fixture();
+  const queue = { busy: true, items: [] };
+  state.room.free = { queued_messages: queue };
+  const first_reply = Promise.withResolvers(), second_reply = Promise.withResolvers();
+  const first_started = Promise.withResolvers(), second_started = Promise.withResolvers();
+  context.request_json = async (_url, data) => {
+    if (data.text === "甲") { first_started.resolve(); return first_reply.promise; }
+    second_started.resolve();
+    return second_reply.promise;
+  };
+  const send = text => {
+    element("message-input").value = text;
+    return context.send_message({ preventDefault() {} });
+  };
+  const previews = () => Array.from(context.room_queueing_previews(), card => card.text);
+  const first = send("甲"), second = send("乙");
+  assert.deepEqual(previews(), ["甲", "乙"]);
+  assert.equal(context.room_sending_previews().length, 0);
+  await first_started.promise;
+  queue.items.push({ id: 7 });
+  assert.deepEqual(previews(), ["乙"]);
+  first_reply.resolve({ queued: true, queue });
+  await first;
+  await second_started.promise;
+  assert.deepEqual(previews(), ["乙"]);
+  const refreshing = Promise.withResolvers(), refresh_started = Promise.withResolvers();
+  context.refresh_room = () => { refresh_started.resolve(); return refreshing.promise; };
+  second_reply.resolve({ message: { id: 8 } });
+  await refresh_started.promise;
+  assert.deepEqual(previews(), []);
+  assert.equal(context.room_sending_previews()[0].saved_id, 8);
+  const third_started = Promise.withResolvers();
+  context.request_json = async () => { third_started.resolve(); return { queued: true, queue }; };
+  const third = send("丙");
+  await third_started.promise;
+  await third;
+  refreshing.resolve();
+  await second;
+  assert.equal(context.room_sending_previews().length, 0);
 });
 
 test("a send the network drops goes again by itself with the same submission before it becomes a failed card", async () => {
@@ -862,12 +949,72 @@ test('attachment button metadata reaches preview without a metadata or relay rea
   context.test_state.remote_rooms = true;
   context.test_state.text_preview = file => opened.push(file);
   context.test_state.image_viewer = file => opened.push(file);
-  for (const [fileName, contentType] of [['table.xlsx', 'application/octet-stream'], ['image.png', 'image/png']]) {
+  for (const [fileName, contentType] of [['table.xlsx', 'application/octet-stream'], ['image.png', 'image/png'], ['moon.html', 'application/octet-stream']]) {
     const opening = context.preview_attachment({ room_id: 'one', id: 'attachment', fileName, contentType, fileSize: '42', createdAt: '2026-11-10' });
     assert.equal(opened.at(-1).file_name, fileName);
     assert.equal(opened.at(-1).size, 42);
     assert.equal(opened.at(-1).created_at, '2026-11-10');
     await opening;
+  }
+});
+
+test("inline HTML reads on demand from the attachment URL and replaces the open preview", async () => {
+  const requests = [];
+  const inline = create_inline_html_preview(async (file) => {
+    requests.push(file.id);
+    return `data:text/html,${encodeURIComponent(`<!doctype html><p>${file.id}</p>`)}`;
+  });
+  assert.equal(inline.preview.value, null);
+  assert.deepEqual(requests, []);
+
+  const first = inline.open({ id: "first" });
+  assert.equal(inline.preview.value.status, "loading");
+  await first;
+  assert.equal(inline.preview.value.status, "ready");
+  assert.match(inline.preview.value.srcdoc, /<p>first<\/p>/);
+
+  await inline.open({ id: "second" });
+  assert.equal(inline.preview.value.id, "second");
+  assert.match(inline.preview.value.srcdoc, /<p>second<\/p>/);
+  assert.deepEqual(requests, ["first", "second"]);
+});
+
+test("HTML above the inline limit keeps a truncated source available for the preview window", async (context) => {
+  const blob = new Blob([new Uint8Array(ATTACHMENT_TEXT_LIMIT + 1).fill(65)]);
+  const url = URL.createObjectURL(blob);
+  context.after(() => URL.revokeObjectURL(url));
+  const requests = [];
+  const inline = create_inline_html_preview(async (file) => { requests.push(file.id); return url; });
+
+  await inline.open({ id: "known-size", size: blob.size });
+  assert.deepEqual(inline.preview.value, { id: "known-size", status: "truncated" });
+  assert.deepEqual(requests, []);
+
+  await inline.open({ id: "actual-size", size: ATTACHMENT_TEXT_LIMIT });
+  assert.deepEqual(inline.preview.value, { id: "actual-size", status: "truncated" });
+  const source = await read_attachment({ url });
+  assert.equal(source.truncated, true);
+  assert.equal(source.text.length, ATTACHMENT_TEXT_LIMIT);
+});
+
+test("closing or replacing an inline preview discards delayed bytes", async (context) => {
+  const reads = new Map();
+  const delayed_url = "https://room.test/delayed";
+  const fetch_attachment = globalThis.fetch;
+  context.mock.method(globalThis, "fetch", (url) => url.startsWith(delayed_url)
+    ? new Promise((resolve) => reads.set(url, resolve))
+    : fetch_attachment(url));
+  const inline = create_inline_html_preview(async ({ id }) => id === "current" ? "data:text/html,current" : `${delayed_url}/${id}`);
+  for (const id of ["closed", "replaced"]) {
+    const pending_read = inline.open({ id });
+    await Promise.resolve();
+    const finish_read = reads.get(`${delayed_url}/${id}`);
+    assert.ok(finish_read, "the attachment fetch is in flight");
+    if (id === "closed") inline.close();
+    else await inline.open({ id: "current" });
+    finish_read(new Response("late"));
+    await pending_read;
+    assert.equal(inline.preview.value?.id ?? null, id === "closed" ? null : "current");
   }
 });
 
@@ -1205,7 +1352,7 @@ function create_preferences_fixture(store) {
   for (const [id, value] of Object.entries(defaults)) f.nodes.set(id, { value, matches: () => true, dispatchEvent() {} });
   f.nodes.set('room-form', { reset() { for (const [id, value] of Object.entries(defaults)) f.nodes.get(id).value = value; } });
   Object.assign(state.launch, { available: true, scheduler_providers: { jev: { base_url: 'https://jev.test', models: ['jev-latest'] } },
-    api_keys: { 'https://jev.test': 'saved-key-ref' }, saved_profiles: { Codex: { adapter: 'codex_cli' } }, scheduler_default_mode: 'guided' });
+    api_keys: { 'https://jev.test': 'saved-key-ref' }, saved_profiles: { Codex: { adapter: 'codex_cli' } } });
   Object.assign(f.context, { Event: class {}, render_launch_settings() {},
     render_expert_inputs: (id, experts) => { roster[id] = experts; }, render_host_options: id => { f.nodes.get(id).value = ''; },
     local_launch_request: async (route, input) => {
@@ -1221,7 +1368,6 @@ test('new-room choices survive cancellation and reload while room text, project 
   await context.reset_create_form();
   assert.equal(state.launch.scheduler.enabled, true, 'first use still offers the configured scheduler');
   context.write_scheduler('enabled', false);
-  context.write_scheduler('mode', 'stable');
   context.write_create_host_workflows(true);
   context.write_named_followup(true);
   context.write_create_chain_rounds(7);
@@ -1244,7 +1390,6 @@ test('new-room choices survive cancellation and reload while room text, project 
   await reloaded.context.reset_create_form();
   assert.equal(reloaded.state.launch.scheduler.enabled, false);
   assert.equal(reloaded.state.launch.scheduler.api_key_ref, 'saved-key-ref');
-  assert.equal(reloaded.state.launch.scheduler.mode, 'stable');
   assert.equal(reloaded.state.create_host_workflows, true);
   assert.equal(reloaded.state.create_chain_rounds, 7);
   assert.equal(reloaded.state.named_followup, true);

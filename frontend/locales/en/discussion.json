@@ -56,7 +56,7 @@
   "项目文件 · {value1}/": "Project files · {value1}/",
   "项目文件": "Project files",
   "需要一位由本机唤醒的 AI 主持人": "Requires a host AI managed by the local service",
-  "需先在电脑上的“成员与设置 → 协作设置”打开“主持人完整权限”": "Enable Full host permissions under Members and settings → Collaboration settings on the computer first",
+  "需先在电脑上的“成员与设置 → 协作设置”勾选主持人权限“工作流”": "Tick the host permission “Workflows” under Members and settings → Collaboration settings on the computer first",
   "工作流": "Workflows",
   "新建 / 修改工作流": "Create / edit workflow",
   "请主持人按 workflow-creator 技能写工作流": "Ask the host to write a workflow using the workflow-creator skill",
@@ -306,5 +306,16 @@
   "换行": "new line",
   "接力在等你回答上方的问题卡；这条消息只发给主持人 {value1}": "The relay is waiting for your answer on the question card above; this message goes only to the host {value1}",
   "接力在等你回答问题卡…": "The relay is waiting for your answer on the question card…",
-  "修改注释 {value1} · {value2}": "Editing note {value1} · {value2}"
+  "修改注释 {value1} · {value2}": "Editing note {value1} · {value2}",
+  "关联房间": "Linked room",
+  "打开房间": "Open room",
+  "该房间已删除": "That room was deleted",
+  "另一房间的主持人经房主凭据在本房间发言；点击打开该房间": "The host of another room spoke here with the owner credential; click to open that room",
+  "来自房间「{room}」的主持人 {host}": "From host {host} of room \"{room}\"",
+  "已删除的房间": "a deleted room",
+  "在消息内展开": "Expand in message",
+  "在消息内展开 {name}": "Expand {name} in message",
+  "收起 {name} 的预览": "Collapse preview of {name}",
+  "HTML 附件超过 2 MiB，请在预览窗口查看源码。": "This HTML attachment is over 2 MiB. Open the preview window to view its source.",
+  "打开预览窗口": "Open preview window"
 }

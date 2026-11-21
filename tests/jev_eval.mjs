@@ -3,7 +3,7 @@
  * compare each choice and its probability with the expected answer (and optionally with an earlier run).
  * Not part of `npm test`: it sends the case texts to the provider and is billed per call.
  *
- *   node tests/jev_eval.mjs [--provider jev] [--model jev-latest] [--mode guided|stable] [--repeat N] [--only S1a,G,round] [--out FILE] [--baseline FILE]
+ *   node tests/jev_eval.mjs [--provider jev] [--model jev-latest] [--repeat N] [--only S1a,G,round] [--out FILE] [--baseline FILE]
  *
  * --repeat runs every case N times and judges the averaged probabilities, since one call varies by about ±0.1.
  */
@@ -11,10 +11,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { saved_api_keys } from '../runner/discussion_api.mjs';
 import { service_home } from '../runner/discussion_service.mjs';
-import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, REVIEW_PROMPT_VERSION, SEQUENCE_PROMPT_VERSION, decide_sequence_checkpoint, discussion_prompt_version, SCHEDULER_MODES, SCHEDULER_PROVIDERS, route_prompt_version, decide_interjection, decide_review_completion,
+import { DISCUSSION_GUIDED_PROMPT_VERSION as DISCUSSION_PROMPT_VERSION, GOAL_PROMPT_VERSION, REVIEW_PROMPT_VERSION, ROUTE_GUIDED_PROMPT_VERSION as ROUTE_PROMPT_VERSION, SCHEDULER_MODE, SEQUENCE_PROMPT_VERSION, decide_sequence_checkpoint, SCHEDULER_PROVIDERS, decide_interjection, decide_review_completion,
   decide_goal_wake, decide_next_speaker, decide_round, route_free_message } from '../runner/scheduler.mjs';
 
-const { values: options } = parseArgs({ options: { provider: { type: 'string', default: 'jev' }, model: { type: 'string' }, mode: { type: 'string', default: DEFAULT_SCHEDULER_MODE },
+const { values: options } = parseArgs({ options: { provider: { type: 'string', default: 'jev' }, model: { type: 'string' },
   repeat: { type: 'string', default: '1' }, only: { type: 'string' }, out: { type: 'string' }, baseline: { type: 'string' } } });
 const { fixtures, cases } = JSON.parse(readFileSync(new URL('./jev_cases.json', import.meta.url), 'utf8'));
 const home = service_home();
@@ -22,10 +22,7 @@ const provider = SCHEDULER_PROVIDERS[options.provider];
 if (!provider) throw new Error(`供应商只能为 ${Object.keys(SCHEDULER_PROVIDERS).join(' / ')}`);
 const api_key_ref = saved_api_keys(home)[provider.base_url];
 if (!api_key_ref) throw new Error(`本机服务目录 ${home} 没有 ${provider.base_url} 的密钥，请先在新建房间面板保存`);
-if (!SCHEDULER_MODES[options.mode]) throw new Error(`模式只能为 ${Object.keys(SCHEDULER_MODES).join(' / ')}`);
-const scheduler = { provider: options.provider, model: options.model || provider.models[0], base_url: provider.base_url, api_key_ref, mode: options.mode };
-const ROUTE_PROMPT_VERSION = route_prompt_version(options.mode);
-const DISCUSSION_PROMPT_VERSION = discussion_prompt_version(options.mode);
+const scheduler = { provider: options.provider, model: options.model || provider.models[0], base_url: provider.base_url, api_key_ref };
 const REPEAT = Math.max(1, Number.parseInt(options.repeat, 10) || 1);
 
 /** Run one case through the same function the runner uses; returns what the system did and what the model chose. */
@@ -138,8 +135,8 @@ for (const item of selected) {
   }
 }
 const count = status => results.filter(item => item.status === status).length;
-console.log(`\n${scheduler.provider}/${scheduler.model} · 模式 ${options.mode} · 每条 ${REPEAT} 次 · 路由提示版本 ${ROUTE_PROMPT_VERSION} · 讨论提示版本 ${DISCUSSION_PROMPT_VERSION} · 评审提示版本 ${REVIEW_PROMPT_VERSION} · 循环提示版本 ${SEQUENCE_PROMPT_VERSION} · Goal 提示版本 ${GOAL_PROMPT_VERSION} · `
+console.log(`\n${scheduler.provider}/${scheduler.model} · 每条 ${REPEAT} 次 · 路由提示版本 ${ROUTE_PROMPT_VERSION} · 讨论提示版本 ${DISCUSSION_PROMPT_VERSION} · 评审提示版本 ${REVIEW_PROMPT_VERSION} · 循环提示版本 ${SEQUENCE_PROMPT_VERSION} · Goal 提示版本 ${GOAL_PROMPT_VERSION} · `
   + `PASS ${count('PASS')} / WEAK ${count('WEAK')} / FAIL ${count('FAIL')} / ERROR ${count('ERROR')}，共 ${results.length} 条`);
-if (options.out) writeFileSync(options.out, JSON.stringify({ provider: scheduler.provider, model: scheduler.model, mode: options.mode, repeat: REPEAT, route_prompt: ROUTE_PROMPT_VERSION,
+if (options.out) writeFileSync(options.out, JSON.stringify({ provider: scheduler.provider, model: scheduler.model, mode: SCHEDULER_MODE, repeat: REPEAT, route_prompt: ROUTE_PROMPT_VERSION,
   discussion_prompt: DISCUSSION_PROMPT_VERSION, review_prompt: REVIEW_PROMPT_VERSION, sequence_prompt: SEQUENCE_PROMPT_VERSION, goal_prompt: GOAL_PROMPT_VERSION, ran_at: new Date().toISOString(), results }, null, 2));
 if (count('FAIL') || count('ERROR')) process.exitCode = 1;

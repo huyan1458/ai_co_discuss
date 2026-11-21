@@ -168,9 +168,15 @@ function skill_label(fields) {
   return (fields.metadata && typeof fields.metadata === 'object' ? fields.metadata.label : '') || (typeof fields.label === 'string' ? fields.label : '');
 }
 
-/** SKILL.md frontmatter as the Agent Skills format writes it: the display name goes under `metadata`. */
-function skill_fields(id, label, description) {
-  return { name: id, description, metadata: { label } };
+/** SKILL.md frontmatter as the Agent Skills format writes it: the display name (and a sub-workflow's `attach`) go under `metadata`. */
+function skill_fields(id, label, description, attach = []) {
+  return { name: id, description, metadata: { label, ...(attach?.length ? { attach: attach.join(', ') } : {}) } };
+}
+
+/** A sub-workflow's `metadata.attach`: the main flow's stage IDs it attaches to, written comma-separated. */
+function skill_attach(fields) {
+  const value = fields.metadata && typeof fields.metadata === 'object' ? fields.metadata.attach : '';
+  return typeof value === 'string' ? value.split(',').map(item => item.trim()).filter(Boolean) : [];
 }
 
 /** Turn one parsed card file into the card shape the page edits. */
@@ -214,8 +220,9 @@ function split_sub_workflows(resources) {
     const { fields, body } = parse_markdown(files['SKILL.md'], `${prefix}SKILL.md`);
     if (fields.name !== id) throw new Error(`${prefix}SKILL.md 的 name 须与文件夹名相同：${typeof fields.name === 'string' && fields.name || '（空）'}`);
     const flow = typeof files[FLOW_FILE] === 'string' ? parse_flow_text(files[FLOW_FILE], `${prefix}${FLOW_FILE}`) : undefined;
+    const attach = skill_attach(fields);
     return { id, label: skill_label(fields), description: typeof fields.description === 'string' ? fields.description : '', skill: body,
-      agents: Object.entries(files.cards).map(([card, text]) => card_from_markdown(card, text, `${prefix}agents/${card}.md`)), ...(flow ? { flow } : {}) };
+      ...(attach.length ? { attach } : {}), agents: Object.entries(files.cards).map(([card, text]) => card_from_markdown(card, text, `${prefix}agents/${card}.md`)), ...(flow ? { flow } : {}) };
   });
   return { sub_workflows, rest };
 }
@@ -289,6 +296,8 @@ export function workflow_cards(workflow) {
 const SUB_DIRECTORY = 'workflows';
 const SUB_FILE = /^workflows\/([^/]+)\/(SKILL\.md|flow\.json|agents\/([^/]+)\.md)$/;
 const MAX_SUB_WORKFLOWS = 10;
+// A stage ID a sub-workflow attaches to follows the canvas's node ID rule.
+const STAGE_ID = /^[A-Za-z0-9_-]{1,40}$/;
 
 /**
  * Check the sub-workflows a save carries; each obeys a workflow's rules. Its canvas may show its own cards and the main
@@ -312,7 +321,11 @@ function validate_sub_workflows(list, validate_card, main_cards) {
     if (!Array.isArray(agents) || agents.length > MAX_WORKFLOW_CARDS) throw new Error(`${name}的卡片须为列表，最多 ${MAX_WORKFLOW_CARDS} 张`);
     const normalized = agents.map(agent => normalize_card(agent, validate_card));
     const flow = validate_flow(sub.flow, [...normalized.map(agent => agent.card), ...main_cards], null);
-    return { id, label, description, skill, agents: normalized, ...(flow ? { flow } : {}) };
+    const attach = sub.attach === undefined ? [] : sub.attach;
+    if (!Array.isArray(attach) || attach.some(stage => typeof stage !== 'string' || !STAGE_ID.test(stage))) {
+      throw new Error(`${name}的 attach 须为主线步骤 ID 列表（英文、数字、下划线或连字符）`);
+    }
+    return { id, label, description, skill, ...(attach.length ? { attach: [...new Set(attach)] } : {}), agents: normalized, ...(flow ? { flow } : {}) };
   });
 }
 
@@ -330,7 +343,7 @@ function write_sub_workflows(staging, list) {
   for (const sub of list) {
     const folder = join(root, sub.id);
     mkdirSync(join(folder, 'agents'), { recursive: true });
-    writeFileSync(join(folder, 'SKILL.md'), serialize_markdown(skill_fields(sub.id, sub.label, sub.description), sub.skill));
+    writeFileSync(join(folder, 'SKILL.md'), serialize_markdown(skill_fields(sub.id, sub.label, sub.description, sub.attach), sub.skill));
     write_cards(join(folder, 'agents'), sub.agents);
     if (sub.flow) writeFileSync(join(folder, FLOW_FILE), `${JSON.stringify(sub.flow, null, 2)}\n`);
   }
@@ -618,8 +631,31 @@ export function save_workflow(home, input, validate_card) {
       try { workflow_cards(read_workflow_folder(staging).workflow); }
       catch (error) { rmSync(staging, { recursive: true, force: true }); throw error; }
     });
-    return read_saved_workflow(home, workflow.id);
+    const saved = read_saved_workflow(home, workflow.id);
+    const warnings = workflow_warnings(saved);
+    return { ...saved, ...(warnings.length ? { warnings } : {}) };
   });
+}
+
+/**
+ * What a saved or previewed workflow gets wrong about its steps without being refused, since steps are soft (the host
+ * follows SKILL.md): a sub-workflow attaching to a stage the main canvas lacks, and a sub-workflow node on the main
+ * canvas inside a stage its sub-workflow does not attach to.
+ */
+export function workflow_warnings(workflow) {
+  const stages = workflow.flow?.stages || [];
+  const known = stages.map(stage => stage.id);
+  const warnings = [];
+  for (const sub of workflow.sub_workflows || []) {
+    const unknown = (sub.attach || []).filter(stage => !known.includes(stage));
+    if (unknown.length) warnings.push(`子工作流 ${sub.id} 的 attach 写了主线画布没有的步骤：${unknown.join('、')}`);
+  }
+  for (const node of (workflow.flow?.nodes || []).filter(item => item.type === 'sub')) {
+    const stage = stages.find(item => item.nodes.includes(node.id));
+    const sub = (workflow.sub_workflows || []).find(item => item.id === node.sub);
+    if (stage && sub && !(sub.attach || []).includes(stage.id)) warnings.push(`主线画布把子工作流 ${sub.id} 放在步骤 ${stage.id}，但它的 attach 没有这个步骤`);
+  }
+  return warnings;
 }
 
 /** Remove one workflow folder. */
@@ -700,7 +736,9 @@ export function preview_workflow(input, validate_card, known_platform) {
   // A draft carries none, which keeps the saved ones; a folder or files carry them all.
   const sub_workflows = workflow.sub_workflows?.map(sub => ({ ...sub, agents: sub.agents.map(mark) }));
   // Shown for the user to allow before saving: the page drops an import's commands file unless they do.
-  return { ...workflow, agents, ...(sub_workflows ? { sub_workflows } : {}), commands: workflow_commands(workflow.resources), ignored: source.ignored };
+  const warnings = workflow_warnings(workflow);
+  return { ...workflow, agents, ...(sub_workflows ? { sub_workflows } : {}), commands: workflow_commands(workflow.resources), ignored: source.ignored,
+    ...(warnings.length ? { warnings } : {}) };
 }
 
 /**
@@ -718,17 +756,31 @@ export function load_room_workflow(config) {
     const cards = Object.fromEntries(workflow_cards(workflow).map(agent => [agent.card, agent]));
     // Like the main SKILL.md, the host reads a sub-workflow's only when a request fits it; its canvas is the user's.
     const sub_workflows = workflow.sub_workflows.map(sub => ({ id: sub.id, label: sub.label || sub.id, description: sub.description, skill: sub.skill,
-      revision: revision_of(sub.skill), skill_path: join(directory, SUB_DIRECTORY, sub.id, 'SKILL.md'), cards: sub.agents.map(agent => agent.card) }));
-    // The canvas is for the user to see; the host works from SKILL.md alone.
+      revision: revision_of(sub.skill), skill_path: join(directory, SUB_DIRECTORY, sub.id, 'SKILL.md'), cards: sub.agents.map(agent => agent.card),
+      attach: sub.attach || [] }));
+    // The canvas is for the user to see; the host works from SKILL.md alone, plus the steps' names its sub-workflows attach to.
+    const stages = (workflow.flow?.stages || []).map(stage => ({ id: stage.id, label: stage.label || stage.id }));
     return { id: binding.id, label: workflow.label || binding.id, description: workflow.description || '', directory, skill_path: join(directory, 'SKILL.md'), skill: workflow.skill,
-      revision: revision_of(workflow.skill), members: binding.members || {}, cards, sub_workflows, commands: workflow.commands };
+      revision: revision_of(workflow.skill), members: binding.members || {}, extra_members: binding.extra_members || {}, cards, sub_workflows, stages,
+      commands: workflow.commands };
   } catch (error) { return { id: binding.id, error: error.message }; }
+}
+
+/** The card a member plays in the room's workflow: its card's first member, or one more member of a card (`extra_members`). */
+export function card_of_member(workflow, member_name) {
+  return Object.entries(workflow?.members || {}).find(([, name]) => name === member_name)?.[0] || workflow?.extra_members?.[member_name] || '';
+}
+
+/** Every member a workflow brought, with its card: each card's first member, then the further members of a card. */
+export function workflow_member_list(workflow) {
+  return [...Object.entries(workflow?.members || {}).map(([card, name]) => ({ card, name })),
+    ...Object.entries(workflow?.extra_members || {}).map(([name, card]) => ({ card, name }))];
 }
 
 /** The member's profile for this execution: a workflow member's prompt comes from its card as it is now. */
 export function effective_profile(profile, member_name, workflow) {
   if (!profile || !workflow || workflow.error) return profile;
-  const card = Object.entries(workflow.members).find(([, name]) => name === member_name)?.[0];
+  const card = card_of_member(workflow, member_name);
   const source = card && workflow.cards[card];
   if (!source) return profile;
   const { system_prompt: ignored, ...rest } = profile;
@@ -737,11 +789,13 @@ export function effective_profile(profile, member_name, workflow) {
 }
 
 /**
- * The host's view of the workflow: which card is which member now, whether present, and what it may do. A card the
- * workflow dropped is left out; `missing` lists cards added after it was enabled, which no member plays yet.
+ * The host's view of the workflow: which card is which member now (a card may have several, each with its own name in
+ * the room), whether present, and what it may do. A card the workflow dropped is left out; `missing` lists cards added
+ * after it was enabled, which no member plays yet. `stages` and each sub-workflow's `attach` say where sub-workflows
+ * attach to the main flow's steps; both are soft, followed through SKILL.md.
  */
 export function workflow_task_field(workflow, room_members, participants) {
-  const members = Object.entries(workflow.members).map(([card, name]) => {
+  const members = workflow_member_list(workflow).map(({ card, name }) => {
     const member = (room_members || []).find(item => item.name === name);
     const source = workflow.cards[card];
     if (!member || member.status === 'removed' || !source) return null;
@@ -753,11 +807,11 @@ export function workflow_task_field(workflow, room_members, participants) {
     .map(card => ({ card: card.card, label: card.label || '', description: card.description || '' }));
   // Like the main SKILL.md, a sub-workflow is read only when a request fits its description and its revision is new.
   const sub_workflows = (workflow.sub_workflows || []).map(sub => ({ id: sub.id, label: sub.label, description: sub.description,
-    revision: sub.revision, skill_path: sub.skill_path, cards: sub.cards.map(card => ({ card, label: workflow.cards[card]?.label || '',
-      description: workflow.cards[card]?.description || '' })) }));
+    revision: sub.revision, skill_path: sub.skill_path, ...(sub.attach?.length ? { attach: sub.attach } : {}),
+    cards: sub.cards.map(card => ({ card, label: workflow.cards[card]?.label || '', description: workflow.cards[card]?.description || '' })) }));
   // The host reads SKILL.md only when a request fits the description and its revision is one it has not read.
   return { id: workflow.id, label: workflow.label, description: workflow.description || '', revision: workflow.revision || '', members,
-    ...(missing.length ? { missing } : {}), ...(sub_workflows.length ? { sub_workflows } : {}) };
+    ...(workflow.stages?.length ? { stages: workflow.stages } : {}), ...(missing.length ? { missing } : {}), ...(sub_workflows.length ? { sub_workflows } : {}) };
 }
 
 /**
@@ -766,16 +820,25 @@ export function workflow_task_field(workflow, room_members, participants) {
  */
 export function workflow_in_use(workflow, room_members) {
   const host = (room_members || []).find(member => member.role === 'host')?.name;
-  const brought = Object.values(workflow.members || {}).filter(name => name !== host);
+  const brought = workflow_member_list(workflow).map(item => item.name).filter(name => name !== host);
   return !brought.length || (room_members || []).some(member => brought.includes(member.name) && member.status === 'active');
 }
 
 /** Write a room's workflow binding into its configuration object (the caller saves it). */
-export function bind_room_workflow(config, { id, enabled, members }) {
+export function bind_room_workflow(config, { id, enabled, members, extra_members }) {
   workflow_directory('.', id);
   if (members && (typeof members !== 'object' || Array.isArray(members)
     || Object.entries(members).some(([card, name]) => !CARD_ID_PATTERN.test(card) || typeof name !== 'string' || !name))) {
     throw new Error('workflow.members 须为 {卡片ID: 成员名}');
   }
-  return { ...config, workflow: { id, enabled: Boolean(enabled), members: { ...(config.workflow?.id === id ? config.workflow.members : {}), ...(members || {}) } } };
+  if (extra_members !== undefined && (!extra_members || typeof extra_members !== 'object' || Array.isArray(extra_members)
+    || Object.entries(extra_members).some(([name, card]) => !name || typeof card !== 'string' || !CARD_ID_PATTERN.test(card)))) {
+    throw new Error('workflow.extra_members 须为 {成员名: 卡片ID}');
+  }
+  // Further members of a card (`extra_members`, {member name: card ID}) come only from the host's workflow-join --label;
+  // rebinding the same workflow keeps them.
+  const same = config.workflow?.id === id;
+  const extra = extra_members ?? (same ? config.workflow.extra_members : undefined);
+  return { ...config, workflow: { id, enabled: Boolean(enabled), members: { ...(same ? config.workflow.members : {}), ...(members || {}) },
+    ...(extra && Object.keys(extra).length ? { extra_members: { ...extra } } : {}) } };
 }

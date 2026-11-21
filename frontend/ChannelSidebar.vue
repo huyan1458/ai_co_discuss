@@ -1,6 +1,5 @@
 <script>
 import { ref } from "vue";
-const tools_open = ref(true);
 const workflows_open = ref(true);
 </script>
 
@@ -8,13 +7,11 @@ const workflows_open = ref(true);
 import { computed, inject } from "vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
 import InvitedRooms from "./InvitedRooms.vue";
-import { use_invited_rooms } from "./external-members.js";
 import { use_workflow_library, workflow_problem } from "./workflow-library.js";
 import { t } from "./i18n.js";
 
 /** The room sidebar, shared by the docked desktop column and the tablet and phone drawer. */
-const props = defineProps({ tabs: { type: Array, required: true } });
-const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "workflows", "invited", "tab", "settings"]);
+const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "workflows", "invited", "settings"]);
 const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
 const library = use_workflow_library();
@@ -29,16 +26,6 @@ function open_workflow(id) {
 /** New or import from the heading's "+", then close the drawer once the page shows the draft. */
 const add_items = library.add_items.map((group) => group.map((item) => ({ ...item, onSelect: () => { item.onSelect(); emit("workflows"); } })));
 const app_version = __APP_VERSION__;
-const invited_open = use_invited_rooms().page_open;
-// The open tab, or null without a room: the links (and the menu) rebuild only when it changes, not on every view publish.
-const link_state = computed(() => invited_open.value ? "invited" : view.value.room ? `${view.value.tab}:${page_open.value}` : null);
-// The room's views wait for a room. An invited room has only its messages: the other room's private chats, runs, settings
-// and files are not this computer's to open, so those stay disabled rather than switching to a room of this computer.
-const view_links = computed(() => { const tab = link_state.value; return props.tabs.map((item) => {
-  if (tab === "invited") return { ...item, active: item.value === "discussion", disabled: item.value !== "discussion", onSelect: () => {} };
-  const usable = tab !== null;
-  return { ...item, active: usable && !page_open.value && view.value.tab === item.value, disabled: !usable || item.disabled, onSelect: () => emit("tab", item.value) };
-}); });
 /** The footer's second line: the account call to action until signed in, then the site connection. */
 const account_status = computed(() => {
   const admin = view.value.admin;
@@ -62,9 +49,7 @@ const account_status = computed(() => {
       <ChannelDirectory @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" />
       <!-- Rooms on other computers this computer's AIs were invited to: their own section, opened in the middle like a room. -->
       <InvitedRooms @open="emit('invited', $event)" />
-      <div class="channel-directory-heading channel-tools-heading"><button type="button" class="channel-section-toggle" :aria-expanded="tools_open" @click="tools_open = !tools_open"><UIcon :name="tools_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t("频道工具") }}</button></div>
-      <UNavigationMenu v-if="tools_open" :items="view_links" orientation="vertical" color="neutral" variant="pill" class="channel-directory channel-view-links" :aria-label="t('房间视图')" :ui="{ link: 'channel-link', linkLabel: 'channel-link-label', linkLeadingIcon: 'channel-link-icon' }" />
-      <!-- The workflow library belongs to this computer, not a room: its own section beside 协作房间 and 频道工具; a row opens the workflow page in the middle. -->
+      <!-- The workflow library belongs to this computer, not a room: its own section below the rooms; a row opens the workflow page in the middle. -->
       <div class="channel-directory-heading channel-tools-heading">
         <button type="button" class="channel-section-toggle" :aria-expanded="workflows_open" @click="workflows_open = !workflows_open"><UIcon :name="workflows_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t("工作流") }}</button>
         <div v-if="available" class="channel-directory-actions">

@@ -28,7 +28,7 @@ export function use_discussion() {
     } });
   async function act(name, value) {
     // Ordering runs beside other actions, like the directory's moves; the speaking order guards its own sends.
-    if (["manage_channel", "move_channel", "create_folder", "rename_folder", "delete_folder", "move_folder", "create", "reorder_speakers"].includes(name)) return bridge.execute(name, value);
+    if (["manage_channel", "move_channel", "create_folder", "rename_folder", "delete_folder", "move_folder", "create", "reorder_speakers", "send", "retry_sending"].includes(name)) return bridge.execute(name, value);
     // Navigation and local-only actions never wait for a write in flight: writes check the room they started in.
     if (LOCAL_ACTIONS.has(name)) return bridge.execute(name, value);
     // The question card has already closed when this runs: its write stays in the background and blocks nothing else.

@@ -182,7 +182,10 @@ function add_expert(name) {
   bridge.default_launch_entry(name);
   // A card already in use adds another instance with its own session, model and effort.
   if (instance_count(name)) bridge.add_instance(EXPERT_CONTAINER, name, "cli");
-  else set_expert_mode(name, "cli");
+  else {
+    bridge.clear_card_drafts(name);
+    set_expert_mode(name, "cli");
+  }
   ensure_host();
 }
 
@@ -269,7 +272,7 @@ const summary = computed(() => {
 
       <section class="create-section">
         <h3><span>3</span>{{ t("协作方式（可选）") }}</h3>
-        <HostWorkflowSwitch v-if="view.launch.available || view.launch.remote" :model-value="Boolean(view.create_host_workflows)" @update:model-value="bridge.write_create_host_workflows($event)" />
+        <HostWorkflowSwitch v-if="view.launch.available || view.launch.remote" :model-value="Boolean(view.create_host_workflows)" :permissions="view.create_host_permissions" @update:model-value="bridge.write_create_host_workflows($event)" />
         <div class="create-drive">
           <span>{{ t("创建后") }}</span>
           <div class="expert-card-modes" role="radiogroup" :aria-label="t('创建后的推进方式')">
@@ -291,6 +294,8 @@ const summary = computed(() => {
         <ChainRoundsField :title="t('连续派活上限')" :model-value="view.create_chain_rounds" @update:model-value="bridge.write_create_chain_rounds($event)" />
         <ApiRequestsField v-if="view.launch.available || view.launch.remote" :title="t('API 请求上限')" class="create-advanced-field" :model-value="view.create_api_max_requests" @update:model-value="bridge.write_create_api_max_requests($event)" />
         <p class="create-advanced-note">{{ t("建房后可在房间页修改。") }}</p>
+        <ChainRoundsField v-if="view.launch.available || view.launch.remote" :title="t('关联房间互传上限')" class="create-advanced-field" :name="t('关联房间互传条数')" :unit="t('条')"
+          :help="t('主持人新建的房间与原房间之间，两边主持人从你上次发言起最多互传几条消息；对本机所有关联房间生效。')" :model-value="view.create_relay_rounds ?? 0" @update:model-value="bridge.write_create_relay_rounds($event)" />
       </details>
     </form>
     <footer class="create-footer">

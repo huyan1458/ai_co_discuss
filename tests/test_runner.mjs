@@ -35,7 +35,22 @@ import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_
 import { DiscussionService, migrate_platform_ids, migrate_service_home, persisted_env, read_registry, register_room, remove_room_files, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
 import { restore_room, room_profiles, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { adapter_of, capabilities_of, deliver_task, execution_details } from '../runner/adapters/index.mjs';
-import { NO_DESKTOP_VARIABLE } from '../runner/adapters/profiles.mjs';
+import { inherited_access, NO_DESKTOP_VARIABLE } from '../runner/adapters/profiles.mjs';
+
+test('a new host takes over the previous host access only as far as its own software offers, and never loses any', () => {
+  const take = (adapter, project_access, from_adapter, from_access) =>
+    inherited_access({ adapter, project_access }, { adapter: from_adapter, project_access: from_access });
+  assert.equal(take('claude', 'read', 'claude', 'full'), 'full');
+  // agy offers no 自动 and an API member nothing above 可写: each lands on the nearest level beneath.
+  assert.equal(take('antigravity_cli', 'read', 'claude', 'auto'), 'write');
+  assert.equal(take('api', 'read', 'codex_cli', 'full'), 'write');
+  assert.equal(take('claude', 'full', 'claude', 'read'), 'full', 'a lower previous host lowers nothing');
+  // Access the runner does not set is neither given nor taken: an App, a taken-over session.
+  assert.equal(take('codex', 'read', 'claude', 'full'), 'read');
+  assert.equal(take('claude', 'read', 'codex', 'full'), 'read');
+  assert.equal(take('claude', 'own', 'claude', 'full'), 'own');
+  assert.equal(take('claude', 'read', 'claude', 'own'), 'read');
+});
 import { read_only_enforced } from '../runner/project_files.mjs';
 import { adopted_fork, claude_api_error, claude_input, claude_permissions, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
 import { codex_developer_instructions, codex_permissions, codex_sandbox_missing, codex_sandbox_refusal } from '../runner/adapters/codex_cli.mjs';
@@ -51,7 +66,7 @@ process.env.CODEX_HOME = codex_test_home;
 process.on('exit', () => rmSync(codex_test_home, { recursive: true, force: true }));
 const activity_phase = (adapter, event) => adapter_of(adapter).events.phase(event);
 import { save_api_key, saved_api_keys } from '../runner/discussion_api.mjs';
-import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_thresholds, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
+import { certainty, decide, decide_interjection, decide_next_speaker, decide_round, ROUTE_CONFIDENCE, ROUTE_WIDE_CONFIDENCE, route_free_message, scheduler_answers, scheduler_check, scheduler_request, SCHEDULER_PROVIDERS, scheduler_state, validate_scheduler } from '../runner/scheduler.mjs';
 import { site_fetch } from '../runner/entry_client.mjs';
 
 // Assertions read Chinese CLI output; the run must not depend on this computer's system locale.
@@ -111,19 +126,16 @@ test('smart scheduling maps one neutral question set to both providers and reads
   const reply = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { handler: { type: 'choice', choice, confidence, probabilities: {} } } }) });
   const input = { title: '房间', context: [], message: { id: 3, author: '用户', text: '修一下登录', reply_to: 2 }, host: { name: 'Claude', description: 'Claude（Claude Code）' },
     members: [{ name: 'Codex', description: 'Codex CLI' }] };
-  // The guided wording (default) has its own lower thresholds; the stable one keeps 0.7 / 0.85.
-  const limits = scheduler_thresholds('guided');
+  const limits = { member: ROUTE_CONFIDENCE, wide: ROUTE_WIDE_CONFIDENCE };
   const routed = await route_free_message(home, jev, input, reply('Codex', 0.95));
   assert.deepEqual([routed.action, routed.member, routed.detail[0].choices], ['member', 'Codex', ['Codex', '__host__', '__all__', '__all_seq__', '__none__']]);
   assert.equal((await route_free_message(home, jev, input, reply('Codex', limits.member - 0.01))).action, 'host');
-  assert.equal((await route_free_message(home, { ...jev, mode: 'stable' }, input, reply('Codex', ROUTE_CONFIDENCE - 0.01))).action, 'host');
   assert.equal((await route_free_message(home, jev, input, reply('Codex', limits.member))).action, 'member');
   assert.equal((await route_free_message(home, jev, input, reply('__host__', 0.99))).action, 'host');
   assert.equal((await route_free_message(home, jev, input, reply('__all__', limits.wide))).action, 'all');
   assert.equal((await route_free_message(home, jev, input, reply('__all__', limits.wide - 0.01))).action, 'host');
-  assert.equal((await route_free_message(home, { ...jev, mode: 'stable' }, input, reply('__all__', ROUTE_WIDE_CONFIDENCE - 0.01))).action, 'host');
   assert.equal((await route_free_message(home, jev, input, reply('__none__', 0.99))).action, 'none');
-  // Everyone in turn is a guided-only choice with the wide threshold.
+  // Everyone in turn is a choice with the wide threshold.
   assert.equal((await route_free_message(home, jev, input, reply('__all_seq__', limits.wide))).action, 'sequential');
   assert.equal((await route_free_message(home, jev, input, reply('__all_seq__', limits.wide - 0.01))).action, 'host');
   // When the text names two or more members, each group of them is one choice; it needs the wide threshold.
@@ -136,18 +148,13 @@ test('smart scheduling maps one neutral question set to both providers and reads
   await route_free_message(home, jev, input, async (url, init) => { named_sent = JSON.parse(init.body); return reply('__host__', 0.9)(); });
   assert.ok(!Object.keys(named_sent.questions.handler.criteria).some(key => key.startsWith('__some__')));
   assert.match(scheduler_state('房间', [], input.message), /#3 用户（回复 #2）：修一下登录/);
-  // The guided mode (default) describes the room and each member in the state; options say what each choice leads to.
+  // The state describes the room and each member; options say what each choice leads to.
   let sent_to_model;
   await route_free_message(home, jev, input, async (url, init) => { sent_to_model = JSON.parse(init.body); return reply('__host__', 0.99)(); });
   assert.match(sent_to_model.state, /成员（名字不区分大小写）：\n- 主持人 Claude/);
   const route_question = sent_to_model.questions.handler;
   assert.match(route_question.instructions, /用户想让谁来回应/);
   assert.match(route_question.criteria.__all__, /彼此看不到对方的回答/);
-  // The stable mode keeps the roster line and the ordered checklist, where a name outranks continuing the previous answer.
-  await route_free_message(home, { ...jev, mode: 'stable' }, input, async (url, init) => { sent_to_model = JSON.parse(init.body); return reply('__host__', 0.99)(); });
-  assert.match(sent_to_model.state, /房间成员（名字不区分大小写）：Claude（主持人）、Codex/);
-  assert.match(sent_to_model.questions.handler.instructions, /按下面的顺序：1）正文叫了某位成员的名字.*选该成员，即使上一条是别人的回答/);
-  assert.doesNotMatch(sent_to_model.questions.handler.criteria.__host__, /延续主持人自己的回答/);
   // The configuration check asks one yes/no question and rejects an answer without a probability.
   const checked = [];
   assert.deepEqual(await scheduler_check(home, jev, async (url, init) => { checked.push([url, JSON.parse(init.body)]);
@@ -205,12 +212,10 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.deepEqual(without_detail(await decide_next_speaker(home, jev, midround, speaker('Antigravity', 0.9))), { action: 'next', expert: 'Antigravity', confidence: 0.9, label: '本轮继续，请 Antigravity 接着发言' });
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('Antigravity', limits.member - 0.01))).action, 'host');
   assert.equal((await decide_next_speaker(home, jev, midround, speaker('__host__', 0.95))).action, 'host');
-  // One question; the guided wording explains that the host may have stopped on purpose, the stable one names it as no basis.
+  // One question, explaining that the host may have stopped on purpose.
   assert.deepEqual(Object.keys(asked[0].questions), ['speaker']);
   assert.match(asked[0].questions.speaker.instructions, /有意只安排到这里/);
-  await decide_next_speaker(home, { ...jev, mode: 'stable' }, midround, async (url, init) => { asked.push(JSON.parse(init.body)); return speaker('Antigravity', 0.9)(); });
-  assert.match(asked.at(-1).questions.speaker.criteria.__host__, /仅仅是本轮还没发言不算依据/);
-  // The guided interjection sees who speaks next, so a question to that expert can wait for the turn.
+  // The interjection sees who speaks next, so a question to that expert can wait for the turn.
   let upcoming_sent;
   await decide_interjection(home, jev, { ...interjection, upcoming: ['Antigravity', 'Codex'] }, async (url, init) => { upcoming_sent = JSON.parse(init.body); return handling('__note__', 0.9)(); });
   assert.match(upcoming_sent.state, /接下来按安排发言：Antigravity → Codex/);

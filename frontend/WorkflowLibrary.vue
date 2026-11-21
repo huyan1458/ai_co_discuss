@@ -124,7 +124,7 @@ function start_resize(event) {
             <i v-if="dirty" class="workflow-library-dirty" /></span></UTooltip>
         </template>
       </WorkflowCanvas>
-      <WorkflowParts v-if="draft" :compact="stacked" @place="(id) => canvas?.add_sub_node(id)" />
+      <WorkflowParts v-if="draft" :compact="stacked" @place="(id) => canvas?.show_sub_node(id)" />
       <WorkflowExperts v-if="draft" v-model:open="experts_open" v-model:focus="experts_focus" />
       <template v-else-if="loading">
         <WorkflowCanvas v-model:flow="placeholder.flow" v-model:agents="placeholder.agents" :compact="stacked" class="workflow-library-placeholder" inert />

@@ -3,6 +3,7 @@ import ui from "@nuxt/ui/vue-plugin";
 import App from "./App.vue";
 import { i18n_plugin } from "./i18n.js";
 import { keep_reading } from "./scroll-anchor.js";
+import { float_box } from "./float-box.js";
 import "./theme.css";
 import "./channel.css";
 
@@ -11,7 +12,7 @@ try { if (new URLSearchParams(location.search).has("scrolldebug")) sessionStorag
 
 /** Mount the channel workspace once over the shared discussion controller. */
 function mount_workspace() {
-  createApp(App).use(ui).use(i18n_plugin).directive("keep-reading", keep_reading).mount("#modern-root");
+  createApp(App).use(ui).use(i18n_plugin).directive("keep-reading", keep_reading).directive("float-box", float_box).mount("#modern-root");
 }
 
 const KEYBOARD_SETTLE_MS = 120;

@@ -64,6 +64,8 @@ const search = field("search-input");
 const LAYOUT_KEY = "ai-codiscuss-channel-layout";
 const EFFECT_OPTIONS = [{ value: "full", label: t("完整") }, { value: "reduced", label: t("精简") }];
 // How readily long answers fold; ChannelDiscussion.vue MESSAGE_FOLD_LEVELS gives each level's heights.
+// Text size inside message cards; channel.css maps each value to --card-text-scale.
+const CARD_TEXT_OPTIONS = [{ value: "small", label: t("小") }, { value: "medium", label: t("中") }, { value: "large", label: t("大") }];
 const FOLD_OPTIONS = [{ value: "loose", label: t("宽松") }, { value: "standard", label: t("标准") }, { value: "compact", label: t("紧凑") }];
 const READING_WIDTHS = { narrow: { label: t("窄"), width: 720 }, default: { label: t("默认"), width: 960 }, wide: { label: t("宽"), width: 1240 } };
 const RAIL_MIN = 220;
@@ -82,6 +84,7 @@ const saved_layout = read_layout();
 const reading_width = ref(saved_layout.reading);
 const effects = ref(saved_layout.effects);
 const fold_level = ref(saved_layout.fold);
+const card_text = ref(saved_layout.card_text);
 provide("fold_level", fold_level);
 const rail_width = ref(saved_layout.rail);
 const nav_width = ref(saved_layout.nav);
@@ -181,6 +184,7 @@ const width_options = Object.entries(READING_WIDTHS).map(([value, option]) => ({
 watch(reading_width, (value) => { document.documentElement.style.setProperty("--channel-reading-width", `${READING_WIDTHS[value].width}px`); save_layout(); }, { immediate: true });
 // Portalled menus and dialogs sit outside the shell, so the preference marks the document root.
 watch(effects, (value) => { document.documentElement.dataset.effects = value; save_layout(); }, { immediate: true });
+watch(card_text, (value) => { document.documentElement.dataset.cardText = value; save_layout(); }, { immediate: true });
 watch(fold_level, save_layout);
 watch(nav_collapsed, save_layout);
 watch(rail_collapsed, save_layout);
@@ -213,7 +217,7 @@ const tabs = computed(() => [
   ...(share.value ? [] : [{ value: "overview", label: t("房间"), icon: "i-lucide-sliders-horizontal" },
     { value: "files", label: t("文件"), icon: "i-lucide-files", title: project_directory.value || "" }]),
 ]);
-/** The workflow library belongs to this computer, not a room, so it is neither a room tab nor one of 频道工具: the sidebar
+/** The workflow library belongs to this computer, not a room, so it is not a room tab: the sidebar
  * has its own 工作流 section, and a workflow chosen there fills the middle in place of the room (with no room selected too). */
 const workflow_library = use_workflow_library();
 const { page_open: workflow_page, draft: workflow_draft, saved_id: workflow_saved, deleting: workflow_deleting, leaving: workflow_leaving } = workflow_library;
@@ -262,7 +266,6 @@ function manage_room({ room, action }) {
 function open_archives() { nav_open.value = false; modal.value = "archives"; }
 
 /** Switch the room view (leaving the workflow page) and close the mobile navigation. */
-function choose_tab(value) { nav_open.value = false; workflow_library.close_page(() => { invited_rooms.close(); act("tab", value); }); }
 
 /** The sidebar opened the workflow page: close the mobile navigation. */
 function open_workflows() { nav_open.value = false; invited_rooms.close(); }
@@ -328,6 +331,7 @@ function read_layout() {
       reading: Object.hasOwn(READING_WIDTHS, saved.reading) ? saved.reading : "default",
       effects: saved.effects === "reduced" ? "reduced" : "full",
       fold: FOLD_OPTIONS.some((option) => option.value === saved.fold) ? saved.fold : "loose",
+      card_text: CARD_TEXT_OPTIONS.some((option) => option.value === saved.card_text) ? saved.card_text : "medium",
       rail: Number.isFinite(saved.rail) ? Math.min(RAIL_MAX, Math.max(RAIL_MIN, saved.rail)) : RAIL_DEFAULT,
       nav: Number.isFinite(saved.nav) ? Math.min(NAV_MAX, Math.max(NAV_MIN, saved.nav)) : default_nav_width(),
       collapsed: saved.collapsed === true,
@@ -335,7 +339,7 @@ function read_layout() {
       rail_collapsed: saved.rail_collapsed === true,
       rail_chosen: typeof saved.rail_collapsed === "boolean",
     };
-  } catch { return { reading: "default", effects: "full", fold: "loose", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false, rail_collapsed: false, rail_chosen: false }; }
+  } catch { return { reading: "default", effects: "full", fold: "loose", card_text: "medium", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false, rail_collapsed: false, rail_chosen: false }; }
 }
 
 /** Preserve the existing responsive navigation width on first use. */
@@ -346,7 +350,7 @@ function default_nav_width() {
 
 /** Keep layout preferences local without blocking adjustments when storage is unavailable. */
 function save_layout() {
-  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ reading: reading_width.value, effects: effects.value, fold: fold_level.value, rail: rail_width.value, nav: nav_width.value, collapsed: nav_collapsed.value, brief_collapsed: brief_collapsed.value, rail_collapsed: rail_collapsed.value })); }
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ reading: reading_width.value, effects: effects.value, fold: fold_level.value, card_text: card_text.value, rail: rail_width.value, nav: nav_width.value, collapsed: nav_collapsed.value, brief_collapsed: brief_collapsed.value, rail_collapsed: rail_collapsed.value })); }
   catch { /* The current page can still use the selected layout. */ }
 }
 
@@ -446,7 +450,7 @@ function resize_nav_by_key(event) {
 
 <template>
   <div class="channel-shell" :class="{ 'channel-share': share, 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': !nav_docked, 'channel-has-rail': show_rail }" :style="layout_style">
-    <ChannelSidebar v-if="nav_docked" :tabs="tabs" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @invited="open_invited" @tab="choose_tab" @settings="modal = 'settings'" />
+    <ChannelSidebar v-if="nav_docked" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @invited="open_invited" @settings="modal = 'settings'" />
     <div v-if="nav_docked" class="channel-nav-resizer" role="separator" tabindex="0" :aria-label="t('调整房间栏宽度')" aria-orientation="vertical" aria-controls="channel-sidebar" :aria-valuemin="NAV_MIN" :aria-valuemax="nav_max" :aria-valuenow="effective_nav_width" :aria-valuetext="t('{count} 像素', { count: effective_nav_width })" :title="t('拖动调整房间栏宽度，也可使用方向键')" @pointerdown="start_nav_resize" @pointermove="resize_nav" @pointerup="finish_nav_resize" @pointercancel="finish_nav_resize" @lostpointercapture="finish_nav_resize" @keydown="resize_nav_by_key"></div>
 
     <main class="channel-main">
@@ -588,13 +592,13 @@ function resize_nav_by_key(event) {
     </aside>
 
     <USlideover v-model:open="nav_open" side="left" :title="t('房间导航')" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-navigation-drawer' }">
-      <template #content><ChannelSidebar :tabs="tabs" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @invited="open_invited" @tab="choose_tab" @settings="nav_open = false; modal = 'settings'" /></template>
+      <template #content><ChannelSidebar @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @invited="open_invited" @settings="nav_open = false; modal = 'settings'" /></template>
     </USlideover>
     <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :content="{ onInteractOutside: keep_drawer_for_file_float }" :title="invited_page ? t('外部房间') : room.title" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.host ? t('{value1} 主持', { value1: bridge.display_name(room.host) }) : ''" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
       <template #body><InvitedRoomRail v-if="invited_page" drawer /><FreeBoard v-else @history="info_open = false; open_consensus()" /></template>
     </USlideover>
     <FilePreview />
     <JoinInvitedDialog />
-    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" v-model:fold-level="fold_level" :fold-options="FOLD_OPTIONS" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
+    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" v-model:fold-level="fold_level" v-model:card-text="card_text" :fold-options="FOLD_OPTIONS" :card-text-options="CARD_TEXT_OPTIONS" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
   </div>
 </template>

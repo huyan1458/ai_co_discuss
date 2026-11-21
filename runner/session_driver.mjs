@@ -1,7 +1,7 @@
 /** Smart scheduling and limit checks for a discussion hosted inside a free room. */
 import { readFileSync } from 'node:fs';
 import { api as raw_api, peer_round_question } from './discussion_runner.mjs';
-import { DEFAULT_SCHEDULER_MODE, ROUTE_CONTEXT_MESSAGES, scheduler_thresholds, decide_interjection, decide_next_speaker, decide_round, discussion_prompt_version } from './scheduler.mjs';
+import { DISCUSSION_GUIDED_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_WIDE_CONFIDENCE, SCHEDULER_MODE, decide_interjection, decide_next_speaker, decide_round } from './scheduler.mjs';
 import { room_text, room_payload } from './room_text.mjs';
 const api = (config, path, payload, ...options) => raw_api(config, path, room_payload(payload), ...options);
 
@@ -202,9 +202,8 @@ export class SessionDriver {
       return await api(this.config, '/scheduler-decisions', { kind: plan.kind, label: plan.label,
         confidence: plan.confidence ?? null, applied, provider: this.config.scheduler.provider,
         after_message_id, detail: plan.detail, input: plan.input,
-        context: { model: this.config.scheduler.model, threshold: scheduler_thresholds(this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE).member,
-          wide_threshold: scheduler_thresholds(this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE).wide,
-          mode: this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE, prompt: discussion_prompt_version(this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE), package: PACKAGE_VERSION } });
+        context: { model: this.config.scheduler.model, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_WIDE_CONFIDENCE,
+          mode: SCHEDULER_MODE, prompt: DISCUSSION_GUIDED_PROMPT_VERSION, package: PACKAGE_VERSION } });
     } catch (error) { this.log(`智能调度决策记录未保存：${error.message}`); }
   }
 }

@@ -19,6 +19,7 @@ import InviteDialog from "./InviteDialog.vue";
 import WorkflowControl from "./WorkflowControl.vue";
 import { active_workflow } from "./workflow-state.js";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
+import MemberNameEdit from "./MemberNameEdit.vue";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import MemoBlock from "./memo-block.js";
 import { member_actions } from "./member-actions.js";
@@ -256,8 +257,7 @@ const scheduler = computed(() => {
   if (local_state.value) return "—";
   if (!saved.value.scheduler) return t("未开启");
   const provider = view.value.launch.scheduler_providers?.[saved.value.scheduler.provider]?.label || saved.value.scheduler.provider;
-  const mode = view.value.launch.scheduler_modes?.[saved.value.scheduler.mode];
-  return [provider, saved.value.scheduler.model, mode].filter(Boolean).join(" · ");
+  return [provider, saved.value.scheduler.model].filter(Boolean).join(" · ");
 });
 const HOST_LABEL = t("设为主持人");
 /**
@@ -363,7 +363,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <header class="member-card-head">
             <UIcon v-if="reorderable && order.movable.includes(member.name)" name="i-lucide-grip-vertical" class="member-card-grip" :title="t('拖动调整成员顺序，右栏发言顺序与 @全体依次 同步')" @pointerdown="grabbed = member.name" @pointerup="grabbed = ''" />
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-            <div class="member-card-name"><strong>{{ bridge.display_name(member.name) }}<span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
+            <div class="member-card-name"><strong><MemberNameEdit :name="member.name" :editable="Boolean(view.access?.can_manage)" /><span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
             <!-- The host's crown sits where the other cards offer 设为主持人, so every card shows it in one place. -->
             <span v-if="member.role === 'host'" class="member-card-host is-current" :title="t('主持人')"><UIcon name="i-lucide-crown" /><span data-slot="label">{{ t('主持人') }}</span></span>
             <UButton v-else-if="actions(member).host" class="member-card-host" :title="actions(member).host.label" :icon="actions(member).host.icon" :label="actions(member).host.label" size="xs" variant="ghost" color="neutral" :disabled="actions(member).host.disabled" @click="actions(member).host.onSelect()" />
@@ -440,8 +440,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <WorkflowControl v-if="workflow" :workflow="workflow" />
           <span v-else class="overview-muted">{{ t("没有进行中的工作流；在输入框打 / 或邀请成员时选择") }}</span>
         </dd></div>
-        <div v-if="saved?.registered"><dt>{{ t("主持人完整权限") }}</dt><dd>
-          <HostWorkflowSwitch :model-value="Boolean(saved.host_workflows)" :disabled="!view.access?.can_manage || room.archived" @update:model-value="act('set_room_host_workflows', $event)" />
+        <div v-if="saved?.registered"><dt>{{ t("主持人权限") }}</dt><dd>
+          <HostWorkflowSwitch :model-value="Boolean(saved.host_workflows)" :permissions="saved.host_permissions" :disabled="!view.access?.can_manage || room.archived" @update:model-value="act('set_room_host_workflows', $event)" />
         </dd></div>
         <div v-if="room.free?.max_rounds != null"><dt>{{ t("连续派活上限") }}</dt><dd>
           <template v-if="view.access?.can_manage"><ChainRoundsField :model-value="rounds_shown" :disabled="saving_rounds" @update:model-value="save_rounds" />

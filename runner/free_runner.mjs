@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, cleanup_room, deliver_task, delivery_receipt, recover_turn, session_exists, stored_delivery, takes_images } from './adapters/index.mjs';
+import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, chosen_settings, cleanup_room, deliver_task, delivery_receipt, recover_turn, session_exists, session_settings, stored_delivery, takes_images } from './adapters/index.mjs';
 import { api as raw_api, overlapping_directories, read_rule } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
 import { capture_base, file_diffs } from './file_diff.mjs';
@@ -15,9 +15,10 @@ import { outside_directory, room_directories } from './project_files.mjs';
 import { SessionDriver } from './session_driver.mjs';
 import { slash_names } from './slash_names.mjs';
 import { effective_profile, load_room_workflow, workflow_directory, workflow_in_use, workflow_task_field } from './workflows.mjs';
-import { DEFAULT_SCHEDULER_MODE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, decide_review_completion, route_free_message, route_prompt_version, scheduler_thresholds, some_members } from './scheduler.mjs';
+import { GOAL_CONFIDENCE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_GUIDED_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, SCHEDULER_MODE, decide_review_completion, route_free_message, some_members } from './scheduler.mjs';
 import { room_text, room_payload } from './room_text.mjs';
 import { question_notice } from './question_weixin.mjs';
+import { host_permissions } from './host_permissions.mjs';
 const api = (config, path, payload, ...options) => raw_api(config, path, room_payload(payload), ...options);
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -385,14 +386,16 @@ export function free_task_files(config, member, execution, binding, { session = 
     skills: skills.map(file => join(config.project, '.agents/skills', file)),
     // The workflow's SKILL.md is not a skill read on every task: the host opens it when a request fits its description.
     ...(workflow_field ? { workflow: { ...workflow_field, skill_path: host_workflow.skill_path } } : {}),
-    ...(member.role === 'host' && config.host_workflows ? { host_workflows: true } : {}),
+    ...(member.role === 'host' && config.host_workflows ? { host_workflows: true, host_permissions: host_permissions(config).items } : {}),
     // Present only while the owner has drawing on and this computer has an image service.
     ...(image ? { image: { model: image.model, command: `${cli} launch image --file REQUEST.json` } } : {}),
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
   return { id, participant: member.name, directory: config.directory, member_directory, task_path, draft_directory, extra_directories, ...(goal_field ? { goal: goal_field } : {}),
     ...(goal_of_room ? { room_goal: goal_of_room } : {}),
-    skill_directories: [skills_directory, ...(host_workflow ? [host_workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox, images,
+    // Every member may read the folder of the room's workflow (templates, tools, a review of the workflow itself), also
+    // while its members are away and the host no longer follows it; only the host's task names it.
+    skill_directories: [skills_directory, ...(workflow && !workflow.error ? [workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox, images,
     profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill, ...api_sub_workflows(workflow_field, host_workflow) } } : {}) };
 }
 
@@ -826,7 +829,7 @@ export class FreeRoomRunner {
     } catch (error) { this.log(`Goal ${action === 'wait' ? '等待' : '续跑'}未生效：${error.message}`); }
     finally { this.goal_idle = null; }
     if (decision?.detail) await this.record_decision(decision.after_message_id, decision, decision.label, applied,
-      { prompt: GOAL_PROMPT_VERSION, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_CONFIDENCE, scene: 'goal' });
+      { prompt: GOAL_PROMPT_VERSION, threshold: GOAL_CONFIDENCE, wide_threshold: GOAL_CONFIDENCE, scene: 'goal' });
   }
   /** The Weixin notice an active goal waiting on the owner calls for, or null. */
   pending_notice(room) {
@@ -1025,12 +1028,11 @@ export class FreeRoomRunner {
   }
   /** Show each judgment under its message so the user can rate it; a failed record never affects delivery. */
   async record_decision(message_id, decision, label, applied, context = {}) {
-    const limits = scheduler_thresholds(this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE);
     try {
       return await api(this.config, '/scheduler-decisions', { kind: 'interjection', label, confidence: decision.confidence ?? null,
         applied, provider: this.config.scheduler.provider, after_message_id: message_id, detail: decision.detail, input: decision.input,
-        context: { model: this.config.scheduler.model, threshold: limits.member, wide_threshold: limits.wide,
-          mode: this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE, prompt: route_prompt_version(this.config.scheduler.mode || DEFAULT_SCHEDULER_MODE), package: PACKAGE_VERSION, ...context } });
+        context: { model: this.config.scheduler.model, threshold: ROUTE_CONFIDENCE, wide_threshold: ROUTE_WIDE_CONFIDENCE,
+          mode: SCHEDULER_MODE, prompt: ROUTE_GUIDED_PROMPT_VERSION, package: PACKAGE_VERSION, ...context } });
     } catch (error) { this.log(`智能调度 #${message_id} 决策记录未保存：${error.message}`); }
   }
   /** Reserve with a persisted client id before invoking any software. */
@@ -1185,6 +1187,7 @@ export class FreeRoomRunner {
       const delivery = result.capabilities || capabilities_of(adapter.adapter).delivery;
       await this.report_delivery(execution.id, { ...delivery, steer: Boolean(result.steer),
         resume: Boolean(capabilities_of(adapter.adapter).resume && delivery.stoppable) }, member.name);
+      this.report_model(execution.id, chosen_settings(task.profile));
     } catch (error) {
       if (review_request && error.delivery_status === 'not_sent') return this.reject_review(member, execution, error.message);
       if (adapter.project_access === 'own') return this.retry_or_fail(member.name, execution, `投递失败：${error.message}`);
@@ -1439,6 +1442,12 @@ export class FreeRoomRunner {
     await api(this.config, `/executions/${execution_id}`, { action: 'delivery', stoppable, progress, steer, resume })
       .catch(error => this.log(`执行 #${execution_id} 的投递能力未能上报：${error.message}`));
   }
+  /** Tell the site which model and effort an execution ran with, for its card; a lost report only leaves the card without it. */
+  report_model(execution_id, { model, effort }) {
+    if (!model && !effort) return;
+    api(this.config, `/executions/${execution_id}`, { action: 'model', model, effort })
+      .catch(error => this.log(`执行 #${execution_id} 的模型未能上报：${error.message}`));
+  }
   /** Retry durable stop reports even after the member went idle, left, or started a later execution. */
   async report_stops(active) {
     const pending = new Set();
@@ -1596,7 +1605,12 @@ export class FreeRoomRunner {
       const running = this.execution_processes.get(execution_id)?.size > 0;
       if (running && snapshot.reported_early) continue;
       if (running) snapshot.reported_early = true;
-      else this.snapshots.delete(execution_id);
+      else {
+        this.snapshots.delete(execution_id);
+        // Once the turn is over the software's session log says what really ran (a default model, or one the App chose).
+        const profile = this.config.participants[snapshot.member];
+        if (profile) this.report_model(execution_id, session_settings(profile.adapter, this.store.binding(snapshot.member).session_id));
+      }
       const after = snapshot.before ? workspace_snapshot(snapshot.directory) : null;
       const extra = (snapshot.extras || []).flatMap(item => {
         const current = workspace_snapshot(item.directory);

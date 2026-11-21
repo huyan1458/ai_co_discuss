@@ -17,6 +17,7 @@ import "@vue-flow/core/dist/style.css";
 import "@vue-flow/controls/dist/style.css";
 import "@vue-flow/minimap/dist/style.css";
 import RosterAdd from "./RosterAdd.vue";
+import { sub_member_count } from "./workflow-library.js";
 import { access_label as source_access_label } from "../runner/expert_prompts.mjs";
 import { MAX_EDGE_LABEL, MAX_HOST_LABEL, MAX_LOOP_OFFSET, empty_flow, flow_shape } from "../runner/workflow_flow.mjs";
 import { t } from './i18n.js';
@@ -142,15 +143,32 @@ const nodes = ref(initial.list);
 const edges = ref(initial.edges.filter((edge) => nodes.value.some((node) => node.id === edge.source) && nodes.value.some((node) => node.id === edge.target)).map(to_edge));
 const known = new Set(cards.value);
 
+// The canvas's steps (`stages`): drawn as frames around their nodes; edited in flow.json, kept here as they were loaded.
+const stages = (flow.value?.stages || []).map((stage) => ({ id: stage.id, label: stage.label || "", nodes: [...(stage.nodes || [])] }));
+const STAGE_PADDING = 20, STAGE_TITLE = 26;
+/** Each step's frame around its nodes still on the canvas, with the sub-workflows that attach to it (`attach`). */
+const stage_frames = computed(() => stages.flatMap((stage) => {
+  const members = nodes.value.filter((node) => stage.nodes.includes(node.id));
+  if (!members.length) return [];
+  const size = (node) => [node.dimensions?.width || NODE_WIDTH[node.type] || NODE_WIDTH.card, node.dimensions?.height || NODE_HEIGHT[node.type] || NODE_HEIGHT.card];
+  const left = Math.min(...members.map((node) => node.position.x)) - STAGE_PADDING;
+  const top = Math.min(...members.map((node) => node.position.y)) - STAGE_PADDING - STAGE_TITLE;
+  const right = Math.max(...members.map((node) => node.position.x + size(node)[0])) + STAGE_PADDING;
+  const bottom = Math.max(...members.map((node) => node.position.y + size(node)[1])) + STAGE_PADDING;
+  const attached = (props.subs || []).filter((sub) => (sub.attach || []).includes(stage.id)).map((sub) => sub.label || sub.id);
+  return [{ id: stage.id, label: stage.label || stage.id, attached, style: { left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` } }];
+}));
+
 // What is saved: positions rounded, arrows only between nodes still here.
 const live = computed(() => {
   const ids = new Set(nodes.value.map((node) => node.id));
+  const kept = stages.map((stage) => ({ id: stage.id, ...(stage.label ? { label: stage.label } : {}), nodes: stage.nodes.filter((id) => ids.has(id)) }));
   const noted = (item) => item.data?.label?.trim() ? { label: item.data.label.trim() } : {};
   return { nodes: nodes.value.map((node) => ({ id: node.id, type: node.type, ...(node.type === "card" ? { card: node.data.card } : {}),
     ...(node.type === "sub" ? { sub: node.data.sub } : {}),
     ...(node.type === "host" ? noted(node) : {}), x: Math.round(node.position.x), y: Math.round(node.position.y) })),
     edges: edges.value.filter((edge) => ids.has(edge.source) && ids.has(edge.target)).map((edge) => ({ source: edge.source, target: edge.target, ...noted(edge),
-      ...(edge.data?.offset ? { offset: Math.round(edge.data.offset) } : {}) })) };
+      ...(edge.data?.offset ? { offset: Math.round(edge.data.offset) } : {}) })), ...(kept.length ? { stages: kept } : {}) };
 });
 // The saved form (and through it the undo history, the loop layout and the page's unsaved check) follows the canvas,
 // but not on every frame of a drag: that is taken once the card is let go, so dragging stays smooth.
@@ -331,6 +349,25 @@ function add_sub_node(id) {
   add_node(to_node({ id: next_id("sub_"), type: "sub", sub: id }));
 }
 
+/**
+ * Put a sub-workflow on the main canvas from the parts list, or, when it is there already, find it: either way the view
+ * moves to its node and selects it, so the user sees where it is.
+ */
+function show_sub_node(id) {
+  const existing = nodes.value.find((node) => node.type === "sub" && node.data.sub === id);
+  const node_id = existing?.id || next_id("sub_");
+  if (!existing) add_sub_node(id);
+  // Once Vue Flow has the node (a frame after it is added), centre it at the current zoom.
+  nextTick(() => requestAnimationFrame(() => {
+    const node = instance.value?.findNode(node_id);
+    if (!node) return;
+    instance.value.removeSelectedElements();
+    instance.value.addSelectedNodes([node]);
+    const { zoom } = instance.value.getViewport();
+    instance.value.setCenter(node.position.x + NODE_WIDTH.sub / 2, node.position.y + NODE_HEIGHT.sub / 2, { zoom, duration: 300 });
+  }));
+}
+
 /** Show a sub-workflow; this canvas, about to be replaced, hands back its latest state first. */
 function open_sub(id, fresh = false) {
   flow.value = live.value;
@@ -482,7 +519,7 @@ function fit_options() {
 function fit() {
   if (instance.value) open_view();
 }
-defineExpose({ fit, add_sub_node });
+defineExpose({ fit, show_sub_node });
 
 /** A double click on empty canvas (not a card, an arrow or a floating tool) resets the view to the whole workflow. */
 function pane_double_click(event) {
@@ -827,7 +864,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <div class="workflow-node-body nodrag">
             <span class="workflow-sub-kind"><UIcon name="i-lucide-git-branch" class="workflow-icon" />{{ t('子工作流') }}</span>
             <strong>{{ sub_of(node.data.sub).label || node.data.sub }}</strong>
-            <small>{{ t('{value1} 位成员', { value1: sub_of(node.data.sub).agents.length }) }}</small>
+            <small>{{ t('{value1} 位成员', { value1: sub_member_count(sub_of(node.data.sub), agents) }) }}</small>
             <button type="button" class="workflow-sub-enter" :title="t('进入这个子工作流（也可双击）')" @click.stop="open_sub(node.data.sub)">{{ t('进入') }}<UIcon name="i-lucide-arrow-right" class="workflow-icon" /></button>
             <button type="button" class="workflow-pill-close" :aria-label="t('从画布移除子工作流节点')" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
           </div>
@@ -874,6 +911,11 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
             <span v-else>{{ edge.data.label }}</span>
           </div>
         </EdgeLabelRenderer>
+      </template>
+      <template #zoom-pane>
+        <div v-for="frame in stage_frames" :key="frame.id" class="workflow-stage" :style="frame.style">
+          <span class="workflow-stage-title">{{ frame.label }}<small v-if="frame.attached.length">{{ t('挂靠：{value1}', { value1: frame.attached.join('、') }) }}</small></span>
+        </div>
       </template>
       <Background :gap="22" :size="1.2" color="var(--ui-border-accented)" />
       <Controls :show-interactive="false" position="top-right" class="workflow-canvas-controls" />
@@ -1023,10 +1065,14 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 
 /* Ports: round, larger than Vue Flow's default; the start's pulses while nothing is connected. */
 :deep(.workflow-handle) { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--channel-accent, var(--ui-primary)); background: var(--ui-bg); transition: background .15s; }
+.workflow-stage { position: absolute; z-index: -1; pointer-events: none; border: 1px dashed var(--ui-border-accented); border-radius: 14px;
+  background: color-mix(in srgb, var(--ui-bg-elevated, #888) 40%, transparent); }
+.workflow-stage-title { position: absolute; top: 6px; left: 12px; display: flex; gap: 8px; align-items: baseline; font-size: 12px; font-weight: 600;
+  color: var(--ui-text-muted); white-space: nowrap; }
+.workflow-stage-title small { font-weight: 400; color: var(--ui-text-dimmed); }
 :deep(.workflow-handle:hover) { background: var(--channel-accent, var(--ui-primary)); }
 :deep(.workflow-handle.is-calling) { animation: workflow-call 1.6s ease-out infinite; }
 @keyframes workflow-call { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--channel-accent, #6c7bff) 55%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
-@media (prefers-reduced-motion: reduce) { :deep(.workflow-handle.is-calling) { animation: none; } }
 :deep(.workflow-edge) { stroke: var(--ui-text-dimmed); stroke-width: 1.6; }
 :deep(.workflow-edge.is-loop) { stroke: #c99a2e; stroke-dasharray: 6 5; }
 :deep(.vue-flow__edge.selected:has(.workflow-edge.is-under)) { cursor: ns-resize; }

@@ -24,6 +24,16 @@ export function workflow_problem(item) {
   return t('本机未配置这些卡片的软件：{value1}。可在工作流页的“专家配置”里换用本机已有的软件', { value1: cards });
 }
 
+/**
+ * How many members a sub-workflow uses: its own cards and the main flow's cards (`main_agents`) placed on its canvas,
+ * each once. The parts list and the sub-workflow's node on the main canvas show the same number.
+ */
+export function sub_member_count(sub, main_agents) {
+  const known = new Set([...main_agents, ...sub.agents].map((agent) => agent.card));
+  const placed = (sub.flow?.nodes || []).filter((node) => node.type === "card" && known.has(node.card)).map((node) => node.card);
+  return new Set([...sub.agents.map((agent) => agent.card), ...placed]).size;
+}
+
 /** The shared library, created on first use with the injected discussion context. */
 export function use_workflow_library() {
   if (!library) library = effectScope(true).run(() => create_library(inject("discussion")));
@@ -32,14 +42,15 @@ export function use_workflow_library() {
 
 /**
  * A canvas as saved: only nodes of cards (`agents`) and sub-workflows (`subs`, IDs) that exist, and only edges between
- * kept nodes; one with only its start is none.
+ * kept nodes; one with only its start is none. Its steps (`stages`) keep only kept nodes.
  */
 function saved_flow(flow, agents, subs = []) {
   const cards = new Set(agents.map((agent) => agent.card));
   const kept = (node) => node.type === "card" ? cards.has(node.card) : node.type !== "sub" || subs.includes(node.sub);
   const nodes = flow_in_use(flow) ? flow.nodes.filter(kept) : null;
   const ids = new Set((nodes || []).map((node) => node.id));
-  return nodes ? { nodes, edges: flow.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) } : null;
+  const stages = (flow?.stages || []).map((stage) => ({ ...stage, nodes: (stage.nodes || []).filter((id) => ids.has(id)) }));
+  return nodes ? { nodes, edges: flow.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)), ...(stages.length ? { stages } : {}) } : null;
 }
 
 /**

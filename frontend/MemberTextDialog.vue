@@ -22,12 +22,21 @@ const props = defineProps({
   saving: Boolean,
   /** Shown but not editable, such as a prompt that comes from a workflow card. */
   readonly: Boolean,
+  /** A visible name for the text box and a line on what the text is for. */
+  caption: { type: String, default: "" },
+  hint: { type: String, default: "" },
+  /** Float beside what opened it instead of centring over the page: { top, right, width } in pixels; the page stays usable. */
+  anchor: { type: Object, default: null },
 });
 const open = defineModel("open", { type: Boolean, default: false });
 const draft = defineModel("draft", { type: String, default: "" });
 const emit = defineEmits(["save"]);
 // The counter only draws attention once the limit is close.
 const near_limit = computed(() => draft.value.length >= props.max * 0.9);
+const content = computed(() => ({
+  onInteractOutside: (event) => event.preventDefault(),
+  ...(props.anchor ? { style: { top: `${props.anchor.top}px`, right: `${props.anchor.right}px`, left: "auto", width: `${props.anchor.width}px`, translate: "none" } } : {}),
+}));
 
 /** Saving an unchanged text would only close the dialog, so the button and the shortcut both wait for a change. */
 function save() {
@@ -36,7 +45,7 @@ function save() {
 </script>
 
 <template>
-  <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" :title="title" :description="description" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+  <UModal :content="content" v-model:open="open" :title="title" :description="description" :overlay="!anchor" :modal="!anchor" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>
       <form class="member-text" @submit.prevent="save">
         <slot name="lead" />
@@ -52,12 +61,14 @@ function save() {
           <p><b>{{ source.tag }}</b>{{ source.text }}</p>
           <button type="button" @click="draft = source.text">{{ source.action }}</button>
         </div>
+        <div v-if="caption" class="member-text-caption"><span>{{ caption }}</span><small>{{ hint }}</small></div>
         <UTextarea v-model="draft" :rows="rows" :maxlength="max" autoresize :maxrows="rows * 2" autofocus class="w-full" :aria-label="label" :placeholder="placeholder" :readonly="readonly"
           @keydown.enter.ctrl.prevent="save" @keydown.enter.meta.prevent="save" />
         <div class="member-text-meta">
           <span>{{ note }}</span>
           <span :class="{ 'is-near': near_limit }">{{ draft.length }} / {{ max }}</span>
         </div>
+        <slot name="below" />
         <div class="member-text-footer">
           <div><slot name="extra" /></div>
           <UButton :label="t('取消')" color="neutral" variant="ghost" @click="open = false" />
@@ -85,6 +96,8 @@ function save() {
 .member-text-source b { margin-right: 6px; color: var(--ui-text-toned); font-weight: 500; }
 .member-text-source > button { padding: 0 6px; border-radius: 4px; color: var(--channel-accent); font-size: 12px; line-height: 20px; white-space: nowrap; }
 .member-text-source > button:hover { background: var(--ui-bg-accented); }
+.member-text-caption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin-top: 4px; margin-bottom: -2px; color: var(--ui-text-muted); font-size: 12px; }
+.member-text-caption > small { color: var(--ui-text-dimmed); font-size: 11px; }
 .member-text-meta { display: flex; justify-content: space-between; gap: 12px; margin-top: -2px; color: var(--ui-text-dimmed); font-size: 11px; }
 .member-text-meta > span:last-child { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .member-text-meta > .is-near { color: var(--ui-warning, #e0a33a); }

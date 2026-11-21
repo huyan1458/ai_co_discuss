@@ -181,7 +181,7 @@ const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: ""
   named_followup: false, create_discussion: false, create_goal: null,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0, removing_members: new Set(),
   reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
-  snapshot_id: 0, pending_submission: null, pending_room: null, toast_timer: null, queued_taken: 0,
+  snapshot_id: 0, pending_room: null, toast_timer: null, queued_taken: 0,
   // When live room data stopped (page hidden, connection lost); null while it is current. Silence is judged only up to here.
   observed_until: null,
   // Back from the background: the transcript shows the opening load until the next full read finishes.
@@ -218,6 +218,16 @@ const BACKGROUND_ROOM_LIMIT = 8;
 const BACKGROUND_PROGRESS_INTERVAL_MS = 5000;
 // marks: what the directory said of each room when it was last read. queue: room id to the mark being read.
 const background_reads = { marks: new Map(), read_at: new Map(), queue: new Map(), running: false, generation: 0 };
+// Whether each room was at work when the directory was last read, so its turning idle can be announced once.
+const room_running_seen = new Map();
+
+/** Announce in the toaster each room whose work ended since the directory was last read. */
+function announce_idle_rooms(rooms) {
+  for (const room of rooms) {
+    if (room_running_seen.get(room.id) && !room.running && !room.archived) notify("info", t('「{name}」已空闲', { name: room.title }));
+    room_running_seen.set(room.id, Boolean(room.running));
+  }
+}
 
 /** Cards of a later transcript batch replace the same ones read before; each kind is keyed by its id. */
 function merge_history_cards(base, batch) {
@@ -242,16 +252,12 @@ state.attachment_drafts = [];
 // Composer drafts set aside by editing a queued message, newest last; each send from the composer brings one back.
 state.stashed_drafts = [];
 state.upload_status = "";
-state.sending_message = false;
-// The message being sent, shown in the transcript as soon as Send is pressed until the site answers;
-// a failed send leaves it for a failed card (failed_sends), kept until it is sent again or discarded.
+// A server-queued message the user chose to send now.
 state.sending_preview = null;
-// The message being sent that the site will likely queue, shown as a row in the queue tray until the site answers.
-state.queueing_preview = null;
 // The queued message whose files are being read for editing, and those already in the composer while the site removes them.
 state.queue_reading = 0;
 state.queue_taking = new Set();
-// Sends that failed, each kept as a card that sends it again: [{ id, preview, room_id, draft, drafts, reply_to, submission }].
+// Failed submissions retain their original room, payload and attachments for retry until the page closes.
 state.failed_sends = [];
 state.attachment_preview = null;
 state.archive_changes = new Map();
@@ -266,6 +272,7 @@ state.admin = { loaded: false, local: false, registered: false, setup_available:
 state.device = { id: "", needs: "", pairing_code: "", pairing_fp: "", prompt: null };
 state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], hidden_builtins: [], workflows: [], description_templates: {}, workspace: {}, scheduler: {}, create_preferences: {}, error: "", recoveries: [] };
 state.create_host_workflows = false;
+state.create_host_permissions = null;
 // Mirrors DEFAULT_API_MAX_REQUESTS in runner/adapters/profiles.mjs; this classic script cannot import it.
 const DEFAULT_API_MAX_REQUESTS = 300;
 state.create_api_max_requests = DEFAULT_API_MAX_REQUESTS;
@@ -1298,6 +1305,7 @@ async function refresh_room({ room: read_room = true } = {}) {
   const directory = await directory_read;
   if (version !== state.refresh_version) return;
   sync_background_rooms(directory.rooms);
+  announce_idle_rooms(directory.rooms);
   if (!state.directory_pending.size && directory_version === state.directory_version) {
     state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version, archive_version, directory_version));
     set_folder_directory(directory);
@@ -1391,8 +1399,8 @@ async function select_room(room_id) {
   // A room opened before is shown as last read, with the directory's newer title, folder and archive state, until the site answers.
   const cached = listed && room_views.get(room_id);
   state.room = cached ? { ...cached, ...listed } : listed;
+  state.upload_status = "";
   state.sending_preview = null;
-  state.queueing_preview = null;
   state.page = 1;
   state.query = "";
   state.mention_only = false;
@@ -1401,10 +1409,6 @@ async function select_room(room_id) {
   state.card_kinds = [];
   state.context_dirty = false;
   state.topic_dirty = false;
-  state.pending_submission = null;
-  state.sending_drafts = null;
-  for (const failed of state.failed_sends) release_files(failed.drafts);
-  state.failed_sends = [];
   clear_attachment_drafts();
   for (const stashed of state.stashed_drafts) release_files(stashed.drafts);
   state.stashed_drafts = [];
@@ -1586,7 +1590,9 @@ function apply_create_preferences() {
     idle_seconds: preferences.goal_idle_seconds ?? GOAL_IDLE_SECONDS } : null;
   state.create_chain_rounds = preferences.chain_rounds ?? DEFAULT_CHAIN_ROUNDS;
   state.create_host_workflows = preferences.host_workflows ?? false;
+  state.create_host_permissions = preferences.host_permissions ?? null;
   state.create_api_max_requests = preferences.api_max_requests ?? DEFAULT_API_MAX_REQUESTS;
+  state.create_relay_rounds = preferences.relay_rounds ?? 0;
   for (const field of ["max_rounds", "max_minutes"]) {
     const control = element(`new-room-limit-${field}`);
     if (control && preferences[field] !== undefined) control.value = String(preferences[field]);
@@ -1630,7 +1636,7 @@ async function refresh_create_preferences() {
   try {
     const settings = await local_launch_request("settings");
     if (version !== create_preferences_version) return;
-    for (const field of ["api_keys", "scheduler_providers", "scheduler_default_mode", "workflows"]) {
+    for (const field of ["api_keys", "scheduler_providers", "workflows"]) {
       if (settings[field] !== undefined) state.launch[field] = settings[field];
     }
     state.launch.create_preferences = { ...settings.create_preferences, ...create_preferences_pending };
@@ -1662,6 +1668,8 @@ const DESCRIPTION_TEMPLATE_PREFIX = "discuss-description-template:";
 const description_drafts = {};
 // A display label a card brings from a named preset; the room keeps it so screens show it instead of the instance name.
 const label_drafts = {};
+// The saved preset each card was added from, by card name: its "update preset" saves back to that preset.
+const preset_origins = {};
 
 /** Templates this browser kept before they moved to the local service, by platform. */
 function browser_description_templates() {
@@ -1737,7 +1745,15 @@ function apply_expert_preset(name, preset) {
   description_drafts[name] = preset.description || "";
   // A second copy of a preset keeps the number its instance name got: 评审官 → 评审官2.
   if (preset.label) label_drafts[name] = preset.label + name.slice(preset.name.length);
+  // A workflow's card is built for that workflow alone and never updates a saved preset.
+  if (expert_presets().includes(preset)) preset_origins[name] = preset.name;
+  else delete preset_origins[name];
   publish_view();
+}
+
+/** The saved preset a card was added from, or "" for a card of its own. */
+function preset_origin(name) {
+  return preset_origins[name] || "";
 }
 
 /** Rename one card before the room or invitation is submitted; empty goes back to its default name. */
@@ -1752,9 +1768,10 @@ function label_draft(name) {
   return label_drafts[name] || "";
 }
 
-/** The name a card shows: its preset label, else the room's or platform's display name. */
+/** The name a draft card shows: its given label, else the platform's default. The open room's labels belong to
+ * that room's members, not to a draft that happens to reuse one of their names. */
 function member_label(name) {
-  return label_drafts[name] || display_name(name);
+  return label_drafts[name] || default_name(name);
 }
 
 /** The instance a preset of this platform is saved under for a free name: the name itself when it is already one, else platform-name. */
@@ -1784,10 +1801,13 @@ function add_preset_instance(container_id, preset, value) {
 /** Save one card as the user's preset, under a new display label or, without one, updating the preset of its own name. */
 async function save_expert_preset(name, label) {
   const profile = state.launch.profiles[name] || {};
-  const id = label === undefined ? name : preset_identity(name, label);
-  const shown = label === undefined ? expert_presets().find(item => item.name === name)?.label || "" : label.trim();
+  const id = label === undefined ? preset_origins[name] || name : preset_identity(name, label);
+  const shown = label === undefined ? expert_presets().find(item => item.name === id)?.label || "" : label.trim();
   const preset = { name: id, ...shown && shown !== id ? { label: shown } : {}, description: description_draft(name).trim(), project_access: profile.project_access || "read" };
-  for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(profile, field) && profile[field] !== "") preset[field] = profile[field];
+  // Model and effort are always kept, "" meaning the software's own default, so a card added from the preset never
+  // takes whatever the platform's card was last set to.
+  for (const field of ["model", "effort"]) preset[field] = profile[field] || "";
+  if (Object.hasOwn(profile, "system_prompt") && profile.system_prompt !== "") preset.system_prompt = profile.system_prompt;
   try {
     await save_presets({ presets: [...state.launch.presets.filter(item => item.name !== id), preset] });
     show_toast(t('已存为预设「{value1}」', { value1: preset.label || id }));
@@ -1811,24 +1831,31 @@ function description_draft(name) {
   return description_drafts[name] ?? description_template(name);
 }
 
+/** Start a fresh card without the name and description an earlier card of this name left behind. */
+function clear_card_drafts(name) {
+  delete description_drafts[name];
+  delete label_drafts[name];
+  delete preset_origins[name];
+}
+
 /** Change one card's description before the room or invitation is submitted. */
 function write_description_draft(name, text) {
   description_drafts[name] = text;
   publish_view();
 }
 
-/** Save descriptions by member name with the room credential; a failure leaves the room as created. */
+/** Save descriptions by member name with the room credential, else this browser's administrator authority; a failure leaves the room as created. */
 async function send_descriptions(room_id, token, descriptions) {
   const filled = Object.fromEntries(Object.entries(descriptions).filter(([, text]) => text?.trim()));
-  if (!room_id || !token || !Object.keys(filled).length) return;
+  if (!room_id || !Object.keys(filled).length) return;
   try { await request_json(`/api/rooms/${room_id}/descriptions`, { descriptions: filled }, token); }
   catch (error) { notify("warning", t('成员描述未保存：{value1}，可在发言顺序的成员菜单里重新填写。', { value1: error.message })); }
 }
 
-/** Save display labels by member name with the room credential; a failure leaves the members under their names. */
+/** Save display labels by member name with the room credential, else this browser's administrator authority; a failure leaves the members under their names. */
 async function send_labels(room_id, token, labels) {
   const filled = Object.fromEntries(Object.entries(labels).filter(([, text]) => text?.trim()));
-  if (!room_id || !token || !Object.keys(filled).length) return;
+  if (!room_id || !Object.keys(filled).length) return;
   try { await request_json(`/api/rooms/${room_id}/labels`, { labels: filled }, token); }
   catch (error) { notify("warning", t('成员显示名未保存：{value1}，房间里按成员名显示。', { value1: error.message })); }
 }
@@ -1964,11 +1991,29 @@ async function change_member({ member_id, name, action, role, latest_id, quiet =
     if (!quiet && state.room?.id === room_id) notify("info", member.access === "manual" ? t('{value1} 已请回，凭证已更新；请用新的启动指令让它重新注册。', { value1: name }) : t('{value1} 已请回，续接原会话。', { value1: name }));
   } else {
     const live = action === "interrupt" ? live_executions_of(member_id) : [];
+    const previous_host = role === "host" ? (state.room.free?.members || state.room.members).find(item => item.role === "host" && item.id !== member_id) : null;
     await request_json(`/api/rooms/${room_id}/members/${member_id}${action === "interrupt" ? "/interrupt" : ""}`,
       action === "interrupt" ? {} : { action, ...(role ? { role } : {}), ...(latest_id !== undefined ? { latest_id } : {}) });
     warn_unstoppable(live);
+    if (previous_host) await inherit_host_access(room_id, name, previous_host.name);
   }
   if (state.room?.id === room_id) await refresh_room();
+}
+
+/**
+ * The new host takes over the previous host's project access as far as its own software goes; this computer decides
+ * the level and the page says what changed. The host change itself is already saved, so a failure here is only reported.
+ */
+async function inherit_host_access(room_id, name, previous) {
+  try {
+    const result = await local_launch_request("room-member-access", { room_id, token: localStorage.getItem(`discuss-access:${room_id}`), name, inherit_from: previous });
+    if (!result?.changed) return;
+    if (state.launch.room_models?.room_id === room_id) state.launch.room_models = { ...state.launch.room_models, revision: "", loading: false };
+    notify("info", t('{name} 接任主持人，项目权限已随原主持人改为“{level}”', { name, level: ACCESS_LABELS[result.project_access] || result.project_access }));
+    if (state.room?.id === room_id) await load_room_models();
+  } catch (error) {
+    notify("warning", t('{name} 已设为主持人，但项目权限没有随原主持人调整：{reason}', { name, reason: error.message }));
+  }
 }
 
 /** Reorder who has not spoken yet against the revision the board showed; a changed order is refused and the board reloads. */
@@ -2025,11 +2070,13 @@ async function invite_member({ name, access, project_access = "read", session_id
 }
 
 /** Clear only the composer that produced the saved message. */
-async function finish_message(result, room_id, drafts) {
+async function finish_message(result, job) {
+  const { room_id } = job;
+  if (state.room?.id !== room_id) {
+    show_toast(t('发往「{room}」的留言已保存 · #{id}', { room: job.room_title, id: result.message.id }));
+    return;
+  }
   show_toast(t('留言已保存 · #{value1}', { value1: result.message.id }));
-  if (state.room?.id !== room_id || state.sending_drafts !== drafts) return;
-  // The composer was emptied on send; what is in it now was typed since and stays.
-  state.pending_submission = null;
   state.query = "";
   state.mention_only = false;
   state.host_only = false;
@@ -2042,32 +2089,19 @@ async function finish_message(result, room_id, drafts) {
   // place in the same render as the room's other changes (its request, the host's working card). Swapping it in first
   // and the rest a moment later laid the transcript out twice, and on a phone the page jumped and flashed in between.
   const saved_id = result.message.id;
-  // Shown in the queue tray because the room looked busy, but the site posted it (the work had just ended): the row moves
-  // into the transcript as the sending card, so the message is never off screen until the room is read again (#4391).
-  if (!state.sending_preview && state.queueing_preview) {
-    const { queued_ids, ...shown } = state.queueing_preview;
-    state.sending_preview = shown;
-    state.queueing_preview = null;
-  }
-  if (state.sending_preview) state.sending_preview = { ...state.sending_preview, saved_id };
+  job.queueing = null;
+  job.preview = { ...job.preview, saved_id };
   publish_view();
-  refresh_room().catch(() => {}).finally(() => {
-    if (state.sending_preview?.saved_id !== saved_id) return;
-    release_files(state.sending_preview.release || []);
-    state.sending_preview = null;
-    if (state.room?.id === room_id && !state.messages.some(message => message.id === saved_id)) {
-      render_messages({ messages: [...state.messages, { ...result.message, just_sent: true }], total: state.message_total + 1, page: 1, pages: 1 });
-    }
-    publish_view();
-  });
+  await refresh_room().catch(() => {});
+  if (state.room?.id === room_id && !state.messages.some(message => message.id === saved_id)) {
+    const messages = [...state.messages, { ...result.message, just_sent: true }].sort((a, b) => a.id - b.id);
+    render_messages({ messages, total: state.message_total + 1, page: 1, pages: 1 });
+  }
 }
 
-/** A message the site queued: clear the composer; it waits above the composer until the room is idle. */
-async function finish_queued(result, room_id, drafts) {
-  if (state.room?.id !== room_id || state.sending_drafts !== drafts) return;
-  state.pending_submission = null;
-  state.sending_preview = null;
-  state.queueing_preview = null;
+/** Move the local sending card to the room's queue once the site confirms it. */
+async function finish_queued(result, room_id) {
+  if (state.room?.id !== room_id) return;
   if (state.room.free) state.room = { ...state.room, free: { ...state.room.free, queued_messages: result.queue } };
   run_action(refresh_room);
 }
@@ -2214,7 +2248,6 @@ async function delete_queued(id) {
  */
 async function send_queued(id) {
   const item = state.room?.free?.queued_messages?.items?.find(entry => entry.id === id);
-  // A send from the composer already owns the sending card; this one then just waits in its row.
   const preview = item && !state.sending_preview
     ? { author: "用户", text: item.text, created_at: new Date().toISOString(), files: item.attachments.map(file => ({ name: file.file_name })) } : null;
   if (preview) { state.sending_preview = preview; publish_view(); }
@@ -2222,43 +2255,78 @@ async function send_queued(id) {
   finally { if (preview && state.sending_preview === preview) { state.sending_preview = null; publish_view(); } }
 }
 
-/** Submit one message; reuse its identifier if a network failure requires a retry. */
+// The unsaved submissions of this page, in click order, including the one on its way to the site.
+const send_queue = [];
+
+/** Cards belonging to the open room, until its saved messages replace them. */
+function room_sending_previews() {
+  const cards = send_queue.filter(job => job.room_id === state.room?.id && !job.queueing && !job.queued && !job.preview.failed
+    && !(job.preview.saved_id && state.messages.some(message => message.id === job.preview.saved_id)))
+    .map(job => job.preview);
+  if (state.sending_preview) cards.push(state.sending_preview);
+  return cards;
+}
+
+/** Predict the server's queue decision using the recipients and the room's current work. */
+function predicted_queue(payload, queue) {
+  if (!payload.queue || !queue) return null;
+  const items = queue.items || [];
+  const waits = name => queue.busy_members?.includes(name) || items.some(item => item.to?.includes(name));
+  const side = payload.to?.length && !payload.sequential && payload.order !== "auto";
+  const likely = side ? payload.to.every(waits) : queue.busy || items.length;
+  return likely ? { queued_ids: items.map(item => item.id) } : null;
+}
+
+/** A pushed queue row can arrive before the POST receipt; only the in-flight local row can be its duplicate. */
+function room_queueing_previews() {
+  const items = state.room?.free?.queued_messages?.items || [];
+  return send_queue.filter(job => job.room_id === state.room?.id && job.queueing && !job.queued && !job.preview.failed
+    && (job.preview.waiting || !items.some(item => !job.queueing.queued_ids.includes(item.id))))
+    .map(job => job.preview);
+}
+
+/** Capture the room, contents and receipt before releasing the composer for the next message. */
 async function send_message(event) {
   event.preventDefault();
-  if (!state.room || state.sending_message) return;
-  const room_id = state.room.id, drafts = state.attachment_drafts;
-  const payload = message_payload();
-  let saved = false;
+  if (!state.room) return;
+  const drafts = state.attachment_drafts, payload = message_payload();
   if (!payload.text && !drafts.length) return;
-  const signature = JSON.stringify({ room: room_id, ...payload, files: drafts.map(file => file.id) });
-  if (state.pending_submission?.signature !== signature) state.pending_submission = { signature, id: new_submission_id() };
-  payload.submission_id = state.pending_submission.id;
-  element("send-message").disabled = true;
-  state.sending_message = true;
-  // The text, the reply and the files leave the composer at once and live on as the sending card; a failed send stays
-  // there as a failed card that sends again, and the composer is never filled back (2026-11-12 user's choice).
-  const draft = element("message-input").value;
-  element("message-input").value = "";
-  const reply_to = state.reply_to;
-  cancel_reply();
-  const preview = { author: payload.author, text: payload.text, created_at: new Date().toISOString(), attachment_start: draft_start(drafts) || 1,
+  const id = new_submission_id();
+  payload.submission_id = id;
+  const preview = { id, author: payload.author, text: payload.text, created_at: new Date().toISOString(), attachment_start: draft_start(drafts) || 1,
     files: drafts.map(file => ({ id: file.id, name: file.file.name, preview_url: file.preview_url, uploaded: Boolean(file.uploaded) })) };
-  state.sending_drafts = drafts;
+  const job = { id, room_id: state.room.id, room_title: state.room.title || state.room.id, drafts, payload, preview };
+  element("message-input").value = "";
   state.attachment_drafts = [];
-  // A message the site will likely queue shows at once as a row in the queue tray instead of a card in the transcript,
-  // which would flash before moving above the composer. Like the site, a message naming members (not everyone, not in turn)
-  // goes at once to those not busy and with nothing queued for them; only when none of them is free does it wait.
-  const queue = state.room.free?.queued_messages;
-  const named = [...new Set(payload.to || [])];
-  const side = named.length && !payload.sequential && payload.order !== "auto";
-  const waits = name => (queue?.busy_members || []).includes(name) || (queue?.items || []).some(item => (item.to || []).includes(name));
-  const likely_queued = payload.queue && (side ? named.every(waits) : (queue?.busy || queue?.items?.length));
-  state.sending_preview = likely_queued ? null : preview;
-  // The rows already queued, so the first snapshot listing a new one swaps it in for this row (see publish_view).
-  state.queueing_preview = likely_queued ? { ...preview, queued_ids: (queue.items || []).map(item => item.id) } : null;
-  let sent;
-  state.sending_done = new Promise(resolve => { sent = resolve; });
+  cancel_reply();
+  render_attachment_drafts();
+  return enqueue_send(job);
+}
+
+/** Start after the preceding submission settles, even if it failed. */
+function enqueue_send(job) {
+  const previous = send_queue.at(-1)?.submitted || Promise.resolve();
+  job.submitted = new Promise(resolve => { job.finish_submission = resolve; });
+  job.queueing = predicted_queue(job.payload, state.room.free?.queued_messages);
+  job.preview = { ...job.preview, waiting: true };
+  send_queue.push(job);
+  job.done = previous.then(() => deliver_send(job)).finally(() => {
+    job.finish_submission();
+    send_queue.splice(send_queue.indexOf(job), 1);
+    publish_view();
+  });
   publish_view();
+  return job.done;
+}
+
+async function deliver_send(job) {
+  const { room_id, drafts, payload } = job;
+  if (job.queueing && state.room?.id === room_id) {
+    job.queueing.queued_ids = (state.room.free?.queued_messages?.items || []).map(item => item.id);
+  }
+  job.preview = { ...job.preview, waiting: false };
+  publish_view();
+  let saved = false;
   const deliver = async () => {
     payload.attachment_ids = await upload_message_attachments(room_id, payload.submitted_by, drafts);
     if (draft_start(drafts)) payload.attachment_start = draft_start(drafts);
@@ -2277,42 +2345,33 @@ async function send_message(event) {
         // Only a failure of the network is tried again (unconfirmed, the computer briefly away, a dropped or timed-out
         // request); a refusal by the site would be refused again.
         const network = error.unconfirmed || error.offline || ["TypeError", "AbortError", "TimeoutError"].includes(error.name);
-        if (!network || attempt >= SEND_RETRY_MS.length || state.room?.id !== room_id) throw error;
-        if (state.sending_preview) state.sending_preview = { ...state.sending_preview, retrying: attempt + 1 };
+        if (!network || attempt >= SEND_RETRY_MS.length) throw error;
+        job.preview = { ...job.preview, retrying: attempt + 1 };
         publish_view();
         await new Promise((resolve) => setTimeout(resolve, SEND_RETRY_MS[attempt]));
       }
     }
     saved = true;
+    job.finish_submission();
     // The sender's room rises as soon as the message is saved, without waiting for the next directory read.
     if (result.message?.created_at) patch_directory_room(room_id, { latest_speech_at: result.message.created_at });
-    if (result.queued) await finish_queued(result, room_id, drafts);
-    else await finish_message(result, room_id, drafts);
+    if (result.queued) {
+      job.queued = true;
+      await finish_queued(result, room_id);
+    }
+    else await finish_message(result, job);
   } catch (error) {
-    if (state.room?.id !== room_id) throw error;
-    // An unsaved message stays as a failed card in place, the one signal of this failure; the card keeps what it sends again.
     if (saved) notify_failure(error, t('留言已保存，但页面刷新失败：{value1}', { value1: error.message }));
     else {
-      state.failed_sends = [...state.failed_sends, { id: new_submission_id(), preview: { ...preview, failed: error.message },
-        room_id, draft, drafts, reply_to, submission: state.pending_submission }];
+      job.preview = { ...job.preview, failed: error.message };
+      state.failed_sends = [...state.failed_sends, job];
+      if (state.room?.id !== room_id) notify("error", t('发往「{room}」的消息未发出，回到该房间可重新发送', { room: job.room_title }));
       error.notified = true;
     }
     throw error;
   } finally {
-    state.sending_message = false;
-    // A saved message's card stays until the saved card replaces it (finish_message), and keeps its file previews till then.
-    const kept = saved && state.sending_preview?.saved_id ? state.sending_preview : null;
-    if (kept) kept.release = drafts;
-    // Previews of files not kept by a failed card are no longer shown anywhere.
-    else if (!state.failed_sends.some((failed) => failed.drafts === drafts)) release_files(drafts);
-    if (state.sending_drafts === drafts) state.sending_drafts = null;
-    sent(saved);
-    if (!kept) state.sending_preview = null;
-    state.queueing_preview = null;
-    state.upload_status = "";
-    element("send-message").disabled = false;
-    render_attachment_drafts();
-    publish_view();
+    if (saved) release_files(drafts);
+    if (state.room?.id === room_id) state.upload_status = "";
   }
 }
 
@@ -2327,30 +2386,15 @@ function release_files(drafts) {
  */
 async function retry_sending(id) {
   const failed = state.failed_sends.find((item) => item.id === id);
-  if (!failed || state.sending_message || state.room?.id !== failed.room_id) return;
-  const typed = element("message-input").value, typed_drafts = state.attachment_drafts, typed_reply = state.reply_to;
-  const typed_submission = state.pending_submission, reply_hidden = element("reply-preview").hidden;
-  element("message-input").value = failed.draft;
-  state.attachment_drafts = failed.drafts;
-  state.reply_to = failed.reply_to;
-  state.pending_submission = failed.submission;
+  if (!failed || state.room?.id !== failed.room_id) return;
   state.failed_sends = state.failed_sends.filter((item) => item !== failed);
-  // send_message takes the message before its first wait; the composer gets back what it held.
-  const sending = send_message({ preventDefault() {} });
-  element("message-input").value = typed;
-  state.attachment_drafts = typed_drafts;
-  state.reply_to = typed_reply;
-  element("reply-preview").hidden = reply_hidden;
-  if (typed_submission) state.pending_submission = typed_submission;
-  render_attachment_drafts();
-  publish_view();
-  await sending;
+  return enqueue_send({ ...failed, preview: { ...failed.preview, failed: "", retrying: 0 } });
 }
 
 /** Drop a failed card and the message it held. */
 function discard_sending(id) {
   const failed = state.failed_sends.find((item) => item.id === id);
-  if (!failed) return;
+  if (!failed || state.room?.id !== failed.room_id) return;
   release_files(failed.drafts);
   // Files of a send the site never saved are taken back; one it did save refuses, and stays with its message.
   failed.drafts.forEach(discard_draft_upload);
@@ -2609,7 +2653,7 @@ function report_upload_percent(item, percent, phase = "upload") {
 
 /** How far a draft file in the composer or being sent has come; its percent is null when none is measured. */
 function upload_progress(id) {
-  const item = [...state.attachment_drafts, ...(state.sending_drafts || [])].find(draft => draft.id === id);
+  const item = [...state.attachment_drafts, ...send_queue.flatMap(job => job.drafts)].find(draft => draft.id === id);
   return { percent: item?.upload_percent ?? null, phase: item?.upload_phase ?? "upload" };
 }
 
@@ -2646,16 +2690,19 @@ async function upload_message_attachments(room_id, actor, drafts) {
     // A file still uploading from the composer finishes first, so it is not sent twice.
     if (item.uploading) await item.uploading;
     if (!item.uploaded || item.actor !== actor) {
-      state.upload_status = t('正在上传 {value1}/{value2} · {value3}', { value1: index + 1, value2: drafts.length, value3: item.file.name });
+      if (state.room?.id === room_id) state.upload_status = t('正在上传 {value1}/{value2} · {value3}', { value1: index + 1, value2: drafts.length, value3: item.file.name });
       render_attachment_drafts();
       publish_view();
       await upload_draft(room_id, actor, item);
     }
     identifiers.push(item.uploaded);
     // The sending card (or the queue tray's row) shows each file as uploading until it is in; its status says what is left.
-    const shown = state.sending_preview ? "sending_preview" : "queueing_preview";
-    const preview = state.sending_drafts === drafts && state[shown]?.files?.[index];
-    if (preview && !preview.uploaded) { preview.uploaded = true; state[shown] = { ...state[shown], files: [...state[shown].files] }; publish_view(); }
+    const job = send_queue.find(job => job.drafts === drafts);
+    if (job && !job.preview.files[index].uploaded) {
+      job.preview.files[index].uploaded = true;
+      job.preview = { ...job.preview, files: [...job.preview.files] };
+      publish_view();
+    }
   }
   return identifiers;
 }
@@ -2678,7 +2725,7 @@ function paste_attachments(event) {
 /** What a preview button carries, so the preview opens at once instead of first asking the site about the file. */
 function attachment_preview_attributes(file) {
   const name = escape_html(file.file_name);
-  return `data-preview-attachment="${escape_html(file.id)}" data-attachment-room="${escape_html(file.room_id)}" data-file-name="${name}" data-content-type="${escape_html(file.content_type)}" data-file-size="${Number(file.size) || 0}" data-created-at="${escape_html(file.created_at || "")}" aria-label="${escape_html(t("预览 {name}", { name: file.file_name }))}"`;
+  return `data-preview-attachment="${escape_html(file.id)}" data-attachment-room="${escape_html(file.room_id)}" data-file-name="${name}" data-content-type="${escape_html(file.content_type)}" data-file-size="${Number(file.size) || 0}" data-created-at="${escape_html(file.created_at || "")}" data-message-id="${Number(file.message_id) || 0}" aria-label="${escape_html(t("预览 {name}", { name: file.file_name }))}"`;
 }
 
 /** A download link's attributes; files of the computer's rooms are read through the relay. */
@@ -2783,12 +2830,13 @@ async function preview_attachment(input) {
   // DOM datasets use camelCase; API records use snake_case.
   const file_name = input.file_name || input.fileName, content_type = input.content_type || input.contentType;
   const file_size = input.file_size ?? input.fileSize ?? input.size, created_at = input.created_at || input.createdAt;
+  const message_id = Number(input.message_id ?? input.messageId) || 0;
   close_attachment_preview();
   const preview = { page: 1, zoom: 1, render_version: 0 };
   state.attachment_preview = preview;
   // A button rendered by attachment_markup names the file; an older caller passes only its ID.
   const known = file_name && content_type;
-  const file = known ? { room_id, id, file_name, content_type, size: Number(file_size) || 0, created_at: created_at || "" }
+  const file = known ? { room_id, id, file_name, content_type, size: Number(file_size) || 0, created_at: created_at || "", message_id }
     : await request_json(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(id)}`);
   if (state.attachment_preview !== preview) return;
   // The Vue workspace opens the preview window at once and reads the file there, with its loading animation; PDF
@@ -4138,7 +4186,7 @@ async function load_launch_settings({ relay_known = () => {} } = {}) {
     state.launch.create_preferences = { ...settings.create_preferences, ...create_preferences_pending };
     Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], projects_restricted: settings.projects_restricted === true, user_home: settings.user_home || "", api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {}, managed_api_keys: settings.managed_api_keys || [],
       presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], hidden_builtins: settings.hidden_builtins || [], workflows: settings.workflows || [], card_platforms: settings.platforms || [], description_templates: settings.description_templates || {},
-      scheduler_providers: settings.scheduler_providers || {}, scheduler_modes: settings.scheduler_modes || {}, scheduler_default_mode: settings.scheduler_default_mode || "", invite_site: settings.invite_site || null, error: "",
+      scheduler_providers: settings.scheduler_providers || {}, invite_site: settings.invite_site || null, error: "",
       notice: relay_machine ? t('经电脑「{value1}」执行本机操作', { value1: relay_machine.name }) : local_connection ? t('已连接本机服务，讨论保存在当前网站') : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
     move_browser_description_templates();
@@ -4218,7 +4266,7 @@ let members_seen = null;
 function room_models_fields(result) {
   return { participants: result.participants, registered: result.registered,
     scheduler: result.scheduler || null, project_directory: result.project_directory || "", extra_directories: result.extra_directories || [],
-    workflow: result.workflow || null, host_workflows: Boolean(result.host_workflows), api_max_requests: result.api_max_requests,
+    workflow: result.workflow || null, host_workflows: Boolean(result.host_workflows), host_permissions: result.host_permissions || null, api_max_requests: result.api_max_requests,
     image_generation: Boolean(result.image_generation), image_configured: Boolean(result.image_configured) };
 }
 
@@ -4726,9 +4774,9 @@ function launch_options() {
 
 /** A new room also carries the optional smart scheduling choice; only a complete, enabled choice is sent. */
 function creation_launch_options() {
-  const { enabled, provider, model, api_key_ref, mode } = state.launch.scheduler;
-  return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref, ...(mode ? { mode } : {}) } } : {}),
-    ...(state.create_host_workflows ? { host_workflows: true } : {}),
+  const { enabled, provider, model, api_key_ref } = state.launch.scheduler;
+  return { ...launch_options(), ...(enabled && provider && model && api_key_ref ? { scheduler: { provider, model, api_key_ref } } : {}),
+    ...(state.create_host_workflows ? { host_workflows: true, ...(state.create_host_permissions ? { host_permissions: state.create_host_permissions } : {}) } : {}),
     ...(state.create_api_max_requests !== DEFAULT_API_MAX_REQUESTS ? { api_max_requests: state.create_api_max_requests } : {}),
     ...(state.create_image_generation ? { image_generation: true } : {}) };
 }
@@ -4736,6 +4784,13 @@ function creation_launch_options() {
 /** Whether the new room lets its members draw with this computer's image service. */
 function write_create_image_generation(value) {
   state.create_image_generation = Boolean(value);
+  publish_view();
+}
+
+/** How many messages the hosts of two linked rooms may pass each other before the owner speaks again (0 = no limit). */
+function write_create_relay_rounds(value) {
+  state.create_relay_rounds = value;
+  write_create_preferences({ relay_rounds: value });
   publish_view();
 }
 
@@ -4797,13 +4852,13 @@ async function set_room_image_generation(enabled) {
 }
 
 /**
- * Turn this room's smart scheduling on with `{provider, model, api_key_ref, mode}`, change it, or turn it off with null;
+ * Turn this room's smart scheduling on with `{provider, model, api_key_ref}`, change it, or turn it off with null;
  * the running service picks it up at its next check. Throws the local service's reason.
  */
 async function set_room_scheduler(scheduler) {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
-  const value = scheduler && { provider: scheduler.provider, model: scheduler.model, api_key_ref: scheduler.api_key_ref, ...(scheduler.mode ? { mode: scheduler.mode } : {}) };
+  const value = scheduler && { provider: scheduler.provider, model: scheduler.model, api_key_ref: scheduler.api_key_ref };
   const result = await local_launch_request("room-settings", { room_id, token, scheduler: value });
   update_room_models(room_id, { scheduler: result.scheduler || null });
 }
@@ -4815,18 +4870,20 @@ function update_room_models(room_id, fields) {
   publish_view();
 }
 
-/** Whether the new room's host may save and enable workflows by itself, inviting their cards. */
+/** What the new room's host may do by itself: the ticked items as `{ items, room_limit }`, or true / false for all the single switch covered. */
 function write_create_host_workflows(value) {
-  state.create_host_workflows = Boolean(value);
-  write_create_preferences({ host_workflows: state.create_host_workflows });
+  const permissions = value && typeof value === "object" ? value : null;
+  state.create_host_permissions = permissions;
+  state.create_host_workflows = permissions ? permissions.items.length > 0 : Boolean(value);
+  write_create_preferences({ host_workflows: state.create_host_workflows, ...(permissions ? { host_permissions: permissions } : {}) });
   publish_view();
 }
 
-/** Grant or withdraw this room's host the right to save and enable workflows by itself. */
+/** Save what this room's host may do by itself: the ticked items as `{ items, room_limit }`, or true / false for the single switch. */
 async function set_room_host_workflows(allowed) {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
-  await local_launch_request("room-workflow", { room_id, token, action: "host", allowed: Boolean(allowed) });
+  await local_launch_request("room-workflow", { room_id, token, action: "host", ...(allowed && typeof allowed === "object" ? { permissions: allowed } : { allowed: Boolean(allowed) }) });
   await reload_room_models();
 }
 
@@ -4926,7 +4983,7 @@ function default_scheduler() {
   const provider = Object.keys(providers).find((name) => state.launch.api_keys?.[providers[name].base_url]);
   if (!provider) return {};
   const { base_url, models } = providers[provider];
-  return { enabled: true, provider, model: models[0] || "", api_key_ref: state.launch.api_keys[base_url], mode: state.launch.scheduler_default_mode || "" };
+  return { enabled: true, provider, model: models[0] || "", api_key_ref: state.launch.api_keys[base_url] };
 }
 
 /** Change the smart scheduling draft; a new provider starts from its preset model and any key saved for its root. */
@@ -4939,8 +4996,8 @@ function write_scheduler(field, value) {
     scheduler.model = preset?.models[0] || "";
     scheduler.api_key_ref = preset ? state.launch.api_keys?.[preset.base_url] || "" : "";
   }
-  const { enabled = false, provider = "", model = "", mode = "" } = scheduler;
-  write_create_preferences({ scheduler: { enabled, provider, model, mode } });
+  const { enabled = false, provider = "", model = "" } = scheduler;
+  write_create_preferences({ scheduler: { enabled, provider, model } });
   publish_view();
 }
 
@@ -5503,8 +5560,11 @@ async function stop_and_rewind(room_id, message_id, refusal) {
 
 /** Take back the owner's latest message, after a send still in flight is saved; the site refuses once a member started on it. */
 async function retract_latest() {
-  if (state.sending_message) {
-    if (!await state.sending_done) return;
+  const room_id = state.room?.id;
+  const last = send_queue.findLast(job => job.room_id === room_id);
+  if (last) {
+    try { await last.done; } catch { return; }
+    if (state.room?.id !== room_id) return;
   }
   const message = state.messages.findLast(item => item.author === "用户" && !item.withdrawn);
   if (message) await retract_message(message.id);
@@ -6312,15 +6372,6 @@ async function initialize() {
 
 /** Publish a presentation snapshot shared by the legacy and Vue renderers. */
 function publish_view() {
-  // A sent message's card gives way in the same snapshot that first holds the saved message.
-  if (state.sending_preview?.saved_id && state.messages.some(message => message.id === state.sending_preview.saved_id)) {
-    release_files(state.sending_preview.release || []);
-    state.sending_preview = null;
-  }
-  // Likewise a queued message's row gives way in the first snapshot listing it in the queue: a room refresh started by
-  // a live update can bring it before the site's answer to the send, and both rows showed until that answer came.
-  const queueing = state.queueing_preview;
-  if (queueing && state.room?.free?.queued_messages?.items?.some(item => !queueing.queued_ids.includes(item.id))) state.queueing_preview = null;
   document.dispatchEvent(new CustomEvent("discuss:view"));
 }
 
@@ -6332,14 +6383,15 @@ function view_snapshot() {
     .map((control) => [control.id, control.value]));
   const experts = Object.fromEntries(["new-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
+  const sending_previews = room_sending_previews();
   return { room_source: { computer: computer_rooms_only(), signed_in: state.admin.logged_in, remote: state.remote_rooms, online: state.remote_online },
     room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: shown_room(), archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, history_cards: state.history_cards, total: state.message_total,
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     connected: state.connected, reconnecting: state.reconnecting, rooms_loading: state.rooms_loading, observed_until: state.observed_until, resuming: state.resuming, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url, placeholder: item.placeholder || "" })),
-    upload_status: state.upload_status, sending_message: state.sending_message, sending_preview: state.sending_preview, queueing_preview: state.queueing_preview, queue_reading: state.queue_reading, queue_taking: [...state.queue_taking],
-    failed_sends: state.failed_sends.map((failed) => ({ id: failed.id, ...failed.preview })),
+    upload_status: state.upload_status, sending_message: send_queue.some(job => job.room_id === state.room?.id), sending_previews, sending_preview: sending_previews[0] || null, queueing_previews: room_queueing_previews(), queue_reading: state.queue_reading, queue_taking: [...state.queue_taking],
+    failed_sends: state.failed_sends.filter(job => job.room_id === state.room?.id).map((failed) => ({ id: failed.id, ...failed.preview })),
     mention_only: state.mention_only, host_only: state.host_only, authors: state.authors, card_kinds: state.card_kinds,
     source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, queued_taken: state.queued_taken,
     access: access_snapshot(), admin: admin_snapshot(), entry_account: state.entry_account || "",
@@ -6348,7 +6400,7 @@ function view_snapshot() {
     share: SHARE ? { exported_at: SHARE.exported_at, home: SHARE_HOME } : null,
     share_draft: share_draft ? { room_id: share_draft.room_id, title: share_draft.title, spots: share_draft.spots } : null,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_api_max_requests: state.create_api_max_requests, create_image_generation: state.create_image_generation };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_host_permissions: state.create_host_permissions, create_api_max_requests: state.create_api_max_requests, create_relay_rounds: state.create_relay_rounds ?? 0, create_image_generation: state.create_image_generation };
 }
 
 /** Update a shared draft using the same input events as the original controls; `publish: false` leaves the views to keep their own copy. */
@@ -6942,8 +6994,8 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input, upload_progress,
-  write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, remove_launch_projects, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
+  write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, clear_card_drafts, preset_origin, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
+  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, remove_launch_projects, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, write_create_relay_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_size, attachment_file_icon, add_attachments, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,

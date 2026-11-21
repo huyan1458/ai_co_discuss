@@ -116,6 +116,7 @@ watch(() => room.value.id, () => { inviting.value = false; invite_picks.value = 
 /** Add a card for a platform, again for a second instance; one without local software starts on its API, as in the create form. */
 function add_invite(name) {
   bridge.default_launch_entry(name);
+  if (!invite_picks.value.some((pick) => pick.name === name)) bridge.clear_card_drafts(name);
   invite_picks.value = [...invite_picks.value, { id: ++invite_pick_seq, name, mode: "cli" }];
 }
 

@@ -12,6 +12,8 @@ Message a member or host, understand main and branch work and assignment labels,
 - **Ask all members.** Type `@all` to have everyone present answer in parallel. Type `@all-seq` to have members answer in the order shown in the sidebar’s “Speaking order”.
 - **Reply, search, and filter.** Use “Reply” in a message menu to link a reply to the original. Use “View original” to read its full text and summary. At the top of the room, “Search messages” searches the conversation and “Filter messages and cards” filters by author, host, mentions, or card type.
 
+- **Send several messages in a row.** You can send the next message while the previous one still shows “Sending…”. If the room is busy and a message is expected to queue, it appears immediately above the composer. The confirmed queue entry takes its place. The browser submits messages in order and continues if one fails. The failed card keeps the original text and attachments so you can resend or discard it. Sending and network retries continue if you switch rooms. Return to the original room to find its failed cards. Refreshing or closing the page clears unsent messages held by that page.
+
 ### 2. Understand main lines, branches, and assignment labels
 
 Room work can run on several lines in parallel. Labels at the top of a card show which line the work belongs to and what should happen when it finishes.
@@ -20,10 +22,12 @@ Room work can run on several lines in parallel. Labels at the top of a card show
   - With message queuing enabled, a directly mentioned member starts immediately when idle. If busy, its request waits in the queue until it is free. If one message mentions both idle and busy members, idle members start at once while the busy members’ work waits.
   - When a main-line member’s turn arrives, it waits for that member to finish its active branch work.
   - With message queuing enabled, your unmentioned messages, `@all`, and `@all-seq` wait until the room is idle, then go out in order. Background work assigned by the host does not hold up your new messages.
-- **Card labels.**
-  - “Host” identifies a message from the current host. A host note also has its own host marker.
+- **Where things sit on a card.** Every member card has, from top to bottom: the header, the body, what it delivers (answer summary, attachments, delivered files) and the run’s record (progress notes with step count, file changes, refused operations). In the header, the name and labels are on the left, and a coloured label only means something went wrong (red for failed; amber for stopped, voided or skipped); the time and number sit below the name; the model, effort and duration sit at the right end. Stop and retry sit at the right end of the line they act on.
+- **Card labels.** Where the card came from comes first, then where the work goes next. The usual channels (own message, CLI, API) are no longer labelled; only rare sources such as sent on someone’s behalf, proactive messages and auto-captured answers are.
+  - “Host” identifies a message from the current host, host notes included.
   - “Main line · step {n}” is a host-arranged order. “Main line · #{n} in turn” is `@all-seq`.
-  - “Branch” marks a directly mentioned member’s work running alongside the main line.
+  - “Branch” marks a directly mentioned member’s work running alongside the main line. Failed and stopped cards keep these labels.
+- **Model and reasoning effort**: a member’s answer card, working card, failed card and stopped card show the model and effort that run actually used (for example `gpt-6.2-sol · medium`) before its duration, and so does a run’s detail on the Runs page. It records what was used at the time, so changing the member’s model later does not change older cards; when it cannot be read (an external member, for example) nothing is shown. On a phone, when space runs short only the start of the model ID is cut, keeping its end and the effort.
 - **Labels on the host’s work assignments.**
   - “Back to the host when done”: wake the host when all assigned members finish, including failures, so the host can decide what to do next.
   - “Straight to you when done”: give you the member’s answers without returning to the host. Failures still go back to the host.
@@ -68,7 +72,7 @@ When a member needs you to make a decision, a question card appears above the co
 
 ### 7. Inspect a run and troubleshoot a room
 
-- Open **Runs** in the left sidebar and select **Waterfall**. The timeline shows when each member started, how long it ran, and where it spent time waiting. Select a member's name for the run's status, start time, and duration. Select a segment to inspect the recorded details for that phase.
+- Open **Runs** in the tabs at the top of the room and select **Waterfall**. The timeline shows when each member started, how long it ran, and where it spent time waiting. Select a member's name for the run's status, start time, and duration. Select a segment to inspect the recorded details for that phase.
 - To handle a permission denial, return to the conversation and expand the run report on its failure or reply card. **Allow and resend** appears when the report includes a rule that can be allowed, the local service is available, and the original request can be found. Review the rule before selecting it. The original message returns to the composer for you to confirm and send.
 - If a member never woke up or an action was rejected, open **Runs → Events**. The **Event log** shows operations in time order, their outcomes, and the resulting state changes. Select a row to inspect its original record and related events. From a terminal on the local computer, run `codiscuss room events <ROOM_ID>` to read the same log.
 

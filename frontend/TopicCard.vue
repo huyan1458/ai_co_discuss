@@ -1,4 +1,5 @@
 <script setup>
+import { HOST_ITEMS, normalize_host_permissions } from '../runner/host_permissions.mjs';
 import { t } from './i18n.js';
 import { computed, inject, nextTick, ref, watch } from "vue";
 
@@ -32,7 +33,7 @@ function settings_summary(value) {
   const items = [];
   if (saved?.scheduler) items.push(t('智能调度'));
   if (saved?.image_generation) items.push(t('生图'));
-  if (saved?.host_workflows) items.push(t('主持人完整权限'));
+  if (saved?.host_workflows) items.push(normalize_host_permissions(saved.host_permissions, true).items.length === HOST_ITEMS.length ? t('主持人完整权限') : t('主持人部分权限'));
   if (value.free?.max_rounds != null) items.push(value.free.max_rounds ? t('连续派活 {count} 轮', { count: value.free.max_rounds }) : t('连续派活不限'));
   const has_api = Object.values(saved?.participants || {}).some((member) => member?.adapter === "api");
   if (has_api) {

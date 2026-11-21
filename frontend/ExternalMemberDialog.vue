@@ -49,6 +49,10 @@ async function load() {
   finally { if (serial === load_serial) loading.value = false; }
 }
 watch([open, () => room.value?.id, () => props.member?.id], () => {
+  if (!open.value) {
+    load_serial++;
+    return;
+  }
   reads.value = []; detail.value = null; reinviting.value = props.reinvite;
   load();
 }, { immediate: true });

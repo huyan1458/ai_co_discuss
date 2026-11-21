@@ -18,6 +18,7 @@ import { format_duration } from "./LimitPicker.vue";
 import ProgressBoard from "./ProgressBoard.vue";
 import SpeakingOrder from "./SpeakingOrder.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
+import MemberNameEdit from "./MemberNameEdit.vue";
 import { busy, member_actions } from "./member-actions.js";
 import MemoBlock from "./memo-block.js";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
@@ -247,13 +248,13 @@ function member_row_key(member, state) {
   const identity = bridge.identities[member.name];
   return JSON.stringify([member, state, discussion.value, member_tag(member), member_setup(member), member_model(member),
     bridge.participant_session_hint(member.name, room.value, view.value.launch.room_models), bridge.display_name(member.name),
-    room.value.descriptions?.[member.name], external_declined.value.has(member.id), external_of(member) && Math.floor(clock.value / CLOCK_TICK_MS), in_workflow(member.name) && workflow.value.label, identity?.icon, identity?.initials, identity?.style,
+    room.value.descriptions?.[member.name], can_describe.value, external_declined.value.has(member.id), external_of(member) && Math.floor(clock.value / CLOCK_TICK_MS), in_workflow(member.name) && workflow.value.label, identity?.icon, identity?.initials, identity?.style,
     view.value.access, room.value.session?.status, view.value.launch.available]);
 }
 
 /** The rail's quick entry to a member's actions; the room overview lays the same list out in full. */
 function member_menu(member) {
-  return member_actions(member, { view: view.value, act, describe: (name) => { describing.value = name; },
+  return member_actions(member, { view: view.value, act, describe,
     external: (target) => { external_member.value = target; external_reinvite.value = false; external_open.value = true; },
     revoke: (target) => revoke_member(bridge, act, room.value.id, target),
     copy_link: async (target) => { if (await copy_seat_link(bridge, room.value.id, target.id)) bridge.notify("info", t("已复制邀请链接")); } });
@@ -286,6 +287,27 @@ watch(() => [room.value.id, free.value.members], ([room_id, members]) => {
 }, { immediate: true });
 // The member whose description is open for editing; the scheduler and the host read it from the room.
 const describing = ref(""), describing_saving = ref(false);
+// Where the editor floats: beside the rail when there is room, else centred as a dialog.
+const describing_anchor = ref(null);
+const board = ref(null);
+const can_describe = computed(() => Boolean(view.value.access?.can_manage));
+const ANCHORED_WIDTH = 420, ANCHORED_HEIGHT = 560, ANCHOR_GAP = 8, ANCHOR_MARGIN = 16;
+
+/** Open the name and description editor of one member. */
+function describe(name) {
+  describing_anchor.value = anchor_of(name);
+  describing.value = name;
+}
+
+/** Where the editor floats for a member's row: left of the rail, level with the row; none in the drawer or a narrow window. */
+function anchor_of(name) {
+  const row = board.value?.querySelector(`[data-member="${CSS.escape(name)}"]`);
+  if (!row || board.value.closest(".progress-drawer")) return null;
+  const rail = board.value.getBoundingClientRect();
+  if (rail.left - ANCHOR_GAP - ANCHOR_MARGIN < ANCHORED_WIDTH) return null;
+  const top = Math.max(ANCHOR_MARGIN, Math.min(row.getBoundingClientRect().top - ANCHOR_MARGIN, window.innerHeight - ANCHORED_HEIGHT));
+  return { top, right: window.innerWidth - rail.left + ANCHOR_GAP, width: ANCHORED_WIDTH };
+}
 watch(() => room.value.id, () => { inviting.value = false; describing.value = ""; });
 
 /** Save one member's description in this room, and optionally as its platform's default for later rooms. */
@@ -309,7 +331,7 @@ watch(() => room.value.id, () => { starting.value = false; });
 </script>
 
 <template>
-  <div class="progress-board is-docked">
+  <div ref="board" class="progress-board is-docked">
     <header class="pb-header"><strong>{{ discussion ? t('讨论进度') : t('房间') }}</strong><span class="pb-mode">{{ host ? t('{value1} 主持', { value1: bridge.display_name(host.name) }) : t('无主持人') }}</span></header>
     <ProgressBoard v-if="discussion" />
     <section v-else class="pb-status" :class="`is-${status.tone}`" :aria-label="t('房间状态')">
@@ -364,10 +386,12 @@ watch(() => room.value.id, () => { starting.value = false; });
         <template #default="{ item }">
           <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state)]">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-            <div class="pb-member-body">
-              <div class="pb-member-name" :title="room.descriptions?.[member.name] || undefined">{{ bridge.display_name(member.name) }}<span v-if="!external_of(member) && bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
+            <div class="pb-member-body" :data-member="member.name">
+              <div class="pb-member-name"><MemberNameEdit :name="member.name" :editable="can_describe" /><span v-if="!external_of(member) && bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
+              <button v-if="room.descriptions?.[member.name] && can_describe" type="button" class="pb-member-description" :title="room.descriptions[member.name]" :aria-label="t('编辑 {value1} 的描述', { value1: member.name })" @click="describe(member.name)">{{ room.descriptions[member.name] }}</button>
+              <div v-else-if="room.descriptions?.[member.name]" class="pb-member-description" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</div>
               <div v-if="member_setup(member) || in_workflow(member.name)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)"><small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>{{ member_setup(member) }}</div>
-              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
+              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span><button v-if="can_describe && !room.descriptions?.[member.name]" type="button" class="pb-member-describe" @click="describe(member.name)">{{ t('添加描述') }}</button></div>
             </div>
             <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="t('{value1} 的更多操作', { value1: member.name })" /></UDropdownMenu>
           </MemoBlock>
@@ -399,7 +423,7 @@ watch(() => room.value.id, () => { starting.value = false; });
   <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" :description="t('新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。')" />
   <ExternalMemberDialog v-model:open="external_open" :member="external_member" :reinvite="external_reinvite" />
   <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
-    :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
+    :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving" :anchor="describing_anchor"
     @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
   </div>
 </template>
@@ -423,6 +447,12 @@ watch(() => room.value.id, () => { starting.value = false; });
 .speaking-order-row .pb-member-body { line-height: 1.35; }
 .pb-workflow-member { color: var(--ui-text-muted); font-size: 10px; }
 .pb-workflow-member:not(:last-child)::after { content: " · "; }
+/* The description takes one line; the full text shows on hover and a click edits it. */
+.pb-member-description { display: block; max-width: 100%; overflow: hidden; padding: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.35; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+button.pb-member-description:hover { color: var(--ui-text-highlighted); }
+/* Offered only while the row is pointed at, on the status line, so no row changes height. */
+.pb-member-describe { display: none; flex-shrink: 0; margin-left: auto; padding: 0; color: var(--channel-accent); font-size: 11px; }
+.pb-member:hover .pb-member-describe, .pb-member-describe:focus-visible { display: block; }
 .pb-member-model { margin: 1px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
 .member-id { margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }

@@ -52,8 +52,4 @@ const WAITING_SHARE = 0.25;
 @container (max-height: 39px) { .upload-ring-number { display: none; } }
 .upload-ring-leave-active { transition: opacity .18s ease-out; }
 .upload-ring-leave-to { opacity: 0; }
-@media (prefers-reduced-motion: reduce) {
-  .is-waiting svg { animation: none; }
-  .upload-ring-value, .upload-ring-leave-active { transition: none; }
-}
 </style>

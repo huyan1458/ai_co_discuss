@@ -263,7 +263,8 @@ function save_description({ text, label, as_template }) {
 }
 
 // A preset keeps this card's description, prompt, project access, model and effort under its name for later rooms.
-const own_preset = computed(() => view.value.launch.presets.some((preset) => preset.name === props.name));
+// A card added from a saved preset (built-in ones included) updates that preset; any other card saves a new one.
+const own_preset = computed(() => Boolean(view.value && bridge.preset_origin(props.name)) || view.value.launch.presets.some((preset) => preset.name === props.name));
 // A card not added from its own preset is saved under a name the user gives; the platform prefix is only a suggestion.
 const naming = ref(false), naming_draft = ref("");
 const saving_preset = ref(false);
@@ -430,8 +431,12 @@ watch(back, (open) => {
   else document.removeEventListener("pointerdown", close_on_outside, true);
 });
 
-// The flip always plays, even under prefers-reduced-motion: the user asked to keep it.
-watch(back, (next) => { turning.value = true; angle.set(next ? BACK_ANGLE : 0); });
+watch(back, (next) => {
+  const target = next ? BACK_ANGLE : 0;
+  turning.value = document.documentElement.dataset.motion !== "off";
+  if (turning.value) angle.set(target);
+  else angle.jump(target);
+});
 // Prefetch as soon as the card can use a catalog, so flipping does not wait on a slow CLI query.
 watch(() => [configurable.value, view.value.launch.available, profile.value.adapter],
   ([enabled, available]) => { if (enabled && available) load_models(); }, { immediate: true });
@@ -539,7 +544,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </div>
         <span class="expert-card-flip-actions">
           <template v-if="view.launch.available && !workflow && !preset && !joining">
-            <button type="button" class="expert-card-flip is-cancel" :disabled="saving_preset" :aria-label="t('{value1}预设「{value2}」', { value1: own_preset ? t('更新') : t('存为'), value2: name })" :title="t('存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入')" @click="save_preset">{{ saving_preset ? t('保存中…') : own_preset ? t('更新预设') : t('存为预设') }}</button>
+            <button type="button" class="expert-card-flip is-cancel" :disabled="saving_preset" :aria-label="t('{value1}预设「{value2}」', { value1: own_preset ? t('更新') : t('存为'), value2: own_preset ? bridge.preset_origin(name) || name : name })" :title="t('存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入')" @click="save_preset">{{ saving_preset ? t('保存中…') : own_preset ? t('更新预设') : t('存为预设') }}</button>
           </template>
           <button type="button" class="expert-card-flip is-cancel" :aria-label="t('放弃 {value1} 的修改', { value1: name })" @click="cancel">{{ t('取消') }}</button>
           <button ref="back_button" type="button" class="expert-card-flip is-done" :aria-label="t('保存并返回 {value1} 角色卡片', { value1: name })" @click="flip(false)"><UIcon name="i-lucide-check" />{{ t('完成') }}</button>

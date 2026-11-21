@@ -21,12 +21,12 @@ Rerunning setup replaces selected bundled workflows with the package versions. B
 
 ### 2. Enable, refresh, and end a room workflow
 
-1. **Allow the host to enable workflows:** When creating a room, turn on “Full host control” under “How to work (optional)”. In an existing room, open **Room → Members and settings** in the left sidebar and turn it on under “Collaboration settings.” The host then has permission to enable a workflow and invite its members.
+1. **Allow the host to enable workflows:** When creating a room, turn on “Full host control” under “How to work (optional)”. In an existing room, open **Room → Members and settings** in the tabs at the top of the room and turn it on under “Collaboration settings.” The host then has permission to enable a workflow and invite its members.
 2. **Enable a workflow:** Type / in the composer, choose a saved workflow, add what you want done, and send the message to the host. The composer inserts /workflow-id. The host enables it, adds any missing workflow members, and assigns work according to the workflow.
    - Each card in the main workflow defines a role, including its description, member prompt, software, model, effort, and project access. Members already mapped to a card and present in the room keep their identity. Away members are invited back. Sub-workflow roles join when used. Workflow prompts are read-only in a room. Edit them on the Workflows page.
 3. **Add new roles:** If you add cards to a workflow later, existing rooms do not add those members automatically. The host adds them when needed, or you can click the refresh icon on the workflow row in the right panel.
 4. **Use a sub-workflow:** While a workflow is active, type / in the composer and choose an item under “Sub-workflows of ‘name’.” Send it to the host to run that procedure. Members used only by the sub-workflow are marked away when it is done. Their sessions are kept.
-5. **End a workflow in a room:** On the workflow row under “Collaboration settings” in **Room → Members and settings** in the left sidebar, click the dismiss-members control. Workflow members leave, the host stays, and active work stops. Their sessions are kept, and selecting that workflow again can bring the members back. To disable a workflow in your local library, open the “…” menu beside it on the Workflows page and choose “Disable.”
+5. **End a workflow in a room:** On the workflow row under “Collaboration settings” in **Room → Members and settings** in the tabs at the top of the room, click the dismiss-members control. Workflow members leave, the host stays, and active work stops. Their sessions are kept, and selecting that workflow again can bring the members back. To disable a workflow in your local library, open the “…” menu beside it on the Workflows page and choose “Disable.”
 
 ### 3. Create or edit workflows with workflow-creator
 
@@ -42,6 +42,8 @@ Select a workflow on the Workflows page. The canvas opens in the center, and its
 
 - **The canvas is a diagram:** You can move cards, add host nodes, connect nodes to show order or loops, add notes to connections, or choose “Auto arrange.” Click a connection or its note to select it before editing; once a gold loop is selected, drag it up or down to change its height. Dragging an unselected connection or note just pans the canvas. The program does not execute canvas connections, and the host cannot see the canvas.
 - **The host follows SKILL.md:** The skill file defines order, parallel work, when to return to the host, and when to revise. The host follows those written instructions. When workflow-creator creates or edits a workflow, it updates the canvas to reflect the skill file.
+- **Steps and attached sub-workflows:** The canvas can group nodes into steps, shown as named dashed frames that list the sub-workflows attached to each step. Steps and attachments live in flow.json and in each sub-workflow's SKILL.md (workflow-creator maintains them). Like the canvas they are only a diagram; the host still decides from SKILL.md whether to use a sub-workflow at that step.
+- **Several members for one card:** The host can bring in several members for the same card under different display names, for example one member per character. A display name applies to this room only, and asking for the same name again brings back the same member with its own session.
 
 ### 5. “Full host control” and workflows
 
@@ -53,4 +55,5 @@ Select a workflow on the Workflows page. The canvas opens in the center, and its
 
 - **Changes reach active rooms:** Rooms using a workflow read its latest instructions and member prompts on their next run. Existing members’ models, effort, and project access remain room settings.
 - **Review imported workflows:** Importing a ZIP or folder shows a canvas preview. Cards that can write files are imported read-only until you enable them individually. If a workflow includes commands.json to register local commands for read-only API members, the editor shows the full commands. They run only after you enable “Allow these commands to run on this computer.” The host cannot add or remove local commands while drafting or editing a workflow.
+- **Allow only part of it:** Expand “Items” under “Full host control” and tick them one by one: “Handle execution problems”, “Adjust member settings”, “Change project access”, “Manage the member list”, “How work proceeds”, “Workflows” and “Create rooms”. Saving and enabling workflows needs “Workflows”; an action whose item is not ticked is refused, and the host is told which item is missing.
 - **You keep key decisions:** Even with “Full host control,” only you can change the host, approve assignment rounds above the limit, grant project access above write, change project folders, withdraw your messages, or use private chat.

@@ -15,7 +15,7 @@ import { free_task_files, member_folders } from '../runner/free_runner.mjs';
 function runtime_file(directory, name) {
   return member_folders(directory).map(folder => join(folder, name)).find(path => existsSync(path)) || join(directory, name);
 }
-import { assert_workflow_enabled, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_in_use } from '../runner/workflows.mjs';
+import { assert_workflow_enabled, delete_workflow, effective_profile, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_in_use, workflow_task_field } from '../runner/workflows.mjs';
 
 const NOVEL = {
   id: 'novel-serial', label: '连载小说', description: '主编出骨架，执笔写正文',
@@ -201,6 +201,8 @@ test('the host is told of the workflow to read on demand and its present members
   const writer_file = JSON.parse(readFileSync(runtime_file(config.directory, 'free-2.task.json'), 'utf8'));
   assert.equal(writer_file.workflow, undefined);
   assert.ok(!writer_file.skills.some(path => path.includes('workflows')));
+  // A member may read the workflow folder too, though its task does not name it.
+  assert.deepEqual(writer.skill_directories.slice(1), [join(home, 'workflows', 'novel-serial')]);
   assert.match(writer.prompt, /克制、具体。/);
   assert.doesNotMatch(writer.prompt, /旧提示词/);
   assert.equal(writer.profile.project_access, 'write');
@@ -317,6 +319,48 @@ test('sub-workflows live in workflows/<id>/ as workflows of their own: their car
   // An API host has no files outside the project, so it gets each sub-workflow's text in its system prompt.
   assert.match(system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'free', workflow: host.workflow }), /子工作流「剧情试演」（rehearsal）[\s\S]*请主角视角试演。/);
   assert.match(task('Claude-hero').prompt, /你就是主角。/, 'a sub-workflow member gets its card prompt');
+});
+
+test('the canvas names its steps and a sub-workflow says where it attaches: soft, warned about but never refused, and told to the host', t => {
+  const home = home_fixture(t);
+  const nodes = [{ id: 'start', type: 'start' }, { id: 'w', type: 'card', card: 'writer' }, { id: 's', type: 'sub', sub: 'rehearsal' }];
+  const rehearsal = { id: 'rehearsal', label: '剧情试演', description: '请主角视角试演一场戏', skill: '试演。', attach: ['brief'],
+    agents: [{ card: 'hero', name: 'Claude-hero', label: '角色', system_prompt: '你就是这个人物。' }] };
+  // An older canvas without steps still saves and reads back unchanged.
+  const { attach: none, ...standalone } = rehearsal;
+  save_workflow(home, { ...NOVEL, flow: { nodes, edges: [] }, sub_workflows: [standalone] }, validate_preset);
+  assert.equal(get_workflow(home, 'novel-serial').flow.stages, undefined);
+  // A standalone sub-workflow, like the main SKILL.md, writes no attach line at all.
+  const folder = join(home, 'workflows', 'novel-serial');
+  assert.doesNotMatch(readFileSync(join(folder, 'workflows', 'rehearsal', 'SKILL.md'), 'utf8'), /attach/);
+  assert.doesNotMatch(readFileSync(join(folder, 'SKILL.md'), 'utf8'), /attach/);
+  // A step naming a node the canvas lacks, or a node in two steps, is refused.
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages: [{ id: 'brief', nodes: ['ghost'] }] } }, validate_preset), /不存在的节点：ghost/);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages: [{ id: 'a', nodes: ['w'] }, { id: 'b', nodes: ['w'] }] } }, validate_preset), /只能属于一个步骤/);
+  // Steps and attach points round-trip; attach is written under metadata in the sub-workflow's SKILL.md.
+  const stages = [{ id: 'brief', label: '出任务书', nodes: ['w', 's'] }, { id: 'accept', label: '验收', nodes: [] }];
+  const saved = save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages }, sub_workflows: [rehearsal] }, validate_preset);
+  assert.equal(saved.warnings, undefined);
+  assert.deepEqual(saved.flow.stages, stages);
+  assert.match(readFileSync(join(home, 'workflows', 'novel-serial', 'workflows', 'rehearsal', 'SKILL.md'), 'utf8'), /\n {2}attach: brief\n/);
+  assert.deepEqual(get_workflow(home, 'novel-serial').sub_workflows[0].attach, ['brief']);
+  // An attach point the canvas lacks, or a sub-workflow node in a step it does not attach to, saves with warnings.
+  const odd = save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages }, sub_workflows: [{ ...rehearsal, attach: ['nowhere'] }] }, validate_preset);
+  assert.equal(odd.warnings.length, 2);
+  assert.match(odd.warnings.join('\n'), /没有的步骤：nowhere[\s\S]*步骤 brief/);
+  assert.deepEqual(get_workflow(home, 'novel-serial').sub_workflows[0].attach, ['nowhere'], 'the save went through');
+  save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages }, sub_workflows: [rehearsal] }, validate_preset);
+  // The host is told the steps and each sub-workflow's attach points; a card's further member plays it with its prompt.
+  const workflow = load_room_workflow({ api_home: home, workflow: { id: 'novel-serial', enabled: true, members: { hero: 'Claude-hero' },
+    extra_members: { 'Claude-hero-2': 'hero' } } });
+  const room_members = [{ name: 'Claude', role: 'host', status: 'active' }, { name: 'Claude-hero', label: '角色·小满', status: 'active' },
+    { name: 'Claude-hero-2', label: '角色·她', status: 'away' }];
+  const field = workflow_task_field(workflow, room_members, {});
+  assert.deepEqual(field.stages, [{ id: 'brief', label: '出任务书' }, { id: 'accept', label: '验收' }]);
+  assert.deepEqual(field.sub_workflows[0].attach, ['brief']);
+  assert.deepEqual(field.members.map(member => [member.card, member.member, member.status]), [['hero', '角色·小满', 'active'], ['hero', '角色·她', 'away']]);
+  assert.equal(effective_profile({ adapter: 'claude' }, 'Claude-hero-2', workflow).system_prompt, '你就是这个人物。');
+  assert.equal(workflow_in_use(workflow, room_members), true);
 });
 
 test('registered commands travel with the workflow, and an API member runs only them, within its access and project', async t => {

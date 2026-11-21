@@ -7,7 +7,7 @@ import { t, locale } from './i18n.js';
  * dispatched it, its bar split into waiting, model and tool time and labelled where wide enough. A sentence at the top
  * says what the round came down to; the critical path stays bright and the rest steps back.
  * Phase reports wake no other page, so this page reads on its own: in full when opened, then only what is running or
- * just ended, every two seconds while anything runs and whenever the room changes. Running bars grow every frame.
+ * just ended, every two seconds while anything runs and whenever the room changes. Running bars grow four times a second.
  * A finished run can be replayed: the same drawing, with the playback position as now.
  * On a phone a clock axis over hours has no resolution left, so each top-level row and the executions under it share
  * an axis of their own and still step down as a waterfall.
@@ -20,8 +20,11 @@ const emit = defineEmits(["detail"]);
 const { view, bridge } = inject("discussion");
 const LIVE_REFRESH_MS = 2000;
 const FULL_REFRESH_MS = 60_000;
-// Running bars grow and a replay plays every frame with few rows; with many, this often.
+// A replay plays every frame with few rows; with many, this often.
 const CLOCK_MS = 100;
+// Running bars grow this often: each tick recomputes and redraws every row, and at a frame each the page lagged
+// (2026-11-21); a bar on an axis of minutes moves well under a pixel in this time.
+const LIVE_CLOCK_MS = 250;
 const SMOOTH_ROWS = 60;
 // A row that appears while watching slides in for this long.
 const ENTER_MS = 520;
@@ -299,12 +302,12 @@ const speed_items = computed(() => [{ label: t('自动 · {value1}×', { value1:
 const replay_speed = computed(() => replay.speed || auto_speed.value);
 const can_replay = computed(() => !overview.value && !base_live.value && bounds.value.duration > 0);
 
-/** One clock for live growth and replay: every frame while either is on, at most ten times a second with many rows.
- *  Running bars grow smoothly, as a waterfall is drawn; a hidden page skips the frames (the browser pauses them). */
+/** One clock for live growth and replay: a replay every frame (at most ten times a second with many rows), live work
+ *  every LIVE_CLOCK_MS; a hidden page skips the frames (the browser pauses them). */
 function step(timestamp) {
   const elapsed = last_frame ? Math.min(timestamp - last_frame, 250) : 0;
   last_frame = timestamp;
-  const due = all_rows.value.length <= SMOOTH_ROWS || timestamp - last_paint >= CLOCK_MS;
+  const due = timestamp - last_paint >= (running.value ? LIVE_CLOCK_MS : all_rows.value.length <= SMOOTH_ROWS ? 0 : CLOCK_MS);
   if (replay.playing) {
     play_position += elapsed * replay_speed.value;
     if (play_position >= bounds.value.duration) Object.assign(replay, { position: null, playing: false });
@@ -378,6 +381,13 @@ const status_time = computed(() => replaying.value ? view_time.value : Math.min(
 const digest = computed(() => task_digest(all_rows.value, latest_keys.value, status_time.value));
 const parents = computed(() => all_rows.value.filter((row) => row.has_children).map((row) => row.key));
 const opened_row = computed(() => all_rows.value.find((row) => row.key === opened.value));
+// One detail card for every row, so moving from row to row moves and refills it instead of drawing a new one; it shows
+// only while its row is on the timeline (not folded away, not the overview).
+const detail_row = computed(() => {
+  const row = opened_row.value;
+  return row && !overview.value && !row.ancestors.some((key) => collapsed.value.has(key)) ? row : null;
+});
+const detail_element = ref(null);
 const opened_log = computed(() => opened_row.value ? execution_log(opened_row.value, note_texts.value.get(opened_row.value.item.id)) : []);
 const name = (member) => bridge.display_name(member);
 
@@ -416,15 +426,39 @@ const can_hover = typeof window !== "undefined" && window.matchMedia?.("(hover: 
 const hovering = () => can_hover && !compact.value;
 // Leaving a piece closes the card after this long, time enough to move the pointer into the card.
 const HOVER_CLOSE_MS = 200;
+// Pointing opens the card after this long, so a pointer passing over the rows does not flash it; once a card is open,
+// pointing elsewhere switches it at once, as tooltips do, so the rows can be scanned (2026-11-21).
+const HOVER_OPEN_MS = 120;
+/**
+ * The card follows the pointer from row to row, yet one on its way into the card must not lose it to the rows it
+ * crosses (2026-11-21: tell scanning on from going in to read or copy). Resting on one thing for DWELL_MS means the
+ * card is wanted: from then on, pointing at another row switches only after AIM_WAIT_MS, time enough to reach the card,
+ * and reaching it keeps it. Until then, as while running down the names, pointing elsewhere switches at once. While text
+ * is being selected or stays selected in the card, it is held: it neither switches nor closes, until a click elsewhere.
+ */
+const DWELL_MS = 300;
+const AIM_WAIT_MS = 180;
 let hover_timer = 0;
+let shown_at = 0;
+/** Text being selected (a button held) or selected inside the card: the user is reading or copying it. */
+function card_held(event) {
+  if (event?.buttons) return true;
+  const selection = window.getSelection?.();
+  return Boolean(selection && !selection.isCollapsed && detail_element.value?.contains(selection.anchorNode));
+}
 function hover_open(row, event, piece = null) {
   if (!hovering()) return;
+  if (opened.value && card_held(event)) return;
   clearTimeout(hover_timer);
   if (opened.value === row.key && (selected.value?.id || "") === (piece ? piece_id(row, piece) : "")) return;
-  show_detail(row, event, piece);
+  const target = event.currentTarget;
+  const show = () => show_detail(row, target, piece);
+  if (!opened.value) hover_timer = setTimeout(show, HOVER_OPEN_MS);
+  else if (performance.now() - shown_at >= DWELL_MS) hover_timer = setTimeout(show, AIM_WAIT_MS);
+  else show();
 }
-function hover_leave() {
-  if (!hovering()) return;
+function hover_leave(event) {
+  if (!hovering() || card_held(event)) return;
   clearTimeout(hover_timer);
   hover_timer = setTimeout(() => { opened.value = ""; }, HOVER_CLOSE_MS);
 }
@@ -432,21 +466,45 @@ function hover_keep() { clearTimeout(hover_timer); }
 onBeforeUnmount(() => clearTimeout(hover_timer));
 function open_row(row, event, piece = null) {
   const id = piece ? piece_id(row, piece) : "";
-  if (hovering()) { clearTimeout(hover_timer); if (opened.value !== row.key || (selected.value?.id || "") !== id) show_detail(row, event, piece); return; }
+  if (hovering()) { clearTimeout(hover_timer); if (opened.value !== row.key || (selected.value?.id || "") !== id) show_detail(row, event.currentTarget, piece); return; }
   if (opened.value === row.key && (selected.value?.id || "") === id) { opened.value = ""; return; }
-  show_detail(row, event, piece);
+  show_detail(row, event.currentTarget, piece);
 }
-function show_detail(row, event, piece) {
+// The card keeps this far inside the window, and is never cut shorter than this to stay level with what was pointed at.
+const DETAIL_MARGIN_PX = 8;
+const DETAIL_MIN_HEIGHT_PX = 320;
+function show_detail(row, target, piece) {
   const id = piece ? piece_id(row, piece) : "";
   opened.value = row.key;
+  shown_at = performance.now();
   selected.value = piece ? { id, piece, related: piece.note ? { notes: [piece.note], earlier: false } : notes_between(row.notes, piece.start, piece.end) } : null;
   note_texts_for(row);
   if (compact.value) return;
-  // Anchored under what was pointed at, within the card; the card scrolls with the page, so the anchor stays put.
-  const name_box = event.currentTarget.getBoundingClientRect();
+  // Anchored within the card (it scrolls with the page, so the anchor stays put) and never over the name column, so the
+  // pointer can run down the names from one execution to the next (2026-11-21): beside a name, level with it, or under
+  // a bar piece.
+  const box = target.getBoundingClientRect();
   const card = wf_element.value.getBoundingClientRect();
-  const width = Math.min(DETAIL_WIDTH_PX, card.width - 16);
-  detail_anchor.value = { top: name_box.bottom - card.top + 4, left: Math.max(8, Math.min(name_box.left - card.left, card.width - width - 8)) };
+  const names_end = (wf_element.value.querySelector(".wf-label")?.getBoundingClientRect().right ?? card.left) - card.left + 4;
+  const width = Math.min(DETAIL_WIDTH_PX, card.width - names_end - 8);
+  const beside = target.classList.contains("wf-names");
+  // It follows the pointer: its top level with the name (or just under the piece), as tall as the window leaves below,
+  // scrolling within; only where too little is left does it move up.
+  const top = beside ? box.top : box.bottom + 4;
+  detail_anchor.value = { width, top: top - card.top, left: Math.max(names_end, Math.min(box.left - card.left, card.width - width - 8)),
+    max_height: Math.max(DETAIL_MIN_HEIGHT_PX, window.innerHeight - DETAIL_MARGIN_PX - top) };
+  nextTick(() => keep_in_window(box, beside));
+}
+/** Once drawn, a card that runs past the window's bottom moves up, never above the window's top, and beside a name never
+ *  so far that the name is no longer level with it. */
+function keep_in_window(box, beside) {
+  const element = detail_element.value;
+  if (!element || !detail_anchor.value) return;
+  const rect = element.getBoundingClientRect();
+  const overflow = rect.bottom - (window.innerHeight - DETAIL_MARGIN_PX);
+  const room = Math.max(0, rect.top - DETAIL_MARGIN_PX);
+  const lift = Math.min(overflow, room, beside ? rect.bottom - box.bottom : room);
+  if (lift > 0) detail_anchor.value = { ...detail_anchor.value, top: detail_anchor.value.top - lift };
 }
 watch(() => opened_row.value?.notes.length, () => { if (opened_row.value) note_texts_for(opened_row.value); });
 
@@ -568,7 +626,7 @@ const opened_parts = computed(() => {
 });
 const percent = (share) => share >= 0.995 ? "100%" : share < 0.01 ? "<1%" : `${Math.round(share * 100)}%`;
 const opened_task_open = ref(false);
-watch(opened, () => { opened_task_open.value = false; });
+watch(opened, () => { opened_task_open.value = false; if (detail_element.value) detail_element.value.scrollTop = 0; });
 const selected_notes = computed(() => {
   if (!selected.value || !opened_row.value) return [];
   const texts = note_texts.value.get(opened_row.value.item.id);
@@ -721,62 +779,64 @@ const selected_notes = computed(() => {
           </div></div>
           <span v-if="!compact" class="wf-end">{{ format_duration(row.end - row.start) }}<small v-if="row.item.state !== 'done'" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</small><small v-if="row.truncated">{{ t('明细已截断') }}</small></span>
           <span v-else-if="row.item.state === 'running' || row.item.state === 'failed'" class="wf-row-status wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</span>
-          <div v-if="opened === row.key && (compact || detail_anchor)" class="wf-detail" role="dialog" @mouseenter="hover_keep" @mouseleave="hover_leave" :aria-label="is_user_row(row) ? t('{value1} 的这条消息', { value1: name(row.item.member) }) : t('{value1} 的这次执行', { value1: name(row.item.member) })"
-            :style="compact ? undefined : { top: `${detail_anchor.top}px`, left: `${detail_anchor.left}px` }">
-            <header class="wf-detail-head">
-              <UAvatar :src="bridge.identities[row.item.member]?.icon" :text="bridge.identities[row.item.member]?.initials" :alt="row.item.member" size="sm" class="channel-avatar wf-avatar" :class="bridge.identities[row.item.member]?.style" />
-              <div class="wf-detail-title">
-                <span class="wf-detail-name"><strong>{{ name(row.item.member) }}</strong><em class="wf-pill wf-state-pill" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</em></span>
-                <small>{{ t('{value1} · {value2} 起', { value1: role_label(row), value2: clock(row.start) }) }}</small>
-              </div>
-              <span class="wf-detail-total">{{ format_duration(row.end - row.start) }}</span>
-              <button type="button" class="wf-card-close" :aria-label="t('关闭')" @click="opened = ''"><UIcon name="i-lucide-x" /></button></header>
-            <section v-if="selected" class="wf-detail-piece">
-              <strong>{{ selected_title }}</strong>
-              <small>{{ clock(selected.piece.start) }}<template v-if="selected.piece.end > selected.piece.start"> – {{ selected.piece.live ? t('现在') : clock(selected.piece.end) }}</template><template v-if="selected.piece.text"> · {{ selected.piece.text }}</template></small>
-              <template v-if="selected_notes.length">
-                <small class="wf-detail-piece-label">{{ selected.related.earlier ? t('此前的过程说明') : t('这段时间的过程说明') }}</small>
-                <ol><li v-for="note in selected_notes" :key="note.at + note.text"><time>{{ clock(note.at) }}</time>{{ note.text }}</li></ol>
-              </template>
-            </section>
-            <p v-if="row.item.state !== 'done'" class="wf-detail-status wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</p>
-            <section v-if="opened_parts.length" class="wf-detail-block" :aria-label="t('时间分布')">
-              <span class="wf-dist" :data-tone="member_tone.get(row.item.member)">
-                <i v-for="part in opened_parts" :key="part.key" :class="`is-${part.kind}`" :style="{ flexGrow: part.ms }"></i></span>
-              <ul class="wf-dist-key" :data-tone="member_tone.get(row.item.member)">
-                <li v-for="part in opened_parts" :key="part.key"><i class="wf-swatch" :class="`is-${part.kind}`" aria-hidden="true"></i>{{ part.label }}
-                  <b>{{ format_duration(part.ms) }}</b><small>{{ percent(part.share) }}</small></li>
-              </ul>
-            </section>
-            <section v-if="row.item.task" class="wf-detail-block">
-              <h4>{{ t('任务') }}<button v-if="row.item.task_id" type="button" class="wf-detail-link" @click="emit('detail', row.item.task_id)">#{{ row.item.task_id }}<UIcon name="i-lucide-arrow-up-right" /></button></h4>
-              <p class="wf-detail-task" :class="{ 'is-open': opened_task_open }">{{ row.item.task }}</p>
-              <button v-if="row.item.task.length > 80" type="button" class="wf-text-button wf-detail-more" @click="opened_task_open = !opened_task_open">{{ opened_task_open ? t('收起') : t('展开全文') }}</button>
-            </section>
-            <div v-if="row.item.answer_id || row.item.changes" class="wf-detail-actions">
-              <button v-if="row.item.answer_id" type="button" class="wf-detail-chip is-link" @click="emit('detail', row.item.answer_id)"><UIcon name="i-lucide-message-square-text" />{{ t('查看回答 #{value1}', { value1: row.item.answer_id }) }}</button>
-              <span v-if="row.item.changes" class="wf-detail-chip"><UIcon name="i-lucide-file-diff" />{{ t('改动 {value1} 个文件', { value1: row.item.changes }) }}</span>
-            </div>
-            <section v-if="!is_user_row(row)" class="wf-detail-block">
-              <h4>{{ t('过程') }}<small v-if="opened_log.length">{{ t('{value1} 条', { value1: opened_log.length }) }}</small></h4>
-              <ol v-if="opened_log.length" class="wf-log" :aria-label="t('过程')" :data-tone="member_tone.get(row.item.member)">
-                <li v-for="entry in opened_log" :key="`${entry.kind}-${entry.at}-${entry.phase || ''}`" :class="[`log-${entry.kind}`, entry.kind === 'phase' && `kind-${PHASE_KINDS[entry.phase]}`, { 'is-live': entry.live }]">
-                  <i class="wf-log-dot" aria-hidden="true"></i>
-                  <template v-if="entry.kind === 'phase'">
-                    <span class="wf-log-phase"><b>{{ PHASE_LABELS[entry.phase] }}</b><span v-if="entry.tool" class="wf-log-tool">{{ entry.tool }}</span></span>
-                    <span class="wf-log-dur">{{ entry.live ? t('进行中') : format_duration(entry.duration) }}</span>
-                    <time>{{ clock(entry.at) }}</time>
-                  </template>
-                  <template v-else><p class="wf-log-note">{{ entry.text }}</p><time>{{ clock(entry.at) }}</time></template>
-                </li>
-              </ol>
-              <p v-else class="fine-print">{{ t('这次执行没有阶段明细或过程说明。') }}</p>
-            </section>
-          </div>
         </div>
         </template>
       </div>
 
+      <Transition name="wf-pop">
+        <div v-if="detail_row && (compact || detail_anchor)" ref="detail_element" class="wf-detail" role="dialog" @mouseenter="hover_keep" @mouseleave="hover_leave" :aria-label="is_user_row(detail_row) ? t('{value1} 的这条消息', { value1: name(detail_row.item.member) }) : t('{value1} 的这次执行', { value1: name(detail_row.item.member) })"
+          :style="compact ? undefined : { top: `${detail_anchor.top}px`, left: `${detail_anchor.left}px`, width: `${detail_anchor.width}px`, maxHeight: `min(70vh, 600px, ${detail_anchor.max_height}px)` }">
+          <header class="wf-detail-head">
+            <UAvatar :src="bridge.identities[detail_row.item.member]?.icon" :text="bridge.identities[detail_row.item.member]?.initials" :alt="detail_row.item.member" size="sm" class="channel-avatar wf-avatar" :class="bridge.identities[detail_row.item.member]?.style" />
+            <div class="wf-detail-title">
+              <span class="wf-detail-name"><strong>{{ name(detail_row.item.member) }}</strong><em class="wf-pill wf-state-pill" :class="`is-${detail_row.item.state}`">{{ STATE_LABELS[detail_row.item.state] }}</em></span>
+              <small>{{ t('{value1} · {value2} 起', { value1: role_label(detail_row), value2: clock(detail_row.start) }) }}<template v-if="detail_row.item.model || detail_row.item.effort"> · <span class="wf-detail-model" :title="[detail_row.item.model, detail_row.item.effort].filter(Boolean).join(' · ')">{{ [detail_row.item.model, detail_row.item.effort].filter(Boolean).join(' · ') }}</span></template></small>
+            </div>
+            <span class="wf-detail-total">{{ format_duration(detail_row.end - detail_row.start) }}</span>
+            <button type="button" class="wf-card-close" :aria-label="t('关闭')" @click="opened = ''"><UIcon name="i-lucide-x" /></button></header>
+          <section v-if="selected" class="wf-detail-piece">
+            <strong>{{ selected_title }}</strong>
+            <small>{{ clock(selected.piece.start) }}<template v-if="selected.piece.end > selected.piece.start"> – {{ selected.piece.live ? t('现在') : clock(selected.piece.end) }}</template><template v-if="selected.piece.text"> · {{ selected.piece.text }}</template></small>
+            <template v-if="selected_notes.length">
+              <small class="wf-detail-piece-label">{{ selected.related.earlier ? t('此前的过程说明') : t('这段时间的过程说明') }}</small>
+              <ol><li v-for="note in selected_notes" :key="note.at + note.text"><time>{{ clock(note.at) }}</time>{{ note.text }}</li></ol>
+            </template>
+          </section>
+          <p v-if="detail_row.item.state !== 'done'" class="wf-detail-status wf-status" :class="`is-${status(detail_row).tone}`">{{ status(detail_row).text }}</p>
+          <section v-if="opened_parts.length" class="wf-detail-block" :aria-label="t('时间分布')">
+            <span class="wf-dist" :data-tone="member_tone.get(detail_row.item.member)">
+              <i v-for="part in opened_parts" :key="part.key" :class="`is-${part.kind}`" :style="{ flexGrow: part.ms }"></i></span>
+            <ul class="wf-dist-key" :data-tone="member_tone.get(detail_row.item.member)">
+              <li v-for="part in opened_parts" :key="part.key"><i class="wf-swatch" :class="`is-${part.kind}`" aria-hidden="true"></i>{{ part.label }}
+                <b>{{ format_duration(part.ms) }}</b><small>{{ percent(part.share) }}</small></li>
+            </ul>
+          </section>
+          <section v-if="detail_row.item.task" class="wf-detail-block">
+            <h4>{{ t('任务') }}<button v-if="detail_row.item.task_id" type="button" class="wf-detail-link" @click="emit('detail', detail_row.item.task_id)">#{{ detail_row.item.task_id }}<UIcon name="i-lucide-arrow-up-right" /></button></h4>
+            <p class="wf-detail-task" :class="{ 'is-open': opened_task_open }">{{ detail_row.item.task }}</p>
+            <button v-if="detail_row.item.task.length > 80" type="button" class="wf-text-button wf-detail-more" @click="opened_task_open = !opened_task_open">{{ opened_task_open ? t('收起') : t('展开全文') }}</button>
+          </section>
+          <div v-if="detail_row.item.answer_id || detail_row.item.changes" class="wf-detail-actions">
+            <button v-if="detail_row.item.answer_id" type="button" class="wf-detail-chip is-link" @click="emit('detail', detail_row.item.answer_id)"><UIcon name="i-lucide-message-square-text" />{{ t('查看回答 #{value1}', { value1: detail_row.item.answer_id }) }}</button>
+            <span v-if="detail_row.item.changes" class="wf-detail-chip"><UIcon name="i-lucide-file-diff" />{{ t('改动 {value1} 个文件', { value1: detail_row.item.changes }) }}</span>
+          </div>
+          <section v-if="!is_user_row(detail_row)" class="wf-detail-block">
+            <h4>{{ t('过程') }}<small v-if="opened_log.length">{{ t('{value1} 条', { value1: opened_log.length }) }}</small></h4>
+            <ol v-if="opened_log.length" class="wf-log" :aria-label="t('过程')" :data-tone="member_tone.get(detail_row.item.member)">
+              <li v-for="entry in opened_log" :key="`${entry.kind}-${entry.at}-${entry.phase || ''}`" :class="[`log-${entry.kind}`, entry.kind === 'phase' && `kind-${PHASE_KINDS[entry.phase]}`, { 'is-live': entry.live }]">
+                <i class="wf-log-dot" aria-hidden="true"></i>
+                <template v-if="entry.kind === 'phase'">
+                  <span class="wf-log-phase"><b>{{ PHASE_LABELS[entry.phase] }}</b><span v-if="entry.tool" class="wf-log-tool">{{ entry.tool }}</span></span>
+                  <span class="wf-log-dur">{{ entry.live ? t('进行中') : format_duration(entry.duration) }}</span>
+                  <time>{{ clock(entry.at) }}</time>
+                </template>
+                <template v-else><p class="wf-log-note">{{ entry.text }}</p><time>{{ clock(entry.at) }}</time></template>
+              </li>
+            </ol>
+            <p v-else class="fine-print">{{ t('这次执行没有阶段明细或过程说明。') }}</p>
+          </section>
+        </div>
+      </Transition>
       <footer v-if="!overview" class="wf-foot">
         <span class="wf-key"><i class="wf-swatch is-queue"></i>{{ t('排队') }}<i class="wf-swatch is-wake"></i>{{ t('唤醒') }}<i class="wf-swatch is-model"></i>{{ t('模型') }}<i class="wf-swatch is-tool"></i>{{ t('工具') }}</span>
         <span v-if="member_tone.size > 1">{{ t('颜色区分成员，深浅区分模型与工具') }}</span>
@@ -1041,6 +1101,12 @@ const selected_notes = computed(() => {
 .wf-detail { position: absolute; z-index: 20; display: grid; gap: 14px; width: min(560px, calc(100% - 16px)); max-height: min(70vh, 600px); padding: 14px 16px 16px; overflow: auto;
   border: 1px solid var(--channel-edge-float, var(--wf-border)); border-radius: 12px; background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-float, 0 12px 32px rgb(0 0 0 / .3));
   font-size: 13px; line-height: 1.6; overscroll-behavior: contain; }
+/* The card fades in on opening and out on closing; moving between rows it changes at once, never glides behind the pointer. */
+.wf-pop-enter-active { transition: opacity .12s ease-out, transform .12s ease-out; }
+.wf-pop-leave-active { transition: opacity .1s ease-in; }
+.wf-pop-enter-from { opacity: 0; transform: translateY(4px); }
+.wf-pop-leave-to { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .wf-pop-enter-active, .wf-pop-leave-active { transition: none; } }
 .wf-detail-head { position: relative; display: flex; align-items: center; gap: 10px; min-width: 0; padding-right: 30px; }
 .wf-detail-title { display: grid; flex: 1; gap: 1px; min-width: 0; }
 .wf-detail-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -1141,7 +1207,6 @@ const selected_notes = computed(() => {
 .wf-row.is-entering .wf-track > .wf-bar { transform-origin: left center; animation: wf-unroll 640ms cubic-bezier(.2, .8, .2, 1) both; }
 @keyframes wf-enter { from { opacity: 0; transform: translateY(8px); } }
 @keyframes wf-unroll { from { transform: scaleX(0); } }
-@media (prefers-reduced-motion: reduce) { .wf *, .wf *::before, .wf *::after { animation: none !important; transition: none !important; } }
 
 /* Narrow pages (a small window, or both rails open): a shorter label column, so the lanes keep room. */
 .execution-timeline { container: wf / inline-size; }

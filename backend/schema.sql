@@ -101,6 +101,23 @@ CREATE TABLE IF NOT EXISTS message_details (
 CREATE TABLE IF NOT EXISTS proactive_messages (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE
 );
+-- A card in a room naming a room its host created (`child`) or the room whose host created it (`parent`); the runner
+-- writes one on each side after `host-control create-room`. Wakes nobody; one per pair of rooms.
+CREATE TABLE IF NOT EXISTS room_links (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id),
+    other_room_id TEXT NOT NULL,
+    relation TEXT NOT NULL CHECK(relation IN ('child','parent')),
+    host TEXT NOT NULL,
+    UNIQUE(room_id, other_room_id)
+);
+-- An owner-credential message the host of another room sent here through `host-control room-post`: where it came from.
+-- Only a label; the write itself is the owner's, so it routes and wakes like the owner's own message.
+CREATE TABLE IF NOT EXISTS message_relays (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    source_room_id TEXT NOT NULL,
+    host TEXT NOT NULL
+);
 -- Site administrator account (single user) and its login sessions. Raw tokens and passwords are never stored.
 CREATE TABLE IF NOT EXISTS site_admin (
     id INTEGER PRIMARY KEY CHECK(id=1),
@@ -307,6 +324,10 @@ CREATE TABLE IF NOT EXISTS member_executions (
     -- When the owner paused it from the private chat (0 = not paused): the runner stopped its software turn and resumes
     -- the same execution in the same session with the owner's next line; the execution itself stays live.
     paused_at INTEGER NOT NULL DEFAULT 0,
+    -- The model and effort this execution ran with, as the runner's adapter reported them ('' when unknown): the
+    -- chosen ones on delivery, replaced by what the software's session log says once it ends. Shown on the card.
+    model TEXT NOT NULL DEFAULT '',
+    effort TEXT NOT NULL DEFAULT '',
     UNIQUE(room_id,client_id)
 );
 -- What the owner wrote about each member (strengths, division of work), by name so it survives leaving and rejoining.

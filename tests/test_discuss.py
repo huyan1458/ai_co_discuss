@@ -115,8 +115,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.cli("attachment", "list", self.room)["total"], 0)
         self.assertEqual(self.cli("attachment", "view", self.room, attachment["id"])["file_name"], source.name)
         self.assertEqual(self.cli("attachment", "list", self.room, "--submission-id", upload_id)["attachments"][0]["id"], attachment["id"])
-        message = self.cli("message", "post", self.room, "--as", "用户", "--attachment", attachment["id"],
-                           "--submission-id", str(uuid.uuid4()))["message"]
+        posted = self.cli("message", "post", self.room, "--as", "用户", "--attachment", attachment["id"],
+                          "--submission-id", str(uuid.uuid4()))
+        message = posted["message"]
+        self.assertIn("不要复述", posted["note"])
         self.assertEqual((message["text_chars"], message["attachments"]), (0, 1))
         self.assertEqual(self.cli("attachment", "list", self.room, "--message", message["id"])["total"], 1)
         destination = source.with_suffix(".download")

@@ -93,7 +93,6 @@ input:hover{border-color:var(--line-strong)}input:focus{border-color:var(--accen
 .choices button{height:32px;padding:0 6px;border:0;border-radius:7px;background:none;color:var(--muted);font-size:13px;cursor:pointer;white-space:nowrap}
 .choices button[aria-pressed=true]{background:var(--bg);color:var(--text);font-weight:600;box-shadow:0 1px 3px #0003}
 @media (max-width:860px){.entry{grid-template-columns:1fr;grid-template-rows:auto 1fr}.stage{height:176px;padding:0}.pitch{display:none}.emblem{width:84px;height:84px;margin:-42px 0 0 -42px;border-radius:22px}.emblem::before,.emblem::after{border-radius:22px}.emblem svg{width:56px;height:56px}.side{place-items:start center;padding:28px 24px 36px}.wordmark{display:none}.settings{position:fixed;right:12px;top:12px}}
-@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.pulse{stroke-dashoffset:60}}
 `;
 
 // Runs before the first paint, so the page never flashes the other theme or language.

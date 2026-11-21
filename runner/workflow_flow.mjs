@@ -12,6 +12,8 @@ const NODE_ID = /^[A-Za-z0-9_-]{1,40}$/;
 // Short notes drawn on the canvas: what the host does at a host node ("验收"), what an arrow means ("返工", "不等交回").
 export const MAX_HOST_LABEL = 12;
 export const MAX_EDGE_LABEL = 16;
+export const MAX_STAGE_LABEL = 16;
+export const MAX_FLOW_STAGES = 20;
 // How far the user may move a loop arrow up or down from where the canvas draws it (`offset`, canvas pixels).
 export const MAX_LOOP_OFFSET = 2000;
 
@@ -58,7 +60,32 @@ export function normalize_flow(flow) {
     const offset = Number.isFinite(edge.offset) ? Math.max(-MAX_LOOP_OFFSET, Math.min(MAX_LOOP_OFFSET, Math.round(edge.offset))) : 0;
     return { source: edge.source, target: edge.target, ...(label ? { label } : {}), ...(offset ? { offset } : {}) };
   });
-  return { nodes, edges };
+  const stages = normalize_stages(flow.stages, ids);
+  return { nodes, edges, ...(stages.length ? { stages } : {}) };
+}
+
+/**
+ * The canvas's steps (`stages`): named groups of its nodes, drawn as frames, that sub-workflows name to say where they
+ * attach (`metadata.attach`). Like the canvas they only illustrate SKILL.md. A stage ID follows the node ID rule and may
+ * equal a node's ID; a node belongs to one stage at most; an unknown node is refused.
+ */
+function normalize_stages(stages, node_ids) {
+  if (stages === undefined || stages === null) return [];
+  if (!Array.isArray(stages) || stages.length > MAX_FLOW_STAGES) throw new Error(`stages 须为列表，最多 ${MAX_FLOW_STAGES} 个`);
+  const ids = new Set(), placed = new Set();
+  return stages.map(stage => {
+    if (!stage || !NODE_ID.test(stage.id) || ids.has(stage.id)) throw new Error('画布的步骤须有不重复的 id（英文、数字、下划线或连字符，1—40 位）');
+    ids.add(stage.id);
+    const label = note(stage.label, MAX_STAGE_LABEL, `步骤 ${stage.id} `);
+    const nodes = stage.nodes === undefined ? [] : stage.nodes;
+    if (!Array.isArray(nodes)) throw new Error(`步骤 ${stage.id} 的 nodes 须为节点 id 列表`);
+    for (const id of nodes) {
+      if (!node_ids.has(id)) throw new Error(`步骤 ${stage.id} 引用了不存在的节点：${id}`);
+      if (placed.has(id)) throw new Error(`节点 ${id} 只能属于一个步骤`);
+      placed.add(id);
+    }
+    return { id: stage.id, ...(label ? { label } : {}), nodes: [...nodes] };
+  });
 }
 
 /** Top to bottom, then left to right: the order members of one step are named in. */

@@ -220,6 +220,7 @@
   "continue 只能由主持人使用，写明房间空闲后继续做什么，最多 {max_continue_reason} 字": "Only the host can use continue. Describe what to do after the room becomes idle, in up to {max_continue_reason} characters",
   "delivery 的 steer 与 resume 须为布尔值": "The steer and resume values in delivery must be booleans",
   "delivery 须带布尔值 stoppable 与 progress": "delivery requires boolean stoppable and progress values",
+  "model 与 effort 须为字符串": "model and effort must be strings",
   "denials 须为 1–{max_denials} 条 {open_brace}tool, detail, rule{close_brace}": "denials must contain 1–{max_denials} entries with {open_brace}tool, detail, rule{close_brace}",
   "descriptions 须为 {open_brace}成员名: 描述{close_brace}，最多 {max_room_agents} 位，每段最多 {max_member_description} 字": "descriptions must be {open_brace}member name: description{close_brace}, with up to {max_room_agents} members and {max_member_description} characters per description",
   "detach 不能包含 to 中的成员": "detach must not include any members listed in to",
@@ -825,5 +826,15 @@
   "绑定令牌已过期，请重试": "The binding token expired; try again",
   "线上网站没有释放这个账号：{value1}": "The online site did not release this account: {value1}",
   "请先关闭该账号的“允许邀请外部专家”，再更改隔离": "Turn off Allow inviting external experts for this account before changing its isolation",
-  "没有建立直连身份": "The direct identity was not created"
+  "没有建立直连身份": "The direct identity was not created",
+  "关联的房间不存在": "The linked room does not exist",
+  "host 须为 1–100 字的主持人名称": "host must be the host's name, 1–100 characters",
+  "relation 须为 child 或 parent": "relation must be child or parent",
+  "主持人 {host} 新建了房间「{title}」。": "Host {host} created the room \"{title}\".",
+  "本房间由房间「{title}」的主持人 {host} 新建。": "This room was created by host {host} of the room \"{title}\".",
+  "relay 须为含 room_id 与 host 的对象": "relay must be an object with room_id and host",
+  "只有房间控制凭据能代其他房间的主持人发言": "Only the room's control credential can speak for another room's host",
+  "只有互相关联的房间之间才能代主持人发言": "Only linked rooms can speak for each other's host",
+  "两个房间的主持人自用户上次发言后已互传 {count} 条消息，达到上限；请等用户在任一房间发言后再继续": "The two rooms' hosts have passed {count} messages since the owner last spoke, which is the limit; wait for the owner to speak in either room before continuing",
+  "relay.limit 须为 0–100 的整数，0 表示不限": "relay.limit must be an integer from 0 to 100; 0 means no limit"
 }

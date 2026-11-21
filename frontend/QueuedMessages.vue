@@ -18,8 +18,6 @@ const HAPTIC_MS = 10;
 const TRAY_RISE_MS = 200;
 const TRAY_RISE_EASING = "cubic-bezier(.2, .8, .2, 1)";
 const sending = ref(null);
-// The file of the message just sent that is still uploading.
-const uploading_file = computed(() => view.value.queueing_preview?.files.find((file) => !file.uploaded) ?? null);
 // The order shown between a drop and the site's answer, so the row stays where it was dropped.
 const local_order = ref(null);
 const list = ref(null);
@@ -77,8 +75,10 @@ function rise_tray(height_before) {
   tray_rise.onfinish = () => { tray_rise = null; };
 }
 
-// The row just sent becoming a queued row keeps the count, so only a message really joining the tray raises it.
-watch(() => items.value.length + (view.value.queueing_preview ? 1 : 0), (count, before) => {
+const pending_rows = computed(() => view.value.queueing_previews.map(card => ({
+  card, upload: card.files.find(file => !file.uploaded),
+})));
+watch(() => items.value.length + pending_rows.value.length, (count, before) => {
   if (count <= before) return;
   const height_before = list.value?.offsetHeight || 0;
   nextTick(() => rise_tray(height_before));
@@ -192,7 +192,7 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
 </script>
 
 <template>
-  <div v-if="items.length || view.queueing_preview" ref="list" class="queued-messages" :class="{ 'is-dragging': drag }" role="list" :aria-label="t('排队消息')" @touchmove="hold_scroll">
+  <div v-if="items.length || pending_rows.length" ref="list" class="queued-messages" :class="{ 'is-dragging': drag }" role="list" :aria-label="t('排队消息')" @touchmove="hold_scroll">
     <div v-if="queue.paused" class="queued-row queued-paused-row">
       <UIcon name="i-lucide-pause" class="queued-leading" />
       <span class="queued-text">{{ t('已暂停排队：你停止了运行') }}</span>
@@ -237,12 +237,14 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
         </span>
       </div>
     </TransitionGroup>
-    <!-- The message just sent, shown at once while the site queues it. The queued row takes its place in the same render,
-         so neither animates: a row fading in beside one fading out showed the message twice and made the tray jump. -->
-    <div v-if="view.queueing_preview" role="listitem" class="queued-row">
+    <div v-for="{ card, upload } in pending_rows" :key="card.id" role="listitem" class="queued-row">
       <span class="queued-leading" aria-hidden="true"><UIcon name="i-lucide-loader-circle" class="animate-spin" /></span>
-      <span class="queued-text">{{ view.queueing_preview.text.replace(/\s+/g, " ").trim() || t('{value1} 个附件', { value1: view.queueing_preview.files.length }) }}</span>
-      <span class="queued-actions queued-sending-status" role="status"><UploadPercent v-if="uploading_file" :id="uploading_file.id" v-slot="{ percent, phase }">{{ percent === null ? t('发送中…') : phase === 'compress' ? t('压缩中 {percent}%', { percent }) : t('上传中 {percent}%', { percent }) }}</UploadPercent><template v-else>{{ t('发送中…') }}</template></span>
+      <span class="queued-text">{{ card.text.replace(/\s+/g, " ").trim() || t('{value1} 个附件', { value1: card.files.length }) }}</span>
+      <span class="queued-actions queued-sending-status" role="status">
+        <template v-if="card.retrying">{{ t('网络不稳，第 {value1} 次重试…', { value1: card.retrying }) }}</template>
+        <UploadPercent v-else-if="upload && !card.waiting" :id="upload.id" v-slot="{ percent, phase }">{{ percent === null ? t('发送中…') : phase === 'compress' ? t('压缩中 {percent}%', { percent }) : t('上传中 {percent}%', { percent }) }}</UploadPercent>
+        <template v-else>{{ t('发送中…') }}</template>
+      </span>
     </div>
   </div>
 </template>

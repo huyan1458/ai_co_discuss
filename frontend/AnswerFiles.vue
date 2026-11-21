@@ -11,8 +11,10 @@ import { file_preview, file_size, file_type } from "./file-preview.js";
 // What counts as a deliverable: documents, tables, slides, pages and media, not source code.
 const DELIVERABLE = /\.(docx?|xlsx?|ods|csv|tsv|pptx?|pdf|md|txt|html?|png|jpe?g|gif|webp|svg|mp3|wav|m4a|mp4|webm|mov|srt|vtt)$/i;
 const MAX_FILES = 6;
-// Start reading a little before the card scrolls into view.
-const READ_AHEAD = "300px";
+// Start reading well before the card scrolls into view, measured against the transcript that scrolls it: against the
+// window the transcript clips the card, so reading began only once it showed and the cards popped in under the reader,
+// moving the cards below (user 2026-11-21).
+const READ_AHEAD = "800px 0px";
 // What each answer found, so a card that is mounted again shows at once and does not ask the computer again.
 const found_files = new Map();
 
@@ -79,7 +81,7 @@ onMounted(() => {
     if (!entries.some((entry) => entry.isIntersecting)) return;
     observer.disconnect();
     read_files();
-  }, { rootMargin: READ_AHEAD });
+  }, { root: anchor.value.closest(".channel-transcript"), rootMargin: READ_AHEAD });
   observer.observe(anchor.value);
 });
 onBeforeUnmount(() => observer?.disconnect());

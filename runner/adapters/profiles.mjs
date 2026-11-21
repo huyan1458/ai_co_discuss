@@ -178,6 +178,25 @@ export function same_session_family(left, right) {
   return Boolean(a && b && left !== right && a.session_family === b.session_family);
 }
 
+/**
+ * The project access a member takes over from another, as when it becomes the host in its place: the highest level its
+ * own software offers that does not exceed the other's, and never below what it has now. Levels rank in ALL_ACCESS
+ * order, so software with fewer levels lands on the nearest one beneath (自动 becomes 可写 where 自动 is not offered)
+ * without a table of software pairs. Access the runner does not set (an App, a taken-over session's `own`) is neither
+ * given nor taken.
+ * @param {{adapter: string, project_access: string}} member - the member taking over, with its present access.
+ * @param {{adapter: string, project_access: string}} source - the member whose access is taken over.
+ * @returns {string} the member's access afterwards; its present one when nothing changes.
+ */
+export function inherited_access(member, source) {
+  const rank = level => ALL_ACCESS.indexOf(level);
+  const offered = ADAPTER_PROFILES[member.adapter]?.access_levels;
+  const limit = ADAPTER_PROFILES[source.adapter]?.access_levels ? rank(source.project_access) : -1;
+  if (!offered || rank(member.project_access) < 0 || limit < 0) return member.project_access;
+  const reachable = offered.filter(level => rank(level) <= limit && rank(level) > rank(member.project_access));
+  return reachable.sort((left, right) => rank(right) - rank(left))[0] || member.project_access;
+}
+
 /** The adapters serving one platform, in table order; a model API serves every platform. */
 export function platform_adapters(platform) {
   return ADAPTER_IDS.filter(id => ADAPTER_PROFILES[id].platform === platform || ADAPTER_PROFILES[id].platform === '');

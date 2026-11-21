@@ -8,7 +8,7 @@ import OfficeViewer from "./OfficeViewer.vue";
 import PreviewLoading from "./PreviewLoading.vue";
 import Papa from "papaparse";
 import { gunzip } from "fflate";
-import { add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_range, file_preview, file_size, file_type, hold_selection, inline_markdown_images, inner_scroll_follower, media_of, modified_time, scrolled_out, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
+import { ATTACHMENT_TEXT_LIMIT, HTML_SANDBOX, add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_range, file_preview, file_size, file_type, hold_selection, html_document, inline_markdown_images, inner_scroll_follower, media_of, modified_time, read_attachment, scrolled_out, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
 import { t } from './i18n.js';
 
 // The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
@@ -93,9 +93,6 @@ const media_kind = computed(() => (tab.value?.attachment ? "" : media_of(active_
 // Images a project Markdown file refers to by relative path are read by the computer (`tab.page.images`).
 const rendered = computed(() => format.value === "markdown" && preview.value?.text
   ? inline_markdown_images(window.discuss_markdown.render_markdown(preview.value.text, [], { source_lines: true }), tab.value?.page?.images, active_path.value.split("/").slice(0, -1).join("/")) : "");
-// HTML renders in full, its scripts and external resources included, in a sandbox without `allow-same-origin`: an
-// opaque origin that cannot reach this site's storage, cookies or pages. The same sandbox is used in a new tab.
-const HTML_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals";
 // Sent into the in-page preview so a selection can be quoted: once a selection settles it posts its text and boxes
 // (in the frame's viewport) to this page, which offers "添加到对话"; it clears the selection when asked. The file's own
 // scripts could post the same message; at worst that shows an offer the user still has to confirm.
@@ -106,11 +103,6 @@ const later=()=>{clearTimeout(timer);post("",[]);if(!down)timer=setTimeout(send,
 document.addEventListener("selectionchange",later);addEventListener("scroll",later,{passive:true});
 addEventListener("pointerdown",e=>{down=e.pointerType!=="touch";},true);addEventListener("pointerup",()=>{down=false;later();},true);addEventListener("pointercancel",()=>{down=false;later();},true);
 addEventListener("message",e=>{if(e.source===parent&&e.data&&e.data.codiscuss_clear){const s=getSelection();if(s)s.removeAllRanges();}});})();<\/script>`;
-// What goes before the file: after its doctype, so a page that declares one is not shown in quirks mode.
-function html_document(text, extra = "") {
-  const doctype = /^﻿?\s*<!doctype[^>]*>/i.exec(text)?.[0] || "";
-  return `${doctype}<meta charset="utf-8">${extra}${text.slice(doctype.length)}`;
-}
 // A project's HTML file is shown as the computer bundles it (the files it refers to inlined); an attachment as it is.
 const html_text = computed(() => tab.value?.page?.text ?? preview.value?.text ?? "");
 const html_preview = computed(() => html_document(html_text.value, selection_bridge()));
@@ -188,8 +180,8 @@ const OFFER_SETTLE_MS = 350;
 // The offer pills and the comment box sit just above the selection (below it when there is no room).
 const OFFER_WIDTH = 190;
 const OFFER_HEIGHT = 28;
-const COMMENT_WIDTH = 340;
-const COMMENT_HEIGHT = 40;
+const COMMENT_WIDTH = 440;
+const COMMENT_HEIGHT = 92;
 const OFFER_GAP = 6;
 const FOLLOW_KEYS = ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "];
 const editor_body = ref(null), markdown_scroll = ref(null), markdown_body = ref(null), code_scroll = ref(null), comment_input = ref(null), crumbs_nav = ref(null), code_text = ref(null), html_frame = ref(null);
@@ -207,8 +199,8 @@ const file_marks = ref([]);
 const mark_editing = ref(null);
 // The CSS highlight underlining the shown file's quoted passages.
 const MARKED_HIGHLIGHT = "excerpt-marked";
-const MARK_CARD_WIDTH = 300;
-const MARK_CARD_HEIGHT = 110;
+const MARK_CARD_WIDTH = COMMENT_WIDTH;
+const MARK_CARD_HEIGHT = COMMENT_HEIGHT;
 let offer_timer = 0, pointer_down = false;
 const speech_settings = () => bridge.local_request("tts-settings", {});
 const reader = use_read_aloud({ bridge, container: () => markdown_scroll.value, hosts: ".project-markdown-preview",
@@ -243,19 +235,6 @@ const file_menu = computed(() => {
  */
 function check_speech() {
   speech_settings().then((settings) => { speech_ready.value = Boolean(settings.api_key_ref); }, () => {});
-}
-
-// A message attachment is read up to this size, like a project file.
-const ATTACHMENT_TEXT_LIMIT = 2 * 1024 * 1024;
-
-/** Read a message attachment's bytes as text, in the shape of the room-files answer. */
-async function read_attachment(attachment) {
-  const response = await fetch(attachment.url);
-  if (!response.ok) throw new Error(t('附件读取失败（{value1}）', { value1: response.status }));
-  const blob = await response.blob();
-  const truncated = blob.size > ATTACHMENT_TEXT_LIMIT;
-  const text = new TextDecoder("utf-8").decode(await (truncated ? blob.slice(0, ATTACHMENT_TEXT_LIMIT) : blob).arrayBuffer());
-  return { text, truncated, limit: ATTACHMENT_TEXT_LIMIT, size: blob.size, modified_at: attachment.created_at, encoding: "utf-8" };
 }
 
 /** Read one tab's file, discarding answers to its earlier requests; a tab already shown keeps its text meanwhile. */
@@ -481,7 +460,7 @@ const modal_content = {
 };
 
 const float_place = ref({ left: 0, top: FLOAT_FALLBACK_TOP });
-const reduced_motion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const motion_disabled = () => document.documentElement.dataset.motion === "off";
 let pull = null, folding = false;
 
 // The floating button can be dragged anywhere (mouse or finger) and sticks to the nearer side when let go: the content
@@ -578,7 +557,7 @@ function fold(after) {
   place_float();
   const element = frame.value;
   const finish = () => { folding = false; minimize(); if (typeof after === "function") after(); };
-  if (!element || reduced_motion() || docked.value) { finish(); return; }
+  if (!element || motion_disabled() || docked.value) { finish(); return; }
   folding = true;
   set_frame("none", { transition: false });
   const rect = element.getBoundingClientRect();
@@ -594,7 +573,7 @@ async function unfold() {
   open.value = true;
   await nextTick();
   // The reading's highlight is drawn and followed again once the window has its full size and its scroll back.
-  if (reduced_motion() || docked.value) { requestAnimationFrame(() => reader.refresh()); return; }
+  if (motion_disabled() || docked.value) { requestAnimationFrame(() => reader.refresh()); return; }
   requestAnimationFrame(() => {
     const element = frame.value;
     if (!element) return;
@@ -618,7 +597,7 @@ async function toggle_dock() {
   const element = frame.value, from = element?.getBoundingClientRect();
   dock_chosen.value = !dock_chosen.value;
   try { localStorage.setItem(FLOATING_KEY, dock_chosen.value ? "0" : "1"); } catch { /* Kept for this visit only. */ }
-  if (!element || reduced_motion()) return;
+  if (!element || motion_disabled()) return;
   await nextTick();
   const to = element.getBoundingClientRect();
   set_frame(`translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${from.width / to.width}, ${from.height / to.height})`, { transition: false });
@@ -681,19 +660,20 @@ function close_all() {
   open.value = false;
 }
 
-/** Go back to the room the active file was opened in, when another room is shown now. */
+/** Report whether the file's room is open, switching to it when needed. */
 async function to_tab_room(room_id = tab.value?.room_id) {
-  if (!room_id || view.value.room?.id === room_id) return;
-  await act("room", room_id);
+  if (!room_id) return false;
+  if (view.value.room?.id === room_id) return true;
+  const switched = await act("room", room_id);
   await nextTick();
+  return switched && view.value.room?.id === room_id;
 }
 
 /** Jump the file list (of the file's room) to a folder named in the breadcrumb, folding the window away. */
 async function reveal_folder(path) {
   const { room_id, root, directory } = tab.value;
+  if (!await to_tab_room(room_id)) return;
   if (!docked.value) fold();
-  await to_tab_room(room_id);
-  if (view.value.room?.id !== room_id) return;
   file_preview.reveal_root = root || 0;
   file_preview.reveal_name = directory || "";
   file_preview.reveal_path = path;
@@ -945,7 +925,9 @@ function cancel_comment() { commenting.value = null; hold_selection(null); }
 /** Put the selection (and comment) in the composer of the room shown now as an excerpt, fold the window and go to the messages. */
 async function add_excerpt() {
   const { text, start, end, from, to, in_source = false } = commenting.value;
-  const excerpt = { path: reference_path.value, name: preview_name.value, start, end, text, from, to, in_source, comment: comment.value.trim() };
+  const attachment = tab.value?.attachment;
+  const excerpt = { path: reference_path.value, name: preview_name.value, start, end, text, from, to, in_source, comment: comment.value.trim(),
+    ...(attachment ? { attachment_id: attachment.id, attachment_message_id: Number(attachment.message_id) || 0 } : {}) };
   cancel_comment();
   clear_selection();
   if (!view.value.room) await to_tab_room();
@@ -1131,11 +1113,13 @@ onBeforeUnmount(() => {
           <button type="button" class="channel-listen-mark" :title="t('把选中的文字作为注释添加到对话')" @mousedown.prevent @click="start_comment"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
           <button v-if="can_read" type="button" class="channel-listen-mark" :title="t('从选中处开始朗读')" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
         </div>
-        <form v-if="commenting" class="file-selection-offer selection-comment file-comment" :class="{ 'is-docked': commenting.touch }"
+        <form v-if="commenting" v-float-box class="file-selection-offer selection-comment file-comment" :class="{ 'is-docked': commenting.touch }"
           :style="commenting.touch ? {} : { left: `${commenting.left}px`, top: `${commenting.top}px` }" @submit.prevent="add_excerpt">
           <textarea ref="comment_input" v-model="comment" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注（可选）')" enterkeyhint="send" @keydown="comment_keydown"></textarea>
-          <button type="button" class="selection-comment-cancel" :aria-label="t('取消添加')" :title="t('取消')" @click="cancel_comment"><UIcon name="i-lucide-x" /></button>
-          <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
+          <div class="selection-comment-actions">
+            <button type="button" class="selection-comment-cancel" :aria-label="t('取消添加')" :title="t('取消')" @click="cancel_comment"><UIcon name="i-lucide-x" /></button>
+            <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
+          </div>
         </form>
         <div v-if="(offer?.touch && !commenting) || reader.state.message_id" class="file-listen-dock">
           <button v-if="offer?.touch" type="button" class="channel-listen-pill file-selection-offer" @mousedown.prevent @click="start_comment"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
@@ -1256,8 +1240,8 @@ onBeforeUnmount(() => {
 .file-offer-marks { position: absolute; z-index: 4; display: flex; gap: 6px; }
 .file-offer-marks .channel-listen-mark { position: static; }
 /* The shared comment box (channel.css), placed inside the dialog instead of on the page. */
-.file-comment { position: absolute; z-index: 4; }
-.file-comment.is-docked { inset: auto 12px calc(var(--keyboard-inset, 0px) + 12px); }
+.file-comment { position: absolute; z-index: 4; max-width: calc(100% - 16px); }
+.file-comment.is-docked { inset: auto 0 0; max-width: none; padding-bottom: calc(var(--keyboard-inset, 0px) + 12px); }
 .file-listen-dock { position: absolute; inset: auto 0 12px; z-index: 3; display: flex; justify-content: center; gap: 8px; pointer-events: none; }
 .project-html-preview { display: block; flex: 1; width: 100%; border: 0; background: white; }
 .project-editor-status { display: flex; align-items: center; gap: 16px; flex-shrink: 0; height: 26px; padding: 0 14px; font-size: 11.5px; color: var(--ui-text-muted);
@@ -1338,7 +1322,6 @@ onBeforeUnmount(() => {
    fades as it moves into the split pane. It also keeps clicks off the page behind the floating window. */
 .project-editor.is-switchable::before { content: ""; position: absolute; inset: -200vmax; z-index: -1; background: #000000a6; transition: opacity .24s ease; }
 .project-editor.is-switchable.is-docked::before { opacity: 0; pointer-events: none; }
-@media (prefers-reduced-motion: reduce) { .project-editor.is-switchable::before { transition: none; } }
 /* Shared by the file list and the preview. */
 .project-file-icon { flex-shrink: 0; width: 16px; height: 16px; }
 .project-crumb-separator { flex-shrink: 0; width: 13px; height: 13px; color: var(--ui-text-dimmed); }

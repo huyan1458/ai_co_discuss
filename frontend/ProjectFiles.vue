@@ -25,7 +25,7 @@ const loading = ref(false);
 const mode = ref(shown?.mode === "roots" ? "roots" : "folder");
 const roots = ref(null);
 const trash = ref(null);
-const section_failed = ref(false);
+const section_failure = ref("");
 const busy = ref(false);
 // A name being typed: `{ kind: "mkdir" | "rename" | "project", entry, value }`.
 const naming = ref(null);
@@ -76,7 +76,8 @@ async function open_project(path) {
   const request = ++listing_request;
   mode.value = "folder";
   loading.value = true;
-  await folder_listings.load(directory.value);
+  try { await folder_listings.load(directory.value); }
+  catch { /* Read from the computer even when the local cache is unavailable. */ }
   if (request !== listing_request) return;
   read_directory(path);
   sweep_folders();
@@ -105,7 +106,7 @@ async function read_section(section) {
   mode.value = section;
   naming.value = null;
   if (section === "roots") remember();
-  section_failed.value = false;
+  section_failure.value = "";
   loading.value = true;
   try {
     const answer = await bridge.manage_room_files(room_id, { op: section });
@@ -114,8 +115,8 @@ async function read_section(section) {
     else trash.value = answer.entries;
   } catch (error) {
     if (request !== listing_request) return;
-    section_failed.value = true;
-    bridge.notify("error", section === "roots" ? t('读取项目列表失败：{value1}', { value1: error.message }) : t('读取回收区失败：{value1}', { value1: error.message }));
+    section_failure.value = section === "roots" ? t('读取项目列表失败：{value1}', { value1: error.message }) : t('读取回收区失败：{value1}', { value1: error.message });
+    bridge.notify("error", section_failure.value);
   } finally { if (request === listing_request) loading.value = false; }
 }
 const show_roots = () => read_section("roots");
@@ -303,7 +304,10 @@ async function upload_files(files) {
     let conflict = null;
     if (taken.has(file.name)) {
       conflict = for_all || await ask_conflict(file.name, list.length > 1);
-      if (left_page) return;
+      if (left_page) {
+        bridge.notify("warning", t('已取消上传：离开文件页前未处理同名文件。'));
+        return;
+      }
       if (ask_all.value && conflict) for_all = conflict;
       if (!conflict) continue;
     }
@@ -311,22 +315,23 @@ async function upload_files(files) {
   }
   let uploaded = 0;
   for (const { file, conflict } of plans) {
-    if (left_page) return;
     const item = { id: crypto.randomUUID(), name: file.name, progress: 0, error: "" };
-    uploads.value = [...uploads.value, item];
+    if (!left_page) uploads.value = [...uploads.value, item];
     const update = (patch) => {
       if (!left_page) uploads.value = uploads.value.map((entry) => entry.id === item.id ? { ...entry, ...patch } : entry);
     };
     try {
       await bridge.upload_project_file(room_id, { ...target, file, conflict, on_progress: (progress) => update({ progress }) });
-      if (left_page) return;
-      uploads.value = uploads.value.filter((entry) => entry.id !== item.id);
+      if (!left_page) uploads.value = uploads.value.filter((entry) => entry.id !== item.id);
       uploaded += 1;
-    } catch (error) { update({ error: error.message }); }
+    } catch (error) {
+      if (left_page) bridge.notify("error", t('{name} 上传失败：{reason}', { name: file.name, reason: error.message }));
+      else update({ error: error.message });
+    }
   }
-  if (uploaded && !left_page) {
+  if (uploaded) {
     bridge.notify("info", t('已上传 {value1} 个文件', { value1: uploaded }));
-    if (mode.value === "folder" && root.value === target.root && current_path.value === target.path) read_directory(current_path.value);
+    if (!left_page && mode.value === "folder" && root.value === target.root && current_path.value === target.path) read_directory(current_path.value);
   }
 }
 
@@ -448,7 +453,10 @@ const deleted_time = (value) => modified_time(value);
       <div v-if="mode !== 'folder' && loading && (mode === 'roots' ? !roots : !trash)" class="project-files-rows" role="status" :aria-label="t('正在读取…')">
         <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
       </div>
-      <p v-if="mode !== 'folder' && section_failed" class="project-files-empty"><UButton :label="t('重试')" icon="i-lucide-refresh-cw" color="neutral" variant="ghost" @click="read_section(mode)" /></p>
+      <p v-if="mode !== 'folder' && section_failure" class="project-files-empty">
+        <span>{{ section_failure }}</span>
+        <UButton :label="t('重试')" icon="i-lucide-refresh-cw" color="neutral" variant="ghost" @click="read_section(mode)" />
+      </p>
 
       <template v-if="mode === 'roots' && roots">
         <div class="project-files-rows">

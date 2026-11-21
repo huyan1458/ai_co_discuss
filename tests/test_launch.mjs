@@ -17,6 +17,7 @@ import { read_project_files } from '../runner/project_files.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
 import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
+import { host_permissions } from '../runner/host_permissions.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
 import { software_models, software_skills } from '../runner/adapters/index.mjs';
 import { device_command, pairing_passkey_challenge, pairing_proof, start_pairing } from '../runner/device_auth.mjs';
@@ -578,9 +579,9 @@ test('the owner turns a room\'s smart scheduling on, changes it and turns it off
   const { api_key_ref } = save_api_key(f.home, { base_url: 'https://api.typesafe.ai/v1', api_key: 'test-key' });
   await assert.rejects(room_settings(f.home, { ...input, scheduler: { provider: 'nobody', model: 'x', api_key_ref } }), /供应商/);
   await assert.rejects(room_settings(f.home, { ...input, scheduler: { provider: 'jev', model: 'jev-latest', api_key_ref }, token: 'invalid-owner' }), /403/);
-  const on = await room_settings(f.home, { ...input, scheduler: { provider: 'jev', model: 'jev-latest', api_key_ref, mode: 'stable' } });
-  assert.deepEqual(on.scheduler, { provider: 'jev', model: 'jev-latest', mode: 'stable' }, 'the key reference is never sent back');
-  assert.deepEqual(await models(), { provider: 'jev', model: 'jev-latest', mode: 'stable' });
+  const on = await room_settings(f.home, { ...input, scheduler: { provider: 'jev', model: 'jev-latest', api_key_ref } });
+  assert.deepEqual(on.scheduler, { provider: 'jev', model: 'jev-latest' }, 'the key reference is never sent back');
+  assert.deepEqual(await models(), { provider: 'jev', model: 'jev-latest' });
   assert.equal(load_config(launched.config_path).scheduler.api_key_ref, api_key_ref);
   assert.equal((await room_settings(f.home, { ...input, scheduler: null })).scheduler, null);
   assert.equal(await models(), null);
@@ -1257,7 +1258,7 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   const draft = join(f.directory, 'draft.md');
   writeFileSync(draft, '<!-- workflow-part: 1/1 id: serial -->\n<!-- workflow-file: SKILL.md -->\n---\nname: serial\nlabel: 连载\n---\n先写再审。\n'
     + '<!-- workflow-file: agents/writer.md -->\n---\nname: Claude-writer\nlabel: 写手\nproject_access: full\n---\n按任务书写。\n');
-  await assert.rejects(adopt_workflow(f.home, { access_file: host_access, draft_file: draft }), /主持人完整权限/);
+  await assert.rejects(adopt_workflow(f.home, { access_file: host_access, draft_file: draft }), /主持人权限/);
   assert.equal(list_workflows(f.home).length, 0);
   // A browser of the local site without the room credential grants it with the site's administrator authority.
   const granted = await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', allowed: true }, { 'X-CoDiscuss-Local': '1' });
@@ -1273,6 +1274,12 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   const saved = load_config(launched.config_path);
   assert.deepEqual(saved.workflow, { id: 'serial', enabled: true, members: { writer: 'Claude-writer' } });
   assert.equal(saved.participants['Claude-writer'].project_access, 'write');
+  // Taking over another member's access (a new host from the previous one) raises it and says so; a second time changes nothing.
+  const inherit = () => request(f.site, '/api/local/room-member-access', { room_id: config.room, name: 'Codex', inherit_from: 'Claude-writer' }, { 'X-CoDiscuss-Local': '1' });
+  const raised = await inherit();
+  assert.deepEqual([raised.status, raised.body.changed, raised.body.project_access], [200, true, 'write'], JSON.stringify(raised.body));
+  assert.equal(load_config(launched.config_path).participants.Codex.project_access, 'write');
+  assert.equal((await inherit()).body.changed, false);
   const room = await api(config, '');
   assert.equal(room.free.members.find(member => member.name === 'Claude-writer').status, 'active');
   assert.equal(room.labels['Claude-writer'], '写手');
@@ -1320,7 +1327,12 @@ test('with full host control granted, only the host stops, invites at most writi
     return path;
   };
   const host_access = access('Codex', config.members.Codex.token);
-  await assert.rejects(host_control(f.home, 'stop-all', { access_file: host_access }), /主持人完整权限/);
+  await assert.rejects(host_control(f.home, 'stop-all', { access_file: host_access }), /主持人权限/);
+  // Only the ticked items are allowed: handling executions does not let the host invite, and the refusal names the item.
+  await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', permissions: { items: ['execution'] } }, { 'X-CoDiscuss-Local': '1' });
+  await host_control(f.home, 'stop-all', { access_file: host_access });
+  await assert.rejects(host_control(f.home, 'invite', { access_file: host_access, name: 'Claude' }), /管理成员名单/);
+  assert.deepEqual(load_config(launched.config_path).host_permissions.items, ['execution']);
   await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', allowed: true }, { 'X-CoDiscuss-Local': '1' });
   await assert.rejects(host_control(f.home, 'stop-all', { access_file: access('Other', randomUUID() + randomUUID()) }), /只有本房间的主持人/);
   await assert.rejects(host_control(f.home, 'invite', { access_file: host_access, name: 'Claude', access: 'full' }), /read 或 write/);
@@ -1344,6 +1356,53 @@ test('with full host control granted, only the host stops, invites at most writi
   const removed = await host_control(f.home, 'remove', { access_file: host_access, member: '评审' });
   assert.deepEqual({ ...removed, execution: undefined }, { ok: true, action: 'remove', member: invited.member, label: '评审', status: 'removed', pending: 0, cancelled_pending: 0, execution: undefined });
   assert.ok(!(await api(config, '')).free.members.some(member => member.name === invited.member && member.status === 'active'));
+});
+
+test('a host creates a room inside its project, linked both ways, that cannot create rooms, up to the limit', async t => {
+  const f = await fixture(t), token = randomUUID() + randomUUID();
+  save_launch_settings(f.home, { participants: f.input.participants });
+  const project = join(f.directory, 'project');
+  mkdirSync(join(project, 'sub'), { recursive: true });
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token, cwd: project,
+    room: { title: '父房间', mode: 'free', host: 'Codex', members: ['Codex'], submission_id: randomUUID() } }, f.options);
+  const config = load_config(launched.config_path);
+  const host_access = join(f.directory, 'host.access.json');
+  writeFileSync(host_access, JSON.stringify({ site: f.site, room: config.room, member: 'Codex', token: config.members.Codex.token }));
+  const create = (extra = {}) => host_control(f.home, 'create-room', { access_file: host_access, title: '子任务', members: 'Claude', cwd: 'sub',
+    text: '先列方案', submission_id: 'first-room', ...extra }, f.options);
+  await assert.rejects(create(), /新建房间/);
+  await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', permissions: { items: ['create_rooms'], room_limit: 1 } }, { 'X-CoDiscuss-Local': '1' });
+  await assert.rejects(create({ cwd: '..' }), /子目录/);
+  await assert.rejects(create({ access: 'full' }), /read 或 write/);
+  const created = await create();
+  assert.deepEqual([created.host, created.members, created.project_access, created.cwd], ['Codex', ['Codex', 'Claude'], 'read', join(project, 'sub')]);
+  // The new room's host is this host's own expert in a new session; the new room cannot create rooms.
+  const child = load_config(read_registry(f.home).find(path => load_config(path).room === created.room_id));
+  assert.deepEqual([child.participants.Codex.adapter, child.participants.Codex.project_access, child.participants.Codex.session_id], ['codex_cli', 'read', undefined]);
+  assert.ok(!host_permissions(child).items.includes('create_rooms'));
+  assert.deepEqual(load_config(launched.config_path).spawned_rooms, [{ room: created.room_id, submission_id: 'first-room' }]);
+  const parent_card = (await api(config, '/messages?after=0')).messages.at(-1);
+  assert.deepEqual([parent_card.source, parent_card.link_room, parent_card.link_relation], ['room_link', created.room_id, 'child']);
+  const child_messages = (await api(child, '/messages?after=0')).messages;
+  assert.deepEqual(child_messages.map(message => [message.source, message.link_relation, message.relay_room]),
+    [['room_link', 'parent', null], ['user', null, config.room]]);
+  // A retry returns the same room; a new one is over the limit; posting only reaches rooms this one created.
+  assert.equal((await create()).room_id, created.room_id);
+  assert.equal((await api(child, '/messages?after=0')).messages.length, 2);
+  await assert.rejects(create({ submission_id: 'second-room' }), /上限 1/);
+  await assert.rejects(host_control(f.home, 'room-post', { access_file: host_access, room: 'elsewhere', text: '你好' }), /关联的房间/);
+  const posted = await host_control(f.home, 'room-post', { access_file: host_access, room: created.room_id, text: '进展如何' });
+  assert.equal((await api(child, '/messages?after=0')).messages.at(-1).id, posted.message_id);
+  // The new room's host answers back; with the owner's limit set, the two hosts pass at most that many until the owner speaks again.
+  const child_access = join(f.directory, 'child.access.json');
+  writeFileSync(child_access, JSON.stringify({ site: f.site, room: created.room_id, member: 'Codex', token: child.members.Codex.token }));
+  const back = await host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '方案已列好' });
+  assert.equal((await api(config, '/messages?after=0')).messages.at(-1).relay_room, created.room_id);
+  save_launch_settings(f.home, { create_preferences: { relay_rounds: 10 } });
+  for (let index = 0; index < 7; index += 1) await host_control(f.home, 'room-post', { access_file: host_access, room: created.room_id, text: `第 ${index} 次` });
+  await assert.rejects(host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '再来' }), /上限/);
+  await api(config, '/messages', { author: '用户', text: '继续', submission_id: randomUUID() });
+  assert.ok((await host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '再来' })).message_id > back.message_id);
 });
 
 test('a workflow bound at creation ends when its members are sent away, resumes with their sessions, and is replaced by another', async t => {
@@ -1441,6 +1500,49 @@ test('a sub-workflow brings its own cards only when the host uses it, and sends 
   room = await api(config, '');
   assert.equal(room.free.members.find(member => member.name === 'Claude-hero').status, 'active');
   assert.equal(room.free.members.length, 3);
+});
+
+test('one card brings several members under names of their own, and each comes back to its own session', async t => {
+  const f = await fixture(t), token = randomUUID() + randomUUID();
+  save_launch_settings(f.home, { participants: f.input.participants });
+  const writer = { card: 'writer', name: 'Claude-writer', project_access: 'read' };
+  const sub_workflows = [{ id: 'rehearsal', label: '角色代入', description: '角色代入', skill: '代入。',
+    agents: [{ card: 'character', name: 'Claude-character', label: '角色', project_access: 'read', system_prompt: '你是这个人物。' }] }];
+  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer], sub_workflows }, validate_preset);
+  const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
+    workflow: { id: 'writing', members: { writer: 'Claude' } },
+    room: { title: '一卡多人', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, f.options);
+  const config = load_config(launched.config_path);
+  const host_access = join(f.directory, 'host.access.json');
+  writeFileSync(host_access, JSON.stringify({ site: f.site, room: config.room, member: 'Codex', token: config.members.Codex.token }));
+  await assert.rejects(join_workflow(f.home, { access_file: host_access, label: '角色·小满' }), /--card/);
+  const first = await join_workflow(f.home, { access_file: host_access, cards: ['character'], label: '角色·小满' });
+  const second = await join_workflow(f.home, { access_file: host_access, cards: ['character'], label: '角色·她' });
+  assert.notEqual(first.member, second.member);
+  assert.deepEqual(second.members, { writer: 'Claude', character: first.member });
+  assert.deepEqual(second.extra_members, { [second.member]: 'character' });
+  let room = await api(config, '');
+  assert.deepEqual([room.labels[first.member], room.labels[second.member]], ['角色·小满', '角色·她']);
+  // Asking again for a name this card's member has brings no one new; a name another member has is refused.
+  assert.equal((await join_workflow(f.home, { access_file: host_access, cards: ['character'], label: '角色·她' })).member, second.member);
+  await assert.rejects(join_workflow(f.home, { access_file: host_access, cards: ['writer'], label: '角色·她' }), /已有显示名/);
+  // Sending one away leaves the other; the same name brings back the same member, in its own session.
+  const left = await leave_sub_workflow(f.home, { access_file: host_access, member: '角色·她' });
+  assert.deepEqual(left.away, [second.member]);
+  await assert.rejects(leave_sub_workflow(f.home, { access_file: host_access, member: 'Claude' }), /主线成员不能这样请离/);
+  room = await api(config, '');
+  assert.equal(room.free.members.find(member => member.name === second.member).status, 'away');
+  assert.equal(room.free.members.find(member => member.name === first.member).status, 'active');
+  const back = await join_workflow(f.home, { access_file: host_access, cards: ['character'], label: '角色·她' });
+  assert.equal(back.member, second.member);
+  assert.equal(back.returned, true);
+  room = await api(config, '');
+  assert.equal(room.free.members.find(member => member.name === second.member).status, 'active');
+  assert.equal(room.free.members.length, 4);
+  // Leaving the sub-workflow sends all its members away, the further ones included.
+  const all = await leave_sub_workflow(f.home, { access_file: host_access, sub: 'rehearsal' });
+  assert.deepEqual(all.away.sort(), [first.member, second.member].sort());
+  assert.deepEqual(load_config(launched.config_path).workflow.extra_members, { [second.member]: 'character' }, 'the binding remembers who plays which card');
 });
 
 test('members join, leave and return while a free room keeps running', async t => {

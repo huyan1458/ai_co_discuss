@@ -20,11 +20,13 @@ function keydown(event) {
 </script>
 
 <template>
-  <form class="selection-comment excerpt-edit" :class="{ 'is-inline': inline, 'has-context': context }" @submit.prevent="emit('save', draft.trim())">
+  <form v-float-box="!inline" class="selection-comment excerpt-edit" :class="{ 'is-inline': inline, 'has-context': context }" @submit.prevent="emit('save', draft.trim())">
     <small v-if="context" class="excerpt-edit-context">{{ context }}</small>
     <textarea ref="input" v-model="draft" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注')" enterkeyhint="done" @keydown="keydown"></textarea>
-    <button v-if="removable" type="button" class="selection-comment-remove" :aria-label="t('移除这条注释')" :title="t('移除注释')" @click="emit('remove')"><UIcon name="i-lucide-trash-2" /></button>
-    <button type="button" class="selection-comment-cancel" :aria-label="t('取消')" :title="t('取消')" @click="emit('cancel')"><UIcon name="i-lucide-x" /></button>
-    <button type="submit" class="selection-comment-send" :aria-label="t('保存')" :title="t('保存（Enter）')"><UIcon name="i-lucide-check" /></button>
+    <div class="selection-comment-actions">
+      <button v-if="removable" type="button" class="selection-comment-remove" :aria-label="t('移除这条注释')" :title="t('移除注释')" @click="emit('remove')"><UIcon name="i-lucide-trash-2" /></button>
+      <button type="button" class="selection-comment-cancel" :aria-label="t('取消')" :title="t('取消')" @click="emit('cancel')"><UIcon name="i-lucide-x" /></button>
+      <button type="submit" class="selection-comment-send" :aria-label="t('保存')" :title="t('保存（Enter）')"><UIcon name="i-lucide-check" /></button>
+    </div>
   </form>
 </template>

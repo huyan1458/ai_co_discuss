@@ -5,6 +5,8 @@ import { external_of } from './external-members.js';
  * lays the same actions out in full, so both read them from here instead of keeping two lists.
  */
 const LIVE = ["dispatched", "started"];
+/** Longest display name a member may be given. */
+export const MAX_LABEL = 32;
 
 /** A member is busy while it has queued requests or a live execution. */
 export const busy = (member) => member.pending > 0 || LIVE.includes(member.execution?.status);

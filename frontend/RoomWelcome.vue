@@ -60,7 +60,7 @@ async function start() {
   try {
     await act("quick_create", text);
   } finally {
-    if (!view.value.room && !draft.value) draft.value = text;
+    if (!view.value.room && text) draft.value = draft.value ? `${text}\n${draft.value}` : text;
   }
 }
 </script>

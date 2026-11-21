@@ -18,6 +18,7 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 | 手动成员注册、原会话或手动回答 | [手动接入](references/manual.md) |
 | 写入结果不明、被拒、超长正文 | [写入与恢复](references/writing.md) |
 | 接力（`sequence`）、向用户提问（`question`）、生图（`image`）、主动发言 | [按需场景](references/situations.md) |
+| 回答需要用户亲手操作的演示（交互式 HTML） | [交付可操作的演示](references/interactive-html.md) |
 
 ## 硬约束
 

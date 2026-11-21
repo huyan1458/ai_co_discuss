@@ -124,6 +124,18 @@ class FreeRoomTests(unittest.TestCase):
 class SingleMemberTests(FreeRoomTests):
     """Single-member rooms; subclasses of FreeRoomTests reuse its fixture without re-running these."""
 
+    def test_execution_keeps_the_model_the_runner_reports(self):
+        """The chosen model on delivery, then what the session log says after the answer; an empty field keeps the last."""
+        self.say("写一段", to=["Claude"])
+        execution = self.reserve()[1]
+        url = f"{self.path}/executions/{execution['id']}"
+        self.assertEqual(self.request(url, {"action": "model", "model": "claude-opus-5-5", "effort": "high"}, self.owner)[0], 200)
+        self.assertEqual(self.request(url, {"action": "model", "model": 5}, self.owner)[0], 400)
+        self.assertEqual(self.answer(execution["id"])[0], 201)
+        self.assertEqual(self.request(url, {"action": "model", "model": "claude-sonnet-5-5", "effort": ""}, self.owner)[0], 200)
+        shown = self.request(self.path)[1]["free"]["executions"][0]
+        self.assertEqual((shown["model"], shown["effort"]), ("claude-sonnet-5-5", "high"))
+
     def test_message_reads_name_members_as_shown_and_count_what_remains(self):
         """`author` takes the display name as well as the ID; pages say how many matches still follow."""
         self.say("帮我看看")
@@ -1434,6 +1446,34 @@ class MultiMemberTests(FreeRoomTests):
                 self.assertEqual(response.status, 200)
             self.assertEqual(self.messages()[-1][1], "主持人 Claude 把自己的模型从 sonnet 换为 opus，下次执行起生效。")
         self.assertEqual(self.request(self.path)[1]["free"]["requests"], [])
+
+    def test_rooms_a_host_created_link_both_ways_and_its_relayed_message_wakes_the_child_host(self):
+        """create-room leaves a link card on each side (owner credential, idempotent); room-post labels where it came from."""
+        child_owner, child_member = uuid.uuid4().hex, uuid.uuid4().hex
+        status, child = self.request("/api/rooms", {"title": "子房间", "goal": "拆出的任务", "mode": "free",
+                                                    "members": [{"name": "Claude", "adapter": "claude", "token": child_member}],
+                                                    "submission_id": "child-room-1"}, child_owner)
+        self.assertEqual(status, 201, child)
+        child_path = f"/api/rooms/{child['id']}"
+        link = {"relation": "child", "room_id": child["id"], "host": "Claude"}
+        self.assertEqual(self.request(f"{self.path}/room-link", link, self.member)[0], 403)
+        self.assertEqual(self.request(f"{self.path}/room-link", {**link, "room_id": "nope"}, self.owner)[0], 400)
+        status, first = self.request(f"{self.path}/room-link", link, self.owner)
+        self.assertEqual((status, first["duplicate"]), (200, False), first)
+        self.assertTrue(self.request(f"{self.path}/room-link", link, self.owner)[1]["duplicate"])
+        self.request(f"{child_path}/room-link", {"relation": "parent", "room_id": self.room["id"], "host": "Claude"}, child_owner)
+        card = self.request(f"{self.path}/messages?after=0")[1]["messages"][-1]
+        self.assertEqual((card["source"], card["link_room"], card["link_relation"], card["link_title"]), ("room_link", child["id"], "child", "子房间"))
+        self.assertEqual(self.request(self.path)[1]["free"]["requests"], [])
+        # The parent host speaks in the child room with that room's owner credential; only the owner may carry a relay.
+        relay = {"room_id": self.room["id"], "host": "Claude"}
+        payload = {"author": "用户", "text": "请先列出方案", "submission_id": uuid.uuid4().hex, "relay": relay}
+        self.assertEqual(self.request(f"{child_path}/messages", {**payload, "author": "Claude", "source": "cli"}, child_member)[0], 403)
+        status, saved = self.request(f"{child_path}/messages", payload, child_owner)
+        self.assertEqual(status, 201, saved)
+        message = self.request(f"{child_path}/messages?after=0")[1]["messages"][-1]
+        self.assertEqual((message["relay_room"], message["relay_host"], message["relay_title"]), (self.room["id"], "Claude", "自由单聊"))
+        self.assertEqual([(item["member"], item["status"]) for item in self.request(child_path)[1]["free"]["requests"]], [("Claude", "pending")])
 
     def test_quoted_mention_of_the_host_wakes_nobody(self):
         """应 8: a host's name inside quotation marks is quoted, not called on."""

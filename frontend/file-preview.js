@@ -2,8 +2,56 @@
  * What the file list, the floating file preview and the composer share within one room: the preview's entry points and
  * the excerpts quoted from project files for the next message.
  */
-import { reactive } from "vue";
+import { reactive, shallowRef } from "vue";
 import { locale, t } from './i18n.js';
+
+export const ATTACHMENT_TEXT_LIMIT = 2 * 1024 * 1024;
+// Scripts run in an opaque origin, including when the preview is opened in a new tab.
+export const HTML_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals";
+
+/** Wrap preview source without putting the UTF-8 declaration before its doctype. */
+export function html_document(text, extra = "") {
+  const doctype = /^\uFEFF?\s*<!doctype[^>]*>/i.exec(text)?.[0] || "";
+  return `${doctype}<meta charset="utf-8">${extra}${text.slice(doctype.length)}`;
+}
+
+/** Read an attachment as UTF-8 text, retaining enough metadata for a truncated source preview. */
+export async function read_attachment(attachment) {
+  const response = await fetch(attachment.url);
+  if (!response.ok) throw new Error(t('附件读取失败（{value1}）', { value1: response.status }));
+  const blob = await response.blob();
+  const truncated = blob.size > ATTACHMENT_TEXT_LIMIT;
+  const text = new TextDecoder("utf-8").decode(await (truncated ? blob.slice(0, ATTACHMENT_TEXT_LIMIT) : blob).arrayBuffer());
+  return { text, truncated, limit: ATTACHMENT_TEXT_LIMIT, size: blob.size, modified_at: attachment.created_at, encoding: "utf-8" };
+}
+
+/** Hold at most one in-message preview and ignore reads belonging to a closed or replaced preview. */
+export function create_inline_html_preview(attachment_url) {
+  const preview = shallowRef(null);
+  const close = () => { preview.value = null; };
+
+  async function open(file) {
+    if (file.size > ATTACHMENT_TEXT_LIMIT) {
+      preview.value = { id: file.id, status: "truncated" };
+      return;
+    }
+    const request = { id: file.id, status: "loading" };
+    preview.value = request;
+    try {
+      const url = await attachment_url(file);
+      if (preview.value !== request) return;
+      const result = await read_attachment({ ...file, url });
+      if (preview.value !== request) return;
+      preview.value = result.truncated
+        ? { id: file.id, status: "truncated" }
+        : { id: file.id, status: "ready", srcdoc: html_document(result.text) };
+    } catch (error) {
+      if (preview.value === request) preview.value = { id: file.id, status: "error", error: error.message };
+    }
+  }
+
+  return { preview, open, close };
+}
 
 /**
  * `open(path, directory, root)` is set by the preview while it is mounted (`root` is the index of the room's project
@@ -300,15 +348,25 @@ export function excerpt_lines({ start, end }) {
   return start === end ? `第 ${start} 行` : `第 ${start}–${end} 行`;
 }
 
+/** Where an excerpt comes from: a message, a message attachment (its message and ID, to download it), or a project path. */
+function excerpt_origin(excerpt) {
+  if (excerpt.message_id) return `${excerpt.name} 的消息 #${excerpt.message_id}`;
+  if (excerpt.attachment_id) {
+    const owner = excerpt.attachment_message_id ? `消息 #${excerpt.attachment_message_id} 的附件` : "附件";
+    return `${owner} \`${excerpt.name}\`（附件 ID ${excerpt.attachment_id}）`;
+  }
+  return `\`${excerpt.path}\``;
+}
+
 /**
- * The excerpts as Markdown appended to a message: path and lines, the text as a quote (quoted lines never @name
+ * The excerpts as Markdown appended to a message: source and lines, the text as a quote (quoted lines never @name
  * anyone), then the optional comment.
  */
 export function excerpts_markdown(excerpts) {
   return excerpts.map((excerpt, index) => {
     const quote = excerpt.text.split("\n").map(line => line.trim() ? `> ${line}` : ">").join("\n");
     const lines = excerpt_lines(excerpt);
-    const source = excerpt.message_id ? `${excerpt.name} 的消息 #${excerpt.message_id}` : `\`${excerpt.path}\``;
+    const source = excerpt_origin(excerpt);
     return [`注释 ${index + 1}：${source}${lines ? ` ${lines}` : ""}`, quote, excerpt.comment ? `批注：${excerpt.comment}` : ""]
       .filter(Boolean).join("\n\n");
   }).join("\n\n");

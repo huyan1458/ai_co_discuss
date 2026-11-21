@@ -1,3 +1,10 @@
+<script>
+import { ref as module_ref } from "vue";
+// Kept across openings of the settings, so reopening shows the last list at once instead of loading and reflowing.
+const cached_devices = module_ref(null);
+const cached_audit = module_ref([]);
+</script>
+
 <script setup>
 /** Paired devices: pair this browser with a code from a trusted screen, add another device by QR code, create or renew this
  * device's passkey, and revoke devices or their remote write grants. The paired computer decides; this only asks it. */
@@ -12,8 +19,8 @@ const local = computed(() => view.value.admin.local);
 // Another device reaches the computer through the relay; the computer's own page asks its local service.
 const remote = computed(() => !local.value && view.value.launch.available && view.value.launch.remote);
 const device = computed(() => view.value.device);
-const devices = ref(null);
-const audit = ref([]);
+const devices = cached_devices;
+const audit = cached_audit;
 const audit_open = ref("");
 const busy = ref("");
 const code = ref("");
@@ -43,14 +50,16 @@ async function run(name, task, success = "") {
   } finally { busy.value = ""; }
 }
 
-/** Read the device list; an unpaired browser learns here that it must pair first. */
-function load() {
+/** Read the device list in the background, leaving the buttons usable; an unpaired browser learns here that it must pair first. */
+async function load() {
   if (!local.value && !remote.value) return;
-  return run("list", async () => {
+  try {
     const result = await bridge.device.request("device-list");
     devices.value = result.devices;
     audit.value = result.audit || [];
-  });
+  } catch (error) {
+    if (!error.cancelled && !error.need) bridge.notify("error", error.message);
+  }
 }
 onMounted(load);
 watch(remote, (value) => { if (value) load(); });
@@ -148,7 +157,6 @@ const date = (time) => new Date(time).toLocaleString(locale, { month: "numeric",
 <template>
   <section v-if="local || remote || needs_pairing || device.needs" class="device-settings" aria-labelledby="device-heading">
     <h4 id="device-heading">{{ t('已配对的设备') }}</h4>
-    <p v-if="!needs_pairing" class="fine-print device-pair-note">{{ t('新设备须在电脑前扫码配对。') }}</p>
 
     <form v-if="needs_pairing" class="dialog-form device-pair" :aria-label="t('配对这台设备')" @submit.prevent="pair">
       <p class="fine-print">{{ t('扫描电脑本机网页 设置 → 添加设备 的二维码，或输入配对码。') }}</p>
@@ -239,7 +247,6 @@ const date = (time) => new Date(time).toLocaleString(locale, { month: "numeric",
 .device-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 /* Another device has nothing to add here, and an empty row would still take a gap. */
 .device-actions:empty { display: none; }
-@media (max-width: 720px) { .device-pair-note { display: none; } }
 .device-invite { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px; border: 1px solid var(--ui-border); border-radius: 10px; }
 .device-invite p { margin: 0 0 4px; font-size: 12px; }
 .device-expired { opacity: 0.35; filter: grayscale(1); }

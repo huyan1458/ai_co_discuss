@@ -17,9 +17,9 @@ import { guard_remote_request, list_remote_directories, remote_allows, remote_ro
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
 import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_preview, session_settings, software_defaults, software_defaults_stamp, software_effort, software_models, software_sessions, software_skills } from './adapters/index.mjs';
-import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_capabilities, adapter_profile, DEFAULT_API_MAX_REQUESTS, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
+import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_capabilities, adapter_profile, DEFAULT_API_MAX_REQUESTS, inherited_access, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, managed_api_keys, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
-import { DEFAULT_SCHEDULER_MODE, SCHEDULER_MODES, SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
+import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { save_tts_settings, tts_release, tts_settings, tts_speak } from './tts.mjs';
 import { local_service_stop, local_services } from './tts_providers.mjs';
 import { weixin_command } from './weixin.mjs';
@@ -30,10 +30,12 @@ import { run_image_tool } from './adapters/api_images.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, check_extra_directories, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
-import { assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, WORKFLOW_ID_PATTERN } from './workflows.mjs';
+import { assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, workflow_member_list, WORKFLOW_ID_PATTERN } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 import { site_fetch } from './entry_client.mjs';
 import { t } from './i18n.mjs';
+import { host_room_limit, without_host_item } from './host_permissions.mjs';
+import { HOST_ACTION_ITEMS, HOST_ITEMS, HOST_LEGACY_ITEMS, host_allowed, host_permission_fields, host_permissions, host_refusal, normalize_host_permissions } from './host_permissions.mjs';
 
 // A platform is a type; `Claude-review` is another Claude instance with its own session, model and effort. An ID is
 // English letters, digits and underscores only; a Chinese name is a display label.
@@ -103,8 +105,8 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch presets [--file FILE]
       codiscuss launch machine-link --file FILE
       codiscuss launch workflow-adopt (--draft FILE | --id WORKFLOW) [--access-file FILE]
-      codiscuss launch workflow-join [--card ID[,ID] | --sub SUB] [--access-file FILE]
-      codiscuss launch workflow-leave --sub SUB [--access-file FILE]
+      codiscuss launch workflow-join [--card ID[,ID] | --sub SUB | --card ID --label 显示名] [--access-file FILE]
+      codiscuss launch workflow-leave (--sub SUB | --member 成员) [--access-file FILE]
       codiscuss launch host-control ACTION [选项] [--access-file FILE]
       codiscuss launch workflow-check (--dir DIR | --draft FILE)
       codiscuss launch workflow-save (--dir DIR | --draft FILE)
@@ -150,9 +152,9 @@ room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
 room-fork 把从原房间分支出的新房间登记到本机，各本机成员从原会话分叉、不含分支点之后的执行，原会话不变；须提供 site、room_id、token、source_room_id、source_token、executions（{成员名: [排除的执行编号]}）。
 workflow-adopt 主持人在本房间启用工作流：--draft 把自己的草稿（一段，分段头 1/1）保存进工作流库后启用，--id 启用工作流库里已有的工作流（不改动它）；缺的卡片成员由本机服务邀请，项目权限最高可写；须房主已为本房间打开“主持人完整权限”。凭据为本次任务的 access_file（或 DISCUSS_ACCESS_FILE）。
-workflow-join 主持人为本房间在用工作流里还没有成员的卡片（启用后才新增的）邀请成员，不填 --card 即全部主线卡片；无需额外授权，离开或移除的成员由用户请回。--sub 改为请进该子工作流的卡片成员（离开的请回原会话）。凭据同上。
-workflow-leave 主持人用完子工作流后，把 --sub 子工作流卡片的成员设为离开（会话保留，下次 workflow-join --sub 请回）；主线成员不能这样请离。凭据同上。
-host-control 主持人代房主控制房间，须房主已为本房间打开“主持人完整权限”，凭据同上；成员用 --member（成员 ID 或显示名），除 retry、model、label 外不能是主持人自己：
+workflow-join 主持人为本房间在用工作流里还没有成员的卡片（启用后才新增的）邀请成员，不填 --card 即全部主线卡片；无需额外授权，离开或移除的成员由用户请回。--sub 改为请进该子工作流的卡片成员（离开的请回原会话）。凭据同上。 --card 一张卡片加 --label 显示名：按这个显示名请一位扮演该卡片的成员（同一张卡可请多位，各有自己的会话；显示名只在本房间、不能和别的成员重复；该卡片已有同名的离开成员就请回它的原会话）。
+workflow-leave 主持人用完子工作流后，把 --sub 子工作流卡片的成员设为离开（会话保留，下次 workflow-join --sub 请回）；主线成员不能这样请离。凭据同上。 --member 成员（成员 ID 或显示名）只请离子工作流卡片的这一位成员。
+host-control 主持人代房主控制房间，须房主已为本房间勾选对应的主持人权限（任务的 host_permissions 列出已勾选的项），凭据同上；成员用 --member（成员 ID 或显示名），除 retry、model、label 外不能是主持人自己：
   诊断：details --execution N 读取该执行的本机过程日志（服务端详情与事件记录用 execution / room events 读取）；
   恢复：stop --member 打断；stop-all 停止全部执行、请求与接力；steer --member --text 话 [--submission-id ID] 向它进行中的执行插话；
         retry --execution N 重试失败的执行（含你自己的）；model --member [--model M] [--effort E] 改 CLI 或 API 成员的模型与强度（空值恢复默认；API 成员不填模型则保留原模型；换后房间留一条系统记录，成员下次任务带 model_change）；model --member M --list 列出该成员软件的可用模型；
@@ -164,6 +166,10 @@ host-control 主持人代房主控制房间，须房主已为本房间打开“�
   推进：order 读取发言顺序，order --order 甲,乙 --revision REV 调整尚未发言的部分；
         discussion 读取讨论，discussion --do start --goal 目标 --revision REV 开启（上限用房间默认值），--do pause|resume|end --revision REV；
         goal 读取 Goal，goal --do start --goal 目标 --revision REV 开启（预算用房主默认值，默认不限时为 8 次续跑、90 分钟），--do pause|resume|end --revision REV。
+  房间：create-room --title 标题 [--goal 目标] [--members 甲,乙] [--host 平台] [--cwd 子目录] [--access read|write] [--text 首条消息] [--submission-id ID]
+        新建一个房间分担工作：成员用本机已配置的软件，项目权限默认只读、最高可写，目录只能是本房间项目目录或其子目录；不填 --host 时由与你同款的专家主持；
+        新房间的主持人权限取本机默认值但不能再新建房间，本房间可新建的数量有上限；两边各留一张链接卡片；重试沿用同一 --submission-id；
+        room-post --room 房间编号 --text 话 [--submission-id ID] 在关联房间（你新建的，或新建本房间的）发言，按房主消息唤醒该房间、标注来自本房间；自用户上次发言起两边互传的条数受本机“关联房间互传上限”限制（默认不限）；读它用平常的读取命令、房间编号写新房间的（跨房间只能读）。
   不开放：批准超出上限的轮数、项目权限高于可写或放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己的其他操作。
 workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库（同 ID 覆盖），卡片按声明的项目权限保存。写法见 workflow-creator 技能。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
@@ -402,10 +408,10 @@ export async function room_models(home, raw, { read_defaults = profile => cached
         outside_enforced: read_only_enforced({ ...profile, project_access: profile.project_access || config.project_access || 'read' }) } : {}) }];
   })));
   // Smart scheduling is a local choice; only which model decides is shown, never its key.
-  const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model, mode: config.scheduler.mode || DEFAULT_SCHEDULER_MODE } : null;
+  const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model } : null;
   return { room_id: input.room_id, registered: paths.length > 0, participants, scheduler, project_directory: config.cwd || '',
     extra_directories: config.extra_directories || [],
-    workflow: room_workflow_status(config, home), host_workflows: Boolean(config.host_workflows),
+    workflow: room_workflow_status(config, home), host_workflows: Boolean(config.host_workflows), host_permissions: host_permissions(config),
     api_max_requests: config.api_max_requests ?? DEFAULT_API_MAX_REQUESTS,
     // Whether members may draw here, and whether this computer has an image service to draw with.
     image_generation: Boolean(config.image_generation), image_configured: image_settings(home).configured };
@@ -451,8 +457,9 @@ function room_workflow_status(config, home) {
   // `cards` are the main flow's, which a refresh fills; a sub-workflow's cards join only when it is used.
   const cards = Object.values(loaded.cards || {});
   return { id: config.workflow.id, label: loaded.label || config.workflow.id, enabled: Boolean(config.workflow.enabled),
-    available: !loaded.error, members: config.workflow.members || {}, cards: cards.filter(card => !card.sub_workflow).map(card => card.card),
-    sub_workflows: (loaded.sub_workflows || []).map(sub => ({ id: sub.id, label: sub.label || sub.id, description: sub.description, cards: sub.cards })) };
+    available: !loaded.error, members: config.workflow.members || {}, ...(config.workflow.extra_members ? { extra_members: config.workflow.extra_members } : {}),
+    cards: cards.filter(card => !card.sub_workflow).map(card => card.card), stages: loaded.stages || [],
+    sub_workflows: (loaded.sub_workflows || []).map(sub => ({ id: sub.id, label: sub.label || sub.id, description: sub.description, cards: sub.cards, attach: sub.attach || [] })) };
 }
 
 /**
@@ -695,7 +702,7 @@ function read_log_tail(path) {
   return length < size ? text.slice(text.indexOf('\n') + 1) : text;
 }
 
-const CREATE_PREFERENCE_RANGES = { max_rounds: [0, 100], max_minutes: [0, 1440], goal_max_continues: [0, 100], goal_max_minutes: [0, 1440], chain_rounds: [0, 100],
+const CREATE_PREFERENCE_RANGES = { max_rounds: [0, 100], max_minutes: [0, 1440], goal_max_continues: [0, 100], goal_max_minutes: [0, 1440], chain_rounds: [0, 100], relay_rounds: [0, 100],
   api_max_requests: [0, MAX_API_MAX_REQUESTS] };
 const CREATE_PREFERENCE_FLAGS = ['named_followup', 'host_workflows', 'advanced_open'];
 const MAX_PREFERENCE_MODEL_LENGTH = 200;
@@ -714,8 +721,15 @@ function validate_create_preferences(input) {
     else if (field === 'host_project_access') valid = ['read', 'write', 'auto', 'full'].includes(value);
     else if (field === 'workflow_id') valid = typeof value === 'string' && (!value || WORKFLOW_ID_PATTERN.test(value));
     else if (field === 'scheduler') valid = valid_scheduler_preference(value);
+    else if (field === 'host_permissions') valid = valid_host_permissions(value);
     if (!valid) throw new Error(`建房偏好字段无效：${field}`);
   }
+}
+
+/** Host permissions as the page sends them: known items, and a room limit when given. */
+function valid_host_permissions(value) {
+  return Boolean(value) && typeof value === 'object' && Array.isArray(value.items) && value.items.every(item => HOST_ITEMS.includes(item))
+    && (value.room_limit === undefined || Number.isInteger(value.room_limit));
 }
 
 /** A scheduler preference carries selections, never a key or even a key reference. */
@@ -725,7 +739,8 @@ function valid_scheduler_preference(value) {
     enabled: item => typeof item === 'boolean',
     provider: item => typeof item === 'string' && (!item || Object.hasOwn(SCHEDULER_PROVIDERS, item)),
     model: item => typeof item === 'string' && item.length <= MAX_PREFERENCE_MODEL_LENGTH,
-    mode: item => typeof item === 'string' && (!item || Object.hasOwn(SCHEDULER_MODES, item)),
+    // The decision method was retired on 2026-11-21; preferences saved before still carry it and are read as before.
+    mode: item => typeof item === 'string',
   };
   return Object.entries(value).every(([field, item]) => Object.hasOwn(fields, field) && fields[field](item));
 }
@@ -1009,7 +1024,7 @@ function free_launch_config(home, input, room, directory, options) {
   if (workflow && Object.values(workflow.members).some(name => !names.includes(name))) throw new Error('工作流成员须在本次邀请的成员中');
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
     scheduler: input.scheduler || undefined, cwd: input.cwd, extra_directories: input.extra_directories, project_access: input.project_access || undefined, workflow,
-    host_workflows: input.host_workflows === true || undefined, api_max_requests: input.api_max_requests,
+    ...host_permission_fields(normalize_host_permissions(input.host_permissions, input.host_workflows === true)), api_max_requests: input.api_max_requests,
     image_generation: input.image_generation === true || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
 }
@@ -1218,7 +1233,7 @@ export async function room_settings(home, raw) {
     const config = configuration_snapshot(path).config;
     const next = { ...config, ...(requests !== undefined ? { api_max_requests: requests } : {}), ...(images !== undefined ? { image_generation: images } : {}) };
     // Off is written as null, not dropped, so the running service's merge of the new configuration turns it off too.
-    if (scheduler !== undefined) next.scheduler = scheduler && { provider: scheduler.provider, model: scheduler.model, api_key_ref: scheduler.api_key_ref, ...(scheduler.mode ? { mode: scheduler.mode } : {}) };
+    if (scheduler !== undefined) next.scheduler = scheduler && { provider: scheduler.provider, model: scheduler.model, api_key_ref: scheduler.api_key_ref };
     if (cwd !== undefined) {
       if (config.cwd) throw new Error('本房间已有项目目录，建房后不能更改；可添加其他项目目录');
       if (typeof cwd !== 'string' || !isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory()) throw new Error('项目目录须为本机已有文件夹的完整路径');
@@ -1232,9 +1247,23 @@ export async function room_settings(home, raw) {
     validate_config(next, dirname(path));
     atomic_json(path, next);
     return { room_id: input.room_id, ...(requests !== undefined ? { api_max_requests: requests } : {}), ...(images !== undefined ? { image_generation: images } : {}),
-      ...(scheduler !== undefined ? { scheduler: next.scheduler ? { provider: next.scheduler.provider, model: next.scheduler.model, mode: next.scheduler.mode || DEFAULT_SCHEDULER_MODE } : null } : {}),
+      ...(scheduler !== undefined ? { scheduler: next.scheduler ? { provider: next.scheduler.provider, model: next.scheduler.model } : null } : {}),
       ...(cwd !== undefined ? { project_directory: cwd } : {}), ...(directories !== undefined ? { extra_directories: directories } : {}) };
   } finally { release(); }
+}
+
+/**
+ * The access `name` gains by taking over `source`'s, or null when it gains none: either is not woken here, the access
+ * is not the runner's to set, or 可写 would have no project to write.
+ */
+function inherited_project_access(config, name, source) {
+  const level = member => member.project_access || config.project_access || 'read';
+  const [profile, other] = [config.participants?.[name], config.participants?.[source]];
+  if (!profile || !other) return null;
+  const facts = adapter_profile(profile.adapter);
+  if (facts?.own_project_when_bound && profile.session_id) return null;
+  const next = inherited_access({ adapter: profile.adapter, project_access: level(profile) }, { adapter: other.adapter, project_access: level(other) });
+  return next === level(profile) || (next === 'write' && !(profile.cwd || config.cwd)) ? null : next;
 }
 
 /**
@@ -1243,12 +1272,16 @@ export async function room_settings(home, raw) {
  */
 export async function room_member_access(home, raw) {
   const { input, path } = await member_room_context(home, raw);
-  const { name, project_access } = input;
-  if (!PROJECT_ACCESS.includes(project_access)) throw new Error('project_access 只能为 read、write、auto 或 full');
+  const { name } = input;
+  if (input.inherit_from === undefined && !PROJECT_ACCESS.includes(input.project_access)) throw new Error('project_access 只能为 read、write、auto 或 full');
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
   try {
     const config = configuration_snapshot(path).config;
     const profile = config.participants?.[name];
+    // A new host takes over the previous host's access as far as its own software goes (inherited_access); a member
+    // whose access the runner does not set, or that has nothing to gain, is left as it is without an error.
+    const project_access = input.inherit_from === undefined ? input.project_access : inherited_project_access(config, name, input.inherit_from);
+    if (project_access === null) return { room_id: input.room_id, member: name, changed: false };
     if (!profile) throw new Error(`${name} 不由本机唤醒，项目权限由它自己的会话决定`);
     if (profile.project_access === 'own') throw new Error(`${name} 是手动接入的成员，权限沿用它自己会话的软件设置`);
     const facts = adapter_profile(profile.adapter);
@@ -1260,7 +1293,7 @@ export async function room_member_access(home, raw) {
     const next = { ...config, participants: { ...config.participants, [name]: { ...profile, project_access } } };
     validate_config(next, dirname(path));
     atomic_json(path, next);
-    return { room_id: input.room_id, member: name, project_access };
+    return { room_id: input.room_id, member: name, project_access, ...(input.inherit_from === undefined ? {} : { changed: true }) };
   } finally { release(); }
 }
 
@@ -1938,10 +1971,13 @@ export async function room_workflow(home, raw) {
   try {
     const config = configuration_snapshot(path).config;
     if (input.action === 'host') {
-      // The owner's per-room grant that lets the host save and enable workflows by itself (workflow-adopt).
-      const next = { ...config, host_workflows: input.allowed === true || undefined };
+      // The owner's per-room grant of what the host may do by itself, item by item; the older `allowed` ticks or clears
+      // the items the single switch covered.
+      if (input.permissions !== undefined && !valid_host_permissions(input.permissions)) throw new Error('主持人权限须为 { items, room_limit }');
+      const permissions = input.permissions ?? { ...host_permissions(config), items: input.allowed === true ? HOST_LEGACY_ITEMS : [] };
+      const next = { ...config, ...host_permission_fields(permissions) };
       atomic_json(path, next);
-      return { room_id: input.room_id, host_workflows: Boolean(next.host_workflows) };
+      return { room_id: input.room_id, host_workflows: Boolean(next.host_workflows), host_permissions: host_permissions(next) };
     }
     if (input.action === 'enable') {
       get_workflow(home, input.workflow?.id);
@@ -1954,7 +1990,7 @@ export async function room_workflow(home, raw) {
     if (!['away', 'back', 'disable'].includes(input.action)) throw new Error('action 须为 enable、sync、away、back、disable 或 host');
     if (!config.workflow?.id) throw new Error('本房间没有工作流');
     const room = await site_request(input.site, `/api/rooms/${input.room_id}`, input.token);
-    const names = new Set(Object.values(config.workflow.members || {}));
+    const names = new Set(workflow_member_list(config.workflow).map(item => item.name));
     const members = room.free.members.filter(item => names.has(item.name) && item.role !== 'host');
     if (input.action === 'back') {
       // Each comes back to its own session; a removed member stays removed.
@@ -2099,8 +2135,10 @@ async function sync_workflow_cards(home, path, config, roster, cards) {
   try {
     const current = configuration_snapshot(path).config;
     if (current.workflow?.id !== workflow.id) throw new Error('本房间的工作流已更换，请重新读取后再试');
-    // The map is replaced, not merged, so dropped cards leave it.
-    const next = { ...current, workflow: { ...current.workflow, members } };
+    // The map is replaced, not merged, so dropped cards leave it; so do further members of a dropped card.
+    const extra = Object.fromEntries(Object.entries(current.workflow.extra_members || {}).filter(([, card]) => known.includes(card)));
+    const { extra_members: ignored, ...binding } = current.workflow;
+    const next = { ...current, workflow: { ...binding, members, ...(Object.keys(extra).length ? { extra_members: extra } : {}) } };
     atomic_json(path, next);
     return { room_id: config.room, workflow: room_workflow_status(next, home), members };
   } finally { release(); }
@@ -2122,14 +2160,66 @@ async function refresh_room_workflow(home, raw) {
  * authorized the workflow's cards, so this needs no further grant. Only cards with no member yet may be named, so a
  * member the user sent away or removed stays so. Returns the room's workflow status and the card map.
  */
-export async function join_workflow(home, { access_file, cards, sub }) {
-  const { path, config, roster } = await host_room(home, access_file);
+export async function join_workflow(home, { access_file, cards, sub, label }) {
+  const { path, config, roster, labels } = await host_room(home, access_file);
+  if (label !== undefined) return join_labeled_member(home, { path, config, roster, labels }, cards, String(label).trim());
   if (sub) return sync_workflow_cards(home, path, config, roster, sub_workflow_cards(home, config, sub));
   const mapped = Object.keys(config.workflow?.members || {});
   const taken = (cards || []).filter(card => mapped.includes(card));
   if (taken.length) throw new Error(`这些卡片已有成员：${taken.join('、')}；离开或移除的成员由用户请回`);
   const known = config.workflow?.id && config.workflow.enabled ? get_workflow(home, config.workflow.id).agents.map(agent => agent.card) : [];
   return sync_workflow_cards(home, path, config, roster, cards?.length ? cards : known.filter(card => !mapped.includes(card)));
+}
+
+// A member's display name in the room, as the owner's labels limit it.
+const MAX_MEMBER_LABEL = 32;
+
+/**
+ * The host brings one member to play a card under a display name of its own (`workflow-join --card ID --label 名字`,
+ * user 2026-11-21): several members may play one card, each in its own session, e.g. one per character for a card
+ * that plays a character. A card with no member yet gets this one as its first; otherwise it is one more, kept in
+ * `extra_members`. A member of this card that already has the name comes back (its own session) instead of a new one;
+ * a name another member uses is refused. Returns the room's workflow status, the card maps and the member brought.
+ */
+async function join_labeled_member(home, { path, config, roster, labels }, cards, label) {
+  if (!config.workflow?.id || !config.workflow.enabled) throw new Error('本房间没有在用的工作流');
+  if (cards?.length !== 1) throw new Error('--label 须和 --card 一起用，且只写一张卡片');
+  if (!label || label.length > MAX_MEMBER_LABEL || /\n/.test(label)) throw new Error(`--label 须为 1—${MAX_MEMBER_LABEL} 字、不换行的显示名`);
+  const [card] = cards;
+  const workflow = get_workflow(home, config.workflow.id);
+  const agent = workflow_cards(workflow).find(item => item.card === card);
+  if (!agent) throw new Error(`工作流 ${workflow.id} 没有卡片 ${card}`);
+  const shown = member => labels[member.name] || member.name;
+  const live = roster.filter(member => member.status !== 'removed');
+  const players = workflow_member_list(config.workflow).filter(item => item.card === card).map(item => item.name);
+  const same = live.find(member => players.includes(member.name) && shown(member) === label);
+  const owner = { site: config.site, room_id: config.room, token: config.token };
+  let name = same?.name;
+  if (same?.status === 'away') await room_member(home, { ...owner, action: 'rejoin', name });
+  if (!same) {
+    if (live.some(member => shown(member) === label || member.name === label)) throw new Error(`本房间已有显示名为“${label}”的成员，换一个名字`);
+    const first = !live.some(member => member.name === config.workflow.members?.[card]);
+    const taken = new Set([...roster.map(member => member.name), ...workflow_member_list(config.workflow).map(item => item.name)]);
+    name = taken.has(agent.name) ? free_instance(agent.name, taken) : agent.name;
+    const api = card_api_profile(home, platform_of(agent.name));
+    const settings = Object.fromEntries(['project_access', 'model', 'effort'].filter(field => agent[field]).map(field => [field, agent[field]]));
+    if (api && settings.project_access && !access_levels('api').includes(settings.project_access)) settings.project_access = 'write';
+    const joined = await room_member(home, { ...owner, action: 'add', name, participants: { [name]: { ...api, ...settings } } });
+    name = joined.member;
+    await site_request(config.site, `/api/rooms/${config.room}/labels`, config.token, { labels: { [name]: label } });
+    if (agent.description) await site_request(config.site, `/api/rooms/${config.room}/descriptions`, config.token, { descriptions: { [name]: agent.description } });
+    const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+    try {
+      const current = configuration_snapshot(path).config;
+      if (current.workflow?.id !== workflow.id) throw new Error('本房间的工作流已更换，请重新读取后再试');
+      const binding = first ? { ...current.workflow, members: { ...current.workflow.members, [card]: name } }
+        : { ...current.workflow, extra_members: { ...(current.workflow.extra_members || {}), [name]: card } };
+      atomic_json(path, { ...current, workflow: binding });
+    } finally { release(); }
+  }
+  const next = configuration_snapshot(path).config;
+  return { room_id: config.room, workflow: room_workflow_status(next, home), members: next.workflow.members, extra_members: next.workflow.extra_members || {},
+    member: name, label, card, ...(same ? { returned: true } : {}) };
 }
 
 /** The cards a sub-workflow of the room's workflow in use brings; refuses one it lacks or one with no cards. */
@@ -2147,14 +2237,23 @@ function sub_workflow_cards(home, config, sub) {
  * stopped, sessions kept), so `workflow-join --sub` brings them back to their own sessions. Only a sub-workflow's cards
  * may be sent away this way; the main flow's members stay for the user to manage.
  */
-export async function leave_sub_workflow(home, { access_file, sub }) {
-  if (!sub) throw new Error('须用 --sub 指定子工作流');
-  const { config, roster } = await host_room(home, access_file);
-  const cards = sub_workflow_cards(home, config, sub);
-  const names = cards.map(card => config.workflow.members?.[card]).filter(Boolean);
+export async function leave_sub_workflow(home, { access_file, sub, member: wanted }) {
+  if (!sub && !wanted) throw new Error('须用 --sub 指定子工作流，或用 --member 指定成员');
+  const { config, roster, labels } = await host_room(home, access_file);
+  if (!config.workflow?.id || !config.workflow.enabled) throw new Error('本房间没有在用的工作流');
+  // A sub-workflow's members: every member of its cards, a card's further members (`extra_members`) included.
+  const sub_cards = sub ? sub_workflow_cards(home, config, sub)
+    : workflow_cards(get_workflow(home, config.workflow.id)).filter(agent => agent.sub_workflow).map(agent => agent.card);
+  let names = workflow_member_list(config.workflow).filter(item => sub_cards.includes(item.card)).map(item => item.name);
+  if (wanted) {
+    const member = roster.find(item => item.status !== 'removed' && (item.name === wanted || labels[item.name] === wanted || String(item.id) === String(wanted)));
+    if (!member) throw new Error(`本房间没有成员 ${wanted}`);
+    if (!names.includes(member.name)) throw new Error(`${wanted} 不是${sub ? `子工作流 ${sub} ` : '子工作流卡片'}的成员；主线成员不能这样请离`);
+    names = [member.name];
+  }
   const away = roster.filter(member => names.includes(member.name) && member.status === 'active' && member.role !== 'host');
   for (const member of away) await site_request(config.site, `/api/rooms/${config.room}/members/${member.id}`, config.token, { action: 'away' });
-  return { room_id: config.room, sub, away: away.map(member => member.name) };
+  return { room_id: config.room, ...(sub ? { sub } : {}), away: away.map(member => member.name) };
 }
 
 // When the owner left the room's goal budget at no limit, a goal the host opens itself still stops by these.
@@ -2290,7 +2389,101 @@ async function member_change(action, target, request, labels) {
     ...(['away', 'remove'].includes(action) ? { cancelled_pending: Math.max(0, (target.pending || 0) - (after?.pending ?? 0)) } : {}) };
 }
 
+/** The headers for a write in another room: the caller's name, without this room's host credential, which means nothing there. */
+const caller_only = headers => ({ 'User-Agent': headers['User-Agent'] });
+
+/** A directory for a room the host creates: this room's project directory or a folder inside it, never wider. */
+function spawned_directory(parent, wanted) {
+  if (!wanted) return parent || undefined;
+  if (!parent) throw new Error('本房间没有项目目录，新房间不能指定 --cwd');
+  const target = resolve(parent, wanted);
+  const inside = relative(resolve(parent), target);
+  if (inside.startsWith('..') || isAbsolute(inside)) throw new Error(`新房间的目录只能是本房间的项目目录或其子目录：${parent}`);
+  if (!existsSync(target) || !statSync(target).isDirectory()) throw new Error(`目录不存在或不是文件夹：${target}`);
+  return target;
+}
+
+/** The registered configuration of a room this computer launched; throws when there is none. */
+function registered_room_config(home, site, room_id) {
+  const path = registered_room_path(home, site, room_id);
+  if (!path) throw new Error(`本机没有登记房间 ${room_id}`);
+  return { path, config: configuration_snapshot(path).config };
+}
+
+/** Change a registered room's configuration under its edit lock. */
+function edit_room_config(path, change) {
+  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  try { atomic_json(path, change(configuration_snapshot(path).config)); } finally { release(); }
+}
+
+/**
+ * Create a room for part of the work (`create-room`, user 2026-11-21): this computer's configured software as members,
+ * project access at most write, the directory this room's or one inside it. The new room's host is `--host` when given,
+ * else this host's own platform with its settings. Its host permissions are this computer's defaults without creating
+ * rooms, so rooms do not multiply. A card links the two rooms both ways; `--text` is its first message, sent as by
+ * `room-post`. A retry passes the same --submission-id and returns the same room.
+ */
+async function host_create_room(ctx, o) {
+  const { home, config, host } = ctx;
+  if (!o.title) throw new Error('须用 --title 写明新房间的标题');
+  const created = config.spawned_rooms || [];
+  const submission_id = o.submission_id || randomUUID();
+  if (!/^[A-Za-z0-9_-]{8,100}$/.test(submission_id)) throw new Error('--submission-id 须为 8–100 位字母、数字、下划线或连字符');
+  const retry = created.find(item => item.submission_id === submission_id);
+  if (!retry && created.length >= host_room_limit(config)) {
+    throw new Error(`本房间已新建 ${created.length} 个房间，达到上限 ${host_room_limit(config)}；需要更多请让用户在“主持人权限”里调高上限`);
+  }
+  if (o.access && !HOST_CARD_ACCESS.includes(o.access)) throw new Error('新房间成员的项目权限只能是 read 或 write');
+  const access = o.access || 'read';
+  const host_name = o.host || platform_of(host);
+  const names = [...new Set([host_name, ...(o.members || '').split(',').map(name => name.trim()).filter(Boolean)])];
+  const participants = Object.fromEntries(names.map(name => [name, host_invite_profile(home, name, { access })]));
+  if (!o.host) {
+    // The same expert as this host: its software, model and effort, in a new session and at the access asked for.
+    const { session_id, cwd, project_access, ...own } = config.participants?.[host] || {};
+    participants[host_name] = { ...own, project_access: access };
+  }
+  const preferences = launch_settings(home).create_preferences || {};
+  const permissions = without_host_item(normalize_host_permissions(preferences.host_permissions, preferences.host_workflows === true), 'create_rooms');
+  const receipt = await launch_discussion(home, { site: config.site, entry: 'web', cwd: spawned_directory(config.cwd, o.cwd), participants,
+    host_permissions: permissions, room: { title: o.title, goal: o.goal || '', mode: 'free', host: host_name, submission_id,
+      members: names.map(name => ({ name, access: 'runner' })) } }, ctx.launch_options);
+  const room_id = receipt.room.id;
+  const parent_path = registered_room_path(home, config.site, config.room);
+  if (!retry) edit_room_config(parent_path, saved => ({ ...saved, spawned_rooms: [...(saved.spawned_rooms || []), { room: room_id, submission_id }] }));
+  const label = ctx.labels[host] || host;
+  await ctx.call('/room-link', { relation: 'child', room_id, host: label });
+  const registered = registered_room_config(home, config.site, room_id);
+  if (registered.config.spawned_from !== config.room) edit_room_config(registered.path, saved => ({ ...saved, spawned_from: config.room }));
+  const child = registered.config;
+  await site_request(config.site, `/api/rooms/${room_id}/room-link`, child.token, { relation: 'parent', room_id: config.room, host: label }, caller_only(ctx.headers));
+  const first = o.text ? await host_room_post({ ...ctx, config: configuration_snapshot(parent_path).config }, { room: room_id, text: o.text, submission_id: `${submission_id}-first` }) : null;
+  return { room_id, title: receipt.room.title, url: receipt.url, host: host_name, members: names, project_access: access,
+    cwd: child.cwd || null, ...(first ? { message_id: first.message_id } : {}) };
+}
+
+/**
+ * Speak in a linked room (`room-post`): one this room created, or the room that created this one. It goes with that
+ * room's owner credential, so it routes and wakes as the owner's message there, labelled with this room and host. The
+ * site counts how many messages two hosts pass each other before the owner speaks again, against this computer's
+ * `relay_rounds` preference (0, the default, is unlimited; set in the new-room form's advanced settings).
+ */
+async function host_room_post(ctx, o) {
+  const { home, config, host } = ctx;
+  if (!o.room || (o.room !== config.spawned_from && !(config.spawned_rooms || []).some(item => item.room === o.room))) {
+    throw new Error('只能在与本房间关联的房间里发言（本房间新建的房间，或新建本房间的房间）；用 --room 指定其房间编号');
+  }
+  if (!o.text) throw new Error('须用 --text 写明要发的消息');
+  const child = registered_room_config(home, config.site, o.room).config;
+  const result = await site_request(config.site, `/api/rooms/${o.room}/messages`, child.token, { author: '用户', text: o.text,
+    submission_id: o.submission_id || randomUUID(), relay: { room_id: config.room, host: ctx.labels[host] || host,
+      limit: launch_settings(home).create_preferences?.relay_rounds ?? 0 } }, caller_only(ctx.headers));
+  return { room_id: o.room, message_id: result.message?.id ?? null, queued: result.queued ?? null };
+}
+
 const HOST_CONTROLS = {
+  'create-room': host_create_room,
+  'room-post': host_room_post,
   stop: (ctx, o) => {
     const target = host_target(ctx, o.member);
     return member_change('stop', target, ctx.call(`/members/${target.id}/interrupt`, {}), ctx.labels);
@@ -2342,16 +2535,17 @@ const HOST_CONTROLS = {
  * included). What stays the owner's: acting on the host itself, approving rounds beyond the limit, access above write
  * or tool approvals, project directories, the owner's messages and private chats.
  */
-export async function host_control(home, action, options) {
+export async function host_control(home, action, options, launch_options = {}) {
   if (!Object.hasOwn(HOST_CONTROLS, action || '')) throw new Error(`操作须为 ${Object.keys(HOST_CONTROLS).join('、')} 之一`);
   const { config, roster, labels, host } = await host_room(home, options.access_file);
-  if (!config.host_workflows) throw new Error('房主没有为本房间打开“主持人完整权限”；请让用户在电脑上“成员与设置 → 协作设置”打开后再试');
+  const needed = HOST_ACTION_ITEMS[action];
+  if (needed && !host_allowed(config, needed)) throw new Error(host_refusal(needed));
   // The User-Agent names the caller in the event log; the host's own credential is what lets the site label what it
   // does as the host's (steer, stop) by its display name, since every write here carries the owner's credential.
   const headers = { 'User-Agent': `AI-CoDiscuss-host:${host}`, 'X-Acting-Member-Token': config.members[host].token };
   const owner = { site: config.site, room_id: config.room, token: config.token };
   const call = (path, body) => site_request(config.site, `/api/rooms/${config.room}${path}`, config.token, body, headers);
-  return HOST_CONTROLS[action]({ home, config, roster, labels, host, headers, owner, call }, options);
+  return HOST_CONTROLS[action]({ home, config, roster, labels, host, headers, owner, call, launch_options }, options);
 }
 
 /** Cards as the host may bring them: any access above writing is lowered to it. */
@@ -2368,7 +2562,7 @@ const host_cards = agents => agents.map(agent => agent.project_access && !HOST_C
 export async function adopt_workflow(home, { access_file, draft_file, workflow_id }) {
   if (!draft_file === !workflow_id) throw new Error('须提供 --draft 草稿文件或 --id 工作流库中的工作流 ID 之一；凭据用 --access-file 或 DISCUSS_ACCESS_FILE');
   const { config, roster } = await host_room(home, access_file);
-  if (!config.host_workflows) throw new Error('房主没有为本房间打开“主持人完整权限”；请让用户在电脑上“成员与设置 → 协作设置”打开后再试');
+  if (!host_allowed(config, 'workflows')) throw new Error(host_refusal('workflows'));
   const bound = config.workflow?.id;
   let workflow;
   if (workflow_id) workflow = get_workflow(home, workflow_id);
@@ -2388,7 +2582,7 @@ export async function adopt_workflow(home, { access_file, draft_file, workflow_i
   const owner = { site: config.site, room_id: config.room, token: config.token };
   const members = await join_workflow_cards(home, config, roster, workflow, bound === workflow.id ? config.workflow.members || {} : {});
   const enabled = await room_workflow(home, { ...owner, action: 'enable', workflow: { id: workflow.id, members } });
-  return { ...enabled, members, skill_path: join(workflow_directory(home, workflow.id), 'SKILL.md') };
+  return { ...enabled, members, skill_path: join(workflow_directory(home, workflow.id), 'SKILL.md'), ...(workflow.warnings ? { warnings: workflow.warnings } : {}) };
 }
 
 /**
@@ -2461,6 +2655,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     model: { type: 'string' }, effort: { type: 'string' }, do: { type: 'string' }, execution: { type: 'string' }, text: { type: 'string' },
     goal: { type: 'string' }, label: { type: 'string' }, description: { type: 'string' }, adapter: { type: 'string' }, 'submission-id': { type: 'string' },
     message: { type: 'string' }, minutes: { type: 'string' }, off: { type: 'boolean' }, list: { type: 'boolean' },
+    title: { type: 'string' }, members: { type: 'string' }, host: { type: 'string' }, cwd: { type: 'string' }, room: { type: 'string' },
   } });
   if (values.help || !positionals.length) return process.stdout.write(command_help(positionals[0]));
   if (positionals[0] === 'workflow-adopt') {
@@ -2471,18 +2666,19 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   if (positionals[0] === 'host-control') {
     const { member, order, revision, name, access, model, effort, execution, text, goal, label, description, adapter } = values;
     const result = await host_control(service_home(), positionals[1], { member, order, revision, name, access, model, effort, execution, text, goal,
-      label, description, adapter, message: values.message, minutes: values.minutes, off: values.off, list: values.list, do: values.do, submission_id: values['submission-id'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+      label, description, adapter, message: values.message, minutes: values.minutes, off: values.off, list: values.list, do: values.do, submission_id: values['submission-id'],
+      title: values.title, members: values.members, host: values.host, cwd: values.cwd, room: values.room, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}
 `);
   }
   if (positionals[0] === 'workflow-join') {
     const cards = (values.card || '').split(',').map(card => card.trim()).filter(Boolean);
-    const result = await join_workflow(service_home(), { cards, sub: values.sub, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+    const result = await join_workflow(service_home(), { cards, sub: values.sub, label: values.label, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}
 `);
   }
   if (positionals[0] === 'workflow-leave') {
-    const result = await leave_sub_workflow(service_home(), { sub: values.sub, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+    const result = await leave_sub_workflow(service_home(), { sub: values.sub, member: values.member, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}
 `);
   }
@@ -2504,7 +2700,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   const space = account_space(home), restricted = Boolean(space.projects_root);
   if (values.remote || restricted) {
     guard_remote_request(positionals[0], input, { projects: granted_projects(home), participants: launch_settings(home).participants, home });
-    if (values.remote && positionals[0] === 'room-workflow' && input?.action === 'host') throw new Error('“主持人完整权限”只能在电脑上开启');
+    if (values.remote && positionals[0] === 'room-workflow' && input?.action === 'host') throw new Error('主持人权限只能在电脑上开启');
     if (restricted && positionals[0] === 'pick-directory') throw new Error('此账号只能使用自己的项目文件夹');
     // Another device repeats the saved program locations it cannot see; keep them rather than dropping them.
     if (positionals[0] === 'settings' && input?.participants) input.participants = keep_saved_locations(home, input.participants);
@@ -2515,7 +2711,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   }
   let result;
   if (positionals[0] === 'settings') result = { ...(input ? save_launch_settings(home, input) : launch_settings(home)), api_providers: API_PROVIDERS,
-    scheduler_providers: SCHEDULER_PROVIDERS, scheduler_modes: SCHEDULER_MODES, scheduler_default_mode: DEFAULT_SCHEDULER_MODE, api_keys: saved_api_keys(home), managed_api_keys: restricted ? managed_api_keys(home) : [], projects: launch_projects(home).projects, projects_restricted: restricted, full_access_only: ADAPTER_IDS.filter(id => adapter_capabilities(id).no_sandbox), workspace: space.workspace, user_home: restricted ? homedir() : '', ...expert_presets(home), ...workflow_library(home) };
+    scheduler_providers: SCHEDULER_PROVIDERS, api_keys: saved_api_keys(home), managed_api_keys: restricted ? managed_api_keys(home) : [], projects: launch_projects(home).projects, projects_restricted: restricted, full_access_only: ADAPTER_IDS.filter(id => adapter_capabilities(id).no_sandbox), workspace: space.workspace, user_home: restricted ? homedir() : '', ...expert_presets(home), ...workflow_library(home) };
   // The online site an invitation would use, so an external expert's card says before the room exists whether a link can be made.
   if (positionals[0] === 'settings') result.invite_site = await (await import('./external_gateway.mjs')).invite_site_state(home);
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);

@@ -41,7 +41,7 @@ from .free_room import convert_suggestion, message_suggestions, save_suggestions
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
 from .private_chat import chat_action, member_chat
 from .external_members import external_api, guard_route as guard_external_route, is_external_path, owner_api as external_owner_api
-from .free_room import describe_members, execution_notes, label_members, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
+from .free_room import describe_members, execution_notes, label_members, check_relay, record_room_link, save_message_relay, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
 from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         host_event, host_hidden_event, room_event_log, withdrawals)
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
@@ -214,8 +214,14 @@ COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','
 THEN messages.author ELSE '用户' END) AS submitted_by,
 COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds,
 answered.execution_id, answered.request_message_id, answered.layout_after, answered.layout_at, COALESCE(withdrawn.kind,'') AS withdrawn,
-EXISTS(SELECT 1 FROM proactive_messages p WHERE p.message_id=messages.id) AS proactive
+EXISTS(SELECT 1 FROM proactive_messages p WHERE p.message_id=messages.id) AS proactive,
+relay.source_room_id AS relay_room, relay.host AS relay_host,
+(SELECT l.other_room_id FROM room_links l WHERE l.message_id=messages.id) AS link_room,
+(SELECT l.relation FROM room_links l WHERE l.message_id=messages.id) AS link_relation,
+(SELECT r.title FROM room_links l JOIN rooms r ON r.id=l.other_room_id WHERE l.message_id=messages.id) AS link_title,
+(SELECT r.title FROM rooms r WHERE r.id=relay.source_room_id) AS relay_title
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
+LEFT JOIN message_relays AS relay ON relay.message_id=messages.id
 LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
 LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
 LEFT JOIN message_timings AS timing ON timing.message_id=messages.id
@@ -1695,6 +1701,9 @@ def append_free_message(connection, room, payload, actor):
     room_id = room["id"]
     if actor == "用户" and (author != "用户" or payload.get("submitted_by", "用户") != "用户"):
         raise PermissionError(Text('房间控制凭据只能以用户身份发言'))
+    if payload.get("relay") is not None and actor != "用户":
+        # Another room's host speaks here through `host-control room-post`, only with the owner credential.
+        raise PermissionError(Text('只有房间控制凭据能代其他房间的主持人发言'))
     submitted_by = author
     source = payload.get("source") if payload.get("source") in ("api", "auto") else "cli"
     expected = {"author": author, "text": text, "reply_to": reply_to, "kind": "chat", "submitted_by": submitted_by,
@@ -1713,6 +1722,8 @@ def append_free_message(connection, room, payload, actor):
         return {"message": previous, "duplicate": True}
     if room["archived"]:
         raise ValueError(Text('房间已存档；恢复后才能继续协作'))
+    if payload.get("relay") is not None:
+        check_relay(connection, room_id, payload["relay"])
     check_message_references(connection, room_id, expected)
     check_message_attachments(connection, room_id, submitted_by, identifiers)
     # `/goal` and `/discuss` are commands: checked before saving, never queued, and not routed to members.
@@ -1734,6 +1745,8 @@ def append_free_message(connection, room, payload, actor):
     connection.execute("INSERT INTO message_summaries (message_id,text,author) VALUES (?,?,?)",
                        (cursor.lastrowid, expected["summary"], expected["summary_by"]))
     link_message_attachments(connection, room_id, cursor.lastrowid, identifiers, text, payload)
+    if payload.get("relay") is not None:
+        save_message_relay(connection, room_id, cursor.lastrowid, payload["relay"])
     # A captured reply keeps its text, but its mentions wake nobody: only a submitted answer may ask for a host.
     if expected["source"] != "auto":
         save_suggestions(connection, room_id, cursor.lastrowid, actor, payload)
@@ -3338,7 +3351,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = queue_action(connection, room_id, token, self.read_payload(), post_queued, check_queued, interrupt_for_message)
             connection.commit()
             return self.respond(result)
-        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"], ["dispatches"], ["host-checkin"]):
+        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"], ["dispatches"], ["host-checkin"], ["room-link"]):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
@@ -3658,6 +3671,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = withdraw_dispatch(connection, room_id, token, int(parts[4]))
         elif parts[3:] == ["host-checkin"] and method == "POST":
             result = set_host_checkin(connection, room_id, token, self.read_payload())
+        elif parts[3:] == ["room-link"] and method == "POST":
+            result = record_room_link(connection, room_id, token, self.read_payload())
         else:
             raise LookupError(Text('地址不存在'))
         if not self.read_only_request():

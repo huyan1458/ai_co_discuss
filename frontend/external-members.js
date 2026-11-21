@@ -344,7 +344,7 @@ function create_invited({ view, bridge }) {
   /** Read the records; newly waiting default-level requests raise a notice once each. */
   async function load() {
     if (!available.value || writes_pending) return;
-    const serial = ++list_serial;
+    const serial = list_serial;
     try {
       const result = await bridge.local_request(OPERATIONS.invited_list, {});
       if (serial !== list_serial) return;
