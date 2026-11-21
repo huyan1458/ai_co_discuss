@@ -2230,3 +2230,36 @@ test("a share page carries none of what only this computer and its owner should 
   assert.deepEqual(responses["/api/rooms/r1/timeline"].executions.map((item) => item.id), [10]);
   assert.deepEqual(Object.keys(responses).filter((path) => path.endsWith("/notes")), ["/api/rooms/r1/executions/10/notes"]);
 });
+
+test("a share link is published once, then updated and revoked with its own manage token only", async () => {
+  const { context, storage, notified } = theme_fixture();
+  const calls = [];
+  let status = 200;
+  Object.assign(context, { Blob, navigator: { clipboard: { writeText: async () => {} } },
+    fetch: async (url, options) => {
+      calls.push({ url, method: options.method, auth: options.headers.Authorization || "", body: options.body ? JSON.parse(options.body) : null });
+      const answer = options.method === "POST" ? { id: "abc", url: "https://share.example/s/abc", manage_token: "TOKEN", expires_at: "2099-01-01T00:00:00Z" }
+        : { expires_at: "2099-01-02T00:00:00Z" };
+      const code = options.method === "PUT" ? status : 200;
+      return { ok: code < 400, status: code, json: async () => code < 400 ? answer : { error: "gone" } };
+    } });
+  const draft = () => vm.runInContext(`share_draft = { room_id: "r1", title: "Room", description: "d", exported_at: "2026-11-21T00:00:00Z", responses: { "/api/rooms/r1": { id: "r1" } }, spots: [] };`, context);
+  draft();
+  await context.share_publish(3);
+  assert.deepEqual([calls[0].method, calls[0].url.endsWith("/api/shares"), calls[0].auth, calls[0].body.ttl_days, calls[0].body.format], ["POST", true, "", 3, 1]);
+  assert.equal(JSON.parse(storage.get("codiscuss-share:r1")).manage_token, "TOKEN");
+  draft();
+  await context.share_publish(99);
+  assert.deepEqual([calls[1].method, calls[1].url.endsWith("/api/shares/abc"), calls[1].auth, calls[1].body.ttl_days], ["PUT", true, "Bearer TOKEN", 7], "an unknown lifetime falls back to the default");
+  assert.equal(JSON.parse(storage.get("codiscuss-share:r1")).expires_at, "2099-01-02T00:00:00Z");
+  // A link the site no longer has is published anew instead of failing.
+  status = 410;
+  draft();
+  await context.share_publish(7);
+  assert.deepEqual(calls.slice(-2).map((call) => call.method), ["PUT", "POST"]);
+  assert.ok(!notified.some(([level]) => level === "error"));
+  status = 200;
+  await context.share_revoke("r1");
+  assert.deepEqual([calls.at(-1).method, calls.at(-1).auth], ["DELETE", "Bearer TOKEN"]);
+  assert.equal(storage.has("codiscuss-share:r1"), false);
+});

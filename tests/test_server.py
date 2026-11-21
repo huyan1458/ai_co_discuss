@@ -416,7 +416,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(url, {"action": "delivery", "stoppable": False, "progress": False})[0], 200)
         self.assertEqual(self.request(url, {"action": "stopped", "result": "unstoppable"})[0], 200)
         self.assertTrue(self.request(url, {"action": "stopped", "result": "unstoppable"})[1]["duplicate"])
-        self.assertEqual(self.request(url, {"action": "stopped", "result": "stopped"})[0], 409, "recorded once")
+        self.assertEqual(self.request(url, {"action": "stopped", "result": "unconfirmed"})[0], 409, "recorded once")
         report = next(item for item in self.request(path)[1]["free"]["executions"] if item["id"] == execution["id"])
         self.assertEqual([report["status"], report["capabilities"], report["stop_result"]], ["cancelled", {"stoppable": False, "progress": False, "steer": False, "resume": False}, "unstoppable"])
         # The window may still be on the voided turn: the member's next message waits instead of arriving mid-turn.

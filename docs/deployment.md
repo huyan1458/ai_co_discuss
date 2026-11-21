@@ -187,3 +187,25 @@ npx wrangler deploy --config deploy/entry.wrangler.jsonc
 
 - **`no such table`**：所连接的数据库尚未执行 schema，先核对配置文件指向的数据库。
 - **端口被占用**：服务拒绝两个实例监听同一端口，改用其他端口。
+
+## 官方房间分享站（运营方）
+
+在线分享由独立的 Worker、D1 和自定义域名提供。访客无需安装，发布者无需自行部署。以下命令从源码仓库根目录运行，需要运营方的 Cloudflare 账号和该账号已接管的域名。
+
+1. 运行 `npm ci`、`npm run build` 和 `npx wrangler login`。把 `deploy/share.wrangler.jsonc` 复制为同目录的 `deploy/wrangler.local.jsonc`，保留原有绑定与 Cron 配置；若该私有文件已用于其他服务，请为分享站另选私有路径并调整下列命令。
+2. 创建独立数据库，将返回的 ID 写入私有配置的 `d1_databases[0].database_id`。在该配置顶层添加 `"routes": [{ "pattern": "<分享站完整主机名>", "custom_domain": true }]`，并将 `web/app.js` 的 `SHARE_SITE` 指向同一 HTTPS 域名。使用与配对和登录站点隔离的主机名。
+
+```sh
+npx wrangler d1 create codiscuss-share --config deploy/wrangler.local.jsonc
+npx wrangler d1 execute DB --remote --file backend/share_schema.sql --config deploy/wrangler.local.jsonc
+```
+
+3. 用下列交互命令分别录入两段独立生成的随机 secret。`ADMIN_TOKEN` 只给运营方审核工具，`SOURCE_SALT` 用于给来源 IP 做 HMAC，保持稳定。确认域名和数据库后部署。Cron 每小时删除到期分享，访客访问在到期时即返回 410。
+
+```sh
+npx wrangler secret put ADMIN_TOKEN --config deploy/wrangler.local.jsonc
+npx wrangler secret put SOURCE_SALT --config deploy/wrangler.local.jsonc
+npx wrangler deploy --config deploy/wrangler.local.jsonc
+```
+
+程序按原始快照字节限制单份 5 MiB、每个来源 20 份及 50 MiB、全站 5 GB。免费 D1 的单库物理上限是 500 MB，账号合计 5 GB；压缩后的数据、索引和其他记录都占用单库空间。部署使用一个库，先达到的平台限额会先影响写入。分享页面每次检查状态，撤销或下架后停止提供内容；已由读者保存的副本无法收回。[Cloudflare D1 限额](https://developers.cloudflare.com/d1/platform/limits/)

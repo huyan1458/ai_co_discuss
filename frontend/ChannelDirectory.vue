@@ -223,7 +223,8 @@ function toggle_folder(id) {
 const SHARE_SPOTS_SHOWN = 12;
 const SHARE_ITEMS = [t("包含：消息、卡片、执行时间线与过程说明，冻结在生成这一刻。"),
   t("不包含：私聊、事件记录、调度决策、被拒操作、排队消息、附件、本机路径、会话编号与凭据；失败原因只写“执行失败”，文件改动只列文件名，执行中的命令输出不带。"),
-  t("得到一个单独的 .html 文件，任何人都能直接打开阅读，但不能操作。"),
+  t("“下载网页文件”得到一个 .html 文件，发出去后无法过期或撤回；“发布链接”放到分享站，到期自动删除，可随时撤销。两者都只能阅读，不能操作。"),
+  t("“发布链接”会把内容上传到 AI CoDiscuss 运营的分享站：运营方和内容审核 AI 能读到全文，违规会被下架；撤销后链接立即失效，但边缘缓存里的副本最长保留到原定过期时间才清除。"),
   t("消息正文会原样公开。下面列出的是程序找到的疑似密钥、本机目录或联系方式，查不全，发出前请自己打开核对一遍。")];
 const share_draft = computed(() => view.value.share_draft);
 // The title stays while the dialog fades out after the draft is gone.
@@ -235,12 +236,17 @@ const share_items = computed(() => {
   return [...SHARE_ITEMS, t("找到 {count} 处需要核对：", { count: spots.length }), ...spots.slice(0, SHARE_SPOTS_SHOWN),
     ...(spots.length > SHARE_SPOTS_SHOWN ? [t("……其余 {count} 处请在生成的网页里查找", { count: spots.length - SHARE_SPOTS_SHOWN })] : [])];
 });
-// Confirming closes the dialog too; that close must not drop the page being made.
-let share_confirming = false;
+// How long a published link lives; the share site keeps it at most seven days.
+const share_days = ref(7);
+const share_day_items = computed(() => (view.value.share_days || [1, 3, 7]).map((days) => ({ label: t("{count} 天后过期", { count: days }), value: days })));
+/** Closing the dialog without choosing drops the prepared page. */
 function close_share(open) {
-  if (open || share_confirming) { share_confirming = false; return; }
-  bridge.execute("share_cancel");
+  if (!open && share_draft.value) bridge.execute("share_cancel");
 }
+// The room whose published link waits for the owner to confirm revoking it.
+const revoking = ref(null);
+/** A room's published link, if this browser published one: { url, expires_at }. */
+const share_link = (room) => view.value.share_links?.[room.id] || null;
 
 /** Keep actions targeted to the clicked channel without changing the open draft. */
 function actions(room, index, folder_id, folder_room_count) {
@@ -252,6 +258,8 @@ function actions(room, index, folder_id, folder_room_count) {
     { label: t("复制阅读入口"), icon: "i-lucide-link", onSelect: () => act("copy", `${view.value.room_site}/r/${encodeURIComponent(room.id)}`) },
     { label: t("导出对话"), icon: "i-lucide-upload", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("backup", room.id) },
     { label: t("分享为网页…"), icon: "i-lucide-share-2", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("share_prepare", room.id) },
+    ...(share_link(room) ? [{ label: t("复制分享链接"), icon: "i-lucide-link-2", onSelect: () => act("share_copy", room.id) },
+      { label: t("撤销分享链接"), icon: "i-lucide-link-2-off", disabled: view.value.backup_pending, onSelect: () => { revoking.value = room; } }] : []),
   ], ...(current ? [[{ label: t("刷新消息"), icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") }]] : []), [
     { label: t("移至文件夹"), icon: "i-lucide-folder-input", disabled: Boolean(pending.value) || (!room.folder_id && !view.value.folders?.length), children: [
       { label: t("移出文件夹"), icon: "i-lucide-folder-minus", disabled: !room.folder_id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: null }) },
@@ -326,11 +334,26 @@ function actions(room, index, folder_id, folder_room_count) {
     </nav>
     <UButton v-show="rooms_open" icon="i-lucide-archive" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="emit('archives')"><span class="channel-archive-label">{{ t("已存档") }}</span><small v-if="archived_count" class="channel-archive-count">{{ archived_count }}</small></UButton>
     <ImportDialog v-model:open="import_open" />
-    <ConfirmDialog :open="Boolean(share_draft)" :title="t('分享「{name}」为网页', { name: share_title })" :description="t('生成一个只读网页，发给没装共议的人也能打开看。')"
-      :items="share_items" :confirm-label="t('生成网页')" @update:open="close_share" @confirm="share_confirming = true; act('share_room')" />
+    <UModal :open="Boolean(share_draft)" :title="t('分享「{name}」为网页', { name: share_title })" :description="t('生成一个只读网页，发给没装共议的人也能打开看。')"
+      :content="{ onInteractOutside: (event) => event.preventDefault() }" :ui="{ content: 'glass-panel studio-modal channel-folder-modal channel-manage-modal', body: 'dialog-body' }" @update:open="close_share">
+      <template #body>
+        <ul class="confirm-dialog-items share-dialog-items"><li v-for="item in share_items" :key="item">{{ item }}</li></ul>
+        <div class="dialog-actions share-dialog-actions">
+          <UButton :label="t('取消')" color="neutral" variant="ghost" @click="close_share(false)" />
+          <UButton :label="t('下载网页文件')" icon="i-lucide-download" color="neutral" variant="outline" @click="act('share_room')" />
+          <USelect v-model="share_days" :items="share_day_items" size="md" class="share-dialog-days" :aria-label="t('分享链接的有效期')" />
+          <UButton :label="share_draft?.linked ? t('更新链接') : t('发布链接')" icon="i-lucide-link-2" color="primary" @click="act('share_publish', share_days)" />
+        </div>
+      </template>
+    </UModal>
+    <ConfirmDialog :open="Boolean(revoking)" :title="t('撤销「{name}」的分享链接', { name: revoking?.title || '' })" :description="t('分享站上的这份记录会立即删除，打开链接的人会看到“分享不存在”。')"
+      :items="[t('已经下载的离线网页文件不受影响。')]" :confirm-label="t('撤销链接')" danger @update:open="(value) => { if (!value) revoking = null; }" @confirm="act('share_revoke', revoking.id)" />
   </div>
 </template>
 
 <style scoped>
+.share-dialog-items { display: grid; gap: 6px; margin: 0 0 16px; padding-left: 18px; color: var(--ui-text-toned); font-size: 13px; line-height: 1.6; list-style: disc; }
+.share-dialog-actions { flex-wrap: wrap; }
+.share-dialog-days { min-width: 130px; }
 .channel-room-alert { justify-self: center; width: 14px; height: 14px; color: var(--ui-error); }
 </style>

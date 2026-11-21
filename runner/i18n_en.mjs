@@ -376,6 +376,8 @@ export default {
   "等待 Cloudflare 授权": "Wait for Cloudflare authorization",
   "即将打开浏览器：登录 Cloudflare，选择 {value1} 并点 Authorize，完成后回到这里": "Opening the browser: sign in to Cloudflare, select {value1} and click Authorize, then return here",
   "Cloudflare 授权没有完成，重新开始即可再试": "Cloudflare authorization incomplete; start again to retry",
+  "Cloudflare 授权的是另一个域名，记录被建成了 {value1}（可在 Cloudflare 删除）；需要为 {value2} 重新授权": "The Cloudflare authorization covers another domain, so the record was created as {value1} (you can delete it in Cloudflare); authorize again for {value2}",
+  "授权的仍不是 {value1} 所在的域名，记录被建成了 {value2}：重新开始，在浏览器里选对域名": "The authorization still does not cover the domain of {value1}; the record was created as {value2}. Start again and pick the right domain in the browser",
   "建立隧道": "Create tunnel",
   "隧道 {value1} 建了却读不到，重新运行即可": "Tunnel {value1} was created but cannot be read; rerun to retry",
   "找不到隧道凭据 {value1}：这条隧道可能建在别的电脑上，换一个 --tunnel-name 重新运行": "Tunnel credentials not found: {value1}. The tunnel may be on another computer; rerun with a different --tunnel-name.",

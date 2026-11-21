@@ -40,24 +40,93 @@ const THREADS = [
 const escape_html = text => String(text).replace(/[&<>"']/g, mark => `&#${mark.charCodeAt(0)};`);
 
 const threads_svg = () => THREADS.map(([path, colour, seconds, delay]) => `<path class="thread" d="${path}"/>`
-  + `<path class="pulse" d="${path}" pathLength="100" stroke="${colour}" style="animation-duration:${seconds}s;animation-delay:-${delay}s"/>`).join('');
+  + `<path class="pulse" d="${path}" pathLength="100" stroke="${colour}" style="filter:drop-shadow(0 0 3px ${colour});animation-duration:${seconds}s;animation-delay:-${delay}s"/>`).join('');
+
+// Clawd, Claude's pixel mascot, on a 12 × 7 grid with headroom above for its hop. It strolls along the top of the mark,
+// hops, waves and blinks, and shuts its eyes while the password is being typed.
+const CLAWD = `<svg class="pal clawd" viewBox="0 -3 12 10" aria-hidden="true"><path class="clawd-spark" d="M10.4-2.9l.4.9.9.4-.9.4-.4.9-.4-.9-.9-.4.9-.4z"/>`
+  + `<g class="clawd-hop" shape-rendering="crispEdges"><g class="clawd-legs-a"><rect x="2" y="5" width="1" height="2"/><rect x="7" y="5" width="1" height="2"/></g>`
+  + `<g class="clawd-legs-b"><rect x="4" y="5" width="1" height="2"/><rect x="9" y="5" width="1" height="2"/></g>`
+  + `<rect class="pal-arm" x="0" y="2" width="1" height="2"/><rect class="pal-arm pal-wave" x="11" y="2" width="1" height="2"/><rect x="1" y="0" width="10" height="5"/>`
+  + `<rect class="pal-eye pal-eye-left" fill="#2a1810" x="3" y="1" width="1" height="2"/><rect class="pal-eye" fill="#2a1810" x="8" y="1" width="1" height="2"/></g></svg>`;
+
+// Two companions for the other auto-wake tools: each is that tool's own mark (the shapes and colours of web/icons)
+// with a pair of eyes. They hide behind our mark and peek over its top edge on the side Clawd has walked away from:
+// the star bobs along with Clawd's hop, the knot wiggles back at its wave. Both duck out of sight while the password
+// is being typed.
+const STAR_SHAPE = 'M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z';
+const STAR_PAL = `<svg class="pal peeker peeker-star" viewBox="0 0 24 24" aria-hidden="true"><defs>`
+  + `<linearGradient id="pal-star-0" gradientUnits="userSpaceOnUse" x1="7" x2="11" y1="15.5" y2="12"><stop stop-color="#08B962"/><stop offset="1" stop-color="#08B962" stop-opacity="0"/></linearGradient>`
+  + `<linearGradient id="pal-star-1" gradientUnits="userSpaceOnUse" x1="8" x2="11.5" y1="5.5" y2="11"><stop stop-color="#F94543"/><stop offset="1" stop-color="#F94543" stop-opacity="0"/></linearGradient>`
+  + `<linearGradient id="pal-star-2" gradientUnits="userSpaceOnUse" x1="3.5" x2="17.5" y1="13.5" y2="12"><stop stop-color="#FABC12"/><stop offset=".46" stop-color="#FABC12" stop-opacity="0"/></linearGradient></defs>`
+  + `<path d="${STAR_SHAPE}" fill="#3186FF"/><path d="${STAR_SHAPE}" fill="url(#pal-star-0)"/><path d="${STAR_SHAPE}" fill="url(#pal-star-1)"/><path d="${STAR_SHAPE}" fill="url(#pal-star-2)"/>`
+  + `<rect class="pal-eye pal-eye-left" fill="#0b1f4d" x="9.1" y="10" width="1.6" height="3.2" rx=".3"/><rect class="pal-eye" fill="#0b1f4d" x="13.3" y="10" width="1.6" height="3.2" rx=".3"/></svg>`;
+const KNOT_SHAPE = 'M21.55 10.004a5.416 5.416 0 00-.478-4.501c-1.217-2.09-3.662-3.166-6.05-2.66A5.59 5.59 0 0010.831 1C8.39.995 6.224 2.546 5.473 4.838A5.553 5.553 0 001.76 7.496a5.487 5.487 0 00.691 6.5 5.416 5.416 0 00.477 4.502c1.217 2.09 3.662 3.165 6.05 2.66A5.586 5.586 0 0013.168 23c2.443.006 4.61-1.546 5.361-3.84a5.553 5.553 0 003.715-2.66 5.488 5.488 0 00-.693-6.497v.001zm-8.381 11.558a4.199 4.199 0 01-2.675-.954c.034-.018.093-.05.132-.074l4.44-2.53a.71.71 0 00.364-.623v-6.176l1.877 1.069c.02.01.033.029.036.05v5.115c-.003 2.274-1.87 4.118-4.174 4.123zM4.192 17.78a4.059 4.059 0 01-.498-2.763c.032.02.09.055.131.078l4.44 2.53c.225.13.504.13.73 0l5.42-3.088v2.138a.068.068 0 01-.027.057L9.9 19.288c-1.999 1.136-4.552.46-5.707-1.51h-.001zM3.023 8.216A4.15 4.15 0 015.198 6.41l-.002.151v5.06a.711.711 0 00.364.624l5.42 3.087-1.876 1.07a.067.067 0 01-.063.005l-4.489-2.559c-1.995-1.14-2.679-3.658-1.53-5.63h.001zm15.417 3.54l-5.42-3.088L14.896 7.6a.067.067 0 01.063-.006l4.489 2.557c1.998 1.14 2.683 3.662 1.529 5.633a4.163 4.163 0 01-2.174 1.807V12.38a.71.71 0 00-.363-.623zm1.867-2.773a6.04 6.04 0 00-.132-.078l-4.44-2.53a.731.731 0 00-.729 0l-5.42 3.088V7.325a.068.068 0 01.027-.057L14.1 4.713c2-1.137 4.555-.46 5.707 1.513.487.833.664 1.809.499 2.757h.001zm-11.741 3.81l-1.877-1.068a.065.065 0 01-.036-.051V6.559c.001-2.277 1.873-4.122 4.181-4.12.976 0 1.92.338 2.671.954-.034.018-.092.05-.131.073l-4.44 2.53a.71.71 0 00-.365.623l-.003 6.173v.002zm1.02-2.168L12 9.25l2.414 1.375v2.75L12 14.75l-2.415-1.375v-2.75z';
+const KNOT_PAL = `<svg class="pal peeker peeker-knot" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><g class="pal-wiggle"><path fill-rule="evenodd" d="${KNOT_SHAPE}"/>`
+  + `<rect class="pal-eye pal-eye-left" x="10.05" y="10.7" width="1.3" height="2.6" rx=".25"/><rect class="pal-eye" x="12.65" y="10.7" width="1.3" height="2.6" rx=".25"/></g></svg>`;
+
+// Clawd's 12-second loop walks right, idles, walks back, idles. [from, to] in percent of the loop.
+const CLAWD_WALKS = [[0, 28], [50, 78]];
+const CLAWD_STEP_PERCENT = 2;
+
+/** Keyframes lifting one pair of legs on every other step while Clawd walks, and resting them while it idles. */
+const leg_keyframes = (name, lifted_first) => {
+  const frames = CLAWD_WALKS.flatMap(([from, to]) => {
+    const steps = [];
+    for (let percent = from, step = 0; percent < to; percent += CLAWD_STEP_PERCENT, step += 1) {
+      steps.push(`${percent}%{transform:${(step % 2 === 0) === lifted_first ? 'translateY(-.6px)' : 'none'}}`);
+    }
+    return [...steps, `${to}%{transform:none}`];
+  });
+  return `@keyframes ${name}{${frames.join('')}}`;
+};
 
 const STYLE = `
-:root{color-scheme:light;--bg:#f6f6f6;--panel:#ececef;--field:#fff;--line:#d9d9de;--line-strong:#b9b9c2;--text:#1b1c20;--muted:#61636d;--dim:#767885;--accent:#4f51e8;--accent-text:#fff;--danger:#b4243d;--danger-bg:#c4314b14;--thread:#1b1c2014;--shadow:0 16px 40px #1b1c2024}
-:root[data-mode=dark]{color-scheme:dark;--bg:#202127;--panel:#191a1f;--field:#2a2b32;--line:#393a43;--line-strong:#50515c;--text:#f1f2f5;--muted:#a8abb6;--dim:#8d909e;--accent:#8791ff;--accent-text:#14151a;--danger:#ff8a9b;--danger-bg:#ff8a9b18;--thread:#ffffff12;--shadow:0 16px 40px #0007}
+:root{color-scheme:light;--bg:#f6f6f6;--panel:#ececef;--field:#fff;--line:#d9d9de;--line-strong:#b9b9c2;--text:#1b1c20;--muted:#61636d;--dim:#767885;--accent:#4f51e8;--accent-text:#fff;--danger:#b4243d;--danger-bg:#c4314b14;--thread:#1b1c2014;--dot:#1b1c2026;--pal-ink:#0d0d0d;--shadow:0 16px 40px #1b1c2024}
+:root[data-mode=dark]{color-scheme:dark;--bg:#202127;--panel:#191a1f;--field:#2a2b32;--line:#393a43;--line-strong:#50515c;--text:#f1f2f5;--muted:#a8abb6;--dim:#8d909e;--accent:#8791ff;--accent-text:#14151a;--danger:#ff8a9b;--danger-bg:#ff8a9b18;--thread:#ffffff12;--dot:#ffffff1f;--pal-ink:#ffffff;--shadow:0 16px 40px #0007}
 *{box-sizing:border-box}html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
 button,input{font:inherit;color:inherit}
 .entry{min-height:100%;display:grid;grid-template-columns:minmax(0,1.15fr) minmax(420px,1fr)}
 .stage{position:relative;overflow:hidden;background:var(--panel);display:flex;flex-direction:column;justify-content:flex-end;padding:48px 56px}
+.stage::before{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,color-mix(in srgb,var(--accent) 14%,transparent),transparent 44%),radial-gradient(var(--dot) 1px,transparent 1.5px) 0 0/24px 24px;-webkit-mask-image:radial-gradient(circle at 50% 50%,#000 18%,transparent 72%);mask-image:radial-gradient(circle at 50% 50%,#000 18%,transparent 72%)}
 .threads{position:absolute;inset:0;width:100%;height:100%}
 .thread,.pulse{fill:none;stroke-linecap:round}.thread{stroke:var(--thread);stroke-width:1.5}
-.pulse{stroke-width:2.5;stroke-dasharray:14 86;stroke-dashoffset:100;animation:flow linear infinite}
+.pulse{stroke-width:3;stroke-dasharray:12 88;stroke-dashoffset:100;animation:flow linear infinite}
 @keyframes flow{to{stroke-dashoffset:0}}
-.emblem{position:absolute;left:50%;top:50%;width:132px;height:132px;margin:-66px 0 0 -66px;display:grid;place-items:center;border-radius:32px;background:var(--bg);box-shadow:var(--shadow);animation:arrive .8s cubic-bezier(.2,.9,.3,1.2) both}
+.emblem{--stroll:16px;position:absolute;left:50%;top:50%;width:132px;height:132px;margin:-66px 0 0 -66px;display:grid;place-items:center;border-radius:32px;background:var(--bg);box-shadow:var(--shadow),inset 0 0 0 1px var(--line);animation:arrive .8s cubic-bezier(.2,.9,.3,1.2) both}
+.emblem .pal{position:absolute;overflow:visible}
+.emblem .clawd{left:50%;bottom:calc(100% - 1px);width:72px;height:60px;margin-left:-36px;fill:#d97757;animation:clawd-stroll 12s linear infinite}
+.stage{--unit:5px;--half:66px;--aside:34px}
+.peeker{--down:calc(16*var(--unit));position:absolute;overflow:visible;bottom:calc(50% + var(--half) - 4*var(--unit));width:calc(13*var(--unit));height:calc(13*var(--unit))}
+.peeker-star{left:calc(50% - var(--aside) - 6.5*var(--unit));animation:peek-star 12s ease-in-out infinite,peeker-late 1s both}
+.peeker-knot{left:calc(50% + var(--aside) - 6.5*var(--unit));color:var(--pal-ink);animation:peek-knot 12s ease-in-out infinite,peeker-late 1s both}
+.pal-wiggle{transform-box:fill-box;transform-origin:center;animation:pal-wiggle 12s steps(1) infinite}
+@keyframes peeker-late{0%,90%{opacity:0}}
+@keyframes peek-star{0%,25%,54%,100%{transform:translateY(var(--down))}30%,32%,38%,44%,49%{transform:none}35%{transform:translateY(calc(var(--unit)*-1.2))}41%{transform:translateY(calc(var(--unit)*-.8))}}
+@keyframes peek-knot{0%,75%,100%{transform:translateY(var(--down))}80%,96%{transform:none}}
+@keyframes pal-wiggle{0%,83%,87%,91%,95%{transform:none}85%,93%{transform:rotate(-14deg)}89%{transform:rotate(14deg)}}
+.entry:has(#password[type=password]:focus) .peeker{animation:none;transform:translateY(var(--down))}
+.entry:has(#password[type=text]:focus) .peeker{animation:none;transform:translateY(calc(1.5*var(--unit)))}
+.clawd-hop{animation:clawd-hop 12s ease-in-out infinite}
+.clawd-legs-a{animation:clawd-legs-a 12s steps(1) infinite}.clawd-legs-b{animation:clawd-legs-b 12s steps(1) infinite}
+.pal-wave{animation:clawd-wave 12s steps(1) infinite}
+.pal-eye{transform-box:fill-box;transform-origin:center;animation:clawd-blink 4.6s steps(1) infinite}
+.peeker-knot .pal-eye{animation-duration:5.8s}.peeker-star .pal-eye{animation-duration:3.9s}
+.clawd-spark{fill:#fac04a;opacity:0;transform-box:fill-box;transform-origin:center;animation:clawd-spark 12s ease-out infinite}
+@keyframes clawd-stroll{0%{transform:translateX(calc(var(--stroll)*-1))}28%,50%{transform:translateX(var(--stroll))}78%,100%{transform:translateX(calc(var(--stroll)*-1))}}
+@keyframes clawd-hop{0%,32%,38%,44%,100%{transform:none}35%{transform:translateY(-1.6px)}41%{transform:translateY(-1px)}}
+@keyframes clawd-wave{0%,83%,87%,91%,95%{transform:none}85%,89%,93%{transform:translateY(-1px)}}
+@keyframes clawd-blink{0%,98%{transform:none}95%{transform:scaleY(.15)}}
+@keyframes clawd-spark{0%,33%{opacity:0;transform:scale(.3)}36%{opacity:1;transform:none}44%,100%{opacity:0;transform:translateY(-1px) scale(.6)}}
+${leg_keyframes('clawd-legs-a', true)}${leg_keyframes('clawd-legs-b', false)}
+.entry:has(#password:focus) .pal,.entry:has(#password:focus) .pal *{animation-play-state:paused}
+.entry:has(#password[type=password]:focus) .pal-eye,.entry:has(#password[type=text]:focus) .pal-eye-left{animation:none;transform:scaleY(.15)}
+.entry:has(#password[type=password]:focus) .pal-arm{animation:none;transform:translateY(-1px)}
+@media (prefers-reduced-motion:reduce){.pulse,.pal,.pal *,.emblem,.emblem::before,.emblem::after{animation:none!important}}
 .emblem::before,.emblem::after{content:"";position:absolute;inset:0;border-radius:32px;border:1.5px solid var(--accent);opacity:0;animation:ring 4.5s ease-out infinite}
 .emblem::after{animation-delay:2.25s}
-.emblem svg{width:88px;height:88px}
+.emblem>svg:not(.pal){width:88px;height:88px}
 @keyframes arrive{from{opacity:0;transform:scale(.72)}}
 @keyframes ring{0%{opacity:.45;transform:scale(1)}70%,100%{opacity:0;transform:scale(1.7)}}
 .logo-light,:root[data-mode=dark] .logo-dark{display:block}.logo-dark,:root[data-mode=dark] .logo-light{display:none}
@@ -92,7 +161,7 @@ input:hover{border-color:var(--line-strong)}input:focus{border-color:var(--accen
 .choices{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:2px;padding:3px;border-radius:9px;background:color-mix(in srgb,var(--text) 7%,transparent)}
 .choices button{height:32px;padding:0 6px;border:0;border-radius:7px;background:none;color:var(--muted);font-size:13px;cursor:pointer;white-space:nowrap}
 .choices button[aria-pressed=true]{background:var(--bg);color:var(--text);font-weight:600;box-shadow:0 1px 3px #0003}
-@media (max-width:860px){.entry{grid-template-columns:1fr;grid-template-rows:auto 1fr}.stage{height:176px;padding:0}.pitch{display:none}.emblem{width:84px;height:84px;margin:-42px 0 0 -42px;border-radius:22px}.emblem::before,.emblem::after{border-radius:22px}.emblem svg{width:56px;height:56px}.side{place-items:start center;padding:28px 24px 36px}.wordmark{display:none}.settings{position:fixed;right:12px;top:12px}}
+@media (max-width:860px){.entry{grid-template-columns:1fr;grid-template-rows:auto 1fr}.stage{height:176px;padding:0}.pitch{display:none}.emblem{width:84px;height:84px;margin:-42px 0 0 -42px;border-radius:22px}.emblem::before,.emblem::after{border-radius:22px}.emblem>svg:not(.pal){width:56px;height:56px}.emblem{--stroll:11px}.emblem .clawd{width:42px;height:35px;margin-left:-21px}.stage{--unit:3px;--half:42px;--aside:21px}.side{place-items:start center;padding:28px 24px 36px}.wordmark{display:none}.settings{position:fixed;right:12px;top:12px}}
 `;
 
 // Runs before the first paint, so the page never flashes the other theme or language.
@@ -138,7 +207,7 @@ export function login_page({ action, refusal = '', name = '' }) {
   const notice = refusal ? `<p class="notice" role="alert">${ICON.alert}<span ${text(refusal)}</span></p>` : '';
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>${zh.page_title}</title><script>${EARLY_SCRIPT}</script><style>${STYLE}</style></head><body><main class="entry">
-<section class="stage"><svg class="threads" viewBox="0 0 800 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">${threads_svg()}</svg><div class="emblem" aria-hidden="true">${logos}</div>
+<section class="stage"><svg class="threads" viewBox="0 0 800 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">${threads_svg()}</svg>${STAR_PAL}${KNOT_PAL}<div class="emblem" aria-hidden="true">${CLAWD}${logos}</div>
 <div class="pitch"><h2 ${text('tagline')}</h2><p ${text('tagline_detail')}</p></div></section>
 <section class="side"><div class="settings"><button id="settings-button" class="icon-button" type="button" aria-expanded="false" aria-controls="settings-menu" data-label="settings" aria-label="${zh.settings}" title="${zh.settings}">${ICON.settings}</button>
 <div id="settings-menu" class="menu" hidden><fieldset><legend ${text('language')}</legend><div class="choices"><button type="button" data-locale="zh-CN">简体中文</button><button type="button" data-locale="en">English</button></div></fieldset>

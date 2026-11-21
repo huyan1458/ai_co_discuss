@@ -11,7 +11,7 @@
  * computer only.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -90,6 +90,18 @@ function login_in_browser(cloudflared, { shown, on_url }) {
   });
 }
 
+/**
+ * Point `host` at the tunnel and return the record name cloudflared reports (it logs to stderr), or '' when it names
+ * none. A failure is only reported: an existing record that already points at this tunnel is fine.
+ */
+function route_dns(cloudflared, name, host, say) {
+  const result = spawnSync(cloudflared, ['tunnel', 'route', 'dns', name, host], { encoding: 'utf8', windowsHide: true });
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  const record = output.match(/Added CNAME (\S+)/)?.[1] || output.match(/(\S+) is already configured to route/)?.[1] || '';
+  if (result.status !== 0) say(t('没有新建 {value1} 的域名记录（{value2}）；若它已指向这条隧道可忽略', { value1: host, value2: output.trim().split(/\r?\n/).pop() || result.status }));
+  return record.toLowerCase();
+}
+
 function run(cloudflared, args, shown = false) {
   const result = spawnSync(cloudflared, args, { encoding: 'utf8', windowsHide: !shown, stdio: shown ? TO_STDERR : 'pipe' });
   if (result.status !== 0) throw new Error(t('cloudflared {value1} 失败：{value2}', { value1: args.join(' '), value2: String(result.stderr || '').trim().split(/\r?\n/).pop() || t('退出码 {value1}', { value1: result.status }) }));
@@ -115,13 +127,14 @@ export async function prepare_tunnel({ host, name = DEFAULT_TUNNEL_NAME, interac
   host = tunnel_host(host); name = tunnel_name(name);
   progress(t('安装 cloudflared'));
   const cloudflared = install_cloudflared(shown);
-  if (!existsSync(join(TUNNEL_HOME, 'cert.pem'))) {
+  const authorize = async () => {
     if (!interactive) throw new Error(t('还没有授权 Cloudflare：在管理面板“概览”页设置外网地址，或在终端运行 codiscuss setup --hosting，在浏览器里完成授权'));
     progress(t('等待 Cloudflare 授权'));
     say(t('即将打开浏览器：登录 Cloudflare，选择 {value1} 并点 Authorize，完成后回到这里', { value1: host.split('.').slice(-2).join('.') }));
     await login_in_browser(cloudflared, { shown, on_url });
     if (!existsSync(join(TUNNEL_HOME, 'cert.pem'))) throw new Error(t('Cloudflare 授权没有完成，重新开始即可再试'));
-  }
+  };
+  if (!existsSync(join(TUNNEL_HOME, 'cert.pem'))) await authorize();
   progress(t('建立隧道'));
   let tunnel = find_tunnel(cloudflared, name);
   if (!tunnel) { run(cloudflared, ['tunnel', 'create', name]); tunnel = find_tunnel(cloudflared, name); }
@@ -129,10 +142,15 @@ export async function prepare_tunnel({ host, name = DEFAULT_TUNNEL_NAME, interac
   const credentials = join(TUNNEL_HOME, `${tunnel.id}.json`);
   if (!existsSync(credentials)) throw new Error(t('找不到隧道凭据 {value1}：这条隧道可能建在别的电脑上，换一个 --tunnel-name 重新运行', { value1: credentials }));
   progress(t('添加域名记录'));
-  try { run(cloudflared, ['tunnel', 'route', 'dns', name, host]); }
-  catch (error) {
-    // An existing record that already points at this tunnel is fine; any other is reported by the final check.
-    say(t('没有新建 {value1} 的域名记录（{value2}）；若它已指向这条隧道可忽略', { value1: host, value2: error.message }));
+  let routed = route_dns(cloudflared, name, host, say);
+  if (routed && routed !== host) {
+    // The sign-in covers one Cloudflare domain; cloudflared then appends it to a host of another domain
+    // (test.b.com becomes test.b.com.a.com). Sign in again for the host's own domain, keeping the old one aside.
+    say(t('Cloudflare 授权的是另一个域名，记录被建成了 {value1}（可在 Cloudflare 删除）；需要为 {value2} 重新授权', { value1: routed, value2: host }));
+    renameSync(join(TUNNEL_HOME, 'cert.pem'), join(TUNNEL_HOME, `cert-${Date.now()}.pem`));
+    await authorize();
+    routed = route_dns(cloudflared, name, host, say);
+    if (routed && routed !== host) throw new Error(t('授权的仍不是 {value1} 所在的域名，记录被建成了 {value2}：重新开始，在浏览器里选对域名', { value1: host, value2: routed }));
   }
   return { name, host, id: tunnel.id, credentials };
 }

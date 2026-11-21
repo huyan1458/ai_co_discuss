@@ -503,7 +503,7 @@ html[data-theme^="channel"] .channel-nav-preview-text p { margin-bottom: 6px; }
 /* The topic card reuses .channel-message box rules so its edges and text column match the message cards at every size. */
 .channel-topic-group { padding-top: 4px; }
 html[data-theme^="channel"] .channel-message.channel-topic-card { color: var(--ui-text); box-shadow: inset 3px 0 0 var(--channel-accent); }
-.channel-topic-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.channel-topic-heading { display: flex; align-items: center; gap: 10px; }
 .channel-topic-heading h2 { flex: 1; min-width: 0; margin: 0; color: var(--ui-text-highlighted); font-size: 17px; font-weight: 650; }
 .channel-topic-eyebrow { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; color: var(--channel-accent); font-size: 12px; font-weight: 600; }
 .channel-topic-section { margin-top: 10px; }
@@ -623,6 +623,13 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 .channel-empty > [class*="icon"] { font-size: 32px; color: #9aa4bc; margin-bottom: 14px; }
 .channel-empty h2 { color: #f1f3f7; font-size: 23px; font-weight: 650; }
 .channel-empty p { color: #a9b1c0; font-size: 14px; margin: 9px 0 22px; }
+/* A phone shows the empty state as a short note right under the topic card, not a large heading floating mid-screen. */
+@media (max-width: 700px) {
+  .channel-empty { flex: none; min-height: 0; justify-content: flex-start; padding: 20px 16px 16px; }
+  .channel-empty > [class*="icon"] { font-size: 22px; margin-bottom: 8px; }
+  .channel-empty h2 { font-size: 18px; }
+  .channel-empty p { font-size: 13px; line-height: 1.6; margin: 6px 0 12px; }
+}
 .channel-files-unset { min-height: 100%; display: flex; align-items: center; justify-content: center; color: var(--ui-text-muted); font-size: 14px; }
 /* The placeholder rows line up with the card text, and the cover spans the transcript down under the composer, so no
    old card shows past its edges. */
@@ -1586,7 +1593,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-working-main { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-top: 4px; padding-left: calc(var(--working-avatar) + 8px); }
 .channel-working-status { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .channel-working-strip .channel-working-actions { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; }
-.channel-working-tools { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 0; padding: 0 34px 0 0; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; list-style: none; font-variant-numeric: tabular-nums; }
+.channel-working-tools { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 0; padding: 0 34px 0 calc(var(--working-avatar) + 8px); color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; list-style: none; font-variant-numeric: tabular-nums; }
 .channel-working-tools li { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .channel-working-tool-count { display: inline-flex; flex-shrink: 0; gap: 1px; }
 .channel-working-notes { margin-top: 8px; padding: 8px 0 0; border-top: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.6; }

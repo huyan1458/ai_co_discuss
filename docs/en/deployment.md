@@ -185,3 +185,25 @@ To connect a hosted computer: in the admin panel of your computer (the one that 
 
 - **`no such table`** — the connected database has no schema yet; check which database your configuration points to.
 - **Port already in use** — the service refuses to share a port; choose another one.
+
+## Official room sharing site (operators)
+
+The online sharing service uses a dedicated Worker, D1 database and custom domain. Visitors can read links without installing the app, and publishers use the operator's service. Run the following from the repository root with a Cloudflare account that manages the chosen domain.
+
+1. Run `npm ci`, `npm run build` and `npx wrangler login`. Copy `deploy/share.wrangler.jsonc` to `deploy/wrangler.local.jsonc`, retaining its bindings and Cron configuration. If that private file is already used by another service, choose a separate private path and adjust the commands below.
+2. Create the dedicated database and enter the returned ID in `d1_databases[0].database_id` in the private configuration. Add `"routes": [{ "pattern": "<full-share-hostname>", "custom_domain": true }]` at the top level, and set `SHARE_SITE` in `web/app.js` to that HTTPS origin. Use a hostname separate from the pairing and sign-in sites.
+
+```sh
+npx wrangler d1 create codiscuss-share --config deploy/wrangler.local.jsonc
+npx wrangler d1 execute DB --remote --file backend/share_schema.sql --config deploy/wrangler.local.jsonc
+```
+
+3. Enter two independently generated random secrets at the prompts below. Give `ADMIN_TOKEN` only to the operator's moderation tool. Keep `SOURCE_SALT` stable for source IP hashing. Verify the domain and database before deploying. An hourly Cron removes expired shares. Views return 410 as soon as a link expires.
+
+```sh
+npx wrangler secret put ADMIN_TOKEN --config deploy/wrangler.local.jsonc
+npx wrangler secret put SOURCE_SALT --config deploy/wrangler.local.jsonc
+npx wrangler deploy --config deploy/wrangler.local.jsonc
+```
+
+The service limits raw snapshot data to 5 MiB per share, 20 shares and 50 MiB per source, and 5 GB across the site. Free D1 allows 500 MB of physical storage per database and 5 GB across the account. Compressed data, indexes and other records occupy space in the single configured database. Platform limits can therefore stop writes earlier. Every page request checks visibility. Revocation or moderation stops subsequent views, while copies already saved by readers remain available to them. [Cloudflare D1 limits](https://developers.cloudflare.com/d1/platform/limits/)

@@ -22,6 +22,8 @@ npm run test:markdown
 npm run test:pages
 ```
 
+日常只跑改动对应的测试文件；全量 `npm test` 要几分钟，适合大范围改动后。`test:python` 与 `test:js` 经 `scripts/test_env.mjs` 启动，先去掉本机服务交给 AI 成员的环境变量（入口密钥文件、服务目录、成员凭据），否则在房间任务里运行时测试服务器会进入入口保护模式，几乎全部返回 403。单独运行某个测试文件时同样加这个前缀，如 `node scripts/test_env.mjs node --test tests/test_share_worker.mjs`。
+
 测试默认创建临时数据，不读取真实房间。`tests/test_server.py` 和 `tests/test_discuss.py` 可通过 `DISCUSS_TEST_URL` / `DISCUSS_CLI_TEST_URL` 指向单独初始化的本地 Worker，二者只允许回环地址。测试会创建和修改数据，不能指向共享环境；本地 D1 初始化和启动见 [部署指南](../docs/deployment.md)。
 
 修改智能调度的题目、选项、上下文或阈值（`runner/scheduler.mjs`）后，运行 `node tests/jev_eval.mjs --baseline tests/jev_baseline.json`：它用本机服务目录保存的决策模型密钥调用真实模型（按次计费），把固定场景 `tests/jev_cases.json` 的选择与期望答案和基线对比，不在 `npm test` 中。

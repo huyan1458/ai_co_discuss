@@ -9,6 +9,15 @@ const SHARE = window.CODISCUSS_SHARE || null;
 let share_recording = null;
 // Where a reader of a share page learns about the product.
 const SHARE_HOME = "https://github.com/huyan1458/ai_co_discuss";
+// The official share site that hosts published links (backend/share_worker.mjs); changing the domain changes only this.
+const SHARE_SITE = "https://share.codiscuss.com";
+// What a published link carries and how long it lives (the site enforces the same).
+const SHARE_FORMAT = 1;
+const SHARE_DAYS = [1, 3, 7];
+const SHARE_DEFAULT_DAYS = 7;
+const SHARE_MAX_BYTES = 5 * 1024 * 1024;
+// This browser's published links, by room: the manage token lets it update or revoke them.
+const SHARE_LINK_PREFIX = "codiscuss-share:";
 // A share page is a record of one moment: every "how long ago" and running clock is read at that moment.
 if (SHARE && Number.isFinite(Date.parse(SHARE.exported_at))) {
   const exported_at = Date.parse(SHARE.exported_at);
@@ -6398,7 +6407,8 @@ function view_snapshot() {
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
     share: SHARE ? { exported_at: SHARE.exported_at, home: SHARE_HOME } : null,
-    share_draft: share_draft ? { room_id: share_draft.room_id, title: share_draft.title, spots: share_draft.spots } : null,
+    share_draft: share_draft ? { room_id: share_draft.room_id, title: share_draft.title, spots: share_draft.spots, linked: Boolean(share_link(share_draft.room_id)) } : null,
+    share_links: SHARE ? {} : share_links(), share_days: SHARE_DAYS,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_host_permissions: state.create_host_permissions, create_api_max_requests: state.create_api_max_requests, create_relay_rounds: state.create_relay_rounds ?? 0, create_image_generation: state.create_image_generation };
 }
@@ -6825,6 +6835,96 @@ async function share_room() {
   }
 }
 
+/** A published link of a room, as this browser keeps it: { id, url, manage_token, expires_at }, or null. */
+function share_link(room_id) {
+  try {
+    const link = JSON.parse(localStorage.getItem(`${SHARE_LINK_PREFIX}${room_id}`) || "null");
+    // An expired link is gone from the share site; forgetting it here keeps the menu honest.
+    if (link && Date.parse(link.expires_at) <= Date.now()) { localStorage.removeItem(`${SHARE_LINK_PREFIX}${room_id}`); return null; }
+    return link;
+  } catch { return null; }
+}
+
+/** The published links of the rooms in the directory, without their manage tokens. */
+function share_links() {
+  return Object.fromEntries(state.rooms.map(room => [room.id, share_link(room.id)]).filter(([, link]) => link)
+    .map(([id, link]) => [id, { url: link.url, expires_at: link.expires_at }]));
+}
+
+/** Send one request to the share site; its error text, or the status, explains a refusal. */
+async function share_site_request(method, path, body, token) {
+  const headers = { ...(body ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  const response = await fetch(`${SHARE_SITE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: "no-store", referrerPolicy: "no-referrer" });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(result.error || t('分享站拒绝了这次请求（{status}）', { status: response.status })), { status: response.status });
+  return result;
+}
+
+/** Publish the confirmed share page on the share site, or replace the one this room already has there; the link is copied. */
+async function share_publish(ttl_days = SHARE_DEFAULT_DAYS) {
+  const draft = share_draft;
+  if (!draft || state.backup_pending) return;
+  const days = SHARE_DAYS.includes(Number(ttl_days)) ? Number(ttl_days) : SHARE_DEFAULT_DAYS;
+  const body = { format: SHARE_FORMAT, room_id: draft.room_id, title: draft.title, description: draft.description, exported_at: draft.exported_at, responses: draft.responses, ttl_days: days };
+  const bytes = new Blob([JSON.stringify(body)]).size;
+  if (bytes > SHARE_MAX_BYTES) {
+    notify("error", t('这个房间整理后有 {size}，超过分享链接 5 MB 的上限；请改用“下载网页文件”。', { size: attachment_size(bytes) }));
+    return;
+  }
+  share_draft = null;
+  state.backup_pending = true;
+  publish_view();
+  try {
+    const existing = share_link(draft.room_id);
+    let link;
+    try {
+      const result = existing
+        ? await share_site_request("PUT", `/api/shares/${encodeURIComponent(existing.id)}`, body, existing.manage_token)
+        : await share_site_request("POST", "/api/shares", body);
+      link = { id: result.id || existing.id, url: result.url || existing.url, manage_token: result.manage_token || existing.manage_token, expires_at: result.expires_at };
+    } catch (error) {
+      // The old link is gone from the site (expired, taken down or revoked elsewhere): publish anew.
+      if (!existing || ![404, 410].includes(error.status)) throw error;
+      const result = await share_site_request("POST", "/api/shares", body);
+      link = { id: result.id, url: result.url, manage_token: result.manage_token, expires_at: result.expires_at };
+    }
+    try { localStorage.setItem(`${SHARE_LINK_PREFIX}${draft.room_id}`, JSON.stringify(link)); } catch { /* The link still works; only managing it here is lost. */ }
+    const copied = await navigator.clipboard?.writeText(link.url).then(() => true, () => false);
+    const until = new Date(link.expires_at).toLocaleString();
+    notify("info", copied ? t('分享链接已复制，{time} 前有效：{url}', { time: until, url: link.url }) : t('分享链接 {time} 前有效：{url}', { time: until, url: link.url }));
+  } catch (error) {
+    notify("error", t('发布分享链接失败：{value1}', { value1: error.message }));
+  } finally {
+    state.backup_pending = false;
+    publish_view();
+  }
+}
+
+/** Take a room's published link down now; the share site deletes its copy. */
+async function share_revoke(room_id) {
+  const link = share_link(room_id);
+  if (!link || state.backup_pending) return;
+  state.backup_pending = true;
+  publish_view();
+  try {
+    try { await share_site_request("DELETE", `/api/shares/${encodeURIComponent(link.id)}`, null, link.manage_token); }
+    catch (error) { if (![404, 410].includes(error.status)) throw error; }
+    localStorage.removeItem(`${SHARE_LINK_PREFIX}${room_id}`);
+    notify("info", t('分享链接已撤销，打开它的人会看到“分享不存在”。'));
+  } catch (error) {
+    notify("error", t('撤销分享链接失败：{value1}', { value1: error.message }));
+  } finally {
+    state.backup_pending = false;
+    publish_view();
+  }
+}
+
+/** Copy a room's published link again. */
+async function share_copy(room_id) {
+  const link = share_link(room_id);
+  if (link) await copy_text(link.url);
+}
+
 /** Download one complete room snapshot independently of visible filters or later navigation. */
 async function backup_room(room_id = state.room?.id) {
   if (!room_id || state.backup_pending) return;
@@ -6962,7 +7062,7 @@ async function execute_view_action(name, value) {
   if (!["refresh", "create"].includes(name)) state.navigation_version++;
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
-    archives: toggle_archives, backup: backup_room, backup_rooms, share_prepare, share_room, share_cancel, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
+    archives: toggle_archives, backup: backup_room, backup_rooms, share_prepare, share_room, share_cancel, share_publish, share_revoke, share_copy, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_from_composer(event), discard_sending, retry_sending, choose_attachments, remove_attachment, preview_attachment,
     create: ({ folder_id, accepted, rejected }) => submit_room(event, folder_id, { accepted, rejected }), quick_create: quick_create_room, welcome: open_welcome,
     save_context: () => save_context(event), save_topic: () => save_topic(event),

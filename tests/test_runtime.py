@@ -175,6 +175,8 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT status,ended_message_id FROM discussion_sessions WHERE room_id=?", (self.room,)).fetchone(), ("concluded", message))
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
             connection.executescript("BEGIN;\n" + server_module.LEGACY_DISCUSSION_SQL + "\nCOMMIT;")
+        # The script also drops the retired room_links; startup runs it before the schema, which recreates the current one.
+        init_database(self.database, seed=False)
         self.assertEqual(self.request(f"{self.path}/messages/{message}")[1]["text"], "迁移原文")
         self.start_session()
         status, deleted = self.request(self.path + "/delete", {"actor": "用户", "confirm_title": "会话运行验证"}, self.owner)

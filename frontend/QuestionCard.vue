@@ -210,35 +210,49 @@ async function cancel() {
 <style scoped>
 /* A card over the composer, at most min(60vh, 520px) tall with its body scrolling, as in DeepSeek Harness. */
 /* The title bar's frosted glass: messages scrolling behind the card stay out of the way of its text. */
-.question-card { display: flex; flex-direction: column; max-height: min(60vh, 520px); margin: 0 12px 8px; border: 1px solid var(--ui-border-accented); border-radius: 12px; background: var(--channel-topbar-bg); -webkit-backdrop-filter: var(--channel-glass-filter); backdrop-filter: var(--channel-glass-filter); font-size: 13px; overflow: hidden; }
+.question-card { display: flex; flex-direction: column; max-height: min(60vh, 520px); margin: 0 12px 8px; border: 1px solid var(--channel-edge-float, var(--ui-border)); border-radius: 14px; background: var(--channel-glass-bg, var(--channel-topbar-bg)); box-shadow: var(--channel-shadow-panel); -webkit-backdrop-filter: var(--channel-glass-filter); backdrop-filter: var(--channel-glass-filter); font-size: 13px; overflow: hidden; }
 .question-card.is-minimized { max-height: none; }
-.question-head { display: flex; align-items: center; gap: 4px; padding: 8px 8px 4px 12px; }
-.question-heading { display: flex; flex: 1; flex-direction: column; min-width: 0; }
-.question-eyebrow { color: var(--ui-text-muted); font-size: 12px; }
+.question-head { display: flex; align-items: center; gap: 2px; padding: 8px 8px 2px 14px; }
+.question-heading { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
+.question-eyebrow { color: var(--ui-primary); font-size: 12px; font-weight: 600; }
 .question-meta, .question-scope, .question-status, .question-progress { color: var(--ui-text-dimmed); font-size: 12px; }
-.question-card.is-minimized .question-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.question-body { display: flex; flex-direction: column; gap: 8px; min-height: 0; padding: 4px 12px 8px; overflow-y: auto; overscroll-behavior: contain; }
+.question-progress { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
+.question-card.is-minimized .question-head { padding-bottom: 8px; }
+.question-card.is-minimized .question-heading { flex-wrap: nowrap; }
+.question-card.is-minimized .question-eyebrow { flex-shrink: 0; }
+.question-card.is-minimized .question-title { min-width: 0; font-size: 13px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.question-body { display: flex; flex-direction: column; gap: 8px; min-height: 0; padding: 2px 14px 10px; overflow-y: auto; overscroll-behavior: contain; }
 .question-body:focus { outline: none; }
-.question-title { color: var(--ui-text-highlighted); font-weight: 600; }
-.question-detail, .question-note { color: var(--ui-text-toned); white-space: pre-wrap; }
-.question-options { display: flex; flex-direction: column; gap: 2px; }
-.question-option { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px; border-radius: 8px; text-align: left; color: var(--ui-text); cursor: pointer; }
-.question-option:hover:not(:disabled) { background: var(--ui-bg-accented); }
-.question-option.is-selected { background: var(--ui-bg-accented); box-shadow: inset 0 0 0 1px var(--ui-border-accented); }
+.question-title { color: var(--ui-text-highlighted); font-size: 15px; font-weight: 600; line-height: 1.5; }
+.question-detail, .question-note { color: var(--ui-text-toned); line-height: 1.6; white-space: pre-wrap; }
+.question-options { display: flex; flex-direction: column; gap: 4px; margin: 2px -4px 0; }
+/* Hover is the shared faint ghost fill; the chosen row carries the accent as a tint, a hairline and a filled marker, so the two never read alike. */
+.question-option { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 10px; border: 1px solid transparent; border-radius: 10px; text-align: left; color: var(--ui-text); cursor: pointer; transition: background-color .12s, border-color .12s; }
+.question-option:hover:not(:disabled) { background: var(--channel-ghost-hover, var(--ui-bg-accented)); }
+.question-option:focus-visible { outline: none; border-color: color-mix(in srgb, var(--ui-primary) 60%, transparent); }
+.question-option.is-selected, .question-option.is-selected:hover:not(:disabled) { border-color: color-mix(in srgb, var(--ui-primary) 36%, transparent); background: color-mix(in srgb, var(--ui-primary) 10%, transparent); }
 .question-option:disabled { cursor: default; opacity: .6; }
-.question-number, .question-check { display: inline-grid; flex-shrink: 0; place-items: center; width: 20px; height: 20px; margin-top: 1px; border: 1px solid var(--ui-border-accented); border-radius: 6px; color: var(--ui-text-muted); font-size: 12px; }
-.question-option.is-selected .question-number, .question-option.is-selected .question-check { border-color: var(--ui-primary); color: var(--ui-primary); }
+.question-number, .question-check { display: inline-grid; flex-shrink: 0; place-items: center; width: 20px; height: 20px; margin-top: 1px; border: 1px solid transparent; border-radius: 6px; background: var(--channel-ghost-active, var(--ui-bg-accented)); color: var(--ui-text-muted); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; transition: background-color .12s, border-color .12s, color .12s; }
+.question-check { border-color: var(--ui-border-accented); background: transparent; }
+.question-option.is-selected .question-number, .question-option.is-selected .question-check { border-color: var(--ui-primary); background: var(--ui-primary); color: var(--ui-bg); }
 .question-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .question-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.question-badge { padding: 0 6px; border-radius: 999px; background: var(--ui-primary); color: var(--ui-bg); font-size: 11px; line-height: 18px; }
-.question-description { color: var(--ui-text-muted); font-size: 12px; overflow-wrap: anywhere; }
-.question-custom { cursor: text; }
+.question-label { color: var(--ui-text-highlighted); font-weight: 500; line-height: 22px; }
+.question-badge { padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--ui-primary) 16%, transparent); color: var(--ui-primary); font-size: 11px; font-weight: 500; line-height: 18px; }
+.question-description { color: var(--ui-text-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+/* The free answer reads as a field: a hairline at rest, the accent while typing. */
+.question-custom { align-items: center; border-color: var(--channel-edge-control, var(--ui-border)); cursor: text; }
+.question-custom:hover:not(:disabled) { background: transparent; }
+.question-custom:focus-within { border-color: color-mix(in srgb, var(--ui-primary) 55%, transparent); }
+.question-custom .question-number { margin-top: 0; }
 .question-custom-field { flex: 1; min-width: 0; }
-.question-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px 8px; border-top: 1px solid var(--ui-border); }
+.question-custom-field :deep(textarea) { min-height: 22px; padding: 0; font-size: 13px; line-height: 22px; }
+.question-scope { font-size: 11px; line-height: 1.5; }
+.question-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--channel-topbar-divider, var(--ui-border)); }
 .question-pager { display: flex; align-items: center; gap: 2px; }
 .question-room-actions { display: flex; flex: 1; flex-wrap: wrap; gap: 2px; }
 .question-actions { display: flex; gap: 6px; margin-left: auto; }
-.question-queue { display: flex; flex-direction: column; gap: 2px; padding: 6px 12px 8px; border-top: 1px solid var(--ui-border); color: var(--ui-text-muted); }
+.question-queue { display: flex; flex-direction: column; gap: 2px; padding: 6px 14px 8px; border-top: 1px solid var(--channel-topbar-divider, var(--ui-border)); color: var(--ui-text-muted); font-size: 12px; }
 .question-queue li { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .question-queue li > span:first-of-type { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* Phone width: the room's own actions drop under the pager and the main buttons stay at the right. */
@@ -246,6 +260,6 @@ async function cancel() {
   .question-room-actions { order: 3; flex-basis: 100%; }
   /* A phone keeps most of its height for the conversation: the card takes at most 45% and scrolls inside. */
   .question-card { max-height: 45dvh; margin: 0 8px 6px; }
-  .question-option { padding: 6px; }
+  .question-option { padding: 6px 8px; }
 }
 </style>
