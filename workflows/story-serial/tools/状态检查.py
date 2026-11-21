@@ -12,10 +12,14 @@
     1. 状态/ 下每个 YAML 能否解析；
     2. 分集记录与正文是否逐集对应（记了账却没有正文、中间漏记的集）；
     3. 账里用中文引号“”括起的引文，是否真的出现在现定稿正文里（不含 正文/旧稿_* 目录）；
-    4. 线索.yaml 里“埋于”“最后一次动”的集号是否存在，按最新一集重算“停了几集”，与账上写的对比；
+    4. 线索.yaml 里“埋于”“最后一次动”的集号是否存在（“停了几集”由脚本计算，账上不必写）；
     5. 账里“见某某.yaml”的指向，文件是否存在。
 
-退出码：0 全部通过；1 有问题；2 没有可检查的内容（缺文件夹、没有账本或没有正文）。
+最后另印一节“体检”，对照文档标准给出整理信号，只提示，不算检查失败：
+    现状文件（主角、物资、据点、人物）超过 80 字的条目；各账本“待确认”一类字样的处数；
+    文件头注释行数；分集记录里超过 15 行的集；线索久悬（停 5 集及以上）的条目。
+
+退出码：0 全部通过（体检提示不影响）；1 有问题；2 没有可检查的内容（缺文件夹、没有账本或没有正文）。
 """
 
 import logging
@@ -34,6 +38,12 @@ MIN_QUOTE_LEN = 6  # 少于这个字数的引号内容多半是称呼、单字�
 EPISODE_PATTERN = re.compile(r"第\s?(\d{1,3})\s?集")
 QUOTE_PATTERN = re.compile(r"“([^“”]+)”")
 REFERENCE_PATTERN = re.compile(r"([一-龥]+\.yaml)")
+CURRENT_FILES = ("主角.yaml", "物资.yaml", "据点.yaml", "人物.yaml")
+MAX_ENTRY_CHARS = 80  # 现状条目字数上限，见文档标准
+MAX_EPISODE_LINES = 15  # 分集记录每集行数上限
+MAX_HEADER_LINES = 5  # 文件头注释行数上限
+STALE_EPISODES = 5  # 线索停这么多集以上列为久悬
+PENDING_PATTERN = re.compile(r"待确认|待定|待核|未报")
 STRIP_PATTERN = re.compile(r"[\s　*【】，。、；：！？,.;:!?‘’“”\"'（）()—…·]")
 
 logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
@@ -129,16 +139,76 @@ def check_threads(data, episodes, latest):
     content = data.get("线索.yaml") or {}
     threads = content.get("线索", []) if isinstance(content, dict) else []
     for item in threads or []:
+        if not isinstance(item, dict):
+            problems.append(f"线索条目不是“键: 值”结构：{str(item)[:24]}")
+            continue
         name = str(item.get("线", "（无名）"))[:24]
         for field in ("埋于", "最后一次动"):
             number = parse_episode(item.get(field))
             if number is None or number not in episodes or number > latest:
                 problems.append(f"{name}：{field}“{item.get(field)}”不是已记账的集号")
-        last = parse_episode(item.get("最后一次动"))
-        recorded = re.search(r"停\s?(\d+)\s?集", str(item.get("停", "")))
-        if last and recorded and int(recorded.group(1)) != latest - last:
-            problems.append(f"{name}：账上写停 {recorded.group(1)} 集，按第 {latest} 集算应为 {latest - last} 集")
     return problems
+
+
+def header_lines(path):
+    """数文件开头连续的注释行。"""
+    count = 0
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        if not line.lstrip().startswith("#"):
+            break
+        count += 1
+    return count
+
+
+def thread_items(data):
+    """返回线索账里的条目（只取字典）。"""
+    content = data.get("线索.yaml") or {}
+    items = content.get("线索", []) if isinstance(content, dict) else []
+    return [item for item in items or [] if isinstance(item, dict)]
+
+
+def episode_lines(entry):
+    """数一集分集记录里的变化行：只数值为列表的那几栏里的元素。"""
+    return sum(len(value) for value in entry.values() if isinstance(value, list))
+
+
+def health_report(data, latest):
+    """对照文档标准列出整理信号，只提示，返回提示行列表（每类汇总一行，未回收的久悬线逐条列）。"""
+    hints = []
+    long_counts = []
+    for name in CURRENT_FILES:
+        count = sum(1 for _, text in walk_strings(data.get(name) or {}) if len(text) > MAX_ENTRY_CHARS)
+        if count:
+            long_counts.append(f"{name} {count}")
+    if long_counts:
+        hints.append(f"现状条目超过 {MAX_ENTRY_CHARS} 字：" + "、".join(long_counts))
+    pending_counts = []
+    for name, content in data.items():
+        count = sum(len(PENDING_PATTERN.findall(text)) for _, text in walk_strings(content))
+        if count:
+            pending_counts.append((name, count))
+    if pending_counts:
+        total = sum(count for _, count in pending_counts)
+        hints.append(f"“待确认”一类字样合计 {total} 处：" + "、".join(f"{name} {count}" for name, count in pending_counts))
+    long_headers = [f"{name} {lines} 行" for name in data if (lines := header_lines(STATE_DIR / name)) > MAX_HEADER_LINES]
+    if long_headers:
+        hints.append(f"文件头注释超过 {MAX_HEADER_LINES} 行：" + "、".join(long_headers))
+    log_content = data.get(EPISODE_LOG_FILE) or {}
+    entries = log_content.get("分集记录", []) if isinstance(log_content, dict) else []
+    long_episodes = [str(entry.get("集数")) for entry in entries or [] if isinstance(entry, dict) and episode_lines(entry) > MAX_EPISODE_LINES]
+    if long_episodes:
+        hints.append(f"分集记录超过 {MAX_EPISODE_LINES} 行的集 {len(long_episodes)} 个：" + "、".join(long_episodes))
+    threads = thread_items(data)
+    closed = [item for item in threads if "已回收" in str(item.get("现状", ""))]
+    if closed:
+        hints.append(f"线索.yaml：已回收仍在册 {len(closed)} 条")
+    for item in threads:
+        if item in closed:
+            continue
+        last = parse_episode(item.get("最后一次动"))
+        if last and latest - last >= STALE_EPISODES:
+            hints.append(f"久悬：{str(item.get('线', '（无名）'))[:24]} 停了 {latest - last} 集")
+    return hints
 
 
 def check_references(data):
@@ -192,11 +262,15 @@ def main():
     sections = [
         ("分集记录与正文对应", check_coverage(episodes, recorded) if recorded else []),
         ("引文不在现正文里", check_quotes(data, checked)),
-        ("线索集号与停了几集", check_threads(data, checked, latest)),
+        ("线索集号", check_threads(data, checked, latest)),
         ("文件指向", check_references(data)),
     ]
     for title, problems in sections:
         report(title, problems)
+    hints = health_report(data, latest)
+    log.info("\n== 体检（只提示，不算失败）：%s ==", f"{len(hints)} 条" if hints else "无")
+    for line in hints:
+        log.info("  - %s", line)
     return 1 if parse_errors or any(problems for _, problems in sections) else 0
 
 

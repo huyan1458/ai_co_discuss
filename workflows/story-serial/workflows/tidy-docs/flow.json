@@ -1,0 +1,74 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "scope",
+      "type": "host",
+      "label": "留原文·体检文档",
+      "x": 300,
+      "y": 0
+    },
+    {
+      "id": "recorder",
+      "type": "card",
+      "card": "recorder",
+      "x": 680,
+      "y": 0
+    },
+    {
+      "id": "list",
+      "type": "host",
+      "label": "出清单·确认·执行",
+      "x": 1060,
+      "y": 0
+    },
+    {
+      "id": "critic",
+      "type": "card",
+      "card": "critic",
+      "x": 1440,
+      "y": 0
+    },
+    {
+      "id": "wrap",
+      "type": "host",
+      "label": "抽查·收尾",
+      "x": 1820,
+      "y": 0
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "scope"
+    },
+    {
+      "source": "scope",
+      "target": "recorder",
+      "label": "体检账本，分堆报数"
+    },
+    {
+      "source": "recorder",
+      "target": "list"
+    },
+    {
+      "source": "list",
+      "target": "recorder",
+      "label": "按清单改账本"
+    },
+    {
+      "source": "list",
+      "target": "critic",
+      "label": "核对主持人改过的文件"
+    },
+    {
+      "source": "critic",
+      "target": "wrap"
+    }
+  ]
+}

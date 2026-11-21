@@ -1,0 +1,93 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "sort",
+      "type": "host",
+      "label": "分拣·查排线表·用户确认",
+      "x": 300,
+      "y": -40
+    },
+    {
+      "id": "writer",
+      "type": "card",
+      "card": "writer",
+      "x": 680,
+      "y": -40
+    },
+    {
+      "id": "critic_people",
+      "type": "card",
+      "card": "critic_people",
+      "x": 1060,
+      "y": -200
+    },
+    {
+      "id": "critic",
+      "type": "card",
+      "card": "critic",
+      "x": 1060,
+      "y": 120
+    },
+    {
+      "id": "accept",
+      "type": "host",
+      "label": "验收·校正排线表",
+      "x": 1440,
+      "y": -40
+    },
+    {
+      "id": "recorder",
+      "type": "card",
+      "card": "recorder",
+      "x": 1820,
+      "y": -40
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "sort"
+    },
+    {
+      "source": "sort",
+      "target": "writer",
+      "label": "按文件分给多位写手并行（默认）"
+    },
+    {
+      "source": "writer",
+      "target": "critic_people",
+      "label": "同一棒同时审"
+    },
+    {
+      "source": "writer",
+      "target": "critic",
+      "label": "同一棒同时审"
+    },
+    {
+      "source": "critic_people",
+      "target": "accept",
+      "label": "只审一圈"
+    },
+    {
+      "source": "critic",
+      "target": "accept",
+      "label": "只审一圈"
+    },
+    {
+      "source": "accept",
+      "target": "writer",
+      "label": "回修按原分工派回"
+    },
+    {
+      "source": "accept",
+      "target": "recorder",
+      "label": "有账目变化才记"
+    }
+  ]
+}
