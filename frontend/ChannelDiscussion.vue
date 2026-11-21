@@ -155,7 +155,8 @@ function place_by(range, width, height) {
 }
 /** Offer quoting (and, with speech configured, reading from) a selection made inside a message's text. */
 async function track_selection() {
-  if (quoting.value) return;
+  // A share page has no conversation to add a quote to.
+  if (quoting.value || view.value.share) return;
   const selection = document.getSelection();
   const range = selection?.rangeCount && !selection.isCollapsed ? selection.getRangeAt(0) : null;
   const start = range && (range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement);
@@ -2286,6 +2287,17 @@ function jump_to(id) {
   track_scroll();
 }
 
+// A share page's reader starts from how the room began, not from its latest message.
+let share_opened = false;
+watch(() => Boolean(view.value.share && view.value.messages.length && !view.value.messages_loading), (ready) => {
+  if (!ready || share_opened) return;
+  share_opened = true;
+  follow_tail.value = false;
+  // The whole record is mounted at once: it no longer grows, so no later slice can move what the reader is looking at.
+  render_floor.value = 0;
+  nextTick(() => { if (transcript.value) write_scroll(transcript.value, 0); track_scroll(); });
+}, { flush: "post" });
+
 /** Any manual scroll (wheel, touch drag, scroll keys, scrollbar) turns read-aloud following off; only its button turns it back on. */
 function stop_following(event) {
   if (event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) moved_by_hand = true;
@@ -2773,10 +2785,11 @@ async function allow_and_resend(report) {
 function message_actions(message) {
   return [[
     ...(can_take_back(message) || has_private_chat(message) ? [{ label: t('回复'), icon: "i-lucide-corner-up-left", onSelect: () => reply_to(message) }] : []),
-    ...(narrow.value && message.kind !== "receipt" && editing.value.id !== message.id ? [reader.state.message_id === message.id
+    ...(narrow.value && !view.value.share && message.kind !== "receipt" && editing.value.id !== message.id ? [reader.state.message_id === message.id
       ? { label: t('停止朗读'), icon: "i-lucide-square", onSelect: () => reader.stop() }
       : { label: t('朗读'), icon: "i-lucide-volume-2", onSelect: () => reader.start(message.id) }] : []),
-    { label: t('复制原文链接'), icon: "i-lucide-link", onSelect: () => copy_message(message) },
+    // A share page has no address for one message.
+    ...(view.value.share ? [] : [{ label: t('复制原文链接'), icon: "i-lucide-link", onSelect: () => copy_message(message) }]),
     { label: t('查看原文'), icon: "i-lucide-expand", onSelect: () => emit("detail", message.id) },
     ...(can_branch(message) && message.author !== "用户" ? [{ label: t('从这里分支'), icon: "i-lucide-git-branch", onSelect: () => act("fork_room", message.id) }] : []),
   ]];
@@ -2958,6 +2971,7 @@ let last_escape = 0;
  * the site refuses once a member started on the message, and says so.
  */
 function retract_shortcut(event) {
+  if (view.value.share) return;
   if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
   const from_composer = event.target === prompt.value?.textareaRef || event.target === document.body;
   if (!from_composer || (has_draft.value && !view.value.sending_message)) { last_escape = 0; return; }
@@ -3271,10 +3285,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #header><div class="channel-message-actions"><div class="channel-message-stack"><div class="channel-message-toolbar">
             <!-- Private chat joins the toolbar group at the end opposite "…": the bottom of the column with a mouse, the left end on touch screens. -->
             <component v-if="card.private_chat" :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" :text="t('私聊：查看这次执行的过程')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key" size="xs" color="neutral" variant="ghost" :aria-label="t('查看 #{value1} 的执行过程', { value1: message.id })" @click="open_private_chat(act, message.author, card.execution_id)" /></component>
-            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.private_chat && !card.can_take_back" :text="t('回复')"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="t('回复 #{value1}', { value1: message.id })" @click="reply_to(message)" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.private_chat && !card.can_take_back && !view.share" :text="t('回复')"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="t('回复 #{value1}', { value1: message.id })" @click="reply_to(message)" /></component>
             <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_retract && !card.editing" :text="t('撤回')"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="t('撤回 #{value1}', { value1: message.id })" @click="retract(message.id)" :loading="card.retracting" /></component>
             <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_take_back && !card.editing" :text="t('编辑')"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="t('编辑 #{value1}，回退到它之前重新发送', { value1: message.id })" @click="start_edit(message)" /></component>
-            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.narrow && message.kind !== 'receipt' && !card.editing" :text="card.reading ? t('停止朗读') : t('朗读')"><UButton :icon="card.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="card.reading ? t('停止朗读') : t('从 #{value1} 开始朗读', { value1: message.id })" @click="card.reading ? reader.stop() : reader.start(message.id)" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.narrow && !view.share && message.kind !== 'receipt' && !card.editing" :text="card.reading ? t('停止朗读') : t('朗读')"><UButton :icon="card.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="card.reading ? t('停止朗读') : t('从 #{value1} 开始朗读', { value1: message.id })" @click="card.reading ? reader.stop() : reader.start(message.id)" /></component>
             <UDropdownMenu v-if="card.armed" :open="card.menu_open" :items="card.actions" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }" @update:open="(open) => menu_open_id = open ? message.id : 0"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="t('消息 #{value1} 的更多操作', { value1: message.id })" /></UDropdownMenu>
             <UButton v-else icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="t('消息 #{value1} 的更多操作', { value1: message.id })" aria-haspopup="menu" @click="open_card_menu(message.id)" />
           </div></div></div></template>
@@ -3359,7 +3373,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button v-if="reader.state.reading" type="button" class="channel-listen-pill" :aria-label="t('停止朗读')" @click="reader.stop()"><UIcon name="i-lucide-square" />{{ t('停止') }}</button>
       <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" :aria-label="t('回到最新消息')" class="channel-latest-button" @click="return_to_latest" />
     </div>
-    <div ref="composer_dock" class="channel-composer-dock"><div class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event); step_over_token($event, view.attachment_drafts)" @beforeinput="guard_token_edit($event, view.attachment_drafts)" @input.capture="hold_transcript" @input="release_transcript(); update_mention($event); drop_unreferenced($event)" @click="update_mention($event); snap_caret($event, view.attachment_drafts)" @keyup="update_mention($event); snap_caret($event, view.attachment_drafts)" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
+    <div ref="composer_dock" class="channel-composer-dock"><div v-if="view.share" class="channel-composer-column channel-share-end">
+      <p><span>{{ t("只读分享 · 生成于 {time}", { time: new Date(view.share.exported_at).toLocaleString(locale, { hour12: false }) }) }}</span><span class="channel-share-pitch">{{ t("把你已有的 Claude Code、Codex、Gemini 和模型 API 拉进同一个房间协作，免费开源，数据留在你自己的电脑上。") }}</span></p>
+      <UButton :to="view.share.home" target="_blank" rel="noopener noreferrer" icon="i-lucide-sparkles" :label="t('用自己的 AI 开一个房间')" size="sm" color="neutral" class="channel-primary-button" />
+    </div><div v-else class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event); step_over_token($event, view.attachment_drafts)" @beforeinput="guard_token_edit($event, view.attachment_drafts)" @input.capture="hold_transcript" @input="release_transcript(); update_mention($event); drop_unreferenced($event)" @click="update_mention($event); snap_caret($event, view.attachment_drafts)" @keyup="update_mention($event); snap_caret($event, view.attachment_drafts)" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
       <UPopover :open="mention_open" :reference="mention_anchor" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
         <template #content>
           <div class="channel-mention-heading"><span>{{ mention_heading }}</span><small>{{ t('↑↓ 选择 · Enter 确认') }}</small></div>

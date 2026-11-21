@@ -35,7 +35,7 @@ async function submit() {
 <template>
   <ScheduleCard icon="i-lucide-flag" plain :expandable="false" :label="t('讨论结束')">
     <template #text>{{ t("讨论已结束：{reason}", { reason }) }} · {{ done ? t("目标已完成") : t("目标未确认完成") }}</template>
-    <template #actions><UButton icon="i-lucide-rotate-ccw" :label="t('继续讨论')" size="xs" color="neutral" variant="ghost" :title="t('沿用讨论目标，设定新的轮次与时长上限后继续，需本机接入程序在运行')" :disabled="!view.access?.can_manage || room.archived || Boolean(pending)" @click="open_continue" /></template>
+    <template v-if="!view.share" #actions><UButton icon="i-lucide-rotate-ccw" :label="t('继续讨论')" size="xs" color="neutral" variant="ghost" :title="t('沿用讨论目标，设定新的轮次与时长上限后继续，需本机接入程序在运行')" :disabled="!view.access?.can_manage || room.archived || Boolean(pending)" @click="open_continue" /></template>
   </ScheduleCard>
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="continuing" :title="t('继续讨论')" :description="t('沿用讨论目标和全部记录，按新的上限继续。')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body>

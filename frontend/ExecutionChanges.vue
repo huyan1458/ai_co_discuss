@@ -31,7 +31,9 @@ const props = defineProps({
   report: { type: Object, required: true },
   roomId: { type: String, required: true },
 });
-const { bridge } = inject("discussion");
+const { bridge, view } = inject("discussion");
+// A share page carries no patches: its rows only list the files.
+const previews = computed(() => !view.value.share);
 
 const stats = computed(() => new Map((props.report.diff_stats || []).map((item) => [item.path, item])));
 const edited = computed(() => new Set(props.report.edited || []));
@@ -186,11 +188,11 @@ function patch_lines(patch) {
     <ul v-if="open_sections.has(section.key)" class="execution-changes-list">
       <li v-for="file in section.files" :key="file.path">
         <button type="button" class="execution-changes-row" :aria-expanded="open.has(file.path) || (pinned && floating === file.path)" :title="file.path"
-          @click="file.stat && !file.stat.skipped && press(file.path, $event)" @pointerenter="file.stat && !file.stat.skipped && enter_row(file.path, $event)" @pointerleave="leave">
+          @click="previews && file.stat && !file.stat.skipped && press(file.path, $event)" @pointerenter="previews && file.stat && !file.stat.skipped && enter_row(file.path, $event)" @pointerleave="leave">
           <span class="execution-changes-path"><span class="execution-changes-folder">{{ folder(file.path) }}</span>{{ name(file.path) }}</span>
           <span v-if="file.stat?.skipped" class="execution-changes-note" :title="file.stat.skipped === 'binary' ? '' : t('文件超过 1 MB，只记录了改动，没有保存逐行差异')">{{ file.stat.skipped === 'binary' ? t('二进制文件') : t('未记录差异') }}</span>
           <span v-else-if="Number.isInteger(file.stat?.added)" class="execution-changes-count"><b class="is-add">+{{ file.stat.added }}</b> <b class="is-del">-{{ file.stat.removed }}</b></span>
-          <UIcon v-if="file.stat && !file.stat.skipped" name="i-lucide-chevron-down" class="execution-changes-chevron" />
+          <UIcon v-if="previews && file.stat && !file.stat.skipped" name="i-lucide-chevron-down" class="execution-changes-chevron" />
         </button>
         <Teleport to="body" :disabled="floating !== file.path">
         <div v-if="(open.has(file.path) || floating === file.path) && file.stat && !file.stat.skipped" :ref="floating === file.path ? keep_panel : undefined"

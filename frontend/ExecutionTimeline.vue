@@ -592,6 +592,8 @@ const selected_notes = computed(() => {
           </span>
           <span v-if="replaying" class="wf-state is-replay">{{ t('回放中 · {value1}', { value1: clock(view_time) }) }}</span>
           <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? t('{value1} 个进行中', { value1: digest.running.length }) : t('均已结束') }}</span>
+          <!-- On a share page the replay is the quickest way to see several AIs at work, so it starts from the top. -->
+          <button v-if="view.share && can_replay && !replaying" type="button" class="wf-text-button wf-replay-open" @click="show_player = true; play()"><UIcon name="i-lucide-play" />{{ t('回放最近这次任务') }}</button>
         </div>
         <p v-if="headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
       </header>

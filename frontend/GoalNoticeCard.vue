@@ -9,7 +9,7 @@ const { view, pending } = inject("discussion");
 const room = computed(() => view.value.room);
 const goal = computed(() => room.value.goal_state?.goal || null);
 // Only the newest goal's end notice continues it, and not while another goal or a discussion is open.
-const continuable = computed(() => goal.value && goal.value.ended_message_id === props.message.id
+const continuable = computed(() => !view.value.share && goal.value && goal.value.ended_message_id === props.message.id
   && !["active", "paused"].includes(room.value.session?.status));
 const icon = computed(() => continuable.value || goal.value?.ended_message_id === props.message.id ? "i-lucide-flag" : "i-lucide-target");
 const continuing = ref(false);

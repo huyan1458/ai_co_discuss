@@ -2042,3 +2042,46 @@ test("an answered run shows kept texts, never its process note, and says when th
   const item = kept.find((entry) => entry.key === "e9");
   assert.deepEqual([item.requests.map((message) => message.text), item.answers.map((message) => message.text), item.missing_text], [["问题"], ["回答"], false]);
 });
+
+test("a share page carries none of what only this computer and its owner should see", () => {
+  const { context } = theme_fixture();
+  const history = "/api/rooms/r1/messages?q=&withdrawn=include&limit=200&cards=1&after=0";
+  const raw = {
+    "/api/rooms": { rooms: [{ id: "r1", title: "Room", folder_id: "f1" }, { id: "r2", title: "OTHER-ROOM-MARK" }], folders: [{ id: "f1", name: "FOLDER-MARK" }] },
+    "/api/rooms/r1": { id: "r1", title: "Room", background: "BACKGROUND-MARK", boundaries: "BOUNDARY-MARK", descriptions: { Codex: "DESCRIPTION-MARK" },
+      members: [{ name: "Codex", status: "active", reported_session: "SESSION-MARK", external: { machine_label: "MACHINE-MARK", directories: ["DIRECTORY-MARK"] } }],
+      free: { queued_messages: { items: [{ text: "QUEUED-MARK" }] }, recommendations: [{ provider: "RECOMMEND-MARK" }], scheduler_decisions: [{ note: "DECISION-MARK" }],
+        ended_externals: [{ machine_label: "ENDED-MARK" }],
+        executions: [{ id: 1, status: "failed", failure_class: "quota", result: "QUOTA-MARK", cwd: "D:/Work/Secret-Project", session_id: "SESSION-MARK",
+          lease_until: 1, changes: ["d:/work/secret-project/src/a.txt"], edited: ["d:/work/secret-project/src/a.txt"], denials: [{ detail: "DENIAL-MARK" }],
+          retry: { reason: "RETRY-MARK" }, background: true }] } },
+    [history]: { has_more: false, cards: { executions: [{ id: 7, request_message_id: 2, result: "CARD-ANSWER-MARK" }] }, messages: [
+      { id: 1, text: "see D:\\Work\\Secret-Project\\src\\b.txt, /d/Work/Secret-Project/c.txt, /mnt/d/work/secret-project/e.txt and D:\\Work\\Secret-Project-wt\\d.txt",
+        attachments: [{ name: "ATTACHMENT-MARK" }], submission_id: "SUBMISSION-MARK" },
+      { id: 2, text: "REWOUND-MARK", withdrawn: "rewound" },
+      { id: 3, text: "RETRACTED-MARK", withdrawn: "retracted" },
+      { id: 4, text: "run failed: NOTICE-MARK", texts: { text: { template: "run failed: {reason}", params: { reason: "NOTICE-MARK" } } } },
+      { id: 5, text: "quota used up, resets RESETS-MARK", texts: { text: { template: "quota used up, resets {resets}", params: { resets: "RESETS-MARK" } } } }] },
+    // The runs that asked or answered a message taken back carry its text in the timeline and in their notes.
+    "/api/rooms/r1/timeline": { now: 1, executions: [
+      { id: 7, task_id: 2, task: "TIMELINE-TASK-MARK", answer_id: 8, result: "TIMELINE-ANSWER-MARK", last_note: { text: "TIMELINE-NOTE-MARK" } },
+      { id: 9, task_id: 3, task: "RETRACTED-TASK-MARK" },
+      { id: 10, task_id: 1, task: "kept task", answer_id: 11 }] },
+    "/api/rooms/r1/executions/7/notes": { notes: [{ text: "NOTES-MARK" }] },
+    "/api/rooms/r1/executions/10/notes": { notes: [{ text: "kept note" }] },
+  };
+  const responses = context.share_payload(raw, "r1");
+  const text = JSON.stringify(responses);
+  for (const mark of ["OTHER-ROOM-MARK", "FOLDER-MARK", "BACKGROUND-MARK", "BOUNDARY-MARK", "DESCRIPTION-MARK", "SESSION-MARK", "MACHINE-MARK", "DIRECTORY-MARK",
+    "QUEUED-MARK", "RECOMMEND-MARK", "DECISION-MARK", "ENDED-MARK", "QUOTA-MARK", "DENIAL-MARK", "RETRY-MARK", "ATTACHMENT-MARK", "SUBMISSION-MARK",
+    "REWOUND-MARK", "RETRACTED-MARK", "NOTICE-MARK", "RESETS-MARK", "CARD-ANSWER-MARK", "TIMELINE-TASK-MARK", "TIMELINE-ANSWER-MARK", "TIMELINE-NOTE-MARK",
+    "RETRACTED-TASK-MARK", "NOTES-MARK", "lease_until"]) assert.ok(!text.includes(mark), mark);
+  assert.ok(!/secret-project[\\/]/i.test(text), "the project folder never appears, in any spelling");
+  const run = responses["/api/rooms/r1"].free.executions[0];
+  assert.deepEqual([run.changes, run.edited, run.background, responses["/api/rooms/r1"].members[0].external], [["src/a.txt"], ["src/a.txt"], true, true]);
+  // A sibling folder that only starts with the project's name is left as written.
+  assert.deepEqual(responses[history].messages.map((message) => [message.id, message.text]), [
+    [1, "see src\\b.txt, c.txt, e.txt and D:\\Work\\Secret-Project-wt\\d.txt"], [4, "run failed: 执行失败"], [5, "quota used up, resets 未公开"]]);
+  assert.deepEqual(responses["/api/rooms/r1/timeline"].executions.map((item) => item.id), [10]);
+  assert.deepEqual(Object.keys(responses).filter((path) => path.endsWith("/notes")), ["/api/rooms/r1/executions/10/notes"]);
+});

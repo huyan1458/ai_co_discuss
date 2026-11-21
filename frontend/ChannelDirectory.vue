@@ -218,6 +218,29 @@ function toggle_folder(id) {
   expanded.value = next;
 }
 
+// The share page read and cleaned, waiting for the owner to confirm; what looks sensitive in it is listed first.
+const SHARE_SPOTS_SHOWN = 12;
+const SHARE_ITEMS = [t("包含：消息、卡片、执行时间线与过程说明，冻结在生成这一刻。"),
+  t("不包含：私聊、事件记录、调度决策、被拒操作、排队消息、附件、本机路径、会话编号与凭据；失败原因只写“执行失败”，文件改动只列文件名，执行中的命令输出不带。"),
+  t("得到一个单独的 .html 文件，任何人都能直接打开阅读，但不能操作。"),
+  t("消息正文会原样公开。下面列出的是程序找到的疑似密钥、本机目录或联系方式，查不全，发出前请自己打开核对一遍。")];
+const share_draft = computed(() => view.value.share_draft);
+// The title stays while the dialog fades out after the draft is gone.
+const share_title = ref("");
+watch(() => share_draft.value?.title, (title) => { if (title) share_title.value = title; });
+const share_items = computed(() => {
+  const spots = share_draft.value?.spots || [];
+  if (!spots.length) return [...SHARE_ITEMS, t("没有找到疑似密钥、本机目录或联系方式。")];
+  return [...SHARE_ITEMS, t("找到 {count} 处需要核对：", { count: spots.length }), ...spots.slice(0, SHARE_SPOTS_SHOWN),
+    ...(spots.length > SHARE_SPOTS_SHOWN ? [t("……其余 {count} 处请在生成的网页里查找", { count: spots.length - SHARE_SPOTS_SHOWN })] : [])];
+});
+// Confirming closes the dialog too; that close must not drop the page being made.
+let share_confirming = false;
+function close_share(open) {
+  if (open || share_confirming) { share_confirming = false; return; }
+  bridge.execute("share_cancel");
+}
+
 /** Keep actions targeted to the clicked channel without changing the open draft. */
 function actions(room, index, folder_id, folder_room_count) {
   const ordering = view.value.directory_pending.includes("room-order");
@@ -227,6 +250,7 @@ function actions(room, index, folder_id, folder_room_count) {
     ...(current ? [{ label: t("编辑议题"), icon: "i-lucide-pencil", onSelect: () => emit("manage", { room, action: "edit" }) }] : []),
     { label: t("复制阅读入口"), icon: "i-lucide-link", onSelect: () => act("copy", `${view.value.room_site}/r/${encodeURIComponent(room.id)}`) },
     { label: t("导出对话"), icon: "i-lucide-upload", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("backup", room.id) },
+    { label: t("分享为网页…"), icon: "i-lucide-share-2", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("share_prepare", room.id) },
   ], ...(current ? [[{ label: t("刷新消息"), icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") }]] : []), [
     { label: t("移至文件夹"), icon: "i-lucide-folder-input", disabled: Boolean(pending.value) || (!room.folder_id && !view.value.folders?.length), children: [
       { label: t("移出文件夹"), icon: "i-lucide-folder-minus", disabled: !room.folder_id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: null }) },
@@ -301,6 +325,8 @@ function actions(room, index, folder_id, folder_room_count) {
     </nav>
     <UButton v-show="rooms_open" icon="i-lucide-archive" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="emit('archives')"><span class="channel-archive-label">{{ t("已存档") }}</span><small v-if="archived_count" class="channel-archive-count">{{ archived_count }}</small></UButton>
     <ImportDialog v-model:open="import_open" />
+    <ConfirmDialog :open="Boolean(share_draft)" :title="t('分享「{name}」为网页', { name: share_title })" :description="t('生成一个只读网页，发给没装共议的人也能打开看。')"
+      :items="share_items" :confirm-label="t('生成网页')" @update:open="close_share" @confirm="share_confirming = true; act('share_room')" />
   </div>
 </template>
 

@@ -3,8 +3,19 @@ const t = (source, params) => window.codiscuss_i18n ? window.codiscuss_i18n.t(so
   : source.replace(/\{(\w+)\}/g, (match, name) => params && name in params ? String(params[name]) : match);
 /** Show text the server sent in the page language: `payload` is its `{ template, params }`, `fallback` the Chinese. */
 const server_text = (payload, fallback) => (payload?.template ? t(payload.template, payload.params) : fallback);
+// A shared room page (made by share_room) carries its one room here: every read is answered from it and nothing is written.
+const SHARE = window.CODISCUSS_SHARE || null;
+// While a share page is being assembled, the raw answers of its reads, by route.
+let share_recording = null;
+// Where a reader of a share page learns about the product.
+const SHARE_HOME = "https://github.com/huyan1458/ai_co_discuss";
+// A share page is a record of one moment: every "how long ago" and running clock is read at that moment.
+if (SHARE && Number.isFinite(Date.parse(SHARE.exported_at))) {
+  const exported_at = Date.parse(SHARE.exported_at);
+  Date.now = () => exported_at;
+}
 // index.html carries the Chinese tab title; it follows the page language here.
-document.title = t("共议聊天室 · AI CoDiscuss");
+document.title = SHARE ? t("{title} · AI CoDiscuss", { title: SHARE.title }) : t("共议聊天室 · AI CoDiscuss");
 
 const REFRESH_INTERVAL_MS = 60000;
 const FALLBACK_REFRESH_INTERVAL_MS = 12000;
@@ -288,7 +299,8 @@ function apply_theme(theme) {
   const selected = THEMES.includes(theme) ? theme : "channel";
   document.documentElement.dataset.theme = selected;
   document.documentElement.classList.toggle("dark", selected === "channel");
-  if (!document.getElementById("modern-script")) {
+  // A share page carries the workspace script itself.
+  if (!SHARE && !document.getElementById("modern-script")) {
     const script = document.createElement("script");
     script.id = "modern-script";
     script.type = "module";
@@ -382,9 +394,13 @@ async function request_json(path, payload, access_token) {
     }
     return result;
   }
+  if (SHARE) return share_answer(path, payload, localize);
+  // A share page records what the site answers now, so neither a kept copy nor an early read stands in for it.
+  const recording = payload === undefined && share_recording;
+  const record = (body) => { if (recording) recording.set(path, structuredClone(body)); return body; };
   // The room list and a room are read conditionally: unchanged, the copy already held is reused, the same object.
   const conditional = payload === undefined && ROOM_READ_PATH.test(path);
-  const cached = conditional ? room_reads.get(path) : undefined;
+  const cached = conditional && !recording ? room_reads.get(path) : undefined;
   // The cache keeps the localized copy, so a 304 shows the page language and still reuses the same object.
   const remember = (status, body, etag) => {
     if (status === 304 && cached) return cached.body;
@@ -394,10 +410,11 @@ async function request_json(path, payload, access_token) {
   };
   if (computer_rooms_only() && ROOM_RELAY_PATH.test(path)) {
     if (!state.remote_rooms) throw Object.assign(new Error(COMPUTER_UNREACHABLE), { preflight: true });
-    const answer = await (payload === undefined && take_prefetch(path) || relay_room_request(path, payload, cached?.etag));
+    const answer = await (payload === undefined && !recording && take_prefetch(path) || relay_room_request(path, payload, cached?.etag));
+    if (answer.status >= 200 && answer.status < 300) record(answer.body);
     return remember(answer.status, answer.body, answer.etag);
   }
-  const early = payload === undefined && take_prefetch(path);
+  const early = payload === undefined && !recording && take_prefetch(path);
   // An early read is this function's own answer, already localized.
   if (early) return early;
   const options = { cache: "no-store" };
@@ -422,6 +439,7 @@ async function request_json(path, payload, access_token) {
   // The hosted account's session ended (signed out elsewhere, expired, password reset): back to the sign-in (#5688).
   if (response.status === 401 && result?.code === "entry_login") { keep_draft_for_login(); window.location.assign("/_entry/login"); throw Object.assign(new Error(t('请先登录')), { status: 401 }); }
   if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('请求失败，请重试')), { preflight: response.status >= 400 && response.status < 500, status: response.status });
+  record(result);
   return conditional ? remember(response.status, result, response.headers.get("ETag")) : localize(result);
 }
 
@@ -566,6 +584,7 @@ async function admin_avatar_from_file(file) {
 /** Whether this browser may write as the room owner: its own control credential, a logged-in administrator session, or the
  *  loopback-only local site, whose server writes as the owner for every visitor (`admin_as_owner`). */
 function has_room_control(room_id) {
+  if (SHARE) return false;
   return Boolean(localStorage.getItem(`discuss-access:${room_id}`) || state.admin.local || state.admin.logged_in);
 }
 
@@ -1401,8 +1420,9 @@ async function select_room(room_id) {
   restore_room_composer(state.room?.id);
   if (state.room) take_draft_after_login(state.room.id);
   select_tab("discussion", { refresh: false });
-  history.replaceState(null, "", state.room ? `/?room=${encodeURIComponent(room_id)}` : "/");
-  if (state.room) remember_room(room_id);
+  // A share page is one file or one fixed address: its location and this browser's last room stay as they are.
+  if (!SHARE) history.replaceState(null, "", state.room ? `/?room=${encodeURIComponent(room_id)}` : "/");
+  if (state.room && !SHARE) remember_room(room_id);
   if (state.room) state.archive_view = Boolean(state.room.archived);
   else {
     element("host-brief-panel").hidden = true;
@@ -3201,6 +3221,7 @@ function restore_local_connection() {
 
 /** Use the local bridge directly, or the paired computer when this device has none; plaintext never goes to the public server. */
 async function local_launch_request(action, payload) {
+  if (SHARE) throw Object.assign(new Error(t('分享页面不包含这部分内容')), { preflight: true });
   // A website without rooms of its own reaches the computer only through the relay; pairing itself still needs the local bridge.
   if (relay_machine && (!local_connection || computer_rooms_only() && action !== "machine-link")) return relay_command(action, payload);
   // Only the computer's own page has a local service at this address; elsewhere the computer is reached through the relay alone.
@@ -6134,7 +6155,8 @@ async function refresh_live_progress(room_id, revision) {
 
 /** Subscribe once per visible page; every connection fetches changes missed while disconnected. */
 function start_live_updates({ refresh = true } = {}) {
-  if (document.hidden) return;
+  // A share page has nothing live behind it.
+  if (SHARE || document.hidden) return;
   live_updates.enabled = true;
   if (!live_updates.source && typeof EventSource !== "undefined" && (state.remote_rooms || !computer_rooms_only())) {
     const source = state.remote_rooms ? relay_event_source() : new EventSource("/api/updates");
@@ -6168,7 +6190,8 @@ function start_live_updates({ refresh = true } = {}) {
 
 /** Reopen the update stream and read the site now; used by the footer retry and, quietly, by automatic reconnects. */
 async function reconnect_live_updates({ automatic = false } = {}) {
-  if (document.hidden) return;
+  // A share page has nothing live behind it.
+  if (SHARE || document.hidden) return;
   state.reconnecting = !automatic;
   publish_view();
   live_updates.source?.close();
@@ -6219,6 +6242,7 @@ function end_resuming() {
 
 /** Initialize forms and the shared discussion controller. */
 async function initialize() {
+  if (SHARE) return initialize_share();
   render_identities();
   bind_delegated_actions();
   bind_directory_controls();
@@ -6321,6 +6345,8 @@ function view_snapshot() {
     access: access_snapshot(), admin: admin_snapshot(), entry_account: state.entry_account || "",
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
+    share: SHARE ? { exported_at: SHARE.exported_at, home: SHARE_HOME } : null,
+    share_draft: share_draft ? { room_id: share_draft.room_id, title: share_draft.title, spots: share_draft.spots } : null,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_api_max_requests: state.create_api_max_requests, create_image_generation: state.create_image_generation };
 }
@@ -6411,6 +6437,339 @@ async function filter_view({ query = state.query, mention = state.mention_only, 
       publish_view();
     }
     throw error;
+  }
+}
+
+/** Open the one room a share page carries, with no administrator, launcher, relay or live updates behind it. */
+async function initialize_share() {
+  render_identities();
+  bind_delegated_actions();
+  Object.assign(state.admin, { loaded: true, local: false, devices: false, logged_in: false, registered: true });
+  try {
+    const directory = await request_json("/api/rooms");
+    state.rooms = directory.rooms;
+    set_folder_directory(directory);
+    await select_room(SHARE.room_id);
+  } catch (error) { notify("error", error.message); }
+  set_connection(true);
+  state.rooms_loading = false;
+  publish_view();
+}
+
+/** Every message a share page carries, in order, gathered from its recorded history batches. */
+function share_messages() {
+  if (!share_messages.all) {
+    share_messages.all = Object.entries(SHARE.responses).filter(([path]) => /\/messages\?/.test(path))
+      .flatMap(([, body]) => body.messages || []).sort((a, b) => a.id - b.id);
+  }
+  return share_messages.all;
+}
+
+/** Answer a shared room page's reads from what it carries; it has nothing to write to. */
+function share_answer(path, payload, localize) {
+  if (payload !== undefined) return Promise.reject(Object.assign(new Error(t('这是只读的分享页面，不能修改房间')), { preflight: true, status: 403 }));
+  let body = SHARE.responses[path];
+  const base = `/api/rooms/${SHARE.room_id}`;
+  // The timeline's later reads ask only for what changed since; a share page has the whole timeline as it was.
+  if (body === undefined && path.startsWith(`${base}/timeline?`)) body = SHARE.responses[`${base}/timeline`];
+  // A later history read, or a search, is answered from the messages already carried.
+  if (body === undefined && path.startsWith(`${base}/messages?`)) {
+    const params = new URLSearchParams(path.split("?")[1]);
+    const after = Number(params.get("after") || 0), query = (params.get("q") || "").toLowerCase();
+    const messages = share_messages().filter(message => message.id > after && (!query || `${message.text}\n${message.summary || ""}`.toLowerCase().includes(query)));
+    body = { messages, total: messages.length, page: 1, pages: 1, remaining: 0, has_more: false, next_after: messages.at(-1)?.id || after };
+  }
+  const single = path.match(/\/messages\/(\d+)$/);
+  if (body === undefined && single && path.startsWith(`${base}/`)) body = share_messages().find(message => message.id === Number(single[1]));
+  if (body === undefined) return Promise.reject(Object.assign(new Error(t('分享页面不包含这部分内容')), { preflight: true, status: 404 }));
+  return Promise.resolve(localize(structuredClone(body)));
+}
+
+// Fields a share page never carries: where things ran on this computer, sessions, credentials, the owner's own notes
+// on the room and its members, the decision model's choices, messages still queued, attachments and refused commands.
+const SHARE_DROPPED_FIELDS = new Set(["cwd", "session_id", "reported_session", "reported_client", "client_id", "submission_id",
+  "lease_until", "adopt_error", "token", "access_token", "descriptions", "extra_directories", "project_directory", "resets"]);
+const SHARE_EMPTIED_FIELDS = new Set(["scheduler_decisions", "scheduler_routing", "recommendations", "denials", "queued_messages",
+  "ended_externals", "attachments"]);
+// Template parameters a notice fills with the software's own words, and what a share page says instead.
+const SHARE_TEMPLATE_PARAMS = { reason: () => t('执行失败'), resets: () => t('未公开') };
+// The room's own background and boundaries are text; executions use "background" as a flag, which stays.
+const SHARE_DROPPED_TEXT = new Set(["background", "boundaries"]);
+// Text that looks like a key, a token, a person's folder on a computer or contact details: flagged for the owner, never rewritten.
+const SHARE_SENSITIVE_PATTERNS = [/\bsk[-_](?:live_)?[A-Za-z0-9_-]{20,}/g, /\bgh[pousr]_[A-Za-z0-9]{30,}/g, /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+  /\bglpat-[A-Za-z0-9_-]{20,}/g, /\bAIza[0-9A-Za-z_-]{30,}/g, /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, /\b(?:hf|npm)_[A-Za-z0-9]{30,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g, /-----BEGIN [A-Z ]*PRIVATE KEY-----/g, /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+  /\bBearer\s+[A-Za-z0-9._~+/-]{20,}/g, /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*["']?[^\s"']{8,}/gi,
+  /\bhttps?:\/\/[^\s/:@]+:[^\s/@]+@/g, /\b[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s"]+/g, /\/(?:home|Users)\/[^/\s"]+/g,
+  /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g, /(?<!\d)1[3-9]\d{9}(?!\d)/g, /\bresets?\s+(?:in\s+)?\d[^\n]{0,40}/gi, /\(\s*[A-Z][a-z]+\/[A-Za-z_]+\s*\)/g];
+// "<" and the two line separators JSON allows but a script must not carry raw.
+const SHARE_SCRIPT_UNSAFE = new RegExp(`[<${String.fromCharCode(0x2028, 0x2029)}]`, "g");
+const ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\/)/;
+// A folder named by fewer parts ("C:", "/home") is too broad to rewrite in text.
+const SHARE_FOLDER_MIN_PARTS = 2;
+const SHARE_SNIPPET_CHARS = 20;
+
+/** A changed file's path as a share page shows it: inside the run's own folder, or the last two parts of the path. */
+function share_path(path, folder) {
+  if (typeof path !== "string") return path;
+  const normal = path.replaceAll("\\", "/");
+  if (!ABSOLUTE_PATH.test(normal)) return path;
+  const base = String(folder || "").replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+  if (base && normal.toLowerCase().startsWith(`${base}/`)) return normal.slice(base.length + 1);
+  return `…/${normal.split("/").filter(Boolean).slice(-2).join("/")}`;
+}
+
+/** Copy an answer for a share page, leaving out what only this computer and its owner should see. */
+function share_clean(value) {
+  if (Array.isArray(value)) return value.map(share_clean);
+  if (!value || typeof value !== "object") return value;
+  const result = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (SHARE_DROPPED_FIELDS.has(key) || SHARE_DROPPED_TEXT.has(key) && typeof item === "string") continue;
+    result[key] = SHARE_EMPTIED_FIELDS.has(key) ? (Array.isArray(item) ? [] : null) : share_clean(item);
+  }
+  // Another person's computer: only that the member is external stays.
+  if (value.external && typeof value.external === "object") result.external = true;
+  // A failure's own text comes from the software and can name the account, its plan or its time zone.
+  if (value.status === "failed" || value.failure_class) {
+    if (typeof result.result === "string" && result.result) result.result = t('执行失败');
+    if (typeof result.reason === "string" && result.reason) result.reason = t('执行失败');
+  }
+  if (result.retry?.reason) result.retry = { ...result.retry, reason: "" };
+  // A system notice about a failed run quotes the same text, or its quota's reset time, through its template: the notice
+  // keeps its wording, not the quote. Read from the original, since "resets" itself is a dropped field.
+  for (const [field, metadata] of Object.entries(value.texts || {})) {
+    const params = metadata?.params || {};
+    const replaced = Object.fromEntries(Object.keys(SHARE_TEMPLATE_PARAMS).filter(key => params[key]).map(key => [key, SHARE_TEMPLATE_PARAMS[key]()]));
+    if (!Object.keys(replaced).length) continue;
+    result.texts = { ...result.texts, [field]: { ...metadata, params: { ...result.texts?.[field]?.params, ...replaced } } };
+    if (typeof result[field] === "string") result[field] = server_text(result.texts[field], result[field]);
+  }
+  for (const field of ["changes", "edited"]) if (Array.isArray(result[field])) result[field] = result[field].map(item => share_path(item, value.cwd));
+  if (Array.isArray(result.diff_stats)) result.diff_stats = result.diff_stats.map(item => item?.path ? { ...item, path: share_path(item.path, value.cwd) } : item);
+  return result;
+}
+
+/** A history batch without the messages the owner took back: retracted or rewound. */
+function share_batch(body) {
+  return { ...body, messages: (body.messages || []).filter(message => !message.withdrawn) };
+}
+
+/**
+ * Read everything a share page shows for one room, as the site answers now, keyed by the routes the page will ask for.
+ * Only these reads go into the page: anything else read meanwhile (another room in the background) stays out.
+ */
+async function record_share_reads(room_id) {
+  const base = `/api/rooms/${room_id}`;
+  const kept = new Map();
+  const keep = async (path) => {
+    const recorder = new Map();
+    share_recording = recorder;
+    let answer;
+    try { answer = await request_json(path); }
+    finally { if (share_recording === recorder) share_recording = null; }
+    if (!recorder.has(path)) throw new Error(t('分享页面不包含这部分内容'));
+    kept.set(path, recorder.get(path));
+    return answer;
+  };
+  await keep("/api/rooms");
+  await keep(base);
+  const noted = new Set(), runs = new Set();
+  for (let after = 0, more = true; more;) {
+    const batch = await keep(history_batch_path(room_id, "", after));
+    for (const execution of batch.cards?.executions || []) {
+      runs.add(execution.id);
+      if (execution.notes > 0) noted.add(execution.id);
+    }
+    more = Boolean(batch.has_more) && batch.messages.length > 0;
+    after = batch.messages.at(-1)?.id || after;
+  }
+  const timeline = await keep(`${base}/timeline`);
+  for (const execution of timeline.executions || []) {
+    if (execution.source === "external") continue;
+    runs.add(execution.id);
+    if (execution.notes?.length || execution.last_note) noted.add(execution.id);
+  }
+  // Notes are read only for runs that have some; one that cannot be read stops the page rather than leaving it short.
+  for (const id of noted) await keep(`${base}/executions/${id}/notes`);
+  return { responses: Object.fromEntries(kept), runs: runs.size };
+}
+
+/** A file's bytes as a data URL, so the share page needs nothing but itself. */
+function data_url(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** This page's own HTML with its scripts, styles and member icons carried inside, and the room set before the scripts. */
+async function share_page_html(share) {
+  const read = async (path) => {
+    const response = await fetch(path, { cache: "no-store" });
+    if (!response.ok) throw new Error(t('读取网页文件 {path} 失败', { path }));
+    return response.text();
+  };
+  const page = await read("/");
+  const icon_paths = new Set();
+  const sources = {};
+  for (const name of ["i18n.js", "markdown.js", "backup.js", "app.js", "modern.js", "modern.css", "markdown.css", "katex/katex.min.css"]) {
+    sources[name] = await read(`/${name}`);
+    for (const match of sources[name].matchAll(/\/icons\/[\w.-]+\.svg/g)) icon_paths.add(match[0]);
+  }
+  for (const path of icon_paths) {
+    const response = await fetch(path).catch(() => null);
+    if (!response?.ok) continue;
+    const icon = await data_url(new Blob([await response.arrayBuffer()], { type: "image/svg+xml" }));
+    for (const name of Object.keys(sources)) sources[name] = sources[name].replaceAll(path, icon);
+  }
+  // Scripts and styles go in as data URLs, so nothing in them can end the tag that carries them.
+  const script = async (name, module = false) => `<script${module ? ' type="module" id="modern-script"' : ""} src="${await data_url(new Blob([sources[name]], { type: "text/javascript" }))}"></script>`;
+  const style = async (name) => `<link rel="stylesheet" href="${await data_url(new Blob([sources[name]], { type: "text/css" }))}">`;
+  // JSON as script text: "<" cannot close the tag, and the two line separators JSON allows are escaped too.
+  const room_json = JSON.stringify(share).replace(SHARE_SCRIPT_UNSAFE, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  const head = [
+    `<meta name="robots" content="noindex, noarchive">`, `<meta name="referrer" content="no-referrer">`,
+    // Pictures from other sites stay links: loading them would tell those sites who reads the page and when.
+    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' data: blob:; style-src 'unsafe-inline' data:; img-src data: blob:; media-src data: blob:; font-src data:; connect-src data: blob:; base-uri 'none'; form-action 'none'">`,
+    `<meta property="og:title" content="${escape_html(share.title)} · AI CoDiscuss">`,
+    `<meta property="og:description" content="${escape_html(share.description)}">`,
+    await style("modern.css"), await style("markdown.css"), await style("katex/katex.min.css"),
+    `<script>window.CODISCUSS_SHARE = ${room_json};</script>`,
+    await script("i18n.js"), await script("markdown.js"), await script("backup.js"), await script("app.js"), await script("modern.js", true),
+  ].join("\n  ");
+  // Replacements are functions: as plain strings, "$&", "$`" and "$'" in the room's own text would be read as patterns.
+  return page.replace(/<link[^>]*href="\/(?:modern\.css|modern\.js|markdown\.css|katex\/katex\.min\.css)[^"]*"[^>]*>\s*/g, () => "")
+    .replace(/<script src="\/(?:i18n|markdown|backup|app)\.js[^"]*"><\/script>\s*/g, () => "")
+    .replace(/<title>[^<]*<\/title>/, () => `<title>${escape_html(share.title)} · AI CoDiscuss</title>`)
+    .replace(/<meta name="description" content="[^"]*">/, () => `<meta name="description" content="${escape_html(share.description)}">`)
+    .replace("</head>", () => `  ${head}\n</head>`);
+}
+
+/** Where the share page has text that looks like a key, a token, a personal folder or contact details: message number and nearby text. */
+function share_sensitive_spots(responses) {
+  const spots = new Set();
+  const scan = (text, where) => {
+    for (const pattern of SHARE_SENSITIVE_PATTERNS) {
+      for (const match of String(text || "").matchAll(pattern)) {
+        const from = Math.max(0, match.index - SHARE_SNIPPET_CHARS);
+        spots.add(t('{where}：…{text}…', { where, text: String(text).slice(from, match.index + match[0].length + SHARE_SNIPPET_CHARS).replace(/\s+/g, " ") }));
+      }
+    }
+  };
+  for (const [path, body] of Object.entries(responses)) {
+    if (/\/messages\?/.test(path)) for (const message of body.messages || []) scan(`${message.text}\n${message.summary || ""}`, `#${message.id}`);
+    else if (/\/notes$/.test(path)) scan(JSON.stringify(body), t('执行 #{id} 的过程说明', { id: path.match(/executions\/(\d+)/)[1] }));
+    else scan(JSON.stringify(body), t('房间与执行信息'));
+  }
+  return [...spots];
+}
+
+/** A folder of this computer as a pattern for any spelling of it in text: either slash, any letter case, with the separator after it. */
+function share_folder_pattern(folder) {
+  const parts = String(folder).split(/[\\/]+/).filter(Boolean).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (parts.length < SHARE_FOLDER_MIN_PARTS) return null;
+  // A drive is also written /d or /mnt/d (Git Bash, WSL).
+  const drive = parts[0].match(/^([A-Za-z]):$/);
+  const first = drive ? `(?:${drive[1]}:|/${drive[1]}|/mnt/${drive[1]})` : `${String(folder).startsWith("/") ? "/" : ""}${parts[0]}`;
+  // Whole path parts only: D:\Work\X is not the start of D:\Work\X-wt, nor of a path inside an address.
+  return new RegExp(`(?<![\\w./-])${[first, ...parts.slice(1)].join("[\\\\/]+")}(?![\\w-])([\\\\/]+)?`, "gi");
+}
+
+/**
+ * What a share page carries, from the answers its reads got: only this room in the directory, no messages the owner took
+ * back, none of the fields only this computer and its owner should see, and the room's project folders written as paths
+ * inside the project. `folders` adds folders the page knows beyond those its runs worked in.
+ */
+function share_payload(raw, room_id, folders = []) {
+  const known = new Set(folders.filter(Boolean));
+  JSON.stringify(raw, (key, item) => { if (key === "cwd" && typeof item === "string" && item) known.add(item); return item; });
+  // Longer folders first, so a project inside another one keeps its own relative paths.
+  const patterns = [...known].sort((a, b) => b.length - a.length).map(share_folder_pattern).filter(Boolean);
+  const strip = (value) => {
+    if (typeof value === "string") return patterns.reduce((text, pattern) => text.replace(pattern, (match, separator) => separator ? "" : t('项目目录')), value);
+    if (Array.isArray(value)) return value.map(strip);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, strip(item)]));
+  };
+  // Messages the owner took back, and the runs that asked or answered them: their text also sits in the timeline and notes.
+  const withdrawn = new Set(Object.entries(raw).filter(([path]) => /\/messages\?/.test(path))
+    .flatMap(([, body]) => (body.messages || []).filter(message => message.withdrawn).map(message => message.id)));
+  const on_withdrawn = (run) => [run.task_id, run.request_message_id, run.answer_id].some(id => withdrawn.has(id));
+  const dropped_runs = new Set();
+  JSON.stringify(raw, (key, item) => { if (key === "executions" && Array.isArray(item)) for (const run of item) if (run && on_withdrawn(run)) dropped_runs.add(run.id); return item; });
+  const without_runs = (value) => {
+    if (Array.isArray(value)) return value.map(without_runs);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === "executions" && Array.isArray(item) ? item.filter(run => !dropped_runs.has(run?.id)).map(without_runs) : without_runs(item)]));
+  };
+  const responses = {};
+  for (const [path, body] of Object.entries(raw)) {
+    const run = path.match(/\/executions\/(\d+)\/notes$/);
+    if (run && dropped_runs.has(Number(run[1]))) continue;
+    let kept = body;
+    if (path === "/api/rooms") kept = { rooms: (body.rooms || []).filter(room => room.id === room_id).map(room => ({ ...room, folder_id: "", archived: false })),
+      folders: [], uncategorized_position: 0, participants: [], last_room: room_id };
+    else if (/\/messages\?/.test(path)) kept = share_batch(body);
+    responses[path] = strip(share_clean(without_runs(kept)));
+  }
+  return responses;
+}
+
+// The share page waiting for its owner to confirm, with what was found in it.
+let share_draft = null;
+
+/** Read and clean one room for a share page, then let the owner see what looks sensitive before the file is made. */
+async function share_prepare(room_id = state.room?.id) {
+  if (!room_id || state.backup_pending) return;
+  share_draft = null;
+  state.backup_pending = true;
+  publish_view();
+  try {
+    const exported_at = new Date().toISOString();
+    const recorded = await record_share_reads(room_id);
+    const models = state.launch.room_models?.room_id === room_id ? state.launch.room_models : null;
+    const responses = share_payload(recorded.responses, room_id, [models?.project_directory, ...(models?.extra_directories || [])]);
+    const room = responses[`/api/rooms/${room_id}`];
+    const members = (room.members || []).filter(member => member.status !== "removed").map(member => member.label || display_name(member.name));
+    const description = t('{members} 在同一个房间协作 · {messages} 条消息 · {runs} 次执行', { members: members.join("、"), messages: room.message_count, runs: recorded.runs });
+    share_draft = { room_id, title: room.title, description, responses, exported_at, spots: share_sensitive_spots(responses) };
+  } catch (error) {
+    notify("error", t('生成分享网页失败：{value1}', { value1: error.message }));
+  } finally {
+    state.backup_pending = false;
+    publish_view();
+  }
+}
+
+/** Drop the share page the owner decided not to make. */
+function share_cancel() {
+  share_draft = null;
+  publish_view();
+}
+
+/** Make the confirmed share page: one read-only file anyone can open, without this computer's details. */
+async function share_room() {
+  const draft = share_draft;
+  if (!draft || state.backup_pending) return;
+  share_draft = null;
+  state.backup_pending = true;
+  publish_view();
+  try {
+    const page = await share_page_html({ room_id: draft.room_id, title: draft.title, description: draft.description, exported_at: draft.exported_at, responses: draft.responses });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([page], { type: "text/html" }));
+    link.download = `${draft.title.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 60) || draft.room_id}.html`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    notify("info", t('已生成分享网页，请查看浏览器下载；发出前请打开核对一遍内容。'));
+  } catch (error) {
+    notify("error", t('生成分享网页失败：{value1}', { value1: error.message }));
+  } finally {
+    state.backup_pending = false;
+    publish_view();
   }
 }
 
@@ -6551,7 +6910,7 @@ async function execute_view_action(name, value) {
   if (!["refresh", "create"].includes(name)) state.navigation_version++;
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
-    archives: toggle_archives, backup: backup_room, backup_rooms, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
+    archives: toggle_archives, backup: backup_room, backup_rooms, share_prepare, share_room, share_cancel, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_from_composer(event), discard_sending, retry_sending, choose_attachments, remove_attachment, preview_attachment,
     create: ({ folder_id, accepted, rejected }) => submit_room(event, folder_id, { accepted, rejected }), quick_create: quick_create_room, welcome: open_welcome,
     save_context: () => save_context(event), save_topic: () => save_topic(event),

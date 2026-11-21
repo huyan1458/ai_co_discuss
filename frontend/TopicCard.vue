@@ -60,7 +60,7 @@ defineExpose({ measure });
 
 <template>
   <section v-if="ready" class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" :aria-label="t('议题')">
-    <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />{{ t('议题') }}</span><h2>{{ room.title }}</h2><UButton v-if="!preview" icon="i-lucide-pencil" :label="t('编辑')" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
+    <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />{{ t('议题') }}</span><h2>{{ room.title }}</h2><UButton v-if="!preview && !view.share" icon="i-lucide-pencil" :label="t('编辑')" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
     <div ref="topic_body" class="channel-topic-body" :class="{ 'is-clamped': topic_overflows && !topic_expanded }">
     <div v-if="topic.request" class="channel-topic-section channel-topic-request"><h3>{{ topic.request.label }}</h3><p class="channel-topic-text">{{ topic.request.text }}</p></div>
     <div v-if="topic.goal" class="channel-topic-section"><h3>{{ t('目标') }}</h3><p class="channel-topic-text">{{ topic.goal }}</p></div>
@@ -69,6 +69,6 @@ defineExpose({ measure });
     <UButton v-if="topic_overflows || topic_expanded" :label="topic_expanded ? t('收起') : t('展开全文')" :trailing-icon="topic_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" @click="topic_expanded = !topic_expanded" />
     <div class="channel-topic-section channel-topic-config"><h3>{{ t('参与配置') }}</h3><div class="channel-topic-people">
       <span v-for="person in topic.experts" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small>{{ person.name === topic.host ? t('主持 · {value1}', { value1: person.mode }) : person.mode }}</small></span>    </div><small v-if="topic.bounds && (topic.discussing || preview)" class="channel-topic-bounds">{{ topic.bounds }}</small>
-      <button v-else-if="topic.bounds" type="button" class="channel-topic-bounds" :title="t('查看协作设置')" @click="act('tab', 'overview')">{{ topic.bounds }}</button></div>
+      <small v-else-if="topic.bounds && view.share" class="channel-topic-bounds">{{ topic.bounds }}</small><button v-else-if="topic.bounds" type="button" class="channel-topic-bounds" :title="t('查看协作设置')" @click="act('tab', 'overview')">{{ topic.bounds }}</button></div>
   </section>
 </template>
