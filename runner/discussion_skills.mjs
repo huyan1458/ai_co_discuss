@@ -103,6 +103,14 @@ export function shipped_workflows() {
   });
 }
 
+/** The shipped workflows a service home has whose copy differs from the shipped version (edited or older). */
+export function outdated_workflows(home) {
+  return shipped_workflows().map(item => item.name).filter(name => {
+    const destination = workflow_directory(home, name);
+    return existsSync(destination) && tree_hash(destination) !== tree_hash(join(WORKFLOW_SOURCE, name));
+  });
+}
+
 /**
  * Install shipped workflows into the service home's library, replacing any of the same ID with the shipped version.
  * Setup calls this only for the ones the user picks on that run; a copy that differs is backed up first.

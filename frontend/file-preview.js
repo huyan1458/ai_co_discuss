@@ -26,7 +26,7 @@ export async function read_attachment(attachment) {
 }
 
 /** Hold at most one in-message preview and ignore reads belonging to a closed or replaced preview. */
-export function create_inline_html_preview(attachment_url) {
+export function create_inline_html_preview(attachment_url, wrap = html_document) {
   const preview = shallowRef(null);
   const close = () => { preview.value = null; };
 
@@ -44,7 +44,7 @@ export function create_inline_html_preview(attachment_url) {
       if (preview.value !== request) return;
       preview.value = result.truncated
         ? { id: file.id, status: "truncated" }
-        : { id: file.id, status: "ready", srcdoc: html_document(result.text) };
+        : { id: file.id, status: "ready", srcdoc: wrap(result.text) };
     } catch (error) {
       if (preview.value === request) preview.value = { id: file.id, status: "error", error: error.message };
     }

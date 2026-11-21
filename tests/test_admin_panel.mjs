@@ -6,12 +6,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { add_account, instance_home, read_accounts, save_entry_settings, stop_entry } from '../gateway/gateway.mjs';
+import { add_account, instance_home, read_accounts, save_entry_settings, set_account_disabled, set_instance_wanted, stop_entry } from '../gateway/gateway.mjs';
 import { managed_api_keys, save_api_key } from '../runner/discussion_api.mjs';
 import { create_panel, instance_conforms, instance_state, list_keys, protect_account, relay_operator_events, update_step } from '../runner/admin_panel.mjs';
 import { blocking_paths, instance_key_file, os_user_name, place_instance_key, secure_folder, secure_shared_root } from '../runner/os_users.mjs';
 import { tray_script } from '../runner/tray.mjs';
 import { admin_cli } from '../runner/admin_cli.mjs';
+import { read_relay_health, relay_health_writer, request_relay_reconnect } from '../runner/relay_health.mjs';
+import { start_relay_channels } from '../runner/relay_channel.mjs';
+import { relay_commands } from '../runner/remote_launch.mjs';
 
 process.env.CODISCUSS_LANG = 'zh-CN';
 
@@ -41,6 +44,205 @@ function fixture() {
   const ops = { list_accounts: async () => [{ name: 'demo' }], shared_cli_state: () => ({}), service_overview: () => ({ running: true }), autostart_enabled: () => false };
   return { data, ops };
 }
+
+test('only a pong on the current socket confirms the relay; HTTP successes cannot refresh it', { timeout: 15_000 }, async context => {
+  const { data } = fixture(), bound = { site: 'https://health.example', machine: 'test-machine' };
+  writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: { [bound.site]: { id: bound.machine, private_key: {}, token: 'test' } } }));
+  const health = relay_health_writer(data), stop = new AbortController(), sockets = [];
+  const original = globalThis.WebSocket, replacement = Promise.withResolvers();
+  globalThis.WebSocket = class extends EventTarget {
+    static OPEN = 1;
+    constructor() { super(); sockets.push(this); if (sockets.length === 2) replacement.resolve(this); }
+    readyState = 1;
+    send() {}
+    close() { this.readyState = 3; queueMicrotask(() => this.dispatchEvent(new Event('close'))); }
+  };
+  context.mock.method(globalThis, 'fetch', async () => Response.json({ commands: [] }));
+  context.mock.timers.enable({ apis: ['setInterval'] });
+  const channels = start_relay_channels(data, { signal: stop.signal, health });
+  context.after(async () => { stop.abort(); await channels.done(); globalThis.WebSocket = original; });
+  const status = () => { health.flush(); return read_relay_health(data, bound, process.pid); };
+  sockets[0].dispatchEvent(new Event('open'));
+  assert.equal(status().state, 'confirming');
+  context.mock.timers.tick(15_000);
+  sockets[0].dispatchEvent(new MessageEvent('message', { data: 'pong' }));
+  assert.equal(status().state, 'connected');
+  context.mock.timers.tick(15_000);
+  context.mock.timers.tick(15_000);
+  assert.equal(status().last_failure.kind, 'heartbeat');
+  assert.equal(status().state, 'reconnecting');
+  sockets[0].dispatchEvent(new MessageEvent('message', { data: 'pong' }));
+  assert.equal(status().state, 'reconnecting', 'a pong from a retired connection is ignored');
+  const failure = new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } });
+  globalThis.fetch.mock.mockImplementation(async () => { throw failure; });
+  await relay_commands(data, { wait: 0, health });
+  await relay_commands(data, { wait: 0, health });
+  assert.equal(status().http_failures, 2);
+  assert.equal(status().http_reason, 'reset');
+  globalThis.fetch.mock.mockImplementation(async () => Response.json({ commands: [] }));
+  await relay_commands(data, { wait: 0, health });
+  assert.equal(status().http_failures, 0);
+  assert.equal(read_relay_health(data, bound, process.pid, status().updated_at + 120_000).state, 'unknown');
+  assert.equal(read_relay_health(data, bound, 0).reason, 'stopped');
+  assert.equal(read_relay_health(data, bound, process.pid + 1).state, 'unknown');
+  const next = await replacement.promise;
+  next.dispatchEvent(new Event('open'));
+  assert.equal(status().state, 'confirming');
+  assert.equal(status().retries, 1);
+  sockets[0].dispatchEvent(new MessageEvent('message', { data: 'pong' }));
+  assert.equal(status().state, 'confirming');
+  next.dispatchEvent(new MessageEvent('message', { data: 'pong' }));
+  assert.equal(status().state, 'connected');
+  assert.equal(status().retries, 0);
+  assert.equal(status().last_failure.kind, 'heartbeat');
+});
+
+test('relay retry caps the wait at 30 seconds and sends a heartbeat when the recovered socket opens', async context => {
+  const { data } = fixture(), bound = { site: 'https://retry.example', machine: 'retry' };
+  writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: { [bound.site]: { id: bound.machine, private_key: {}, token: 'test' } } }));
+  const sockets = [], stop = new AbortController(), health = relay_health_writer(data), original = globalThis.WebSocket;
+  globalThis.WebSocket = class extends EventTarget {
+    static OPEN = 1;
+    readyState = 1;
+    frames = [];
+    constructor() { super(); sockets.push(this); }
+    send(frame) { this.frames.push(frame); }
+    close() { this.readyState = 3; }
+  };
+  context.mock.method(globalThis, 'fetch', async () => Response.json({}));
+  context.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const channels = start_relay_channels(data, { signal: stop.signal, health });
+  context.after(async () => { stop.abort(); await channels.done(); globalThis.WebSocket = original; });
+  const settled = () => new Promise(done => setImmediate(done));
+  // The first connection hangs during the handshake. Subsequent upgrades fail promptly.
+  context.mock.timers.tick(10_000); await settled();
+  health.flush();
+  assert.equal(read_relay_health(data, bound, process.pid).last_failure.kind, 'timeout');
+  for (const interval of [4_000, 8_000, 16_000, 30_000, 30_000]) {
+    const before = sockets.length;
+    context.mock.timers.tick(interval - 1); await settled();
+    assert.equal(sockets.length, before);
+    context.mock.timers.tick(1); await settled();
+    assert.equal(sockets.length, before + 1);
+    if (sockets.length < 6) { sockets.at(-1).dispatchEvent(new Event('error')); await settled(); }
+  }
+  const restored = sockets.at(-1);
+  restored.dispatchEvent(new Event('open'));
+  assert.deepEqual(restored.frames, ['ping']);
+  restored.dispatchEvent(new MessageEvent('message', { data: 'pong' }));
+  health.flush();
+  assert.equal(read_relay_health(data, bound, process.pid).state, 'connected');
+});
+
+test('relay watchdog and manual reconnect rebuild only the addressed binding', async context => {
+  const { data } = fixture(), healthy = 'https://a.example', stalled = 'https://b.example';
+  const sites = Object.fromEntries([healthy, stalled].map((site, i) => [site, { id: String(i), private_key: {}, token: 'test' }]));
+  writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites }));
+  const sockets = [], logs = [], health = relay_health_writer(data), stop = new AbortController();
+  const original = globalThis.WebSocket;
+  globalThis.WebSocket = class extends EventTarget {
+    static OPEN = 1;
+    readyState = 1;
+    constructor(url) { super(); this.url = url; sockets.push(this); }
+    send() {}
+    close() { this.readyState = 3; }
+  };
+  context.mock.method(globalThis, 'fetch', async () => Response.json({}));
+  context.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const channels = start_relay_channels(data, { signal: stop.signal, health, log: message => logs.push(message) });
+  context.after(async () => { stop.abort(); await channels.done(); globalThis.WebSocket = original; });
+  for (const socket of sockets) socket.dispatchEvent(new Event('open'));
+  sockets[0].dispatchEvent(new MessageEvent('message', { data: 'pong' }));
+  for (let elapsed = 15_000; elapsed < 180_000; elapsed += 15_000) {
+    context.mock.timers.tick(15_000);
+    sockets[0].dispatchEvent(new MessageEvent('message', { data: 'pong' }));
+  }
+  assert.equal(sockets.length, 2);
+  context.mock.timers.tick(15_000);
+  assert.equal(sockets.length, 3);
+  assert.match(sockets[2].url, /b\.example/);
+  assert.equal(sockets[0].readyState, 1);
+  health.flush();
+  const bound = { site: stalled, machine: sites[stalled].id };
+  assert.equal(read_relay_health(data, bound, process.pid).last_rebuild.reason, 'watchdog');
+  request_relay_reconnect(data, { ...bound, machine: 'old' }, process.pid);
+  channels.refresh();
+  request_relay_reconnect(data, bound, process.pid + 1);
+  channels.refresh();
+  assert.equal(sockets.length, 3);
+  request_relay_reconnect(data, bound, process.pid);
+  channels.refresh(); channels.refresh();
+  assert.equal(sockets.length, 4);
+  health.flush();
+  assert.equal(read_relay_health(data, bound, process.pid).last_rebuild.reason, 'manual');
+  assert.match(logs.join('\n'), /3 分钟.*\n.*管理员/);
+});
+
+test('instance recovery honors owner intent, backoff and a persistent cap; manual start restores the budget', async () => {
+  const { data, ops } = fixture();
+  let at = Date.now(), starts = 0, state = 'down', fails = true;
+  Object.assign(ops, { now: () => at, instance_state: async () => state, start_verified: async () => {
+    starts++;
+    if (fails) throw new Error('state file locked');
+  }, entry_overview: async () => ({}) });
+  const panel = () => create_panel({ data, key: KEY, port: 0, ops });
+  let server = panel();
+  const check = () => server.recover_instances();
+  const last = async () => (await server.api('GET', '/api/state', {})).accounts[0].last_restart;
+  await check();
+  set_instance_wanted(data, 'demo', true);
+  set_account_disabled(data, 'demo', true);
+  await check();
+  set_account_disabled(data, 'demo', false);
+  state = 'unknown'; await check();
+  state = 'up'; await check();
+  assert.equal(starts, 0);
+  state = 'down';
+  await Promise.all([check(), check()]);
+  assert.equal(starts, 1);
+  at += 59_999; await check(); assert.equal(starts, 1);
+  at++; await check(); assert.equal(starts, 2);
+  at += 60_000; await check(); assert.equal(starts, 2);
+  at += 60_000; await check(); assert.equal(starts, 3);
+  assert.equal((await last()).blocked, true);
+  assert.equal((await last()).error.template, 'state file locked');
+  assert.equal((await last()).at, at);
+  const log = readFileSync(join(data, 'admin-panel.log'), 'utf8');
+  assert.equal(log.match(/正在自动重启/g).length, 3);
+  assert.equal(log.match(/state file locked/g).length, 3);
+  server = panel(); at += 660_000; await check(); assert.equal(starts, 3);
+  fails = false;
+  await server.api('POST', '/api/accounts/demo/start', {});
+  await check();
+  assert.equal(starts, 5);
+  assert.equal((await last()).result, 'started');
+  set_instance_wanted(data, 'demo', false);
+  at += 120_000; await check(); assert.equal(starts, 5);
+});
+
+test('isolated instance recovery uses the scheduler run flag and disarms it after repeated crashes', async () => {
+  const { data, ops } = fixture();
+  writeFileSync(join(data, 'os-users.json'), JSON.stringify({ demo: { user: 'isolated-demo' } }));
+  let at = Date.now(), flag = false, starts = 0;
+  set_instance_wanted(data, 'demo', true);
+  Object.assign(ops, { now: () => at, instance_flag_set: () => flag, clear_instance_flag: () => { flag = false; },
+    instance_state: async () => 'down', start_verified: async () => { starts++; }, entry_overview: async () => ({}) });
+  const server = create_panel({ data, key: KEY, port: 0, ops });
+  await server.recover_instances();
+  assert.equal(starts, 0);
+  flag = true;
+  for (const advance of [0, 60_000, 120_000, 60_000]) {
+    at += advance;
+    await server.recover_instances();
+  }
+  assert.equal(starts, 3);
+  assert.equal(flag, false);
+  const { port } = await serve(data, ops);
+  writeFileSync(join(data, 'admin-panel.json'), JSON.stringify({ port, key: KEY, pid: process.pid }));
+  const status = await admin_cli(['status', '--data', data], { print: () => {} });
+  assert.deepEqual(status.accounts[0].last_restart, { reason: '实例端口拒绝连接', result: 'started', blocked: true,
+    at: new Date(at - 60_000).toISOString(), error: '实例端口拒绝连接' });
+});
 
 test('update progress normalizes old updater records and preserves structured failure flags', async () => {
   const { data, ops } = fixture();
@@ -511,6 +713,32 @@ test('the admin command line works the panel with the owner key only, and does w
   assert.ok(created);
   const keys = await run(['key', 'list', 'demo']);
   assert.ok(keys.some(item => item.managed) && !JSON.stringify(keys).includes('sk-secret-5678'), 'added as the owner gives it, never shown in full');
+});
+
+test('admin status and the panel use the same fresh relay snapshot', async () => {
+  const { data, ops } = fixture(), site = 'https://panel-health.example', machine = 'panel-machine';
+  writeFileSync(join(data, 'local-settings.json'), JSON.stringify({ hosting: false }));
+  writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: { [site]: { id: machine, private_key: {} } } }));
+  ops.service_overview = () => ({ running: true, pid: process.pid });
+  const { request, port } = await serve(data, ops);
+  writeFileSync(join(data, 'admin-panel.json'), JSON.stringify({ port, key: KEY, pid: process.pid }));
+  const run = () => admin_cli(['status', '--data', data], { print: () => {} });
+  assert.equal((await run()).relay_health.label, '状态未知');
+  const health = relay_health_writer(data);
+  health.channel(site, machine, 'connected');
+  health.request(site, machine);
+  health.http(site, machine, { cause: { code: 'ECONNRESET' } });
+  health.flush();
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  const panel = await (await request('/api/state', { cookie })).json();
+  const { label, detail, ...fields } = (await run()).relay_health;
+  assert.deepEqual(fields, panel.relay_health);
+  assert.ok(fields.last_request_at);
+  assert.equal(label, '网站请求异常');
+  assert.match(detail, /panel-health\.example.*1 次.*连接被重置/);
+  const result = await admin_cli(['site', 'reconnect', '--data', data], { print: () => {} });
+  assert.deepEqual(result, { requested: true, site });
+  assert.equal(JSON.parse(readFileSync(join(data, 'relay-reconnect.json'), 'utf8')).machine, machine);
 });
 
 

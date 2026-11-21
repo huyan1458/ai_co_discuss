@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SOURCE_DIRS = ["frontend"];
-const SOURCE_FILES = ["web/app.js"];
+const SOURCE_FILES = ["web/app.js", "runner/relay_health_text.mjs"];
 const SOURCE_PATTERN = /\.(vue|js|mjs)$/;
 const SKIP_DIRS = new Set(["locales", "node_modules"]);
 const SKIP_FILES = new Set(["i18n-runtime.js", "i18n.js"]);

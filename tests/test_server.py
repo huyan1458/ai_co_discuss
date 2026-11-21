@@ -797,6 +797,23 @@ class DiscussionTests(unittest.TestCase):
         before["limits"]["elapsed_seconds"] = after["limits"]["elapsed_seconds"]
         self.assertEqual(after, before)
 
+    def test_room_share_link_keeps_its_token_out_of_the_directory_and_the_backup(self):
+        """The manage token of a published link is for the owner's own reads only; the directory shows just the link."""
+        base = f"/api/rooms/{self.room['id']}"
+        link = {"share_id": "A" * 22, "url": "https://share.codiscuss.com/s/" + "A" * 22, "manage_token": "T" * 43, "expires_at": "2999-01-01T00:00:00.000Z"}
+        self.assertEqual(self.request(base + "/share-link", {"link": {**link, "url": "http://share.example/s/x"}})[0], 400)
+        self.assertEqual(self.request(base + "/share-link", {"link": {**link, "url": "https://evil.example/s/" + "A" * 22}})[0], 400, "only the official share site")
+        member = next(iter(self.member_tokens.values()))
+        self.assertEqual(self.request(base + "/share-link", token=member)[0], 403, "a member's own credential cannot read the manage token")
+        self.assertEqual(self.request(base + "/share-link", {"link": link})[1]["link"]["manage_token"], link["manage_token"])
+        listed = next(room for room in self.request("/api/rooms")[1]["rooms"] if room["id"] == self.room["id"])
+        self.assertEqual(listed["share_link"], {"url": link["url"], "expires_at": link["expires_at"]})
+        self.assertNotIn(link["manage_token"], json.dumps(self.request("/api/rooms")[1]))
+        self.assertNotIn(link["manage_token"], json.dumps(self.request(base + "/backup")[1]))
+        self.request(base + "/share-link", {"link": {**link, "expires_at": "2000-01-01T00:00:00.000Z"}})
+        self.assertIsNone(self.request(base + "/share-link")[1]["link"], "an expired link is not offered")
+        self.assertEqual(self.request(base + "/share-link", {"link": None})[1], {"link": None})
+
     def test_room_backup_excludes_other_rooms_and_retains_archived_data(self):
         """Folder membership must not pull another room's messages or configuration."""
         base = f"/api/rooms/{self.room['id']}"

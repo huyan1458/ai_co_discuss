@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { data_home, entry_settings, entry_status, stop_entry } from '../gateway/gateway.mjs';
 import { local_status } from './discussion_local.mjs';
+import { relay_health_text } from './relay_health_text.mjs';
 import { stop_tunnel } from './hosting_tunnel.mjs';
 import { launcher_path } from './launcher.mjs';
 import { running_elevated } from './os_users.mjs';
@@ -43,7 +44,7 @@ export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面
   update [check]                           检查更新；不带 check 时安装最新版（面板未运行时先启动）并等待每一步结果
 
 本机
-  status [--full]                          概览：服务、版本、开机自启、登录入口、托管账号；--full 输出面板的完整状态
+  status [--full]                          概览：服务、中转状态、版本、开机自启、登录入口、托管账号；--full 输出面板的完整状态
   service start|stop|restart               只启停共议服务（网站与讨论服务）
   autostart on|off                         登录 Windows 时自动启动
 
@@ -51,6 +52,7 @@ export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面
   site status                              本地网页与线上网站的地址
   site connect <接入码|站点> [绑定令牌]     绑定线上网站（管理员外出、邀请外部专家用）；在部署该网站的电脑上只填站点即可
   site disconnect                          解绑线上网站，已配对的设备不能再连到这台电脑
+  site reconnect                           立即重连已绑定网站的中转
 
 登录入口与访问方式（需打开托管管理）
   entry start|stop                         启动或停止登录入口
@@ -80,7 +82,7 @@ API 密钥、技能、工作流、系统提示词（目标同上）
   key list <目标>  /  key add <目标> --base-url <地址> --key <密钥>  /  key remove <目标> <编号>
   skill library  /  skill import <文件夹或.zip>  /  skill delete <名>
   skill list <目标>  /  skill install <目标> <名>...  /  skill remove <目标> <名>...
-  workflow list <目标>  /  workflow install <目标>
+  workflow list <目标>  /  workflow install <目标>  /  workflow update <目标>
   prompt get <目标>  /  prompt set <目标> --file <文件> [--group <键>]   管理员的提示词按组保存（见 prompt get）
   prompt default get  /  prompt default set --file <文件>             新托管账号的默认系统提示词
 
@@ -232,6 +234,7 @@ async function workflow_command(call, [action, who]) {
   const base = is_owner(need(who, t('目标'))) ? 'owner/workflows' : `accounts/${who}/workflows`;
   if (action === 'list') return call(base);
   if (action === 'install') return call(`${base}/install`, {});
+  if (action === 'update') return call(`${base}/update`, {});
   throw new Error(HELP);
 }
 
@@ -349,6 +352,7 @@ async function site_command(call, [action, first, second]) {
   }
   if (action === 'connect') return call('site/connect', { site: need(first, t('站点')), setup_key: second || '' });
   if (action === 'disconnect') return call('site/disconnect', {});
+  if (action === 'reconnect') return call('site/reconnect', {});
   throw new Error(HELP);
 }
 
@@ -370,11 +374,11 @@ function summary(state) {
   const tunnel = entry?.tunnel ? (entry.tunnel.connected ? t('已连接') : entry.tunnel.running ? t('连接中') : t('未运行')) : undefined;
   return { hosting: state.hosting, version: state.version, autostart: state.autostart,
     service: { running: service.running, url: service.url, version: service.version, error: service.error || undefined },
-    online_site: state.online_site || undefined,
+    online_site: state.online_site || undefined, relay_health: state.relay_health || undefined,
     ...(state.hosting ? {
       entry: entry && { running: entry.running, relay_enabled: entry.relay_enabled, tunnel_enabled: entry.tunnel_enabled, address: entry.address || undefined, tunnel, problem: entry.relay?.problem || undefined },
       runtime: state.clis,
-      accounts: state.accounts.map(item => ({ name: item.name, isolated: Boolean(item.os_user), protected: item.protected, running: item.running, disabled: item.disabled })),
+      accounts: state.accounts.map(item => ({ name: item.name, isolated: Boolean(item.os_user), protected: item.protected, running: item.running, disabled: item.disabled, last_restart: item.last_restart })),
     } : {}) };
 }
 
@@ -415,8 +419,20 @@ export async function admin_cli(args, { client = panel_client, print = text => p
   const commands = {
     status: async () => {
       const { login_methods: _methods, providers: _providers, ...state } = await call('state');
+      if (state.online_site) {
+        const { label, detail } = relay_health_text(state.online_site, state.relay_health, t);
+        state.relay_health = { state: 'unknown', ...state.relay_health, label, detail };
+      }
       // The state leaves out the entry's checks over the network; they are asked apart.
-      if (state.hosting) state.entry = await call('entry');
+      if (state.hosting) {
+        state.entry = await call('entry');
+        for (const account of state.accounts) {
+          const restart = account.last_restart;
+          if (restart) account.last_restart = { at: new Date(restart.at).toISOString(), result: restart.result,
+            reason: t(restart.reason.template, restart.reason.params), blocked: restart.blocked,
+            error: restart.error && t(restart.error.template, restart.error.params) };
+        }
+      }
       return values.full ? state : summary(state);
     },
     service: () => call(`service/${need(rest[0], 'start|stop|restart')}`, {}),

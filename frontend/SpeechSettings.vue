@@ -101,13 +101,29 @@ function choose(provider) {
   save_with({ provider });
 }
 
-// Known voices of the chosen service show by name; IDs typed earlier (enabled in its console) are kept and shown as themselves.
+// Known voices of the chosen service show by name, their kind as a second line; IDs typed earlier (enabled in its
+// console) are kept and shown as themselves.
 const voice_items = computed(() => {
-  const items = (service.value.voices || []).map((voice) => ({ label: voice.label, value: voice.id }));
+  const items = (service.value.voices || []).map((voice) => {
+    const [label, ...kind] = voice.label.split(" · ");
+    return { label, description: kind.join(" · "), value: voice.id };
+  });
   const typed = [own.value.speaker, own.value.file_voice, ...Object.values(own.value.member_voices || {})].filter((id) => id && !items.some((item) => item.value === id));
   return [...items, ...[...new Set(typed)].map((id) => ({ label: id, value: id }))];
 });
-const platform_items = computed(() => [{ label: t('跟随通用'), value: "" }, ...voice_items.value]);
+const general_voice = computed(() => voice_items.value.find((voice) => voice.value === own.value.speaker) || { label: own.value.speaker });
+const platform_items = computed(() => [{ label: t('跟随通用'), description: general_voice.value.label, value: "" }, ...voice_items.value]);
+/** The item a voice menu shows for its value. */
+const shown_voice = (items, value) => items.find((item) => item.value === (value || "")) || { label: value };
+// On a touch screen the search field waits for a tap: focusing it on open raises the keyboard over the list.
+const voice_menu = {
+  "value-key": "value", "create-item": true, size: "sm", class: "min-w-0 flex-1", "filter-fields": ["label", "description", "value"],
+  "search-input": { placeholder: t('搜索或输入音色 ID'), autofocus: !window.matchMedia("(pointer: coarse)").matches },
+  ui: { content: "speech-voice-menu", itemDescription: "speech-voice-kind" },
+};
+// Per-AI voices fold under one line, so the usual case (all follow the general voice) is not a column of repeats.
+const platforms_open = ref(false);
+const custom_count = computed(() => platforms.filter((platform) => own.value.member_voices?.[platform.name]).length);
 /** The voice a row plays: a platform's or the file voice when set, otherwise the default voice. */
 const voice_of = (key) => (key === FILE_KEY ? own.value.file_voice : key ? own.value.member_voices[key] : "") || own.value.speaker;
 /** Set the default voice, one platform's or the file voice (empty follows the default), from a choice or a typed ID. */
@@ -196,23 +212,36 @@ onBeforeUnmount(stop_preview);
             </div>
             <div class="speech-row"><span>{{ t('通用') }}</span>
               <div class="speech-inline">
-                <USelectMenu :model-value="own.speaker" :items="voice_items" value-key="value" create-item :search-input="{ placeholder: t('搜索或输入音色 ID') }" :aria-label="t('通用音色')" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice('', $event)" @create="set_voice('', $event)" />
+                <USelectMenu :model-value="own.speaker" :items="voice_items" v-bind="voice_menu" :aria-label="t('通用音色')" @update:model-value="set_voice('', $event)" @create="set_voice('', $event)">
+                  <template #default><span class="speech-voice-value">{{ general_voice.label }}<small v-if="general_voice.description">{{ general_voice.description }}</small></span></template>
+                </USelectMenu>
                 <UButton :icon="playing === GENERAL_KEY ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === GENERAL_KEY ? t('停止试听') : t('试听通用音色')" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${GENERAL_KEY}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(GENERAL_KEY)" />
               </div>
             </div>
             <div class="speech-row"><span>{{ t('文件') }}</span>
               <div class="speech-inline">
-                <USelectMenu :model-value="own.file_voice || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: t('搜索或输入音色 ID') }" :aria-label="t('朗读文件的音色')" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(FILE_KEY, $event)" @create="set_voice(FILE_KEY, $event)" />
+                <USelectMenu :model-value="own.file_voice || ''" :items="platform_items" v-bind="voice_menu" :aria-label="t('朗读文件的音色')" @update:model-value="set_voice(FILE_KEY, $event)" @create="set_voice(FILE_KEY, $event)">
+                  <template #default><span v-for="shown in [shown_voice(platform_items, own.file_voice)]" :key="shown.value" :class="['speech-voice-value', { follows: !own.file_voice }]">{{ shown.label }}<small v-if="shown.description">{{ shown.description }}</small></span></template>
+                </USelectMenu>
                 <UButton :icon="playing === FILE_KEY ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === FILE_KEY ? t('停止试听') : t('试听朗读文件的音色')" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${FILE_KEY}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(FILE_KEY)" />
               </div>
             </div>
-            <div v-for="platform in platforms" :key="platform.name" class="speech-row"><span :title="platform.label">{{ platform.label }}</span>
-              <div class="speech-inline">
-                <USelectMenu :model-value="own.member_voices[platform.name] || ''" :items="platform_items" value-key="value" create-item :search-input="{ placeholder: t('搜索或输入音色 ID') }" :aria-label="t('{value1} 的音色', { value1: platform.label })" size="sm" class="min-w-0 flex-1" @update:model-value="set_voice(platform.name, $event)" @create="set_voice(platform.name, $event)" />
-                <UButton :icon="playing === platform.name ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === platform.name ? t('停止试听') : t('试听 {value1} 的音色', { value1: platform.label })" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${platform.name}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(platform.name)" />
-              </div>
+            <div class="speech-row"><span>{{ t('各 AI') }}</span>
+              <button type="button" class="speech-fold" :aria-expanded="platforms_open" :title="t('未单独设置的 AI 与其他消息用通用音色')" @click="platforms_open = !platforms_open">
+                <span>{{ custom_count ? t('已单独设置 {value1} 个', { value1: custom_count }) : t('全部跟随通用') }}</span><UIcon :name="platforms_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
+              </button>
             </div>
-            <p class="fine-print speech-note">{{ t('未单独设置的 AI 与其他消息用通用音色') }}</p>
+            <div v-if="platforms_open" class="speech-platforms">
+              <div v-for="platform in platforms" :key="platform.name" class="speech-row"><span :title="platform.label">{{ platform.label }}</span>
+                <div class="speech-inline">
+                  <USelectMenu :model-value="own.member_voices[platform.name] || ''" :items="platform_items" v-bind="voice_menu" :aria-label="t('{value1} 的音色', { value1: platform.label })" @update:model-value="set_voice(platform.name, $event)" @create="set_voice(platform.name, $event)">
+                    <template #default><span v-for="shown in [shown_voice(platform_items, own.member_voices[platform.name])]" :key="shown.value" :class="['speech-voice-value', { follows: !own.member_voices[platform.name] }]">{{ shown.label }}<small v-if="shown.description">{{ shown.description }}</small></span></template>
+                  </USelectMenu>
+                  <UButton :icon="playing === platform.name ? 'i-lucide-square' : 'i-lucide-volume-2'" :aria-label="playing === platform.name ? t('停止试听') : t('试听 {value1} 的音色', { value1: platform.label })" color="neutral" variant="ghost" size="sm" :loading="busy === `preview:${platform.name}`" :disabled="!settings.api_key_ref || Boolean(busy)" @click="preview(platform.name)" />
+                </div>
+              </div>
+              <p class="fine-print speech-note">{{ t('未单独设置的 AI 与其他消息用通用音色') }}</p>
+            </div>
             <div class="speech-row"><span>{{ t('语速') }}</span>
               <div class="speech-rates" role="group" :aria-label="t('朗读语速')" :title="service.rate === false ? t('当前接入不支持调节语速') : undefined"><UButton v-for="rate in rates" :key="rate.value" :label="rate.label" color="neutral" variant="ghost" size="xs" :disabled="service.rate === false" :class="{ chosen: settings.speech_rate === rate.value }" :aria-pressed="settings.speech_rate === rate.value" @click="settings.speech_rate = rate.value; save()" /></div>
             </div>
@@ -287,4 +316,16 @@ onBeforeUnmount(stop_preview);
 .speech-process-state.running { color: var(--ui-success); }
 .speech-process-state.other { color: var(--ui-warning); }
 .speech-settings :deep(.speech-key-masked) { -webkit-text-security: disc; }
+/* A chosen voice reads as its name, its kind dimmed after it; a row that follows the general voice is dimmed whole. */
+.speech-voice-value { display: flex; min-width: 0; align-items: baseline; gap: 6px; overflow: hidden; color: var(--ui-text-highlighted); white-space: nowrap; }
+.speech-voice-value small { min-width: 0; overflow: hidden; color: var(--ui-text-dimmed); font-size: 12px; text-overflow: ellipsis; }
+.speech-voice-value.follows { color: var(--ui-text-muted); }
+.speech-fold { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 10px; border: 1px solid var(--ui-border); border-radius: 6px; background: none; color: var(--ui-text-muted); cursor: pointer; font-size: 13px; }
+.speech-fold:hover { background: var(--ui-bg-elevated); }
+.speech-platforms { display: grid; gap: 10px; padding-left: 12px; border-left: 2px solid var(--ui-border); }
+.speech-platforms .speech-row { grid-template-columns: 44px minmax(0, 1fr); }
+.speech-platforms .speech-note { padding-left: 54px; }
+/* The list is portaled out of this section; each voice takes two lines, name over kind. */
+:global(.speech-voice-menu) { min-width: 220px; }
+:global(.speech-voice-menu .speech-voice-kind) { font-size: 12px; }
 </style>

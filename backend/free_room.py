@@ -998,7 +998,7 @@ def recent_executions(connection, room_id, span=None):
     for row in rows:
         requests = []
         line = None
-        for request in connection.execute("SELECT id,room_id,member_id,message_id,batch_id,purpose,created_by,status,answer_id FROM member_requests WHERE execution_id=? ORDER BY id", (row["id"],)):
+        for request in connection.execute("SELECT id,room_id,member_id,message_id,batch_id,purpose,created_by,created_at,status,answer_id FROM member_requests WHERE execution_id=? ORDER BY id", (row["id"],)):
             line = line or line_of(connection, request, positions)
             request_data = {key: request[key] for key in ("id", "message_id", "purpose", "status", "answer_id")}
             requests.append({**request_data, **session_request_source(connection, request["id"], request["message_id"])})
@@ -2627,12 +2627,33 @@ def line_of(connection, request, positions=None):
             return {"kind": "main", "step": order.index(request["member_id"]) + 1, "by": "user"}
     if connection.execute("SELECT 1 FROM session_requests WHERE member_request_id=?", (request["id"],)).fetchone():
         return None
-    # The host asked directly is a side question, not a branch. A member named directly works beside whatever the host
-    # and the others do, relay or not (user 2026-11-21, #6512); only a room of a single member has nothing to branch off.
+    # The host asked directly is a side question, not a branch. A member named directly is a branch when it works beside
+    # what the host or the others were doing then, relay or not (user 2026-11-21, #6512); named while nothing else was
+    # under way it is simply the room's work and carries no mark (user 2026-11-21, #6884).
     if connection.execute("SELECT 1 FROM room_members WHERE id=? AND role='host'", (request["member_id"],)).fetchone() or \
-            connection.execute("SELECT COUNT(*) FROM room_members WHERE room_id=? AND status<>'removed'", (request["room_id"],)).fetchone()[0] < 2:
+            not beside_other_work(connection, request):
         return None
     return {"kind": "branch", "by": request["created_by"]}
+
+
+# How many of the room's requests before a named one are checked for work that was under way when it was named.
+BRANCH_LOOKBACK = 50
+
+
+def beside_other_work(connection, request):
+    """Whether another member had work open when this request was made: still open now, answered by a later message,
+    or ended without an answer after it.
+
+    The members named with it are left out, and a request answered by the very message that made this one is not later
+    than it, so a host's dispatch does not count as running beside the host's own turn that sent it."""
+    return connection.execute("""SELECT 1 FROM (SELECT * FROM member_requests WHERE room_id=?1 AND id<?2 ORDER BY id DESC LIMIT ?3) o
+        LEFT JOIN member_executions e ON e.id=o.execution_id
+        WHERE o.member_id<>?4 AND o.message_id<>?5 AND o.purpose<>'group'
+        AND (o.status IN ('pending','delivering') OR o.answer_id>?5 OR (o.answer_id IS NULL AND e.finished_at>?6))
+        UNION ALL SELECT 1 FROM member_requests o WHERE o.room_id=?1 AND o.status IN ('pending','delivering') AND o.id<?2
+        AND o.member_id<>?4 AND o.message_id<>?5 AND o.purpose<>'group' LIMIT 1""",
+                              (request["room_id"], request["id"], BRANCH_LOOKBACK, request["member_id"], request["message_id"],
+                               request["created_at"])).fetchone() is not None
 
 
 def dispatch_modes(connection, room_id, message_ids):

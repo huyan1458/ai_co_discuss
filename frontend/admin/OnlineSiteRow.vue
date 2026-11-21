@@ -7,10 +7,13 @@
  */
 import { computed, inject, ref, watch } from "vue";
 import { call } from "./api.js";
+import RelayReconnect from "./RelayReconnect.vue";
 import { t } from '../i18n.js';
+import { relay_health_text } from '../../runner/relay_health_text.mjs';
 
 const { state, reload, notify, binding } = inject("panel");
 const site = computed(() => state.value.online_site || "");
+const relay = computed(() => relay_health_text(site.value, state.value.relay_health, t));
 // The own domain counts as on as the hosted accounts' entry cards judge it (HostingCards.vue): set up and switched on.
 const own_domain = computed(() => Boolean(state.value.entry?.tunnel_enabled && state.value.entry?.tunnel));
 const usage = computed(() => !state.value.hosting ? t('在外面用其他设备使用这台电脑、邀请外部专家时需要')
@@ -65,11 +68,13 @@ const close = (open) => { if (!open) dialog.value = ""; };
   <div class="panel-row">
     <div class="panel-tile"><UIcon name="i-lucide-cloud" /></div>
     <div class="panel-main">
-      <div class="panel-title">{{ t('线上网站') }} <span class="panel-tag" :class="site ? 'is-green' : 'is-gray'"><UIcon :name="site ? 'i-lucide-check' : 'i-lucide-minus'" />{{ site ? t('已绑定') : t('未绑定') }}</span></div>
+      <div class="panel-title">{{ t('线上网站') }} <span class="panel-tag" :class="relay.tone">{{ relay.label }}</span></div>
       <span class="panel-sub"><template v-if="site">{{ site }} · </template>{{ usage }}</span>
+      <span v-if="relay.detail" class="panel-sub">{{ relay.detail }}</span>
     </div>
     <div class="panel-side">
       <template v-if="site">
+        <RelayReconnect :disabled="Boolean(busy)" />
         <button type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" :title="t('在部署线上网站的电脑上，为其他电脑生成绑定用的接入码')" @click="start_making"><UIcon name="i-lucide-ticket" />{{ t('生成接入码') }}</button>
         <button type="button" class="panel-button is-plain is-small is-danger" :disabled="Boolean(busy)" @click="dialog = 'unbind'">{{ t('解绑') }}</button>
       </template>

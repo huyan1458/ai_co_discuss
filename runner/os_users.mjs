@@ -649,7 +649,12 @@ exit $LASTEXITCODE
 'ok'`);
 }
 
-/** Keep a stopped instance stopped when the computer starts again (its supervisor is stopped separately). */
+/** Whether the owner requested that this isolated instance keep running. */
+export function instance_flag_set(account) {
+  return existsSync(join(SHARED_ROOT, 'keys', account, RUN_FLAG));
+}
+
+/** Withdraw the owner's request to run this isolated instance. */
 export function clear_instance_flag(account) {
   rmSync(join(SHARED_ROOT, 'keys', account, RUN_FLAG), { force: true });
 }

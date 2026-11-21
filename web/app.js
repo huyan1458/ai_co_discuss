@@ -16,7 +16,7 @@ const SHARE_FORMAT = 1;
 const SHARE_DAYS = [1, 3, 7];
 const SHARE_DEFAULT_DAYS = 7;
 const SHARE_MAX_BYTES = 5 * 1024 * 1024;
-// This browser's published links, by room: the manage token lets it update or revoke them.
+// Where an earlier version kept a room's published link in this browser; it moves to the room when first read.
 const SHARE_LINK_PREFIX = "codiscuss-share:";
 // A share page is a record of one moment: every "how long ago" and running clock is read at that moment.
 if (SHARE && Number.isFinite(Date.parse(SHARE.exported_at))) {
@@ -139,6 +139,8 @@ let computer_connecting = false;
 let relay_machine = null;
 // Object URLs of files read from the computer's rooms, by their room route.
 const relay_files = new Map();
+/** Room files are read as bytes and shown from object URLs: the computer's rooms through the relay, a share page from what it carries. */
+const files_by_blob = () => state.remote_rooms || Boolean(SHARE);
 // Relay file reads waiting for a free slot, and how many are running (RELAY_FILE_CONCURRENCY).
 const relay_file_queue = [];
 let relay_file_running = 0;
@@ -229,12 +231,28 @@ const BACKGROUND_PROGRESS_INTERVAL_MS = 5000;
 const background_reads = { marks: new Map(), read_at: new Map(), queue: new Map(), running: false, generation: 0 };
 // Whether each room was at work when the directory was last read, so its turning idle can be announced once.
 const room_running_seen = new Map();
+// Work that stops and starts again within this time is one piece of work: an interjection, a retry or a relay hands it on in seconds.
+const IDLE_NOTICE_DELAY_MS = 8000;
+// Room id to the timer that will announce the end of its work, cancelled when the room is at work again.
+const idle_notices = new Map();
 
-/** Announce in the toaster each room whose work ended since the directory was last read. */
+/**
+ * Announce in the toaster each room whose work has ended and stayed ended. The room on screen is never announced:
+ * its own cards already show that the work is over.
+ */
 function announce_idle_rooms(rooms) {
   for (const room of rooms) {
-    if (room_running_seen.get(room.id) && !room.running && !room.archived) notify("info", t('「{name}」已空闲', { name: room.title }));
+    const was_running = room_running_seen.get(room.id);
     room_running_seen.set(room.id, Boolean(room.running));
+    if (room.running || room.archived) {
+      clearTimeout(idle_notices.get(room.id));
+      idle_notices.delete(room.id);
+    } else if (was_running && !idle_notices.has(room.id)) {
+      idle_notices.set(room.id, setTimeout(() => {
+        idle_notices.delete(room.id);
+        if (state.room?.id !== room.id) notify("info", t('房间「{name}」的工作已结束', { name: room.title }));
+      }, IDLE_NOTICE_DELAY_MS));
+    }
   }
 }
 
@@ -2738,9 +2756,13 @@ function attachment_preview_attributes(file) {
 }
 
 /** A download link's attributes; files of the computer's rooms are read through the relay. */
-function attachment_download_attributes(file) {
+function attachment_download_link(file) {
   const url = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
-  return state.remote_rooms ? `href="#" data-relay-href="${url}" data-file-name="${escape_html(file.file_name)}"` : `href="${url}?download=1"`;
+  return files_by_blob() ? { href: "#", "data-relay-href": url, "data-file-name": file.file_name } : { href: `${url}?download=1` };
+}
+
+function attachment_download_attributes(file) {
+  return Object.entries(attachment_download_link(file)).map(([key, value]) => `${key}="${escape_html(value)}"`).join(" ");
 }
 
 /**
@@ -2748,18 +2770,22 @@ function attachment_download_attributes(file) {
  * can show, a download for the rest. Text outside the attachment count stays as written.
  */
 function link_attachment_placeholders(html, files = []) {
-  if (!files?.length) return html;
+  // A share page made without its attachments says so, rather than showing a tag that looks like it should open.
+  const omitted = (kind, number) => `<span class="attachment-placeholder is-omitted" title="${escape_html(t("分享时未包含附件"))}">${escape_html(kind === "图片"
+    ? t("[图片 #{number} · 未包含在分享中]", { number }) : t("[文件 #{number} · 未包含在分享中]", { number }))}</span>`;
+  if (!files?.length) return SHARE ? html.replace(/\[(图片|文件) #(\d{1,4})\]/g, (match, kind, number) => omitted(kind, number)) : html;
   // A message saved since files were numbered across the room names them by that number; an older one by its place
   // in the message, which shows as every placeholder fitting a place while not every one fits a number.
   const numbers = [...html.matchAll(/\[(?:图片|文件) #(\d{1,4})\]/g)].map(([, number]) => Number(number));
   const by_number = numbers.every(number => files.some(file => file.number === number)) || !numbers.every(number => number <= files.length);
   return html.replace(/\[(图片|文件) #(\d{1,4})\]/g, (match, kind, number) => {
     const file = by_number ? files.find(item => item.number === Number(number)) : files[Number(number) - 1];
-    if (!file) return match;
+    if (!file) return SHARE ? omitted(kind, number) : match;
     const previewable = file.content_type.startsWith("image/") || file.content_type === "application/pdf" || is_text_attachment(file);
     // The stored `[图片 #n]` / `[文件 #n]` is protocol text; only the shown label follows the page language.
     const label = escape_html(kind === "图片" ? t("[图片 #{number}]", { number }) : t("[文件 #{number}]", { number }));
-    return previewable ? `<button type="button" class="attachment-placeholder" ${attachment_preview_attributes(file)} title="${escape_html(file.file_name)}">${label}</button>`
+    const visual = kind === "文件" && /\.html$/i.test(file.file_name) ? " data-inline-visual" : "";
+    return previewable ? `<button type="button" class="attachment-placeholder"${visual} ${attachment_preview_attributes(file)} title="${escape_html(file.file_name)}">${label}</button>`
       : `<a class="attachment-placeholder" ${attachment_download_attributes(file)} download title="${escape_html(t("下载 {name}", { name: file.file_name }))}">${label}</a>`;
   });
 }
@@ -2787,7 +2813,7 @@ function attachment_markup(files = []) {
     const name = escape_html(file.file_name);
     const preview_attributes = attachment_preview_attributes(file);
     // Files of the computer's rooms are not on this website: they are read through the relay once shown or clicked.
-    const source = state.remote_rooms ? `data-relay-src="${url}"` : `src="${url}"`;
+    const source = files_by_blob() ? `data-relay-src="${url}"` : `src="${url}"`;
     const download = attachment_download_attributes(file);
     if (file.content_type.startsWith("image/")) return `<button type="button" class="attachment-image" ${preview_attributes}${attachment_image_style(file)}>
       <img ${source} alt="${name}" loading="lazy"></button>`;
@@ -2831,7 +2857,7 @@ function close_attachment_preview() {
  */
 async function attachment_url(file) {
   const path = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
-  return state.remote_rooms ? relay_file_url(path, { urgent: true }) : path;
+  return files_by_blob() ? relay_file_url(path, { urgent: true }) : path;
 }
 
 async function preview_attachment(input) {
@@ -2852,7 +2878,8 @@ async function preview_attachment(input) {
   // opens there too. The classic page reads first and keeps its dialog.
   if ((is_text_attachment(file) || file.content_type === "application/pdf") && state.text_preview) {
     state.attachment_preview = null;
-    state.text_preview(file);
+    if (typeof input.source === "boolean") state.text_preview(file, input.source);
+    else state.text_preview(file);
     return;
   }
   if (file.content_type.startsWith("image/") && state.image_viewer) {
@@ -2860,7 +2887,7 @@ async function preview_attachment(input) {
     state.image_viewer(file);
     return;
   }
-  file.url = file.download_url = state.remote_rooms ? await attachment_url(file) : file.url || await attachment_url(file);
+  file.url = file.download_url = files_by_blob() ? await attachment_url(file) : file.url || await attachment_url(file);
   if (state.attachment_preview !== preview) return;
   if (is_text_attachment(file)) {
     state.attachment_preview = null;
@@ -2931,8 +2958,7 @@ function bind_attachment_controls() {
   for (const event of ["dragover", "drop"]) element("message-form").addEventListener(event, drop_attachments);
   element("message-input").addEventListener("paste", paste_attachments);
   document.addEventListener("click", event => {
-    const preview = event.target.closest("[data-preview-attachment]");
-    if (preview) run_action(() => preview_attachment({ ...preview.dataset, room_id: preview.dataset.attachmentRoom, id: preview.dataset.previewAttachment }));
+    preview_clicked_attachment(event);
     const remove = event.target.closest("[data-remove-attachment]");
     if (remove) remove_attachment(remove.dataset.removeAttachment);
   });
@@ -3731,6 +3757,7 @@ async function relay_file_part(path, offset) {
 
 /** Read a whole file of the computer's rooms through the relay; larger files come in several parts. */
 async function relay_room_bytes(path) {
+  if (SHARE) return share_file_blob(path);
   const parts = [];
   let offset = 0, total = 0, type = "";
   do {
@@ -3813,7 +3840,7 @@ async function post_room_file(path, body, token, on_progress) {
 
 /** Read the bytes of a room file from this website, or from the paired computer while its rooms are shown. */
 async function read_room_file(path) {
-  if (state.remote_rooms) return new Uint8Array(await (await relay_room_bytes(path)).arrayBuffer());
+  if (files_by_blob()) return new Uint8Array(await (await relay_room_bytes(path)).arrayBuffer());
   const response = await fetch(path, { cache: "no-store" });
   if (!response.ok) throw new Error(t('附件读取失败'));
   return new Uint8Array(await response.arrayBuffer());
@@ -5536,6 +5563,7 @@ async function retry_delivery({ execution_id, action }) {
 /** Take back the user's message, its text returning to an empty input for editing; once members started on it, see `stop_and_rewind`. */
 async function retract_message(message_id) {
   const room_id = state.room.id;
+  const message = state.messages.find(item => item.id === message_id);
   let result;
   try { result = await request_json(`/api/rooms/${room_id}/messages/${message_id}/retract`, {}); }
   catch (error) {
@@ -5543,8 +5571,51 @@ async function retract_message(message_id) {
     result = await stop_and_rewind(room_id, message_id, error);
   }
   if (state.room?.id !== room_id) return;
-  if (!element("message-input").value.trim()) element("message-input").value = result.text;
   await refresh_room();
+  if (state.room?.id !== room_id || element("message-input").value.trim() || state.attachment_drafts.length) return;
+  await restore_taken_back(room_id, message, result.text);
+}
+
+/**
+ * A sent message's files and reply as composer drafts, for sending it again. The site keeps the files with the old
+ * message, so they are read from it and become new drafts that upload again; each keeps the placeholder `text` has for it.
+ */
+async function message_draft_parts(room_id, message, text) {
+  const files = await Promise.all((message?.attachments || []).map(async (file) => {
+    const bytes = await read_room_file(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(file.id)}/content`);
+    return { number: file.number, file: new File([bytes], file.file_name, { type: file.content_type || "" }) };
+  }));
+  const drafts = files.map(({ number, file }) => {
+    const draft = { id: new_submission_id(), file, preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: null, actor: null };
+    draft.placeholder = [`[图片 #${number}]`, `[文件 #${number}]`].find(placeholder => text.includes(placeholder));
+    return draft;
+  });
+  let reply = null;
+  if (message?.reply_to) {
+    const quoted = state.messages.find(item => item.id === message.reply_to)
+      || await request_json(`/api/rooms/${room_id}/messages/${message.reply_to}`).catch((error) => { release_files(drafts); throw error; });
+    reply = { id: quoted.id, label: t('正在回复 #{value1} · {value2}', { value1: quoted.id, value2: display_name(quoted.author) }) };
+  }
+  return { drafts, reply };
+}
+
+/** Fill the composer with drafts from `message_draft_parts`; the files then take the room's current numbers. */
+function fill_composer_parts(text, { drafts, reply }) {
+  fill_composer(text, drafts, reply);
+  renumber_placeholders(null);
+  preupload_drafts(drafts);
+  publish_view();
+}
+
+/** Put a taken-back message in the empty composer as it was sent: its text, its files and the message it replied to. */
+async function restore_taken_back(room_id, message, text) {
+  let parts = { drafts: [], reply: null };
+  try { parts = await message_draft_parts(room_id, message, text); }
+  catch (error) { notify("warning", t('撤回的消息里有附件或引用未能放回输入框：{value1}', { value1: error.message })); }
+  if (state.room?.id !== room_id || element("message-input").value.trim() || state.attachment_drafts.length) { release_files(parts.drafts); return; }
+  // A reply the owner already picked meanwhile stays.
+  if (state.reply_to) parts.reply = { id: state.reply_to, label: element("reply-label").textContent };
+  fill_composer_parts(text, parts);
 }
 
 /**
@@ -5588,10 +5659,12 @@ function rewind_plan(message_id) {
 async function rewind_and_send({ message_id, revision, text }) {
   if (element("message-input").value.trim() || state.attachment_drafts.length) throw new Error(t('输入框里还有草稿，请先发送或清空后再编辑这条消息'));
   const room_id = state.room.id;
-  await request_json(`/api/rooms/${room_id}/rewind`, { message_id, revision });
-  if (state.room?.id !== room_id) return;
-  cancel_reply();
-  element("message-input").value = text;
+  // The edit keeps the message's files and reply; they are read first, so a failed read leaves the room as it was.
+  const parts = await message_draft_parts(room_id, state.messages.find(item => item.id === message_id), text);
+  try { await request_json(`/api/rooms/${room_id}/rewind`, { message_id, revision }); }
+  catch (error) { release_files(parts.drafts); throw error; }
+  if (state.room?.id !== room_id) { release_files(parts.drafts); return; }
+  fill_composer_parts(text, parts);
   await send_message({ preventDefault() {} });
 }
 
@@ -6335,9 +6408,7 @@ async function initialize() {
     await new Promise(resolve => setTimeout(resolve, RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)]));
   }
   const relay_ready = new Promise(resolve => load_launch_settings({ relay_known: resolve }));
-  document.addEventListener("click", download_relay_file, true);
-  document.addEventListener("error", mark_failed_media, true);
-  new MutationObserver((records) => { if (state.remote_rooms) show_relay_images(records); }).observe(document.body, { childList: true, subtree: true });
+  watch_room_files();
   window.addEventListener("hashchange", () => {
     if (new URLSearchParams(location.hash.slice(1)).has("codiscuss-connect")) load_launch_settings();
   });
@@ -6369,6 +6440,7 @@ async function initialize() {
   prefetched.clear();
   publish_view();
   start_live_updates();
+  migrate_local_share_links();
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stop_live_updates();
     else { begin_resuming(); start_live_updates(); load_admin_state(); }
@@ -6407,7 +6479,10 @@ function view_snapshot() {
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
     share: SHARE ? { exported_at: SHARE.exported_at, home: SHARE_HOME } : null,
-    share_draft: share_draft ? { room_id: share_draft.room_id, title: share_draft.title, spots: share_draft.spots, linked: Boolean(share_link(share_draft.room_id)) } : null,
+    share_draft: share_draft ? { room_id: share_draft.room_id, title: share_draft.title, phase: share_draft.phase || "ready",
+      spots: [...share_draft.spots || [], ...share_draft.include_files ? share_draft.file_spots || [] : []],
+      files: { count: share_draft.files?.length || 0, bytes: (share_draft.files || []).reduce((total, file) => total + file.size, 0), included: Boolean(share_draft.include_files) },
+      linked: Boolean(share_link(share_draft.room_id)), link: share_draft.link || null } : null,
     share_links: SHARE ? {} : share_links(), share_days: SHARE_DAYS,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_host_permissions: state.create_host_permissions, create_api_max_requests: state.create_api_max_requests, create_relay_rounds: state.create_relay_rounds ?? 0, create_image_generation: state.create_image_generation };
@@ -6502,10 +6577,25 @@ async function filter_view({ query = state.query, mention = state.mention_only, 
   }
 }
 
+/** Open the attachment a clicked image, file card or `[图片 #n]` tag names. */
+function preview_clicked_attachment(event) {
+  const preview = event.target.closest("[data-preview-attachment]");
+  if (preview) run_action(() => preview_attachment({ ...preview.dataset, room_id: preview.dataset.attachmentRoom, id: preview.dataset.previewAttachment }));
+}
+
+/** Show and download room files read as bytes (the computer's rooms, a share page), and mark media the browser cannot play. */
+function watch_room_files() {
+  document.addEventListener("click", download_relay_file, true);
+  document.addEventListener("error", mark_failed_media, true);
+  new MutationObserver((records) => { if (files_by_blob()) show_relay_images(records); }).observe(document.body, { childList: true, subtree: true });
+}
+
 /** Open the one room a share page carries, with no administrator, launcher, relay or live updates behind it. */
 async function initialize_share() {
   render_identities();
   bind_delegated_actions();
+  watch_room_files();
+  document.addEventListener("click", preview_clicked_attachment);
   Object.assign(state.admin, { loaded: true, local: false, devices: false, logged_in: false, registered: true });
   try {
     const directory = await request_json("/api/rooms");
@@ -6551,6 +6641,7 @@ function share_answer(path, payload, localize) {
 // on the room and its members, the decision model's choices, messages still queued, attachments and refused commands.
 const SHARE_DROPPED_FIELDS = new Set(["cwd", "session_id", "reported_session", "reported_client", "client_id", "submission_id",
   "lease_until", "adopt_error", "token", "access_token", "descriptions", "extra_directories", "project_directory", "resets"]);
+const SHARE_ZEROED_FIELDS = ["quota_until", "held_until"];
 const SHARE_EMPTIED_FIELDS = new Set(["scheduler_decisions", "scheduler_routing", "recommendations", "denials", "queued_messages",
   "ended_externals", "attachments"]);
 // Template parameters a notice fills with the software's own words, and what a share page says instead.
@@ -6566,9 +6657,15 @@ const SHARE_SENSITIVE_PATTERNS = [/\bsk[-_](?:live_)?[A-Za-z0-9_-]{20,}/g, /\bgh
   /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g, /(?<!\d)1[3-9]\d{9}(?!\d)/g, /\bresets?\s+(?:in\s+)?\d[^\n]{0,40}/gi, /\(\s*[A-Z][a-z]+\/[A-Za-z_]+\s*\)/g];
 // "<" and the two line separators JSON allows but a script must not carry raw.
 const SHARE_SCRIPT_UNSAFE = new RegExp(`[<${String.fromCharCode(0x2028, 0x2029)}]`, "g");
+// A person's home folder on any computer, in Windows, Git Bash, WSL or Unix spelling; a share page writes it as "~".
+const SHARE_HOME_FOLDERS = [/(?<![\w./-])[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s"'`<>|*?]+/gi, /(?<![\w./-])\/(?:mnt\/)?[a-z]\/Users\/[^/\s"'`]+/gi,
+  /(?<![\w./-])\/(?:home|Users)\/[^/\s"'`]+/g];
 const ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\/)/;
 // A folder named by fewer parts ("C:", "/home") is too broad to rewrite in text.
 const SHARE_FOLDER_MIN_PARTS = 2;
+// Attachments whose text is scanned for keys and folders before sharing: plain text up to this size, not packed office files.
+const SHARE_SCAN_BYTES = 2 * 1024 * 1024;
+const SHARE_PACKED_TEXT = /\.(docx|xlsx|xls|ods|pptx|prproj)$/i;
 const SHARE_SNIPPET_CHARS = 20;
 
 /** A changed file's path as a share page shows it: inside the run's own folder, or the last two parts of the path. */
@@ -6581,15 +6678,17 @@ function share_path(path, folder) {
   return `…/${normal.split("/").filter(Boolean).slice(-2).join("/")}`;
 }
 
-/** Copy an answer for a share page, leaving out what only this computer and its owner should see. */
-function share_clean(value) {
-  if (Array.isArray(value)) return value.map(share_clean);
+/** Copy an answer for a share page, leaving out what only this computer and its owner should see; attachments only when `keep_files`. */
+function share_clean(value, keep_files = false) {
+  if (Array.isArray(value)) return value.map(item => share_clean(item, keep_files));
   if (!value || typeof value !== "object") return value;
   const result = {};
   for (const [key, item] of Object.entries(value)) {
     if (SHARE_DROPPED_FIELDS.has(key) || SHARE_DROPPED_TEXT.has(key) && typeof item === "string") continue;
-    result[key] = SHARE_EMPTIED_FIELDS.has(key) ? (Array.isArray(item) ? [] : null) : share_clean(item);
+    result[key] = SHARE_EMPTIED_FIELDS.has(key) && !(keep_files && key === "attachments") ? (Array.isArray(item) ? [] : null) : share_clean(item, keep_files);
   }
+  // When a member's quota comes back is the same fact as a quota notice's reset time, as a timestamp.
+  for (const field of SHARE_ZEROED_FIELDS) if (field in result) result[field] = 0;
   // Another person's computer: only that the member is external stays.
   if (value.external && typeof value.external === "object") result.external = true;
   // A failure's own text comes from the software and can name the account, its plan or its time zone.
@@ -6710,23 +6809,92 @@ async function share_page_html(share) {
     .replace("</head>", () => `  ${head}\n</head>`);
 }
 
-/** Where the share page has text that looks like a key, a token, a personal folder or contact details: message number and nearby text. */
-function share_sensitive_spots(responses) {
-  const spots = new Set();
-  const scan = (text, where) => {
-    for (const pattern of SHARE_SENSITIVE_PATTERNS) {
-      for (const match of String(text || "").matchAll(pattern)) {
-        const from = Math.max(0, match.index - SHARE_SNIPPET_CHARS);
-        spots.add(t('{where}：…{text}…', { where, text: String(text).slice(from, match.index + match[0].length + SHARE_SNIPPET_CHARS).replace(/\s+/g, " ") }));
+/** Every string inside an answer, so a scan reads text as written rather than JSON with its escapes. */
+function share_strings(value, out = []) {
+  if (typeof value === "string") out.push(value);
+  else if (Array.isArray(value)) for (const item of value) share_strings(item, out);
+  else if (value && typeof value === "object") for (const item of Object.values(value)) share_strings(item, out);
+  return out;
+}
+
+/**
+ * Where the share page has text that looks like a key, a token, a personal folder or contact details, one entry per place
+ * (a message, a run's notes, the room's details) with how many it has and the first of them in its context. `extra` adds
+ * texts read elsewhere, as [{ texts, where }] (an attachment's own text).
+ */
+function share_sensitive_spots(responses, extra = []) {
+  const places = new Map();
+  const scan = (texts, where) => {
+    for (const text of texts) {
+      for (const pattern of SHARE_SENSITIVE_PATTERNS) {
+        for (const match of text.matchAll(pattern)) {
+          const place = places.get(where) || places.set(where, { where, count: 0, text: "" }).get(where);
+          place.count++;
+          if (!place.text) {
+            const from = Math.max(0, match.index - SHARE_SNIPPET_CHARS);
+            place.text = `${from ? "…" : ""}${text.slice(from, match.index + match[0].length + SHARE_SNIPPET_CHARS).replace(/\s+/g, " ")}…`;
+          }
+        }
       }
     }
   };
   for (const [path, body] of Object.entries(responses)) {
-    if (/\/messages\?/.test(path)) for (const message of body.messages || []) scan(`${message.text}\n${message.summary || ""}`, `#${message.id}`);
-    else if (/\/notes$/.test(path)) scan(JSON.stringify(body), t('执行 #{id} 的过程说明', { id: path.match(/executions\/(\d+)/)[1] }));
-    else scan(JSON.stringify(body), t('房间与执行信息'));
+    if (/\/messages\?/.test(path)) for (const message of body.messages || []) scan([message.text || "", message.summary || ""], `#${message.id}`);
+    else if (/\/notes$/.test(path)) scan(share_strings(body), t('执行 #{id} 的过程说明', { id: path.match(/executions\/(\d+)/)[1] }));
+    else scan(share_strings(body), t('房间与执行信息'));
   }
-  return [...spots];
+  for (const { texts, where } of extra) scan(texts, where);
+  return [...places.values()];
+}
+
+/** The attachments a share page could carry: those of the messages it shows, each once, by the route that reads it. */
+function share_files(responses) {
+  const files = new Map();
+  for (const [path, body] of Object.entries(responses)) {
+    if (!/\/messages\?/.test(path)) continue;
+    for (const message of body.messages || []) for (const file of message.attachments || []) {
+      const route = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
+      // A data URL names the plain type; parameters such as a charset would not survive the share site's check.
+      files.set(route, { route, file_name: file.file_name, size: Number(file.size) || 0, message_id: message.id,
+        content_type: String(file.content_type || "").split(";")[0].trim() || "application/octet-stream" });
+    }
+  }
+  return [...files.values()];
+}
+
+/** What looks sensitive inside the attachments whose text can be read; images and other files are left to the owner. */
+async function share_file_spots(files) {
+  const extra = [];
+  for (const file of files) {
+    if (!is_text_attachment(file) || SHARE_PACKED_TEXT.test(file.file_name) || file.size > SHARE_SCAN_BYTES) continue;
+    const text = new TextDecoder().decode(await read_room_file(file.route));
+    extra.push({ texts: [text], where: t('#{id} 的附件 {name}', { id: file.message_id, name: file.file_name }) });
+  }
+  return share_sensitive_spots({}, extra);
+}
+
+/** A file a share page carries, as a Blob; one it does not carry was left out when the page was made. */
+function share_file_blob(path) {
+  const match = /^data:([^;,]*);base64,(.*)$/s.exec(SHARE.attachments?.[path] || "");
+  if (!match) throw Object.assign(new Error(t('分享页面不包含这个附件')), { status: 404 });
+  return new Blob([base64_to_bytes(match[2])], { type: match[1] });
+}
+
+/** What a confirmed share page carries: the room's answers, and every attachment's bytes when the owner chose to include them. */
+async function share_contents(draft) {
+  const share = { room_id: draft.room_id, title: draft.title, description: draft.description, exported_at: draft.exported_at,
+    responses: draft.include_files ? draft.responses_with_files : draft.responses };
+  if (!draft.include_files || !draft.files.length) return share;
+  share.attachments = {};
+  for (const file of draft.files) share.attachments[file.route] = await data_url(new Blob([await read_room_file(file.route)], { type: file.content_type }));
+  return share;
+}
+
+/** Include or leave out the attachments of the page being prepared. */
+function share_include_files(include) {
+  if (!share_draft || share_draft.phase !== "ready") return;
+  share_draft.include_files = Boolean(include);
+  publish_view();
 }
 
 /** A folder of this computer as a pattern for any spelling of it in text: either slash, any letter case, with the separator after it. */
@@ -6745,13 +6913,14 @@ function share_folder_pattern(folder) {
  * back, none of the fields only this computer and its owner should see, and the room's project folders written as paths
  * inside the project. `folders` adds folders the page knows beyond those its runs worked in.
  */
-function share_payload(raw, room_id, folders = []) {
+function share_payload(raw, room_id, folders = [], { attachments = false } = {}) {
   const known = new Set(folders.filter(Boolean));
   JSON.stringify(raw, (key, item) => { if (key === "cwd" && typeof item === "string" && item) known.add(item); return item; });
   // Longer folders first, so a project inside another one keeps its own relative paths.
   const patterns = [...known].sort((a, b) => b.length - a.length).map(share_folder_pattern).filter(Boolean);
   const strip = (value) => {
-    if (typeof value === "string") return patterns.reduce((text, pattern) => text.replace(pattern, (match, separator) => separator ? "" : t('项目目录')), value);
+    if (typeof value === "string") return SHARE_HOME_FOLDERS.reduce((text, pattern) => text.replace(pattern, () => "~"),
+      patterns.reduce((text, pattern) => text.replace(pattern, (match, separator) => separator ? "" : t('项目目录')), value));
     if (Array.isArray(value)) return value.map(strip);
     if (!value || typeof value !== "object") return value;
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, strip(item)]));
@@ -6775,35 +6944,68 @@ function share_payload(raw, room_id, folders = []) {
     if (path === "/api/rooms") kept = { rooms: (body.rooms || []).filter(room => room.id === room_id).map(room => ({ ...room, folder_id: "", archived: false })),
       folders: [], uncategorized_position: 0, participants: [], last_room: room_id };
     else if (/\/messages\?/.test(path)) kept = share_batch(body);
-    responses[path] = strip(share_clean(without_runs(kept)));
+    responses[path] = strip(share_clean(without_runs(kept), attachments));
   }
   return responses;
 }
 
-// The share page waiting for its owner to confirm, with what was found in it.
+// The share dialog's page: its stage ("preparing", "ready", "downloading", "publishing", "published"), what was found in
+// it once read, and the published link once there is one.
 let share_draft = null;
 
 /** Read and clean one room for a share page, then let the owner see what looks sensitive before the file is made. */
 async function share_prepare(room_id = state.room?.id) {
   if (!room_id || state.backup_pending) return;
-  share_draft = null;
+  // The dialog opens at once and says it is reading; the room's answers fill it when they arrive.
+  const draft = share_draft = { room_id, title: state.rooms.find(room => room.id === room_id)?.title || state.room?.title || "", phase: "preparing" };
   state.backup_pending = true;
   publish_view();
   try {
     const exported_at = new Date().toISOString();
     const recorded = await record_share_reads(room_id);
     const models = state.launch.room_models?.room_id === room_id ? state.launch.room_models : null;
-    const responses = share_payload(recorded.responses, room_id, [models?.project_directory, ...(models?.extra_directories || [])]);
+    const folders = [models?.project_directory, ...(models?.extra_directories || [])];
+    const responses = share_payload(recorded.responses, room_id, folders);
+    // The same page with its messages' attachments listed, used when the owner chooses to include them.
+    const responses_with_files = share_payload(recorded.responses, room_id, folders, { attachments: true });
+    const files = share_files(responses_with_files);
+    const file_spots = await share_file_spots(files);
     const room = responses[`/api/rooms/${room_id}`];
     const members = (room.members || []).filter(member => member.status !== "removed").map(member => member.label || display_name(member.name));
     const description = t('{members} 在同一个房间协作 · {messages} 条消息 · {runs} 次执行', { members: members.join("、"), messages: room.message_count, runs: recorded.runs });
-    share_draft = { room_id, title: room.title, description, responses, exported_at, spots: share_sensitive_spots(responses) };
+    // Closed while reading: the owner no longer wants it.
+    if (share_draft === draft) Object.assign(draft, { title: room.title, description, responses, responses_with_files, files, file_spots, include_files: false,
+      exported_at, runs: recorded.runs, spots: share_sensitive_spots(responses), phase: "ready" });
   } catch (error) {
+    if (share_draft === draft) share_draft = null;
     notify("error", t('生成分享网页失败：{value1}', { value1: error.message }));
   } finally {
     state.backup_pending = false;
     publish_view();
   }
+}
+
+/** Markdown reduced to plain words for a one-glance excerpt. */
+function share_plain(text) {
+  return String(text || "").replace(/```[\s\S]*?```/g, " ").replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[`*_>#|~-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** What the share card shows of a prepared page: members, the first question, the latest outcome and the counts. */
+function share_card(draft, link) {
+  const room = draft.responses[`/api/rooms/${draft.room_id}`] || {};
+  const members = (room.members || []).filter(member => member.status !== "removed").map(member => member.label || display_name(member.name));
+  const messages = Object.entries(draft.responses).filter(([path]) => /\/messages\?/.test(path)).flatMap(([, body]) => body.messages || [])
+    .filter(message => message.kind !== "system" && message.text).sort((a, b) => a.id - b.id);
+  // The latest question and what came of it, so the two belong together even in a room used for months.
+  const question = messages.findLast(message => message.author === "用户");
+  const answers = messages.filter(message => message.author !== "用户" && message.id > (question?.id ?? 0));
+  const outcome = answers.findLast(message => message.summary) || answers.at(-1);
+  // Text the owner was asked to check stays off the card, which cannot be taken back once posted; it can be typed in.
+  const flagged = new Set((draft.spots || []).map(spot => spot.where));
+  const text = (message, value) => message && !flagged.has(`#${message.id}`) ? share_plain(value) : "";
+  return { title: draft.title, members, question: text(question, question?.text), outcome: text(outcome, outcome?.summary || outcome?.text),
+    stats: t('{members} 位 AI · {messages} 条消息 · {runs} 次执行', { members: members.length, messages: room.message_count ?? messages.length, runs: draft.runs ?? 0 }),
+    url: link.url, expires: t('{time} 前有效', { time: new Date(link.expires_at).toLocaleString(undefined, { hour12: false }) }) };
 }
 
 /** Drop the share page the owner decided not to make. */
@@ -6815,19 +7017,21 @@ function share_cancel() {
 /** Make the confirmed share page: one read-only file anyone can open, without this computer's details. */
 async function share_room() {
   const draft = share_draft;
-  if (!draft || state.backup_pending) return;
-  share_draft = null;
+  if (!draft || draft.phase !== "ready" || state.backup_pending) return;
+  draft.phase = "downloading";
   state.backup_pending = true;
   publish_view();
   try {
-    const page = await share_page_html({ room_id: draft.room_id, title: draft.title, description: draft.description, exported_at: draft.exported_at, responses: draft.responses });
+    const page = await share_page_html(await share_contents(draft));
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([page], { type: "text/html" }));
     link.download = `${draft.title.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 60) || draft.room_id}.html`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    if (share_draft === draft) share_draft = null;
     notify("info", t('已生成分享网页，请查看浏览器下载；发出前请打开核对一遍内容。'));
   } catch (error) {
+    draft.phase = "ready";
     notify("error", t('生成分享网页失败：{value1}', { value1: error.message }));
   } finally {
     state.backup_pending = false;
@@ -6835,20 +7039,54 @@ async function share_room() {
   }
 }
 
-/** A published link of a room, as this browser keeps it: { id, url, manage_token, expires_at }, or null. */
+/** A room's live share link as the directory lists it ({ url, expires_at }, no manage token), or null. */
 function share_link(room_id) {
-  try {
-    const link = JSON.parse(localStorage.getItem(`${SHARE_LINK_PREFIX}${room_id}`) || "null");
-    // An expired link is gone from the share site; forgetting it here keeps the menu honest.
-    if (link && Date.parse(link.expires_at) <= Date.now()) { localStorage.removeItem(`${SHARE_LINK_PREFIX}${room_id}`); return null; }
-    return link;
-  } catch { return null; }
+  const link = state.rooms.find(room => room.id === room_id)?.share_link;
+  return link && Date.parse(link.expires_at) > Date.now() ? link : null;
 }
 
-/** The published links of the rooms in the directory, without their manage tokens. */
+/** The live share links of the rooms in the directory, by room. */
 function share_links() {
-  return Object.fromEntries(state.rooms.map(room => [room.id, share_link(room.id)]).filter(([, link]) => link)
-    .map(([id, link]) => [id, { url: link.url, expires_at: link.expires_at }]));
+  return Object.fromEntries(state.rooms.map(room => [room.id, share_link(room.id)]).filter(([, link]) => link));
+}
+
+/** Show a room's link as changed at once, before the next directory read carries it. */
+function show_share_link(room_id, link) {
+  state.rooms = state.rooms.map(room => room.id === room_id ? { ...room, share_link: link ? { url: link.url, expires_at: link.expires_at } : null } : room);
+}
+
+/**
+ * A room's share link with its manage token, kept with the room on the computer so any of the owner's devices can renew
+ * or revoke it. A link an earlier version kept only in this browser moves there the first time it is asked for.
+ */
+async function share_link_record(room_id) {
+  const { link } = await request_json(`/api/rooms/${encodeURIComponent(room_id)}/share-link`);
+  if (link) return link;
+  let local = null;
+  try { local = JSON.parse(localStorage.getItem(`${SHARE_LINK_PREFIX}${room_id}`) || "null"); } catch { /* Nothing kept here. */ }
+  if (!local?.id || !local.manage_token || Date.parse(local.expires_at) <= Date.now()) return null;
+  const saved = await save_share_link(room_id, { share_id: local.id, url: local.url, manage_token: local.manage_token, expires_at: local.expires_at });
+  try { localStorage.removeItem(`${SHARE_LINK_PREFIX}${room_id}`); } catch { /* It now lives with the room. */ }
+  return saved;
+}
+
+/** Move every live link an earlier version kept in this browser to its room, so the "shared" list shows them all. */
+async function migrate_local_share_links() {
+  let keys = [];
+  try { keys = Object.keys(localStorage).filter(key => key.startsWith(SHARE_LINK_PREFIX)); } catch { return; }
+  for (const key of keys) {
+    const room_id = key.slice(SHARE_LINK_PREFIX.length);
+    if (!state.rooms.some(room => room.id === room_id)) continue;
+    await share_link_record(room_id).catch(() => {});
+  }
+  if (keys.length) publish_view();
+}
+
+/** Keep (or with null, forget) a room's share link with the room, and show it in the directory at once. */
+async function save_share_link(room_id, link) {
+  const result = await request_json(`/api/rooms/${encodeURIComponent(room_id)}/share-link`, { link });
+  show_share_link(room_id, result.link);
+  return result.link;
 }
 
 /** Send one request to the share site; its error text, or the status, explains a refusal. */
@@ -6863,37 +7101,64 @@ async function share_site_request(method, path, body, token) {
 /** Publish the confirmed share page on the share site, or replace the one this room already has there; the link is copied. */
 async function share_publish(ttl_days = SHARE_DEFAULT_DAYS) {
   const draft = share_draft;
-  if (!draft || state.backup_pending) return;
+  if (!draft || (draft.phase && draft.phase !== "ready") || state.backup_pending) return;
   const days = SHARE_DAYS.includes(Number(ttl_days)) ? Number(ttl_days) : SHARE_DEFAULT_DAYS;
-  const body = { format: SHARE_FORMAT, room_id: draft.room_id, title: draft.title, description: draft.description, exported_at: draft.exported_at, responses: draft.responses, ttl_days: days };
-  const bytes = new Blob([JSON.stringify(body)]).size;
-  if (bytes > SHARE_MAX_BYTES) {
-    notify("error", t('这个房间整理后有 {size}，超过分享链接 5 MB 的上限；请改用“下载网页文件”。', { size: attachment_size(bytes) }));
-    return;
-  }
-  share_draft = null;
+  // The button turns to uploading at once; reading the attachments, when included, happens behind it.
+  draft.phase = "publishing";
   state.backup_pending = true;
   publish_view();
   try {
-    const existing = share_link(draft.room_id);
+    const body = { format: SHARE_FORMAT, ...await share_contents(draft), ttl_days: days };
+    const bytes = new Blob([JSON.stringify(body)]).size;
+    if (bytes > SHARE_MAX_BYTES) {
+      draft.phase = "ready";
+      notify("error", draft.include_files && draft.files.length
+        ? t('这个房间连同附件整理后有 {size}，超过分享链接 5 MB 的上限；请取消“包含附件”，或改用“下载网页文件”。', { size: attachment_size(bytes) })
+        : t('这个房间整理后有 {size}，超过分享链接 5 MB 的上限；请改用“下载网页文件”。', { size: attachment_size(bytes) }));
+      return;
+    }
+    const existing = await share_link_record(draft.room_id);
     let link;
     try {
       const result = existing
-        ? await share_site_request("PUT", `/api/shares/${encodeURIComponent(existing.id)}`, body, existing.manage_token)
+        ? await share_site_request("PUT", `/api/shares/${encodeURIComponent(existing.share_id)}`, body, existing.manage_token)
         : await share_site_request("POST", "/api/shares", body);
-      link = { id: result.id || existing.id, url: result.url || existing.url, manage_token: result.manage_token || existing.manage_token, expires_at: result.expires_at };
+      link = { share_id: result.id || existing.share_id, url: result.url || existing.url, manage_token: result.manage_token || existing.manage_token, expires_at: result.expires_at };
     } catch (error) {
       // The old link is gone from the site (expired, taken down or revoked elsewhere): publish anew.
       if (!existing || ![404, 410].includes(error.status)) throw error;
       const result = await share_site_request("POST", "/api/shares", body);
-      link = { id: result.id, url: result.url, manage_token: result.manage_token, expires_at: result.expires_at };
+      link = { share_id: result.id, url: result.url, manage_token: result.manage_token, expires_at: result.expires_at };
     }
-    try { localStorage.setItem(`${SHARE_LINK_PREFIX}${draft.room_id}`, JSON.stringify(link)); } catch { /* The link still works; only managing it here is lost. */ }
+    // The link is out; keeping it with the room is what lets the owner renew or revoke it later, so a failure here is said.
+    await save_share_link(draft.room_id, link).catch(error => notify("warning", t('链接已发布，但没能保存到房间，之后无法在这里续期或撤销：{value1}', { value1: error.message })));
     const copied = await navigator.clipboard?.writeText(link.url).then(() => true, () => false);
-    const until = new Date(link.expires_at).toLocaleString();
-    notify("info", copied ? t('分享链接已复制，{time} 前有效：{url}', { time: until, url: link.url }) : t('分享链接 {time} 前有效：{url}', { time: until, url: link.url }));
+    // The dialog turns into the published link itself, to copy or open; the room's own data is no longer needed.
+    Object.assign(draft, { phase: "published", link: { url: link.url, expires_at: link.expires_at, copied: Boolean(copied), updated: Boolean(existing), card: share_card(draft, link) }, responses: null, responses_with_files: null });
   } catch (error) {
+    draft.phase = "ready";
     notify("error", t('发布分享链接失败：{value1}', { value1: error.message }));
+  } finally {
+    state.backup_pending = false;
+    publish_view();
+  }
+}
+
+/** Give a room's published link a new lifetime from now, its content unchanged. */
+async function share_renew({ room_id, days = SHARE_DEFAULT_DAYS }) {
+  if (state.backup_pending) return;
+  state.backup_pending = true;
+  publish_view();
+  try {
+    const link = await share_link_record(room_id);
+    if (!link) throw new Error(t('这个房间没有可续期的分享链接'));
+    const result = await share_site_request("POST", `/api/shares/${encodeURIComponent(link.share_id)}/renew`, { ttl_days: SHARE_DAYS.includes(Number(days)) ? Number(days) : SHARE_DEFAULT_DAYS }, link.manage_token);
+    await save_share_link(room_id, { ...link, expires_at: result.expires_at });
+    notify("info", t('已续期，{time} 前有效。', { time: new Date(result.expires_at).toLocaleString(undefined, { hour12: false }) }));
+  } catch (error) {
+    // Gone from the site already: nothing to renew, so it leaves the list.
+    if ([404, 410].includes(error.status)) await save_share_link(room_id, null).catch(() => {});
+    notify("error", t('续期失败：{value1}', { value1: error.message }));
   } finally {
     state.backup_pending = false;
     publish_view();
@@ -6902,14 +7167,16 @@ async function share_publish(ttl_days = SHARE_DEFAULT_DAYS) {
 
 /** Take a room's published link down now; the share site deletes its copy. */
 async function share_revoke(room_id) {
-  const link = share_link(room_id);
-  if (!link || state.backup_pending) return;
+  if (state.backup_pending) return;
   state.backup_pending = true;
   publish_view();
   try {
-    try { await share_site_request("DELETE", `/api/shares/${encodeURIComponent(link.id)}`, null, link.manage_token); }
-    catch (error) { if (![404, 410].includes(error.status)) throw error; }
-    localStorage.removeItem(`${SHARE_LINK_PREFIX}${room_id}`);
+    const link = await share_link_record(room_id);
+    if (link) {
+      try { await share_site_request("DELETE", `/api/shares/${encodeURIComponent(link.share_id)}`, null, link.manage_token); }
+      catch (error) { if (![404, 410].includes(error.status)) throw error; }
+    }
+    await save_share_link(room_id, null);
     notify("info", t('分享链接已撤销，打开它的人会看到“分享不存在”。'));
   } catch (error) {
     notify("error", t('撤销分享链接失败：{value1}', { value1: error.message }));
@@ -7062,7 +7329,7 @@ async function execute_view_action(name, value) {
   if (!["refresh", "create"].includes(name)) state.navigation_version++;
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
-    archives: toggle_archives, backup: backup_room, backup_rooms, share_prepare, share_room, share_cancel, share_publish, share_revoke, share_copy, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
+    archives: toggle_archives, backup: backup_room, backup_rooms, share_prepare, share_room, share_cancel, share_publish, share_include_files, share_revoke, share_renew, share_copy, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_from_composer(event), discard_sending, retry_sending, choose_attachments, remove_attachment, preview_attachment,
     create: ({ folder_id, accepted, rejected }) => submit_room(event, folder_id, { accepted, rejected }), quick_create: quick_create_room, welcome: open_welcome,
     save_context: () => save_context(event), save_topic: () => save_topic(event),
@@ -7097,7 +7364,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, clear_card_drafts, preset_origin, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, remove_launch_projects, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, write_create_relay_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
-  attachment_markup, attachment_size, attachment_file_icon, add_attachments, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
+  attachment_markup, attachment_download_link, attachment_size, attachment_file_icon, add_attachments, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,

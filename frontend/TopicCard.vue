@@ -16,13 +16,25 @@ const room = computed(() => props.preview || view.value.room);
 const topic = computed(() => {
   const value = room.value || {};
   const request = value.user_request?.trim() ? { label: t('用户原文'), text: value.user_request } : value.background?.trim() ? { label: t('背景'), text: value.background } : null;
-  const experts = Object.entries(value.experts || {}).map(([name]) => ({ name, mode: bridge.participant_access(name, value) }));
+  const experts = view.value.share ? spoken(value) : Object.entries(value.experts || {}).map(([name]) => ({ name, mode: bridge.participant_access(name, value) }));
   const limits = value.limits || {};
   const discussing = ["active", "paused"].includes(value.session?.status);
   const bounds = discussing ? [t('本场讨论'), limits.max_rounds ? t('{value1} 轮', { value1: limits.max_rounds }) : t('轮次不限'),
     limits.max_minutes ? t('{value1} 分钟', { value1: limits.max_minutes }) : t('时长不限')].join(" · ") : settings_summary(value);
   return { request, goal: value.session?.goal || value.goal, boundaries: value.boundaries, host: value.host, experts, bounds, discussing };
 });
+
+// A share page lists at most this many of the AIs that spoke, then how many more.
+const SHARED_PEOPLE_SHOWN = 12;
+/**
+ * On a share page: the AIs that spoke in the room, host first, in the order they first spoke. The roster holds only who is
+ * in the room now, and members invited for one task and removed after it are part of what the reader sees.
+ */
+function spoken(value) {
+  const names = [value.host, ...view.value.messages.filter((message) => !message.withdrawn && message.author && message.author !== "用户" && message.author !== "系统").map((message) => message.author)];
+  return [...new Set(names.filter(Boolean))].map((name) => ({ name, mode: "" }));
+}
+const shown_people = computed(() => view.value.share ? topic.value.experts.slice(0, SHARED_PEOPLE_SHOWN) : topic.value.experts);
 
 /**
  * Outside a discussion, the settings that shape everyday collaboration: only what is switched on, plus the chain-round
@@ -68,8 +80,8 @@ defineExpose({ measure });
     <div v-if="topic.boundaries" class="channel-topic-section"><h3>{{ t('边界') }}</h3><p class="channel-topic-text">{{ topic.boundaries }}</p></div>
     </div>
     <UButton v-if="topic_overflows || topic_expanded" :label="topic_expanded ? t('收起') : t('展开全文')" :trailing-icon="topic_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" @click="topic_expanded = !topic_expanded" />
-    <div class="channel-topic-section channel-topic-config"><h3>{{ t('参与配置') }}</h3><div class="channel-topic-people">
-      <span v-for="person in topic.experts" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small>{{ person.name === topic.host ? t('主持 · {value1}', { value1: person.mode }) : person.mode }}</small></span>    </div><small v-if="topic.bounds && (topic.discussing || preview)" class="channel-topic-bounds">{{ topic.bounds }}</small>
-      <small v-else-if="topic.bounds && view.share" class="channel-topic-bounds">{{ topic.bounds }}</small><button v-else-if="topic.bounds" type="button" class="channel-topic-bounds" :title="t('查看协作设置')" @click="act('tab', 'overview')">{{ topic.bounds }}</button></div>
+    <div class="channel-topic-section channel-topic-config"><h3>{{ view.share ? t('参与的 AI') : t('参与配置') }}</h3><div class="channel-topic-people">
+      <span v-for="person in shown_people" :key="person.name" class="channel-topic-person"><UAvatar :src="bridge.identities[person.name]?.icon" :text="bridge.identities[person.name]?.initials" :alt="person.name" size="2xs" class="channel-avatar" :class="bridge.identities[person.name]?.style" />{{ bridge.display_name(person.name) }}<small v-if="view.share">{{ person.name === topic.host ? t('主持') : '' }}</small><small v-else>{{ person.name === topic.host ? t('主持 · {value1}', { value1: person.mode }) : person.mode }}</small></span><small v-if="topic.experts.length > shown_people.length" class="channel-topic-more">{{ t('等 {count} 位', { count: topic.experts.length }) }}</small>    </div><small v-if="topic.bounds && (topic.discussing || preview)" class="channel-topic-bounds">{{ topic.bounds }}</small>
+      <button v-else-if="topic.bounds && !view.share" type="button" class="channel-topic-bounds" :title="t('查看协作设置')" @click="act('tab', 'overview')">{{ topic.bounds }}</button></div>
   </section>
 </template>

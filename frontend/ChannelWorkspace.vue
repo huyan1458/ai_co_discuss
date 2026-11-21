@@ -29,6 +29,13 @@ const { view, bridge, field, act, pending } = inject("discussion");
 const room = computed(() => view.value.room);
 // A share page: one room, read only, with its messages and executions and nothing that would change it.
 const share = computed(() => view.value.share);
+// On a share page these tabs stay in place, greyed out over sample rows, saying what they hold in a room of one's own.
+const SHARE_LOCKED = {
+  private: { icon: "i-lucide-message-square", title: t("私聊"), text: t("在自己的房间里，可以单独和某个 AI 私聊，看它这次执行的每一步，不打扰其他成员。分享页不包含私聊。") },
+  overview: { icon: "i-lucide-sliders-horizontal", title: t("房间设置"), text: t("在自己的房间里，这里管理成员、模型、强度、项目权限和主持人权限。分享页只能阅读。") },
+  files: { icon: "i-lucide-files", title: t("项目文件"), text: t("在自己的房间里，这里浏览项目目录、预览成员改动过的文件。分享页不包含项目文件。") },
+};
+const SHARE_SAMPLE_ROWS = [92, 76, 84, 60, 88, 70, 80, 54];
 // The external experts the new-room panel asked for: the room it created adds their seats by itself.
 watch(() => [room.value?.id, view.value.launch.room_models], async ([id, models]) => {
   const waiting = invite_after_creation.value;
@@ -67,6 +74,8 @@ const EFFECT_OPTIONS = [{ value: "full", label: t("完整") }, { value: "reduced
 // Text size inside message cards; channel.css maps each value to --card-text-scale.
 const CARD_TEXT_OPTIONS = [{ value: "small", label: t("小") }, { value: "medium", label: t("中") }, { value: "large", label: t("大") }];
 const FOLD_OPTIONS = [{ value: "loose", label: t("宽松") }, { value: "standard", label: t("标准") }, { value: "compact", label: t("紧凑") }];
+// How much a folded answer keeps; ChannelDiscussion.vue MESSAGE_FOLD_KEEP_SHARES gives each level's share of the screen.
+const FOLD_KEEP_OPTIONS = [{ value: "short", label: t("少") }, { value: "medium", label: t("中") }, { value: "long", label: t("多") }];
 const READING_WIDTHS = { narrow: { label: t("窄"), width: 720 }, default: { label: t("默认"), width: 960 }, wide: { label: t("宽"), width: 1240 } };
 const RAIL_MIN = 220;
 const RAIL_MAX = 440;
@@ -85,7 +94,10 @@ const reading_width = ref(saved_layout.reading);
 const effects = ref(saved_layout.effects);
 const fold_level = ref(saved_layout.fold);
 const card_text = ref(saved_layout.card_text);
+const fold_keep = ref(saved_layout.fold_keep);
 provide("fold_level", fold_level);
+provide("fold_keep", fold_keep);
+provide("card_text", card_text);
 const rail_width = ref(saved_layout.rail);
 const nav_width = ref(saved_layout.nav);
 const viewport_width = ref(typeof window === "undefined" ? NAV_DEFAULT + CONTENT_MIN + DIVIDER_WIDTH : window.innerWidth);
@@ -98,11 +110,10 @@ const hosted = computed(() => view.value.launch.projects_restricted === true);
 watch(hosted, (value) => { if (value && !saved_layout.rail_chosen) rail_collapsed.value = true; }, { immediate: true });
 const rail_inline = computed(() => viewport_width.value >= RAIL_BREAKPOINT);
 // Below the rail breakpoint the room sidebar opens as a drawer too, instead of squeezing the transcript.
-const nav_docked = computed(() => !share.value && rail_inline.value && !nav_collapsed.value);
+const nav_docked = computed(() => rail_inline.value && !nav_collapsed.value);
 // The rail and channel tools stay in place without a room so the layout never jumps; room-only controls are disabled.
 // A file preview docked beside the messages takes the rail's place until it closes; the rail's own setting is kept.
-// A share page has no room board: its states and controls are for whoever runs the room.
-const show_rail = computed(() => !share.value && (invited_page.value || !workflow_page.value && view.value.tab === "discussion") && !rail_collapsed.value && !file_preview.dock_width);
+const show_rail = computed(() => (invited_page.value || !workflow_page.value && view.value.tab === "discussion") && !rail_collapsed.value && !file_preview.dock_width);
 const rail_toggles = computed(() => rail_inline.value && !file_preview.dock_width);
 const info_label = computed(() => rail_toggles.value && (invited_page.value || view.value.tab === "discussion") ? (rail_collapsed.value ? t("展开房间概览") : t("收起房间概览")) : t("讨论进度"));
 const LIVE_EXECUTION = ["dispatched", "started"];
@@ -158,7 +169,7 @@ onBeforeUnmount(() => narrow_query.removeEventListener("change", track_narrow));
 const source_filter_content = computed(() => (narrow.value
   ? { align: "end", sideOffset: 4, alignOffset: -1000, collisionPadding: 8 }
   : { align: "end", sideOffset: 4 }));
-const show_work_status = computed(() => !share.value && !middle_page.value && Boolean(room.value) && !room.value.archived && !(rail_inline.value && show_rail.value));
+const show_work_status = computed(() => !middle_page.value && Boolean(room.value) && !room.value.archived && !(rail_inline.value && show_rail.value));
 const brief_preview = computed(() => {
   const template = document.createElement("template");
   template.innerHTML = room.value?.rendered_brief || "";
@@ -185,7 +196,7 @@ watch(reading_width, (value) => { document.documentElement.style.setProperty("--
 // Portalled menus and dialogs sit outside the shell, so the preference marks the document root.
 watch(effects, (value) => { document.documentElement.dataset.effects = value; save_layout(); }, { immediate: true });
 watch(card_text, (value) => { document.documentElement.dataset.cardText = value; save_layout(); }, { immediate: true });
-watch(fold_level, save_layout);
+watch([fold_level, fold_keep], save_layout);
 watch(nav_collapsed, save_layout);
 watch(rail_collapsed, save_layout);
 onMounted(() => window.addEventListener("resize", update_viewport_width));
@@ -199,7 +210,8 @@ onMounted(() => {
 });
 onBeforeUnmount(() => topbar_observer?.disconnect());
 onBeforeUnmount(() => document.removeEventListener("pointerdown", collapse_brief_outside));
-const selected_tab = computed({ get: () => view.value.tab, set: (value) => act("tab", value) });
+// While the room is being created only its message view exists, so the tabs show it and lock the rest.
+const selected_tab = computed({ get: () => room.value ? view.value.tab : "discussion", set: (value) => act("tab", value) });
 const project_directory = computed(() => view.value.launch.room_models?.room_id === room.value?.id
   ? view.value.launch.room_models?.project_directory || "" : "");
 // The main project directory first, then the room's other ones.
@@ -211,12 +223,12 @@ const project_directories = computed((previous) => {
 /** Room tools keep their positions; files shows a hint until a project directory is saved. */
 const tabs = computed(() => [
   { value: "discussion", label: t("消息"), icon: "i-lucide-messages-square" },
-  // A share page carries the room's messages and executions only.
-  ...(share.value ? [] : [{ value: "private", label: t("私聊"), icon: "i-lucide-message-square", ui: { linkLeadingIcon: "is-private-icon" } }]),
+  { value: "private", label: t("私聊"), icon: "i-lucide-message-square", ui: { linkLeadingIcon: "is-private-icon" } },
   { value: "timeline", label: t("执行"), icon: "i-lucide-chart-gantt" },
-  ...(share.value ? [] : [{ value: "overview", label: t("房间"), icon: "i-lucide-sliders-horizontal" },
-    { value: "files", label: t("文件"), icon: "i-lucide-files", title: project_directory.value || "" }]),
+  { value: "overview", label: t("房间"), icon: "i-lucide-sliders-horizontal" },
+  { value: "files", label: t("文件"), icon: "i-lucide-files", title: project_directory.value || "" },
 ]);
+const creating_tabs = computed(() => tabs.value.map((item) => ({ ...item, disabled: item.value !== "discussion" })));
 /** The workflow library belongs to this computer, not a room, so it is not a room tab: the sidebar
  * has its own 工作流 section, and a workflow chosen there fills the middle in place of the room (with no room selected too). */
 const workflow_library = use_workflow_library();
@@ -331,6 +343,7 @@ function read_layout() {
       reading: Object.hasOwn(READING_WIDTHS, saved.reading) ? saved.reading : "default",
       effects: saved.effects === "reduced" ? "reduced" : "full",
       fold: FOLD_OPTIONS.some((option) => option.value === saved.fold) ? saved.fold : "loose",
+      fold_keep: FOLD_KEEP_OPTIONS.some((option) => option.value === saved.fold_keep) ? saved.fold_keep : "medium",
       card_text: CARD_TEXT_OPTIONS.some((option) => option.value === saved.card_text) ? saved.card_text : "medium",
       rail: Number.isFinite(saved.rail) ? Math.min(RAIL_MAX, Math.max(RAIL_MIN, saved.rail)) : RAIL_DEFAULT,
       nav: Number.isFinite(saved.nav) ? Math.min(NAV_MAX, Math.max(NAV_MIN, saved.nav)) : default_nav_width(),
@@ -339,7 +352,7 @@ function read_layout() {
       rail_collapsed: saved.rail_collapsed === true,
       rail_chosen: typeof saved.rail_collapsed === "boolean",
     };
-  } catch { return { reading: "default", effects: "full", fold: "loose", card_text: "medium", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false, rail_collapsed: false, rail_chosen: false }; }
+  } catch { return { reading: "default", effects: "full", fold: "loose", fold_keep: "medium", card_text: "medium", rail: RAIL_DEFAULT, nav: default_nav_width(), collapsed: false, brief_collapsed: false, rail_collapsed: false, rail_chosen: false }; }
 }
 
 /** Preserve the existing responsive navigation width on first use. */
@@ -350,7 +363,7 @@ function default_nav_width() {
 
 /** Keep layout preferences local without blocking adjustments when storage is unavailable. */
 function save_layout() {
-  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ reading: reading_width.value, effects: effects.value, fold: fold_level.value, card_text: card_text.value, rail: rail_width.value, nav: nav_width.value, collapsed: nav_collapsed.value, brief_collapsed: brief_collapsed.value, rail_collapsed: rail_collapsed.value })); }
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ reading: reading_width.value, effects: effects.value, fold: fold_level.value, fold_keep: fold_keep.value, card_text: card_text.value, rail: rail_width.value, nav: nav_width.value, collapsed: nav_collapsed.value, brief_collapsed: brief_collapsed.value, rail_collapsed: rail_collapsed.value })); }
   catch { /* The current page can still use the selected layout. */ }
 }
 
@@ -450,14 +463,13 @@ function resize_nav_by_key(event) {
 
 <template>
   <div class="channel-shell" :class="{ 'channel-share': share, 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': !nav_docked, 'channel-has-rail': show_rail }" :style="layout_style">
-    <ChannelSidebar v-if="nav_docked" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @invited="open_invited" @settings="modal = 'settings'" />
+    <ChannelSidebar v-if="nav_docked" :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @invited="open_invited" @settings="modal = 'settings'" />
     <div v-if="nav_docked" class="channel-nav-resizer" role="separator" tabindex="0" :aria-label="t('调整房间栏宽度')" aria-orientation="vertical" aria-controls="channel-sidebar" :aria-valuemin="NAV_MIN" :aria-valuemax="nav_max" :aria-valuenow="effective_nav_width" :aria-valuetext="t('{count} 像素', { count: effective_nav_width })" :title="t('拖动调整房间栏宽度，也可使用方向键')" @pointerdown="start_nav_resize" @pointermove="resize_nav" @pointerup="finish_nav_resize" @pointercancel="finish_nav_resize" @lostpointercapture="finish_nav_resize" @keydown="resize_nav_by_key"></div>
 
     <main class="channel-main">
       <div ref="topbar" class="channel-topbar" :class="{ 'is-overlay': !middle_page && (room || creating_preview) && view.tab === 'discussion' }">
         <header class="channel-header">
-          <template v-if="share"><a class="channel-share-brand" :href="share.home" target="_blank" rel="noopener noreferrer" :title="t('AI CoDiscuss：让多个 AI 在同一个房间协作')"><span class="channel-share-mark" aria-hidden="true"><i></i><i></i><i></i></span>AI CoDiscuss</a></template>
-          <UTooltip v-else-if="rail_inline" :text="nav_collapsed ? t('展开房间栏') : t('收起房间栏')"><UButton icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-desktop-nav channel-icon-button channel-panel-toggle" :aria-label="nav_collapsed ? t('展开房间栏') : t('收起房间栏')" :aria-expanded="!nav_collapsed" aria-controls="channel-sidebar" @click="nav_collapsed = !nav_collapsed" /></UTooltip>
+          <UTooltip v-if="rail_inline" :text="nav_collapsed ? t('展开房间栏') : t('收起房间栏')"><UButton icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-desktop-nav channel-icon-button channel-panel-toggle" :aria-label="nav_collapsed ? t('展开房间栏') : t('收起房间栏')" :aria-expanded="!nav_collapsed" aria-controls="channel-sidebar" @click="nav_collapsed = !nav_collapsed" /></UTooltip>
           <UButton v-else icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-mobile-nav channel-icon-button channel-panel-toggle" :aria-label="t('打开房间导航')" :aria-expanded="nav_open" @click="nav_open = true" />
           <template v-if="workflow_page">
             <span class="channel-title-icon"><UIcon name="i-lucide-network" /></span>
@@ -476,6 +488,7 @@ function resize_nav_by_key(event) {
             <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.title || creating_title">{{ room?.title || creating_title || t('共议') }}</h1></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">{{ t("已存档") }}</UBadge></div>
           </template>
           <span v-if="room && !middle_page" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ t("{count} 条记录", { count: room.message_count }) }}<template v-if="created_label"><span>·</span><time :datetime="room.created_at" :title="new Date(room.created_at).toLocaleString(locale, { hour12: false })">{{ created_label }}</time></template></span>
+          <span v-else-if="creating_preview && !middle_page" class="channel-header-context">{{ t("消息") }}<span>·</span>{{ t("正在创建") }}</span>
           <div class="channel-header-actions">
             <button v-if="show_work_status" type="button" class="channel-work-status" :class="`is-${work_status.tone}`" :title="work_status.title" :aria-label="t('执行状态：{status}；打开房间概览', { status: work_status.title.replaceAll('\n', t('，')) })" @click="toggle_info">
               <span v-if="work_status.members.length" class="channel-work-avatars"><UAvatar v-for="member in work_status.members" :key="member.id" :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="2xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" /></span>
@@ -488,10 +501,10 @@ function resize_nav_by_key(event) {
             </form>
             <UDropdownMenu v-if="!share && !middle_page && view.tab === 'discussion'" :items="source_filter_items" :disabled="!room" :content="source_filter_content" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" :aria-label="t('筛选消息与卡片')" :title="t('筛选消息与卡片')" :disabled="!room" /></UDropdownMenu>
           </div>
-          <UTooltip v-if="!workflow_page && !share" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_toggles && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
+          <UTooltip v-if="!workflow_page" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_toggles && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
         </header>
-        <div v-if="room && !middle_page" class="channel-tabbar">
-          <UTabs v-model="selected_tab" :items="tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" :aria-label="t('房间视图')" />
+        <div v-if="(room || creating_preview) && !middle_page" class="channel-tabbar">
+          <UTabs v-model="selected_tab" :items="room ? tabs : creating_tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" :aria-label="t('房间视图')" />
         </div>
         <section v-if="show_brief && !middle_page" class="channel-host-brief" :class="{ 'is-collapsed': brief_collapsed }" :aria-label="t('主持简报')">
           <div class="channel-brief-inner">
@@ -511,7 +524,12 @@ function resize_nav_by_key(event) {
       <div v-if="room" v-show="!middle_page" class="channel-body" :class="{ 'channel-body-discussion': view.tab === 'discussion' }">
         <div class="channel-content">
         <ChannelDiscussion v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" />
-        <div v-if="view.tab === 'overview'" v-keep-reading class="content-page merged-page" role="tabpanel" :aria-label="t('房间')">
+        <div v-if="share && SHARE_LOCKED[view.tab]" class="content-page channel-share-locked" role="tabpanel" :aria-label="SHARE_LOCKED[view.tab].title">
+          <div class="channel-share-locked-sample" aria-hidden="true"><div v-for="row in SHARE_SAMPLE_ROWS" :key="row" class="channel-share-locked-row" :style="{ width: `${row}%` }"></div></div>
+          <div class="channel-share-locked-note"><UIcon :name="SHARE_LOCKED[view.tab].icon" /><h2>{{ SHARE_LOCKED[view.tab].title }}</h2><p>{{ SHARE_LOCKED[view.tab].text }}</p>
+            <UButton :to="share.home" target="_blank" rel="noopener noreferrer" icon="i-lucide-sparkles" :label="t('用自己的 AI 开一个房间')" color="primary" /></div>
+        </div>
+        <div v-else-if="view.tab === 'overview'" v-keep-reading class="content-page merged-page" role="tabpanel" :aria-label="t('房间')">
           <RoomOverview />
           <TopicPanel v-if="!free_room" section="access" @open="modal = $event" @detail="open_detail" />
         </div>
@@ -523,13 +541,13 @@ function resize_nav_by_key(event) {
           <ExecutionTimeline v-if="timeline_view === 'waterfall'" @detail="open_detail" />
           <EventLog v-else @detail="open_detail" />
         </div>
-        <div v-if="view.tab === 'files'" v-keep-reading class="content-page" role="tabpanel" :aria-label="t('文件')">
+        <div v-if="view.tab === 'files' && !share" v-keep-reading class="content-page" role="tabpanel" :aria-label="t('文件')">
           <ProjectFiles v-if="project_directory" :key="room.id" :directories="project_directories" />
           <div v-else-if="view.launch.room_models?.loading || (!view.launch.room_models && view.launch.available)" class="grid gap-4 py-4" role="status" :aria-label="t('正在读取项目目录')"><USkeleton class="h-6 w-40" /><USkeleton v-for="row in 6" :key="row" class="h-5 w-full" /></div>
           <p v-else-if="view.launch.room_models?.error" class="channel-files-unset" role="status">{{ view.launch.room_models.error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" @click="bridge.reload_room_models()" /></p>
           <p v-else class="channel-files-unset" role="status">{{ t("当前未设置项目目录") }}</p>
         </div>
-        <div v-if="view.tab === 'private'" v-keep-reading class="content-page private-page">
+        <div v-if="view.tab === 'private' && !share" v-keep-reading class="content-page private-page">
           <PrivateChat :key="room.id" />
         </div>
         </div>
@@ -578,7 +596,7 @@ function resize_nav_by_key(event) {
       </template>
     </UModal>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" :aria-label="t('调整右侧栏宽度')" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="t('{count} 像素', { count: rail_width })" :title="t('拖动调整右侧栏宽度，也可使用左右方向键')" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
-    <aside v-if="show_rail" id="channel-member-rail" v-keep-reading class="channel-member-rail" :aria-label="t('当前焦点与讨论进度')">
+    <aside v-if="show_rail" id="channel-member-rail" v-keep-reading class="channel-member-rail" :inert="share ? true : undefined" :aria-label="t('当前焦点与讨论进度')">
       <section class="channel-rail-board"><InvitedRoomRail v-if="invited_page" /><FreeBoard v-else-if="room" @history="open_consensus()" />
         <div v-else-if="creating_preview" class="progress-board is-docked"><header class="pb-header"><strong>{{ t("房间") }}</strong><span class="pb-mode">{{ creating_preview.host_name ? t('{value1} 主持', { value1: creating_preview.host_name }) : t('无主持人') }}</span></header>
           <section class="pb-status is-primary" :aria-label="t('房间状态')"><div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ t("正在创建") }}</strong></div><p class="pb-status-detail">{{ creating_preview.detail }}</p></section>
@@ -592,13 +610,13 @@ function resize_nav_by_key(event) {
     </aside>
 
     <USlideover v-model:open="nav_open" side="left" :title="t('房间导航')" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-navigation-drawer' }">
-      <template #content><ChannelSidebar @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @invited="open_invited" @settings="nav_open = false; modal = 'settings'" /></template>
+      <template #content><ChannelSidebar :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @workflows="open_workflows" @invited="open_invited" @settings="nav_open = false; modal = 'settings'" /></template>
     </USlideover>
     <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :content="{ onInteractOutside: keep_drawer_for_file_float }" :title="invited_page ? t('外部房间') : room.title" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.host ? t('{value1} 主持', { value1: bridge.display_name(room.host) }) : ''" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
-      <template #body><InvitedRoomRail v-if="invited_page" drawer /><FreeBoard v-else @history="info_open = false; open_consensus()" /></template>
+      <template #body><InvitedRoomRail v-if="invited_page" drawer /><div v-else-if="share" inert class="channel-share-inert"><FreeBoard /></div><FreeBoard v-else @history="info_open = false; open_consensus()" /></template>
     </USlideover>
     <FilePreview />
     <JoinInvitedDialog />
-    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" v-model:fold-level="fold_level" v-model:card-text="card_text" :fold-options="FOLD_OPTIONS" :card-text-options="CARD_TEXT_OPTIONS" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
+    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" v-model:fold-level="fold_level" v-model:fold-keep="fold_keep" v-model:card-text="card_text" :fold-options="FOLD_OPTIONS" :fold-keep-options="FOLD_KEEP_OPTIONS" :card-text-options="CARD_TEXT_OPTIONS" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
   </div>
 </template>

@@ -1,3 +1,9 @@
+<script>
+// A share page replays the run once by itself, the first time its reader opens the timeline; switching tabs back and
+// forth does not start it again.
+let share_replayed = false;
+</script>
+
 <script setup>
 import { t, locale } from './i18n.js';
 /**
@@ -332,6 +338,19 @@ function pause() { replay.playing = false; }
 function restart() { play_position = 0; Object.assign(replay, { position: 0, playing: true }); }
 function scrub(event) { play_position = Number(event.target.value); Object.assign(replay, { position: play_position, playing: false }); load_run_notes(); }
 function close_player() { show_player.value = false; Object.assign(replay, { position: null, playing: false }); }
+/** The share page's replay button: start, pause, or go on from where it paused. */
+function toggle_replay() {
+  show_player.value = true;
+  if (replay.playing) pause(); else play();
+}
+watch(can_replay, (ready) => {
+  if (!ready || !view.value.share || share_replayed) return;
+  // A reader who asked for less motion starts it with the button instead.
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  share_replayed = true;
+  show_player.value = true;
+  play();
+}, { immediate: true });
 // Another room starts from its real, final state.
 watch(room_id, close_player);
 
@@ -651,7 +670,8 @@ const selected_notes = computed(() => {
           <span v-if="replaying" class="wf-state is-replay">{{ t('回放中 · {value1}', { value1: clock(view_time) }) }}</span>
           <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? t('{value1} 个进行中', { value1: digest.running.length }) : t('均已结束') }}</span>
           <!-- On a share page the replay is the quickest way to see several AIs at work, so it starts from the top. -->
-          <button v-if="view.share && can_replay && !replaying" type="button" class="wf-text-button wf-replay-open" @click="show_player = true; play()"><UIcon name="i-lucide-play" />{{ t('回放最近这次任务') }}</button>
+          <button v-if="view.share && can_replay" type="button" class="wf-share-replay" :class="{ 'is-playing': replay.playing }" @click="toggle_replay">
+            <UIcon :name="replay.playing ? 'i-lucide-pause' : 'i-lucide-play'" />{{ replay.playing ? t('暂停回放') : replaying ? t('继续回放') : t('回放协作过程') }}</button>
         </div>
         <p v-if="headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
       </header>
@@ -842,7 +862,7 @@ const selected_notes = computed(() => {
         <span v-if="member_tone.size > 1">{{ t('颜色区分成员，深浅区分模型与工具') }}</span>
         <span v-if="axis.folds.length && !compact"><i class="wf-swatch is-fold" aria-hidden="true"></i>{{ t('已折叠 {value1} 段超过 {value2} 分钟的空闲', { value1: axis.folds.length, value2: FOLD_GAP_MS / 60000 }) }}</span>
         <span v-if="timeline.executions.length >= timeline.execution_limit">{{ t('只列出最近 {value1} 次讨论执行与 {value2} 次协作执行', { value1: timeline.execution_limit, value2: timeline.execution_limit }) }}</span>
-        <button v-if="can_replay && !show_player" type="button" class="wf-text-button wf-replay-open" @click="show_player = true"><UIcon name="i-lucide-play" />{{ t('回放最近这次任务') }}</button>
+        <button v-if="can_replay && !show_player && !view.share" type="button" class="wf-text-button wf-replay-open" @click="show_player = true"><UIcon name="i-lucide-play" />{{ t('回放最近这次任务') }}</button>
       </footer>
       <div v-if="can_replay && show_player" class="wf-player">
         <button type="button" class="wf-player-button" :aria-label="replay.playing ? t('暂停回放') : t('回放最近这次任务')" @click="replay.playing ? pause() : play()">
@@ -1172,6 +1192,11 @@ const selected_notes = computed(() => {
 .wf-key .wf-swatch:not(:first-child) { margin-left: 8px; }
 .wf-key .wf-swatch.is-model, .wf-key .wf-swatch.is-tool { --tone: var(--wf-muted); }
 .wf-replay-open { margin-left: auto; }
+/* The share page's replay: the one thing a first-time reader should press, so it looks like a button. */
+.wf-share-replay { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; height: 30px; padding: 0 14px; border: 0; border-radius: 15px; background: var(--ui-primary); color: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; box-shadow: 0 2px 10px color-mix(in srgb, var(--ui-primary) 40%, transparent); transition: filter .15s; }
+.wf-share-replay:hover { filter: brightness(1.1); }
+.wf-share-replay.is-playing { background: var(--wf-hover, #ffffff14); color: var(--wf-text); box-shadow: none; }
+.wf-share-replay :deep(svg) { width: 14px; height: 14px; }
 /* Playback: replay a finished run on the same drawing. */
 .wf-player { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 16px; border-top: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; }
 .wf-player-button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--wf-border); border-radius: 50%; background: var(--wf-surface); color: var(--wf-text); cursor: pointer; }

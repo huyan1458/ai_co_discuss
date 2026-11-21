@@ -87,7 +87,10 @@ async function sync() {
     if ((state.value.version && fresh.version && fresh.version !== state.value.version) || outdated(fresh.version)) { window.location.reload(); return; }
     // The entry's network checks are not part of the state; the last answer stays until the next full reload.
     if (JSON.stringify({ ...fresh, entry: undefined }) !== JSON.stringify({ ...state.value, entry: undefined })) state.value = { ...fresh, entry: fresh.entry ?? state.value.entry };
-  } catch { /* The panel is restarting or stopped; the next round asks again. */ }
+  } catch {
+    // A previously healthy response cannot establish relay health while the panel is unreachable.
+    if (state.value.online_site) state.value = { ...state.value, relay_health: { state: 'unknown', reason: 'unavailable' } };
+  }
   finally { syncing = false; }
 }
 

@@ -43,15 +43,13 @@ const LABELLED_TOOLBAR_WIDTH = 680;
 const narrow = ref(false);
 // Whether the toolbar shows words goes by the canvas's own width only: a portrait tablet stacks the page yet has room for them.
 const icons_only = computed(() => narrow.value);
-// Sizes the layout leaves for each kind of node, and the gaps between columns and rows.
-// Member, host and sub-workflow cards are squares (the drag bar is inside the member's square).
+// Layout reads each node's size as Vue Flow measured it (node_size), so restyling a node needs no change here; these are
+// only its first guess for a node not drawn yet (a workflow opened without positions, a node just added).
+// Member, host and sub-workflow nodes share one flat shape and one delete (user 2026-11-21, #6830); the start stays small.
 // A card on the canvas only says who it is (user 2026-11-17); its settings live in the 专家配置 panel.
-const NODE_WIDTH = { card: 240, start: 96, host: 136, sub: 136 };
-const NODE_HEIGHT = { card: 96, start: 60, host: 136, sub: 136 };
+const NODE_WIDTH = { card: 240, start: 96, host: 240, sub: 240 };
+const NODE_HEIGHT = { card: 96, start: 60, host: 96, sub: 96 };
 const COLUMN_GAP = 120, ROW_GAP = 28;
-// How far below a node's top its round connection points sit: in its middle. Layout lines these up, not the nodes'
-// tops, so arrows between nodes of different heights run straight.
-const HANDLE_Y = { card: 48, start: 30, host: 68, sub: 68 };
 // An arrow's note sits on its middle: the gap it crosses leaves this much on each side of the note (ports, arrowhead).
 const NOTE_CHAR = 11, NOTE_PAD = 16, NOTE_MARGIN = 36;
 // A column an arrow skips over is lifted this far clear of the line the arrow runs along (room for its note too).
@@ -80,10 +78,10 @@ const PRESET_FIELDS = ["label", "description", "project_access", "model", "effor
 /** A stored node as Vue Flow draws it; a card is dragged by its top bar so its own buttons and swipes keep working. */
 function to_node(item) {
   const base = { id: item.id, type: item.type, position: { x: item.x || 0, y: item.y || 0 } };
-  // Not by Delete: the key would take the card off the canvas but leave the member in the workflow (its × removes both).
+  // Not by Vue Flow's Delete: the key presses the node's × instead (delete_key), so it asks twice like the button.
   if (item.type === "card") return { ...base, data: { card: item.card }, dragHandle: NODE_HANDLE, deletable: false };
-  if (item.type === "host") return { ...base, data: { label: item.label || "" }, dragHandle: NODE_HANDLE };
-  if (item.type === "sub") return { ...base, data: { sub: item.sub }, dragHandle: NODE_HANDLE };
+  if (item.type === "host") return { ...base, data: { label: item.label || "" }, dragHandle: NODE_HANDLE, deletable: false };
+  if (item.type === "sub") return { ...base, data: { sub: item.sub }, dragHandle: NODE_HANDLE, deletable: false };
   return { ...base, deletable: false, dragHandle: NODE_HANDLE };
 }
 
@@ -92,14 +90,29 @@ function to_edge({ source, target, label, offset }) {
   return { id: `${source}>${target}`, source, target, type: "flow", data: { label: label || "", offset: offset || 0 }, markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 } };
 }
 
-// A member card's × asks twice, as deleting a sub-workflow does: removing it takes the member out of the workflow.
-const removing_card = ref(""), REMOVE_ARMED_MS = 3000;
+// Every node's × asks twice (user 2026-11-21): the first press turns it into a red bin for a few seconds.
+const removing = ref(""), REMOVE_ARMED_MS = 3000;
 let removing_timer = 0;
-function press_remove(card) {
+function press_remove(node) {
   clearTimeout(removing_timer);
-  if (removing_card.value === card) { removing_card.value = ""; remove_card(card); return; }
-  removing_card.value = card;
-  removing_timer = setTimeout(() => { removing_card.value = ""; }, REMOVE_ARMED_MS);
+  if (removing.value !== node.id) {
+    removing.value = node.id;
+    removing_timer = setTimeout(() => { removing.value = ""; }, REMOVE_ARMED_MS);
+    return;
+  }
+  removing.value = "";
+  if (node.type === "card") remove_card(node.data.card);
+  else remove_node(node.id);
+}
+
+/** Delete or Backspace on a selected node presses its ×; arrows are still deleted by Vue Flow. */
+function delete_key(event) {
+  if (event.key !== "Delete" && event.key !== "Backspace") return;
+  if (event.target.closest?.("input, textarea, [contenteditable]")) return;
+  // `instance` sits in a ref, which unwraps the store's computed getters; read either form.
+  const selected = instance.value?.getSelectedNodes;
+  const node = (Array.isArray(selected) ? selected : selected?.value || []).find((item) => item.type !== "start");
+  if (node) press_remove(node);
 }
 
 /** Set the note on a host node or an arrow (trimmed when stored); `kind` is "nodes" or "edges". */
@@ -135,10 +148,19 @@ function initial_nodes() {
   }
   const left = Math.max(...list.map((node) => node.position.x + NODE_WIDTH[node.type])) + COLUMN_GAP;
   missing.forEach((card, index) => list.push(to_node({ id: `card_${card}`, type: "card", card,
-    x: left, y: (index - (missing.length - 1) / 2) * (NODE_HEIGHT.card + ROW_GAP) - HANDLE_Y.card })));
+    x: left, y: (index - (missing.length - 1) / 2) * (NODE_HEIGHT.card + ROW_GAP) - NODE_HEIGHT.card / 2 })));
   return { list, edges: saved.edges };
 }
 const initial = initial_nodes();
+
+/**
+ * A node's size: as Vue Flow measured it, else the first guess for its kind. Its round connection points sit in its
+ * middle (half its height); layout lines these up, not the nodes' tops, so arrows between different heights run straight.
+ */
+function node_size(node) {
+  const measured = instance.value?.findNode(node.id)?.dimensions;
+  return { width: measured?.width || NODE_WIDTH[node.type] || NODE_WIDTH.card, height: measured?.height || NODE_HEIGHT[node.type] || NODE_HEIGHT.card };
+}
 const nodes = ref(initial.list);
 const edges = ref(initial.edges.filter((edge) => nodes.value.some((node) => node.id === edge.source) && nodes.value.some((node) => node.id === edge.target)).map(to_edge));
 const known = new Set(cards.value);
@@ -150,11 +172,10 @@ const STAGE_PADDING = 20, STAGE_TITLE = 26;
 const stage_frames = computed(() => stages.flatMap((stage) => {
   const members = nodes.value.filter((node) => stage.nodes.includes(node.id));
   if (!members.length) return [];
-  const size = (node) => [node.dimensions?.width || NODE_WIDTH[node.type] || NODE_WIDTH.card, node.dimensions?.height || NODE_HEIGHT[node.type] || NODE_HEIGHT.card];
   const left = Math.min(...members.map((node) => node.position.x)) - STAGE_PADDING;
   const top = Math.min(...members.map((node) => node.position.y)) - STAGE_PADDING - STAGE_TITLE;
-  const right = Math.max(...members.map((node) => node.position.x + size(node)[0])) + STAGE_PADDING;
-  const bottom = Math.max(...members.map((node) => node.position.y + size(node)[1])) + STAGE_PADDING;
+  const right = Math.max(...members.map((node) => node.position.x + node_size(node).width)) + STAGE_PADDING;
+  const bottom = Math.max(...members.map((node) => node.position.y + node_size(node).height)) + STAGE_PADDING;
   const attached = (props.subs || []).filter((sub) => (sub.attach || []).includes(stage.id)).map((sub) => sub.label || sub.id);
   return [{ id: stage.id, label: stage.label || stage.id, attached, style: { left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` } }];
 }));
@@ -189,9 +210,10 @@ function place(node, position, source) {
   if (source) nextTick(() => { edges.value = [...edges.value, to_edge({ source, target: node.id })]; });
 }
 
-/** Where a node goes after a source: beside it, centred on its row. */
+/** Where a node goes after a source: beside it, centred on its row (the new node is not drawn yet: its kind's guess). */
 function beside(source, type) {
-  return { x: source.position.x + NODE_WIDTH[source.type] + COLUMN_GAP, y: source.position.y + (NODE_HEIGHT[source.type] - NODE_HEIGHT[type]) / 2 };
+  const { width, height } = node_size(source);
+  return { x: source.position.x + width + COLUMN_GAP, y: source.position.y + (height - NODE_HEIGHT[type]) / 2 };
 }
 
 /** Put a node at a dropped arrow's end, at the single open end, or (several open ends) unjoined on the right. */
@@ -204,7 +226,7 @@ function add_node(node) {
   }
   const ends = tails();
   const tail = ends.length === 1 ? ends[0] : null;
-  const right = Math.max(...nodes.value.map((item) => item.position.x + NODE_WIDTH[item.type]));
+  const right = Math.max(...nodes.value.map((item) => item.position.x + node_size(item).width));
   place(node, tail ? beside(tail, node.type) : { x: right + COLUMN_GAP, y: 0 }, tail?.id);
 }
 
@@ -364,7 +386,8 @@ function show_sub_node(id) {
     instance.value.removeSelectedElements();
     instance.value.addSelectedNodes([node]);
     const { zoom } = instance.value.getViewport();
-    instance.value.setCenter(node.position.x + NODE_WIDTH.sub / 2, node.position.y + NODE_HEIGHT.sub / 2, { zoom, duration: 300 });
+    const { width, height } = node_size(node);
+    instance.value.setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom, duration: 300 });
   }));
 }
 
@@ -390,8 +413,8 @@ function grant(agent, allowed) {
  */
 function loop_depth({ id, sourceX, sourceY, targetX, targetY, data }) {
   const left = targetX - LOOP_OUT, right = sourceX + LOOP_OUT;
-  const spanned = nodes.value.filter((node) => node.position.x < right && node.position.x + NODE_WIDTH[node.type] > left);
-  const auto = Math.max(sourceY, targetY, ...spanned.map((node) => node.position.y + NODE_HEIGHT[node.type])) + LOOP_CLEARANCE
+  const spanned = nodes.value.filter((node) => node.position.x < right && node.position.x + node_size(node).width > left);
+  const auto = Math.max(sourceY, targetY, ...spanned.map((node) => node.position.y + node_size(node).height)) + LOOP_CLEARANCE
     + (loop_rank.value.get(id) || 0) * LOOP_STACK;
   const floor = Math.max(sourceY, targetY) + 2 * LOOP_RADIUS;
   return { auto, floor, below: Math.max(floor, auto + (data?.offset || 0)) };
@@ -434,10 +457,6 @@ function arrange() {
   nextTick(() => requestAnimationFrame(() => instance.value?.fitView({ ...fit_options(), duration: 250 })));
 }
 
-/** A node's width: as Vue Flow measured it, else the layout size. */
-function node_width(node) {
-  return instance.value?.findNode(node.id)?.dimensions?.width || NODE_WIDTH[node.type];
-}
 
 /** The gap after a column: wide enough for the longest note on a forward arrow leaving it (loops run below). */
 function column_gap(column, arrows, loops) {
@@ -466,14 +485,15 @@ function layout(list, { layers, loops }, arrows) {
   for (const [index, column] of columns.entries()) {
     if (!column) continue;
     column.sort((left, right) => left.position.y - right.position.y);
-    const height = column.reduce((sum, node) => sum + NODE_HEIGHT[node.type], 0) + ROW_GAP * (column.length - 1);
+    const sizes = column.map(node_size);
+    const height = sizes.reduce((sum, size) => sum + size.height, 0) + ROW_GAP * (column.length - 1);
     let y = -height / 2;
-    const tops = column.map((node) => { const top = y; y += NODE_HEIGHT[node.type] + ROW_GAP; return top; });
-    // Shift the column so its connection points centre on the line the other columns' do.
-    const shift = column.reduce((sum, node, row) => sum + tops[row] + HANDLE_Y[node.type], 0) / column.length;
-    const lift = skipped.has(index) ? Math.max(...column.map((node, row) => tops[row] - shift + NODE_HEIGHT[node.type])) + BYPASS_CLEARANCE : 0;
-    const width = Math.max(...column.map(node_width));
-    column.forEach((node, row) => placed.set(node.id, { x: x + (width - node_width(node)) / 2, y: tops[row] - shift - lift }));
+    const tops = sizes.map((size) => { const top = y; y += size.height + ROW_GAP; return top; });
+    // Shift the column so its connection points (each node's middle) centre on the line the other columns' do.
+    const shift = sizes.reduce((sum, size, row) => sum + tops[row] + size.height / 2, 0) / column.length;
+    const lift = skipped.has(index) ? Math.max(...sizes.map((size, row) => tops[row] - shift + size.height)) + BYPASS_CLEARANCE : 0;
+    const width = Math.max(...sizes.map((size) => size.width));
+    column.forEach((node, row) => placed.set(node.id, { x: x + (width - sizes[row].width) / 2, y: tops[row] - shift - lift }));
     x += width + column_gap(column, arrows, loops);
   }
   return placed;
@@ -503,8 +523,8 @@ function fit_once() {
 function open_view() {
   const pane = canvas_element.value?.getBoundingClientRect();
   if (!pane?.width || !pane.height) return;
-  const left = Math.min(...nodes.value.map((node) => node.position.x)), right = Math.max(...nodes.value.map((node) => node.position.x + NODE_WIDTH[node.type]));
-  const top = Math.min(...nodes.value.map((node) => node.position.y)), bottom = Math.max(...nodes.value.map((node) => node.position.y + NODE_HEIGHT[node.type]));
+  const left = Math.min(...nodes.value.map((node) => node.position.x)), right = Math.max(...nodes.value.map((node) => node.position.x + node_size(node).width));
+  const top = Math.min(...nodes.value.map((node) => node.position.y)), bottom = Math.max(...nodes.value.map((node) => node.position.y + node_size(node).height));
   const whole = Math.min(pane.width / ((right - left) * (1 + 2 * FIT.padding)), pane.height / ((bottom - top) * (1 + 2 * FIT.padding)));
   if (whole >= READABLE_ZOOM) { instance.value.fitView(FIT); return; }
   instance.value.setViewport({ x: OPEN_PADDING - left * READABLE_ZOOM, y: pane.height / 2 - (top + bottom) / 2 * READABLE_ZOOM, zoom: READABLE_ZOOM });
@@ -820,7 +840,8 @@ function history_key(event) {
   if (key === "y" || event.shiftKey) redo(); else undo();
 }
 window.addEventListener("keydown", history_key);
-onBeforeUnmount(() => { window.removeEventListener("keydown", history_key); clearTimeout(timer); clearTimeout(removing_timer); });
+window.addEventListener("keydown", delete_key);
+onBeforeUnmount(() => { window.removeEventListener("keydown", history_key); window.removeEventListener("keydown", delete_key); clearTimeout(timer); clearTimeout(removing_timer); });
 
 /** A card being dragged would repaint the whole one-layer canvas every frame, so the layer waits until it is let go. */
 function drag_start() { dragging = true; layered.value = false; }
@@ -845,13 +866,15 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
         <UTooltip :text="t('主持人：示意这里交回主持人判断；选中后可写上做什么')">
           <div class="workflow-host" :class="{ 'is-selected': node.selected }">
             <Handle type="target" :position="Position.Left" class="workflow-handle" />
-            <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" /></div>
+            <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
+              <button type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次删除主持人节点') : t('删除主持人节点')"
+                :title="removing === node.id ? t('再点一次删除主持人节点') : t('删除主持人节点')" @click.stop="press_remove(node)"><UIcon :name="removing === node.id ? 'i-lucide-trash-2' : 'i-lucide-x'" class="workflow-icon" /></button></div>
             <div class="workflow-node-body nodrag">
-              <UIcon name="i-lucide-crown" class="workflow-host-icon" /><strong>{{ t('主持人') }}</strong>
+              <UIcon name="i-lucide-crown" class="workflow-host-icon" />
+              <div class="workflow-node-text"><strong>{{ t('主持人') }}</strong>
               <input v-if="node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input" :maxlength="MAX_HOST_LABEL" :placeholder="t('做什么')"
                 :aria-label="t('主持人在这里做什么')" @input="set_note('nodes', node.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
-              <p v-else-if="node.data.label" class="workflow-host-note">{{ node.data.label }}</p>
-              <button type="button" class="workflow-pill-close" :aria-label="t('删除主持人节点')" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
+              <p v-else-if="node.data.label" class="workflow-host-note">{{ node.data.label }}</p></div>
             </div>
             <Handle type="source" :position="Position.Right" class="workflow-handle" />
           </div>
@@ -860,13 +883,16 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       <template #node-sub="node">
         <div v-if="sub_of(node.data.sub)" class="workflow-sub" :class="{ 'is-selected': node.selected }" :title="sub_of(node.data.sub).description || undefined">
           <Handle type="target" :position="Position.Left" class="workflow-handle" />
-          <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" /></div>
+          <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
+              <button type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次，从画布移除子工作流节点') : t('从画布移除子工作流节点')"
+                :title="removing === node.id ? t('再点一次，从画布移除子工作流节点') : t('从画布移除子工作流节点')" @click.stop="press_remove(node)"><UIcon :name="removing === node.id ? 'i-lucide-trash-2' : 'i-lucide-x'" class="workflow-icon" /></button></div>
           <div class="workflow-node-body nodrag">
-            <span class="workflow-sub-kind"><UIcon name="i-lucide-git-branch" class="workflow-icon" />{{ t('子工作流') }}</span>
-            <strong>{{ sub_of(node.data.sub).label || node.data.sub }}</strong>
-            <small>{{ t('{value1} 位成员', { value1: sub_member_count(sub_of(node.data.sub), agents) }) }}</small>
+            <UIcon name="i-lucide-git-branch" class="workflow-sub-icon" />
+            <div class="workflow-node-text">
+              <strong>{{ sub_of(node.data.sub).label || node.data.sub }}</strong>
+              <small>{{ t('子工作流') }} · {{ t('{value1} 位成员', { value1: sub_member_count(sub_of(node.data.sub), agents) }) }}</small>
+            </div>
             <button type="button" class="workflow-sub-enter" :title="t('进入这个子工作流（也可双击）')" @click.stop="open_sub(node.data.sub)">{{ t('进入') }}<UIcon name="i-lucide-arrow-right" class="workflow-icon" /></button>
-            <button type="button" class="workflow-pill-close" :aria-label="t('从画布移除子工作流节点')" @click.stop="remove_node(node.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
           </div>
           <Handle type="source" :position="Position.Right" class="workflow-handle" />
         </div>
@@ -874,7 +900,9 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       <template #node-card="node">
         <div v-if="agent_of(node.data.card)" class="workflow-card" :class="{ 'is-selected': node.selected }">
           <Handle type="target" :position="Position.Left" class="workflow-handle" />
-          <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" /></div>
+          <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
+              <button type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次移除 {value1}', { value1: label_of(node.data.card) }) : t('移除 {value1}', { value1: label_of(node.data.card) })"
+                :title="removing === node.id ? t('再点一次，从工作流移除这位成员') : t('从工作流移除这张卡片')" @click.stop="press_remove(node)"><UIcon :name="removing === node.id ? 'i-lucide-trash-2' : 'i-lucide-x'" class="workflow-icon" /></button></div>
           <div v-for="agent in [agent_of(node.data.card)]" :key="agent.card" class="workflow-card-body nodrag" :title="agent.description || undefined"
             @dblclick="emit('configure', agent.card)">
             <UAvatar :src="bridge.identities[bridge.platform_of(agent.name)]?.icon" :text="bridge.identities[bridge.platform_of(agent.name)]?.initials || '?'" size="md"
@@ -886,9 +914,6 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
             </div>
             <div class="workflow-card-tools">
               <UButton icon="i-lucide-sliders-horizontal" size="xs" color="neutral" variant="ghost" :aria-label="t('配置 {value1}', { value1: agent.label || agent.card })" :title="t('配置：软件、模型、描述与专属提示词（也可双击卡片）')" @click="emit('configure', agent.card)" />
-              <UButton :icon="removing_card === agent.card ? 'i-lucide-trash-2' : 'i-lucide-x'" size="xs" :color="removing_card === agent.card ? 'error' : 'neutral'" :variant="removing_card === agent.card ? 'soft' : 'ghost'"
-                :aria-label="removing_card === agent.card ? t('再点一次移除 {value1}', { value1: agent.label || agent.card }) : t('移除 {value1}', { value1: agent.label || agent.card })"
-                :title="removing_card === agent.card ? t('再点一次，从工作流移除这位成员') : t('从工作流移除这张卡片')" @click="press_remove(agent.card)" />
             </div>
             <label v-if="agent_of(node.data.card).requested_access" class="workflow-card-grant">
               <input type="checkbox" :checked="agent_of(node.data.card).project_access !== 'read'" @change="grant(agent_of(node.data.card), $event.target.checked)" /> {{ t('允许「{value1}」', { value1: access_label(agent_of(node.data.card).requested_access) }) }}</label>
@@ -990,38 +1015,38 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 .workflow-pill.is-start { color: var(--channel-accent, var(--ui-primary)); }
 /* A node's body: pressing it neither drags the node nor (with a mouse) pans the canvas. */
 .workflow-node-body { cursor: default; }
-/* Hidden until hovered or selected, and not pressable while hidden: a phone has no hover, so a tap there removed the node unseen. */
-.workflow-pill-close { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--ui-text-dimmed); opacity: 0; pointer-events: none; transition: opacity .15s; }
-.workflow-host:hover .workflow-pill-close, .workflow-host.is-selected .workflow-pill-close { opacity: 1; pointer-events: auto; }
-.workflow-pill-close:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
-.workflow-pill-close > .workflow-icon { width: 11px; height: 11px; }
+/* Every node's ×: at the right end of its drag bar. Hidden until hovered or selected, and not pressable while hidden: a phone
+   has no hover, so a tap there removed the node unseen. Armed (first press), it turns into a red bin until pressed again. */
+.workflow-node-close { position: absolute; top: 50%; right: 4px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  transform: translateY(-50%); color: var(--ui-text-dimmed); opacity: 0; pointer-events: none; cursor: pointer; transition: opacity .15s; }
+:is(.workflow-host, .workflow-sub, .workflow-card):is(:hover, .is-selected) .workflow-node-close, .workflow-node-close.is-armed { opacity: 1; pointer-events: auto; }
+.workflow-node-close:hover { background: var(--ui-bg-accented); color: var(--ui-error, #e5484d); }
+.workflow-node-close.is-armed { background: color-mix(in srgb, var(--ui-error, #e5484d) 18%, transparent); color: var(--ui-error, #e5484d); }
+.workflow-node-close > .workflow-icon { width: 12px; height: 12px; }
+/* Host, sub-workflow and member share one body: icon or avatar, a title over a dim line, then the node's own action. */
+.workflow-node-text { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; text-align: left; line-height: 1.3; }
+.workflow-node-text > * { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Host: a small gold square, its note under the title. */
-.workflow-host { --workflow-grip-tint: #e0b44a; --workflow-card-edge: color-mix(in srgb, #e0b44a 70%, var(--ui-border)); position: relative; display: flex; flex-direction: column; width: 136px; height: 136px;
+/* Host: gold, its note under the title. */
+.workflow-host { --workflow-grip-tint: #e0b44a; --workflow-card-edge: color-mix(in srgb, #e0b44a 70%, var(--ui-border)); position: relative; display: flex; flex-direction: column; width: 240px; height: 96px;
   border: 1.5px solid var(--workflow-card-edge); border-radius: 12px; background: color-mix(in srgb, #e0b44a 10%, var(--ui-bg-elevated));
   box-shadow: 0 6px 18px rgb(0 0 0 / .28); color: #d6a63a; text-align: center; }
 .workflow-host.is-selected { box-shadow: 0 0 0 3px color-mix(in srgb, #e0b44a 45%, transparent), 0 6px 18px rgb(0 0 0 / .28); }
-.workflow-host > .workflow-node-body { position: relative; display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 0; padding: 8px 12px; }
-.workflow-host-icon { width: 26px; height: 26px; }
+.workflow-host > .workflow-node-body, .workflow-sub > .workflow-node-body { display: flex; flex: 1; align-items: center; gap: 10px; min-height: 0; padding: 0 12px; }
+.workflow-host-icon, .workflow-sub-icon { flex-shrink: 0; width: 26px; height: 26px; }
 .workflow-host strong { font-size: 14px; font-weight: 600; }
-.workflow-host-note { display: -webkit-box; max-width: 100%; margin: 0; overflow: hidden; color: var(--ui-text-toned); font-size: 12px; line-height: 17px;
+.workflow-node-text > .workflow-host-note { display: -webkit-box; margin: 0; color: var(--ui-text-toned); font-size: 12px; line-height: 17px; white-space: normal;
   -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
-.workflow-host-input { width: 100%; text-align: center; }
-.workflow-host .workflow-pill-close { position: absolute; top: 4px; right: 4px; }
+.workflow-host-input { width: 100%; }
 
-/* Sub-workflow: a violet square that enters it. */
-.workflow-sub { --workflow-grip-tint: #9b7cf0; --workflow-card-edge: color-mix(in srgb, #9b7cf0 70%, var(--ui-border)); position: relative; display: flex; flex-direction: column; width: 136px; height: 136px;
+/* Sub-workflow: violet, entered by its button. */
+.workflow-sub { --workflow-grip-tint: #9b7cf0; --workflow-card-edge: color-mix(in srgb, #9b7cf0 70%, var(--ui-border)); position: relative; display: flex; flex-direction: column; width: 240px; height: 96px;
   border: 1.5px solid var(--workflow-card-edge); border-radius: 12px; background: color-mix(in srgb, #9b7cf0 12%, var(--ui-bg-elevated));
   box-shadow: 0 6px 18px rgb(0 0 0 / .28); color: #b49cf5; text-align: center; }
 .workflow-sub.is-selected { box-shadow: 0 0 0 3px color-mix(in srgb, #9b7cf0 45%, transparent), 0 6px 18px rgb(0 0 0 / .28); }
-.workflow-sub:hover .workflow-pill-close, .workflow-sub.is-selected .workflow-pill-close { opacity: 1; pointer-events: auto; }
-.workflow-sub > .workflow-node-body { position: relative; display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 0; padding: 6px 12px; }
-.workflow-sub .workflow-pill-close { position: absolute; top: 4px; right: 4px; }
-.workflow-sub-kind { display: flex; align-items: center; gap: 4px; font-size: 11px; }
-.workflow-sub strong { display: -webkit-box; max-width: 100%; overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; line-height: 18px;
-  -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+.workflow-sub strong { color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
 .workflow-sub small { color: var(--ui-text-muted); font-size: 11px; }
-.workflow-sub-enter { display: inline-flex; align-items: center; gap: 3px; margin-top: 2px; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, #9b7cf0 22%, transparent);
+.workflow-sub-enter { display: inline-flex; flex-shrink: 0; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, #9b7cf0 22%, transparent);
   color: inherit; font-size: 11px; }
 .workflow-sub-enter:hover { background: color-mix(in srgb, #9b7cf0 36%, transparent); color: var(--ui-text-highlighted); }
 .workflow-sub-enter > .workflow-icon { width: 11px; height: 11px; }
@@ -1030,7 +1055,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 .workflow-card { --workflow-card-edge: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 45%, var(--ui-border-accented));
   position: relative; display: flex; flex-direction: column; width: 240px; height: 96px; border: 1.5px solid var(--workflow-card-edge); border-radius: 12px;
   background: var(--ui-bg-elevated); box-shadow: 0 6px 18px rgb(0 0 0 / .28); color: var(--ui-text); }
-.workflow-card-grip { display: flex; flex-shrink: 0; align-items: center; justify-content: center; height: 22px; border-bottom: 1px solid var(--workflow-card-edge); border-radius: 10px 10px 0 0;
+.workflow-card-grip { position: relative; display: flex; flex-shrink: 0; align-items: center; justify-content: center; height: 22px; border-bottom: 1px solid var(--workflow-card-edge); border-radius: 10px 10px 0 0;
   background: color-mix(in srgb, var(--workflow-grip-tint, var(--channel-accent, var(--ui-primary))) 16%, var(--ui-bg-elevated)); color: var(--ui-text-muted); cursor: grab; }
 .workflow-card-grip:active { cursor: grabbing; }
 /* A finger needs about 40px, and the bar and ports shrink with the view: on touch screens both reach further than they show. */
@@ -1047,7 +1072,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
   .workflow-canvas.is-compact :deep(.workflow-canvas-controls .vue-flow__controls-button) { width: 40px; height: 40px; }
   .workflow-card-tools :deep(button) { min-width: 32px; min-height: 32px; justify-content: center; }
   .workflow-card-tools { gap: 0; }
-  .workflow-pill-close { width: 28px; height: 28px; }
+  .workflow-node-close { width: 28px; height: 28px; }
   .workflow-edge-delete { width: 32px; height: 32px; }
 }
 .workflow-card.is-selected { border-color: var(--channel-accent, var(--ui-primary)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 30%, transparent), 0 6px 18px rgb(0 0 0 / .28); }

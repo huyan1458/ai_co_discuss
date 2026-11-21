@@ -11,6 +11,7 @@ import { slash_insertion } from "../runner/slash_names.mjs";
 import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
 import { t } from "../frontend/i18n.js";
 import { ATTACHMENT_TEXT_LIMIT, create_inline_html_preview, read_attachment } from "../frontend/file-preview.js";
+import { inline_visual_body, inline_visual_collapsed, inline_visual_height, remember_visual_height, remembered_visual_height, send_visual_theme, start_visual_tab } from "../frontend/inline-visual.js";
 import { declined, external_of, external_tag, invited_items, remaining_label, take_join_fragment } from "../frontend/external-members.js";
 
 // Sliced component code calls t() for interface text; every sandbox gets the translator (Chinese here).
@@ -90,7 +91,7 @@ function mention_fixture() {
     // No browser editing command here: replacing a draft falls back to writing the text directly.
     document: { execCommand: () => false } });
   const start = discussion_source.indexOf("const mention_context =");
-  const end = discussion_source.indexOf("/** End a structured excerpt", start);
+  const end = discussion_source.indexOf("function clip_text(", start);
   vm.runInContext(discussion_source.slice(start, end) + "\nglobalThis.mention_state = { context: mention_context, members: mention_members, active: mention_active };", context);
   const target = context.prompt.value.textareaRef;
   return { context, room, free, free_members, text, editor: target, state: context.mention_state,
@@ -438,9 +439,10 @@ test("retracting the latest message members started on stops that work and rewin
   const input = { value: "" };
   const refusal = Object.assign(new Error("已有成员开始处理这条消息，不能撤回；可以编辑这条消息回退到它之前"), { status: 409 });
   let plan, room;
-  const state = { room: { id: "one" }, messages: [{ id: 5, text: "原问题" }] };
+  const state = { room: { id: "one" }, messages: [{ id: 5, text: "原问题" }], attachment_drafts: [] };
   const context = vm.createContext({ state, element: () => input, notify: (level, text) => notified.push([level, text]),
     display_name: name => name, refresh_room: async () => {}, rewind_plan: async () => plan,
+    fill_composer: (text) => { input.value = text; }, renumber_placeholders() {}, preupload_drafts() {}, publish_view() {},
     request_json: async (url, payload) => {
       if (url.endsWith("/retract")) throw refusal;
       if (payload === undefined) return room;
@@ -584,6 +586,7 @@ function create_form_fixture() {
     write_create_discussion: value => { view.value.create_discussion = Boolean(value); if (value) view.value.create_goal = null; },
     write_create_goal: patch => { view.value.create_goal = patch === null ? null : { objective: '', max_continues: 0, max_minutes: 0, ...(view.value.create_goal || {}), ...patch }; if (patch) view.value.create_discussion = false; },
     write_expert: (id, name, mode) => { if (mode) view.value.experts[id][name] = mode; else delete view.value.experts[id][name]; },
+    clear_card_drafts: () => {},
     add_instance: (id, name, mode) => {
       let number = 2;
       while (view.value.experts[id][`${name}-${number}`]) number++;
@@ -979,6 +982,79 @@ test("inline HTML reads on demand from the attachment URL and replaces the open 
   assert.deepEqual(requests, ["first", "second"]);
 });
 
+test("only visible references to HTML attachments become inline visuals", () => {
+  const { context } = theme_fixture();
+  const file = (id, number, file_name) => ({ id, number, file_name, room_id: "room", content_type: "application/octet-stream" });
+  const files = [file("first", 3, "demo.html"), file("other", 4, "unused.html"), file("code", 5, "example.html"), file("notes", 6, "notes.md")];
+  const rendered = context.link_attachment_placeholders("<p>Before [文件 #3] after [文件 #6]</p><pre><code>[文件 #5]</code></pre>", files);
+  const visuals = inline_visual_body(rendered, files);
+  assert.deepEqual(visuals.files, [files[0]]);
+  assert.deepEqual(visuals.remaining, files.slice(1));
+  assert.match(visuals.markup, /Before <span[^>]*data-visual-slot="first"[^>]*><\/span> after/);
+  assert.equal(inline_visual_body("<p>No reference</p>", files).files.length, 0);
+});
+
+test("a height report changes only its own visual and the last height is reused", () => {
+  const window_target = {};
+  const report = { codiscuss_visual_height: 300.25 };
+  assert.equal(inline_visual_height({ source: {}, data: report }, window_target), null);
+  assert.equal(inline_visual_height({ source: window_target, data: { codiscuss_visual_height: Infinity } }, window_target), null);
+  assert.equal(inline_visual_height({ source: window_target, data: { codiscuss_visual_height: "300" } }, window_target), null);
+  const height = inline_visual_height({ source: window_target, data: report }, window_target);
+  assert.equal(height, 301);
+  remember_visual_height({ id: "measure-test" }, height);
+  assert.equal(remembered_visual_height({ id: "measure-test" }), height);
+});
+
+test("an HTML attachment opened in a new tab updates the same sandbox when the room theme changes", () => {
+  const dark = { "--codiscuss-color-scheme": "dark", "--codiscuss-card": "#303236" };
+  const light = { "--codiscuss-color-scheme": "light", "--codiscuss-card": "#ffffff" };
+  const source = { isConnected: true, ownerDocument: { defaultView: {} } };
+  const received = [], document_root = { style: {} };
+  const frame = { contentWindow: { postMessage: (data, target) => received.push([data.codiscuss_visual_theme, target]) },
+    addEventListener(event, callback) { this[event] = callback; } };
+  const view = {
+    opener: { document: { documentElement: source } },
+    document: { querySelector: () => frame, documentElement: document_root },
+    addEventListener(event, callback) { this[event] = callback; },
+  };
+  let room_theme = dark, change_theme, disconnected = false;
+  start_visual_tab(dark, () => room_theme, (callback, observed_root) => {
+    assert.equal(observed_root, source);
+    change_theme = callback;
+    return () => { disconnected = true; };
+  }, send_visual_theme, view);
+
+  frame.load();
+  assert.deepEqual(received.at(-1), [dark, "*"]);
+  assert.equal(document_root.style.backgroundColor, "#303236");
+  room_theme = light;
+  change_theme();
+  assert.deepEqual(received.at(-1), [light, "*"]);
+  assert.equal(document_root.style.colorScheme, "light");
+  assert.equal(document_root.style.backgroundColor, "#ffffff");
+  view.pagehide();
+  assert.equal(disconnected, true);
+});
+
+test("a collapsed visual stays collapsed on remount and reopening clears the saved preference", (context) => {
+  const values = new Map(), original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: (key) => values.delete(key),
+  } });
+  context.after(() => {
+    if (original) Object.defineProperty(globalThis, "localStorage", original);
+    else delete globalThis.localStorage;
+  });
+  const file = { id: "demo", room_id: "room" };
+  assert.equal(inline_visual_collapsed(file), false);
+  inline_visual_collapsed(file, true);
+  assert.equal(inline_visual_collapsed({ ...file }), true);
+  assert.equal(inline_visual_collapsed({ ...file, room_id: "other" }), false);
+  inline_visual_collapsed(file, false);
+  assert.equal(inline_visual_collapsed({ ...file }), false);
+});
+
 test("HTML above the inline limit keeps a truncated source available for the preview window", async (context) => {
   const blob = new Blob([new Uint8Array(ATTACHMENT_TEXT_LIMIT + 1).fill(65)]);
   const url = URL.createObjectURL(blob);
@@ -1055,7 +1131,8 @@ function connection_fixture(connection, shared_storage) {
     fetch: async (url, options) => {
       assert.equal(location.hash, '', 'connection secret must leave the address bar before network requests');
       requests.push({ url, options });
-      return { ok: true, json: async () => ({ participants: { Claude: { adapter: 'claude', executable: '/local/claude' } } }) };
+      const body = { participants: { Claude: { adapter: 'claude', executable: '/local/claude' } } };
+      return { ok: true, json: async () => body, text: async () => JSON.stringify(body) };
     },
   });
   return { ...fixture, requests, location };
@@ -1256,6 +1333,7 @@ test("automatic invitations keep explicit project permissions across an uncertai
   const f = theme_fixture(), inputs = [], members = [];
   f.context.test_state.room = { id: 'one', mode: 'free', free: { members } };
   f.storage.set('discuss-access:one', 'owner-secret');
+  f.context.window.discuss_backup = { adapter_profile: () => null };
   let lose = true;
   Object.assign(f.context, { refresh_room: async () => {},
     launch_options: () => ({ participants: { Claude: { model: 'sonnet' } } }),
@@ -1532,9 +1610,9 @@ function free_card_fixture({ messages = [], members = [], executions = [], query
   } } });
   const context = vm.createContext({ computed, stable_computed: computed, ref, watch, view,  room: computed(() => view.value.room), Date: TestDate,
     setInterval: callback => { timers.set(++timer_id, callback); return timer_id; }, clearInterval: id => timers.delete(id),
-    bridge: { request: async () => ({ notes: [] }) } });
+    bridge: { request: async () => ({ notes: [] }) }, line_marks: () => ({ badges: [], edge: "" }) });
   const busy_start = discussion_source.indexOf("const free = computed(");
-  const busy_end = discussion_source.indexOf("/** Progress notes per execution id", busy_start);
+  const busy_end = discussion_source.indexOf("/** Late text is owner-only", busy_start);
   vm.runInContext(`${discussion_source.slice(busy_start, busy_end)}\nglobalThis.cards = { busy: free_busy, working: free_working, now: free_now };`, context);
   const layout_start = discussion_source.indexOf("const failure_wakes = computed(");
   const layout_end = discussion_source.indexOf("/** Id of the top-level message at or before", layout_start);
@@ -2077,9 +2155,9 @@ test("external members read the room view's external field, and only declined or
     external: { scope: "read", expires_at: Math.floor(now / 1000) + 2 * 3600 + 60, machine_label: "A 的笔记本", directories: [{ root: 0, name: "app" }] } };
   assert.deepEqual(external_of(member), { level: "read", expires_at: (Math.floor(now / 1000) + 2 * 3600 + 60) * 1000, directories: ["app"], computer: "A 的笔记本", pending: false, ended: false });
   assert.equal(external_tag(member, now), "外部 · 只读文件 · 剩 2 小时", "short enough for the rail at 1440 wide");
-  assert.equal(external_tag(member, now, { full: true }), "外部 · 只读项目 · 剩余 2 小时", "the full wording for its hover text");
+  assert.equal(external_tag(member, now, { full: true }), "外部 · 消息和项目 · 剩余 2 小时", "the full wording for its hover text");
   assert.equal(external_tag({ ...member, adapter: "api", external: { ...member.external, platform: "DeepSeek", model: "deepseek-flash" } }, now, { full: true }),
-    "外部 · DeepSeek · deepseek-flash · 只读项目 · 剩余 2 小时", "hover names the vendor the other computer reports");
+    "外部 · DeepSeek · deepseek-flash · 消息和项目 · 剩余 2 小时", "hover names the vendor the other computer reports");
   assert.equal(external_tag({ ...member, status: "removed" }, now), "外部 · 已结束");
   assert.equal(external_of({ id: 1, name: "Codex", access: "runner" }), null, "an ordinary member is not external");
   assert.equal(remaining_label(now - 1, now), "已到期");
@@ -2194,14 +2272,14 @@ test("a share page carries none of what only this computer and its owner should 
   const raw = {
     "/api/rooms": { rooms: [{ id: "r1", title: "Room", folder_id: "f1" }, { id: "r2", title: "OTHER-ROOM-MARK" }], folders: [{ id: "f1", name: "FOLDER-MARK" }] },
     "/api/rooms/r1": { id: "r1", title: "Room", background: "BACKGROUND-MARK", boundaries: "BOUNDARY-MARK", descriptions: { Codex: "DESCRIPTION-MARK" },
-      members: [{ name: "Codex", status: "active", reported_session: "SESSION-MARK", external: { machine_label: "MACHINE-MARK", directories: ["DIRECTORY-MARK"] } }],
+      members: [{ name: "Codex", status: "active", quota_until: 1234567, held_until: 7654321, reported_session: "SESSION-MARK", external: { machine_label: "MACHINE-MARK", directories: ["DIRECTORY-MARK"] } }],
       free: { queued_messages: { items: [{ text: "QUEUED-MARK" }] }, recommendations: [{ provider: "RECOMMEND-MARK" }], scheduler_decisions: [{ note: "DECISION-MARK" }],
         ended_externals: [{ machine_label: "ENDED-MARK" }],
         executions: [{ id: 1, status: "failed", failure_class: "quota", result: "QUOTA-MARK", cwd: "D:/Work/Secret-Project", session_id: "SESSION-MARK",
           lease_until: 1, changes: ["d:/work/secret-project/src/a.txt"], edited: ["d:/work/secret-project/src/a.txt"], denials: [{ detail: "DENIAL-MARK" }],
           retry: { reason: "RETRY-MARK" }, background: true }] } },
     [history]: { has_more: false, cards: { executions: [{ id: 7, request_message_id: 2, result: "CARD-ANSWER-MARK" }] }, messages: [
-      { id: 1, text: "see D:\\Work\\Secret-Project\\src\\b.txt, /d/Work/Secret-Project/c.txt, /mnt/d/work/secret-project/e.txt and D:\\Work\\Secret-Project-wt\\d.txt",
+      { id: 1, text: "see D:\\Work\\Secret-Project\\src\\b.txt, /d/Work/Secret-Project/c.txt, /mnt/d/work/secret-project/e.txt and D:\\Work\\Secret-Project-wt\\d.txt; notes in C:\\Users\\HOME-MARK\\x.md, /c/Users/HOME-MARK/y.md and /home/HOME-MARK/z.md",
         attachments: [{ name: "ATTACHMENT-MARK" }], submission_id: "SUBMISSION-MARK" },
       { id: 2, text: "REWOUND-MARK", withdrawn: "rewound" },
       { id: 3, text: "RETRACTED-MARK", withdrawn: "retracted" },
@@ -2220,46 +2298,56 @@ test("a share page carries none of what only this computer and its owner should 
   for (const mark of ["OTHER-ROOM-MARK", "FOLDER-MARK", "BACKGROUND-MARK", "BOUNDARY-MARK", "DESCRIPTION-MARK", "SESSION-MARK", "MACHINE-MARK", "DIRECTORY-MARK",
     "QUEUED-MARK", "RECOMMEND-MARK", "DECISION-MARK", "ENDED-MARK", "QUOTA-MARK", "DENIAL-MARK", "RETRY-MARK", "ATTACHMENT-MARK", "SUBMISSION-MARK",
     "REWOUND-MARK", "RETRACTED-MARK", "NOTICE-MARK", "RESETS-MARK", "CARD-ANSWER-MARK", "TIMELINE-TASK-MARK", "TIMELINE-ANSWER-MARK", "TIMELINE-NOTE-MARK",
-    "RETRACTED-TASK-MARK", "NOTES-MARK", "lease_until"]) assert.ok(!text.includes(mark), mark);
+    "RETRACTED-TASK-MARK", "NOTES-MARK", "lease_until", "1234567", "7654321"]) assert.ok(!text.includes(mark), mark);
   assert.ok(!/secret-project[\\/]/i.test(text), "the project folder never appears, in any spelling");
   const run = responses["/api/rooms/r1"].free.executions[0];
   assert.deepEqual([run.changes, run.edited, run.background, responses["/api/rooms/r1"].members[0].external], [["src/a.txt"], ["src/a.txt"], true, true]);
   // A sibling folder that only starts with the project's name is left as written.
   assert.deepEqual(responses[history].messages.map((message) => [message.id, message.text]), [
-    [1, "see src\\b.txt, c.txt, e.txt and D:\\Work\\Secret-Project-wt\\d.txt"], [4, "run failed: 执行失败"], [5, "quota used up, resets 未公开"]]);
+    [1, "see src\\b.txt, c.txt, e.txt and D:\\Work\\Secret-Project-wt\\d.txt; notes in ~\\x.md, ~/y.md and ~/z.md"], [4, "run failed: 执行失败"], [5, "quota used up, resets 未公开"]]);
   assert.deepEqual(responses["/api/rooms/r1/timeline"].executions.map((item) => item.id), [10]);
   assert.deepEqual(Object.keys(responses).filter((path) => path.endsWith("/notes")), ["/api/rooms/r1/executions/10/notes"]);
 });
 
-test("a share link is published once, then updated and revoked with its own manage token only", async () => {
+test("a share link is kept with the room, published once, updated, renewed and revoked with its own manage token only", async () => {
   const { context, storage, notified } = theme_fixture();
   const calls = [];
-  let status = 200;
+  let status = 200, kept = null;
   Object.assign(context, { Blob, navigator: { clipboard: { writeText: async () => {} } },
-    fetch: async (url, options) => {
+    fetch: async (url, options = {}) => {
+      // The room keeps the link on the computer, so the owner's other devices can manage it too.
+      if (url === "/api/rooms/r1/share-link") {
+        if (options.method === "POST") kept = JSON.parse(options.body).link;
+        return { ok: true, status: 200, json: async () => ({ link: kept }) };
+      }
       calls.push({ url, method: options.method, auth: options.headers.Authorization || "", body: options.body ? JSON.parse(options.body) : null });
-      const answer = options.method === "POST" ? { id: "abc", url: "https://share.example/s/abc", manage_token: "TOKEN", expires_at: "2099-01-01T00:00:00Z" }
+      const answer = url.endsWith("/renew") ? { expires_at: "2099-01-03T00:00:00Z" } : options.method === "POST" ? { id: "abc", url: "https://share.example/s/abc", manage_token: "TOKEN", expires_at: "2099-01-01T00:00:00Z" }
         : { expires_at: "2099-01-02T00:00:00Z" };
       const code = options.method === "PUT" ? status : 200;
       return { ok: code < 400, status: code, json: async () => code < 400 ? answer : { error: "gone" } };
     } });
   const draft = () => vm.runInContext(`share_draft = { room_id: "r1", title: "Room", description: "d", exported_at: "2026-11-21T00:00:00Z", responses: { "/api/rooms/r1": { id: "r1" } }, spots: [] };`, context);
+  // A link an earlier version kept in this browser moves to the room the first time it is needed.
+  storage.set("codiscuss-share:r1", JSON.stringify({ id: "old", url: "https://share.example/s/old", manage_token: "OLD", expires_at: "2099-01-01T00:00:00Z" }));
   draft();
   await context.share_publish(3);
-  assert.deepEqual([calls[0].method, calls[0].url.endsWith("/api/shares"), calls[0].auth, calls[0].body.ttl_days, calls[0].body.format], ["POST", true, "", 3, 1]);
-  assert.equal(JSON.parse(storage.get("codiscuss-share:r1")).manage_token, "TOKEN");
+  assert.deepEqual([calls[0].method, calls[0].url.endsWith("/api/shares/old"), calls[0].auth, calls[0].body.ttl_days, calls[0].body.format], ["PUT", true, "Bearer OLD", 3, 1]);
+  assert.equal(storage.has("codiscuss-share:r1"), false, "the browser no longer holds it");
+  assert.equal(kept.manage_token, "OLD");
+  kept = null;
   draft();
   await context.share_publish(99);
-  assert.deepEqual([calls[1].method, calls[1].url.endsWith("/api/shares/abc"), calls[1].auth, calls[1].body.ttl_days], ["PUT", true, "Bearer TOKEN", 7], "an unknown lifetime falls back to the default");
-  assert.equal(JSON.parse(storage.get("codiscuss-share:r1")).expires_at, "2099-01-02T00:00:00Z");
+  assert.deepEqual([calls[1].method, calls[1].url.endsWith("/api/shares"), calls[1].auth, calls[1].body.ttl_days], ["POST", true, "", 7], "an unknown lifetime falls back to the default");
+  assert.deepEqual([kept.share_id, kept.manage_token], ["abc", "TOKEN"]);
   // A link the site no longer has is published anew instead of failing.
   status = 410;
   draft();
   await context.share_publish(7);
   assert.deepEqual(calls.slice(-2).map((call) => call.method), ["PUT", "POST"]);
-  assert.ok(!notified.some(([level]) => level === "error"));
   status = 200;
+  await context.share_renew({ room_id: "r1", days: 1 });
+  assert.deepEqual([calls.at(-1).url.endsWith("/api/shares/abc/renew"), calls.at(-1).auth, calls.at(-1).body.ttl_days, kept.expires_at], [true, "Bearer TOKEN", 1, "2099-01-03T00:00:00Z"]);
   await context.share_revoke("r1");
-  assert.deepEqual([calls.at(-1).method, calls.at(-1).auth], ["DELETE", "Bearer TOKEN"]);
-  assert.equal(storage.has("codiscuss-share:r1"), false);
+  assert.deepEqual([calls.at(-1).method, calls.at(-1).auth, kept], ["DELETE", "Bearer TOKEN", null]);
+  assert.ok(!notified.some(([level]) => level === "error"), JSON.stringify(notified));
 });

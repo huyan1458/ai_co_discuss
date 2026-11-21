@@ -11,6 +11,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { cleanup_room, sweep_adapters } from './adapters/index.mjs';
 import { same_session_family } from './adapters/profiles.mjs';
 import { atomic_json } from './files.mjs';
+import { relay_health_writer } from './relay_health.mjs';
+import { t } from './i18n.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, write_proactive_access } from './free_runner.mjs';
 import { can_notify, notice_sent, receive_replies, send_notice } from './weixin.mjs';
@@ -37,7 +39,8 @@ const REMOTE_SYNC_MS = 3000;
 // A relayed-command claim that waited at least this long is followed by the next one at once.
 const RELAY_RESTART_MIN_MS = 1000;
 const START_WAIT_MS = 5000;
-const STOP_WAIT_MS = 20_000;
+// Pausing every room's running work before exit can take this long when many rooms are busy (an update stops it).
+const STOP_WAIT_MS = 60_000;
 // Left by `service stop` and cleared by any start: the local supervisor restarts a service that exited only without it.
 const STOPPED_MARKER = 'service.stopped';
 const REGISTRY_WAIT_MS = 5000;
@@ -755,7 +758,8 @@ export async function run_service(home, output = () => {}) {
     const { relay_commands, sync_remote_launches } = await import('./remote_launch.mjs');
     const { start_relay_channels } = await import('./relay_channel.mjs');
     if ((await import('./admin_account.mjs')).remove_legacy_admin_accounts(home)) log_line('已删除旧版本明文保存的管理员密码文件 admin-accounts.json');
-    channels = start_relay_channels(home, { log: log_line, signal: relay_stop.signal });
+    const health = relay_health_writer(home);
+    channels = start_relay_channels(home, { log: log_line, signal: relay_stop.signal, health });
     // A hosted account reached on its owner's domain answers external members here instead of over the relay (#5588).
     direct = (await import('./direct_entry.mjs')).direct_receiver(home, { log: log_line });
     direct.refresh();
@@ -764,14 +768,14 @@ export async function run_service(home, output = () => {}) {
     // The owner's Weixin replies come back here and go to the room their notice came from.
     receiving = receive_replies(home, { on_reply: reply => service.weixin_reply(reply), log: log_line, signal: relay_stop.signal })
       .catch(error => log_line(`微信收件停止：${error.message}`));
-    let synced_at = 0, swept_at = 0, relay_failed_at = 0;
+    let synced_at = 0, channels_checked_at = 0, swept_at = 0, relay_failed_at = 0;
     // A long-poll of its own: the site answers as soon as another device relays a command, and the next claim starts
     // the moment one returns, so a device sending several commands never waits on the loop; a failure retries after the sync interval.
     // A claim that returned at once (no paired site, or a command already queued) goes back to the loop instead, so nothing spins.
     const start_relay = () => {
       let failed = false;
       const started = Date.now();
-      relaying = relay_commands(home, { log: log_line, signal: relay_stop.signal, skip: channels.connected,
+      relaying = relay_commands(home, { log: log_line, signal: relay_stop.signal, skip: channels.connected, health,
         on_failure: () => { failed = true; relay_failed_at = Date.now(); } })
         .catch(error => { failed = true; relay_failed_at = Date.now(); log_line(`远程命令检查失败：${error.message}`); })
         .finally(() => {
@@ -791,14 +795,18 @@ export async function run_service(home, output = () => {}) {
         } catch (error) { log_line(`清理本机文件失败：${error.message}`); }
       }
       // Runs beside the room ticks: a slow remote site must not hold up local rooms.
+      if (Date.now() - channels_checked_at >= REMOTE_SYNC_MS) {
+        channels_checked_at = Date.now();
+        try { channels.refresh(); } catch (error) { log_line(t('检查中转连接失败：{reason}', { reason: error.message })); }
+      }
       if (!syncing && Date.now() - synced_at >= REMOTE_SYNC_MS) {
         synced_at = Date.now();
-        channels.refresh();
         direct.refresh();
-        syncing = sync_remote_launches(home, { log: log_line, throttle: true }).catch(error => log_line(`远程启动检查失败：${error.message}`))
+        syncing = sync_remote_launches(home, { log: log_line, throttle: true, health }).catch(error => log_line(`远程启动检查失败：${error.message}`))
           .finally(() => { syncing = null; });
       }
       if (!relaying && Date.now() - relay_failed_at >= REMOTE_SYNC_MS) start_relay();
+      try { health.flush(); } catch (error) { log_line(t('写中转状态失败：{reason}', { reason: error.message })); }
       // Pi, which runs model API members, is the release this codiscuss version pins; after a codiscuss upgrade pins
       // another, it is installed once, in the background. A release that fails its check is not switched to.
       if (!pi_checked && !process.env.CODISCUSS_PI_CLI) {
@@ -887,7 +895,7 @@ async function stop_service(home) {
     if (!service_pid(home)) return { running: false };
     await sleep(500);
   }
-  throw new Error('讨论服务未在 20 秒内退出；请查看 service.log');
+  throw new Error('讨论服务未在 60 秒内退出；请查看 service.log');
 }
 
 /** Report liveness with the last per-room result written by the service. */

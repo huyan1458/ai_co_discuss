@@ -18,17 +18,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { account_home, add_account, data_home, entry_settings, entry_status, instance_home as plain_instance_home, read_accounts, remove_account, reset_password, save_entry_settings,
-  instance_key, set_account_disabled, set_account_protected, start_entry, stop_entry, ENTRY_WAYS } from '../gateway/gateway.mjs';
+  instance_key, set_account_disabled, set_account_protected, set_instance_wanted, start_entry, stop_entry, ENTRY_WAYS } from '../gateway/gateway.mjs';
 import { signed_site_url, verified_connection } from './entry_client.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
 import { ensure_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } from './hosting_tunnel.mjs';
 import { machine_links } from './remote_launch.mjs';
+import { read_relay_health, request_relay_reconnect } from './relay_health.mjs';
+import { instance_recovery } from './instance_recovery.mjs';
 import { DIRECT_ACCOUNTS_FILE } from '../gateway/direct.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
-import { clear_instance_flag, create_os_user, install_shared_runtime, restrict_other_drives, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
+import { clear_instance_flag, create_os_user, install_shared_runtime, restrict_other_drives, instance_flag_set, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
   start_instance_as_user } from './os_users.mjs';
-import { install_workflows, shipped_workflows } from './discussion_skills.mjs';
+import { install_workflows, outdated_workflows, shipped_workflows } from './discussion_skills.mjs';
 import { list_workflows, workflows_home } from './workflows.mjs';
 import { hosted_prompt, import_skill, library_root, list_library, remove_library_skill, save_hosted_prompt } from './skill_library.mjs';
 import { local_status, save_site_connection } from './discussion_local.mjs';
@@ -100,7 +102,7 @@ const HELP = t(`用法：codiscuss panel [run|start|open|stop] [--port {value1}]
 function service_overview(data) {
   const status = local_status(data);
   return { running: Boolean(status.running), website: Boolean(status.website_running), url: status.url || '', version: status.version || '',
-    home: data, error: status.service_error || '' };
+    home: data, pid: status.service_pid, error: status.service_error || '' };
 }
 
 let latest = { at: 0, version: '' };
@@ -521,13 +523,14 @@ export function save_owner_prompt(key, text, original, home = homedir()) {
 }
 
 /**
- * The workflows in a service home's library, and the shipped workflows it lacks:
- * { workflows: [{ id, label, description, cards, disabled?, error? }], missing: [id] }.
+ * The workflows in a service home's library, the shipped workflows it lacks, and the shipped ones whose copy differs
+ * from the shipped version: { workflows: [{ id, label, description, cards, disabled?, error? }], missing: [id], outdated: [id] }.
  */
 export function account_workflows(home) {
   const workflows = existsSync(workflows_home(home)) ? list_workflows(home).map(({ directory: _directory, unavailable: _unavailable, ...item }) => item) : [];
   const installed = new Set(workflows.map(item => item.id));
-  return { workflows, missing: shipped_workflows().map(item => item.name).filter(name => !installed.has(name)) };
+  return { workflows, missing: shipped_workflows().map(item => item.name).filter(name => !installed.has(name)),
+    outdated: installed.size ? outdated_workflows(home) : [] };
 }
 
 function owner_skills(data, { install = [], remove = [] } = {}) {
@@ -587,7 +590,8 @@ function run_instance(data, name, command) {
     return start_instance_as_user(data, name, service, local_script, process.execPath, { key_file });
   }
   // An isolated instance runs as a scheduled task that comes back when the computer starts unless it was stopped here.
-  if (command === 'stop' && read_os_users(data)[name]) clear_instance_flag(name);
+  if (read_os_users(data)[name]) clear_instance_flag(name);
+  else set_instance_wanted(data, name, command === 'start');
   const { DISCUSS_ENTRY_KEY_FILE: _inherited, ...environment } = process.env;
   const child = spawn(process.execPath, [LOCAL_SCRIPT, command, '--json'], { stdio: 'ignore', windowsHide: true,
     env: { ...environment, DISCUSS_SERVICE_HOME: service, ...(key_file ? { DISCUSS_ENTRY_KEY_FILE: key_file } : {}) } });
@@ -664,6 +668,21 @@ function cookie(request, name) {
   return String(request.headers.cookie || '').split(';').map(part => part.trim().split('=')).find(([key]) => key === name)?.[1] || '';
 }
 
+/** The instance port to watch when the owner wants the account running. */
+function wanted_port(data, name, flag_set) {
+  if (!hosting_enabled(data)) return;
+  const job = update_job(data);
+  if (job && job.status !== 'done' && Date.now() - job.started_at < UPDATE_STALE_MS) return;
+  const account = read_accounts(data)[name];
+  if (!account || account.disabled) return;
+  if (read_os_users(data)[name]) return flag_set(name) ? account.port : undefined;
+  if (account.instance_wanted === undefined && local_status(instance_home(data, name)).website_running) {
+    set_instance_wanted(data, name, true);
+    return account.port;
+  }
+  return account.instance_wanted ? account.port : undefined;
+}
+
 /**
  * The panel's request handler.
  *
@@ -679,6 +698,9 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, check_package, begin_update,
     set_account_external, reconcile_external, autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_way, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+  const recovery = instance_recovery(data, { wanted: name => wanted_port(data, name, ops.instance_flag_set || instance_flag_set),
+    probe: ops.instance_state || instance_state, start: name => op.start_verified(data, name), now: ops.now,
+    on_block(name) { if (read_os_users(data)[name]) (ops.clear_instance_flag || clear_instance_flag)(name); } });
 
   async function api(method, path, body) {
     const parts = path.split('/').filter(Boolean).slice(1);
@@ -689,9 +711,12 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     const hosting = hosting_enabled(data);
     if (method === 'GET' && section === 'state') {
       const windows = process.platform === 'win32';
-      return { hosting, version: VERSION, service: op.service_overview(data), online_site: bound_site(data)?.site || '', platform: process.platform,
+      const service = op.service_overview(data), bound = bound_site(data);
+      const restarts = hosting ? recovery.status() : {};
+      return { hosting, version: VERSION, service, online_site: bound?.site || '', platform: process.platform,
+        relay_health: read_relay_health(data, bound, service.running && service.pid),
         launcher: windows && existsSync(launcher_path(data)), autostart: windows && op.autostart_enabled(), login_methods: LOGIN_METHODS, providers: API_PROVIDERS,
-        ...(hosting ? { accounts: await op.list_accounts(data), clis: op.shared_cli_state(), entry: await op.entry_overview(data, { reach: false }) }
+        ...(hosting ? { accounts: (await op.list_accounts(data)).map(item => ({ ...item, last_restart: restarts[item.name] })), clis: op.shared_cli_state(), entry: await op.entry_overview(data, { reach: false }) }
           : { accounts: [], clis: {}, entry: null }) };
     }
     // The entry with what needs the network (the relay's reach, the tunnel's connection), asked apart so the state is quick.
@@ -739,6 +764,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (method === 'GET' && name === 'workflows') return op.account_workflows(data);
       // Only the shipped workflows the owner's library lacks: an existing one, edited or not, is kept.
       if (method === 'POST' && name === 'workflows' && action === 'install') { install_workflows(data, op.account_workflows(data).missing); return op.account_workflows(data); }
+      // Replace the ones that differ from the shipped version; each old copy is backed up first (as setup --workflows).
+      if (method === 'POST' && name === 'workflows' && action === 'update') { install_workflows(data, outdated_workflows(data)); return op.account_workflows(data); }
       if (method === 'GET' && name === 'keys') return op.list_keys(data);
       if (method === 'POST' && name === 'keys' && action === 'remove') { op.remove_key(data, String(body.ref || '')); return { ok: true }; }
       if (method === 'POST' && name === 'keys') return op.save_api_key(data, { base_url: body.base_url, api_key: body.api_key });
@@ -753,6 +780,13 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // The owner's own online site: bound, checked and left here whether or not this computer hosts accounts.
     if (method === 'POST' && section === 'site' && name === 'connect') { const bound = await bind_online_site(data, body, op.connect_site); after_change(); return bound; }
     if (method === 'POST' && section === 'site' && name === 'disconnect') { const left = await disconnect_site(data); after_change(); return left; }
+    if (method === 'POST' && section === 'site' && name === 'reconnect') {
+      const bound = bound_site(data), service = op.service_overview(data);
+      if (!bound) throw panel_error('尚未绑定线上网站');
+      if (!service.pid) throw panel_error('请先启动共议服务，再重连中转');
+      request_relay_reconnect(data, bound, service.pid);
+      return { requested: true, site: bound.site };
+    }
     // Hosting: only once the owner turned it on in setup.
     if (!hosting) throw panel_error('托管管理未打开：运行 codiscuss setup 勾选“托管管理（管理面板）”');
     if (method === 'POST' && section === 'clis' && name === 'install') return op.install_runtime(data);
@@ -794,24 +828,24 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && !name) { const added = await op.add_account(data, String(body.name || '').trim()); after_change(); return added; }
     account();
     if (method === 'POST' && action === 'password') return { password: op.reset_password(data, name) };
-    if (method === 'POST' && action === 'protect') return op.protect_account(data, name, body.on !== false);
+    if (method === 'POST' && action === 'protect') return recovery.manage(name, action, () => op.protect_account(data, name, body.on !== false));
     if (method === 'POST' && (action === 'disable' || action === 'enable')) { op.set_account_disabled(data, name, action === 'disable'); return { disabled: action === 'disable' }; }
     // The instance stops first: its port goes to the next new account, which must not reach this one's instance.
-    if (method === 'POST' && action === 'remove') {
+    if (method === 'POST' && action === 'remove') return recovery.manage(name, action, async () => {
       await op.run_instance(data, name, 'stop');
       // Its online-site binding goes first, or the owner could never unbind the computer afterwards.
       await change_external(data, name, false, { removing: true }).catch(() => {});
       op.remove_account(data, name);
       return { removed: name, kept: account_home(data, name) };
-    }
+    });
     // A start is reported only once the instance serves as the account is set (protected or not).
-    if (method === 'POST' && action === 'start') { await op.start_verified(data, name); return { ok: true }; }
-    if (method === 'POST' && action === 'stop') { await op.run_instance(data, name, action); return { ok: true }; }
+    if (method === 'POST' && action === 'start') { await recovery.manage(name, action, () => op.start_verified(data, name)); return { ok: true }; }
+    if (method === 'POST' && action === 'stop') { await recovery.manage(name, action, () => op.run_instance(data, name, action)); return { ok: true }; }
     // Its identity file is sealed for whichever Windows user wrote it: it goes before that user changes, and is made
     // again for the new one by the next reconcile (#5660).
     // Taken down first and for real: a failure stops the change, or the new user could never open what is left (#5666).
     if (method === 'POST' && action === 'os-user') await change_external(data, name, false);
-    if (method === 'POST' && action === 'os-user' && extra === 'remove') { op.remove_os_user(data, name); after_change(); return { ok: true }; }
+    if (method === 'POST' && action === 'os-user' && extra === 'remove') { set_instance_wanted(data, name, false); op.remove_os_user(data, name); after_change(); return { ok: true }; }
     if (method === 'POST' && action === 'os-user') {
       const result = op.create_os_user(data, name, account_home(data, name));
       op.use_shared_programs(data, name);
@@ -827,6 +861,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'GET' && action === 'workflows') return op.account_workflows(service);
     // Set up again (safe to repeat): it installs the shipped workflows the account lacks and keeps the rest.
     if (method === 'POST' && action === 'workflows' && extra === 'install') { await op.prepare_account(data, name); return op.account_workflows(service); }
+    if (method === 'POST' && action === 'workflows' && extra === 'update') { install_workflows(service, outdated_workflows(service)); return op.account_workflows(service); }
     if (method === 'GET' && action === 'keys') return op.list_keys(service);
     if (method === 'POST' && action === 'keys' && extra === 'remove') { op.remove_key(service, String(body.ref || '')); return { ok: true }; }
     if (method === 'POST' && action === 'keys') return op.save_api_key(service, { base_url: body.base_url, api_key: body.api_key, managed: true });
@@ -882,6 +917,9 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   });
   // The same operations without HTTP, for `codiscuss admin` run elevated (the steps that need administrator rights).
   server.api = api;
+  server.recover_instances = async () => {
+    if (hosting_enabled(data)) await Promise.all(Object.keys(read_accounts(data)).map(name => recovery.check(name)));
+  };
   return server;
 }
 
@@ -1445,10 +1483,14 @@ function installed_script(name) {
  * instances are separate processes and are left alone.
  */
 function run_owner_service(data, command) {
-  const child = spawn(process.execPath, [installed_script('discussion_local.mjs'), command], { stdio: 'ignore', windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: data } });
+  const child = spawn(process.execPath, [installed_script('discussion_local.mjs'), command], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: data } });
+  // Keep the reason it prints (the last lines of stderr) so the failure says why, not just its exit code.
+  let errors = '';
+  child.stderr.on('data', chunk => { errors = (errors + chunk).slice(-4000); });
   return new Promise((done, fail) => {
     child.on('error', fail);
-    child.on('exit', code => code === 0 ? done() : fail(panel_error('codiscuss local {value1} 失败（退出码 {value2}）', { value1: command, value2: code })));
+    child.on('exit', code => code === 0 ? done() : fail(panel_error('{value1} {value2} 失败（退出码 {value3}）：{value4}',
+      { value1: 'codiscuss local', value2: command, value3: code, value4: errors.trim().split(/\r?\n/).slice(-3).join(' ') })));
   });
 }
 
@@ -1485,8 +1527,11 @@ function run_panel(data, port) {
 `, { value1: error.message })));
   // The entry's outside address runs on its own; the panel keeps it as set now and every minute (restarted if it stopped
   // or its settings changed, stopped when the entry is off).
-  const keep = () => keep_tunnel(data).catch(error => process.stderr.write(t(`隧道：{value1}
+  const keep = () => {
+    server.recover_instances().catch(error => process.stderr.write(t('托管实例巡检失败：{reason}\n', { reason: error.message })));
+    keep_tunnel(data).catch(error => process.stderr.write(t(`隧道：{value1}
 `, { value1: error.message }))).then(() => reconcile_external(data)).catch(() => {});
+  };
   keep();
   const keeper = setInterval(keep, TUNNEL_CHECK_MS);
   // Hosted accounts' failures reach the owner's Weixin; one pass at a time.

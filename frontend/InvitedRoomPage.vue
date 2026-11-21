@@ -265,9 +265,10 @@ function reason_class(item) {
               <div class="channel-message-byline">
                 <UAvatar :src="identity(entry.message).icon" :text="identity(entry.message).initials || '?'" :alt="speaker(entry.message)" size="md" class="channel-avatar" :class="identity(entry.message).style" />
                 <div class="channel-message-meta">
-                  <div class="channel-message-author"><strong>{{ speaker(entry.message) }}</strong><UBadge v-if="entry.item" size="xs" :color="outcome_of(entry.item)[1]" variant="soft" class="channel-source">{{ outcome_of(entry.item)[0] }}</UBadge></div>
-                  <div class="channel-message-provenance"><time v-if="entry.message.created_at" :title="full_date(entry.message.created_at)">{{ bridge.format_time(entry.message.created_at) }}</time><span>#{{ entry.message.id }}</span></div>
+                  <div class="channel-message-author"><strong>{{ speaker(entry.message) }}</strong></div>
                 </div>
+                <!-- Who at the left; state, time and number at the right, as on the room's own cards (user 2026-11-21, #6823). -->
+                <div class="channel-message-provenance channel-message-facts"><UBadge v-if="entry.item" size="xs" :color="outcome_of(entry.item)[1]" variant="soft" class="channel-source">{{ outcome_of(entry.item)[0] }}</UBadge><time v-if="entry.message.created_at" :title="full_date(entry.message.created_at)">{{ bridge.format_time(entry.message.created_at) }}</time><span>#{{ entry.message.id }}</span></div>
               </div>
               <div class="channel-answer"><div class="channel-message-text markdown-body" v-html="bridge.render_room_markdown(entry.message.text)"></div></div>
               <template v-if="entry.item">

@@ -3,6 +3,8 @@ const MAX_BYTES = 5 * 1024 * 1024;
 const CHUNK_BYTES = 512 * 1024;
 const DAY_MS = 86_400_000;
 const ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
+const ATTACHMENT_ROUTE = /^\/attachments\/[A-Za-z0-9._~%-]{1,200}\/content$/;
+const DATA_URL = /^data:[\w.+-]+\/[\w.+-]+;base64,[A-Za-z0-9+/]*={0,2}$/;
 const PUBLIC_ASSET = /^\/(?:i18n\.js|markdown\.js|backup\.js|app\.js|modern\.js|modern\.css|markdown\.css|icons\/[\w.-]+|katex\/(?:fonts\/)?[\w.-]+)$/;
 const CODE = {
   invalid: [400, "分享数据无效", "Invalid share data"],
@@ -90,8 +92,15 @@ function snapshot(input) {
     if (path === "/api/rooms" || path === base || path === base+"/timeline") continue;
     if (!path.startsWith(base+"/") || !/^(?:\/messages\?[^#]*|\/executions\/\d+\/notes)$/.test(path.slice(base.length))) fail("invalid");
   }
-  const { format, room_id, title, description, exported_at, responses } = input;
-  return { format, room_id, title, description, exported_at, responses };
+  // Attachments the owner chose to include: this room's attachment routes, each its file as a base64 data URL.
+  if (input.attachments !== undefined) {
+    if (!record(input.attachments)) fail("invalid");
+    for (const [path, value] of Object.entries(input.attachments)) {
+      if (!path.startsWith(base+"/") || !ATTACHMENT_ROUTE.test(path.slice(base.length)) || typeof value !== "string" || !DATA_URL.test(value)) fail("invalid");
+    }
+  }
+  const { format, room_id, title, description, exported_at, responses, attachments } = input;
+  return { format, room_id, title, description, exported_at, responses, ...(attachments ? { attachments } : {}) };
 }
 async function encode_snapshot(data) {
   let raw;
@@ -161,6 +170,20 @@ async function save_share(request, env, id) {
   const url = new URL("/s/"+share_id, request.url).href;
   return json({ id:share_id, url, expires_at:expires, ...(token ? { manage_token:token } : {}) }, id ? 200 : 201);
 }
+/** Give a share a new lifetime from now without sending its content again; moderated or expired shares cannot be renewed. */
+async function renew_share(request, env, id) {
+  const db = env.DB, now = Date.now(), stamp = new Date(now).toISOString();
+  editable(await authorize(request, db, id), stamp);
+  const input = await read_json(request, 1024);
+  const days = input.ttl_days === undefined ? 7 : input.ttl_days;
+  if (![1,3,7].includes(days)) fail("ttl");
+  const source = await source_hash(request, env), expires = new Date(now + days * DAY_MS).toISOString();
+  const [written] = await db.batch([
+    db.prepare("UPDATE shares SET expires_at=? WHERE id=? AND status='active' AND expires_at>?").bind(expires,id,stamp),
+    rate(db,source,"publish",Math.floor(now / 3600000))]);
+  if (!written.meta.changes) { editable(await authorize(request,db,id), stamp); fail("busy"); }
+  return json({ id, url:new URL("/s/"+id, request.url).href, expires_at:expires });
+}
 async function delete_share(request, db, id) {
   await authorize(request, db, id);
   await db.prepare("DELETE FROM shares WHERE id=?").bind(id).run();
@@ -186,8 +209,9 @@ function html_headers(nonce) {
   return { "Content-Type":"text/html; charset=utf-8", "Cache-Control":"private, no-store",
     "Referrer-Policy":"no-referrer", "X-Robots-Tag":"noindex, noarchive", "X-Content-Type-Options":"nosniff",
     "Content-Security-Policy":"default-src 'none'; script-src 'self' 'nonce-"+nonce+
-      "'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "+
-      "connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
+      "'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src blob:; font-src 'self' data:; "+
+      // Included attachments are shown from object URLs made in the page; nothing is fetched from anywhere else.
+      "connect-src blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
 }
 function render_page(template, data, nonce) {
   const title = escape_html(data.title), description = escape_html(data.description);
@@ -294,7 +318,7 @@ async function admin_route(request, env, url, parts) {
   fail("missing");
 }
 function write_method(path) {
-  if (path === "/api/shares" || /^\/api\/shares\/[\w-]{22}\/report$/.test(path)) return "POST";
+  if (path === "/api/shares" || /^\/api\/shares\/[\w-]{22}\/(report|renew)$/.test(path)) return "POST";
   return /^\/api\/shares\/[\w-]{22}$/.test(path) ? "PUT, DELETE" : "";
 }
 async function route(request, env, ctx, url) {
@@ -306,6 +330,7 @@ async function route(request, env, ctx, url) {
   if (method === "OPTIONS") return new Response(null, { status:204 });
   if (method === "POST" && parts.length === 2) return save_share(request,env,null);
   if (method === "POST" && parts[3] === "report") return report_share(request,env,parts[2]);
+  if (method === "POST" && parts[3] === "renew") return renew_share(request,env,parts[2]);
   if (method === "PUT" && parts.length === 3) return save_share(request,env,parts[2]);
   if (method === "DELETE" && parts.length === 3) return delete_share(request,env.DB,parts[2]);
   fail("missing");

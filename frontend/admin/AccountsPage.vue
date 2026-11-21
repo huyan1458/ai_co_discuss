@@ -48,7 +48,8 @@ function todo(account) {
           <button type="button" class="accounts-item" :class="{ 'is-active': current === account.name }" @click="chosen = account.name">
             <span class="accounts-avatar">{{ account.name.slice(0, 1).toUpperCase() }}<i :class="account.running ? 'is-on' : 'is-off'" :title="account.running ? t('运行中') : t('已停止')" /></span>
             <span class="accounts-text"><strong>{{ account.name }}</strong>
-              <small :class="{ 'is-warn': todo(account) || account.disabled }">{{ account.disabled ? t('已停用') : todo(account) ? t('待处理：{value1}', { value1: todo(account) }) : t('已隔离') }}</small></span>
+              <small :class="{ 'is-warn': todo(account) || account.disabled }">{{ account.disabled ? t('已停用') : todo(account) ? t('待处理：{value1}', { value1: todo(account) }) : t('已隔离') }}</small>
+              <small v-if="!account.disabled && account.last_restart?.blocked" class="is-warn restart-error">{{ t('自动重启失败：{reason}', { reason: t(account.last_restart.error.template, account.last_restart.error.params) }) }}</small></span>
           </button>
           <UDropdownMenu :items="menu(account)" :content="{ align: 'start', side: 'right' }">
             <button type="button" class="accounts-more" :title="t('更多操作')" :aria-label="t('更多操作')"><UIcon name="i-lucide-ellipsis" /></button>
@@ -88,6 +89,7 @@ function todo(account) {
 .accounts-text strong { overflow: hidden; font-size: 14px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
 .accounts-text small { overflow: hidden; color: var(--panel-faint); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
 .accounts-text small.is-warn { color: var(--panel-amber); }
+.accounts-text small.restart-error { white-space: normal; overflow-wrap: anywhere; }
 .accounts-row { position: relative; }
 .accounts-row .accounts-item { padding-right: 36px; }
 .accounts-more { position: absolute; top: 50%; right: 6px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; color: var(--panel-faint);

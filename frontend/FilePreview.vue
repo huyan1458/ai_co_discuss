@@ -10,6 +10,7 @@ import Papa from "papaparse";
 import { gunzip } from "fflate";
 import { ATTACHMENT_TEXT_LIMIT, HTML_SANDBOX, add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_range, file_preview, file_size, file_type, hold_selection, html_document, inline_markdown_images, inner_scroll_follower, media_of, modified_time, read_attachment, scrolled_out, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
 import { t } from './i18n.js';
+import { inline_visual_document, inline_visual_theme, observe_visual_theme, send_visual_theme, visual_tab_document } from "./inline-visual.js";
 
 // The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
 // and scroll position, so the user can go to the messages or another room and come back. Mounted once for the workspace,
@@ -105,7 +106,9 @@ addEventListener("pointerdown",e=>{down=e.pointerType!=="touch";},true);addEvent
 addEventListener("message",e=>{if(e.source===parent&&e.data&&e.data.codiscuss_clear){const s=getSelection();if(s)s.removeAllRanges();}});})();<\/script>`;
 // A project's HTML file is shown as the computer bundles it (the files it refers to inlined); an attachment as it is.
 const html_text = computed(() => tab.value?.page?.text ?? preview.value?.text ?? "");
-const html_preview = computed(() => html_document(html_text.value, selection_bridge()));
+const html_preview = computed(() => tab.value?.attachment
+  ? inline_visual_document(html_text.value, false, { extra: selection_bridge(), measure: false })
+  : html_document(html_text.value, selection_bridge()));
 const can_open_html = computed(() => format.value === "html" && can_render.value && !tab.value?.loading);
 // What the rendered HTML lacks: files it refers to that could not be included, or none at all for an attachment.
 const html_notice = computed(() => {
@@ -120,10 +123,8 @@ const html_notice = computed(() => {
 
 /** Show the HTML file in a new tab: a page of ours holding only the sandboxed file, so it never runs as this site. */
 function open_html_tab() {
-  const attribute = (value) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-  const page = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${attribute(preview_name.value)}</title>`
-    + `<style>html,body{margin:0;height:100%}iframe{display:block;width:100%;height:100%;border:0}</style>`
-    + `<iframe sandbox="${HTML_SANDBOX}" referrerpolicy="no-referrer" srcdoc="${attribute(html_document(html_text.value))}"></iframe>`;
+  const theme = tab.value?.attachment ? inline_visual_theme(document.documentElement) : null;
+  const page = visual_tab_document(preview_name.value, html_text.value, theme);
   window.open(URL.createObjectURL(new Blob([page], { type: "text/html" })), "_blank");
 }
 const can_render = computed(() => preview.value?.text != null && (format.value !== "text" || Boolean(media_kind.value)) && !(format.value === "html" && preview.value.truncated && !tab.value?.page));
@@ -185,6 +186,15 @@ const COMMENT_HEIGHT = 92;
 const OFFER_GAP = 6;
 const FOLLOW_KEYS = ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "];
 const editor_body = ref(null), markdown_scroll = ref(null), markdown_body = ref(null), code_scroll = ref(null), comment_input = ref(null), crumbs_nav = ref(null), code_text = ref(null), html_frame = ref(null);
+
+function apply_attachment_theme() {
+  const frame = html_frame.value;
+  if (frame && tab.value?.attachment) send_visual_theme(frame.contentWindow, inline_visual_theme(frame));
+}
+
+watch(() => tab.value?.attachment ? html_frame.value : null, (frame, previous, on_cleanup) => {
+  if (frame) on_cleanup(observe_visual_theme(apply_attachment_theme));
+});
 // A deep path shows its end, where the file's own folder is, instead of the root levels.
 watch([() => open.value, active_path], async () => { await nextTick(); if (crumbs_nav.value) crumbs_nav.value.scrollLeft = crumbs_nav.value.scrollWidth; });
 const speech_ready = ref(false);
@@ -325,7 +335,7 @@ function open_file(path, directory, root = 0, metadata = null) {
 }
 
 /** Open a message attachment (`{ room_id, id, file_name, url, created_at }`) in its own tab, read as text. */
-function open_attachment(attachment) {
+function open_attachment(attachment, show_source) {
   remember_scroll();
   const id = `${attachment.room_id}\nattachment\n${attachment.id}`;
   let item = tabs.value.find(entry => entry.id === id);
@@ -333,6 +343,7 @@ function open_attachment(attachment) {
     tabs.value.push({ id, room_id: attachment.room_id, directory: "", root: 0, path: attachment.file_name, attachment, data: null, loading: false, error: "", source: false, scroll: 0, request: 0 });
     item = tabs.value[tabs.value.length - 1];
   }
+  if (typeof show_source === "boolean") item.source = show_source;
   active_id.value = id;
   open.value = true;
   check_speech();
@@ -1102,7 +1113,8 @@ onBeforeUnmount(() => {
           </tbody></table>
         </div>
         <PreviewLoading v-else-if="preview && format === 'html' && tab?.loading && !tab.page" :label="t('正在载入页面引用的文件…')" />
-        <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :srcdoc="html_preview" :title="t('HTML 文件预览')"></iframe>
+        <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :class="{ 'is-themed-attachment': tab?.attachment }"
+          :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :srcdoc="html_preview" :title="t('HTML 文件预览')" @load="apply_attachment_theme"></iframe>
         <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer" @scroll.capture.passive="follow_inner_scroll" @click="open_mark_at"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
           <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
@@ -1244,6 +1256,7 @@ onBeforeUnmount(() => {
 .file-comment.is-docked { inset: auto 0 0; max-width: none; padding-bottom: calc(var(--keyboard-inset, 0px) + 12px); }
 .file-listen-dock { position: absolute; inset: auto 0 12px; z-index: 3; display: flex; justify-content: center; gap: 8px; pointer-events: none; }
 .project-html-preview { display: block; flex: 1; width: 100%; border: 0; background: white; }
+.project-html-preview.is-themed-attachment { box-sizing: border-box; padding: 16px 20px; background: var(--ui-bg-elevated); }
 .project-editor-status { display: flex; align-items: center; gap: 16px; flex-shrink: 0; height: 26px; padding: 0 14px; font-size: 11.5px; color: var(--ui-text-muted);
   background: var(--ui-bg-elevated); border-top: 1px solid var(--ui-border); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
 .project-editor-status-spacer { flex: 1; }

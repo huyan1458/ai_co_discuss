@@ -175,20 +175,29 @@ export function ready_clients(home) {
   }).map(([name, profile]) => [name, profile.adapter]));
 }
 
-async function machine_request(site, link, path, body, { timeout = SYNC_TIMEOUT_MS, signal } = {}) {
-  const response = await fetch(`${site}/api/machines/${link.id}${path}`, { method: 'POST', redirect: 'error',
-    signal: AbortSignal.any([AbortSignal.timeout(timeout), ...(signal ? [signal] : [])]),
-    headers: { 'Content-Type': 'application/json', 'X-Machine-Token': link.token }, body: JSON.stringify(body) });
-  const result = await response.json();
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${result.error || '请求失败'}`);
-  return result;
+async function machine_request(site, link, path, body, { timeout = SYNC_TIMEOUT_MS, signal, health } = {}) {
+  try {
+    const response = await fetch(`${site}/api/machines/${link.id}${path}`, { method: 'POST', redirect: 'error',
+      signal: AbortSignal.any([AbortSignal.timeout(timeout), ...(signal ? [signal] : [])]),
+      headers: { 'Content-Type': 'application/json', 'X-Machine-Token': link.token }, body: JSON.stringify(body) });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw Object.assign(new Error(`HTTP ${response.status}: ${result?.error || '请求失败'}`), { status: response.status });
+    }
+    const result = await response.json();
+    health?.http(site, link.id);
+    return result;
+  } catch (error) {
+    if (!signal?.aborted) health?.http(site, link.id, error);
+    throw error;
+  }
 }
 
 /**
  * Publish projects, clients and this computer's key to each paired site. Launch tasks a site returns are never run:
  * every remote operation must arrive as a device-signed command, and a site's own answer proves nothing.
  */
-export async function sync_remote_launches(home, { log = () => {}, throttle = false } = {}) {
+export async function sync_remote_launches(home, { log = () => {}, throttle = false, health } = {}) {
   const projects = launch_projects(home).projects.filter(project => project.id).map(({ id, name }) => ({ id, name }));
   const clients = ready_clients(home);
   for (const [site, link] of Object.entries(keyed_links(home).sites)) {
@@ -200,7 +209,7 @@ export async function sync_remote_launches(home, { log = () => {}, throttle = fa
     // (an older website gives none, which keeps 3 seconds); explicit calls after a change always send (#5500).
     const key = [home, site].join('|'), content = JSON.stringify(payload), last = last_syncs.get(key);
     if (throttle && last?.content === content && Date.now() - last.at < last.interval * 1000) continue;
-    try { ({ launches, sync_seconds } = await machine_request(site, link, '/sync', payload)); }
+    try { ({ launches, sync_seconds } = await machine_request(site, link, '/sync', payload, { health })); }
     catch (error) { log(`${site}: 同步电脑状态失败：${error.message}`); continue; }
     const interval = Number.isFinite(sync_seconds) ? Math.min(Math.max(sync_seconds, SYNC_MIN_SECONDS), SYNC_MAX_SECONDS) : SYNC_MIN_SECONDS;
     last_syncs.set(key, { content, at: Date.now(), interval });
@@ -272,7 +281,7 @@ export function run_launch_command({ command, input, browser, device }) {
 }
 
 /** Decrypt one claimed command, run it, and return the encrypted answer to the device waiting on it. */
-async function answer_command(home, site, link, { id, envelope }, run, log) {
+async function answer_command(home, site, link, { id, envelope }, { run, log, health }) {
   let key, sealed;
   try {
     key = await relay_cipher(link.private_key, envelope.key);
@@ -291,7 +300,7 @@ async function answer_command(home, site, link, { id, envelope }, run, log) {
     }
   }
   catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}) } }; }
-  try { await machine_request(site, link, `/commands/${encodeURIComponent(id)}`, { envelope: await seal(key, response, `${id}:response`) }); }
+  try { await machine_request(site, link, `/commands/${encodeURIComponent(id)}`, { envelope: await seal(key, response, `${id}:response`) }, { health }); }
   catch (error) { log(`${site}: 远程命令 ${id} 回传失败：${error.message}`); }
 }
 
@@ -300,18 +309,19 @@ async function answer_command(home, site, link, { id, envelope }, run, log) {
  * still running in `running` so a slow model list never holds up the next claim. `on_failure` hears a claim that failed,
  * so the caller can wait before retrying while a successful claim is followed at once.
  */
-export async function relay_commands(home, { run = run_launch_command, log = () => {}, wait = COMMAND_WAIT_SECONDS, signal, running = new Set(), on_failure = () => {}, skip = new Set() } = {}) {
+export async function relay_commands(home, { run = run_launch_command, log = () => {}, wait = COMMAND_WAIT_SECONDS, signal, running = new Set(), on_failure = () => {}, skip = new Set(), health } = {}) {
   // Keys are created by the sync, which publishes them; a site without one yet has nothing to claim. A site reached
   // through its live relay channel needs no D1 polling.
   await Promise.all(Object.entries(machine_links(home).sites).filter(([site, link]) => link.private_key && !skip.has(site)).map(async ([site, link]) => {
     let commands;
-    try { ({ commands } = await machine_request(site, link, '/commands/claim', { wait }, { timeout: wait * 1000 + COMMAND_REQUEST_MARGIN_MS, signal })); }
+    try { ({ commands } = await machine_request(site, link, '/commands/claim', { wait }, { timeout: wait * 1000 + COMMAND_REQUEST_MARGIN_MS, signal, health })); }
     catch (error) { if (!signal?.aborted) { log(`${site}: 领取远程命令失败：${error.message}`); on_failure(); } return; }
     for (const command of commands) {
       // A pairing removed or replaced while the claim waited ends here, as on the live channel.
       const current = machine_links(home).sites[site];
       if (current?.token !== link.token || current?.private_key?.d !== link.private_key?.d) { log(`${site}: 配对已撤销或更换，忽略远程命令 ${command.id}`); continue; }
-      const task = answer_command(home, site, link, command, run, log).finally(() => running.delete(task));
+      health?.request(site, link.id);
+      const task = answer_command(home, site, link, command, { run, log, health }).finally(() => running.delete(task));
       running.add(task);
     }
   }));

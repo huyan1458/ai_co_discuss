@@ -8,11 +8,12 @@ Use the local management panel or the corresponding codiscuss admin commands to 
 - **Overview:**
   - **This computer:** Check the CoDiscuss service status, start, restart, stop, or select **Open site**. When hosting is enabled, this page also shows **Program copies** used by isolated accounts.
   - **Administrator entry / Online site:** View the local and linked online site addresses. Select **Bind**, **Unbind**, or **Generate access code**.
+    **Online site** and `codiscuss admin status` show **Relay connected** after a heartbeat reply on the current connection, explain disconnects, retries or consecutive HTTP failures, and show **Status unknown** if the service is stopped or its observations are stale. After 3 minutes without heartbeat confirmation, the service rebuilds that site’s connection. Select **Reconnect now** or run `codiscuss admin site reconnect` to request it immediately.
   - **Hosted account entry** (shown when hosting is enabled): Start or stop the **Sign-in entry**, enable **Through the online site**, or configure your **Own domain** using Cloudflare Tunnel.
   - **Settings:** View the installed version, select **Check for updates** or **Update and restart** (which also updates room skills and isolated accounts), enable **Start when signing in to Windows**, and change the panel language.
 - **Account:**
   - **Local account** is listed by default. When hosting is enabled, the page also lists **Hosted accounts** and a **New account** button.
-  - Select the administrator or a hosted account to manage its **CLI sign-ins** (Claude Code, Codex, and Gemini status, sign-in method, or sign-out; Setup Token is recommended for Claude Code), **API keys**, **Skills** (select from **Skill library** or import a ZIP/folder), **bundled workflows**, and **system prompt**.
+  - Select the administrator or a hosted account to manage its **CLI sign-ins** (Claude Code, Codex, and Gemini status, sign-in method, or sign-out; Setup Token is recommended for Claude Code), **API keys**, **Skills** (select from **Skill library** or import a ZIP/folder), **bundled workflows**, and **system prompt**. Updating the program leaves installed workflows unchanged; the workflows section always shows **Check** and **Sync to latest**. **Check** compares the library with the bundled versions and lists missing workflows and those that differ; **Sync to latest** installs the missing ones and replaces those that differ (each replaced copy is first backed up to `backups/workflows` in that account's service folder, and changes made there are replaced too). It is greyed out when everything matches.
 
 ## Hosted accounts for other people
 
@@ -27,7 +28,7 @@ On Windows, open the panel from the tray. On macOS and Linux, use the command-li
 3. **Configure remote access** using either or both options:
    - **Through the online site, without your own domain:** Follow the [deployment guide](../deployment.md#entry-for-hosted-accounts-optional) to deploy the entry Worker. On the deployment computer, generate an access code under **Overview** → **This computer** → **Online site**. On this computer, bind the online site and turn on **Through the online site** under **Hosted account entry**. You can also run codiscuss admin entry join <access-code>.
    - **Own domain:** Under **Hosted account entry** → **Own domain**, authorize a Cloudflare tunnel and connect a domain hosted on Cloudflare. The CLI equivalent is codiscuss admin entry tunnel <domain>.
-4. **Manage the account:** Start or stop its instance, enable, disable or remove the account, reset its password, and provide API keys. Users see **Provided by admin** for administrator-provided keys and cannot view or change them. To invite external experts, the account needs an online relay.
+4. **Manage the account:** Start or stop its instance, enable, disable or remove the account, reset its password, and provide API keys. Users see **Provided by admin** for administrator-provided keys and cannot view or change them. To invite external experts, the account needs an online relay. The panel checks instances requested to run every minute and restarts them if their port refuses connections, up to 3 times in 10 minutes. After repeated failures, the account row shows the last error. Check `codiscuss admin status` for the latest attempt and start the instance manually after fixing the cause to resume recovery.
 
 ### macOS and Linux
 
@@ -44,7 +45,7 @@ Every command in the table is prefixed by codiscuss admin and returns JSON. Thes
 | Link/unlink online site and create access code | `site status`, `site connect <access-code\|site>`, `site disconnect`, `entry code` |
 | Manage sign-in entry and tunnel | `entry start\|stop`, `entry join <access-code>`, `entry open\|close relay\|tunnel`, `entry tunnel <domain>` |
 | Manage hosted account lifecycle | `account list`, `account add <name>`, `account start\|stop\|disable\|enable\|remove\|password <name>`, `account isolate\|protect <name>` |
-| Manage sign-ins, keys, skills, workflows, and prompts | `login status <target>`, `key add <target> --base-url … --key …`, `skill install <target> <skill>`, `workflow install <target>`, `prompt set <target> --file …` |
+| Manage sign-ins, keys, skills, workflows, and prompts | `login status <target>`, `key add <target> --base-url … --key …`, `skill install <target> <skill>`, `workflow install <target>`, `workflow update <target>`, `prompt set <target> --file …` |
 
 Use owner as <target> for the administrator, or use a hosted account name. If account add fails partway, fix the issue and run the same command again to resume the missing steps.
 

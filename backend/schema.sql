@@ -20,6 +20,12 @@ END;
 CREATE TABLE IF NOT EXISTS topic_folders (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0, directories TEXT NOT NULL DEFAULT '[]'
 );
+-- A room's published share link on the official share site; the manage token lets the owner renew or revoke it from any
+-- device. Never part of a room backup.
+CREATE TABLE IF NOT EXISTS room_share_links (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    share_id TEXT NOT NULL, url TEXT NOT NULL, manage_token TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 -- Site-wide preferences of the person managing the site; `last_room` is the room they last opened on any device.
 CREATE TABLE IF NOT EXISTS site_preferences (
     key TEXT PRIMARY KEY,

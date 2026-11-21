@@ -1973,6 +1973,18 @@ class HostTests(HostRoomTests):
         lines = {item["id"]: item["line"] for item in self.request(self.path)[1]["free"]["executions"]}
         self.assertEqual((lines[branch["id"]], lines[relay["id"]]), ({"kind": "branch", "by": "user"}, {"kind": "main", "step": 2, "by": "host"}))
 
+    def test_a_member_named_while_nothing_else_runs_is_not_a_branch(self):
+        """2026-11-21 (#6884): a branch works beside other work; named in an idle room, or sent by the host's own turn, it is not one."""
+        FreeRoomTests.say(self, "Codex 看下日志", to=["Codex"])
+        alone = self.work("Codex")
+        FreeRoomTests.say(self, "安排一下")
+        self.work("Claude", to=["Antigravity"])
+        dispatched = self.reserve_for("Antigravity")[1]
+        FreeRoomTests.say(self, "Codex 再看下配置", to=["Codex"])
+        beside = self.work("Codex")
+        lines = {item["id"]: item["line"] for item in self.request(self.path)[1]["free"]["executions"]}
+        self.assertEqual((lines[alone["id"]], lines[dispatched["id"]], lines[beside["id"]]), (None, None, {"kind": "branch", "by": "user"}))
+
     def test_one_line_per_execution_never_leaves_an_execution_empty_and_keeps_owner_and_host_branches_apart(self):
         """Review #5938: a review waiting beside a relay turn is not counted as a branch, so the delivery is never empty;
         work the owner and the host named the same member for goes one after the other."""

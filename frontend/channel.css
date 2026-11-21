@@ -91,6 +91,24 @@ html[data-theme^="channel"] .channel-new-conversation:active:not(:disabled) { ba
 .channel-archive-toggle > [class*="icon"] { width: 14px; height: 14px; color: inherit; flex-shrink: 0; }
 .channel-archive-toggle { margin: 4px 0 0 !important; }
 .channel-archive-label { text-align: left; }
+.shared-rooms { display: grid; gap: 6px; max-height: 60vh; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+.shared-room { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 16px; padding: 12px 14px 14px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-text) 2%, transparent); overflow: hidden; transition: background .15s, border-color .15s; }
+.shared-room:hover { background: color-mix(in srgb, var(--ui-text) 5%, transparent); border-color: var(--ui-border); }
+.shared-room-main { display: grid; gap: 3px; min-width: 0; }
+.shared-room-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--ui-text-highlighted); }
+.shared-room-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-text-muted); font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-decoration: none; }
+.shared-room-url:hover { color: var(--ui-text-toned); text-decoration: underline; }
+.shared-room-side { display: grid; justify-items: end; gap: 6px; }
+.shared-room-expiry { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 6%, transparent); color: var(--ui-text-toned); font-size: 11px; white-space: nowrap; }
+.shared-room-expiry .iconify { width: 11px; height: 11px; }
+.shared-room.is-soon .shared-room-expiry { background: color-mix(in srgb, var(--ui-warning) 16%, transparent); color: var(--ui-warning); }
+.shared-room-actions { display: flex; align-items: center; gap: 2px; }
+.shared-room-revoke:hover { color: var(--ui-error); }
+/* How much of the seven-day lifetime is left, as a hairline along the bottom edge. */
+.shared-room-life { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: transparent; }
+.shared-room-life i { display: block; height: 100%; background: color-mix(in srgb, var(--ui-primary) 70%, transparent); }
+.shared-room.is-soon .shared-room-life i { background: var(--ui-warning); }
+@media (max-width: 560px) { .shared-room { grid-template-columns: minmax(0, 1fr); } .shared-room-side { grid-auto-flow: column; justify-content: space-between; align-items: center; } }
 .channel-archive-count { color: var(--ui-text-dimmed); font-size: 11px; opacity: .8; font-variant-numeric: tabular-nums; }
 html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 156px; }
 html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon"] { width: 14px; height: 14px; color: var(--ui-text-toned); }
@@ -248,8 +266,22 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-attachment-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .channel-attachment-heading > div { width: min(400px, 100%); }
 .channel-attachment-heading .message-attachments { margin: 0; }
-.channel-inline-html { display: flex; height: clamp(240px, 55dvh, 460px); margin-top: 8px; overflow: hidden; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-bg); }
-.channel-inline-html > iframe { display: block; width: 100%; height: 100%; border: 0; }
+.channel-inline-html { display: flex; height: min(var(--inline-html-height, 220px), 80dvh); margin-top: 8px; overflow: hidden; }
+.channel-inline-html > iframe { display: block; width: 100%; height: 100%; border: 0; background: transparent; }
+.channel-visual-slot, .channel-message-visual { display: block; min-width: 0; }
+.channel-message-visual { margin: .4em 0 .65em; }
+.channel-visual-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 4px; margin-top: 4px; color: var(--ui-text-muted); font-size: 12px; }
+/* The tools stay out of sight beside a shown visual so it reads as part of the answer; they keep their space, so
+   pointing at the visual does not move the text below. A collapsed visual and touch screens always show them. */
+@media (hover: hover) {
+  .channel-message-visual:not(.is-collapsed) .channel-visual-actions { opacity: 0; transition: opacity .15s; }
+  .channel-message-visual:not(.is-collapsed):hover .channel-visual-actions,
+  .channel-message-visual:not(.is-collapsed):focus-within .channel-visual-actions { opacity: 1; }
+}
+.channel-visual-name { min-width: 0; overflow-wrap: anywhere; margin-inline-end: 4px; }
+.channel-visual-actions .channel-visual-download { color: inherit; padding: 3px 8px; border-radius: var(--ui-radius); text-decoration: none; }
+.channel-visual-actions .channel-visual-download:hover { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
+.channel-message-visual .channel-visual-fallback { color: var(--ui-text-muted); font-size: 12px; margin-top: 4px; }
 .channel-inline-html-status { display: grid; flex: 1; align-content: center; justify-items: center; gap: 10px; padding: 16px; text-align: center; color: var(--ui-text-muted); }
 .channel-inline-html-status p { overflow-wrap: anywhere; }
 .channel-answer .markdown-body pre { border: 0; border-radius: 6px; padding: 12px 14px; background: #27292e; }
@@ -344,6 +376,7 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-member-name [class*="icon"] { width: 12px; height: 12px; color: #e5a50a; }
 /* The access, role, model and effort share the name's line; the name keeps its width and the rest truncates, in full on hover. */
 .pb-member-name { min-width: 0; white-space: nowrap; }
+.pb-member-name .member-name-text { flex-shrink: 0; max-width: 100%; }
 .pb-member-name small { min-width: 0; overflow: hidden; color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; text-overflow: ellipsis; }
 .pb-member-status { display: flex; align-items: center; gap: 6px; color: var(--ui-text-muted); font-size: 12px; }
 .pb-member-status .pb-dot { width: 6px; height: 6px; }
@@ -491,9 +524,11 @@ html[data-theme^="channel"] .channel-nav-preview-text p { margin-bottom: 6px; }
    Their height is a guess until they near the screen, so this is only where the browser keeps the reading position as
    guesses turn real (scroll anchoring). The clip margin keeps the action column hanging beside the card painted.
    WebKit is left out (font: -apple-system-body matches only it): after rotating an iPhone back to portrait it kept the
-   cards on screen skipped, leaving the transcript blank until the next manual scroll. */
+   cards on screen skipped, leaving the transcript blank until the next manual scroll.
+   A card's attachment links name their message too and are not cards: contained, `[图片 #n]` lost its baseline and
+   rose above its line. */
 @supports (overflow-anchor: auto) and (not (font: -apple-system-body)) {
-  .channel-transcript [data-message-id] { content-visibility: auto; contain-intrinsic-block-size: auto 240px; overflow-clip-margin: 64px; }
+  .channel-transcript [data-message-id]:not([data-preview-attachment]) { content-visibility: auto; contain-intrinsic-block-size: auto 240px; overflow-clip-margin: 64px; }
 }
 /* WebKit's own scroll anchoring (on by default since 2026) does not hold while a touch scroll runs, so there the page
    keeps the reading position by hand (ChannelDiscussion keep_reading); both at once would move the cards twice. */
@@ -537,7 +572,7 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 .channel-message-body { position: relative; flex: 1 !important; min-width: 0 !important; padding: 0 !important; max-width: none !important; }
 .channel-message-byline { display: flex; align-items: center; gap: 10px; min-height: 28px; padding: 0 58px 0 0; margin-bottom: 16px; }
 .channel-message-byline > .channel-avatar { width: 28px; height: 28px; font-size: 9px; }
-.channel-message-meta { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: 14px; row-gap: 2px; }
+.channel-message-meta { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: 14px; row-gap: 2px; }
 .channel-message-author, .channel-message-provenance { display: flex; align-items: center; flex-wrap: wrap; column-gap: 8px; row-gap: 2px; }
 .channel-message-author { min-height: 23px; }
 .channel-message-byline strong { font-size: 16px; font-weight: 650; color: var(--speaker-accent); }
@@ -545,11 +580,12 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 .channel-source { color: #929aa7 !important; background: transparent !important; border: 0; box-shadow: none !important; font-size: 11px !important; font-weight: 400; line-height: 15px; padding: 0 !important; }
 /* The time and message number take the source tag's line height: centred rows of unequal height put their text on different baselines. */
 .channel-message-provenance { color: #929aa7; font-size: 11px; font-weight: 400; line-height: 15px; font-variant-numeric: tabular-nums; }
-/* The model and effort an execution ran with stand before its elapsed time at the byline's right end (user 2026-11-21).
-   Only the model ID is cut, from its start: IDs of one family differ at the end, and the effort always shows. */
-.channel-message-elapsed { flex-shrink: 0; align-self: center; margin-left: auto; white-space: nowrap; }
-.channel-message-model { display: inline-flex; flex-wrap: nowrap; column-gap: 0; min-width: 0; margin-left: auto; white-space: nowrap; color: var(--ui-text-toned); }
-.channel-message-model + .channel-message-elapsed { margin-left: 0; }
+/* Two groups (user 2026-11-21, #6820, #6823): who at the left — name, tags (host ones included) and the model and
+   effort the run used; how this one went at the right — state, time, number, then the duration, always last so a
+   ticking "已用" moves nothing else. Only the model ID is cut, from its start: IDs of one family differ at the end. */
+.channel-message-facts { flex: none; margin-left: auto; flex-wrap: nowrap; white-space: nowrap; }
+.channel-message-elapsed { white-space: nowrap; }
+.channel-message-model { display: inline-flex; flex-wrap: nowrap; column-gap: 0; min-width: 0; white-space: nowrap; color: var(--ui-text-toned); }
 .channel-model-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
 .channel-model-effort { flex: none; white-space: pre; }
 .channel-message-id { font-size: 11px !important; font-weight: 400; line-height: 15px !important; color: #929aa7; padding: 0 !important; }
@@ -658,20 +694,22 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 /* The dock reserves the transcript's scrollbar gutters and the column repeats the message margins, so composer and card edges line up. */
 .channel-composer-dock { grid-column: 2; grid-row: 3; min-width: 0; overflow: hidden; scrollbar-gutter: stable both-edges; padding: 8px 0 12px; }
 .channel-composer-column { max-width: var(--channel-reading-width); margin: 0 auto; padding: 0 16px; }
-/* A share page ends where the composer would be: one slim line saying what this page is, and where to get one's own room. */
-.channel-share-end { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-block: 6px; border-radius: 10px; background: var(--ui-bg); color: var(--ui-text-muted); font-size: 12px; }
-.channel-share-end p { display: grid; gap: 2px; margin: 0; min-width: 0; }
-.channel-share-end .channel-share-pitch { color: var(--ui-text-toned); line-height: 1.5; }
-.channel-share-end .channel-primary-button { flex-shrink: 0; }
-.channel-share-brand { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; margin-right: 4px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; }
-.channel-share-mark { display: inline-grid; grid-template-columns: repeat(3, 4px); gap: 2px; align-items: end; height: 14px; }
-.channel-share-mark i { display: block; width: 4px; border-radius: 2px; background: var(--ui-primary); }
-.channel-share-mark i:nth-child(1) { height: 8px; } .channel-share-mark i:nth-child(2) { height: 14px; } .channel-share-mark i:nth-child(3) { height: 11px; }
-@media (max-width: 700px) {
-  .channel-share .channel-header { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .channel-share-brand { font-size: 0; gap: 0; }
-  .channel-share-end .channel-share-pitch { display: none; }
-}
+/* A share page keeps the composer in place, disabled, with the way to a room of one's own inside it. */
+.channel-share-composer .channel-composer { opacity: .85; }
+.channel-share-composer :is(textarea, [data-slot="base"]) { cursor: not-allowed; }
+.channel-share-start { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; padding: 4px 10px; border-radius: 14px; background: color-mix(in srgb, var(--ui-primary) 18%, transparent); color: var(--ui-primary); font-size: 13px; font-weight: 600; text-decoration: none; pointer-events: auto; }
+.channel-share-start:hover { background: color-mix(in srgb, var(--ui-primary) 28%, transparent); }
+.channel-share-stamp { margin-right: 8px; color: var(--ui-text-muted); font-size: 11px; white-space: nowrap; }
+/* Sidebar and room board stay where they are on a share page, greyed and out of reach. */
+.channel-share :is(#channel-sidebar, #channel-member-rail), .channel-share-inert { filter: grayscale(.5); opacity: .55; user-select: none; }
+.channel-share-locked { position: relative; display: grid; place-items: center; min-height: 420px; }
+.channel-share-locked-sample { position: absolute; inset: 24px 0 auto; display: grid; gap: 14px; max-width: 760px; margin: 0 auto; opacity: .35; filter: grayscale(1); }
+.channel-share-locked-row { height: 18px; border-radius: 6px; background: var(--ui-bg-elevated); }
+.channel-share-locked-note { position: relative; display: grid; justify-items: center; gap: 8px; max-width: 420px; padding: 24px; border: 1px solid var(--ui-border-muted); border-radius: 14px; background: var(--ui-bg); text-align: center; }
+.channel-share-locked-note h2 { margin: 0; font-size: 16px; color: var(--ui-text-highlighted); }
+.channel-share-locked-note p { margin: 0 0 6px; color: var(--ui-text-toned); font-size: 13px; line-height: 1.6; }
+.channel-share-locked-note > .iconify { width: 22px; height: 22px; color: var(--ui-text-muted); }
+.channel-topic-more { color: var(--ui-text-muted); font-size: 11px; align-self: center; }
 .channel-composer { --composer-surface: #383a40; background: #383a40 !important; border-radius: 12px !important; border: 1px solid #ffffff0b; box-shadow: 0 1px 3px #0002 !important; padding: 0 !important; gap: 0 !important; overflow: hidden; transition: border-color .15s, box-shadow .15s; }
 /* The queued-message tray tucks under the composer's top edge. */
 .queued-messages + .channel-composer { position: relative; z-index: 1; }
@@ -906,6 +944,8 @@ html[data-theme^="channel"] .dialog-form.project-manager { gap: 12px; }
 html[data-theme^="channel"] .dialog-form label[data-slot="label"] { color: #c1c9d6; font-size: 12px; }
 html[data-theme^="channel"] .channel-folder-modal { max-width: 420px; }
 html[data-theme^="channel"] .channel-folder-modal:has(.channel-folder-directories) { max-width: 520px; }
+html[data-theme^="channel"] .channel-folder-modal.share-dialog { max-width: 560px; }
+html[data-theme^="channel"] .channel-folder-modal.share-dialog.share-dialog-wide { max-width: 720px; }
 .channel-folder-directories { display: flex; flex-direction: column; gap: 6px; }
 .channel-folder-primary { align-self: center; flex-shrink: 0; margin-inline-end: 2px; padding: 1px 6px; border-radius: 4px; background: var(--ui-bg-accented); color: var(--ui-text-muted); font-size: 11px; line-height: 18px; }
 .channel-folder-path { overflow-wrap: anywhere; font-size: 12px; }
@@ -1007,6 +1047,22 @@ html[data-theme^="channel"] .theme-choices small { color: #a1aab9; }
 /* The language is one choice among few names: label and a compact picker on one row. */
 .channel-language-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .channel-language-setting h3 { margin-bottom: 0; }
+/* 设置 → 外观 / 阅读 / 房间偏好: each setting is a row (name left, choices right), rows of a group split by hairlines. */
+.channel-settings-group { margin-top: 4px; }
+.theme-choices + .channel-settings-group { margin-top: 8px; }
+.channel-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) 240px; align-items: center; gap: 6px 16px; padding: 10px 0; border-top: 1px solid #ffffff0d; }
+.channel-settings-group > .channel-setting-row:first-child { border-top: 0; }
+.channel-setting-row h3 { margin: 0; color: #cbd3df; font-size: 12px; font-weight: 500; }
+.channel-setting-row > :not(h3):not(.fine-print) { justify-self: end; }
+.channel-setting-row > .channel-reading-options { width: 100%; }
+.channel-setting-row .fine-print { grid-column: 1 / -1; margin: 0; }
+/* Four choices with longer names do not fit beside the label: they take the full width under it. */
+.channel-setting-wide { grid-template-columns: minmax(0, 1fr); }
+.channel-setting-wide > .channel-reading-options { justify-self: stretch; }
+@media (max-width: 520px) {
+  .channel-setting-row, .channel-setting-wide { grid-template-columns: minmax(0, 1fr); }
+  .channel-setting-row > .channel-reading-options { justify-self: stretch; }
+}
 .channel-reading-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; background: #1d1f25; border: 1px solid #ffffff0b; border-radius: 8px; }
 .channel-effect-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .channel-access-options { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -1122,22 +1178,21 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-date-divider { padding: 12px 16px; }
   .channel-message { margin: 0 8px 14px !important; padding: 14px 15px 16px !important; }
   .channel-loading-skeleton { padding-inline: 23px; }
-  /* Phone byline: a two-line block beside a centered avatar — name and badges on the first line, then time, #
-     and elapsed packed on one line. Flex wrap rather than a grid: a name row spanning grid columns widened the
-     time column in iOS Safari and pushed the elapsed time to the middle of the card. */
+  /* Phone byline: a two-line block beside a centered avatar — name and badges on the first line; below, the model at
+     the left and state, time, number and duration at the right. Flex wrap rather than a grid: a name row spanning
+     grid columns widened the time column in iOS Safari and pushed the elapsed time to the middle of the card. */
   .channel-message-byline { position: relative; display: flex; flex-wrap: wrap; align-items: center; align-content: center; gap: 1px 8px; min-height: 32px; padding-left: 40px; margin-bottom: 10px; }
   .channel-message-byline > .channel-avatar { position: absolute; left: 0; top: 50%; width: 32px; height: 32px; font-size: 10px; transform: translateY(-50%); }
   .channel-message-meta { display: contents; }
   .channel-message-author { flex: 1 0 100%; min-width: 0; min-height: 20px; column-gap: 6px; }
   .channel-message-byline strong { font-size: 15px; line-height: 20px; }
   .channel-message-byline .channel-message-provenance { line-height: 16px; }
-  /* Phone (user 2026-11-21): the right side holds only keys, so only the name line keeps clear of the toolbar and the
-     second line runs from the left across the card: time, #, the elapsed time, then the model, which takes what is
-     left and is cut from its start, so the end that tells models apart and the effort stay. */
+  /* Only the name line keeps clear of the toolbar; the second line runs across the card. The model takes what the
+     facts leave and is cut from its start; facts too wide for the line wrap at the right rather than overflow. */
   .channel-message-byline { padding-right: 0; }
   .channel-message-author { padding-right: 58px; }
-  .channel-message-elapsed { order: 1; margin-left: 0; }
-  .channel-message-model { order: 2; flex: 1 1 0; margin-left: 0; }
+  .channel-message-model { flex: 1 1 0; }
+  .channel-message-facts { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
   .channel-answer-summary { grid-template-columns: minmax(0, 1fr); gap: 4px; margin-top: 14px; }
   .channel-answer-summary > small > span { display: inline; }
   .channel-answer-summary > .channel-message-text { font-size: calc(14px * var(--card-text-scale, 1)); }
@@ -1368,8 +1423,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
     .channel-title h1 { font-size: 18px; }
     .channel-message-byline > .channel-avatar { width: 32px; height: 32px; }
     .channel-working-strip { --working-avatar: 32px; }
-    .channel-message-meta { flex: 1; justify-content: space-between; }
-    .channel-message-provenance { margin-left: auto; color: #767676; }
+    .channel-message-provenance { color: #767676; }
     .channel-message { padding: 20px 22px 24px !important; margin-bottom: 16px !important; }
     .channel-composer-dock { padding-top: 12px; padding-bottom: 15px; }
   }
@@ -1664,7 +1718,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-self-button strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-connection.is-action { color: var(--ui-text-highlighted, inherit); }
 .account-settings { padding-bottom: 4px; }
-.account-settings h3, .account-appearance-heading { margin-bottom: 10px; color: var(--ui-text-muted); font-size: 12px; font-weight: 500; }
+/* Group headings outrank the setting names under them (12px, 500). */
+.account-settings h3, .account-appearance-heading { margin-bottom: 10px; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .account-appearance-heading { margin: 16px 0 10px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
 .account-form { gap: 14px; }
 .account-name-row { display: flex; gap: 8px; }
@@ -1735,6 +1790,8 @@ html[data-theme^="channel"] .content-page > .timeline-switch { max-width: 1280px
 .attachment-placeholder { display: inline; padding: 0 4px; border: 0; border-radius: 4px; font: inherit; color: var(--ui-primary);
   background: color-mix(in srgb, var(--ui-primary) 12%, transparent); text-decoration: none; cursor: pointer; }
 .attachment-placeholder:hover { background: color-mix(in srgb, var(--ui-primary) 22%, transparent); }
+/* A share page made without its attachments: the tag stays, muted, and opens nothing. */
+.attachment-placeholder.is-omitted, .attachment-placeholder.is-omitted:hover { color: var(--ui-text-muted); background: var(--ui-bg-elevated); cursor: default; }
 /* `#123` in a message opens message 123's original text, like the card's own `#id`. */
 .message-ref { display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--ui-primary); cursor: pointer; }
 .message-ref:hover { text-decoration: underline; }
@@ -1777,3 +1834,8 @@ html[data-theme^="channel"] .content-page > .timeline-switch { max-width: 1280px
 .viewer-container .viewer-toolbar > ul > .viewer-rotate-left::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e6e8ec' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8'/%3E%3Cpath d='M3 3v5h5'/%3E%3C/svg%3E"); }
 .viewer-container .viewer-toolbar > ul > .viewer-rotate-right::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e6e8ec' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/%3E%3Cpath d='M21 3v5h-5'/%3E%3C/svg%3E"); }
 .viewer-container .viewer-toolbar > ul > .viewer-save::before { content: "Save"; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e6e8ec' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3'/%3E%3C/svg%3E"); }
+
+/* Phones: notices sit just below the room tabs, measured by App.vue's place_notices(). */
+@media (max-width: 700px) {
+  ol[data-slot="viewport"] { top: var(--notice-top, 1rem); }
+}

@@ -924,10 +924,55 @@ def list_rooms(connection, params=None):
         GROUP BY rooms.id ORDER BY rooms.created_at, rooms.id""", (int(time.time()), *((identifier,) if identifier else ())))
     directory = {row["room_id"]: dict(row) for row in connection.execute("SELECT * FROM room_directory")}
     assignments = {row["room_id"]: row["folder_id"] for row in connection.execute("SELECT room_id,folder_id FROM room_folder_assignments")}
+    # Only the public part of a live share link; the manage token stays behind the owner-only share-link read.
+    links = {row["room_id"]: {"url": row["url"], "expires_at": row["expires_at"]} for row in connection.execute(
+        "SELECT room_id,url,expires_at FROM room_share_links WHERE expires_at>?", (utc_iso_now(),))}
     rooms = [{**dict(row), "archived": bool(directory[row["id"]]["archived"]), "running": bool(row["running"]),
-              "folder_id": assignments[row["id"]], "texts": room_display_texts(connection, dict(row))} for row in rows]
+              "folder_id": assignments[row["id"]], "texts": room_display_texts(connection, dict(row)),
+              "share_link": links.get(row["id"])} for row in rows]
     return {"rooms": sorted(rooms, key=lambda room: directory[room["id"]]["position"]),
             **folder_directory(connection)}
+
+
+SHARE_ID = re.compile(r"[A-Za-z0-9_-]{22}")
+SHARE_TOKEN = re.compile(r"[A-Za-z0-9_-]{20,200}")
+SHARE_URL_MAX = 300
+# The official share site (web/app.js SHARE_SITE); a link kept with a room must point there.
+SHARE_SITE_HOST = "share.codiscuss.com"
+
+
+def utc_iso_now():
+    """Now as the share site writes times: ISO 8601 in UTC with milliseconds, so strings compare in time order."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def share_link_record(connection, room_id):
+    """The room's live share link with its manage token, or None when it has none or it expired."""
+    require_room(connection, room_id)
+    row = connection.execute("SELECT share_id,url,manage_token,expires_at,updated_at FROM room_share_links "
+                             "WHERE room_id=? AND expires_at>?", (room_id, utc_iso_now())).fetchone()
+    return {"link": dict(row) if row else None}
+
+
+def save_share_link(connection, room_id, payload):
+    """Keep the room's share link as the share site gave it, or forget it when `link` is null (revoked or gone)."""
+    require_room(connection, room_id)
+    link = payload.get("link")
+    if link is None:
+        connection.execute("DELETE FROM room_share_links WHERE room_id=?", (room_id,))
+        return {"link": None}
+    if not isinstance(link, dict):
+        raise ValueError(Text('分享链接格式不正确'))
+    share_id, url, token, expires = (link.get(key) for key in ("share_id", "url", "manage_token", "expires_at"))
+    valid = (isinstance(share_id, str) and SHARE_ID.fullmatch(share_id) and isinstance(token, str) and SHARE_TOKEN.fullmatch(token)
+             and isinstance(url, str) and len(url) <= SHARE_URL_MAX and url == f"https://{SHARE_SITE_HOST}/s/{share_id}"
+             and isinstance(expires, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z", expires))
+    if not valid:
+        raise ValueError(Text('分享链接格式不正确'))
+    connection.execute("""INSERT INTO room_share_links (room_id,share_id,url,manage_token,expires_at,updated_at) VALUES (?,?,?,?,?,?)
+        ON CONFLICT(room_id) DO UPDATE SET share_id=excluded.share_id,url=excluded.url,manage_token=excluded.manage_token,
+        expires_at=excluded.expires_at,updated_at=excluded.updated_at""", (room_id, share_id, url, token, expires, utc_iso_now()))
+    return share_link_record(connection, room_id)
 
 
 def last_room(connection):
@@ -3357,6 +3402,18 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.handle_attachments(connection, parts, params, method)
         if parts[3:4] in (["scheduler-decisions"], ["scheduler-routing"]):
             return self.handle_scheduler_api(connection, parts, method)
+        if parts[3:] == ["share-link"] and method in ("GET", "POST"):
+            # The manage token can renew, revoke or replace a public page: owner only. A request carrying a credential must
+            # carry the owner's, so a member AI using its own command line cannot read or rewrite it even on a local site.
+            if token:
+                require_owner(connection, room_id, token)
+            else:
+                self.require_entry_owner(connection, room_id, token)
+            if method == "GET":
+                return self.respond(share_link_record(connection, room_id))
+            result = save_share_link(connection, room_id, self.read_payload())
+            connection.commit()
+            return self.respond(result)
         free_actor = None
         if method == "POST" and len(parts) == 4 and (parts[3] in DIRECTORY_OPERATIONS
                                                       or parts[3] in ADMIN_OPERATIONS and self.admin_session(connection)):

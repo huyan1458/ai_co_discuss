@@ -126,7 +126,7 @@ export function external_ai(member) {
   return [name, details.model].filter(Boolean).join(" · ");
 }
 
-/** The rail's quiet line for an external member: "外部 · 只读项目 · 剩余 2 小时". */
+/** The rail's quiet line for an external member: "外部 · 消息和项目 · 剩余 2 小时". */
 // The rail's line is narrow: the tiniest level names and time left ("剩 59 分" / "59m"), the full wording on hover.
 const LEVEL_TINY = { discuss: t("仅讨论"), read: t("只读文件") };
 
@@ -143,7 +143,7 @@ export function remaining_short(expires_at, now = Date.now()) {
 
 /**
  * The rail's quiet line for an external member: short ("外部 · 只读文件 · 剩 2 小时") to fit beside the name, or with
- * `full` the wording for its hover text ("外部 · 只读项目 · 剩余 2 小时").
+ * `full` the wording for its hover text ("外部 · 消息和项目 · 剩余 2 小时").
  */
 export function external_tag(member, now = Date.now(), { full = false } = {}) {
   const info = external_of(member);

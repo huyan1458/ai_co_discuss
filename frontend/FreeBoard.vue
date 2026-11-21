@@ -387,7 +387,7 @@ watch(() => room.value.id, () => { starting.value = false; });
           <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state)]">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body" :data-member="member.name">
-              <div class="pb-member-name"><MemberNameEdit :name="member.name" :editable="can_describe" /><span v-if="!external_of(member) && bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
+              <div class="pb-member-name"><MemberNameEdit :name="member.name" :editable="can_describe" /><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
               <button v-if="room.descriptions?.[member.name] && can_describe" type="button" class="pb-member-description" :title="room.descriptions[member.name]" :aria-label="t('编辑 {value1} 的描述', { value1: member.name })" @click="describe(member.name)">{{ room.descriptions[member.name] }}</button>
               <div v-else-if="room.descriptions?.[member.name]" class="pb-member-description" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</div>
               <div v-if="member_setup(member) || in_workflow(member.name)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)"><small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>{{ member_setup(member) }}</div>
@@ -454,6 +454,4 @@ button.pb-member-description:hover { color: var(--ui-text-highlighted); }
 .pb-member-describe { display: none; flex-shrink: 0; margin-left: auto; padding: 0; color: var(--channel-accent); font-size: 11px; }
 .pb-member:hover .pb-member-describe, .pb-member-describe:focus-visible { display: block; }
 .pb-member-model { margin: 1px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
-/* A member with a nickname also shows its ID, which AI messages, @ and records use. */
-.member-id { margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }
 </style>

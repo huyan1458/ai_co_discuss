@@ -7,11 +7,14 @@
 import { computed, inject } from "vue";
 import { call } from "./api.js";
 import EntryWayCard from "./EntryWayCard.vue";
+import RelayReconnect from "./RelayReconnect.vue";
 import { t } from '../i18n.js';
+import { relay_health_text } from '../../runner/relay_health_text.mjs';
 
 const { state, notify } = inject("panel");
 const service = computed(() => state.value.service || {});
 const online_site = computed(() => state.value.online_site || "");
+const relay = computed(() => relay_health_text(online_site.value, state.value.relay_health, t));
 
 /** Open the local page in the default browser; the panel makes the link, which a protected site requires. */
 async function open_local() {
@@ -27,11 +30,12 @@ async function open_local() {
         <button v-if="service.url" type="button" class="panel-button is-outline is-small" @click="open_local"><UIcon name="i-lucide-external-link" />{{ t('打开') }}</button>
       </template>
     </EntryWayCard>
-    <EntryWayCard icon="i-lucide-cloud" :title="t('线上网站')" :active="Boolean(online_site)" :tag="!online_site ? t('未绑定') : service.running ? t('可用') : t('未运行')" :tone="online_site && service.running ? 'is-green' : 'is-gray'"
+    <EntryWayCard icon="i-lucide-cloud" :title="t('线上网站')" :active="Boolean(online_site)" :tag="relay.label" :tone="relay.tone"
       :note="online_site ? t('扫码配对过的设备可以在外面使用这台电脑') : t('需先在“本机 → 线上网站”绑定')" :value="online_site"
-      :hint="online_site && !service.running ? t('共议服务未运行，线上网站暂时连不上这台电脑') : ''">
+      :hint="relay.detail">
       <template #actions>
         <a v-if="online_site" class="panel-button is-outline is-small" :href="online_site" target="_blank" rel="noopener"><UIcon name="i-lucide-external-link" />{{ t('打开') }}</a>
+        <RelayReconnect />
       </template>
     </EntryWayCard>
     <EntryWayCard icon="i-lucide-globe" :title="t('自有域名')" :tag="t('不支持')" unsupported :note="t('管理员权限最高，不开放到自有域名；在外面请用线上网站。')" />

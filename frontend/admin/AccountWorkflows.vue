@@ -1,8 +1,9 @@
 <script setup>
 /**
- * The workflows in one account's library: each with its name, roles and state, and the shipped workflows it lacks,
- * installed with one button (an existing workflow, edited or not, is kept). `account` is "" for the owner. Workflows
- * are edited and disabled in the CoDiscuss site's sidebar and enabled in a room, not here.
+ * The workflows in one account's library, each with its name, roles and state, and two buttons always shown: "检查"
+ * compares the library with the shipped workflows; "同步到最新版" installs the shipped ones it lacks and replaces those
+ * whose copy differs (edited or older), backing each replaced copy up first, and is greyed out when nothing differs.
+ * `account` is "" for the owner. Workflows are edited and disabled in the CoDiscuss site's sidebar, not here.
  */
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
@@ -10,7 +11,7 @@ import { t } from '../i18n.js';
 
 const props = defineProps({ account: { type: String, required: true } });
 const { notify, refreshed } = inject("panel");
-const result = ref(null), loading = ref(false), installing = ref(false);
+const result = ref(null), loading = ref(false), syncing = ref(false);
 const base = computed(() => (props.account ? `accounts/${props.account}/workflows` : "owner/workflows"));
 
 async function load() {
@@ -23,11 +24,21 @@ onMounted(load);
 watch(refreshed, load);
 watch(() => props.account, load);
 
-async function install() {
-  installing.value = true;
-  try { result.value = await call(`${base.value}/install`, {}); notify("info", t('随包工作流已补齐')); }
+const missing = computed(() => result.value?.missing || []);
+/** Shown names of the workflows that differ from the shipped version. */
+const outdated = computed(() => (result.value?.outdated || []).map((id) => result.value.workflows.find((flow) => flow.id === id)?.label || id));
+const behind = computed(() => missing.value.length + outdated.value.length > 0);
+
+/** Install the missing shipped workflows, then replace the differing ones (each backed up first). */
+async function sync() {
+  syncing.value = true;
+  try {
+    if (missing.value.length) result.value = await call(`${base.value}/install`, {});
+    if (result.value?.outdated?.length) result.value = await call(`${base.value}/update`, {});
+    notify("info", t('工作流已同步到随包最新版，被替换的旧版已备份'));
+  }
   catch (failure) { notify("error", failure.message); }
-  finally { installing.value = false; }
+  finally { syncing.value = false; }
 }
 </script>
 
@@ -35,11 +46,24 @@ async function install() {
   <div class="flows">
     <div class="flows-head">
       <span>{{ t('工作流') }} <small>{{ t('房间中可启用的多人分工流程；编辑、停用在共议网站侧栏的“工作流”中进行') }}</small></span>
-      <button type="button" class="panel-icon-button" :class="{ 'is-spinning': loading }" :disabled="loading" :title="t('重新读取')" :aria-label="t('重新读取')" @click="load"><UIcon name="i-lucide-refresh-cw" /></button>
+      <span class="flows-actions">
+        <button type="button" class="panel-button is-outline is-small" :disabled="loading || syncing" @click="load">
+          <UIcon :name="loading ? 'i-lucide-loader' : 'i-lucide-search-check'" :class="{ 'animate-spin': loading }" />{{ t('检查') }}</button>
+        <button type="button" class="panel-button is-outline is-small" :disabled="!behind || loading || syncing"
+          :title="t('补装缺少的随包工作流，并用最新版替换不同的；被替换的旧版先备份到该账号服务目录的 backups/workflows，在这里做过的修改也会被替换')" @click="sync">
+          <UIcon :name="syncing ? 'i-lucide-loader' : 'i-lucide-refresh-cw'" :class="{ 'animate-spin': syncing }" />{{ t('同步到最新版') }}</button>
+      </span>
     </div>
     <p v-if="result?.error" class="panel-note is-amber"><UIcon name="i-lucide-circle-alert" />{{ result.error }}</p>
     <p v-else-if="!result" class="flows-empty">{{ t('读取中…') }}</p>
     <template v-else>
+      <p class="flows-status" :class="{ 'is-behind': behind }">
+        <template v-if="!behind">{{ t('已是随包最新版') }}</template>
+        <template v-else>
+          <span v-if="missing.length">{{ t('缺少随包工作流：{value1}', { value1: missing.join("、") }) }}</span>
+          <span v-if="outdated.length">{{ t('与随包最新版不同：{value1}', { value1: outdated.join("、") }) }}</span>
+        </template>
+      </p>
       <p v-if="!result.workflows.length" class="flows-empty">{{ t('暂无工作流。') }}</p>
       <div v-for="flow in result.workflows" :key="flow.id" class="flows-row">
         <UIcon name="i-lucide-workflow" class="flows-icon" />
@@ -50,11 +74,6 @@ async function install() {
             <span v-if="flow.error" class="panel-tag is-amber">{{ t('无法读取') }}</span></strong>
           <small :title="flow.error || flow.description">{{ flow.error || flow.description || flow.id }}</small>
         </div>
-      </div>
-      <div v-if="result.missing.length" class="flows-missing">
-        <span>{{ t('缺少随包工作流：{value1}', { value1: result.missing.join("、") }) }}</span>
-        <button type="button" class="panel-button is-outline is-small" :disabled="installing" @click="install">
-          <UIcon :name="installing ? 'i-lucide-loader' : 'i-lucide-download'" :class="{ 'animate-spin': installing }" />{{ t('补齐') }}</button>
       </div>
     </template>
   </div>
@@ -70,5 +89,7 @@ async function install() {
 .flows-text { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
 .flows-text strong { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
 .flows-text small { overflow: hidden; color: var(--panel-faint); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
-.flows-missing { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 4px 4px; border-top: 1px solid var(--panel-line); color: var(--panel-amber); font-size: 13px; }
+.flows-actions { display: flex; gap: 8px; }
+.flows-status { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; padding: 8px 4px; color: var(--panel-faint); font-size: 13px; }
+.flows-status.is-behind { color: var(--panel-amber); }
 </style>

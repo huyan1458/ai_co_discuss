@@ -7,10 +7,12 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 import { join } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
+import timers from 'node:timers/promises';
 import { gzipSync } from 'node:zlib';
 
 import { atomic_json } from './files.mjs';
+import { network_failure, reconnect_reader } from './relay_health.mjs';
+import { t } from './i18n.mjs';
 import { remote_execution_details, remote_room_files, remote_room_media, remote_room_page } from './discussion_launch.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { local_settings } from './discussion_setup.mjs';
@@ -24,7 +26,9 @@ import { entry_settings } from '../gateway/gateway.mjs';
 const RELAY_PROTOCOL = 'codiscuss-relay';
 const BRIDGE_TOKEN_BYTES = 32;
 const RETRY_MIN_MS = 2000;
-const RETRY_MAX_MS = 60000;
+const RETRY_MAX_MS = 30_000;
+const CONNECT_TIMEOUT_MS = 10_000;
+const WATCHDOG_MS = 180_000;
 // A ping still unanswered at the next one means the connection is stalled, so it is replaced within two of these.
 const PING_MS = 15000;
 // The site gives up on a request after 9 seconds, so the local website must answer before then.
@@ -277,7 +281,7 @@ async function forward_changes(home, socket, signal) {
         }
       }
     } catch { /* Reconnect below; devices fall back to their own polling meanwhile. */ }
-    await sleep(EVENT_RETRY_MS, undefined, { signal }).catch(() => {});
+    await timers.setTimeout(EVENT_RETRY_MS, undefined, { signal }).catch(() => {});
   }
 }
 
@@ -288,8 +292,12 @@ async function forward_changes(home, socket, signal) {
  * the channel on its own. The entry treats it like traffic from a tunnel: HTTPS outside, the browser's own Host.
  * Returns the frame handler; `send` puts a frame on the connection, `buffered` says how much it holds unsent.
  */
-export function entry_proxy(home, { send, buffered = () => 0 }) {
+export function entry_proxy(home, { send, buffered = () => 0, signal }) {
   const open = new Map();
+  signal?.addEventListener('abort', () => {
+    for (const entry of open.values()) entry.request?.destroy();
+    open.clear();
+  }, { once: true });
   const head = (id, status, headers = []) => send({ type: 'entry-head', id, status, headers });
   const refuse = (id, status, text) => {
     head(id, status, [['content-type', 'text/plain; charset=utf-8'], ['cache-control', 'no-store']]);
@@ -316,7 +324,7 @@ export function entry_proxy(home, { send, buffered = () => 0 }) {
       }
       head(id, reply.statusCode, kept);
       // Hold the answer while the connection is behind, so a large file is not read into memory ahead of it.
-      const drain = () => { if (buffered() > ENTRY_BUFFER_HIGH) { reply.pause(); setTimeout(() => { reply.resume(); drain(); }, ENTRY_BUFFER_CHECK_MS); } };
+      const drain = () => { if (!reply.destroyed && !signal?.aborted && buffered() > ENTRY_BUFFER_HIGH) { reply.pause(); setTimeout(() => { reply.resume(); drain(); }, ENTRY_BUFFER_CHECK_MS); } };
       reply.on('data', chunk => {
         for (let offset = 0; offset < chunk.length; offset += ENTRY_PART_BYTES) send({ type: 'entry-data', id, data: chunk.subarray(offset, offset + ENTRY_PART_BYTES).toString('base64') });
         drain();
@@ -343,51 +351,87 @@ export function entry_proxy(home, { send, buffered = () => 0 }) {
 }
 
 /** Hold one website's relay connection, reconnecting with backoff; `connected` tracks which websites are live. */
-async function hold_channel(home, site, { connected, log, signal }) {
-  let delay = RETRY_MIN_MS;
+async function hold_channel(home, site, { connected, log, signal, health, watch }) {
+  let delay = RETRY_MIN_MS, answers_pings = false;
   while (!signal.aborted) {
     // Read the pairing each time: reconnecting the website replaces the token, and disconnecting removes it.
     const link = machine_links(home).sites[site];
     if (!link?.private_key) return;
+    health?.attempt(site, link.id);
     const url = `${site.replace(/^http/, 'ws')}/api/machines/${encodeURIComponent(link.id)}/relay`;
     const closed = new Promise(resolve => {
       let socket;
-      try { socket = new WebSocket(url, [RELAY_PROTOCOL, `m.${link.token}`]); } catch { return resolve(false); }
+      try { socket = new WebSocket(url, [RELAY_PROTOCOL, `m.${link.token}`]); }
+      catch (error) { health?.channel(site, link.id, 'failed', { kind: network_failure(error) }); return resolve(false); }
       const events = new AbortController();
       let ping, finished = false;
+      const stop_socket = () => {
+        finish(opened);
+        try { socket.close(1000, 'stopping'); } catch { /* Already closed. */ }
+      };
+      const handshake = setTimeout(() => {
+        finish(false, { kind: 'timeout' });
+        try { socket.close(); } catch { /* Already closed. */ }
+      }, CONNECT_TIMEOUT_MS);
       // The hosted accounts' entry traffic on this connection (entry_proxy).
-      const entry = entry_proxy(home, { send: frame => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(frame)); },
+      const entry = entry_proxy(home, { signal: events.signal, send: frame => { if (!events.signal.aborted && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(frame)); },
         buffered: () => socket.bufferedAmount || 0 });
       // Only the first finish counts: a stalled socket may report its close long after its replacement connected.
-      const finish = opened => {
+      const finish = (opened, failure) => {
         if (finished) return;
         finished = true;
+        clearTimeout(handshake);
         clearInterval(ping);
+        signal.removeEventListener('abort', stop_socket);
         events.abort();
         connected.delete(site);
-        resolve(opened);
+        if (!signal.aborted) {
+          watch(false);
+          health?.channel(site, link.id, opened ? 'reconnecting' : 'failed', failure);
+        }
+        resolve(pong_seen);
       };
       // Only a pong proves both directions work: requests can keep arriving while this computer's answers are stuck.
       // A website that never answers pings is not judged by them.
       let opened = false, awaiting_pong = false, pong_seen = false, backlog_logged = 0;
       socket.addEventListener('open', () => {
+        if (finished || signal.aborted) return;
+        clearTimeout(handshake);
         opened = true;
+        health?.channel(site, link.id, 'confirming');
         connected.add(site);
-        log(`${site}: 中转已连接`);
-        ping = setInterval(() => {
-          if (socket.readyState !== WebSocket.OPEN) return;
-          if (awaiting_pong && pong_seen) {
+        log(`${site}: ${t('连接已打开，正在等待网站回应心跳。')}`);
+        const heartbeat = () => {
+          if (socket.readyState !== WebSocket.OPEN) return finish(opened, { kind: 'closed' });
+          // A website that answered pings on an earlier connection is judged from the first ping: a connection that
+          // stalls before its first pong (seen 2026-11-21) would otherwise stay "connected" while no request reaches it.
+          if (awaiting_pong && answers_pings) {
             log(`${site}: 中转心跳 ${PING_MS / 1000} 秒未回应，重新连接`);
             try { socket.close(4000, 'stalled'); } catch { /* Already closing. */ }
-            return finish(opened);
+            return finish(opened, { kind: 'heartbeat', seconds: PING_MS / 1000 });
           }
           awaiting_pong = true;
-          socket.send('ping');
-        }, PING_MS);
+          try { socket.send('ping'); }
+          catch (error) {
+            finish(opened, { kind: network_failure(error) });
+            try { socket.close(); } catch { /* Already closing. */ }
+          }
+        };
+        heartbeat();
+        if (finished) return;
+        ping = setInterval(heartbeat, PING_MS);
         forward_changes(home, socket, events.signal);
       });
       socket.addEventListener('message', async event => {
-        if (event.data === 'pong') { awaiting_pong = false; pong_seen = true; return; }
+        if (finished || signal.aborted) return;
+        if (event.data === 'pong') {
+          if (!awaiting_pong) return;
+          if (!pong_seen) log(`${site}: ${t('中转已连接')}`);
+          awaiting_pong = false; pong_seen = true; answers_pings = true;
+          watch(true);
+          health?.channel(site, link.id, 'connected');
+          return;
+        }
         if (typeof event.data !== 'string') return;
         let frame;
         try { frame = JSON.parse(event.data); } catch { return; }
@@ -400,11 +444,12 @@ async function hold_channel(home, site, { connected, log, signal }) {
           return socket.close(1000, 'unpaired');
         }
         const received = Date.now();
+        health?.request(site, link.id);
         let kind = { action: '?', route: '', status: 0 };
         try {
           const answer = await answer_request(home, site, link, frame, { report: value => { kind = value; } });
           const answered = Date.now();
-          const open = socket.readyState === WebSocket.OPEN;
+          const open = !finished && socket.readyState === WebSocket.OPEN;
           const { oversized, ...frame_out } = answer;
           if (open) socket.send(JSON.stringify(frame_out));
           const label = `${kind.action}${kind.route ? ` ${kind.route}` : ''} → ${kind.status}`;
@@ -418,18 +463,24 @@ async function hold_channel(home, site, { connected, log, signal }) {
           else if (answered - received > SLOW_REQUEST_MS) log(`${site}: 中转请求较慢：${label}，处理 ${answered - received} ms`);
         } catch (error) { log(`${site}: 中转请求 ${frame.id} 无法处理（${Date.now() - received} ms）：${error.message}`); }
       });
+      let socket_failure;
       socket.addEventListener('close', event => {
         if (opened && !finished && !signal.aborted) log(`${site}: 中转连接断开（${event.code || '无代码'}${event.reason ? ` ${event.reason}` : ''}），稍后重连`);
-        finish(opened);
+        const kind = opened && (!socket_failure || socket_failure === 'network') ? 'closed' : socket_failure || 'network';
+        finish(opened, { kind, code: event.code });
       });
-      socket.addEventListener('error', () => { try { socket.close(); } catch { /* Already closing. */ } });
-      signal.addEventListener('abort', () => { try { socket.close(1000, 'stopping'); } catch { /* Already closed. */ } }, { once: true });
+      socket.addEventListener('error', event => {
+        socket_failure = network_failure(event.error);
+        finish(opened, { kind: socket_failure });
+        try { socket.close(); } catch { /* Already closing. */ }
+      });
+      signal.addEventListener('abort', stop_socket, { once: true });
     });
-    const opened = await closed;
+    const confirmed = await closed;
     if (signal.aborted) return;
     // A website without the relay refuses the upgrade every time; back off fully so it is only asked now and then.
-    delay = opened ? RETRY_MIN_MS : Math.min(delay * 2, RETRY_MAX_MS);
-    await sleep(delay, undefined, { signal }).catch(() => {});
+    delay = confirmed ? RETRY_MIN_MS : Math.min(delay * 2, RETRY_MAX_MS);
+    await timers.setTimeout(delay, undefined, { signal }).catch(() => {});
   }
 }
 
@@ -437,16 +488,56 @@ async function hold_channel(home, site, { connected, log, signal }) {
  * Keep a relay channel open to every paired website that has a command key; returns the set of websites currently
  * connected, so the D1 command queue can skip them. New pairings are picked up when `refresh` is called.
  */
-export function start_relay_channels(home, { log = () => {}, signal }) {
+export function start_relay_channels(home, { log = () => {}, signal, health }) {
   const connected = new Set(), held = new Map();
+  const requested_site = reconnect_reader(home);
+  function start(site, link) {
+    const controller = new AbortController(), channel_signal = AbortSignal.any([signal, controller.signal]);
+    const record = { controller, machine: link.id, token: link.token, timer: null, confirmed: false };
+    held.set(site, record);
+    const watch = confirmed => {
+      if (confirmed || record.confirmed || !record.timer) {
+        clearTimeout(record.timer);
+        record.timer = setTimeout(() => {
+          if (held.get(site) === record && !channel_signal.aborted) rebuild(site, 'watchdog');
+        }, WATCHDOG_MS);
+      }
+      record.confirmed = confirmed;
+    };
+    watch(false);
+    record.done = hold_channel(home, site, { connected, log, signal: channel_signal, health, watch }).finally(() => {
+      clearTimeout(record.timer);
+      if (held.get(site) === record) held.delete(site);
+    });
+  }
+  function rebuild(site, reason) {
+    const link = machine_links(home).sites[site];
+    held.get(site)?.controller.abort();
+    if (signal.aborted || !link?.private_key) return;
+    log(reason === 'watchdog' ? t('{site} 的中转连续 3 分钟未确认，正在重建连接。', { site })
+      : t('正在按管理员要求重建 {site} 的中转连接。', { site }));
+    health?.rebuild(site, link.id, reason);
+    start(site, link);
+  }
   const refresh = () => {
-    for (const [site, link] of Object.entries(machine_links(home).sites)) {
+    if (signal.aborted) return;
+    const sites = machine_links(home).sites;
+    const requested = requested_site(sites);
+    if (requested) rebuild(requested, 'manual');
+    for (const [site, record] of held) {
+      if (record.token !== sites[site]?.token || record.machine !== sites[site]?.id || !sites[site]?.private_key) {
+        record.controller.abort();
+        held.delete(site);
+      }
+    }
+    for (const [site, link] of Object.entries(sites)) {
       if (!link.private_key || held.has(site)) continue;
-      held.set(site, hold_channel(home, site, { connected, log, signal }).finally(() => held.delete(site)));
+      start(site, link);
     }
   };
   refresh();
-  return { connected, refresh, done: () => Promise.all(held.values()) };
+  return { connected, refresh,
+    done: () => Promise.all(Array.from(held.values(), record => record.done)) };
 }
 
 export { RELAY_PROTOCOL };

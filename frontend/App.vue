@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, provide } from "vue";
+import { computed, onBeforeUnmount, provide, ref } from "vue";
 import { MotionConfig } from "motion-v";
 import { useToast } from "@nuxt/ui/composables";
 import { en, zh_cn } from "@nuxt/ui/locale";
@@ -46,9 +46,27 @@ const keep_notices_running = (event) => { if (event.target === window) event.sto
 window.addEventListener("blur", keep_notices_running, true);
 onBeforeUnmount(() => window.removeEventListener("blur", keep_notices_running, true));
 
+// Phones show notices at the top, just below the room tabs (消息、私聊、执行…) so they cover neither those tabs nor the
+// composer at the bottom (2026-11-21 user request). channel.css places the viewport at --notice-top.
+const PHONE_QUERY = window.matchMedia("(max-width: 700px)");
+const NOTICE_GAP_PX = 8;
+const phone = ref(PHONE_QUERY.matches);
+const track_phone = (event) => { phone.value = event.matches; };
+PHONE_QUERY.addEventListener("change", track_phone);
+onBeforeUnmount(() => PHONE_QUERY.removeEventListener("change", track_phone));
+const toaster = computed(() => ({ position: phone.value ? "top-center" : "bottom-right", max: 5 }));
+/** Measure where the room tabs end now; without visible tabs the room header, else the top edge. */
+function place_notices() {
+  if (!phone.value) return;
+  const anchor = [".channel-tabbar", ".channel-header"].map((selector) => document.querySelector(selector)?.getBoundingClientRect())
+    .find((rect) => rect && rect.height > 0 && rect.bottom > 0);
+  document.documentElement.style.setProperty("--notice-top", `${Math.round(anchor ? anchor.bottom : 0) + NOTICE_GAP_PX}px`);
+}
+
 const toast = useToast();
 /** Show the controller's notices; a repeat of one still open restarts it instead of stacking a copy. */
 function show_notice({ detail: { level, message } }) {
+  place_notices();
   const text = String(message);
   toast.add({ ...(NOTICE_LEVELS[level] || NOTICE_LEVELS.info), ...NOTICE_EVENTS, ui: NOTICE_UI, id: `${level}:${text}`,
     title: text.length > NOTICE_MAX_LENGTH ? `${text.slice(0, NOTICE_MAX_LENGTH - 1)}…` : text });
@@ -56,7 +74,7 @@ function show_notice({ detail: { level, message } }) {
 document.addEventListener("discuss:notice", show_notice);
 onBeforeUnmount(() => document.removeEventListener("discuss:notice", show_notice));
 
-// Undo notices use the same bottom toaster as every other notice (2026-11-16 user request: one notice bar to learn).
+// Undo notices use the same toaster as every other notice (2026-11-16 user request: one notice bar to learn).
 // Closing one by its countdown, its ×, or "查看" lets the action go ahead; "撤销" takes it back. A newer notice for the
 // same target lets the older one go ahead first.
 const undo_settles = new Map();
@@ -71,6 +89,7 @@ function settle_undo(id, keep) {
 const undo_toasts = new Map();
 let undo_count = 0;
 function show_undo({ detail }) {
+  place_notices();
   settle_undo(detail.id, true);
   if (undo_toasts.has(detail.id)) toast.remove(undo_toasts.get(detail.id));
   const toast_id = `${detail.id}#${++undo_count}`;
@@ -101,7 +120,7 @@ function confirm_passkey() {
 </script>
 
 <template>
-  <UApp :locale="locale === 'en' ? en : zh_cn" :tooltip="{ delayDuration: 300 }" :toaster="{ position: 'bottom-right', max: 5 }">
+  <UApp :locale="locale === 'en' ? en : zh_cn" :tooltip="{ delayDuration: 300 }" :toaster="toaster">
     <MotionConfig :reduced-motion="MOTION_ENABLED ? 'never' : 'always'">
       <ChannelWorkspace />
       <ConfirmDialog v-if="passkey_prompt" v-model:open="passkey_open" :title="passkey_prompt.title" :description="passkey_prompt.description"

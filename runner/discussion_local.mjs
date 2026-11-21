@@ -21,7 +21,8 @@ const SCRIPT = fileURLToPath(import.meta.url);
 const SERVER = fileURLToPath(new URL('../server.py', import.meta.url));
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const START_WAIT_MS = 15000;
-const STOP_WAIT_MS = 25000;
+// Longer than the discussion service's own stop wait (60 s), which the supervisor waits for while exiting.
+const STOP_WAIT_MS = 70000;
 const POLL_MS = 200;
 // A service that exited without `service stop` (e.g. an old one adopted during an upgrade) is restarted at most this often.
 const SERVICE_REVIVE_MS = 10_000;

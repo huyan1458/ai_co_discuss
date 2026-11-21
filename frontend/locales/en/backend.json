@@ -1,4 +1,6 @@
 {
+  "尚未绑定线上网站": "No online site is bound yet",
+  "请先启动共议服务，再重连中转": "Start the CoDiscuss service before reconnecting the relay",
   "会话上下文压缩失败（{reason}），下次执行将改用新会话；请缩短输入或拆分任务后重试": "Context compaction failed ({reason}). The next run will use a new session; shorten the input or split the task before retrying",
   "{name} 的上下文压缩失败，处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。请缩短输入或拆分任务后再决定是否重试；程序不自动重试。": "{name}'s context compaction failed while handling {messages} (run #{execution_id}): {reason}. Shorten the input or split the task before deciding whether to retry; there is no automatic retry.",
   "{name} 因安全策略拒绝，处理 {messages} 的执行失败（执行 #{execution_id}）：{reason}。请核对请求内容与服务许可要求，不要原样重试；程序不自动重试。": "{name} was blocked by a safety policy while handling {messages} (run #{execution_id}): {reason}. Review the request and service access requirements; do not retry it unchanged. There is no automatic retry.",
@@ -836,5 +838,6 @@
   "只有房间控制凭据能代其他房间的主持人发言": "Only the room's control credential can speak for another room's host",
   "只有互相关联的房间之间才能代主持人发言": "Only linked rooms can speak for each other's host",
   "两个房间的主持人自用户上次发言后已互传 {count} 条消息，达到上限；请等用户在任一房间发言后再继续": "The two rooms' hosts have passed {count} messages since the owner last spoke, which is the limit; wait for the owner to speak in either room before continuing",
-  "relay.limit 须为 0–100 的整数，0 表示不限": "relay.limit must be an integer from 0 to 100; 0 means no limit"
+  "relay.limit 须为 0–100 的整数，0 表示不限": "relay.limit must be an integer from 0 to 100; 0 means no limit",
+  "分享链接格式不正确": "The share link is not in the expected format"
 }

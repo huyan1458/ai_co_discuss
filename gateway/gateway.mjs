@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { ENTRY_KEY_PATTERN, verified_connection } from '../runner/entry_client.mjs';
+import { clear_instance_flag, read_os_users } from '../runner/os_users.mjs';
 import { create_direct } from './direct.mjs';
 import { login_page } from './login_page.mjs';
 
@@ -104,6 +105,13 @@ function accounts_path(data) {
 export function read_accounts(data) {
   const path = accounts_path(data);
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+}
+
+/** Remember an explicit start or stop for hosted instances that run as the owner. */
+export function set_instance_wanted(data, name, wanted) {
+  const accounts = read_accounts(data), account = accounts[name];
+  if (!account || account.instance_wanted === wanted) return;
+  write_json(accounts_path(data), { ...accounts, [name]: { ...account, instance_wanted: wanted } });
 }
 
 function write_json(path, value) {
@@ -492,6 +500,9 @@ export function create_gateway({ data, now = Date.now }) {
 /** Run `codiscuss local start|stop` against one account's service directory and wait for it. */
 function run_instance(data, name, command) {
   if (!read_accounts(data)[name]) throw new Error(`账号不存在：${name}`);
+  if (read_os_users(data)[name]) {
+    if (command === 'stop') clear_instance_flag(name);
+  } else set_instance_wanted(data, name, command === 'start');
   const child = spawn(process.execPath, [LOCAL_SCRIPT, command, '--json'], { stdio: 'inherit', windowsHide: true,
     env: { ...process.env, DISCUSS_SERVICE_HOME: instance_home(data, name) } });
   return new Promise((done, fail) => {

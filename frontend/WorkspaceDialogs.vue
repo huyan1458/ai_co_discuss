@@ -10,11 +10,12 @@ import WeixinSettings from "./WeixinSettings.vue";
 import LanguagePicker from "./LanguagePicker.vue";
 import { t } from "./i18n.js";
 
-const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] }, foldOptions: { type: Array, default: () => [] }, cardTextOptions: { type: Array, default: () => [] } });
+const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] }, foldOptions: { type: Array, default: () => [] }, foldKeepOptions: { type: Array, default: () => [] }, cardTextOptions: { type: Array, default: () => [] } });
 const mode = defineModel({ type: String, default: "" });
 const reading_width = defineModel("readingWidth", { type: String, default: "default" });
 const effects = defineModel("effects", { type: String, default: "full" });
 const fold_level = defineModel("foldLevel", { type: String, default: "loose" });
+const fold_keep = defineModel("foldKeep", { type: String, default: "medium" });
 const card_text = defineModel("cardText", { type: String, default: "medium" });
 const rendered_mode = ref(mode.value);
 watch(mode, (value) => { if (value) rendered_mode.value = value; });
@@ -289,36 +290,48 @@ const keep_open = (event) => event.preventDefault();
         <AccountSettings />
         <h3 class="account-appearance-heading">{{ t("外观") }}</h3>
         <div class="theme-choices"><button v-for="theme in themes" :key="theme.value" :class="{ chosen: view.theme === theme.value }" :aria-pressed="view.theme === theme.value" @click="choose_theme(theme.value)"><span class="theme-preview" :class="theme.value" aria-hidden="true"><i class="theme-preview-side"></i><i class="theme-preview-main"><b></b><b></b><b></b></i></span><span><strong>{{ theme.title }}</strong><small>{{ theme.description }}</small></span><span class="theme-check"><UIcon v-if="view.theme === theme.value" name="i-lucide-check" /></span></button></div>
-        <section class="channel-reading-setting channel-language-setting">
-          <!-- Always bilingual, so someone who cannot read the current language can still find it. -->
-          <h3>{{ t("语言 · Language") }}</h3>
-          <LanguagePicker />
-        </section>
-        <section class="channel-reading-setting">
-          <h3 id="channel-reading-label">{{ t("对话宽度") }}</h3>
-          <div class="channel-reading-options" role="group" aria-labelledby="channel-reading-label"><UButton v-for="option in readingOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: reading_width === option.value }" :aria-pressed="reading_width === option.value" @click="reading_width = option.value" /></div>
-        </section>
-        <section class="channel-reading-setting">
-          <h3 id="channel-card-text-label">{{ t("卡片文字大小") }}</h3>
-          <div class="channel-reading-options" role="group" aria-labelledby="channel-card-text-label"><UButton v-for="option in cardTextOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: card_text === option.value }" :aria-pressed="card_text === option.value" @click="card_text = option.value" /></div>
-          <p class="fine-print">{{ t("调整消息卡片里正文的字号，只对本设备生效。") }}</p>
-        </section>
-        <section class="channel-reading-setting">
-          <h3 id="channel-effects-label">{{ t("视觉效果") }}</h3>
-          <div class="channel-reading-options channel-effect-options" role="group" aria-labelledby="channel-effects-label"><UButton v-for="option in effectOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: effects === option.value }" :aria-pressed="effects === option.value" @click="effects = option.value" /></div>
-          <p class="fine-print">{{ t("精简模式关闭毛玻璃模糊与多层阴影，适合配置较低或需要更流畅滚动的设备。") }}</p>
-        </section>
-        <section class="channel-reading-setting">
-          <h3 id="channel-fold-label">{{ t("长回答折叠") }}</h3>
-          <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-label"><UButton v-for="option in foldOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_level === option.value }" :aria-pressed="fold_level === option.value" @click="fold_level = option.value" /></div>
-          <p class="fine-print">{{ t("宽松：超过 1.2 屏才折叠，折后保留半屏；标准：超过 0.7 屏折叠；紧凑：超过半屏就折叠，只留开头。按当前屏幕高度计算，只对本设备生效。") }}</p>
-        </section>
+        <!-- Each setting is one row: its name on the left, its choices on the right; a note, if any, runs below both. -->
+        <div class="channel-settings-group">
+          <section class="channel-setting-row">
+            <!-- Always bilingual, so someone who cannot read the current language can still find it. -->
+            <h3>{{ t("语言 · Language") }}</h3>
+            <LanguagePicker />
+          </section>
+          <section class="channel-setting-row">
+            <h3 id="channel-effects-label">{{ t("视觉效果") }}</h3>
+            <div class="channel-reading-options channel-effect-options" role="group" aria-labelledby="channel-effects-label"><UButton v-for="option in effectOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: effects === option.value }" :aria-pressed="effects === option.value" @click="effects = option.value" /></div>
+            <p class="fine-print">{{ t("精简模式关闭毛玻璃模糊与多层阴影，适合配置较低或需要更流畅滚动的设备。") }}</p>
+          </section>
+        </div>
+        <h3 class="account-appearance-heading">{{ t("阅读") }}</h3>
+        <div class="channel-settings-group">
+          <section class="channel-setting-row">
+            <h3 id="channel-reading-label">{{ t("对话宽度") }}</h3>
+            <div class="channel-reading-options" role="group" aria-labelledby="channel-reading-label"><UButton v-for="option in readingOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: reading_width === option.value }" :aria-pressed="reading_width === option.value" @click="reading_width = option.value" /></div>
+          </section>
+          <section class="channel-setting-row">
+            <h3 id="channel-card-text-label">{{ t("卡片文字大小") }}</h3>
+            <div class="channel-reading-options" role="group" aria-labelledby="channel-card-text-label"><UButton v-for="option in cardTextOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: card_text === option.value }" :aria-pressed="card_text === option.value" @click="card_text = option.value" /></div>
+          </section>
+          <section class="channel-setting-row">
+            <h3 id="channel-fold-label">{{ t("长回答折叠") }}</h3>
+            <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-label"><UButton v-for="option in foldOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_level === option.value }" :aria-pressed="fold_level === option.value" @click="fold_level = option.value" /></div>
+            <p class="fine-print">{{ t("宽松：超过 1.2 屏才折叠；标准：超过 0.7 屏折叠；紧凑：超过半屏就折叠。按当前屏幕高度计算，只对本设备生效。") }}</p>
+          </section>
+          <section class="channel-setting-row">
+            <h3 id="channel-fold-keep-label">{{ t("折叠后显示") }}</h3>
+            <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-keep-label"><UButton v-for="option in foldKeepOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_keep === option.value }" :aria-pressed="fold_keep === option.value" @click="fold_keep = option.value" /></div>
+            <p class="fine-print">{{ t("折叠后的回答保留开头一段：少约 0.15 屏、中约 0.3 屏、多约半屏。按当前屏幕高度换算成行数，手机、平板、电脑各自不同，只对本设备生效。") }}</p>
+          </section>
+        </div>
         <h3 class="account-appearance-heading">{{ t("房间偏好") }}</h3>
-        <section class="channel-reading-setting">
-          <h3 id="channel-host-access-label">{{ t("主持人项目权限") }}</h3>
-          <div class="channel-reading-options channel-access-options" role="group" aria-labelledby="channel-host-access-label"><UButton v-for="option in HOST_ACCESS_OPTIONS" :key="option.value" :label="option.label" color="neutral" variant="ghost" :disabled="!view.launch.available" :class="{ chosen: host_access === option.value }" :aria-pressed="host_access === option.value" @click="bridge.write_create_preferences({ host_project_access: option.value })" /></div>
-          <p class="fine-print">{{ view.launch.available ? t("新建房间时，第一位加入的成员（默认主持人）使用的项目权限；该软件不支持所选档位时仍为只读。保存在这台电脑的本机服务里，升级后保留。") : t("连接本机服务后可设置。") }}</p>
-        </section>
+        <div class="channel-settings-group">
+          <section class="channel-setting-row channel-setting-wide">
+            <h3 id="channel-host-access-label">{{ t("主持人项目权限") }}</h3>
+            <div class="channel-reading-options channel-access-options" role="group" aria-labelledby="channel-host-access-label"><UButton v-for="option in HOST_ACCESS_OPTIONS" :key="option.value" :label="option.label" color="neutral" variant="ghost" :disabled="!view.launch.available" :class="{ chosen: host_access === option.value }" :aria-pressed="host_access === option.value" @click="bridge.write_create_preferences({ host_project_access: option.value })" /></div>
+            <p class="fine-print">{{ view.launch.available ? t("新建房间时，第一位加入的成员（默认主持人）使用的项目权限；该软件不支持所选档位时仍为只读。保存在这台电脑的本机服务里，升级后保留。") : t("连接本机服务后可设置。") }}</p>
+          </section>
+        </div>
         <SpeechSettings />
         <WeixinSettings />
       </div>

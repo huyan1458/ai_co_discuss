@@ -119,6 +119,10 @@ export const ADAPTER_PROFILES = {
     windows_command: 'codiscuss',
     // Confined by --restricted --safe-mode --tools and dontAsk (claude_lockdown); a taken-over manual member keeps its own window.
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, resume: true, images: true, capture: FINAL_REMARK, tool_lockdown: true },
+    // The card shows only Claude's text between tool calls, not its thinking; without this rule it wrote one line per
+    // five to fourteen calls, often in English (2026-11-21 session record).
+    task_rules: () => '多步任务中，转入新的一段工作时（如读完代码开始修改、改完开始验证）先用一句话说明再继续：'
+      + '用户等待时网页卡片只显示这些话，看不到你的思考。用请求者的语言写，即使代码和工具输出是英文；一句即可，不打断手头的工作。',
   },
   antigravity_cli: {
     platform: 'Antigravity', label: 'Antigravity CLI', kind: 'cli', location: 'executable', fields: ['project_id', 'project_name'],

@@ -70,7 +70,7 @@ test("publishes a nonce-protected page and preserves literal text across chunk b
   assert.match(html,/<title>Room \$&amp; · AI CoDiscuss<\/title>/);
   const [,nonce,script] = html.match(/<script nonce="([^"]+)">(window\.CODISCUSS_SHARE = [\s\S]*?;)<\/script>/);
   assert.match(res.headers.get("Content-Security-Policy"),new RegExp("nonce-"+nonce));
-  assert.match(res.headers.get("Content-Security-Policy"),/connect-src 'none'/);
+  assert.match(res.headers.get("Content-Security-Policy"),/connect-src blob:;/);
   assert.equal(res.headers.get("Referrer-Policy"),"no-referrer");
   assert.equal(res.headers.get("X-Robots-Tag"),"noindex, noarchive");
   assert.doesNotMatch(script,/[<\u2028\u2029]/);
@@ -79,6 +79,19 @@ test("publishes a nonce-protected page and preserves literal text across chunk b
   assert.deepEqual(JSON.parse(JSON.stringify(win.CODISCUSS_SHARE)),data);
   assert.ok(html.indexOf(script)<html.indexOf('src="/app.js"'));
   assert.match(html,/type="module" id="modern-script" src="\/modern.js"/);
+});
+
+test("included attachments are kept as this room's data URLs; any other route or value is refused", async t => {
+  const f = fixture(t), route = "/api/rooms/example/attachments/a1/content", file = "data:text/html;base64,PGI+aGk8L2I+";
+  const share = await f.publish({ ...payload(), attachments: { [route]: file } });
+  const html = await (await f.call("GET", share.url)).text();
+  const win = {};
+  vm.runInNewContext(html.match(/<script nonce="[^"]+">(window\.CODISCUSS_SHARE = [\s\S]*?;)<\/script>/)[1], { window: win });
+  assert.deepEqual(JSON.parse(JSON.stringify(win.CODISCUSS_SHARE.attachments)), { [route]: file });
+  for (const attachments of [{ "/api/rooms/other/attachments/a1/content": file }, { [route]: "https://example.com/a.png" },
+    { [route]: "data:text/html,<script>" }, { "/api/rooms/example/files/a1": file }, [file]]) {
+    assert.equal((await f.call("POST", "/api/shares", { ...payload(), attachments })).status, 400);
+  }
 });
 
 test("renewal, management credentials, revocation and expiration", async t => {
@@ -174,12 +187,20 @@ test("the page's own publish, update and revoke work against the share site, and
   f.env.ASSETS = { fetch: req => new Response(new URL(req.url).pathname === "/index.html" ? readFileSync(new URL("../web/index.html", import.meta.url), "utf8") : "asset") };
   const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
   const storage = new Map();
+  let kept = null;
   const context = vm.createContext({ window: {}, document: { documentElement: { dataset: {}, classList: { toggle() {} } }, getElementById: () => null, querySelectorAll: () => [],
     createElement: () => ({}), head: { append() {} }, dispatchEvent() {} }, crypto: globalThis.crypto, URL, URLSearchParams, AbortSignal, Blob, setTimeout: () => 0, clearTimeout: () => {},
     navigator: { clipboard: { writeText: async () => {} } }, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     // The page talks to the share site; here the site is the Worker itself.
-    fetch: async (url, options) => f.call(options.method, new URL(url).pathname, options.body ? JSON.parse(options.body) : undefined, options.headers.Authorization?.slice(7)) });
+    // The page talks to the share site (here the Worker itself) and keeps the link with its room on the computer.
+    fetch: async (url, options = {}) => {
+      if (url === "/api/rooms/example/share-link") {
+        if (options.method === "POST") kept = JSON.parse(options.body).link;
+        return new Response(JSON.stringify({ link: kept }), { headers: { "Content-Type": "application/json" } });
+      }
+      return f.call(options.method, new URL(url).pathname, options.body ? JSON.parse(options.body) : undefined, options.headers.Authorization?.slice(7));
+    } });
   vm.runInContext(`${source}\nglobalThis.set_draft = (draft) => { share_draft = draft; };`, context);
   const notes = [];
   context.notify = (level, message) => notes.push([level, message]);
@@ -187,7 +208,7 @@ test("the page's own publish, update and revoke work against the share site, and
   const draft = payload("Room $& 分享", "Hello");
   context.set_draft({ ...draft, spots: [] });
   await context.share_publish(1);
-  const link = JSON.parse(storage.get("codiscuss-share:example"));
+  const link = kept;
   assert.deepEqual(notes.filter(([level]) => level === "error"), []);
   const page = await f.call("GET", new URL(link.url).pathname);
   assert.equal(page.status, 200);
@@ -195,10 +216,10 @@ test("the page's own publish, update and revoke work against the share site, and
   assert.ok(html.includes("Room $&amp; 分享") && /window\.CODISCUSS_SHARE\s*=/.test(html), "the page carries the room and its title as written");
   context.set_draft({ ...payload("Room", "Updated"), spots: [] });
   await context.share_publish(7);
-  assert.equal(JSON.parse(storage.get("codiscuss-share:example")).id, link.id, "updating keeps the same link");
+  assert.equal(kept.share_id, link.share_id, "updating keeps the same link");
   assert.match(await (await f.call("GET", new URL(link.url).pathname)).text(), /Updated/);
   await context.share_revoke("example");
-  assert.equal(storage.has("codiscuss-share:example"), false);
+  assert.equal(kept, null);
   assert.equal((await f.call("GET", new URL(link.url).pathname)).status, 404);
 });
 
@@ -210,4 +231,14 @@ test("addresses in one IPv6 /64 count as one source, so changing address neither
   assert.equal((await f.call("GET", share.url)).status, 200, "one /64 is one report");
   await report("2001:db8:1:3::1"); await report("192.0.2.9");
   assert.equal((await f.call("GET", share.url)).status, 410, "three different networks still suspend it");
+});
+
+test("renewing gives a new lifetime without new content, and only with the share's own token", async t => {
+  const f = fixture(t), share = await f.publish(), path = "/api/shares/" + share.id + "/renew";
+  assert.equal((await f.call("POST", path, { ttl_days: 3 }, "wrong-token")).status, 403);
+  assert.equal((await f.call("POST", path, { ttl_days: 30 }, share.manage_token)).status, 400);
+  const renewed = await (await f.call("POST", path, { ttl_days: 3 }, share.manage_token)).json();
+  const left = Date.parse(renewed.expires_at) - Date.now();
+  assert.ok(left > 2.9 * DAY && left <= 3 * DAY, "the new lifetime counts from now");
+  assert.equal((await f.call("GET", share.url)).status, 200, "the content stays as published");
 });
