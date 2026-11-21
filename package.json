@@ -1,6 +1,6 @@
 {
   "name": "ai_co_discuss",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "bin": {
     "codiscuss": "runner/codiscuss.mjs"
   },
@@ -19,8 +19,8 @@
     "deploy": "npm run build && wrangler pages deploy --branch main --commit-dirty=true",
     "deploy:pages": "npm run deploy",
     "test": "npm run test:python && npm run test:js",
-    "test:python": "python -m unittest discover -s tests -p test_*.py",
-    "test:js": "node --test tests/test_*.mjs",
+    "test:python": "node scripts/test_env.mjs python -m unittest discover -s tests -p test_*.py",
+    "test:js": "node scripts/test_env.mjs node --test tests/test_*.mjs",
     "test:install": "node --test tests/test_setup.mjs tests/test_local.mjs tests/test_package.mjs"
   },
   "devDependencies": {
