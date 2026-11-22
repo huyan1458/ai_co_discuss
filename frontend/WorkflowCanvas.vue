@@ -39,7 +39,8 @@ const { view, bridge } = inject("discussion");
 const tool_size = computed(() => (props.compact ? "xs" : "sm"));
 // The canvas's tools sit in its corners by what they act on (user 2026-11-21): top left adds nodes, top right holds the
 // workflow's own actions (the `actions` slot: 专家配置, 保存), bottom right edits and views the canvas (undo, redo,
-// tidy, zoom), bottom left switches between the main line and sub-workflows (WorkflowParts) under the SKILL.md hint.
+// tidy, zoom), bottom left switches between the main line and sub-workflows (WorkflowParts); the SKILL.md hint takes
+// the bottom edge between the two corners, or stands on the folded switch when compact.
 // Below this canvas width the two labelled top groups would meet, so they show icons only, and the bottom-right
 // tools stand in a column (a wide window can still leave a narrow canvas beside the sidebar and the SKILL.md panel).
 const LABELLED_TOOLBAR_WIDTH = 480;
@@ -978,7 +979,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       </Panel>
       <!-- Top right: the workflow's own actions, given by the page. -->
       <Panel v-if="$slots.actions" position="top-right" class="workflow-canvas-toolbar"><slot name="actions" :icons-only="icons_only" /></Panel>
-      <!-- The arrows only illustrate: the hint sits over the main line / sub-workflow switch in the bottom left. -->
+      <!-- The arrows only illustrate: a minor hint, on the bottom edge between the corners (over the folded switch on a phone). -->
       <Panel position="bottom-left" class="workflow-canvas-status">
         <UIcon name="i-lucide-info" class="workflow-icon" /><span>{{ t('连线只作示意，派活以') }}</span>
         <button type="button" class="workflow-canvas-skill" @click="emit('open-skill')">SKILL.md</button><span>{{ t('为准') }}</span>
@@ -1023,9 +1024,10 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 /* Phone and upright tablet: smaller tools, every panel the same 10px from the edge. */
 .workflow-canvas.is-compact :deep(.vue-flow__panel) { margin: 10px; }
 .workflow-canvas.is-compact .workflow-canvas-toolbar { gap: 0; padding: 2px; border-radius: 9px; }
-.workflow-canvas.is-compact .workflow-canvas-status { bottom: 44px; padding: 4px 10px; font-size: 11px; }
-/* The hint stands on the main line / sub-workflow switch (WorkflowParts, 40px tall folded; 38px when compact, 50px for a finger). */
-.workflow-canvas-status { bottom: 46px; display: flex; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid var(--ui-border-muted); border-radius: 999px;
+.workflow-canvas.is-compact .workflow-canvas-status { right: auto; bottom: 44px; left: 0; max-width: calc(100% - 20px); padding: 4px 10px; font-size: 11px; }
+/* The hint is centred on the bottom edge in what the corners leave: right of the main line / sub-workflow list (260px wide,
+   15px in) and left of the minimap (168px). Compact, it stands on the folded switch instead (38px tall). */
+.workflow-canvas-status { right: 198px; left: 283px; width: fit-content; max-width: calc(100% - 481px); margin: 0 auto 15px; overflow: hidden; display: flex; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid var(--ui-border-muted); border-radius: 999px;
   background: var(--ui-bg-elevated); color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; }
 /* Phone: the hint stops short of the column of tools in the bottom-right corner, and wraps as running text when it has to. */
 @media (max-width: 480px) {
@@ -1098,7 +1100,6 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
   /* Every control on the canvas takes a finger: about 40px, or as near as fits inside a card. */
   .workflow-canvas-toolbar :deep(button) { min-width: 40px; min-height: 40px; justify-content: center; }
   :deep(.workflow-canvas-controls .vue-flow__controls-button) { width: 40px; height: 40px; }
-  .workflow-canvas:not(.is-compact) .workflow-canvas-status { bottom: 56px; }
   .workflow-canvas.is-compact :deep(.workflow-canvas-controls .vue-flow__controls-button) { width: 40px; height: 40px; }
   .workflow-card-tools :deep(button) { min-width: 32px; min-height: 32px; justify-content: center; }
   .workflow-card-tools { gap: 0; }

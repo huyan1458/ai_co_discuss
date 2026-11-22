@@ -2,7 +2,7 @@
 /**
  * The open workflow's parts, floating in the bottom-left corner of its canvas (user 2026-11-21): the main flow and its sub-workflows (each a
  * workflow of its own, used on demand beside the main flow, with its own SKILL.md, cards and canvas). Picking one shows
- * its canvas and SKILL.md; all of them save together. It starts folded, naming where you are, and opens upwards.
+ * its canvas and SKILL.md; all of them save together. It opens upwards; folded, it names where you are, and on a phone it starts folded.
  * A row's tools (place on / find on the main canvas, delete) show over its member count on hover; touch shows them always.
  */
 import { computed, ref, watch } from "vue";
@@ -12,7 +12,7 @@ const props = defineProps({ compact: Boolean });
 const emit = defineEmits(["place"]);
 const library = use_workflow_library();
 const { draft, scope, subs } = library;
-const open = ref(false);
+const open = ref(!props.compact);
 // The sub-workflow whose removal awaits a second tap, so one slip does not drop it.
 const confirming = ref("");
 watch(scope, () => { confirming.value = ""; if (props.compact) open.value = false; });
