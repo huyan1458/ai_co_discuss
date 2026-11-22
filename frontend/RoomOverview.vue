@@ -453,7 +453,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <span v-else class="overview-muted">{{ t("没有进行中的工作流；在输入框打 / 或邀请成员时选择") }}</span>
         </dd></div>
         <div v-if="saved?.registered"><dt>{{ t("主持人权限") }}</dt><dd>
-          <HostWorkflowSwitch :model-value="Boolean(saved.host_workflows)" :permissions="saved.host_permissions" :disabled="!view.access?.can_manage || room.archived" @update:model-value="act('set_room_host_workflows', $event)" />
+          <HostWorkflowSwitch :key="room.id" :room-id="room.id" :save="payload => bridge.execute('set_room_host_workflows', payload)" :model-value="Boolean(saved.host_workflows)" :permissions="saved.host_permissions" :disabled="!view.access?.can_manage || room.archived" />
         </dd></div>
         <div v-if="room.free?.max_rounds != null"><dt>{{ t("连续派活上限") }}</dt><dd>
           <template v-if="view.access?.can_manage"><ChainRoundsField :model-value="rounds_shown" :disabled="saving_rounds" @update:model-value="save_rounds" />

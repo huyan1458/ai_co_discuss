@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import * as vue_runtime from "vue";
+import { compile } from "@vue/compiler-dom";
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { API_PROVIDERS } from "../runner/discussion_api.mjs";
 import { member_actions } from "../frontend/member-actions.js";
@@ -369,6 +371,44 @@ test("consecutive sends survive a room switch and retry in order without changin
   assert.equal(requests.at(-1).id, requests[0].id);
   assert.equal(element("message-input").value, "草稿");
   assert.equal(state.failed_sends.length, 0);
+});
+
+test("saving host permissions keeps the settings rows, member model and expanded details during reload", async () => {
+  const read = Promise.withResolvers();
+  const room = { id: "one" };
+  const saved = { room_id: room.id, registered: true, participants: { Codex: { model: "m1" } }, host_permissions: { items: [], room_limit: 8 } };
+  const state = { room, launch: { available: true, room_models: saved } };
+  const context = vm.createContext({ state, preloaded_room_models: new Map(), members_seen: null,
+    localStorage: { getItem: () => "" }, publish_view() {}, shallowReactive: reactive,
+    local_launch_request: async (action, payload) => action === "room-workflow"
+      ? { host_permissions: payload.permissions, host_workflows: true } : read.promise });
+  for (const [from, to] of [["function room_models_fields(", "/** Read a directory or file"], ["function update_room_models(", "/** What the new room"], ["async function set_room_host_workflows(", "// Workflows:"]]) {
+    vm.runInContext(source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from))), context);
+  }
+  const component = name => readFileSync(new URL(`../frontend/${name}.vue`, import.meta.url), "utf8");
+  const host = component("HostWorkflowSwitch");
+  vm.runInContext(host.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, ""), context);
+  const open_rooms = vm.runInContext("open_rooms", context);
+  const render = template => new Function("Vue", compile(template, { prefixIdentifiers: true, isCustomElement: () => true }).code)(vue_runtime);
+  const settings = render(component("RoomOverview").match(/<dl class="overview-settings">[\s\S]*?<\/dl>/)[0]);
+  const details = render(host.match(/<details [\s\S]*?<\/details>/)[0]);
+  const props = { roomId: room.id, current: saved.host_permissions, HOST_ITEMS: [], open_rooms, t };
+  details(props, []).props.onToggle({ target: { open: true } });
+  const rows = () => settings({ room, saved: state.launch.room_models, free: true, view: { launch: {}, access: {} }, t }, []).children.filter(row => row.type === "div").length;
+  const count = rows();
+  const verify = () => {
+    assert.equal(rows(), count);
+    assert.equal(details({ ...props }, []).props.open, true);
+    assert.equal(state.launch.room_models.participants.Codex.model, "m1");
+  };
+  const permissions = { items: [], room_limit: 9 };
+  const writing = context.set_room_host_workflows({ room_id: room.id, permissions });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(state.launch.room_models.loading, true);
+  verify();
+  read.resolve({ ...saved, host_permissions: permissions });
+  await writing;
+  verify();
 });
 
 test("a concurrent push lets the receipt read replace the member card before reading again", async () => {

@@ -357,7 +357,7 @@
   "备份中没有该文件": "This file is not in the backup",
   "{value1} 个附件原文件缺失，消息中的这些附件无法打开": "{value1} attachment originals are missing. These attachments cannot be opened from messages.",
   "未放入文件夹：{value1}": "Could not place in folder: {value1}",
-  "上一个操作仍在处理中，请稍候；长时间无响应请刷新页面": "The previous operation is still running. Please wait. Refresh if it remains unresponsive.",
+  "上一个操作仍在处理中，请稍候": "The previous operation is still running. Please wait.",
   "这里还没有频道。": "No channels here yet.",
   "拖动排序；上下方向键移动": "Drag to reorder; arrow keys move",
   "浏览器无法播放这个文件的格式，请点下面的文件名下载后用本机软件打开。": "Your browser cannot play this format. Click the filename below to download it and open it with local software.",

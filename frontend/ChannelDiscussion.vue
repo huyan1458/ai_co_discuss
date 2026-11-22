@@ -2429,6 +2429,9 @@ function resume_tracking(event) {
   const is_scroll_input = event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key);
   if (is_scroll_input) {
     moved_by_hand = true;
+    // The reader's own scroll ends a fold control's hold: it pulled the card back to its place on every frame, against the
+    // swipe (user 2026-11-22, a scheduler card opened on the phone and scrolled down).
+    if (toggle_hold && !toggle_hold.inline) toggle_hold = null;
     if (event.type !== "keydown" || !event.target.closest?.(".channel-inline-html-toggle")) {
       if (toggle_hold?.inline) toggle_hold = null;
       set_inline_html_tail_space(0);
@@ -2993,10 +2996,12 @@ function message_card(message) {
   const expanded = expanded_answers.value.has(message.id);
   const preview = answer_previews.value.get(message.id);
   const body_html = expanded ? message.rendered_text : preview?.html ?? message.rendered_text;
-  const inline_enabled = inline_html_available.value && !view.value.share && message.author !== "用户" && message.attachments?.some(is_inline_html);
+  // A visual the answer refers to shows in place on every layout, the phone included; the in-message toggle for an
+  // unreferenced HTML attachment stays a desktop control, the phone opening that one full screen.
+  const inline_enabled = !view.value.share && message.author !== "用户" && message.attachments?.some(is_inline_html);
   const visuals = inline_enabled && !edited && message.kind !== 'receipt' ? inline_visual_body(body_html, message.attachments) : null;
   const attachments = visuals?.remaining ?? message.attachments;
-  const inline_html = inline_enabled && attachments.some(is_inline_html);
+  const inline_html = inline_enabled && inline_html_available.value && attachments.some(is_inline_html);
   const inline_preview = inline_html && attachments.some((file) => file.id === inline_html_preview.value?.id)
     ? inline_html_preview.value : null;
   const card = {

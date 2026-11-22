@@ -114,9 +114,10 @@ function start_resize(event) {
       <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="current.flow" v-model:agents="current.agents" :reserved="reserved" :compact="stacked"
         :shared="scope ? draft.agents : null" :subs="scope ? null : subs"
         @update:shared="(value) => { draft.agents = value; }" @open-sub="library.enter_sub" @open-skill="show_skill_text" @configure="(card) => { experts_focus = card; experts_open = true; }">
-        <template #actions="{ iconsOnly }">
+        <template #actions="{ iconsOnly, arrange }">
           <UTooltip :text="experts_missing ? t('专家配置：有卡片的软件本机未配置') : t('专家配置：每张卡片的软件、模型、强度与项目权限')"><span class="workflow-library-save">
             <UButton :icon="experts_missing ? 'i-lucide-triangle-alert' : 'i-lucide-sliders-horizontal'" :label="iconsOnly ? undefined : t('专家配置')" :aria-label="t('专家配置')" :size="stacked ? 'xs' : 'sm'" :color="experts_missing ? 'warning' : 'neutral'" variant="ghost" @click="experts_focus = ''; experts_open = true" /></span></UTooltip>
+          <UTooltip v-if="arrange" :text="t('自动整理')"><UButton icon="i-lucide-wand-sparkles" size="xs" color="neutral" variant="ghost" :aria-label="t('自动整理')" @click="arrange" /></UTooltip>
           <UTooltip v-if="!skill_open && !stacked" :text="t('展开 SKILL.md：主持人照它派活')"><UButton icon="i-lucide-panel-right-open" :label="iconsOnly ? undefined : 'SKILL.md'" :aria-label="t('展开 SKILL.md')" size="sm" color="neutral" variant="ghost" @click="set_skill_open(true)" /></UTooltip>
           <UTooltip :text="dirty ? t('保存（Ctrl+S）：有未保存的修改') : t('没有未保存的修改')"><span class="workflow-library-save">
             <!-- Unsaved changes show on the button itself: worded and filled, even where the toolbar is icons only. -->

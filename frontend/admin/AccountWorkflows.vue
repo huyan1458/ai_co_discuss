@@ -1,8 +1,9 @@
 <script setup>
 /**
- * The workflows in one account's library, each with its name, roles and state, and two buttons always shown: "检查"
- * compares the library with the shipped workflows; "同步到最新版" installs the shipped ones it lacks and replaces those
- * whose copy differs (edited or older), backing each replaced copy up first, and is greyed out when nothing differs.
+ * The workflows in one account's library, each with its name, roles and state, and one icon button in the header,
+ * like the version check on the overview page: while the library matches the shipped workflows it re-checks; once
+ * something differs it turns into "同步到最新版", which installs the shipped ones it lacks and replaces those whose
+ * copy differs (edited or older), backing each replaced copy up first.
  * `account` is "" for the owner. Workflows are edited and disabled in the CoDiscuss site's sidebar, not here.
  */
 import { computed, inject, onMounted, ref, watch } from "vue";
@@ -45,14 +46,12 @@ async function sync() {
 <template>
   <div class="flows">
     <div class="flows-head">
-      <span>{{ t('工作流') }} <small>{{ t('房间中可启用的多人分工流程；编辑、停用在共议网站侧栏的“工作流”中进行') }}</small></span>
-      <span class="flows-actions">
-        <button type="button" class="panel-button is-outline is-small" :disabled="loading || syncing" @click="load">
-          <UIcon :name="loading ? 'i-lucide-loader' : 'i-lucide-search-check'" :class="{ 'animate-spin': loading }" />{{ t('检查') }}</button>
-        <button type="button" class="panel-button is-outline is-small" :disabled="!behind || loading || syncing"
-          :title="t('补装缺少的随包工作流，并用最新版替换不同的；被替换的旧版先备份到该账号服务目录的 backups/workflows，在这里做过的修改也会被替换')" @click="sync">
-          <UIcon :name="syncing ? 'i-lucide-loader' : 'i-lucide-refresh-cw'" :class="{ 'animate-spin': syncing }" />{{ t('同步到最新版') }}</button>
-      </span>
+      <span>{{ t('工作流') }} <small>{{ t('房间中可启用的多人分工流程，在共议网站侧栏编辑、停用') }}</small></span>
+      <button v-if="!behind" type="button" class="panel-icon-button" :class="{ 'is-spinning': loading }" :disabled="loading"
+        :title="t('检查随包工作流')" :aria-label="t('检查随包工作流')" @click="load"><UIcon name="i-lucide-refresh-cw" /></button>
+      <button v-else type="button" class="panel-icon-button flows-sync" :class="{ 'is-spinning': syncing }" :disabled="loading || syncing"
+        :title="t('补装缺少的随包工作流，并用最新版替换不同的；被替换的旧版先备份到该账号服务目录的 backups/workflows，在这里做过的修改也会被替换')"
+        :aria-label="t('同步到最新版')" @click="sync"><UIcon :name="syncing ? 'i-lucide-loader' : 'i-lucide-download'" /></button>
     </div>
     <p v-if="result?.error" class="panel-note is-amber"><UIcon name="i-lucide-circle-alert" />{{ result.error }}</p>
     <p v-else-if="!result" class="flows-empty">{{ t('读取中…') }}</p>
@@ -81,7 +80,7 @@ async function sync() {
 
 <style scoped>
 .flows { display: flex; flex-direction: column; gap: 4px; }
-.flows-head { display: flex; align-items: center; justify-content: space-between; color: var(--panel-muted); font-size: 13px; font-weight: 500; }
+.flows-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--panel-muted); font-size: 13px; font-weight: 500; }
 .flows-head small { margin-left: 6px; color: var(--panel-faint); font-weight: 400; }
 .flows-empty { margin: 0; padding: 12px 4px; border-top: 1px solid var(--panel-line); color: var(--panel-faint); font-size: 13px; }
 .flows-row { display: flex; align-items: center; gap: 12px; padding: 12px 4px; border-top: 1px solid var(--panel-line); }
@@ -89,7 +88,7 @@ async function sync() {
 .flows-text { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
 .flows-text strong { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
 .flows-text small { overflow: hidden; color: var(--panel-faint); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
-.flows-actions { display: flex; gap: 8px; }
+.flows-sync { color: var(--panel-blue); }
 .flows-status { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; padding: 8px 4px; color: var(--panel-faint); font-size: 13px; }
 .flows-status.is-behind { color: var(--panel-amber); }
 </style>

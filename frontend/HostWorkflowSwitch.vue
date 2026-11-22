@@ -1,3 +1,24 @@
+<script>
+import { shallowReactive } from "vue";
+const open_rooms = shallowReactive(new Set());
+const edits = shallowReactive(new Map());
+const SAVE_DELAY_MS = 250;
+
+async function flush_edit(room_id, edit, save) {
+  if (edit.saving) return;
+  edit.saving = true;
+  try {
+    let sent;
+    do {
+      sent = edit.value;
+      await save({ room_id, permissions: sent });
+    } while (sent !== edit.value);
+  } finally {
+    clearTimeout(edit.timer);
+    edits.delete(room_id);
+  }
+}
+</script>
 <script setup>
 import { t } from './i18n.js';
 /**
@@ -13,6 +34,8 @@ const props = defineProps({
   /** `{ items, room_limit }` as the computer saved it, if any. */
   permissions: { type: Object, default: null },
   disabled: Boolean,
+  roomId: String,
+  save: Function,
 });
 const emit = defineEmits(["update:modelValue"]);
 
@@ -25,11 +48,18 @@ const ITEM_TEXTS = {
   workflows: [t('工作流'), t('保存并启用工作流，邀请工作流所需的成员')],
   create_rooms: [t('新建房间'), t('从本房间新建房间并在其中分派工作；新房间不能再新建房间')],
 };
-const current = computed(() => normalize_host_permissions(props.permissions, props.modelValue));
+const current = computed(() => edits.get(props.roomId)?.value ?? normalize_host_permissions(props.permissions, props.modelValue));
 const all = computed(() => current.value.items.length === HOST_ITEMS.length ? true : current.value.items.length ? "indeterminate" : false);
 
 function send(items, room_limit = current.value.room_limit) {
-  emit("update:modelValue", normalize_host_permissions({ items, room_limit }));
+  const value = normalize_host_permissions({ items, room_limit });
+  if (!props.save) { emit("update:modelValue", value); return; }
+  const room_id = props.roomId, save = props.save;
+  const edit = edits.get(room_id) || shallowReactive({ saving: false, timer: null });
+  edit.value = value;
+  edits.set(room_id, edit);
+  clearTimeout(edit.timer);
+  if (!edit.saving) edit.timer = setTimeout(() => flush_edit(room_id, edit, save), SAVE_DELAY_MS);
 }
 
 function toggle(item, checked) {
@@ -48,7 +78,8 @@ function write_limit(value) {
     <UCheckbox :model-value="all" :disabled="disabled" :label="t('主持人完整权限')" :aria-label="t('主持人完整权限')"
       :description="t('主持人可自行处理问题、持续推进；可只勾选下面的一部分。成员项目权限最高可写。')"
       @update:model-value="send($event === true ? HOST_ITEMS : [])" />
-    <details class="host-permission-items">
+    <span v-if="edits.has(roomId)" class="host-saving" role="status">{{ t('保存中…') }}</span>
+    <details class="host-permission-items" :open="roomId ? open_rooms.has(roomId) : undefined" @toggle="roomId && ($event.target.open ? open_rooms.add(roomId) : open_rooms.delete(roomId))">
       <summary>{{ t('具体权限（已选 {count} / {total}）', { count: current.items.length, total: HOST_ITEMS.length }) }}<UIcon name="i-lucide-chevron-down" /></summary>
       <div v-for="item in HOST_ITEMS" :key="item" class="host-permission-item">
         <UCheckbox :model-value="current.items.includes(item)" :disabled="disabled" :label="ITEM_TEXTS[item][0]" :description="ITEM_TEXTS[item][1]" @update:model-value="toggle(item, $event === true)" />
@@ -61,7 +92,8 @@ function write_limit(value) {
 </template>
 
 <style scoped>
-.host-permissions { display: grid; gap: 6px; }
+.host-permissions { display: grid; gap: 6px; position: relative; }
+.host-saving { position: absolute; right: 0; top: 0; font-size: 12px; color: var(--ui-text-muted); }
 .host-permission-items { margin-left: 26px; }
 .host-permission-items > summary { display: inline-flex; align-items: center; gap: 4px; color: var(--channel-accent); font-size: 12px; cursor: pointer; list-style: none; user-select: none; }
 .host-permission-items > summary::-webkit-details-marker { display: none; }

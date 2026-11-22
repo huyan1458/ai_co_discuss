@@ -4700,7 +4700,7 @@ function room_models_fields(result) {
     image_generation: Boolean(result.image_generation), image_configured: Boolean(result.image_configured) };
 }
 
-async function load_room_models() {
+async function load_room_models(force = false) {
   const room = state.room;
   // The saved project directory also applies to rooms containing only manual members.
   const woken = (room?.members || []).filter(member => member.access === "runner").map(member => member.name);
@@ -4709,7 +4709,7 @@ async function load_room_models() {
   const executions = (room.free?.members || []).map(member => member.execution?.id || 0).join(",");
   const revision = `${woken.join(",")}:${executions}`;
   const previous = state.launch.room_models;
-  if (previous?.room_id === room.id && previous.revision === revision
+  if (!force && previous?.room_id === room.id && previous.revision === revision
     && (previous.loading || previous.participants)) return;
   // The last answer stays on screen while the new one is read.
   const same_room = previous?.room_id === room.id;
@@ -4731,7 +4731,7 @@ async function load_room_models() {
     }
   } catch (error) {
     // Unavailable or older bridges leave the model unknown; the failure is kept so the page can say so, and the next refresh retries.
-    Object.assign(current, { participants: null, error: error.message || t('读取失败') });
+    Object.assign(current, { revision: "", error: error.message || t('读取失败') });
   } finally {
     current.loading = false;
     if (live()) publish_view();
@@ -4749,8 +4749,7 @@ async function load_room_models() {
 
 /** Read this computer's saved choices again, as after a failed read. */
 function reload_room_models() {
-  state.launch.room_models = null;
-  return load_room_models();
+  return load_room_models(true);
 }
 
 /** Read a directory or file from the room's saved project through the authenticated local connection. */
@@ -5355,11 +5354,17 @@ function write_create_host_workflows(value) {
 }
 
 /** Save what this room's host may do by itself: the ticked items as `{ items, room_limit }`, or true / false for the single switch. */
-async function set_room_host_workflows(allowed) {
-  const room_id = state.room.id;
+async function set_room_host_workflows({ room_id, permissions }) {
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
-  await local_launch_request("room-workflow", { room_id, token, action: "host", ...(allowed && typeof allowed === "object" ? { permissions: allowed } : { allowed: Boolean(allowed) }) });
-  await reload_room_models();
+  let result;
+  try { result = await local_launch_request("room-workflow", { room_id, token, action: "host", permissions }); }
+  catch (error) {
+    // A timed-out save may still have reached the computer, so the control falls back to what it actually holds.
+    if (state.room?.id === room_id) await reload_room_models().catch(() => {});
+    throw error;
+  }
+  update_room_models(room_id, { host_workflows: result.host_workflows, host_permissions: result.host_permissions });
+  if (state.room?.id === room_id) await reload_room_models();
 }
 
 // Workflows: a host's SKILL.md plus agent cards, kept on this computer and enabled per room.
@@ -7876,7 +7881,12 @@ async function execute_view_action(name, value) {
     queue_send: send_queued, queue_delete: delete_queued, question_answer: question_request,
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
     queue_edit: edit_queued,
-    busy: () => { throw new Error(t('上一个操作仍在处理中，请稍候；长时间无响应请刷新页面')); },
+    busy: () => {
+      const error = new Error(t('上一个操作仍在处理中，请稍候'));
+      notify("warning", error.message);
+      error.notified = true;
+      throw error;
+    },
     copy_reading: () => copy_text(`${room_site()}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);
