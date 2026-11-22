@@ -39,7 +39,7 @@
       "type": "card",
       "card": "screenwriter",
       "x": 1296,
-      "y": -110
+      "y": -250
     },
     {
       "id": "character_plan",
@@ -109,7 +109,7 @@
       "type": "card",
       "card": "recorder",
       "x": 3816,
-      "y": -234
+      "y": -330
     },
     {
       "id": "read_through",
