@@ -1483,20 +1483,32 @@ test('claude background runtime limit ends a hung process without retrying or ca
 
 test('a stopped process tree is ended with taskkill on Windows and falls back to the plain kill otherwise', () => {
   const running = () => ({ pid: 4242, exitCode: null, signalCode: null });
-  const attempt = (child, platform, run) => {
+  // taskkill is not waited for: its result arrives as `outcome` ('exit' with a code, or 'error') after the call returns.
+  const attempt = (child, platform, outcome) => {
     const calls = []; let plain = 0;
-    const result = kill_process_tree(child, () => { plain++; return 'plain'; }, platform, (...call) => { calls.push(call); return run(); });
-    return { calls, plain, result };
+    const killer = new EventEmitter();
+    const result = kill_process_tree(child, () => { plain++; return 'plain'; }, platform, (...call) => {
+      calls.push(call);
+      if (outcome === 'throw') throw new Error('taskkill missing');
+      return killer;
+    });
+    const before = plain;
+    if (outcome === 'error') killer.emit('error', new Error('spawn failed'));
+    else if (typeof outcome === 'number') killer.emit('exit', outcome);
+    return { calls, plain, before, result };
   };
-  const windows = attempt(running(), 'win32', () => ({ status: 0 }));
+  const windows = attempt(running(), 'win32', 0);
   assert.deepEqual(windows.calls[0].slice(0, 2), ['taskkill', ['/PID', '4242', '/T', '/F']]);
   assert.equal(windows.plain, 0);
   assert.equal(windows.result, true);
-  assert.equal(attempt(running(), 'win32', () => ({ status: 128 })).plain, 1);
-  assert.equal(attempt(running(), 'win32', () => { throw new Error('taskkill missing'); }).plain, 1);
-  assert.equal(attempt({ pid: undefined, exitCode: null, signalCode: null }, 'win32', () => ({ status: 0 })).plain, 1);
-  assert.equal(attempt({ pid: 4242, exitCode: 0, signalCode: null }, 'win32', () => ({ status: 0 })).calls.length, 0);
-  const posix = attempt(running(), 'linux', () => ({ status: 0 }));
+  const failed = attempt(running(), 'win32', 128);
+  assert.equal(failed.before, 0);
+  assert.equal(failed.plain, 1);
+  assert.equal(attempt(running(), 'win32', 'error').plain, 1);
+  assert.equal(attempt(running(), 'win32', 'throw').plain, 1);
+  assert.equal(attempt({ pid: undefined, exitCode: null, signalCode: null }, 'win32', 0).plain, 1);
+  assert.equal(attempt({ pid: 4242, exitCode: 0, signalCode: null }, 'win32', 0).calls.length, 0);
+  const posix = attempt(running(), 'linux', 0);
   assert.equal(posix.calls.length, 0);
   assert.equal(posix.plain, 1);
 });

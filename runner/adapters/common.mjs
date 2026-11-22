@@ -1,5 +1,5 @@
 /** Parts every software adapter shares: running programs, ending process trees, reading session logs and model catalogs. */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -82,12 +82,16 @@ export function read_json(path) { return existsSync(path) ? JSON.parse(readFileS
 
 /**
  * Windows leaves a killed process's descendants running, so a stopped Claude turn kept its tool commands working.
- * End the whole tree there; elsewhere, or when taskkill cannot run, use the plain kill.
+ * End the whole tree there; elsewhere, or when taskkill cannot run or fails, use the plain kill. taskkill runs without
+ * being waited for: a service stopping many rooms would otherwise block on each tree in turn and miss its stop deadline.
  */
-export function kill_process_tree(child, plain_kill, platform = process.platform, run = spawnSync) {
+export function kill_process_tree(child, plain_kill, platform = process.platform, run = spawn) {
   if (platform === 'win32' && child.pid && child.exitCode === null && child.signalCode === null) {
     try {
-      if (run('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: CALL_TIMEOUT_MS }).status === 0) return true;
+      const killer = run('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+      killer.once('error', () => plain_kill());
+      killer.once('exit', code => { if (code !== 0) plain_kill(); });
+      return true;
     } catch { /* Fall through to the plain kill. */ }
   }
   return plain_kill();
