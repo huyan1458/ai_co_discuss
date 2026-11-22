@@ -139,6 +139,12 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-room-row.active, .channel-folder-row.active { color: #f1f2f5; background: var(--channel-ghost-active); }
 .channel-room-row.drag-source, .channel-folder-section.drag-source { opacity: .45; }
 .channel-room-row.is-destroying { opacity: .45; pointer-events: none; }
+.channel-destruction-records { display: grid; gap: 10px; max-height: 60vh; overflow: auto; }
+.channel-destroy-all { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid #e5484d66; border-radius: 8px; font-size: 13px; line-height: 1.55; }
+.channel-destroy-all p { margin: 0; }
+.channel-destruction-record { border: 1px solid var(--channel-border, rgba(255,255,255,.14)); border-radius: 8px; padding: 10px 12px; }
+.channel-destruction-record header { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; font-size: 13px; }
+.channel-destruction-record header small { color: var(--channel-muted, #8b93a1); }
 .channel-destroy-scope, .channel-destroy-progress { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; line-height: 1.55; }
 .channel-destroy-progress { list-style: none; padding-left: 0; }
 .channel-destroy-progress li { display: flex; justify-content: space-between; gap: 12px; }
@@ -858,7 +864,7 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .selection-comment button > span { width: 16px; height: 16px; }
 .selection-comment-cancel { color: var(--ui-text-muted); }
 .selection-comment-cancel:hover { background: var(--ui-bg-accented); color: var(--ui-text); }
-.selection-comment-send { background: var(--ui-text-highlighted); color: var(--ui-bg); }
+/* The confirm button is the message composer's send button (channel-primary-button channel-round-button channel-send). */
 /* Floating: any blank part drags the card (v-float-box) and the grip in the corner resizes it. */
 .selection-comment:not(.is-docked, .is-inline) { cursor: move; }
 .selection-comment:not(.is-docked, .is-inline) textarea { cursor: text; }
@@ -877,7 +883,7 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .selection-comment-remove { color: var(--ui-text-muted); }
 .selection-comment-remove:hover { background: var(--ui-bg-accented); color: var(--ui-error); }
 /* Phones: a sheet across the bottom that covers the message composer, so two input boxes never show at once (its owner
-   sets a min-height to the composer's). Finger-sized buttons, the confirm one wide and alone on the right; 16px text
+   sets a min-height to the composer's). Finger-sized buttons, the confirm one alone on the right; 16px text
    keeps iOS from zooming the page on focus. */
 .selection-comment.is-docked { inset: auto 0 0; width: auto; max-width: none; gap: 8px; padding: 14px 16px calc(max(var(--keyboard-inset, 0px), env(safe-area-inset-bottom)) + 12px);
   border-width: 1px 0 0; border-radius: 16px 16px 0 0; box-shadow: 0 -8px 24px #0006; }
@@ -886,7 +892,7 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .selection-comment.is-docked button { width: 40px; height: 40px; }
 .selection-comment.is-docked button > span { width: 20px; height: 20px; }
 .selection-comment.is-docked .selection-comment-cancel, .selection-comment.is-docked .selection-comment-remove { background: var(--ui-bg-accented); }
-.selection-comment.is-docked .selection-comment-send { width: 72px; margin-left: auto; border-radius: 20px; }
+.selection-comment.is-docked .selection-comment-send { margin-left: auto; }
 /* In the notes list: a pill in the flow, the buttons on the text's row. */
 .selection-comment.is-inline { position: static; z-index: auto; flex-direction: row; align-items: flex-end; width: 100%; max-width: none; min-height: 40px; margin-top: 6px; padding: 5px 5px 5px 14px; border-radius: 20px; box-shadow: none; }
 .selection-comment.is-inline textarea { align-self: center; min-height: 0; max-height: 120px; }
@@ -1205,12 +1211,24 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-answer-summary { grid-template-columns: minmax(0, 1fr); gap: 4px; margin-top: 14px; }
   .channel-answer-summary > small > span { display: inline; }
   .channel-answer-summary > .channel-message-text { font-size: calc(14px * var(--card-text-scale, 1)); }
-  /* The card's keys sit at its foot, right end, on a line of their own: the header keeps the whole first line, and
-     the keys are where reading ends (user 2026-11-22, #6950). A message being sent keeps the same foot, so the saved
-     card that replaces it is the same height. */
-  .channel-message-actions { inset: auto 8px 4px auto; width: auto; }
-  .channel-message:has(.channel-message-toolbar), .channel-sending-message:not(.is-failed) { padding-bottom: 38px !important; }
+  /* The card's keys sit in its top-right corner, beside the name, where a thumb expects them (user 2026-11-22,
+     #7075, #7076: keys at the foot left a blank line under a short message and were out of reach on a long answer).
+     So a card's header is two lines: the name and tags beside the keys, then model, state, time, number and duration
+     from the left under the name, the model cut from its start when the line is short (#6904: facts split to the
+     right edge read as detached from the name). The working strip keeps its own one-line head. */
+  .channel-message-actions { inset: 10px 8px auto auto; width: auto; }
   .channel-message-toolbar { position: static; opacity: 1; pointer-events: auto; padding: 3px; }
+  .channel-message { --message-keys: 0px; }
+  .channel-message:has(.channel-message-toolbar > :nth-child(1)) { --message-keys: 36px; }
+  .channel-message:has(.channel-message-toolbar > :nth-child(2)) { --message-keys: 63px; }
+  .channel-message:has(.channel-message-toolbar > :nth-child(3)) { --message-keys: 90px; }
+  .channel-message:has(.channel-message-toolbar > :nth-child(4)) { --message-keys: 117px; }
+  .channel-message:has(.channel-message-toolbar > :nth-child(5)) { --message-keys: 144px; }
+  .channel-message .channel-message-byline { justify-content: flex-start; }
+  .channel-message .channel-message-meta { display: contents; }
+  .channel-message .channel-message-author { flex: 1 0 100%; padding-right: var(--message-keys); }
+  .channel-message .channel-message-model { flex: 1 1 0; max-width: max-content; min-width: 0; }
+  .channel-message .channel-message-facts { align-self: auto; min-height: 0; }
   .channel-message-actions button { width: 25px; height: 24px; padding: 4px; color: #929eb2; }
   .channel-message-actions button [class*="icon"] { width: 13px; height: 13px; }
   .channel-composer-dock { padding: 4px 0 6px; }

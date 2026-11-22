@@ -36,6 +36,8 @@ const LOCAL_TIMEOUT_MS = 8000;
 const EVENT_RETRY_MS = 3000;
 // Diagnostics: a request answered slower than this, or not delivered, is written to the service log (action and route only).
 const SLOW_REQUEST_MS = 3000;
+const SLOW_RELAY_READ_MS = 500;
+const FULL_RELAY_READ_TIMING = process.env.CODISCUSS_RELAY_READ_TIMING === '1';
 // A WebSocket frame on the website is at most 1 MiB; leave room for the envelope around the ciphertext.
 const RESPONSE_MAX_BYTES = 700 * 1024;
 // The website closes the whole connection on a frame over 1 MiB, failing every request on it; a larger answer is
@@ -46,6 +48,7 @@ const FRAME_MAX_BYTES = 1024 * 1024 - 1024;
 const BACKLOG_LOG_BYTES = 4 * 1024 * 1024;
 const BACKLOG_LOG_MS = 60000;
 const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
+const RELAY_READ_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Attachment uploads arrive in parts and are sent to the local website whole, as one browser upload would be.
 const UPLOAD_PATH = /^\/api\/rooms\/[A-Za-z0-9_-]+\/attachments(\/[A-Za-z0-9_-]+\/import)?(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
@@ -94,11 +97,33 @@ export async function seal_compressed(key, value, label) {
   return { iv: Buffer.from(iv).toString('base64'), data: Buffer.from(data).toString('base64'), encoding: 'gzip' };
 }
 
+/** Return a room read category without retaining its path or query. */
+function relay_read_route(payload) {
+  if ((payload?.method ?? 'GET') !== 'GET' || typeof payload?.path !== 'string') return '';
+  const path = payload.path.split('?', 1)[0];
+  if (path === '/api/rooms') return 'directory';
+  if (/^\/api\/rooms\/[A-Za-z0-9_-]+$/.test(path)) return 'room';
+  if (/^\/api\/rooms\/[A-Za-z0-9_-]+\/messages$/.test(path)) return 'messages';
+  return '';
+}
+
+/** Write phase offsets from frame receipt without recording the frame or request data. */
+function log_relay_read(log, timing, status, buffered_bytes) {
+  const elapsed_ms = (timing.sent_at ?? performance.now()) - timing.received_at;
+  if (!FULL_RELAY_READ_TIMING && !timing.failed && elapsed_ms <= SLOW_RELAY_READ_MS) return;
+  const offset = (at) => at === undefined ? null : Math.round(at - timing.received_at);
+  try {
+    log(`relay-read ${JSON.stringify({ request_id: timing.id, route: timing.route, status, received_ms: 0,
+      local_request_ms: offset(timing.local_request_at), local_response_ms: offset(timing.local_response_at),
+      sent_ms: offset(timing.sent_at), frame_bytes: timing.frame_bytes ?? null, buffered_bytes })}`);
+  } catch { /* A failed diagnostic write must not interrupt the relay. */ }
+}
+
 /**
  * Read or write one room route on the local website as this computer's bridge. Only room, folder and revision routes
  * of the local website itself are reachable; the device cannot name another address. Binary content comes back as base64.
  */
-export async function room_api(home, site, payload, { fetcher = site_fetch, device } = {}) {
+export async function room_api(home, site, payload, { fetcher = site_fetch, device, timing } = {}) {
   const { method = 'GET', path, body, token, offset = 0, etag } = payload || {};
   if (!['GET', 'POST'].includes(method) || typeof path !== 'string' || !ROOM_API_PATH.test(path) || path.includes('..')
       || !Number.isSafeInteger(offset) || offset < 0) {
@@ -109,8 +134,10 @@ export async function room_api(home, site, payload, { fetcher = site_fetch, devi
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   // A read the device already holds is asked conditionally; unchanged, the answer is a bare 304 with no body.
   if (method === 'GET' && typeof etag === 'string' && /^"[0-9a-f]{1,64}"$/.test(etag)) headers['If-None-Match'] = etag;
+  const on_request = timing?.route ? () => { timing.local_request_at = performance.now(); } : undefined;
+  if (on_request) headers['X-CoDiscuss-Relay-Request-Id'] = timing.id;
   const response = await fetcher(`${local_origin(home)}${path}`, { method, headers, redirect: 'error',
-    body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(LOCAL_TIMEOUT_MS) });
+    body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(LOCAL_TIMEOUT_MS) }, { on_request });
   const tag = response.headers.get('ETag');
   if (response.status === 304) return { status: 304, etag: tag || etag };
   const type = response.headers.get('Content-Type') || '';
@@ -219,7 +246,7 @@ async function run_command(home, command, run) {
 }
 
 /** Answer one relayed request: room routes and uploads go to the local website, everything else to the local entrypoint as before. */
-export async function answer_request(home, site, link, frame, { run = run_launch_command, fetcher, report } = {}) {
+export async function answer_request(home, site, link, frame, { run = run_launch_command, fetcher, report, timing } = {}) {
   const { id, envelope } = frame;
   const key = await relay_cipher(link.private_key, envelope.key);
   const sealed = await unseal(key, envelope, id);
@@ -239,13 +266,15 @@ export async function answer_request(home, site, link, frame, { run = run_launch
     const opened = await open_signed_request(home, id, sealed, link.id);
     request = opened.request;
     const { action, payload, target } = request;
+    if (timing && action === 'room-api' && RELAY_READ_ID.test(id)) timing.route = relay_read_route(payload);
     claim_relayed_command(home, id, request.sent_at);
     const device = opened.device_id;
     response = DEVICE_ACTIONS.has(action) ? await device_command(home, { site, machine_id: link.id, device_id: device, on_change: () => sync_remote_launches(home) }, action, payload)
       : action === 'computer-site' ? { status: 200, body: { site: local_origin(home) } }
-      : action === 'room-api' ? await room_api(home, site, payload, { fetcher, device })
+      : action === 'room-api' ? await room_api(home, site, payload, { fetcher, device, timing })
       : action === 'room-upload' ? await room_upload(home, site, payload, { fetcher })
         : await run_command(home, { ...(target === 'computer' ? computer_command(home, site, action, payload) : relayed_command(site, action, payload)), device }, run);
+    if (timing?.local_request_at !== undefined) timing.local_response_at = performance.now();
   } catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}) } }; }
   // Remote writes go to this computer's audit log: kind, route, device and outcome, never content. Reads are not logged.
   if (request.action && !(request.action === 'room-api' && (request.payload?.method || 'GET') === 'GET') && !DEVICE_ACTIONS.has(request.action) && request.action !== 'computer-site') {
@@ -424,6 +453,7 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
       });
       socket.addEventListener('message', async event => {
         if (finished || signal.aborted) return;
+        const received_at = performance.now();
         if (event.data === 'pong') {
           if (!awaiting_pong) return;
           if (!pong_seen) log(`${site}: ${t('中转已连接')}`);
@@ -444,15 +474,25 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
           return socket.close(1000, 'unpaired');
         }
         const received = Date.now();
+        const timing = { id: frame.id, received_at };
         health?.request(site, link.id);
         let kind = { action: '?', route: '', status: 0 };
         try {
-          const answer = await answer_request(home, site, link, frame, { report: value => { kind = value; } });
+          const answer = await answer_request(home, site, link, frame, { timing, report: value => { kind = value; } });
           const answered = Date.now();
           const open = !finished && socket.readyState === WebSocket.OPEN;
           const { oversized, ...frame_out } = answer;
-          if (open) socket.send(JSON.stringify(frame_out));
-          const label = `${kind.action}${kind.route ? ` ${kind.route}` : ''} → ${kind.status}`;
+          if (open) {
+            const outgoing = JSON.stringify(frame_out);
+            socket.send(outgoing);
+            if (timing.route) {
+              timing.sent_at = performance.now();
+              timing.frame_bytes = Buffer.byteLength(outgoing);
+              timing.buffered_bytes = socket.bufferedAmount || 0;
+            }
+          }
+          const route = timing.route || kind.route;
+          const label = `${kind.action}${route ? ` ${route}` : ''} → ${kind.status}`;
           if (oversized) log(`${site}: 中转回应超过单帧上限，已改为报错：${label}`);
           const backlog = socket.bufferedAmount || 0;
           if (open && backlog > BACKLOG_LOG_BYTES && answered - backlog_logged > BACKLOG_LOG_MS) {
@@ -461,7 +501,11 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
           }
           if (!open) log(`${site}: 中转回应未送出（连接已断开）：${label}，处理 ${answered - received} ms`);
           else if (answered - received > SLOW_REQUEST_MS) log(`${site}: 中转请求较慢：${label}，处理 ${answered - received} ms`);
-        } catch (error) { log(`${site}: 中转请求 ${frame.id} 无法处理（${Date.now() - received} ms）：${error.message}`); }
+        } catch (error) {
+          timing.failed = true;
+          log(`${site}: 中转请求 ${frame.id} 无法处理（${Date.now() - received} ms）：${error.message}`);
+        }
+        finally { if (timing.route) log_relay_read(log, timing, kind.status, timing.buffered_bytes ?? (socket.bufferedAmount || 0)); }
       });
       let socket_failure;
       socket.addEventListener('close', event => {

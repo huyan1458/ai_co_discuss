@@ -30,7 +30,7 @@
  * (AGENTS.md red line 9).
  */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute } from 'node:path';
 import { antigravity } from './antigravity_app.mjs';
@@ -169,6 +169,27 @@ export function session_exists(adapter_id, session_id, options = {}) {
  *   `kept` names stores the software holds open and this machine leaves alone; `unsupported` when the software keeps
  *   its sessions where this adapter cannot remove them.
  */
+/**
+ * Remove every conversation each software keeps for this user (a hosted account destroying all its rooms), leaving
+ * login and settings. Returns `{removed, failed: [path]}`; a path a running program still holds is failed.
+ */
+export function wipe_software_histories(options = {}) {
+  const paths = [...new Set(Object.values(ADAPTERS).flatMap(adapter => adapter.session?.history?.(options) || []))];
+  const failed = [];
+  let removed = 0;
+  for (const path of paths.filter(existsSync)) {
+    try { rmSync(path, { recursive: true, force: true, maxRetries: 3 }); } catch { /* Checked below. */ }
+    if (existsSync(path)) failed.push(path); else removed += 1;
+  }
+  return { removed, failed };
+}
+
+/** The software that holds a session by that ID on this machine, trying `preferred` first; null when none does. */
+export function session_holder(session_id, preferred, options = {}) {
+  const ids = [preferred, ...Object.keys(ADAPTERS).filter(id => id !== preferred)].filter(Boolean);
+  return ids.find(id => ADAPTERS[id]?.session?.remove && ADAPTERS[id].session.exists(session_id, options)) || null;
+}
+
 export function remove_session(adapter_id, session_id, options = {}) {
   const session = adapter_of(adapter_id)?.session;
   if (!session?.remove) return { state: 'unsupported', removed: 0, kept: [] };

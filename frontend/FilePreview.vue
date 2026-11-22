@@ -1130,7 +1130,7 @@ onBeforeUnmount(() => {
           <textarea ref="comment_input" v-model="comment" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注（可选）')" enterkeyhint="send" @keydown="comment_keydown"></textarea>
           <div class="selection-comment-actions">
             <button type="button" class="selection-comment-cancel" :aria-label="t('取消添加')" :title="t('取消')" @click="cancel_comment"><UIcon name="i-lucide-x" /></button>
-            <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
+            <button type="submit" class="selection-comment-send channel-primary-button channel-round-button channel-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
           </div>
         </form>
         <div v-if="(offer?.touch && !commenting) || reader.state.message_id" class="file-listen-dock">

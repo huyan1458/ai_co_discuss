@@ -232,7 +232,7 @@ LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
 LEFT JOIN message_timings AS timing ON timing.message_id=messages.id
 LEFT JOIN (SELECT r.answer_id, MIN(r.execution_id) AS execution_id, MIN(r.message_id) AS request_message_id,
   MAX(""" + LAYOUT_AFTER_SQL + """) AS layout_after, MIN(""" + LAYOUT_AT_SQL + """) AS layout_at
-  FROM member_requests r WHERE r.answer_id IS NOT NULL AND r.execution_id IS NOT NULL GROUP BY r.answer_id) AS answered
+  FROM member_requests r WHERE r.answer_id IS NOT NULL GROUP BY r.answer_id HAVING MIN(r.execution_id) IS NOT NULL) AS answered
   ON answered.answer_id=messages.id"""
 # Messages the owner took back leave AI reads; the page asks for them with withdrawn=include to keep them in place.
 INCLUDE_WITHDRAWN = "include"
@@ -1175,11 +1175,18 @@ def manage_room(connection, room_id, action, payload):
         # Only a room some computer's runner served has AI sessions and local files to remove there.
         expect_runner = bool(control and control[0]) and connection.execute(
             "SELECT 1 FROM room_members WHERE room_id=? AND access='runner' LIMIT 1", (room_id,)).fetchone() is not None
-        sessions = {}
-        for row in connection.execute("""SELECT DISTINCT m.name,e.session_id FROM member_executions e JOIN room_members m ON m.id=e.member_id
-                WHERE e.room_id=? AND m.access='runner' AND e.session_id<>'' ORDER BY e.id""", (room_id,)):
-            sessions.setdefault(row["name"], []).append(row["session_id"])
-        delete_room_records(connection, room_id)
+        members = {}
+        for row in connection.execute("""SELECT DISTINCT m.id,m.name,m.status,m.session_mode,e.session_id FROM member_executions e
+                JOIN room_members m ON m.id=e.member_id WHERE e.room_id=? AND m.access='runner' AND e.session_id<>'' ORDER BY e.id""", (room_id,)):
+            entry = members.setdefault(row["id"], {"name": row["name"], "ids": [], "borrowed": row["session_mode"] == "borrowed",
+                                                   "removed": row["status"] == "removed"})
+            entry["ids"].append(row["session_id"])
+        sessions = list(members.values())
+        # (a) Kept scheduling feedback serves tuning on the maintainer's own site; a hosted account's has no reader and goes.
+        feedback = connection.execute("SELECT COUNT(*) FROM scheduler_feedback_cases WHERE room_id=?", (room_id,)).fetchone()[0]
+        if feedback and not hosted_instance():
+            counts.append({"kind": "feedback_cases", "state": "kept", "count": feedback})
+        delete_room_records(connection, room_id, keep_feedback=not hosted_instance())
         connection.execute("""INSERT OR REPLACE INTO room_destructions (room_id,title,control_hash,status,expect_runner,automatic,items,sessions,created_at)
             VALUES (?,?,?,'cleaning',?,?,?,?,?)""", (room_id, room["title"], control[0] if control else "", int(expect_runner),
                                                       int(payload.get("automatic") is True), json.dumps(counts), json.dumps(sessions), utc_now()))
@@ -1189,14 +1196,21 @@ def manage_room(connection, room_id, action, payload):
     return require_room(connection, room_id)
 
 
-def delete_room_records(connection, room_id):
-    """Remove a room's dependent records in the caller's transaction."""
+def hosted_instance():
+    """Whether this website serves a hosted account running as its own Windows user (runner/os_users.mjs sets the flag);
+    the owner's instance is entry-protected too while hosting is on, so protection alone proves nothing."""
+    return os.getenv("CODISCUSS_ISOLATED_ACCOUNT") == "1"
+
+
+def delete_room_records(connection, room_id, keep_feedback=False):
+    """Remove a room's dependent records in the caller's transaction; `keep_feedback` leaves its rated scheduling cases."""
     # Stored texts and kept feedback cases name their owner without a foreign key, so they go first, while the
     # rows that identify them still exist.
     for owner, query in ROOM_TEXT_OWNERS:
         connection.execute(f"DELETE FROM stored_texts WHERE owner=? AND owner_id IN ({query})", (owner, room_id))
     connection.execute("DELETE FROM stored_texts WHERE owner='room' AND owner_id=?", (room_id,))
-    connection.execute("DELETE FROM scheduler_feedback_cases WHERE room_id=?", (room_id,))
+    if not keep_feedback:
+        connection.execute("DELETE FROM scheduler_feedback_cases WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM task_message_sources WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM goal_continuations WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM question_events WHERE question_id IN (SELECT id FROM room_questions WHERE room_id=?)", (room_id,))
@@ -1309,7 +1323,7 @@ def destruction_sessions(connection, room_id, token):
     hashed = token_hash(token)
     if not row or not hashed or not row["control_hash"] or not hmac.compare_digest(hashed, row["control_hash"]):
         return {}
-    return {"sessions": json.loads(row["sessions"])}
+    return {"sessions": json.loads(row["sessions"]) or []}
 
 
 def report_destruction(connection, room_id, token, payload):
@@ -2823,6 +2837,10 @@ class DiscussionServer(ThreadingHTTPServer):
 # The administrator login lives in an HttpOnly cookie (same name and lifetime as backend/worker.mjs).
 ADMIN_COOKIE = "codiscuss_admin"
 ADMIN_COOKIE_SECONDS = 30 * 86400
+RELAY_READ_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
+RELAY_READ_HEADER = "X-CoDiscuss-Relay-Request-Id"
+SLOW_RELAY_READ_MS = 500
+FULL_RELAY_READ_TIMING = os.getenv("CODISCUSS_RELAY_READ_TIMING") == "1"
 
 
 class DiscussionHandler(BaseHTTPRequestHandler):
@@ -2866,7 +2884,25 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             # A logged write answers only after its record is stored, so a client that reads the log next sees it.
             self.deferred_response = (status, content_type, data)
             return
+        if getattr(self, "relay_read_started", None) is not None and self.bridged:
+            self.log_relay_read(parts, status, len(data))
         self.send_payload(status, content_type, data)
+
+    def log_relay_read(self, parts, status, body_bytes):
+        """Log a bridged room read with its category and local elapsed time."""
+        if parts == ["api", "rooms"]:
+            route = "directory"
+        elif parts[:2] == ["api", "rooms"] and len(parts) == 3:
+            route = "room"
+        elif parts[:2] == ["api", "rooms"] and parts[3:] == ["messages"]:
+            route = "messages"
+        else:
+            return
+        elapsed_ms = (time.perf_counter() - self.relay_read_started) * 1000
+        if not FULL_RELAY_READ_TIMING and elapsed_ms <= SLOW_RELAY_READ_MS:
+            return
+        logging.info("relay-read %s", json.dumps({"request_id": self.headers[RELAY_READ_HEADER], "route": route,
+                     "status": status, "elapsed_ms": round(elapsed_ms), "body_bytes": body_bytes}))
 
     def send_payload(self, status, content_type, data):
         """Write the status line, headers and encoded body."""
@@ -2910,6 +2946,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
     def dispatch(self, method):
         """Route a request and consistently report validation or lookup errors."""
+        trace_id = self.headers.get(RELAY_READ_HEADER, "") if method == "GET" else ""
+        self.relay_read_started = time.perf_counter() if RELAY_READ_ID.fullmatch(trace_id) else None
         self.payload_cache = None
         self.bridge_origin = None
         self.api_record = None
@@ -3126,7 +3164,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["room-models"], ["room-skills"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["sessions"], ["api-key"], ["api-check"],
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["wipe-histories"], ["room-models"], ["room-skills"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["sessions"], ["api-key"], ["api-check"],
                                              ["scheduler-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]) or (method == "OPTIONS" and len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
@@ -3166,6 +3204,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "projects"
         elif route == ["presets"] and method == "POST":
             command = "presets"
+        elif route == ["wipe-histories"] and method == "POST":
+            command = "wipe-histories"
         elif route in (["workflows"], ["room-workflow"], ["room-settings"]) and method == "POST":
             command = route[0]
         elif route == ["machine-link"] and method == "POST":

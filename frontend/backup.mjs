@@ -97,6 +97,38 @@ export function room_markdown(snapshot) {
   return lines.join("\n\n") + "\n";
 }
 
+/** Decode a base64 file body. */
+function base64_bytes(data) {
+  return Uint8Array.from(atob(data), char => char.charCodeAt(0));
+}
+
+/** Escape text for an HTML page; message text is shown as written, never interpreted as markup. */
+function escape_html(text) {
+  return String(text ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+}
+
+/** A self-contained page of the room's messages and private chats that opens with a double click. */
+export function room_html(snapshot) {
+  const tables = snapshot.tables, room = tables.rooms[0];
+  const task_messages = new Set((tables.task_message_sources || []).map(row => row.message_id));
+  const members = new Map((tables.room_members || []).map(member => [member.id, member.name]));
+  const card = (who, when, text) => `<article><header><b>${escape_html(who)}</b><time>${escape_html(when)}</time></header><div>${escape_html(text)}</div></article>`;
+  const messages = tables.messages.filter(message => !task_messages.has(message.id)).map(message => {
+    const files = (tables.attachments || []).filter(file => file.message_id === message.id)
+      .map(file => `<a href="${escape_html(attachment_archive_path(file))}">${escape_html(file.file_name)}</a>`).join(" ");
+    return card(`#${message.id} ${message.author}`, message.created_at, message.text) + (files ? `<p class="files">${files}</p>` : "");
+  });
+  const chats = (tables.private_chats || []).map(chat => card(`私聊 · ${members.get(chat.member_id) || chat.member_id}`,
+    new Date(chat.created_at * 1000).toISOString(), `你：${chat.text}\n\n回复：${chat.reply || ""}`));
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escape_html(room.title)}</title><style>body{font:15px/1.6 system-ui,sans-serif;max-width:860px;margin:2em auto;padding:0 1em;color:#1f2328}
+article{border:1px solid #d0d7de;border-radius:8px;padding:.8em 1em;margin:.8em 0}header{display:flex;justify-content:space-between;gap:1em;margin-bottom:.4em}
+time{color:#656d76;font-size:.85em}article div{white-space:pre-wrap;word-break:break-word}.files{margin:-.4em 0 1em 1em;font-size:.9em}</style></head>
+<body><h1>${escape_html(room.title)}</h1><p>${escape_html(room.goal)}</p><p>导出：${escape_html(snapshot.exported_at)} · 消息 ${messages.length} 条</p>
+<h2>消息</h2>${messages.join("\n") || "<p>暂无消息。</p>"}${chats.length ? `<h2>私聊</h2>${chats.join("\n")}` : ""}</body></html>
+`;
+}
+
 /** Keep each archived filename unique and portable without trusting path separators. */
 export function attachment_archive_path(file) {
   const name = file.file_name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/, "") || "附件";
@@ -124,9 +156,14 @@ async function fetch_attachment(file, read_file = read_site_file) {
 }
 
 /** Add one room's snapshot, readable record and original files under a folder prefix. */
-async function add_room_files(files, snapshot, prefix, load_attachment) {
+async function add_room_files(files, full_snapshot, prefix, load_attachment) {
+  const { local_drafts, ...snapshot } = full_snapshot;
   files[`${prefix}完整数据.json`] = strToU8(JSON.stringify(snapshot, null, 2) + "\n");
   files[`${prefix}讨论记录.md`] = strToU8(room_markdown(snapshot));
+  files[`${prefix}讨论记录.html`] = strToU8(room_html(snapshot));
+  // Files members wrote in their draft folders and never posted; they go when the room is destroyed.
+  for (const draft of local_drafts?.files || []) files[`${prefix}草稿/${draft.path}`] = base64_bytes(draft.data);
+  if (local_drafts?.omitted?.length) files[`${prefix}草稿/未包含的文件.txt`] = strToU8(`以下文件超过资料包上限，未包含：\n${local_drafts.omitted.join("\n")}\n`);
   for (const file of snapshot.tables.attachments || []) files[prefix + attachment_archive_path(file)] = [await load_attachment(file), { level: 0 }];
 }
 
@@ -188,6 +225,11 @@ function save_archive(archive, name) {
 export async function download_room_backup(snapshot, read_file) {
   const archive = await create_room_archive(snapshot, file => fetch_attachment(file, read_file));
   save_archive(archive, `${safe_title(snapshot.tables.rooms[0].title)}_${snapshot.exported_at.replace(/[:.]/g, "-")}.zip`);
+}
+
+/** Download plain files (path → bytes) as one ZIP named after `name`, such as a project folder. */
+export async function download_files(files, name) {
+  save_archive(await compress(files), `${safe_title(name)}_${new Date().toISOString().replace(/[:.]/g, "-")}.zip`);
 }
 
 /** Download several rooms as one batch archive named after the selection. */

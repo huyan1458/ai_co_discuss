@@ -124,6 +124,17 @@ class FreeRoomTests(unittest.TestCase):
 class SingleMemberTests(FreeRoomTests):
     """Single-member rooms; subclasses of FreeRoomTests reuse its fixture without re-running these."""
 
+    def test_answer_closing_later_requests_sits_after_the_last_of_them(self):
+        """An answer that also closes requests made while it worked is placed after the latest message it answers."""
+        first = self.say("先看这个", to=["Claude"])[1]["message"]["id"]
+        execution = self.reserve()[1]
+        later = self.say("还有这个", to=["Claude"])[1]["message"]["id"]
+        waiting = [item["id"] for item in self.request(self.path)[1]["free"]["requests"] if item["message_id"] == later]
+        status, saved = self.answer(execution["id"], also_request_ids=waiting)
+        self.assertEqual(status, 201, saved)
+        shown = next(item for item in self.request(f"{self.path}/messages?after=0")[1]["messages"] if item["id"] == saved["message"]["id"])
+        self.assertEqual((shown["execution_id"], shown["layout_after"]), (execution["id"], later), f"not under #{first}")
+
     def test_execution_keeps_the_model_the_runner_reports(self):
         """The chosen model on delivery, then what the session log says after the answer; an empty field keeps the last."""
         self.say("写一段", to=["Claude"])
@@ -2003,6 +2014,15 @@ class HostTests(HostRoomTests):
         first = self.reserve_for("Antigravity")[1]
         self.assertEqual([request["created_by"] for request in first["requests"]], ["user"], "the host's branch waits for the next execution")
 
+    def test_queueing_is_always_on_even_where_the_old_site_switch_was_off(self):
+        """2026-11-21 #7060: the switch is gone; a site that had turned it off queues again and the action is refused."""
+        self.database_value("INSERT INTO composer_settings (id,queueing) VALUES (1,0) ON CONFLICT(id) DO UPDATE SET queueing=0")
+        FreeRoomTests.say(self, "先做这个")
+        status, held = FreeRoomTests.say(self, "再说一件", queue=True)
+        self.assertTrue(held.get("queued"), held)
+        self.assertNotIn("queueing", held["queue"])
+        self.assertEqual(self.request(f"{self.path}/queue", {"action": "queueing", "enabled": False}, self.owner)[0], 400)
+
     def test_the_room_view_says_what_becomes_of_each_host_dispatch(self):
         """2026-11-20: hand back to the host, straight to the owner, background only, or a relay; background members named."""
         FreeRoomTests.say(self, "分派")
@@ -2929,14 +2949,21 @@ class HostTests(HostRoomTests):
         self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "all", "revision": revision}, self.owner)[0], 200)
         self.assertEqual(self.requests(), [("Claude", "all", "pending"), ("Codex", "all", "pending"), ("Antigravity", "all", "pending")])
         self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "sequential"}, self.owner)[0], 409)
-        for name in everyone:
+        for name in everyone[:2]:
             self.work(name)
+        self.assertEqual(len(self.requests()), 3, "no summary while an answer is still out")
+        self.work("Antigravity")
+        # The host answered its own share, then sums everyone up once, on a notice.
+        self.assertEqual(self.requests()[3:], [("Claude", "notice", "pending")])
+        notice = self.request(f"{self.path}/messages?after={first}")[1]["messages"][-1]
+        self.assertIn(f"#{first} 全体成员已回答完毕", notice["text"])
+        self.work("Claude")
         second = FreeRoomTests.say(self, "接龙，每人接上一句", to=everyone, order="auto")[1]["message"]["id"]
         revision = self.request(f"{self.path}/recommendations/{second}", token=self.owner)[1]["revision"]
         self.assertEqual(self.request(f"{self.path}/recommendations/{second}", {"action": "sequential", "revision": revision}, self.owner)[0], 200)
-        self.assertEqual(self.requests()[3:], [("Claude", "ask", "pending")])
+        self.assertEqual(self.requests()[4:], [("Claude", "ask", "pending")])
         self.work("Claude")
-        self.assertEqual(self.requests()[4:], [("Codex", "ask", "pending")])
+        self.assertEqual(self.requests()[5:], [("Codex", "ask", "pending")])
         self.assertEqual(self.request(f"{self.path}/recommendations/{second}", {"action": "all"}, self.owner)[0], 409)
 
     def test_only_the_host_dispatches_and_never_itself(self):

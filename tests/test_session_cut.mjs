@@ -8,8 +8,8 @@ import { pathToFileURL } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { branch_session, execution_marker, session_exists, session_preview, software_sessions } from '../runner/adapters/index.mjs';
-import { browse_sessions } from '../runner/discussion_launch.mjs';
+import { branch_session, execution_marker, session_exists, session_preview, software_sessions, wipe_software_histories } from '../runner/adapters/index.mjs';
+import { browse_sessions, wipe_histories } from '../runner/discussion_launch.mjs';
 import { destroy_room_sessions } from '../runner/room_destruction.mjs';
 
 const SESSION = '11111111-2222-3333-4444-555555555555';
@@ -247,14 +247,37 @@ test('a destroyed room removes the sessions it created with their copies and kee
     Shared: { adapter: 'claude' }, Codex: { adapter: 'codex_cli' } } };
   const rewound = '55555555-2222-3333-4444-555555555555';
   writeFileSync(join(projects, `${rewound}.jsonl`), lines([{ type: 'user', sessionId: rewound }]));
-  const items = destroy_room_sessions(config, new Set([shared]), { env, home }, { Claude: [rewound, 'never-ran-here'] });
-  assert.deepEqual(items.filter(item => item.kind === 'sessions'), [{ kind: 'sessions', adapter: 'claude', state: 'deleted', count: 2 },
+  // A member removed from the room still had its session cleaned; one that joined with the user's session keeps it.
+  const gone = '66666666-2222-3333-4444-555555555555', lent = '77777777-2222-3333-4444-555555555555';
+  for (const id of [gone, lent]) writeFileSync(join(projects, `${id}.jsonl`), lines([{ type: 'user', sessionId: id }]));
+  // The removed lender shares its name with a present member: entries are per member, so its session still stays.
+  const items = destroy_room_sessions(config, new Set([shared]), { env, home }, [{ name: 'Claude', ids: [rewound, 'never-ran-here'], borrowed: false, removed: false },
+    { name: 'Removed', ids: [gone], borrowed: false, removed: true }, { name: 'Claude', ids: [lent], borrowed: true, removed: true }]);
+  assert.deepEqual(items.filter(item => item.kind === 'sessions'), [{ kind: 'sessions', adapter: 'claude', state: 'deleted', count: 3 },
     { kind: 'sessions', adapter: 'codex_cli', state: 'deleted', count: 1 }]);
-  assert.deepEqual(items.find(item => item.kind === 'kept_sessions'), { kind: 'kept_sessions', state: 'kept', count: 2 });
+  assert.deepEqual(items.find(item => item.kind === 'kept_sessions'), { kind: 'kept_sessions', state: 'kept', count: 3 });
   assert.equal(session_exists('claude', own, { env, home }), false);
-  assert.deepEqual(readdirSync(projects).sort(), [`${borrowed}.jsonl`, `${shared}.jsonl`].sort());
+  assert.deepEqual(readdirSync(projects).sort(), [`${borrowed}.jsonl`, `${shared}.jsonl`, `${lent}.jsonl`].sort());
   // The software's shared prompt history and thread index are reported as kept, never rewritten.
   assert.match(readFileSync(join(home, '.claude', 'history.jsonl'), 'utf8'), /秘密/);
   assert.deepEqual(items.filter(item => item.kind === 'software_stores').map(item => item.adapter), ['claude', 'codex_cli']);
   assert.equal(session_exists('codex_cli', thread, { env, home }), false);
+});
+
+test('destroying all rooms clears every conversation the software keeps and leaves login and settings', t => {
+  const home = home_fixture(t), env = {};
+  const claude = join(home, '.claude'), codex = join(home, '.codex'), agy = join(home, '.gemini', 'antigravity-cli');
+  for (const folder of [join(claude, 'projects', 'D--p'), join(codex, 'sessions', '2026'), join(agy, 'conversations')]) mkdirSync(folder, { recursive: true });
+  for (const file of [join(claude, 'projects', 'D--p', `${SESSION}.jsonl`), join(claude, 'history.jsonl'), join(claude, '.credentials.json'),
+    join(codex, 'session_index.jsonl'), join(codex, 'state_5.sqlite'), join(codex, 'auth.json'), join(agy, 'conversations', 'a.db'), join(agy, 'settings.json')]) writeFileSync(file, 'x');
+  const result = wipe_software_histories({ env, home });
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(readdirSync(claude).sort(), ['.credentials.json']);
+  assert.deepEqual(readdirSync(codex).sort(), ['auth.json']);
+  assert.deepEqual(readdirSync(agy).sort(), ['settings.json']);
+});
+
+test('clearing the software conversations is refused outside an account running as its own Windows user', t => {
+  const home = home_fixture(t);
+  assert.throws(() => wipe_histories(home, { DISCUSS_ENTRY_KEY_FILE: join(home, 'key') }), /独立 Windows 用户/);
 });

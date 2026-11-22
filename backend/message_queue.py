@@ -19,14 +19,10 @@ from .texts import Text, load_texts, save_text
 
 QUEUED_FIELDS = ("author", "text", "reply_to", "kind", "submitted_by", "to", "sequential", "order", "attachment_ids", "attachment_start",
                  "submission_id", "message_id", "relay")
-QUEUE_ACTIONS = ("send", "edit", "delete", "reorder", "resume", "queueing")
+# Queueing is always on (user 2026-11-21, #7060): the old site switch only left messages waiting on a busy member with
+# nothing left to edit, and once off it could not be found again; `composer_settings.queueing` is no longer read.
+QUEUE_ACTIONS = ("send", "edit", "delete", "reorder", "resume")
 QUEUE_ERRORS = (ValueError, TypeError, LookupError, PermissionError, FileExistsError)
-
-
-def queueing_enabled(connection):
-    """Whether the site queues owner messages sent while members work; on unless the owner turned it off."""
-    row = connection.execute("SELECT queueing FROM composer_settings WHERE id=1").fetchone()
-    return row is None or bool(row[0])
 
 
 def room_busy(connection, room_id):
@@ -43,7 +39,7 @@ def room_busy(connection, room_id):
 
 
 def queue_view(connection, room_id):
-    """The room's queued owner messages in order, whether the queue is paused, and the site's queueing switch.
+    """The room's queued owner messages in order and whether the queue is paused.
 
     The share of a message already posted carries `message_id` and `waiting_for` (the members it still waits for); its
     files went out with that message, so it lists none."""
@@ -64,7 +60,7 @@ def queue_view(connection, room_id):
     busy_members = [row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=? AND status='active'", (room_id,))
                     if member_busy(connection, row["id"])]
     return {"items": items, "paused": paused and bool(items), "busy": room_busy(connection, room_id),
-            "host_busy": host_busy(connection, room_id), "busy_members": busy_members, "queueing": queueing_enabled(connection)}
+            "host_busy": host_busy(connection, room_id), "busy_members": busy_members}
 
 
 def named_members(connection, room_id, payload):
@@ -308,7 +304,7 @@ def reorder(connection, room_id, ids):
 
 
 def queue_action(connection, room_id, token, payload, post, check, interrupt):
-    """The owner acts on the queue: send one now, edit, delete, reorder, resume, or switch queueing for the site.
+    """The owner acts on the queue: send one now, edit, delete, reorder or resume it.
 
     `post(connection, room_id, payload, actor)` posts a message; `check(payload)` validates an edited one;
     `interrupt(connection, room_id, message_id)` stops the busy members a message sent now was given to, so it does not
@@ -334,12 +330,7 @@ def queue_action(connection, room_id, token, payload, post, check, interrupt):
         connection.execute("DELETE FROM queued_messages WHERE id=?", (queued_row(connection, room_id, payload.get("id"))["id"],))
     elif action == "reorder":
         reorder(connection, room_id, payload.get("ids"))
-    elif action == "resume":
-        connection.execute("DELETE FROM queued_message_pauses WHERE room_id=?", (room_id,))
     else:
-        if not isinstance(payload.get("enabled"), bool):
-            raise ValueError(Text('enabled 须为 true 或 false'))
-        connection.execute("INSERT INTO composer_settings (id,queueing) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET queueing=excluded.queueing",
-                           (int(payload["enabled"]),))
+        connection.execute("DELETE FROM queued_message_pauses WHERE room_id=?", (room_id,))
     drain(connection, room_id, post)
     return queue_view(connection, room_id)

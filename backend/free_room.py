@@ -1975,9 +1975,33 @@ def settle_batches(connection, room_id):
             retried = connection.execute("SELECT MAX(id) FROM member_requests WHERE room_id=? AND batch_id=?", (room_id, batch["batch_id"])).fetchone()[0]
             wake_host(connection, room_id, batch["chain_id"], handoff_notice(connection, room_id, batch["batch_id"], True),
                       f"retried:{batch['batch_id']}:{retried}")
+    summarize_groups(connection, room_id)
     advance_queues(connection, room_id)
     resume_host(connection, room_id)
     wake_for_mentions(connection, room_id)
+
+
+def summarize_groups(connection, room_id):
+    """Hand each @everyone message whose answers all ended to the host once, to sum them up and arrange what comes next.
+
+    Nothing is handed over when no one completed (all stopped or failed: failures already reach the host one by one) or
+    when the chain was halted; a room without a present host just drops the row.
+    """
+    for row in connection.execute("SELECT * FROM group_summaries WHERE room_id=?", (room_id,)).fetchall():
+        answers = connection.execute("""SELECT m.name,r.status FROM member_requests r JOIN room_members m ON m.id=r.member_id
+            WHERE r.message_id=? AND r.purpose='all' ORDER BY r.id""", (row["message_id"],)).fetchall()
+        if any(answer["status"] not in TERMINAL for answer in answers):
+            continue
+        connection.execute("DELETE FROM group_summaries WHERE message_id=?", (row["message_id"],))
+        if not any(answer["status"] == "completed" for answer in answers) or connection.execute(
+                "SELECT 1 FROM free_chains WHERE room_id=? AND chain_id=?", (room_id, row["chain_id"])).fetchone():
+            continue
+        names = member_display_names(connection, room_id)
+        unfinished = "、".join(names.get(answer["name"], answer["name"]) for answer in answers if answer["status"] != "completed")
+        facts = {"message_id": row["message_id"], "unfinished": unfinished}
+        text = Text("#{message_id} 全体成员已回答完毕，其中未完成：{unfinished}。请主持人读各成员的回答，汇总共识与分歧，需要时安排后续工作。", **facts) \
+            if unfinished else Text("#{message_id} 全体成员已回答完毕。请主持人读各成员的回答，汇总共识与分歧，需要时安排后续工作。", **facts)
+        wake_host(connection, room_id, row["chain_id"], text, f"group:{row['message_id']}")
 
 
 def reopen_review_handoff(connection, room_id, batch_id, host_id):
@@ -3123,6 +3147,9 @@ def route_group(connection, room_id, group, payload):
         connection.execute(f"""INSERT OR IGNORE INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at)
             SELECT room_id,id,?,?,'all','user',? FROM room_members WHERE room_id=? AND status='active' AND {REGISTERED_MEMBER} ORDER BY id""",
                            (group["message_id"], group["chain_id"], int(time.time()), room_id))
+        # The host answers its own share like everyone, then sums up once all answers end (2026-11-21 user decision).
+        connection.execute("INSERT OR IGNORE INTO group_summaries (message_id,room_id,chain_id) VALUES (?,?,?)",
+                           (group["message_id"], room_id, group["chain_id"]))
     connection.execute("INSERT INTO group_routes (message_id,room_id,request_id,action) VALUES (?,?,?,?)",
                        (group["message_id"], room_id, group["id"], action))
     return {"action": action, "request_id": group["id"], "message_id": group["message_id"]}

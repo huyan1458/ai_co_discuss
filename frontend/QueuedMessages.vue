@@ -93,7 +93,6 @@ function menu(item) {
   return [[
     // A share of a message already posted is not a draft: editing it would post it again to those who already have it.
     ...item.message_id ? [] : [{ label: t('编辑消息'), icon: "i-lucide-pencil", onSelect: () => act("queue_edit", item) }],
-    { label: props.queue.queueing ? t('关闭排队') : t('开启排队'), icon: "i-lucide-list-end", onSelect: () => act("queue_toggle", !props.queue.queueing) },
   ]];
 }
 
@@ -231,7 +230,7 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
           </UTooltip>
           <UButton icon="i-lucide-trash-2" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('删除排队消息')" :disabled="sending === item.id || !!pending" @click.stop="act('queue_delete', item.id)" />
           <!-- Focus goes to the composer for 编辑消息, not back to this button. -->
-          <UDropdownMenu :items="menu(item)" :content="{ align: 'end', sideOffset: 4, onCloseAutoFocus: (event) => event.preventDefault() }" :ui="{ content: 'channel-menu' }">
+          <UDropdownMenu v-if="menu(item)[0].length" :items="menu(item)" :content="{ align: 'end', sideOffset: 4, onCloseAutoFocus: (event) => event.preventDefault() }" :ui="{ content: 'channel-menu' }">
             <UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('排队消息操作')" :disabled="sending === item.id" />
           </UDropdownMenu>
         </span>

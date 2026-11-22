@@ -3,6 +3,7 @@
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { format_duration } from "./LimitPicker.vue";
 import ApiRequestsField from "./ApiRequestsField.vue";
+import AutoDestroyField from "./AutoDestroyField.vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 import GoalConfig from "./GoalConfig.vue";
@@ -291,6 +292,7 @@ const summary = computed(() => {
         <summary><UIcon name="i-lucide-chevron-right" class="create-advanced-icon" />{{ t("高级设置") }}<small>{{ t("派活 {value}", { value: view.create_chain_rounds ? t("{count} 轮", { count: view.create_chain_rounds }) : t("不限") }) }}{{ view.launch.available || view.launch.remote ? " · " + t("API {value}", { value: view.create_api_max_requests ? t("{count} 次", { count: view.create_api_max_requests }) : t("不限") }) : "" }}</small></summary>
         <ChainRoundsField :title="t('连续派活上限')" :model-value="view.create_chain_rounds" @update:model-value="bridge.write_create_chain_rounds($event)" />
         <ApiRequestsField v-if="view.launch.available || view.launch.remote" :title="t('API 请求上限')" class="create-advanced-field" :model-value="view.create_api_max_requests" @update:model-value="bridge.write_create_api_max_requests($event)" />
+        <div class="create-advanced-field create-auto-destroy"><span>{{ t("自动销毁") }}</span><AutoDestroyField :model-value="view.create_auto_destroy" @update:model-value="bridge.write_create_auto_destroy($event)" /></div>
         <p class="create-advanced-note">{{ t("建房后可在房间页修改。") }}</p>
         <ChainRoundsField v-if="view.launch.available || view.launch.remote" :title="t('关联房间互传上限')" class="create-advanced-field" :name="t('关联房间互传条数')" :unit="t('条')"
           :help="t('主持人新建的房间与原房间之间，两边主持人从你上次发言起最多互传几条消息；对本机所有关联房间生效。')" :model-value="view.create_relay_rounds ?? 0" @update:model-value="bridge.write_create_relay_rounds($event)" />
@@ -330,6 +332,7 @@ const summary = computed(() => {
 .create-advanced[open] > summary { margin-bottom: 10px; }
 .create-advanced[open] .create-advanced-icon { transform: rotate(90deg); }
 .create-advanced-field { margin-top: 14px; }
+.create-auto-destroy { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
 .create-advanced-note { margin: 12px 0 0; color: var(--ui-text-dimmed); font-size: 11px; }
 .create-modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .create-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--channel-edge-control, var(--ui-border)); border-radius: 8px; text-align: left; background: color-mix(in srgb, var(--ui-bg-elevated) 35%, transparent); color: var(--ui-text-muted); }

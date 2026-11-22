@@ -1013,7 +1013,10 @@ export const claude = {
   into_window: claude_inbox_ready,
   deliver, chat, events,
   session: { path: session_path, exists: session_exists, owns: session_exists, cwd: session_cwd, branch, settings: session_settings,
-    list: list_sessions, preview: preview_session, remove: remove_session },
+    list: list_sessions, preview: preview_session, remove: remove_session,
+    // Every conversation Claude keeps, with its prompt history; login (.credentials.json) and settings stay.
+    history: ({ env = process.env, home = homedir() } = {}) => ['projects', 'file-history', 'session-env', 'todos', 'shell-snapshots', 'history.jsonl']
+      .map(name => join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), name)) },
   models: { list: models, defaults },
   skills,
 };

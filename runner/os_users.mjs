@@ -629,6 +629,12 @@ ${register_task_script(account, record.user, '$secure', owner_sid({ run }))}
  * its task. The instance keeps running after this returns; a protected instance, and every member it starts, gets the
  * key file it proves itself with.
  */
+/**
+ * Set only in an instance running as an account's own Windows user, whose home holds nothing of the owner's: the one
+ * place where destroying all rooms may clear its AI software's conversations, and where kept scheduling feedback goes.
+ */
+export const ISOLATED_ACCOUNT_VARIABLE = 'CODISCUSS_ISOLATED_ACCOUNT';
+
 export function start_instance_as_user(data, account, service_home, local_script, node = process.execPath, { key_file = '', run = run_powershell } = {}) {
   const record = read_os_users(data)[account];
   if (!record) throw new Error(`账号 ${account} 还没有 Windows 用户，请先隔离这个账号`);
@@ -637,6 +643,7 @@ if (-not (Test-Path -LiteralPath $flag)) { exit 0 }
 $env:DISCUSS_SERVICE_HOME = ${quote(service_home)}
 $env:Path = ${quote(`${COMMAND_ROOT};`)} + $env:Path
 $env:${NO_DESKTOP_VARIABLE} = '1'
+$env:${ISOLATED_ACCOUNT_VARIABLE} = '1'
 ${key_file ? `$env:DISCUSS_ENTRY_KEY_FILE = ${quote(key_file)}\n` : ''}Set-Location -LiteralPath ${quote(service_home)}
 & ${quote(node)} ${quote(local_script)} run
 exit $LASTEXITCODE

@@ -271,6 +271,15 @@ export function session_path(session_id, env = process.env, home = homedir()) {
  * Remove a thread Codex stored on this machine: its rollout and writer lock. Its thread index, prompt history and own
  * databases (state, logs, history) are shared and held open while Codex runs; those are reported as kept.
  */
+/** Every thread Codex keeps, its index, prompt history, memories, attachments, images, logs and databases; login and settings stay. */
+export function codex_history({ env = process.env, home = homedir() } = {}) {
+  const root = env.CODEX_HOME || join(home, '.codex');
+  // The databases carry a version in their names (state_5, logs_2…), so they are matched by prefix.
+  const databases = existsSync(root) ? readdirSync(root).filter(name => /^(state|logs|thread_history|memories)_\d+\.sqlite(-wal|-shm)?$/.test(name)) : [];
+  return ['sessions', 'archived_sessions', 'thread-writer-locks', 'session_index.jsonl', 'history.jsonl', 'attachments', 'generated_images', 'log',
+    ...databases].map(name => join(root, name));
+}
+
 export function remove_session(session_id, { env = process.env, home = homedir() } = {}) {
   const root = env.CODEX_HOME || join(home, '.codex');
   const removed = remove_session_files([session_path(session_id, env, home), join(root, 'thread-writer-locks', `${session_id}.lock`)]);
@@ -531,7 +540,7 @@ export const codex_cli = {
   invocation, lifecycle, exit_error, events,
   on_stderr: remember_writer_conflict,
   session: { path: session_path, exists: session_exists, owns: (id, options) => session_exists(id, options) && !desktop_thread(id, options),
-    branch, settings: session_settings, list: list_sessions, preview: preview_session, remove: remove_session },
+    branch, settings: session_settings, list: list_sessions, preview: preview_session, remove: remove_session, history: codex_history },
   models: { list: models, defaults },
   skills: codex_skills,
 };

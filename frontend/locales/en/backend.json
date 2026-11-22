@@ -557,6 +557,8 @@
   "主持人续跑（接 #{message_id}）：{reason}": "Host continuation (following #{message_id}): {reason}",
   "{name} 在 #{message_id} 中 @ 了主持人：{gist}。请查看原文并处理。": "{name} mentioned the host in #{message_id}: {gist}. Please read the original and handle it.",
   "#{batch_id} 派出的工作已结束，请主持人接着处理。": "The work dispatched in #{batch_id} has ended. The host should continue.",
+  "#{message_id} 全体成员已回答完毕。请主持人读各成员的回答，汇总共识与分歧，需要时安排后续工作。": "Everyone has answered #{message_id}. The host should read the answers, sum up where they agree and differ, and arrange follow-up work if needed.",
+  "#{message_id} 全体成员已回答完毕，其中未完成：{unfinished}。请主持人读各成员的回答，汇总共识与分歧，需要时安排后续工作。": "Everyone has answered #{message_id}; not finished: {unfinished}. The host should read the answers, sum up where they agree and differ, and arrange follow-up work if needed.",
   "#{batch_id} 派出的工作重试后已结束，请主持人接着处理。": "The retried work dispatched in #{batch_id} has ended. The host should continue.",
   "#{batch_id} 派出的工作重试后已全部完成，可以推进预先指定的评审。": "All retried work dispatched in #{batch_id} is complete. The preassigned review can now go ahead.",
   "#{batch_id} 派出的工作已结束，其中未完成：{failed}。请主持人接着处理。": "The work dispatched in #{batch_id} has ended; not finished: {failed}. The host should continue.",

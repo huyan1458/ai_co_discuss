@@ -82,6 +82,15 @@ const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 // When this browser last opened the page, to tell about rooms that destroyed themselves meanwhile.
 const LAST_VISIT_KEY = "codiscuss-last-visit";
+// How often destroying all rooms checks whether each room's cleanup has finished.
+const DESTROY_ALL_POLL_MS = 1000;
+const DESTROY_ALL_WAIT_MS = 120_000;
+// How much one project folder download carries; files past it are listed by name.
+const FOLDER_DOWNLOAD_MAX_BYTES = 500 * 1024 * 1024;
+const FOLDER_DOWNLOAD_RELAYED_MAX_BYTES = 50 * 1024 * 1024;
+const FOLDER_DOWNLOAD_MAX_FILES = 2000;
+// How often a long folder download says how far it got.
+const FOLDER_DOWNLOAD_PROGRESS_EVERY = 100;
 // Limits of the new-room form's title and discussion goal, applied when the welcome page fills them from a message.
 const ROOM_TITLE_MAX_LENGTH = 80;
 const ROOM_GOAL_MAX_LENGTH = 1000;
@@ -184,6 +193,10 @@ const relay_file_queue = [];
 let relay_file_running = 0;
 // The room list and room views last read, with their ETags, by route; an unchanged read is answered 304 and reuses them.
 const ROOM_READ_PATH = /^\/api\/rooms(\/[^/?]+)?$/;
+const ROOM_TIMING_ENABLED = (() => {
+  try { return localStorage.getItem("codiscuss-room-timing") === "1"; }
+  catch { return false; }
+})();
 const room_reads = new Map();
 const DEFAULT_USER_LABEL = "User";
 const DEFAULT_USER_ICON = "/icons/user.svg";
@@ -453,7 +466,7 @@ function take_prefetch(path) {
 }
 
 /** Request JSON from the local or remotely hosted discussion service. */
-async function request_json(path, payload, access_token) {
+async function request_json(path, payload, access_token, trace) {
   // Only backend-owned fields with explicit templates are localized; original objects and user content stay intact.
   function localize(value) {
     if (Array.isArray(value)) return value.map(localize);
@@ -487,13 +500,19 @@ async function request_json(path, payload, access_token) {
   };
   if (computer_rooms_only() && ROOM_RELAY_PATH.test(path)) {
     if (!state.remote_rooms) throw Object.assign(new Error(COMPUTER_UNREACHABLE), { preflight: true });
-    const answer = await (payload === undefined && !recording && take_prefetch(path) || relay_room_request(path, payload, cached?.etag));
+    const early = payload === undefined && !recording && take_prefetch(path);
+    const answer = await (early || relay_room_request(path, payload, cached?.etag, trace));
+    if (early && trace && answer.timing) {
+      Object.assign(trace, answer.timing);
+      trace.log("started", 0);
+    }
     if (answer.status >= 200 && answer.status < 300) record(answer.body);
     return remember(answer.status, answer.body, answer.etag);
   }
   const early = payload === undefined && !recording && take_prefetch(path);
   // An early read is this function's own answer, already localized.
   if (early) return early;
+  trace?.log("started");
   const options = { cache: "no-store" };
   const target_room = path.match(/^\/api\/rooms\/([^/?]+)/)?.[1];
   const token = access_token || (target_room ? localStorage.getItem(`discuss-access:${target_room}`) : null);
@@ -511,6 +530,7 @@ async function request_json(path, payload, access_token) {
   }
   if (/^\/api\/(machines|admin)/.test(path)) options.signal = AbortSignal.timeout((Number.isInteger(payload?.wait) ? payload.wait : RELAY_DEFAULT_WAIT_MS) + MACHINE_REQUEST_MARGIN_MS);
   const response = await fetch(path, options);
+  if (trace) trace.bytes = response.headers.has("Content-Length") ? Number(response.headers.get("Content-Length")) : null;
   if (response.status === 304 && cached) return cached.body;
   const result = await response.json();
   // The hosted account's session ended (signed out elsewhere, expired, password reset): back to the sign-in (#5688).
@@ -918,6 +938,34 @@ async function delete_channel(id) {
 async function set_auto_destroy(id, days) {
   await request_json(`/api/rooms/${id}/auto-destroy`, { actor: "用户", days });
   patch_directory_room(id, { destroy_after_days: days });
+}
+
+/**
+ * Destroy every room, archived ones too, one after another, each as its own destroy would. Once none is left, a hosted
+ * account clears every conversation its AI software keeps, which a single room's destruction leaves in shared stores.
+ */
+async function destroy_all_rooms() {
+  const ids = state.rooms.map(room => room.id);
+  for (const id of ids) {
+    try { await delete_channel(id); } catch { return; }
+  }
+  // Each room's own cleanup on this computer finishes first; until then the rooms are still registered here.
+  const deadline = Date.now() + DESTROY_ALL_WAIT_MS;
+  while (state.destroying.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, DESTROY_ALL_POLL_MS));
+  if (state.destroying.size) {
+    const titles = [...state.destroying.values()].map(({ room }) => room.title);
+    return notify("warning", t('还有 {count} 个房间没有清理完：{names}。可在“销毁记录”里重试；完成后再点一次“销毁全部房间”（没有房间时只清空各 AI 软件的会话记录）。', { count: titles.length, names: titles.join("、") }));
+  }
+  if (!state.launch.available) return;
+  try {
+    const result = await local_launch_request("wipe-histories", {});
+    notify(result.failed.length ? "warning" : "info", result.failed.length
+      ? t('全部房间已销毁；各 AI 软件的会话记录有 {count} 处未能删除（软件可能正在运行）：{paths}', { count: result.failed.length, paths: result.failed.join("、") })
+      : t('全部房间已销毁，各 AI 软件的会话记录与记忆已删除 {count} 处（登录信息保留）。', { count: result.removed }));
+  } catch (error) {
+    // Outside a hosted account the software is the user's own, and its conversations stay.
+    notify("info", t('全部房间已销毁。各 AI 软件自身共用的索引与数据库未改动：{value1}', { value1: error.message }));
+  }
 }
 
 /** Take a room's published share page down at the share site and forget its link, before the room is destroyed. */
@@ -1415,21 +1463,23 @@ function history_batch_path(room_id, query, after) {
 }
 
 /** Join bounded cursor batches for the interactive transcript; refresh only new records. */
-async function load_message_history(room_id, version) {
+async function load_message_history(room_id, version, start_trace) {
   const query = state.query;
-  const history = await read_message_history(room_id, query, () => version === state.refresh_version);
+  const history = await read_message_history(room_id, query, () => version === state.refresh_version, start_trace);
   if (history) state.message_history = { key: `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include" })}`, messages: history.messages };
   return history;
 }
 
 /** Read the messages after the cached ones into the cache; null once `wanted` says the answer is no longer needed. */
-async function read_message_history(room_id, query, wanted) {
+async function read_message_history(room_id, query, wanted, start_trace) {
   const key = `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include" })}`;
   const messages = [...message_histories.get(key) || []];
   let cards = history_cards.get(key) || null;
   let has_more = true;
   while (has_more) {
-    const result = await request_json(history_batch_path(room_id, query, messages.at(-1)?.id || 0));
+    const trace = start_trace?.("messages");
+    const result = await request_json(history_batch_path(room_id, query, messages.at(-1)?.id || 0), undefined, undefined, trace);
+    trace?.received();
     if (!wanted()) return null;
     messages.push(...result.messages);
     if (result.cards) cards = merge_history_cards(cards, result.cards);
@@ -1507,22 +1557,42 @@ function cached_message_history(room_id) {
 /** Show the room and transcript as each arrives, independently of the directory read. */
 async function refresh_room_content(room_id, version, versions) {
   const current = () => version === state.refresh_version && state.room?.id === room_id;
-  const room_read = request_json(`/api/rooms/${room_id}`).then((room) => {
+  const traces = [];
+  const start_trace = ROOM_TIMING_ENABLED ? route => {
+    const start = performance.now();
+    const trace = { id: null, route, start, done: false, log(status, elapsed = performance.now() - this.start) {
+      console.debug("room-read", { request_id: this.id, route, status, bytes: this.bytes ?? null, elapsed_ms: Math.round(elapsed) });
+    }, received() { this.ready = true; this.log("received", this.received_at && this.received_at - this.start); } };
+    traces.push(trace);
+    return trace;
+  } : null;
+  const finish_traces = (status, route) => {
+    for (const trace of traces) {
+      if (trace.done || (route && trace.route !== route) || (status === "published" && !trace.ready)) continue;
+      trace.done = true;
+      trace.log(status);
+    }
+  };
+  const receipts = [...recipient_previews.values()].filter(item => item.room_id === room_id);
+  const trace = start_trace?.("room");
+  const room_read = request_json(`/api/rooms/${room_id}`, undefined, undefined, trace).then((room) => {
+    trace?.received();
     if (!current()) return;
     cache_room_entry(room_views, room_id, room);
     state.room = merge_room_folder(room, versions.folder, versions.archive, versions.directory);
+    for (const item of receipts) recipient_previews.delete(item.message.id);
     render_room();
     // With a transcript already shown, the new room state waits for the new transcript and both show in one snapshot:
     // the room's requests and working cards laid out against the old messages, then again against the new ones, made
     // the page collapse and refill for a moment after every send. A room opened for the first time shows at once.
-    if (!history_read || !state.messages.length) publish_view();
+    if (!history_read || !state.messages.length) { publish_view(); finish_traces("published", "room"); }
     load_room_models();
   });
-  const history_read = state.tab === "discussion" ? load_message_history(room_id, version).then(async (result) => {
+  const history_read = state.tab === "discussion" ? load_message_history(room_id, version, start_trace).then(async (result) => {
     // A room opened for the first time has only its directory entry: the topic card and the transcript wait for each
     // other and show together, so neither pushes the other down when it arrives (user 2026-11-18, #4818).
     if (!state.room?.experts) await room_read;
-    if (current() && result) { render_messages(result); publish_view(); }
+    if (current() && result) { render_messages(result); publish_view(); finish_traces("published"); }
   }) : null;
   // Only a transcript not yet read shows the loading state; re-reading an empty room keeps its empty view.
   const history_key = `${room_id}?${new URLSearchParams({ q: state.query, withdrawn: "include" })}`;
@@ -1530,7 +1600,9 @@ async function refresh_room_content(room_id, version, versions) {
   try {
     await Promise.all([room_read, history_read]);
     if (current()) publish_view();
+    finish_traces(current() ? "published" : state.room?.id === room_id ? "discarded:superseded" : "discarded:room-changed");
   } catch (error) {
+    finish_traces("discarded:read-failed");
     // With the room's messages already on screen a failed re-read changes nothing there: the connection status says it,
     // and reconnecting reads again by itself. Only a room with nothing to show tells why in its place (2026-11-17: a
     // relay blip put a full-width error under the cards every few minutes).
@@ -2364,14 +2436,20 @@ async function finish_message(result, job) {
   element("search-input").value = "";
   element("mention-filter").setAttribute("aria-pressed", "false");
   state.page = 1;
-  // The sending card stays, now showing the saved number, until the room is read again: the saved card then takes its
-  // place in the same render as the room's other changes (its request, the host's working card). Swapping it in first
-  // and the rest a moment later laid the transcript out twice, and on a phone the page jumped and flashed in between.
   const saved_id = result.message.id;
+  // Opening prefetches may predate this receipt, just like a push already in flight.
+  for (const path of prefetched.keys()) {
+    if (path === `/api/rooms/${room_id}` || path.startsWith(`/api/rooms/${room_id}/messages?`)) prefetched.delete(path);
+  }
   job.queueing = null;
   job.preview = { ...job.preview, saved_id };
+  const members = predicted_recipients(job.payload, state.room, state.launch?.room_models);
+  if (members.length) {
+    job.saved_message = { ...result.message, just_sent: true };
+    recipient_previews.set(saved_id, { room_id, message: job.saved_message, members });
+  }
   publish_view();
-  await refresh_room().catch(() => {});
+  await shared_room_refresh(true, true).promise.catch(() => {});
   if (state.room?.id === room_id && !state.messages.some(message => message.id === saved_id)) {
     const messages = [...state.messages, { ...result.message, just_sent: true }].sort((a, b) => a.id - b.id);
     render_messages({ messages, total: state.message_total + 1, page: 1, pages: 1 });
@@ -2508,6 +2586,7 @@ async function edit_queued(item) {
 
 /** Send what the composer holds; once it has left the composer, the draft stashed by editing a queued message comes back. */
 function send_from_composer(event) {
+  if (state.destroying.has(state.room?.id)) throw new Error(t('房间正在销毁，不能再发消息'));
   const sending = send_message(event);
   if (state.stashed_drafts.length && !element("message-input").value && !state.attachment_drafts.length) {
     const stashed = state.stashed_drafts.pop();
@@ -2536,10 +2615,48 @@ async function send_queued(id) {
 
 // The unsaved submissions of this page, in click order, including the one on its way to the site.
 const send_queue = [];
+const recipient_previews = new Map();
+let shared_read = null;
+
+/** A receipt starts a new generation. Pushes can join it while the view and its refresh version still match. */
+function shared_room_refresh(full, saved = false) {
+  const room_id = state.room?.id;
+  if (!saved && shared_read && shared_read.room_id === room_id && shared_read.version === state.refresh_version
+    && shared_read.query === state.query && shared_read.tab === state.tab && (shared_read.full || !full)) return { promise: shared_read.promise, joined: true };
+  const promise = refresh_room({ room: full });
+  const read = { room_id, full, query: state.query, tab: state.tab, version: state.refresh_version, promise };
+  shared_read = read;
+  return { promise: promise.finally(() => { if (shared_read === read) shared_read = null; }), joined: false };
+}
+
+/** Mirror owner dispatch, leaving uncertain routing to the room read. */
+function predicted_recipients(payload, room, models) {
+  const active = (room.free?.members || []).filter(member => member.status === "active"
+    && (member.access !== "manual" || member.registered_at)
+    && (member.access !== "external" || member.external?.claimed_at));
+  const host = active.find(member => member.role === "host");
+  if (!payload.to) {
+    if (room.session?.status === "active") return [];
+    if (active.length === 1) return active;
+    return host && models?.room_id === room.id && !models.loading && !models.scheduler ? [host] : [];
+  }
+  const named = payload.to.map(name => active.find(member => member.name === name)).filter(Boolean);
+  if (payload.order === "auto" && named.length > 1 && host?.access === "runner") return [host];
+  if (!payload.sequential || named.length < 2) return named;
+  const first = room.speaking_order?.default?.find(name => payload.to.includes(name));
+  return named.filter(member => member.name === first);
+}
+
+/** Keep the numbered message visible while its history and room state arrive independently. */
+function receipt_messages() {
+  const added = send_queue.filter(job => job.room_id === state.room?.id && job.saved_message
+    && !state.messages.some(message => message.id === job.saved_message.id)).map(job => job.saved_message);
+  return added.length && !state.query ? [...state.messages, ...added].sort((a, b) => a.id - b.id) : state.messages;
+}
 
 /** Cards belonging to the open room, until its saved messages replace them. */
 function room_sending_previews() {
-  const cards = send_queue.filter(job => job.room_id === state.room?.id && !job.queueing && !job.queued && !job.preview.failed
+  const cards = send_queue.filter(job => job.room_id === state.room?.id && !job.saved_message && !job.queueing && !job.queued && !job.preview.failed
     && !(job.preview.saved_id && state.messages.some(message => message.id === job.preview.saved_id)))
     .map(job => job.preview);
   if (state.sending_preview) cards.push(state.sending_preview);
@@ -2946,6 +3063,8 @@ function preupload_drafts(items) {
   const room = state.room;
   if (!room || room.archived) return;
   for (const item of items) {
+    // A file waiting its turn shows 0% rather than nothing, which reads as already in; only the relay measures a percent.
+    if (state.remote_rooms && !item.uploaded) report_upload_percent(item, 0);
     item.uploading = preupload_chain = preupload_chain.then(() => item.removed || item.uploaded ? null : upload_draft(room.id, "用户", item))
       .catch((error) => { if (error.video_too_large) notify("warning", error.message); })
       .finally(() => { item.uploading = null; if (item.removed) discard_draft_upload(item); });
@@ -3427,7 +3546,12 @@ async function submit_room(event, folder_id = null, { accepted = null, rejected 
     if (launching) element("room-dialog").close();
   }
   if (launching) clear_launch_overrides(launch_draft);
+  const auto_destroy = state.create_auto_destroy || 0;
+  state.create_auto_destroy = 0;
   const starting = (async () => {
+    // The room is made either way: a failed setting is only a warning, and the discussion or goal still starts.
+    if (auto_destroy) await set_auto_destroy(room.id, auto_destroy)
+      .catch(error => notify("warning", t('房间已建好，但自动销毁没有设置成功，可在“房间”页重新设置：{value1}', { value1: error.message })));
     if (discussion) await open_discussion_after_creation(room.id, discussion);
     if (goal) await open_goal_after_creation(room.id, goal);
   })();
@@ -3909,10 +4033,16 @@ async function open_relay_response(key, id, sealed) {
  * Hand one request to the paired computer over its open relay connection. A computer that is not connected fails at once;
  * one that does not answer within `wait` leaves the outcome unconfirmed, and nothing is resent automatically.
  */
-async function relay_exchange(action, payload, wait) {
+async function relay_exchange(action, payload, wait, trace) {
   const machine = relay_machine;
   if (!machine) throw new Error(t('没有可用的已配对电脑，请在电脑上运行 codiscuss 并连接网站'));
   const id = crypto.randomUUID();
+  if (trace) {
+    if (trace.id) trace.log("discarded:retried");
+    trace.id = id;
+    trace.start = performance.now();
+    trace.log("started", 0);
+  }
   const target = computer_rooms_only() ? { target: "computer" } : {};
   const { key, envelope } = await seal_relay_request(machine, id, { action, payload, ...target });
   const result = await request_json(`/api/machines/${encodeURIComponent(machine.id)}/relay`, { id, envelope, ...(wait ? { wait } : {}) })
@@ -3923,7 +4053,14 @@ async function relay_exchange(action, payload, wait) {
         { unconfirmed: true, launch: { stage: "unconfirmed" } });
       throw error.status === 401 ? Object.assign(error, { need: "pairing" }) : error;
     });
-  if (result.status === "done") return open_relay_response(key, id, result.response);
+  if (result.status === "done") {
+    const answer = await open_relay_response(key, id, result.response);
+    if (trace) {
+      trace.bytes = Math.floor(result.response.data.replace(/=+$/, "").length * 3 / 4);
+      trace.received_at = performance.now();
+    }
+    return answer;
+  }
   if (result.status === "offline") throw Object.assign(new Error(t('电脑「{value1}」不在线，请确认它开机并运行 codiscuss', { value1: machine.name })), { offline: true });
   throw Object.assign(new Error(t('结果待确认：电脑「{value1}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试', { value1: machine.name })),
     { unconfirmed: true, launch: { stage: "unconfirmed" } });
@@ -3968,19 +4105,19 @@ async function relay_command_once(action, payload) {
 }
 
 /** Read or write one room route on the paired computer's local website, as its owner, and answer as request_json would. */
-async function relay_room_request(path, payload, etag) {
-  try { return await relay_room_request_once(path, payload, etag); }
+async function relay_room_request(path, payload, etag, trace) {
+  try { return await relay_room_request_once(path, payload, etag, trace); }
   catch (error) {
-    if (await meet_device_need(error)) return relay_room_request_once(path, payload, etag);
+    if (await meet_device_need(error)) return relay_room_request_once(path, payload, etag, trace);
     throw error;
   }
 }
 
 /** Read or write one room route on the paired computer once; a read with `etag` may answer 304 without a body. */
-async function relay_room_request_once(path, payload, etag) {
+async function relay_room_request_once(path, payload, etag, trace) {
   let answer;
   for (let attempt = 0; ; attempt += 1) {
-    try { answer = await relay_exchange("room-api", { method: payload === undefined ? "GET" : "POST", path, body: payload, ...(etag ? { etag } : {}) }); break; }
+    try { answer = await relay_exchange("room-api", { method: payload === undefined ? "GET" : "POST", path, body: payload, ...(etag ? { etag } : {}) }, undefined, trace); break; }
     catch (error) {
       // Only reads are asked again: a write whose outcome is unconfirmed must not be sent twice.
       const transient = error.unconfirmed || error.offline || error instanceof TypeError;
@@ -4241,7 +4378,12 @@ async function show_computer_rooms(remote) {
     let guess = new URLSearchParams(location.search).get("room");
     try { guess ||= localStorage.getItem(LAST_ROOM_KEY); } catch { /* Storage may be unavailable. */ }
     const paths = ["/api/rooms", ...guess ? [`/api/rooms/${guess}`, history_batch_path(guess, "", 0)] : []];
-    paths.forEach(path => prefetch(path, () => relay_room_request(path)));
+    paths.forEach(path => prefetch(path, async () => {
+      const timing = ROOM_TIMING_ENABLED ? { start: performance.now(), log() {} } : null;
+      const answer = await relay_room_request(path, undefined, undefined, timing);
+      if (timing) answer.timing = { id: timing.id, start: timing.start, bytes: timing.bytes, received_at: timing.received_at };
+      return answer;
+    }));
     try { await load_remote_site(); }
     catch (error) { prefetched.clear(); throw error; }
   }
@@ -4669,6 +4811,45 @@ async function download_project_file(room_id, path, root = 0) {
   if (media.blob) setTimeout(() => URL.revokeObjectURL(media.url), 60000);
 }
 
+/**
+ * Download one project folder, with everything under it, as a ZIP. Files are read one by one like single downloads;
+ * past FOLDER_DOWNLOAD_MAX_BYTES, or when one cannot be read, a file is listed in 未包含的文件.txt instead.
+ */
+async function download_project_folder(room_id, path, root = 0) {
+  const base = path ? `${path}/` : "", listed = [];
+  const walk = async folder => {
+    let offset = 0;
+    do {
+      const page = await read_room_files(room_id, folder, offset, "", root);
+      for (const entry of page.entries || []) {
+        if (entry.kind === "directory") await walk(entry.path);
+        else if (entry.kind === "file") listed.push(entry);
+      }
+      offset = page.next_offset;
+    } while (offset);
+  };
+  await walk(path);
+  // Another device reads every file through the relay and holds it all in memory, so it takes far less.
+  const limit = state.launch.available ? FOLDER_DOWNLOAD_MAX_BYTES : FOLDER_DOWNLOAD_RELAYED_MAX_BYTES;
+  const total = listed.reduce((sum, entry) => sum + (entry.size || 0), 0);
+  if (listed.length > FOLDER_DOWNLOAD_MAX_FILES || total > limit) {
+    throw new Error(t('这个文件夹有 {count} 个文件、共 {size}，超过一次下载的上限（{files} 个文件、{limit}）；请下载其中的子文件夹。',
+      { count: listed.length, size: attachment_size(total), files: FOLDER_DOWNLOAD_MAX_FILES, limit: attachment_size(limit) }));
+  }
+  const files = {}, omitted = [];
+  for (const [index, entry] of listed.entries()) {
+    const name = entry.path.startsWith(base) ? entry.path.slice(base.length) : entry.path;
+    try {
+      const media = await read_room_media(room_id, entry.path, root, () => {}, true);
+      files[name] = new Uint8Array(await (await fetch(media.url)).arrayBuffer());
+      if (media.blob) URL.revokeObjectURL(media.url);
+    } catch { omitted.push(name); }
+    if ((index + 1) % FOLDER_DOWNLOAD_PROGRESS_EVERY === 0) notify("info", t('已读取 {done} / {count} 个文件', { done: index + 1, count: listed.length }));
+  }
+  if (omitted.length) files["未包含的文件.txt"] = new TextEncoder().encode(`${omitted.join("\n")}\n`);
+  await window.discuss_backup.download_files(files, path.split("/").pop() || room_title(room_id));
+}
+
 /** A room's name for messages that list rooms by id. */
 function room_title(room_id) {
   return state.rooms.find((room) => room.id === room_id)?.title || room_id;
@@ -5079,6 +5260,12 @@ function write_create_image_generation(value) {
 function write_create_relay_rounds(value) {
   state.create_relay_rounds = value;
   write_create_preferences({ relay_rounds: value });
+  publish_view();
+}
+
+/** After how many days without activity the new room destroys itself (0 keeps it); chosen per room, never remembered. */
+function write_create_auto_destroy(value) {
+  state.create_auto_destroy = value;
   publish_view();
 }
 
@@ -6477,7 +6664,14 @@ async function flush_live_refresh() {
   try {
     // A refresh started meanwhile would discard the opening read, flashing an empty room before reading it all again.
     while (state.opening) await state.opening.catch(() => {});
-    await refresh_room({ room: full });
+    const read = shared_room_refresh(full);
+    try { await read.promise; }
+    finally {
+      if (read.joined) {
+        live_updates.dirty = true;
+        live_updates.full ||= full;
+      }
+    }
     if (full && state.observed_until !== null) { state.observed_until = null; publish_view(); }
     if (full) end_resuming();
   } catch (error) {
@@ -6720,7 +6914,8 @@ function view_snapshot() {
     [id, element(id) ? read_expert_inputs(id) : {}]));
   const sending_previews = room_sending_previews();
   return { room_source: { computer: computer_rooms_only(), signed_in: state.admin.logged_in, remote: state.remote_rooms, online: state.remote_online },
-    room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: shown_room(), archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, history_cards: state.history_cards, total: state.message_total,
+    room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: shown_room(), archive_view: state.archive_view, directory_sort: state.directory_sort, messages: receipt_messages(), history_cards: state.history_cards, total: state.message_total,
+    recipient_previews: [...recipient_previews.values()].filter(item => item.room_id === state.room?.id),
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     destroying: [...state.destroying.keys()], destructions: state.destructions,
@@ -6741,7 +6936,7 @@ function view_snapshot() {
       linked: Boolean(share_link(share_draft.room_id)), link: share_draft.link || null } : null,
     share_links: SHARE ? {} : share_links(), share_days: SHARE_DAYS,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
-    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_host_permissions: state.create_host_permissions, create_api_max_requests: state.create_api_max_requests, create_relay_rounds: state.create_relay_rounds ?? 0, create_image_generation: state.create_image_generation };
+    theme: document.documentElement.dataset.theme, fields, experts, launch: structuredClone(state.launch), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_host_permissions: state.create_host_permissions, create_api_max_requests: state.create_api_max_requests, create_auto_destroy: state.create_auto_destroy || 0, create_relay_rounds: state.create_relay_rounds ?? 0, create_image_generation: state.create_image_generation };
 }
 
 /** Update a shared draft using the same input events as the original controls; `publish: false` leaves the views to keep their own copy. */
@@ -7554,7 +7749,8 @@ async function backup_rooms({ ids, name }) {
     const snapshots = [];
     for (const id of ids) {
       const snapshot = await request_json(`/api/rooms/${encodeURIComponent(id)}/backup`);
-      await attach_local_members(snapshot, id);
+      // A batch export leaves drafts out: a room's may reach the per-room limit, and every room is held in memory at once.
+      await attach_local_members(snapshot, id, { drafts: false });
       snapshots.push({ ...snapshot, source_url: `${room_site()}/r/${encodeURIComponent(id)}` });
     }
     await window.discuss_backup.download_rooms_backup(snapshots, name, read_room_file);
@@ -7568,18 +7764,25 @@ async function backup_rooms({ ids, name }) {
 }
 
 /** Add this machine's member software and sessions to an owned room's backup, so importing it here resumes the same sessions. */
-async function attach_local_members(snapshot, room_id) {
+async function attach_local_members(snapshot, room_id, { drafts = true } = {}) {
   const token = localStorage.getItem(`discuss-access:${room_id}`);
   if (!token || !state.launch.available) return;
   try {
-    const result = await local_launch_request("room-profiles", { room_id, token });
+    // Drafts can be large; a read that fails (a relayed device's answer limit, say) leaves them out, saying why.
+    let result;
+    try { result = await local_launch_request("room-profiles", { room_id, token, drafts }); }
+    catch (error) {
+      result = await local_launch_request("room-profiles", { room_id, token });
+      result.drafts = { files: [], omitted: [t('草稿未能读取：{value1}', { value1: error.message })] };
+    }
     if (result.local_members) snapshot.local_members = result.local_members;
+    if (result.drafts) snapshot.local_drafts = result.drafts;
   } catch (error) { throw new Error(t('读取本机成员会话失败，未生成备份：{value1}', { value1: error.message })); }
 }
 
 /** The website copy of a backup: keep local data private and apply each adapter's restore policy. */
 function import_body(snapshot) {
-  const { local_members, ...body } = snapshot;
+  const { local_members, local_drafts, ...body } = snapshot;
   if (!local_members) return body;
   const manual = new Set(Object.entries(local_members.participants || {}).filter(([, profile]) => window.discuss_backup.adapter_profile(profile.adapter)?.restore_manual).map(([name]) => name));
   const room_members = (body.tables?.room_members || []).map(row => manual.has(row.name) && row.status !== "removed"
@@ -7659,7 +7862,7 @@ async function execute_view_action(name, value) {
   if (!["refresh", "create"].includes(name)) state.navigation_version++;
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
-    archives: toggle_archives, backup: backup_room, backup_rooms, share_prepare, share_room, share_cancel, share_publish, share_include_files, share_revoke, share_renew, share_copy, import_rooms, manage_channel, retry_destruction, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
+    archives: toggle_archives, backup: backup_room, backup_rooms, share_prepare, share_room, share_cancel, share_publish, share_include_files, share_revoke, share_renew, share_copy, import_rooms, manage_channel, retry_destruction, destroy_all_rooms, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_from_composer(event), discard_sending, retry_sending, choose_attachments, remove_attachment, preview_attachment,
     create: ({ folder_id, accepted, rejected }) => submit_room(event, folder_id, { accepted, rejected }), quick_create: quick_create_room, welcome: open_welcome,
     save_context: () => save_context(event), save_topic: () => save_topic(event),
@@ -7696,14 +7899,14 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_download_link, attachment_size, attachment_file_icon, add_attachments, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
-  reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,
+  reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_auto_destroy, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },
   device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, platform_identity: name => PLATFORM_IDENTITIES[name], display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, room_title, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

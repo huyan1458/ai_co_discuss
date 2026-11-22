@@ -6,6 +6,7 @@ import { LEVELS, LEVEL_SHORT, awaiting_member, copy_seat_link, external_ai, exte
  */
 import { computed, inject, ref, watch } from "vue";
 import ApiRequestsField from "./ApiRequestsField.vue";
+import AutoDestroyField from "./AutoDestroyField.vue";
 import ImageService from "./ImageService.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
 import WebSearchSettings from "./WebSearchSettings.vue";
@@ -327,7 +328,6 @@ async function save_description({ text, label, as_template }) {
 const reading = computed(() => `${view.value.room_site}/r/${room.value.id}`);
 // The room's directory entry carries its auto-destroy setting and when its count started (last activity or the setting).
 const listed = computed(() => view.value.rooms.find((item) => item.id === room.value.id) || null);
-const destroy_options = [0, 1, 7, 30].map((days) => ({ value: days, label: days ? t("无活动 {days} 天后销毁", { days }) : t("长期保留") }));
 const HOUR_MS = 3_600_000;
 /** How long the room has left before it destroys itself, counted from its latest message; '' when it is kept. */
 const destroy_left = computed(() => {
@@ -466,7 +466,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <ApiRequestsField :model-value="requests_shown" :disabled="!view.access?.can_manage || room.archived || saving_requests" @update:model-value="save_requests" /></dd></div>
         <div v-if="!free"><dt>{{ t("逐人追问") }}</dt><dd>{{ room.named_followup ? t('开启：主持人每轮给每位专家写针对性追问') : t('关闭：首轮后请专家回应上一轮观点') }}</dd></div>
         <div><dt>{{ t("自动销毁") }}</dt><dd class="overview-destroy">
-          <USelect :model-value="listed?.destroy_after_days || 0" :items="destroy_options" size="sm" :aria-label="t('自动销毁')" :disabled="!view.access?.can_manage || room.archived" @update:model-value="act('manage_channel', { id: room.id, action: 'auto-destroy', days: $event })" />
+          <AutoDestroyField :model-value="listed?.destroy_after_days || 0" :disabled="!view.access?.can_manage || room.archived" @update:model-value="act('manage_channel', { id: room.id, action: 'auto-destroy', days: $event })" />
           <span class="overview-muted">{{ destroy_left || t("可随时在左侧房间菜单中销毁") }}</span></dd></div>
         <div><dt>{{ t("阅读地址") }}</dt><dd class="overview-address"><code>{{ reading }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" :aria-label="t('复制阅读地址')" @click="act('copy', reading)" /></dd></div>
         <div v-if="created"><dt>{{ t("创建时间") }}</dt><dd>{{ created }}</dd></div>

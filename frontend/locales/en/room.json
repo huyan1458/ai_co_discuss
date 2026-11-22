@@ -593,8 +593,6 @@
   "{value1} 张图片": "{value1} images",
   "{value1} 个附件": "{value1} attachments",
   "编辑消息": "Edit message",
-  "关闭排队": "Disable queue",
-  "开启排队": "Enable queue",
   "排队消息": "Queued messages",
   "已暂停排队：你停止了运行": "Queue paused: you stopped the run",
   "拖动调整顺序（手机上长按）": "Drag to reorder (long-press on mobile)",

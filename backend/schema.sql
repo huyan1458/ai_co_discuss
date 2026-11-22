@@ -473,6 +473,13 @@ CREATE TABLE IF NOT EXISTS group_routes (
     request_id INTEGER NOT NULL,
     action TEXT NOT NULL CHECK(action IN ('all','sequential','host'))
 );
+-- An @everyone message answered at once in a room with a host: once every answer ends, the host is handed it once to
+-- sum up and arrange what comes next. The row goes when that hand-over is decided.
+CREATE TABLE IF NOT EXISTS group_summaries (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    chain_id INTEGER NOT NULL
+);
 -- Visible record of each smart-scheduling decision in a discussion; it is not a message and moves no round or floor.
 CREATE TABLE IF NOT EXISTS scheduler_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

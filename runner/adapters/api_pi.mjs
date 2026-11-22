@@ -143,7 +143,8 @@ function remove_session(session_id, options = {}) {
   return { removed: remove_session_files([session_path(session_id, options)]), kept: [] };
 }
 
-export const session = { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings, remove: remove_session };
+export const session = { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings, remove: remove_session,
+  history: ({ home = homedir() } = {}) => [pi_home(join(home, '.codiscuss')).sessions] };
 
 /** Text of a tool result's content blocks. */
 function result_text(result) {

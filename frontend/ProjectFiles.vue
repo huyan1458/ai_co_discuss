@@ -335,6 +335,13 @@ async function upload_files(files) {
   }
 }
 
+/** Save one folder, with everything under it, to this device as a ZIP. */
+async function download_folder(entry) {
+  bridge.notify("info", t('正在打包“{name}”，完成后浏览器会开始下载。', { name: entry.name }));
+  try { await bridge.download_project_folder(room_id, entry.path, root.value); }
+  catch (error) { bridge.notify("error", t('下载失败：{value1}', { value1: error.message })); }
+}
+
 /** Save one file to this device. */
 async function download(entry) {
   try { await bridge.download_project_file(room_id, entry.path, root.value); }
@@ -367,6 +374,7 @@ async function remove_root(item) {
 function entry_menu(entry) {
   const items = [];
   if (entry.kind === "file") items.push({ label: t('下载'), icon: "i-lucide-download", onSelect: () => download(entry) });
+  if (entry.kind === "directory") items.push({ label: t('下载文件夹'), icon: "i-lucide-download", onSelect: () => download_folder(entry) });
   items.push({ label: t('重命名'), icon: "i-lucide-pencil", onSelect: () => start_naming("rename", entry) });
   items.push({ label: t('复制'), icon: "i-lucide-copy", onSelect: () => take(entry, "copy") });
   items.push({ label: t('剪切'), icon: "i-lucide-scissors", onSelect: () => take(entry, "move") });

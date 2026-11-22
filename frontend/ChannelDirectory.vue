@@ -23,7 +23,7 @@ import { use_invited_rooms } from "./external-members.js";
 import { locale, t } from "./i18n.js";
 import { draw_share_card, share_card_blob } from "./share-card.js";
 
-const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives"]);
+const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions"]);
 const { view, bridge, act, pending } = inject("discussion");
 // While the workflow page or an invited room fills the middle, no room row is shown as the open one.
 const { page_open: workflow_library_open } = use_workflow_library();
@@ -52,6 +52,7 @@ const directory_actions = computed(() => [
   { label: t("导入房间…"), icon: "i-lucide-download", disabled: view.value.backup_pending, onSelect: () => choose_import_target(null) },
   { label: t("导出全部房间"), icon: "i-lucide-upload", disabled: view.value.backup_pending || !view.value.rooms.length,
     onSelect: () => act("backup_rooms", { ids: view.value.rooms.map((room) => room.id), name: t("全部房间") }) },
+  { label: t("销毁记录…"), icon: "i-lucide-flame", onSelect: () => emit("destructions") },
 ]);
 const import_input = ref(null);
 const import_open = ref(false);

@@ -459,6 +459,12 @@ export function session_path(session_id, env = process.env, home = homedir()) {
  * Remove a conversation agy or the App stored under `root`: its database, artifact folder, annotations and implicit
  * context. The shared conversation summaries database is reported as kept.
  */
+/** Every conversation agy or the App keeps under `root`, with the shared summaries; login and settings stay. */
+export function conversation_history(root) {
+  return ['conversations', 'brain', 'annotations', 'implicit', 'presence', 'history.jsonl', 'conversation_summaries.db', 'conversation_summaries.db-wal',
+    'conversation_summaries.db-shm', 'agyhub_summaries_proto.pb', 'jetbox_summaries_proto.pb'].map(name => join(root, name));
+}
+
 export function remove_conversation(root, session_id) {
   const database = join(root, 'conversations', `${session_id}.db`);
   const removed = remove_session_files([database, `${database}-wal`, `${database}-shm`, join(root, 'brain', session_id),
@@ -735,7 +741,8 @@ export const antigravity_cli = {
   invocation, lifecycle, events, failure_class: reason => agy_failure_class(reason),
   session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings,
     list: list_sessions, preview: preview_session,
-    remove: (id, { home = homedir() } = {}) => remove_conversation(join(home, '.gemini', 'antigravity-cli'), id) },
+    remove: (id, { home = homedir() } = {}) => remove_conversation(join(home, '.gemini', 'antigravity-cli'), id),
+    history: ({ home = homedir() } = {}) => conversation_history(join(home, '.gemini', 'antigravity-cli')) },
   models: { list: models, defaults, defaults_stamp },
   skills: agy_skills,
 };

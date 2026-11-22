@@ -9,20 +9,22 @@ Message a member or host, understand main and branch work and assignment labels,
 - **Mention members.** Type `@` in the composer at the bottom of the page, choose one or more members, enter a task, and press `Enter` to send. Use `Shift+Enter` for a new line. Mentioned members work in parallel. You can also type `@` to find and quote files or folders in a project directory.
 - **Use a member’s local skills.** After selecting `@member`, type `/` to find skills installed in that member’s local AI app. Click a result or press `Enter` or `Tab` to insert it into the draft. Typing `/` on its own lists modes, workflows, and platform skills.
 - **Send without a mention.** The host routes messages without an `@` mention. If the room has only one member, the message goes directly to it. With smart scheduling enabled, a message clearly addressed to one member may go directly to that member.
-- **Ask all members.** Type `@all` to have everyone present answer in parallel. Type `@all-seq` to have members answer in the order shown in the sidebar’s “Speaking order”.
+- **Ask all members.** Type `@all` to have everyone present answer in parallel. If the room has a host, it first answers on its own like everyone else, then, once all answers are in, sums up where they agree and differ and arranges follow-up work if needed. Type `@all-seq` to have members answer in the order shown in the sidebar’s “Speaking order”.
 - **Reply, search, and filter.** Use “Reply” in a message menu to link a reply to the original. Use “View original” to read its full text and summary. At the top of the room, “Search messages” searches the conversation and “Filter messages and cards” filters by author, host, mentions, or card type.
 
 - **Send several messages in a row.** You can send the next message while the previous one still shows “Sending…”. If the room is busy and a message is expected to queue, it appears immediately above the composer. The confirmed queue entry takes its place. The browser submits messages in order and continues if one fails. The failed card keeps the original text and attachments so you can resend or discard it. Sending and network retries continue if you switch rooms. Return to the original room to find its failed cards. Refreshing or closing the page clears unsent messages held by that page.
+
+Once the site returns a message number, each known recipient appears below the message with their avatar, name and waiting status. The same row shows their actual work status when the room refreshes. If smart scheduling needs to choose the recipient, the page shows scheduling progress.
 
 ### 2. Understand main lines, branches, and assignment labels
 
 Room work can run on several lines in parallel. Labels at the top of a card show which line the work belongs to and what should happen when it finishes.
 
 - **Main line and branches.** The host’s speaking order, including a sequential handoff, and your `@all-seq` messages are on the **main line**. You or the host directly mentioning a member creates a **branch**. A branch does not use a place in the speaking order and can run alongside the main line.
-  - With message queuing enabled, a directly mentioned member starts immediately when idle. If busy, its request waits in the queue until it is free. If one message mentions both idle and busy members, idle members start at once while the busy members’ work waits.
+  - A directly mentioned member starts immediately when idle. If busy, its request waits in the queue until it is free. If one message mentions both idle and busy members, idle members start at once while the busy members’ work waits.
   - When a main-line member’s turn arrives, it waits for that member to finish its active branch work.
-  - With message queuing enabled, your unmentioned messages, `@all`, and `@all-seq` wait until the room is idle, then go out in order. Background work assigned by the host does not hold up your new messages.
-- **Where things sit on a card.** Every member card has, from top to bottom: the header, the body, what it delivers (answer summary, attachments, delivered files) and the run’s record (progress notes with step count, file changes, refused operations). The left of the header says who: the name, labels, and the model and effort this run used. The right says how this one went: status, time, number and duration, with the duration always last. A coloured status only means something went wrong (red for failed; amber for stopped, voided or skipped), and nothing is shown when all is well; on your own messages, the right shows how each member is handling it. On a phone the header is laid out the same way, and the model moves under the name when it does not fit; the buttons for retracting, editing, private chat and the like sit at the bottom right of the card. Stop and retry sit at the right end of the line they act on.
+  - Your unmentioned messages, `@all`, and `@all-seq` wait until the room is idle, then go out in order. Background work assigned by the host does not hold up your new messages.
+- **Where things sit on a card.** Every member card has, from top to bottom: the header, the body, what it delivers (answer summary, attachments, delivered files) and the run’s record (progress notes with step count, file changes, refused operations). The left of the header says who: the name, labels, and the model and effort this run used. The right says how this one went: status, time, number and duration, with the duration always last. A coloured status only means something went wrong (red for failed; amber for stopped, voided or skipped), and nothing is shown when all is well; on your own messages, the right shows how each member is handling it. On a phone, the buttons for retracting, editing, private chat and the like sit at the top right of the card, level with the name; the model, status, time, number and duration run from the left under the name. Stop and retry sit at the right end of the line they act on.
 - **Card labels.** Where the card came from comes first, then where the work goes next. The usual channels (own message, CLI, API) are no longer labelled; only rare sources such as sent on someone’s behalf, proactive messages and auto-captured answers are.
   - “Host” identifies a message from the current host, host notes included.
   - “Main line · step {n}” is a host-arranged order. “Main line · #{n} in turn” is `@all-seq`.
@@ -38,13 +40,13 @@ Room work can run on several lines in parallel. Labels at the top of a card show
 
 ### 3. Manage queued messages
 
-With queuing enabled, new messages wait above the composer while the intended member or room is busy. They are sent when the recipient or room becomes available.
+New messages wait above the composer while the intended member or room is busy. They are sent when the recipient or room becomes available.
 
 - **Send now.** Select “Send now” on a queued item. If its recipient is busy, the service first interrupts its current turn, then sends the new message along with the interruption. A member that cannot be interrupted stays in the queue.
 - **Edit or delete.** In a queued, unsent item’s menu, select “Edit message” to return it to the composer for editing, or delete it.
 - **Reorder.** Drag queued items. On a phone, press and hold an item to move it.
 - **Pause and resume.** Selecting “Stop all” or stopping the service pauses the queue. It shows “Queue paused: you stopped the run”. Select “Continue” to resume. A failed message pauses the queue and shows the reason. Select “Retry”, edit, or delete the message to continue.
-- **Turn queuing on or off.** In a queued item’s menu, choose “Disable queue” or “Enable queue”. This setting applies to the entire site.
+- Queuing is always on and has no switch; to have a busy member take a message right away, use “Send now”.
 
 ### 4. Stop, retry, withdraw, edit, or rewind
 

@@ -178,12 +178,15 @@ function configured_key(key_file = process.env[KEY_FILE_VARIABLE]) {
  *
  * When this service runs a protected instance (its environment names the key file), every request to a loopback address
  * goes through the handshake on a verified connection; other addresses, and every request of an unprotected service,
- * use the ordinary `fetch`. The answer is a standard Response, so callers read it the same way either way.
+ * use the ordinary `fetch`. `on_request` runs just before sending the HTTP request, after any handshake.
  */
-export async function site_fetch(url, init = {}, { key_file } = {}) {
+export async function site_fetch(url, init = {}, { key_file, on_request } = {}) {
   const target = new URL(url);
   const key = LOOPBACK_HOSTS.has(target.hostname) ? configured_key(key_file || process.env[KEY_FILE_VARIABLE] || default_key_file(target)) : '';
-  if (!key) return fetch(url, init);
+  if (!key) {
+    on_request?.();
+    return fetch(url, init);
+  }
   const port = Number(target.port || 80);
   const { socket, header } = await verified_connection(port, key, { signal: init.signal });
   const headers = { ...Object.fromEntries(new Headers(init.headers || {})), host: target.host, 'x-codiscuss-entry': header };
@@ -203,6 +206,7 @@ export async function site_fetch(url, init = {}, { key_file } = {}) {
       if (init.signal.aborted) request.destroy(init.signal.reason);
       init.signal.addEventListener('abort', () => request.destroy(init.signal.reason), { once: true });
     }
+    on_request?.();
     request.end(body || undefined);
   });
 }

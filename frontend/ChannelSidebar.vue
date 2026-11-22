@@ -11,7 +11,7 @@ import { use_workflow_library, workflow_problem } from "./workflow-library.js";
 import { t } from "./i18n.js";
 
 /** The room sidebar, shared by the docked desktop column and the tablet and phone drawer. */
-const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "workflows", "invited", "settings"]);
+const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions", "workflows", "invited", "settings"]);
 const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
 const library = use_workflow_library();
@@ -46,7 +46,7 @@ const account_status = computed(() => {
       <span class="channel-brand-text"><strong>{{ t("共议") }}</strong><span>AI CoDiscuss · v{{ app_version }}</span></span>
     </header>
     <div v-keep-reading class="channel-sidebar-content">
-      <ChannelDirectory @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" />
+      <ChannelDirectory @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" @destructions="emit('destructions')" />
       <!-- Rooms on other computers this computer's AIs were invited to: their own section, opened in the middle like a room. -->
       <InvitedRooms @open="emit('invited', $event)" />
       <!-- The workflow library belongs to this computer, not a room: its own section below the rooms; a row opens the workflow page in the middle. -->

@@ -287,7 +287,7 @@ function attachment_fixture() {
   let identifier = 0, fail = true;
   const context = vm.createContext({ state, element, SEND_RETRY_MS: [2000, 5000, 10000], setTimeout: (callback) => callback(), MAX_MESSAGE_LENGTH: 30000, MAX_SUMMARY_LENGTH: 1000,
     MAX_MESSAGE_ATTACHMENTS: 10, MAX_ATTACHMENT_BYTES: 20 * 1024 * 1024, URLSearchParams,
-    new_submission_id: () => String(++identifier), escape_html: text => text, relay_files: new Map(),
+    new_submission_id: () => String(++identifier), escape_html: text => text, relay_files: new Map(), prefetched: new Map(),
     URL: { createObjectURL: () => "blob:test", revokeObjectURL: url => revoked.push(url) },
     localStorage: { getItem: () => null }, admin_headers: () => ({}), publish_view() {}, show_toast() {}, cancel_reply() {},
     notify: (level, message) => notified.push([level, message]),
@@ -369,6 +369,57 @@ test("consecutive sends survive a room switch and retry in order without changin
   assert.equal(requests.at(-1).id, requests[0].id);
   assert.equal(element("message-input").value, "草稿");
   assert.equal(state.failed_sends.length, 0);
+});
+
+test("a concurrent push lets the receipt read replace the member card before reading again", async () => {
+  const { context, state, element } = attachment_fixture();
+  const member = { id: 3, name: "Codex", access: "runner", status: "active" };
+  state.room.free = { members: [member], requests: [] };
+  state.refresh_version = 1;
+  const message = { id: 8, created_at: new Date().toISOString() };
+  const room_read = Promise.withResolvers(), started = Promise.withResolvers();
+  Object.assign(context, { ROOM_TIMING_ENABLED: false, display_name: name => name, room_views: new Map(),
+    patch_directory_room() {}, cache_room_entry() {}, merge_room_folder: room => room, render_room() {}, load_room_models() {},
+    request_json: async (_url, payload) => {
+      if (payload) return { message };
+      started.resolve();
+      return room_read.promise;
+    },
+    computed: getter => ({ get value() { return getter(); } }), line_marks: () => ({}),
+    room: { get value() { return state.room; } },
+    view: { get value() { return { recipient_previews: vm.runInContext("[...recipient_previews.values()]", context) }; } }
+  });
+  vm.runInContext(source.slice(source.indexOf("async function refresh_room_content("), source.indexOf("/** Refresh a room with version")), context);
+  let reads = 0;
+  context.refresh_room = ({ room }) => {
+    assert.equal(room, true);
+    reads++;
+    return context.refresh_room_content("one", ++state.refresh_version, {});
+  };
+  let scheduled;
+  context.UPDATE_BATCH_MS = 1;
+  context.setTimeout = callback => { scheduled = callback; return 1; };
+  vm.runInContext(source.slice(source.indexOf("function queue_live_refresh("), source.indexOf("/** Keep a low-frequency safety read")), context);
+  Object.assign(context, { live_updates: { enabled: true, full: true }, document: { hidden: false }, end_resuming() {} });
+  vm.runInContext(discussion_source.slice(discussion_source.indexOf("const QUEUED_PURPOSES"), discussion_source.indexOf("const free_now")), context);
+  const cards = () => vm.runInContext("free_queued.value", context);
+  element("message-input").value = "@Codex 请处理";
+  const sending = context.send_message({ preventDefault() {} });
+  assert.equal(cards().length, 0);
+  await started.promise;
+  const push = context.flush_live_refresh();
+  assert.equal(reads, 1);
+  assert.equal(context.receipt_messages()[0].id, message.id);
+  assert.deepEqual(Array.from(cards(), card => [card.author, card.text]), [["Codex", "等待开始…"]]);
+  room_read.resolve({ ...state.room, free: { members: [member], requests: [
+    { id: 12, status: "pending", purpose: "ask", message_id: message.id, member_id: member.id }
+  ] } });
+  await Promise.all([sending, push]);
+  assert.deepEqual(Array.from(cards(), card => [card.author, card.id, card.layout_after]), [["Codex", "queued-12", message.id]]);
+  assert.equal(context.view.value.recipient_previews.length, 0);
+  assert.equal(reads, 1);
+  await scheduled();
+  assert.equal(reads, 2);
 });
 
 test("a busy room previews consecutive sends in the queue and reconciles push and POST receipts", async () => {

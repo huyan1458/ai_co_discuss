@@ -28,6 +28,10 @@ const DESTRUCTION_REPORT_RETRY_MS = 10_000;
 // A destroyed room's member processes are asked to stop first; its sessions are removed after this wait, retried while held.
 const DESTRUCTION_SESSION_WAIT_MS = 3000;
 const DESTRUCTION_SESSION_TRIES = 3;
+// How often sessions a destroyed room left held are tried again, and where those rooms are kept until they clear.
+const DESTRUCTION_RETRY_MS = 10 * 60_000;
+const DESTRUCTION_RETRIES_FILE = 'destruction-retries.json';
+const DESTRUCTION_RETRY_DAYS = 7;
 const POLL_MS = 2000;
 // The service loop only checks which rooms are due; each room keeps its own interval, so a short loop costs no site requests.
 const LOOP_MS = 500;
@@ -451,6 +455,7 @@ export class DiscussionService {
    * waits for them; `wait: false` returns at once, so a slow remote site never delays the other rooms.
    */
   async tick({ wait = true } = {}) {
+    this.retry_destructions().catch(error => this.log(`销毁重试失败：${error.message}`));
     const configs = read_registry(this.home);
     for (const [path, worker] of this.workers) {
       if (!configs.includes(path)) { await worker.busy; await worker.close(true); this.workers.delete(path); }
@@ -596,6 +601,14 @@ export class DiscussionService {
     const record = config ? await api(config, '/destruction').catch(() => null) : null;
     let items = [];
     if (record?.sessions) items = await this.destroy_sessions(config, path, record.sessions);
+    // Sessions still held are tried again later from this record, since the room's own folder goes below.
+    if (items.some(item => item.kind === 'sessions' && item.state === 'failed')) {
+      // Only what finding the sessions needs: each member's software and the session it was invited with.
+      const participants = Object.fromEntries(Object.entries(config.participants || {})
+        .map(([name, profile]) => [name, { adapter: profile.adapter, ...(profile.session_id ? { session_id: profile.session_id } : {}) }]));
+      save_destruction_retry(this.home, { site: config.site, room: config.room, token: config.token, participants,
+        executed: record.sessions, items, since: Date.now() });
+    }
     try { unregister_room(this.home, path); } catch { /* Already removed by another command. */ }
     // Its runtime, task files and answer drafts serve no one now; a file still held is left to the periodic sweep.
     try { remove_room_files(this.home, path, directory); } catch (error) { this.log(`${worker.state.room || path}: 本机文件未能删除，稍后清理：${error.message}`); }
@@ -605,22 +618,40 @@ export class DiscussionService {
     this.log(`${worker.state.site || ''}/${worker.state.room || path}: 房间已在网站删除，已撤销登记并删除本机文件`);
     if (record?.sessions) this.report_destruction(config, items);
   }
+  /** Retry the sessions destroyed rooms still left held, now and then and once at start; report each room that clears. */
+  async retry_destructions() {
+    if (Date.now() - (this.retried_at || 0) < DESTRUCTION_RETRY_MS) return;
+    this.retried_at = Date.now();
+    for (const pending of read_destruction_retries(this.home)) {
+      // A session held for days (open in the user's own window, say) is given up on; its receipt keeps saying not deleted.
+      if (Date.now() - (pending.since || 0) > DESTRUCTION_RETRY_DAYS * 24 * 60 * 60_000) {
+        this.log(`${pending.room}: 销毁后仍有会话记录删不掉，已停止重试`);
+        drop_destruction_retry(this.home, pending);
+        continue;
+      }
+      const config = { site: pending.site, room: pending.room, token: pending.token, participants: pending.participants };
+      const fresh = destroy_room_sessions(config, sessions_in_use(this.home, ''), {}, pending.executed);
+      // Earlier removals stay counted: the failed item carries them, and the counts add up.
+      const items = merge_destruction_items(pending.items, fresh);
+      if (items.some(item => item.state === 'failed')) { save_destruction_retry(this.home, { ...pending, items }); continue; }
+      try { await api(config, '/destruction', { items }); }
+      catch (error) { if (!/^HTTP 40[34]/.test(error.message)) { this.log(`${pending.room}: 销毁结果未能上报：${error.message}`); continue; } }
+      drop_destruction_retry(this.home, pending);
+    }
+  }
   /** Remove a destroyed room's sessions once its processes have had time to exit, retrying files still held. */
   async destroy_sessions(config, path, executed) {
     // A session removed in an earlier attempt is gone in the next one, so removed counts add up across attempts.
-    const merged = new Map();
+    let merged = [];
     for (let attempt = 0; attempt < DESTRUCTION_SESSION_TRIES; attempt += 1) {
       await sleep(DESTRUCTION_SESSION_WAIT_MS);
       let items;
       try { items = destroy_room_sessions(config, sessions_in_use(this.home, path), {}, executed); }
       catch (error) { this.log(`${config.room}: 会话记录未能删除：${error.message}`); items = [{ kind: 'sessions', state: 'failed', count: 0 }]; }
-      for (const item of items) {
-        const key = `${item.kind}:${item.adapter || ''}:${item.detail || ''}`, previous = merged.get(key);
-        merged.set(key, item.kind === 'sessions' && previous ? { ...item, count: (previous.count || 0) + (item.count || 0) } : item);
-      }
+      merged = merge_destruction_items(merged, items);
       if (!items.some(item => item.state === 'failed')) break;
     }
-    return [...merged.values()];
+    return merged;
   }
   /** Tell the website what this computer removed for a destroyed room; a room deleted before receipts existed has no record. */
   async report_destruction(config, items) {
@@ -664,6 +695,32 @@ function changed_rooms(frame) {
   const data = frame.match(/^data: (.*)$/m)?.[1];
   try { const rooms = JSON.parse(data).rooms; return Array.isArray(rooms) && rooms.length ? rooms : null; }
   catch { return null; }
+}
+
+/** Destroyed rooms whose sessions are still to be removed here. */
+export function read_destruction_retries(home) {
+  try { return JSON.parse(readFileSync(join(home, DESTRUCTION_RETRIES_FILE), 'utf8')).rooms || []; } catch { return []; }
+}
+
+/** Keep (or update) one destroyed room to retry, by site and room. */
+function save_destruction_retry(home, pending) {
+  const rooms = read_destruction_retries(home).filter(item => item.site !== pending.site || item.room !== pending.room);
+  atomic_json(join(home, DESTRUCTION_RETRIES_FILE), { rooms: [...rooms, pending] });
+}
+
+/** Forget one destroyed room once its sessions are gone and the website knows. */
+function drop_destruction_retry(home, pending) {
+  atomic_json(join(home, DESTRUCTION_RETRIES_FILE), { rooms: read_destruction_retries(home).filter(item => item.site !== pending.site || item.room !== pending.room) });
+}
+
+/** Combine receipt items of two attempts: removed session counts add up, everything else takes the later state. */
+export function merge_destruction_items(earlier, later) {
+  const merged = new Map(earlier.map(item => [`${item.kind}:${item.adapter || ''}:${item.detail || ''}`, item]));
+  for (const item of later) {
+    const key = `${item.kind}:${item.adapter || ''}:${item.detail || ''}`, previous = merged.get(key);
+    merged.set(key, item.kind === 'sessions' && previous ? { ...item, count: (previous.count || 0) + (item.count || 0) } : item);
+  }
+  return [...merged.values()];
 }
 
 /** Session IDs the other rooms registered here use, as invited or as bound, which a destroyed room must leave alone. */

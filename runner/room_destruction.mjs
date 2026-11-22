@@ -2,7 +2,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { remove_session } from './adapters/index.mjs';
+import { remove_session, session_holder } from './adapters/index.mjs';
 
 /** The session each member of a room was bound to, from the room's runtime records; empty when it never ran here. */
 export function room_bindings(directory) {
@@ -19,32 +19,44 @@ export function room_bindings(directory) {
  * Remove the AI sessions a destroyed room created on this computer and describe the result as receipt items.
  *
  * A session the member was invited with (borrowed from the user), one another registered room still uses, or one the
- * software's own window owns is kept and counted as kept: it was never only this room's.
+ * software's own window owns is kept and counted as kept: it was never only this room's. Each session is removed by the
+ * software that actually holds it, so a member whose software changed, or one removed from the room, is covered too;
+ * a removed member that joined with a session of the user's keeps all of them, as its original can no longer be told apart.
  *
  * @param {object} config The room's validated configuration (`participants`, `directory`).
  * @param {Set<string>} used Session IDs other registered rooms on this computer use.
  * @param {object} options `env` and `home` of the software's user, for tests.
- * @param {Object<string, string[]>} executed Every session ID each member ran in, from the website: a rewind rebinds a
- *   member to a new session and leaves the earlier one behind.
+ * @param {{name: string, ids: string[], borrowed: boolean, removed: boolean}[]} executed Every session ID each member
+ *   (one entry per member, so a removed member and a newcomer of the same name stay apart) ran in, from the website
+ *   (a rewind rebinds a member to a new session and leaves the earlier one behind), whether it joined with a session of
+ *   the user's, and whether it was removed.
  * @returns {object[]} Receipt items `{kind, state, adapter?, count?, detail?}` for the website.
  */
-export function destroy_room_sessions(config, used, options = {}, executed = {}) {
+export function destroy_room_sessions(config, used, options = {}, executed = []) {
   const bound = room_bindings(config.directory);
   const by_adapter = new Map(), stores = new Set();
   let kept = 0;
-  const candidates = Object.entries(config.participants || {}).flatMap(([name, profile]) =>
-    [...new Set([bound[name], ...(executed[name] || [])].filter(Boolean))].map(session_id => [profile, session_id]));
-  for (const [profile, session_id] of candidates) {
-    if (!profile?.adapter) continue;
-    if (session_id === profile.session_id || used.has(session_id)) { kept += 1; continue; }
-    const result = remove_session(profile.adapter, session_id, options);
+  const participants = config.participants || {};
+  // The present members' bindings, then each member's executed sessions; a removed member answers to no profile.
+  const candidates = [...Object.entries(participants).filter(([name]) => bound[name]).map(([name, profile]) => ({ profile, session_id: bound[name], borrowed: false })),
+    ...(Array.isArray(executed) ? executed : []).flatMap(entry => entry.ids.map(session_id =>
+      ({ profile: entry.removed ? undefined : participants[entry.name], session_id, borrowed: entry.removed && entry.borrowed })))];
+  const seen = new Set();
+  for (const { profile, session_id, borrowed } of candidates) {
+    if (seen.has(session_id)) continue;
+    seen.add(session_id);
+    const adapter = session_holder(session_id, profile?.adapter, options);
+    if (!adapter) continue;
+    // A removed member that joined with the user's session may have worked in that original itself: all of it stays.
+    if (session_id === profile?.session_id || used.has(session_id) || borrowed) { kept += 1; continue; }
+    const result = remove_session(adapter, session_id, options);
     if (result.state === 'kept' || result.state === 'unsupported') { kept += 1; continue; }
     // A session that never reached this computer, or is already gone, has nothing to count.
     if (result.state === 'deleted' && !result.removed) continue;
-    const entry = by_adapter.get(profile.adapter) || { deleted: 0, failed: 0 };
+    const entry = by_adapter.get(adapter) || { deleted: 0, failed: 0 };
     entry[result.state === 'failed' ? 'failed' : 'deleted'] += 1;
-    by_adapter.set(profile.adapter, entry);
-    for (const store of result.kept || []) stores.add(`${profile.adapter}:${store}`);
+    by_adapter.set(adapter, entry);
+    for (const store of result.kept || []) stores.add(`${adapter}:${store}`);
   }
   const items = [...by_adapter].map(([adapter, entry]) => ({ kind: 'sessions', adapter, state: entry.failed ? 'failed' : 'deleted',
     count: entry.deleted }));

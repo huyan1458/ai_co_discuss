@@ -1,7 +1,7 @@
 /** Shared launch configuration for an existing AI conversation and the local website. */
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, win32 } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -11,12 +11,14 @@ import { parseArgs } from 'node:util';
 
 import { account_projects, account_space, create_or_restore_account_project, draft_folder, hide_account_projects, listed_account_projects } from './account_space.mjs';
 import { atomic_json } from './files.mjs';
+import { ISOLATED_ACCOUNT_VARIABLE } from './os_users.mjs';
+import { read_store } from './external_client.mjs';
 import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, project_root, read_only_enforced, read_project_files, read_project_folders, room_directories, search_project_roots } from './project_files.mjs';
 import { delete_entry, make_folder, paste_entry, read_text, RecycleArea, rename_entry, save_text, upload_part } from './project_manage.mjs';
 import { guard_remote_request, list_remote_directories, remote_allows, remote_roots } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
-import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_preview, session_settings, software_defaults, software_defaults_stamp, software_effort, software_models, software_sessions, software_skills } from './adapters/index.mjs';
+import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_preview, session_settings, software_defaults, software_defaults_stamp, software_effort, software_models, software_sessions, software_skills, wipe_software_histories } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_capabilities, adapter_profile, DEFAULT_API_MAX_REQUESTS, inherited_access, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, managed_api_keys, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
@@ -63,6 +65,8 @@ const PROFILE_FIELDS = ['adapter', 'executable', 'model', 'effort', 'source_thre
 const LEGACY_PROFILE_FIELDS = ['image_model'];
 const MAX_MINUTES = 1440;
 const SESSION_ID_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
+// How much of a room's draft folders an export carries; files past it are listed by name instead.
+const DRAFT_EXPORT_MAX_BYTES = 50 * 1024 * 1024;
 const LOCAL_MEMBERS_FORMAT = 'ai-codiscuss-local-members';
 // Reading the inbox proves the owner credential without transferring any messages.
 const CONFIG_APPLY_TIMEOUT_MS = 6000;
@@ -1054,6 +1058,9 @@ export function participant_profile(name, defaults, input, current_host) {
   const { session_id: ignored_session, ...inherited } = name === platform ? {} : input.participants?.[platform] || {};
   const saved = { ...defaults[platform], ...(name === platform ? {} : defaults[name]) };
   if (input.without_saved_tools) delete saved.allowed_tools;
+  // An adopted session keeps its own model and effort, and its adapter may differ from the saved one (App vs CLI),
+  // so saved values that adapter rejects must not be validated against it.
+  if (input.adopt) for (const field of ['model', 'effort', 'allowed_tools', 'system_prompt']) delete saved[field];
   const profile = { ...saved, ...inherited, ...input.participants?.[name] };
   for (const field of ['cwd', 'model', 'effort', 'project_name', 'project_id', 'project_access']) if (profile[field] === '') delete profile[field];
   validate_profile(name, profile, true);
@@ -1449,6 +1456,52 @@ function registered_room_path(home, site, room_id) {
   return paths[0] || null;
 }
 
+/**
+ * The files members wrote in a room's draft folders, which go when the room is destroyed: `{files: [{path, data}],
+ * omitted: [path]}` with base64 contents up to DRAFT_EXPORT_MAX_BYTES, paths relative to the drafts and '/'-separated.
+ */
+function room_drafts(home, config, path) {
+  const folder = dirname(path);
+  const roots = [...new Set([config.data_directory || join(folder, `discussion-${config.room}`), folder, join(folder, 'runtime')]
+    .map(directory => service_drafts(home, resolve(directory))))].filter(existsSync);
+  const files = [], omitted = [];
+  let bytes = 0;
+  const walk = (folder, prefix) => {
+    let entries = [];
+    try { entries = readdirSync(folder, { withFileTypes: true }); } catch { omitted.push(`${prefix || '.'}/`); return; }
+    for (const entry of entries) {
+      const file = join(folder, entry.name), relative_path = `${prefix}${entry.name}`;
+      // Links are left out, so a link a member placed here cannot carry another file into the export.
+      if (entry.isSymbolicLink()) { omitted.push(relative_path); continue; }
+      if (entry.isDirectory()) { walk(file, `${relative_path}/`); continue; }
+      if (!entry.isFile()) continue;
+      try {
+        const size = lstatSync(file).size;
+        if (bytes + size > DRAFT_EXPORT_MAX_BYTES) { omitted.push(relative_path); continue; }
+        files.push({ path: relative_path, data: readFileSync(file).toString('base64') });
+        bytes += size;
+      } catch { omitted.push(relative_path); }
+    }
+  };
+  roots.forEach((root, index) => walk(root, roots.length > 1 ? `${index + 1}/` : ''));
+  return { files, omitted };
+}
+
+/**
+ * After a hosted account destroyed all its rooms, remove every conversation its AI software keeps (login stays), so its
+ * receipt has nothing kept. Refused unless this instance runs as the account's own Windows user (the owner's home and
+ * an account sharing it hold the owner's conversations), while any room is still registered here, or while the
+ * account is an invited member of another computer's room.
+ */
+export function wipe_histories(home, env = process.env) {
+  // Entry protection alone is no proof: the owner's own instance runs protected while hosting is on.
+  if (env[ISOLATED_ACCOUNT_VARIABLE] !== '1') throw new Error('只有以独立 Windows 用户运行的托管账号能清空各 AI 软件的会话记录');
+  if (read_registry(home).length) throw new Error('还有房间登记在这台电脑上，先销毁全部房间');
+  // Rooms on other computers this account joined as an invited member still use their sessions.
+  if (Object.keys(read_store(home).records || {}).length) throw new Error('这个账号还以外部成员身份加入了其他电脑的房间，先退出那些房间');
+  return wipe_software_histories();
+}
+
 /** The session each participant actually resumes, read without writing to a runtime the service may be using. */
 function bound_sessions(config, path) {
   const file = join(resolve(config.data_directory || join(dirname(path), `discussion-${config.room}`)), 'runtime.sqlite3');
@@ -1471,12 +1524,13 @@ export async function room_profiles(home, raw) {
   const config = configuration_snapshot(path).config;
   await site_request(input.site, `/api/rooms/${input.room_id}/inbox`, input.token);
   const sessions = bound_sessions(config, path);
+  const drafts = raw.drafts === true ? room_drafts(home, config, path) : undefined;
   const participants = Object.fromEntries(Object.entries(config.participants).map(([name, profile]) => {
     const kept = Object.fromEntries(Object.entries(profile).filter(([key]) => [...PROFILE_FIELDS, 'project_access'].includes(key)));
     const session_id = sessions[name] || profile.session_id;
     return [name, session_id ? { ...kept, session_id } : kept];
   }));
-  return { room_id: input.room_id, local_members: { format: LOCAL_MEMBERS_FORMAT, version: 1, mode: 'free',
+  return { room_id: input.room_id, drafts, local_members: { format: LOCAL_MEMBERS_FORMAT, version: 1, mode: 'free',
     cwd: config.cwd, discussion_project: config.discussion_project, project_access: config.project_access, scheduler: config.scheduler,
     workflow: config.workflow, participants } };
 }
@@ -2752,6 +2806,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-member-adapter' && input) result = await room_member_adapter(home, input);
   else if (positionals[0] === 'room-member-model' && input) result = await room_member_model(home, input);
   else if (positionals[0] === 'room-profiles' && input) result = await room_profiles(home, input);
+  else if (positionals[0] === 'wipe-histories') result = wipe_histories(home);
   else if (positionals[0] === 'room-restore' && input) result = await restore_room(home, input);
   else if (positionals[0] === 'room-fork' && input) result = await fork_room(home, input);
   else if (positionals[0] === 'pick-directory') result = await pick_directory();

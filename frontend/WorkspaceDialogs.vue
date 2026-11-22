@@ -27,7 +27,9 @@ Object.assign(titles, { rename: t("重命名房间"), restore: t("恢复房间")
 const descriptions = { create: t("邀请 AI 一起协作；需要深入讨论时，可在创建时或之后随时开启。"), edit: t("维护话题目标、背景与讨论默认上限。"), message: t("保留作者、来源、提交人和引用关系。") };
 Object.assign(descriptions, { rename: t("名称变化不会影响讨论记录和阅读地址。"), restore: t("移回讨论列表，保持当前讨论阶段。"), delete: t("从这台电脑删除房间的记录、附件和成员在本房间的 AI 会话记录，完成后无法恢复。") });
 titles.archives = t("已存档房间");
-descriptions.archives = t("查看记录、恢复房间或彻底删除。");
+titles.destructions = t("销毁记录");
+descriptions.destructions = t("查看销毁回执：删除了什么、保留了什么；未完成的可以重试。");
+descriptions.archives = t("查看记录、恢复房间或销毁。");
 const archived_rooms = computed(() => view.value.rooms.filter((room) => room.archived));
 const archive_query = ref("");
 const archive_content = ref("all");
@@ -137,6 +139,7 @@ function destruction_label(item) {
     sessions: () => t("{software} 的 AI 会话记录 {count} 个", { software: software_label(item.adapter), count }),
     runtime_files: () => t("运行文件与草稿"), kept_sessions: () => t("沿用你原有的会话，或与其他房间共用的会话 {count} 个", { count }),
     software_stores: () => t("{software} 自身共用的索引与数据库（未改动）", { software: software_label(item.adapter) }),
+    feedback_cases: () => t("你评过的调度记录 {count} 条", { count }),
     project_files: () => t("项目文件"), providers: () => t("已发给模型服务商的内容") };
   return (labels[item.kind] || (() => item.kind))();
 }
@@ -149,6 +152,16 @@ const destruction_items = computed(() => {
   return [...record.items, ...(record.status === "cleaning" && !local ? [{ kind: "runtime_files", state: "pending" }] : [])];
 });
 const destruction_failed = computed(() => destruction_items.value.some((item) => item.state === "failed"));
+const destroy_all_open = ref(false);
+const destroy_all_word = ref("");
+const DESTROY_ALL_WORD = t("销毁全部");
+watch(mode, () => { destroy_all_open.value = false; destroy_all_word.value = ""; });
+
+/** Destroy every room, archived ones too, one after another; a hosted account then clears its AI software's conversations. */
+async function destroy_all_rooms() {
+  destroy_all_open.value = false;
+  await act("destroy_all_rooms");
+}
 
 /** Removing the main directory promotes the first other directory, as other directories need a main one. */
 function remove_folder_main() {
@@ -278,28 +291,43 @@ const keep_open = (event) => event.preventDefault();
         <div class="channel-archive-toolbar">
           <UInput v-model="archive_query" icon="i-lucide-search" :placeholder="t('搜索已存档房间')" :aria-label="t('搜索已存档房间')" class="channel-archive-search" />
           <USelect v-model="archive_content" :items="archive_content_options" icon="i-lucide-list-filter" :aria-label="t('筛选房间内容')" />
-          <UButton :label="t('全部删除（{count}）', { count: archive_results.length })" icon="i-lucide-trash-2" color="error" variant="soft" size="sm" class="channel-archive-delete-all" :loading="archives_deleting" :disabled="archives_deleting || !archive_results.length" @click="archive_delete_all = true; archive_delete_id = null" />
+          <UButton :label="t('全部销毁（{count}）', { count: archive_results.length })" icon="i-lucide-trash-2" color="error" variant="soft" size="sm" class="channel-archive-delete-all" :loading="archives_deleting" :disabled="archives_deleting || !archive_results.length" @click="archive_delete_all = true; archive_delete_id = null" />
         </div>
-        <div v-if="archive_delete_all && archive_results.length" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("将永久删除当前列表中的 {count} 个房间及其全部记录，无法撤销。", { count: archive_results.length }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_all = false" /><UButton :label="t('全部删除')" color="error" size="xs" @click="delete_all_archives" /></div>
+        <div v-if="archive_delete_all && archive_results.length" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("将销毁当前列表中的 {count} 个房间：记录、附件、成员的 AI 会话与草稿都会删除，分享网页会先撤销，项目文件保留，无法撤销。需要留底请先导出。", { count: archive_results.length }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_all = false" /><UButton :label="t('全部删除')" color="error" size="xs" @click="delete_all_archives" /></div>
         <div v-keep-reading class="channel-archive-results">
           <ul v-if="archive_results.length" class="channel-archive-list" :aria-label="t('已存档房间列表')">
           <li v-for="room in archive_results" :key="room.id" class="channel-archive-item">
             <div class="channel-archive-row">
               <div class="channel-archive-info"><button class="channel-archive-title" :title="room.title" :disabled="Boolean(pending)" @click="read_archive(room)">{{ room.title }}</button><small><span v-if="room.created_at">{{ t("创建于") }} <time :datetime="room.created_at">{{ archive_created(room.created_at) }}</time> · </span>{{ t("{count} 条消息", { count: room.message_count }) }}</small></div>
               <div class="channel-archive-actions">
-                <UButton :aria-label="t('彻底删除 {name}', { name: room.title })" :title="t('彻底删除')" icon="i-lucide-trash-2" color="neutral" variant="ghost" size="xs" class="channel-archive-delete" :disabled="archive_busy(room)" @click="archive_delete_id = room.id; archive_delete_all = false" />
+                <UButton :aria-label="t('销毁 {name}', { name: room.title })" :title="t('销毁房间')" icon="i-lucide-trash-2" color="neutral" variant="ghost" size="xs" class="channel-archive-delete" :disabled="archive_busy(room)" @click="archive_delete_id = room.id; archive_delete_all = false" />
                 <UButton :label="t('恢复')" :aria-label="t('恢复 {name}', { name: room.title })" color="neutral" variant="soft" size="xs" class="channel-archive-restore" :disabled="archive_busy(room)" @click="act('manage_channel', { id: room.id, action: 'restore' })" />
               </div>
             </div>
-            <div v-if="archive_delete_id === room.id" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("永久删除「{name}」及其全部记录，无法撤销。", { name: room.title }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_id = null" /><UButton :label="t('删除')" color="error" size="xs" :disabled="archive_busy(room)" @click="delete_archive" /></div>
+            <div v-if="archive_delete_id === room.id" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("销毁「{name}」：记录、附件、成员的 AI 会话与草稿都会删除，分享网页会先撤销，项目文件保留，无法撤销。", { name: room.title }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_id = null" /><UButton :label="t('删除')" color="error" size="xs" :disabled="archive_busy(room)" @click="delete_archive" /></div>
           </li>
           </ul>
         <p v-else class="channel-archive-empty">{{ archived_rooms.length ? t('没有匹配的存档房间') : t('暂无已存档房间') }}</p>
         </div>
       </section>
+      <section v-else-if="rendered_mode === 'destructions'" class="channel-destruction-records">
+        <p v-if="!view.destructions.length" class="fine-print">{{ t("还没有销毁过房间。") }}</p>
+        <article v-for="record in view.destructions" :key="record.room_id" class="channel-destruction-record">
+          <header><b>{{ record.title || t("（名称已随销毁清除）") }}</b><small>{{ archive_created(record.created_at) }}{{ record.automatic ? ` · ${t("自动销毁")}` : "" }} · {{ record.status === "done" ? t("已完成") : t("清理中") }}</small></header>
+          <ul class="channel-destroy-progress"><li v-for="item in record.items" :key="`${item.kind}-${item.adapter || ''}`" :data-state="item.state"><span>{{ destruction_label(item) }}</span><small>{{ DESTROY_STATES[item.state] }}</small></li></ul>
+          <UButton v-if="record.status !== 'done'" :label="t('重试')" color="neutral" variant="soft" size="xs" @click="act('retry_destruction', record.room_id)" />
+        </article>
+        <div v-if="destroy_all_open" class="channel-destroy-all" role="alert">
+          <p>{{ t("将逐个销毁全部 {count} 个房间（含已存档）：记录、附件、成员的 AI 会话与草稿都会删除，发布过的分享网页会先撤销，项目文件保留。需要留底请先在房间目录“…”里“导出全部房间”；它不含草稿，需要草稿请逐个房间导出。", { count: view.rooms.length }) }}</p>
+          <p>{{ t("以独立 Windows 用户运行的托管账号，还会删除各 AI 软件里的全部会话记录与 AI 记住的偏好（登录信息保留）。") }}</p>
+          <UInput v-model="destroy_all_word" :placeholder="t('输入“{word}”确认', { word: DESTROY_ALL_WORD })" size="sm" autocomplete="off" />
+          <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="destroy_all_open = false" /><UButton :label="t('全部销毁')" color="error" size="xs" :disabled="destroy_all_word.trim() !== DESTROY_ALL_WORD" @click="destroy_all_rooms" /></div>
+        </div>
+        <div class="dialog-actions"><UButton :label="t('销毁全部房间')" icon="i-lucide-flame" color="error" variant="soft" :disabled="Boolean(view.destroying.length)" @click="destroy_all_open = true" /></div>
+      </section>
       <form v-else-if="rendered_mode === 'delete-folder'" class="dialog-form" @submit.prevent="remove_folder(false)">
         <p class="fine-print">{{ t("仅移除「{name}」时，房间变为未分组，所有消息和存档状态都会保留。", { name: targetFolder?.name }) }}</p>
-        <p v-if="folder_rooms.length" class="fine-print">{{ t("也可以连同其中的 {count} 个房间一起永久删除，无法撤销。", { count: folder_rooms.length }) }}</p>
+        <p v-if="folder_rooms.length" class="fine-print">{{ t("也可以连同其中的 {count} 个房间一起销毁：记录、附件、成员的 AI 会话与草稿都会删除，项目文件保留，无法撤销。", { count: folder_rooms.length }) }}</p>
         <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton v-if="folder_rooms.length" :label="t('连同 {count} 个房间删除', { count: folder_rooms.length })" color="error" variant="soft" @click="remove_folder(true)" /><UButton type="submit" :label="t('仅移除文件夹')" color="neutral" variant="solid" /></div>
       </form>
       <form v-else-if="rendered_mode === 'archive-folder'" class="dialog-form" @submit.prevent="archive_folder">

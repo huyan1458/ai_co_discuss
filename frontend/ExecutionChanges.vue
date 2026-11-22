@@ -1,3 +1,8 @@
+<script>
+// Execution id → the sections the reader has open, shared by every instance for the page's life.
+const opened_sections = new Map();
+</script>
+
 <script setup>
 /**
  * The files one execution changed, as "edited N files +a -b": a row per file with its added and removed lines. With a
@@ -55,11 +60,15 @@ const sections = computed(() => {
 const open = ref(new Set());
 // A long list starts folded to its header row; the header opens and closes it (user 2026-11-17: 14 files filled the
 // screen with no way to fold them). What may be someone else's work always starts folded.
-const open_sections = ref(new Set(sections.value.filter((section) => section.key === "own" && section.files.length <= FOLDED_ABOVE).map((section) => section.key)));
+// What the reader opened or closed is kept per execution for the page's life, so a card the transcript builds again (a
+// refresh, a re-render) keeps it instead of folding back to the default under their finger (user 2026-11-22, #7122).
+const chosen = opened_sections.get(props.report.id);
+const open_sections = ref(chosen ? new Set(chosen) : new Set(sections.value.filter((section) => section.key === "own" && section.files.length <= FOLDED_ABOVE).map((section) => section.key)));
 function toggle_section(key) {
   const next = new Set(open_sections.value);
   if (next.has(key)) next.delete(key); else next.add(key);
   open_sections.value = next;
+  opened_sections.set(props.report.id, next);
 }
 const patches = ref(null), loading = ref(false), failure = ref("");
 /** The patches of the whole execution, read once on first use. */

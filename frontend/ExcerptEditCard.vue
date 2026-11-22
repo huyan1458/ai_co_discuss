@@ -26,7 +26,7 @@ function keydown(event) {
     <div class="selection-comment-actions">
       <button v-if="removable" type="button" class="selection-comment-remove" :aria-label="t('移除这条注释')" :title="t('移除注释')" @click="emit('remove')"><UIcon name="i-lucide-trash-2" /></button>
       <button type="button" class="selection-comment-cancel" :aria-label="t('取消')" :title="t('取消')" @click="emit('cancel')"><UIcon name="i-lucide-x" /></button>
-      <button type="submit" class="selection-comment-send" :aria-label="t('保存')" :title="t('保存（Enter）')"><UIcon name="i-lucide-check" /></button>
+      <button type="submit" class="selection-comment-send channel-primary-button channel-round-button channel-send" :aria-label="t('保存')" :title="t('保存（Enter）')"><UIcon name="i-lucide-check" /></button>
     </div>
   </form>
 </template>

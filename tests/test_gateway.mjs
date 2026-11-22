@@ -322,11 +322,13 @@ test('malformed control requests are refused without ending the entry, which sti
 });
 
 /** A real Python site protected by `key`, on a free loopback port; resolves to its port. */
-async function protected_site(t, root, key, extra_env = {}) {
+async function protected_site(t, root, key, extra_env = {}, log_file) {
   const key_file = join(root, 'entry-key.json');
   writeFileSync(key_file, JSON.stringify({ key }));
-  const script = "import sys; from backend.server import DiscussionServer,init_database; init_database(sys.argv[1],seed=False); server=DiscussionServer(('127.0.0.1',0),sys.argv[1]); print(server.server_port,flush=True); server.serve_forever()";
-  const child = spawn(process.platform === 'win32' ? 'python' : 'python3', ['-u', '-c', script, join(root, 'site.sqlite3')],
+  const logging = log_file ? 'import logging; logging.basicConfig(filename=sys.argv[2],level=logging.INFO); ' : '';
+  const script = `import sys; from backend.server import DiscussionServer,init_database; ${logging}init_database(sys.argv[1],seed=False); server=DiscussionServer(('127.0.0.1',0),sys.argv[1]); print(server.server_port,flush=True); server.serve_forever()`;
+  const args = ['-u', '-c', script, join(root, 'site.sqlite3'), ...(log_file ? [log_file] : [])];
+  const child = spawn(process.platform === 'win32' ? 'python' : 'python3', args,
     { cwd: join(import.meta.dirname, '..'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, DISCUSS_ENTRY_KEY_FILE: key_file, ...extra_env } });
   const closed = new Promise(done => child.once('close', done));
   t.after(async () => { child.kill(); await closed; });
@@ -478,7 +480,8 @@ test('a paired device reads, writes and uploads to a protected instance through 
   const home = join(root, 'service');
   mkdirSync(home, { recursive: true });
   const key = '7b'.repeat(32);
-  const port = await protected_site(t, root, key, { DISCUSS_SERVICE_HOME: home });
+  const website_log = join(root, 'website.log');
+  const port = await protected_site(t, root, key, { DISCUSS_SERVICE_HOME: home, CODISCUSS_RELAY_READ_TIMING: '1' }, website_log);
   t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10 }));
   const previous = process.env.DISCUSS_ENTRY_KEY_FILE;
   process.env.DISCUSS_ENTRY_KEY_FILE = join(root, 'entry-key.json');
@@ -503,6 +506,19 @@ test('a paired device reads, writes and uploads to a protected instance through 
   const uploaded = await room_upload(home, paired, { id: 'upload-relay-protected-1', path: `/api/rooms/${room.id}/attachments?file_name=note.txt&actor=%E7%94%A8%E6%88%B7&submission_id=relay-protected-upload`,
     index: 0, total: 1, size: content.length, content_type: 'text/plain', data: content.toString('base64') });
   assert.ok([200, 201].includes(uploaded.status), JSON.stringify(uploaded.body));
+
+  const id = crypto.randomUUID();
+  const timing = { id, route: 'messages' };
+  const read = await room_api(home, paired, { path: `/api/rooms/${room.id}/messages?after=0&q=private-query` }, { timing });
+  assert.equal(read.status, 200);
+  assert.ok(Number.isFinite(timing.local_request_at), 'the HTTP send after the handshake was timed');
+  const unbridged = await site_fetch(`http://127.0.0.1:${port}/api/rooms`, { headers: { 'X-CoDiscuss-Relay-Request-Id': id } });
+  assert.equal(unbridged.status, 200);
+  const traces = [...readFileSync(website_log, 'utf8').matchAll(/relay-read (.+)/g)].map(match => JSON.parse(match[1]));
+  assert.equal(traces.length, 1, 'only the bridged read is traced');
+  const { elapsed_ms, body_bytes, ...details } = traces[0];
+  assert.deepEqual(details, { request_id: id, route: 'messages', status: 200 });
+  assert.ok(elapsed_ms >= 0 && body_bytes > 0);
 });
 
 test('the command line refuses to start a protected account, which would run without its protection', async t => {

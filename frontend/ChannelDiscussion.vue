@@ -638,7 +638,8 @@ const free_queued = computed(() => {
   const members = new Map((room.value.free?.members || []).map((member) => [member.id, member]));
   // Several pending requests of one member are delivered together: only the first says it is waking the member.
   const waking = new Set();
-  return (room.value.free?.requests || []).filter((request) => request.status === "pending" && !request.execution_id
+  const requests = room.value.free?.requests || [];
+  const cards = requests.filter((request) => request.status === "pending" && !request.execution_id
     && QUEUED_PURPOSES.has(request.purpose) && !request.discussion_session_id
     && members.get(request.member_id)?.status === "active" && !members.get(request.member_id).adopt_error)
     .sort((left, right) => left.id - right.id)
@@ -656,6 +657,18 @@ const free_queued = computed(() => {
         created_at: request.created_at, request_message_id: request.message_id,
         layout_after: request.layout_after ?? request.message_id, layout_at: request.created_at, marks: line_marks(member.name, null) };
     });
+  for (const { message, members: recipients } of view.value.recipient_previews || []) {
+    for (const member of recipients) {
+      if (requests.some(request => request.message_id === message.id && request.member_id === member.id)) continue;
+      const busy = ["dispatched", "started"].includes(member.execution?.status);
+      const created_at = Date.parse(message.created_at) / 1000;
+      cards.push({ id: `receipt-${message.id}-${member.id}`, author: member.name, member_id: member.id,
+        queued: true, slot_card: true, provisional: true, created_at, request_message_id: message.id,
+        layout_after: message.id, layout_at: created_at, marks: line_marks(member.name, null),
+        text: busy ? t('排队中，等它做完当前工作') : t('等待开始…') });
+    }
+  }
+  return cards;
 });
 const free_now = ref(Math.floor(Date.now() / 1000));
 /** Each busy or queued member keeps its own card, so the elapsed time ticks while any is shown. */
@@ -786,6 +799,7 @@ function dispatch_badges(message_id) {
 }
 /** How long the working card has run or waited, with the retry attempt when it is being redelivered. */
 function working_elapsed(message) {
+  if (message.provisional) return "";
   const spent = format_elapsed(Math.max(0, free_now.value - message.created_at));
   const text = message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: spent }) : '' })
     : message.queued ? t('已等 {value1}', { value1: spent }) : t('已用 {value1}', { value1: spent });
@@ -3205,7 +3219,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <textarea ref="quote_input" v-model="quote_comment" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注（可选）')" enterkeyhint="send" @keydown="quote_keydown"></textarea>
       <div class="selection-comment-actions">
         <button type="button" class="selection-comment-cancel" :aria-label="t('取消添加')" :title="t('取消')" @click="cancel_quote"><UIcon name="i-lucide-x" /></button>
-        <button type="submit" class="selection-comment-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
+        <button type="submit" class="selection-comment-send channel-primary-button channel-round-button channel-send" :aria-label="t('添加到对话')" :title="t('添加到对话（Enter）')"><UIcon name="i-lucide-arrow-up" /></button>
       </div>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :removable="!mark_editing.touch" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? docked_sheet_style() : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
@@ -3213,7 +3227,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <div v-if="!view.query && !view.source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
-        <template v-for="message in group.messages" :key="message.id">
+        <template v-for="message in group.messages" :key="(message.queued || message.working) && message.request_message_id ? `work-${message.request_message_id}-${message.member_id}` : message.id">
         <DiscussionEndCard v-if="message.id === end_anchor && !view.query && !view.source_filter" />
         <TopicCard v-if="message.id === topic_anchor && !view.query && !view.source_filter" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <!-- A free-room working card holds the slot its answer will take. -->
@@ -3578,8 +3592,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <button v-if="reader.state.reading" type="button" class="channel-listen-pill" :aria-label="t('停止朗读')" @click="reader.stop()"><UIcon name="i-lucide-square" />{{ t('停止') }}</button>
       <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" :aria-label="t('回到最新消息')" class="channel-latest-button" @click="return_to_latest" />
     </div>
-    <div ref="composer_dock" class="channel-composer-dock"><div v-if="view.share" class="channel-composer-column channel-share-composer">
-      <UChatPrompt model-value="" disabled :autofocus="false" :rows="1" :placeholder="t('这是只读分享，不能在这里发消息')" :aria-label="t('留言正文')" variant="outline" color="neutral" class="channel-composer" :ui="{ base: 'channel-editor', footer: 'channel-composer-footer' }">
+    <div ref="composer_dock" class="channel-composer-dock"><div v-if="view.share || view.destroying.includes(view.room?.id)" class="channel-composer-column channel-share-composer">
+      <UChatPrompt model-value="" disabled :autofocus="false" :rows="1" :placeholder="view.share ? t('这是只读分享，不能在这里发消息') : t('房间正在销毁，不能再发消息')" :aria-label="t('留言正文')" variant="outline" color="neutral" class="channel-composer" :ui="{ base: 'channel-editor', footer: 'channel-composer-footer' }">
         <template #footer>
           <a class="channel-share-start" :href="view.share.home" target="_blank" rel="noopener noreferrer"><UIcon name="i-lucide-sparkles" />{{ t("用自己的 AI 开一个房间") }}</a>
           <span class="channel-share-stamp">{{ t("只读分享 · 生成于 {time}", { time: new Date(view.share.exported_at).toLocaleString(locale, { hour12: false }) }) }}</span>

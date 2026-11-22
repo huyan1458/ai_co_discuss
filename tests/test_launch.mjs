@@ -1676,7 +1676,8 @@ test('a manual Codex expert is hosted through the app for a desktop chat and the
     writeFileSync(join(codex_home, 'sessions', '2026', '10', '23', `rollout-2026-10-23T08-00-00-${id}.jsonl`), `${JSON.stringify({ type: 'session_meta', payload: { id, originator } })}
 `);
   }
-  save_launch_settings(f.home, { participants: { Codex: { adapter: 'codex_cli', executable: process.execPath } } });
+  // A saved CLI effort must not block hosting a desktop chat, whose App takes no effort.
+  save_launch_settings(f.home, { participants: { Codex: { adapter: 'codex_cli', executable: process.execPath, effort: 'medium' } } });
   const previous = process.env.CODEX_HOME;
   process.env.CODEX_HOME = codex_home;
   try {
