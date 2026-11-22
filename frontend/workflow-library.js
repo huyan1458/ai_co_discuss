@@ -58,7 +58,8 @@ function saved_flow(flow, agents, subs = []) {
  * a sub-workflow's canvas may show main-flow members, the main canvas the sub-workflows.
  */
 function payload(value) {
-  const { resources, commands: ignored, flow, directory, sub_workflows, ...fields } = value;
+  // `revision` is the folder's version the page loaded; it travels beside the workflow as `base_revision`, not in it.
+  const { resources, commands: ignored, flow, directory, sub_workflows, revision: loaded, ...fields } = value;
   return { ...fields, flow: saved_flow(flow, fields.agents, (sub_workflows || []).map((sub) => sub.id)), resources,
     ...(sub_workflows ? { sub_workflows: sub_workflows.map((sub) => ({ ...sub, flow: saved_flow(sub.flow, [...sub.agents, ...fields.agents]) })) } : {}) };
 }
@@ -85,6 +86,9 @@ function create_library({ view, bridge, act }) {
   const read_cache = new Map();
   // The workflow whose deletion awaits confirmation (its ID), and the action waiting on "放弃未保存的修改？".
   const deleting = ref(""), leaving = ref(null);
+  // Why the open workflow cannot simply be saved: "changed" (the library holds a newer version than the one loaded; a
+  // save was refused or a reread found it while edits were pending) or "exists" (a new or imported workflow's ID is taken).
+  const conflict = ref("");
   const deleting_label = computed(() => workflows.value.find((item) => item.id === deleting.value)?.label || deleting.value);
   const renaming = ref(""), rename_text = ref("");
   // The hidden file inputs, registered by the workspace that renders them; `skill_request` asks the page to show SKILL.md.
@@ -104,6 +108,7 @@ function create_library({ view, bridge, act }) {
 
   /** Put a workflow on the canvas. */
   function show(value, id) {
+    conflict.value = "";
     draft.value = { ...value, sub_workflows: value.sub_workflows || [] };
     saved_id.value = id;
     // Saving keeps the sub-workflow in view; another workflow starts at its main flow.
@@ -145,8 +150,9 @@ function create_library({ view, bridge, act }) {
     try {
       const value = await read_saved(id);
       if (version !== read_version) return;
-      // A copy that changed on disk meanwhile is replaced, unless the user already started editing it.
+      // A copy that changed on disk meanwhile is replaced, unless the user already started editing it: then they are told.
       if (!cached || (read_cache.get(id) !== cached && !dirty.value)) show(value, id);
+      else if (read_cache.get(id) !== cached && draft.value?.revision !== value.revision) conflict.value = "changed";
     } catch (error) { if (version === read_version && !cached) failure.value = error.message; }
     finally { if (version === read_version) loading.value = ""; }
   }
@@ -273,8 +279,11 @@ function create_library({ view, bridge, act }) {
     if (scope.value === id) open_scope("");
   }
 
-  /** Save the workflow as files; the local service checks every field. A saved one keeps its folder's other files. */
-  async function save() {
+  /**
+   * Save the workflow as files; the local service checks every field. A saved one keeps its folder's other files and names
+   * the revision it was loaded at, so a library changed since refuses it; `overwrite` replaces an entry the user chose to.
+   */
+  async function save({ overwrite = false } = {}) {
     if (busy.value || !draft.value) return;
     if (!draft.value.label.trim() || !draft.value.skill.trim()) { open_scope(""); skill_request.value++; bridge.notify("warning", t('请填写名称和 SKILL.md 正文')); return; }
     const unfinished = subs.value.find((sub) => !sub.label.trim() || !sub.description.trim() || !sub.skill.trim());
@@ -285,16 +294,31 @@ function create_library({ view, bridge, act }) {
     const saving = draft.value, saved_snapshot = JSON.stringify(payload(saving));
     busy.value = true;
     try {
-      const result = await bridge.local_request("workflows", { action: "save", workflow: saved_id.value ? edited : { ...edited, resources: kept } });
+      const base = saved_id.value && !overwrite ? { base_revision: draft.value.revision } : {};
+      const result = await bridge.local_request("workflows", { action: "save", workflow: saved_id.value ? edited : { ...edited, resources: kept },
+        ...base, ...(overwrite ? { overwrite: true } : {}) });
+      conflict.value = "";
       bridge.notify("info", t('已保存「{value1}」', { value1: result.label || result.id }));
       read_cache.set(result.id, JSON.stringify(result));
       if (draft.value === saving) {
         if (JSON.stringify(payload(saving)) === saved_snapshot) show(result, result.id);
-        else { saved_id.value = result.id; snapshot.value = saved_snapshot; }
+        // Edits made while saving stay; the next save starts from the version just written.
+        else { saved_id.value = result.id; snapshot.value = saved_snapshot; saving.revision = result.revision; }
       }
       await bridge.reload_workflows();
-    } catch (error) { bridge.notify("error", error.message); }
+    } catch (error) {
+      if (error.code === "workflow_changed") conflict.value = "changed";
+      else if (error.code === "workflow_exists") conflict.value = "exists";
+      bridge.notify("error", error.message);
+    }
     finally { busy.value = false; }
+  }
+
+  /** Read the open workflow again from the library, after asking when the page holds unsaved changes. */
+  function reload() {
+    const id = saved_id.value;
+    if (!id) return;
+    guard(() => { conflict.value = ""; read_cache.delete(id); open_saved(id); });
   }
 
   /** Delete the workflow the user confirmed; when it was the open one, the page moves to the first left. */
@@ -362,7 +386,7 @@ function create_library({ view, bridge, act }) {
     finally { pending_items.value.delete(item.id); }
   }
 
-  return { available, workflows, page_open, draft, saved_id, canvas_key, scope, subs, current, reserved, open_scope, enter_sub, add_sub, remove_sub, commands_allowed, busy, loading, failure, pending_items, retry: () => retry_read?.(), deleting, deleting_label, leaving,
+  return { conflict, reload, available, workflows, page_open, draft, saved_id, canvas_key, scope, subs, current, reserved, open_scope, enter_sub, add_sub, remove_sub, commands_allowed, busy, loading, failure, pending_items, retry: () => retry_read?.(), deleting, deleting_label, leaving,
     renaming, rename_text, inputs, skill_request, dirty, add_items, guard, discard, select, close_page, on_zip, on_folder, save,
     remove, item_menu, start_rename, commit_rename };
 }

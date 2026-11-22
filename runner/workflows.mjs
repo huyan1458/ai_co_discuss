@@ -12,6 +12,8 @@ import { flow_in_use, normalize_flow } from './workflow_flow.mjs';
 export const WORKFLOW_ID_PATTERN = /^(?=.{1,40}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // Characters of a SKILL.md hash the host compares to know whether its earlier reading is still current.
 const REVISION_LENGTH = 12;
+// Characters of a whole workflow folder's hash a save names to show which version it edited.
+const FOLDER_REVISION_LENGTH = 16;
 // A card ID becomes the member name's suffix (`platform-card`), which has no hyphen of its own.
 export const CARD_ID_PATTERN = /^[a-z0-9_]{1,16}$/;
 export const MAX_WORKFLOW_SKILL = 20000;
@@ -579,13 +581,53 @@ export function rename_workflow(home, id, label) {
   });
 }
 
-/** Read a library entry while its caller holds the publication lock. */
+/**
+ * The whole folder's revision as saved on disk: every file under it (SKILL.md, cards, canvases, sub-workflows and
+ * their files, templates, scripts), by relative path and bytes. Any change anywhere changes it. Call under the lock.
+ */
+export function folder_revision(directory) {
+  const hash = createHash('sha256');
+  const walk = relative => {
+    for (const name of readdirSync(join(directory, relative)).sort()) {
+      const path = relative ? `${relative}/${name}` : name;
+      if (lstatSync(join(directory, path)).isDirectory()) walk(path);
+      else hash.update(`${path}\0`).update(readFileSync(join(directory, path))).update('\0');
+    }
+  };
+  walk('');
+  return hash.digest('hex').slice(0, FOLDER_REVISION_LENGTH);
+}
+
+/** Read a library entry while its caller holds the publication lock; `revision` is the folder's, which a save must name. */
 function read_saved_workflow(home, id) {
   const directory = workflow_directory(home, id);
   if (!existsSync(directory)) throw new Error(`工作流不存在：${id}`);
   const { workflow } = read_workflow_folder(directory);
   workflow_cards(workflow);
-  return { ...workflow, id, directory, commands: workflow_commands(workflow.resources) };
+  return { ...workflow, id, directory, commands: workflow_commands(workflow.resources), revision: folder_revision(directory) };
+}
+
+/** A refusal the page shows in its own language (template and parameters) with a stable code. */
+function workflow_failure(code, template, params) {
+  const message = template.replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(params, name) ? String(params[name]) : match);
+  return Object.assign(new Error(message), { code, error_text: { template, params } });
+}
+
+/**
+ * Before a save replaces a library entry: a save that edits it names the revision it was read at (`base_revision`), and
+ * one that means to replace whatever is there says so (`overwrite`). A changed or vanished entry is refused, as is one
+ * that exists when the save names neither, so a stale copy never replaces newer files. Call under the lock.
+ */
+function check_save_base(directory, id, { base_revision, overwrite } = {}) {
+  const exists = existsSync(directory);
+  if (overwrite === true) return;
+  if (base_revision) {
+    if (!exists || folder_revision(directory) !== base_revision) {
+      throw workflow_failure('workflow_changed', '工作流「{id}」已被修改，请重新载入后再保存', { id });
+    }
+    return;
+  }
+  if (exists) throw workflow_failure('workflow_exists', '工作流库里已有「{id}」；要整份覆盖它，请明确选择覆盖', { id });
 }
 
 /** One workflow in full, as the editor shows it. */
@@ -613,10 +655,14 @@ export function install_workflow_folder(home, id, source) {
   with_workflow_lock(home, () => publish_directory(home, id, staging => cpSync(source, staging, { recursive: true })));
 }
 
-/** Write a checked workflow as files, publishing a complete directory with crash recovery. */
-export function save_workflow(home, input, validate_card) {
+/**
+ * Write a checked workflow as files, publishing a complete directory with crash recovery. Replacing an existing entry
+ * needs `base.base_revision` (the revision it was read at, refused when the folder changed since) or `base.overwrite`.
+ */
+export function save_workflow(home, input, validate_card, base = {}) {
   const workflow = validate_workflow(input, validate_card);
   return with_workflow_lock(home, () => {
+    check_save_base(workflow_directory(home, workflow.id), workflow.id, base);
     publish_directory(home, workflow.id, (staging, directory) => {
       mkdirSync(join(staging, 'agents'), { recursive: true });
       writeFileSync(join(staging, 'SKILL.md'), serialize_markdown(skill_fields(workflow.id, workflow.label, workflow.description), workflow.skill));

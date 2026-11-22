@@ -75,6 +75,13 @@ test("publishes a nonce-protected page and preserves literal text across chunk b
   assert.ok(!/https?:|\*/.test(csp), csp);
   assert.ok(!/script-src[^;]*'unsafe-inline'/.test(csp), csp);
   assert.match(csp,/form-action 'none'/);
+  // Attachments' scripts run only in /frame: an opaque origin that sends no requests, submits no forms and is framed
+  // only by this site's own pages.
+  const frame = (await f.call("GET","/frame")).headers.get("Content-Security-Policy");
+  assert.match(frame,/^sandbox allow-scripts allow-modals;/);
+  assert.ok(!/allow-same-origin|allow-forms|allow-popups|allow-top-navigation/.test(frame), frame);
+  assert.match(frame,/connect-src data: blob:;/);
+  assert.match(frame,/frame-ancestors 'self'/);
   assert.equal(res.headers.get("Referrer-Policy"),"no-referrer");
   assert.equal(res.headers.get("X-Robots-Tag"),"noindex, noarchive");
   assert.doesNotMatch(script,/[<\u2028\u2029]/);

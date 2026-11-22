@@ -39,13 +39,15 @@ const SHARE_SITE_FILE_TYPES = {
   hpp: "text/plain", cs: "text/plain", go: "text/plain", rs: "text/plain", rb: "text/plain", php: "text/plain", swift: "text/plain", kt: "text/plain", sql: "text/plain",
   sh: "text/plain", vue: "text/plain", diff: "text/plain", patch: "text/plain",
 };
-// Where an earlier version kept a room's published link in this browser; it moves to the room when first read.
 const SHARE_SITE_AS_TEXT = /\.(?:js|mjs|cjs|ps1|bat|cmd|vbs)$/i;
+// Where an earlier version kept a room's published link in this browser; it moves to the room when first read.
 const SHARE_LINK_PREFIX = "codiscuss-share:";
-// A share page is a record of one moment: every "how long ago" and running clock is read at that moment.
+// A share page is a record of one moment: every "how long ago" and running clock is read at that moment. The clock
+// still creeps forward, a millisecond per second read: Vue skips a handler when an event's time is not later than when
+// the handler was attached, and a clock that stood still left every button under a capturing listener dead.
 if (SHARE && Number.isFinite(Date.parse(SHARE.exported_at))) {
-  const exported_at = Date.parse(SHARE.exported_at);
-  Date.now = () => exported_at;
+  const exported_at = Date.parse(SHARE.exported_at), opened_at = performance.now();
+  Date.now = () => exported_at + (performance.now() - opened_at) / 1000;
 }
 // index.html carries the Chinese tab title; it follows the page language here.
 document.title = SHARE ? t("{title} · AI CoDiscuss", { title: SHARE.title }) : t("共议聊天室 · AI CoDiscuss");
@@ -2804,7 +2806,7 @@ function attachment_size(size) {
 
 // Attachments opened in the file preview window: Markdown and HTML rendered, CSV/TSV as tables, subtitles as a
 // timeline, Office documents in their previews, a Premiere project unpacked to its XML, the rest as source.
-const TEXT_ATTACHMENT = /\.(md|markdown|txt|log|csv|tsv|json|jsonc|ya?ml|toml|ini|xml|html?|css|vue|[cm]?js|jsx|tsx?|py|sql|sh|ps1|bat|srt|vtt|ass|ssa|lrc|fcpxml|kdenlive|mlt|otio|edl|docx|xlsx|xls|ods|pptx|prproj)$/i;
+const TEXT_ATTACHMENT = /\.(md|markdown|txt|log|csv|tsv|json|jsonc|ya?ml|toml|ini|xml|html?|css|vue|[cm]?js|jsx|tsx?|py|sql|sh|ps1|bat|srt|vtt|ass|ssa|lrc|fcpxml|kdenlive|mlt|otio|edl|docx|xlsx|xls|ods|pptx|prproj|zip)$/i;
 
 /** Whether an attachment opens in the file preview window. */
 function is_text_attachment(file) {
@@ -3706,7 +3708,8 @@ async function local_launch_request(action, payload) {
   let result;
   try { result = JSON.parse(raw); }
   catch { throw new Error(t('本机服务返回了无法识别的内容（HTTP {status}）：{excerpt}', { status: response.status, excerpt: raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) })); }
-  if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('本机启动请求失败')), { launch: result.launch });
+  // `code` names a refusal the page acts on (e.g. a workflow changed since it was loaded); the text alone is for people.
+  if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('本机启动请求失败')), { launch: result.launch, code: result.code });
   return result;
 }
 
@@ -4100,7 +4103,7 @@ async function relay_command_once(action, payload) {
   try { answer = await relay_exchange(action, payload, limit); }
   catch (error) { if (computer_rooms_only() || (error.status !== 404 && !error.offline)) throw error; }
   const { status, body } = answer ?? await queued_relay_command(action, payload, limit);
-  if (status >= 400) throw Object.assign(new Error(server_text(body.error_text, body.error) || t('本机操作失败')), { launch: body.launch, need: body.need, room_id: body.room_id });
+  if (status >= 400) throw Object.assign(new Error(server_text(body.error_text, body.error) || t('本机操作失败')), { launch: body.launch, need: body.need, room_id: body.room_id, code: body.code });
   return body;
 }
 
@@ -7121,7 +7124,7 @@ const ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\/)/;
 const SHARE_FOLDER_MIN_PARTS = 2;
 // Attachments whose text is scanned for keys and folders before sharing: plain text up to this size, not packed office files.
 const SHARE_SCAN_BYTES = 2 * 1024 * 1024;
-const SHARE_PACKED_TEXT = /\.(docx|xlsx|xls|ods|pptx|prproj)$/i;
+const SHARE_PACKED_TEXT = /\.(docx|xlsx|xls|ods|pptx|prproj|zip)$/i;
 const SHARE_SNIPPET_CHARS = 20;
 
 /** A changed file's path as a share page shows it: inside the run's own folder, or the last two parts of the path. */

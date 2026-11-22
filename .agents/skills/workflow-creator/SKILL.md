@@ -136,7 +136,7 @@ project_access: write
 |---|---|
 | 房间主持人，任务里有 `host_workflows: true` | 房主已允许你自建：把草稿写成一个文件（下方“草稿格式”，只用一段 `1/1`），放在任务的 `draft_directory` 下，运行 `<cli> launch workflow-adopt --draft <文件> --access-file <本次任务的 access_file>`。程序校验、保存、在本房间启用并邀请缺少的卡片成员（离开的请回），返回 `members`（卡片 ID → 成员名），本次执行里就能点名派活。只能更新本房间绑定的工作流；卡片权限最高 write。 |
 | 房间主持人，任务里没有该字段 | 你不能保存。告诉用户：在“成员与设置 → 协作设置”的“主持人权限”里勾选“工作流”后，你就能自己保存并启用；用户打开后再按上一行做。 |
-| 不在房间里，用户直接让你建 | 先在一个临时文件夹里按“格式”写好，运行 `codiscuss launch workflow-check --dir <文件夹>` 校验；用户确认后运行 `codiscuss launch workflow-save --dir <文件夹>` 保存进工作流库。同 ID 会覆盖原有工作流，覆盖前先告诉用户。 |
+| 不在房间里，用户直接让你建 | 先在一个临时文件夹里按“格式”写好，运行 `codiscuss launch workflow-check --dir <文件夹>` 校验；用户确认后运行 `codiscuss launch workflow-save --dir <文件夹>` 保存进工作流库。库里已有同 ID 的工作流时，保存会被拒绝，须表明来意：改的是你读过的那一版，就加 `--revision <读取时的修订号>`（库在那之后被改过就拒绝，什么都不写，重新读取后再改）；要整份覆盖，就先告诉用户、得到同意后加 `--overwrite`。修订号是整个文件夹的内容摘要，`codiscuss launch workflows` 的 get 返回的 `revision` 就是它。 |
 
 不要直接写入本机服务目录的 `workflows/`：那样会跳过校验和写入锁，格式错的文件会让启用它的房间读不到工作流。命令失败时按报错修正，不要绕过。
 

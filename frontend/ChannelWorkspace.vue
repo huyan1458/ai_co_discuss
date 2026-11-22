@@ -221,13 +221,14 @@ const project_directories = computed((previous) => {
   return previous?.length === next.length && next.every((directory, index) => Object.is(directory, previous[index])) ? previous : next;
 });
 /** Room tools keep their positions; files shows a hint until a project directory is saved. */
+// On a share page only 消息 and 执行 hold the room; the other tabs open sample pages and are shown dimmed (user 2026-11-22).
 const tabs = computed(() => [
   { value: "discussion", label: t("消息"), icon: "i-lucide-messages-square" },
   { value: "private", label: t("私聊"), icon: "i-lucide-message-square", ui: { linkLeadingIcon: "is-private-icon" } },
   { value: "timeline", label: t("执行"), icon: "i-lucide-chart-gantt" },
   { value: "overview", label: t("房间"), icon: "i-lucide-sliders-horizontal" },
   { value: "files", label: t("文件"), icon: "i-lucide-files", title: project_directory.value || "" },
-]);
+].map((item) => share.value && SHARE_LOCKED[item.value] ? { ...item, ui: { ...item.ui, trigger: "is-share-locked" } } : item));
 const creating_tabs = computed(() => tabs.value.map((item) => ({ ...item, disabled: item.value !== "discussion" })));
 /** The workflow library belongs to this computer, not a room, so it is not a room tab: the sidebar
  * has its own 工作流 section, and a workflow chosen there fills the middle in place of the room (with no room selected too). */

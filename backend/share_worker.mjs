@@ -250,7 +250,7 @@ function html_headers(nonce) {
       // Included attachments are shown from object URLs made in the page; the PDF and Office viewers load their own parts
       // (fonts, character maps, decoders) from this site, PDF.js decodes some images in WebAssembly, and the slide viewer
       // starts its worker from an object URL. Nothing else is fetched.
-      "connect-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
+      "connect-src 'self' blob:; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
 }
 function render_page(template, data, nonce) {
   const title = escape_html(data.title), description = escape_html(data.description);
@@ -379,10 +379,25 @@ function write_method(path) {
   if (path === "/api/shares" || /^\/api\/shares\/[\w-]{22}\/(report|renew)$/.test(path)) return "POST";
   return /^\/api\/shares\/[\w-]{22}$/.test(path) ? "PUT, DELETE" : "";
 }
+// Where an HTML attachment runs on a share page (frontend/inline-visual.js RELAY_FRAME). The page's frames would inherit
+// its policy and run none of the attachment's scripts, so it is written into this page instead: sandboxed to an opaque
+// origin (no storage or cookies of this site, no forms, no leaving the frame), scripts and public libraries allowed, no
+// requests of its own, and only inside this site's pages. It is sent the document by the page that frames it.
+const FRAME_PAGE = '<!doctype html><meta charset="utf-8"><script>addEventListener("message",function show(event){'+
+  'if(event.source!==parent||!event.data||typeof event.data.codiscuss_frame!=="string")return;removeEventListener("message",show);'+
+  'document.open();document.write(event.data.codiscuss_frame);document.close();});</script>';
+function frame_page() {
+  return new Response(FRAME_PAGE, { headers:{ "Content-Type":"text/html; charset=utf-8", "Cache-Control":"public, max-age=3600",
+    "X-Content-Type-Options":"nosniff", "Referrer-Policy":"no-referrer",
+    "Content-Security-Policy":"sandbox allow-scripts allow-modals; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: data: blob:; "+
+      "style-src 'unsafe-inline' https: data:; img-src https: data: blob:; font-src https: data:; media-src https: data: blob:; worker-src blob:; "+
+      "connect-src data: blob:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'" } });
+}
 async function route(request, env, ctx, url) {
   const parts = url.pathname.slice(1).split("/"), method = request.method;
   if (parts[0] === "api" && parts[1] === "admin" && parts[2] === "shares") return admin_route(request,env,url,parts.slice(3));
   if (method === "GET" && parts.length === 2 && parts[0] === "s" && ID_PATTERN.test(parts[1])) return read_page(request,env,ctx,parts[1]);
+  if ((method === "GET" || method === "HEAD") && url.pathname === "/frame") return frame_page();
   if ((method === "GET" || method === "HEAD") && PUBLIC_ASSET.test(url.pathname)) return env.ASSETS.fetch(request);
   if (!write_method(url.pathname)) fail("missing");
   if (method === "OPTIONS") return new Response(null, { status:204 });

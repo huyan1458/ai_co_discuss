@@ -15,7 +15,7 @@ import { use_workflow_library } from "./workflow-library.js";
 
 const library = use_workflow_library();
 const { available, workflows, draft, saved_id, canvas_key, commands_allowed, busy, loading, failure, dirty, add_items, skill_request,
-  scope, current, reserved, subs } = library;
+  scope, current, reserved, subs, conflict } = library;
 // The SKILL.md panel's width, dragged at its left edge and remembered in this browser, and whether the panel is open
 // (it is unless the user folded it away).
 const SKILL_WIDTH = { min: 280, max: 760, initial: 340, step: 16, key: "codiscuss.workflow_skill_width" };
@@ -125,6 +125,13 @@ function start_resize(event) {
             <i v-if="dirty" class="workflow-library-dirty" /></span></UTooltip>
         </template>
       </WorkflowCanvas>
+      <!-- The library holds a newer version than this page, or the ID is taken: saving would replace it, so the user chooses. -->
+      <div v-if="draft && conflict" class="workflow-library-conflict" role="alert">
+        <UIcon name="i-lucide-triangle-alert" />
+        <span>{{ conflict === 'exists' ? t('工作流库里已有同 ID 的工作流，保存会整份覆盖它') : t('工作流已被修改，请重新载入') }}</span>
+        <UButton v-if="conflict === 'exists'" :label="t('覆盖保存')" size="xs" color="error" variant="soft" :loading="busy" @click="library.save({ overwrite: true })" />
+        <UButton v-else :label="t('重新载入')" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="soft" @click="library.reload()" />
+      </div>
       <WorkflowParts v-if="draft" :compact="stacked" @place="(id) => canvas?.show_sub_node(id)" />
       <WorkflowExperts v-if="draft" v-model:open="experts_open" v-model:focus="experts_focus" />
       <template v-else-if="loading">
@@ -168,6 +175,8 @@ function start_resize(event) {
 /* The loading placeholder keeps the grid and toolbar only; its default start node would sit under the spinner. Not
    `visibility`: Vue Flow makes each node visible again. */
 .workflow-library-placeholder :deep(.vue-flow__nodes), .workflow-library-placeholder :deep(.vue-flow__edges) { display: none; }
+.workflow-library-conflict { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 10px; border: 1px solid var(--ui-warning); background: var(--ui-bg-elevated); color: var(--ui-text); font-size: 13px; max-width: calc(100% - 32px); }
 .workflow-library-loading { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; color: var(--ui-text-dimmed); pointer-events: none; font-size: 13px; }
 .workflow-library-loading > span { width: 28px; height: 28px; }
 .workflow-library-loading > span:last-child { width: auto; height: auto; }

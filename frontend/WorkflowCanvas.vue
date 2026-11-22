@@ -48,8 +48,9 @@ const PHONE_WIDTH = 480;
 const tight = ref(false);
 // Whether the toolbar shows words goes by the canvas's own width only: a portrait tablet stacks the page yet has room for them.
 const icons_only = computed(() => narrow.value);
-// On a phone (user 2026-11-22): one group top left — add, 专家配置, tidy, 保存 (tidy rides in the `actions` slot as its
-// `arrange` prop, between the two) — zoom top right, and nothing in the bottom right; the SKILL.md hint is not shown.
+// On a phone (user 2026-11-22): top left, add, 专家配置, tidy, 保存 (tidy rides in the `actions` slot as its `arrange`
+// prop, between the two), with undo and redo on a second row below; zoom top right; nothing in the bottom right, and the
+// SKILL.md hint is not shown.
 const foldable = computed(() => props.compact && tight.value);
 // Layout reads each node's size as Vue Flow measured it (node_size), so restyling a node needs no change here; these are
 // only its first guess for a node not drawn yet (a workflow opened without positions, a node just added).
@@ -971,6 +972,10 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <UTooltip :text="t('添加节点：成员、主持人或子工作流（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-plus" :label="icons_only ? undefined : t('添加节点')" :aria-label="t('添加节点')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
           <slot v-if="foldable" name="actions" :icons-only="icons_only" :arrange="arrange" />
         </div>
+        <div v-if="foldable" class="workflow-canvas-toolbar">
+          <UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" />
+          <UButton icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" />
+        </div>
         <template v-if="!foldable">
           <div class="workflow-canvas-toolbar">
             <UTooltip :text="t('撤销 (Ctrl+Z)')"><UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" /></UTooltip>
@@ -1045,7 +1050,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
   background: var(--ui-bg-elevated); color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; }
 /* Phone: the hint stands on the main line / sub-workflow switch (38px tall), stops short of the tools in the bottom-right
    corner, and wraps as running text when it has to. */
-.workflow-canvas.is-phone .workflow-canvas-tools { max-width: none; }
+.workflow-canvas.is-phone .workflow-canvas-tools { flex-direction: column; align-items: flex-start; max-width: none; }
 .workflow-canvas.is-layered :deep(.vue-flow__transformationpane) { will-change: transform; }
 
 /* Start: a small card, its drag bar on top like every node's. */

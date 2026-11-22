@@ -1,9 +1,3 @@
-<script>
-// A share page replays the run once by itself, the first time its reader opens the timeline; switching tabs back and
-// forth does not start it again.
-let share_replayed = false;
-</script>
-
 <script setup>
 import { t, locale } from './i18n.js';
 /**
@@ -338,16 +332,16 @@ function pause() { replay.playing = false; }
 function restart() { play_position = 0; Object.assign(replay, { position: 0, playing: true }); }
 function scrub(event) { play_position = Number(event.target.value); Object.assign(replay, { position: play_position, playing: false }); load_run_notes(); }
 function close_player() { show_player.value = false; Object.assign(replay, { position: null, playing: false }); }
-/** The share page's replay button: start, pause, or go on from where it paused. */
+/** The share page's replay button: start the replay, or end it and show the room as it finished (user 2026-11-22). */
 function toggle_replay() {
-  show_player.value = true;
-  if (replay.playing) pause(); else play();
+  if (replaying.value) close_player();
+  else { show_player.value = true; play(); }
 }
+// A share page's 执行 tab replays from the start each time it is opened (the tab mounts this anew).
 watch(can_replay, (ready) => {
-  if (!ready || !view.value.share || share_replayed) return;
-  // A reader who asked for less motion starts it with the button instead.
-  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
-  share_replayed = true;
+  // Not held back for "reduce motion": Windows reports it whenever its animations are off, and the replay is the content
+  // a reader opened the tab for (it was left still on such computers before, user 2026-11-22).
+  if (!ready || !view.value.share) return;
   show_player.value = true;
   play();
 }, { immediate: true });
@@ -670,8 +664,8 @@ const selected_notes = computed(() => {
           <span v-if="replaying" class="wf-state is-replay">{{ t('回放中 · {value1}', { value1: clock(view_time) }) }}</span>
           <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? t('{value1} 个进行中', { value1: digest.running.length }) : t('均已结束') }}</span>
           <!-- On a share page the replay is the quickest way to see several AIs at work, so it starts from the top. -->
-          <button v-if="view.share && can_replay" type="button" class="wf-share-replay" :class="{ 'is-playing': replay.playing }" @click="toggle_replay">
-            <UIcon :name="replay.playing ? 'i-lucide-pause' : 'i-lucide-play'" />{{ replay.playing ? t('暂停回放') : replaying ? t('继续回放') : t('回放协作过程') }}</button>
+          <button v-if="view.share && (can_replay || replaying)" type="button" class="wf-share-replay" :class="{ 'is-playing': replaying }" @click="toggle_replay">
+            <UIcon :name="replaying ? 'i-lucide-square' : 'i-lucide-play'" />{{ replaying ? t('结束回放') : t('回放协作过程') }}</button>
         </div>
         <p v-if="headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
       </header>

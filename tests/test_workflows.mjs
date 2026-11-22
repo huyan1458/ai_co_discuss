@@ -1,21 +1,24 @@
 /** Room workflows: the library on disk, pasted drafts, and what a room's host and members receive. */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { run_command } from '../runner/adapters/api_commands.mjs';
 import { open_project } from '../runner/adapters/api_files.mjs';
-import { validate_preset } from '../runner/discussion_launch.mjs';
+import { check_or_save_workflow, validate_preset, workflows_command } from '../runner/discussion_launch.mjs';
 import { free_task_files, member_folders } from '../runner/free_runner.mjs';
+import { run_launch_command } from '../runner/remote_launch.mjs';
 
 /** A task file, which sits in its member's own runtime folder. */
 function runtime_file(directory, name) {
   return member_folders(directory).map(folder => join(folder, name)).find(path => existsSync(path)) || join(directory, name);
 }
 import { assert_workflow_enabled, delete_workflow, effective_profile, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_in_use, workflow_task_field } from '../runner/workflows.mjs';
+// Saves that replace a saved workflow on purpose; a save naming the version it edited is tested on its own.
+const REPLACE = { overwrite: true };
 
 const NOVEL = {
   id: 'novel-serial', label: '连载小说', description: '主编出骨架，执笔写正文',
@@ -26,6 +29,14 @@ const NOVEL = {
   ],
 };
 
+/** Every file under a folder with its content, to compare a folder before and after a refused save. */
+function list_files(directory, prefix = '') {
+  return Object.fromEntries(readdirSync(join(directory, prefix), { withFileTypes: true }).flatMap(entry => {
+    const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory() ? Object.entries(list_files(directory, path)) : [[path, readFileSync(join(directory, path), 'utf8')]];
+  }));
+}
+
 function home_fixture(t) {
   const home = mkdtempSync(join(tmpdir(), 'workflow-home-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -34,10 +45,10 @@ function home_fixture(t) {
 
 test('a workflow saves as plain files, reads back the same, and refuses unsafe or ambiguous content', t => {
   const home = home_fixture(t);
-  const saved = save_workflow(home, NOVEL, validate_preset);
+  const saved = save_workflow(home, NOVEL, validate_preset, REPLACE);
   // Cards come back in file-name order.
   const by_card = list => [...list].sort((a, b) => a.card.localeCompare(b.card));
-  assert.deepEqual({ ...saved, directory: undefined, agents: by_card(saved.agents) }, { ...NOVEL, directory: undefined, agents: by_card(NOVEL.agents), resources: {}, sub_workflows: [], commands: [] });
+  assert.deepEqual({ ...saved, directory: undefined, revision: undefined, agents: by_card(saved.agents) }, { ...NOVEL, directory: undefined, revision: undefined, agents: by_card(NOVEL.agents), resources: {}, sub_workflows: [], commands: [] });
   const card = readFileSync(join(home, 'workflows', 'novel-serial', 'agents', 'writer.md'), 'utf8');
   // A card file reads like an agent definition: its name is the card ID, the software is its own field, empty fields are left out.
   assert.equal(card, '---\nname: writer\nplatform: Antigravity\nlabel: 执笔\ndescription: 按骨架写正文\nproject_access: write\n---\n克制、具体。\n');
@@ -64,7 +75,7 @@ test('a workflow saves as plain files, reads back the same, and refuses unsafe o
     [{ agents: [{ ...NOVEL.agents[0], secret: 'x' }] }, /预设只能包含/],
     [{ agents: [{ ...NOVEL.agents[0], system_prompt: 'x'.repeat(4001) }] }, /提示词最多/],
     [{ skill: '' }, /不能为空/],
-  ]) assert.throws(() => save_workflow(home, { ...NOVEL, ...change }, validate_preset), pattern);
+  ]) assert.throws(() => save_workflow(home, { ...NOVEL, ...change }, validate_preset, REPLACE), pattern);
   assert.deepEqual(delete_workflow(home, 'novel-serial'), { deleted: 'novel-serial' });
   assert.deepEqual(list_workflows(home), []);
 });
@@ -72,7 +83,7 @@ test('a workflow saves as plain files, reads back the same, and refuses unsafe o
 test('workflow replacement recovers a complete version after process death and deletion never revives its backup', t => {
   const home = home_fixture(t);
   for (const boundary of [1, 2]) {
-    save_workflow(home, NOVEL, validate_preset);
+    save_workflow(home, NOVEL, validate_preset, REPLACE);
     const updated = { ...NOVEL, skill: '新版手册', agents: [{ ...NOVEL.agents[0], system_prompt: '新版提示词' }] };
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
       import fs from 'node:fs';
@@ -83,7 +94,7 @@ test('workflow replacement recovers a complete version after process death and d
       syncBuiltinESMExports();
       const { save_workflow } = await import(${JSON.stringify(new URL('../runner/workflows.mjs', import.meta.url).href)});
       const { validate_preset } = await import(${JSON.stringify(new URL('../runner/discussion_launch.mjs', import.meta.url).href)});
-      save_workflow(${JSON.stringify(home)}, ${JSON.stringify(updated)}, validate_preset);
+      save_workflow(${JSON.stringify(home)}, ${JSON.stringify(updated)}, validate_preset, { overwrite: true });
     `], { windowsHide: true, encoding: 'utf8' });
     assert.equal(child.status, 77, child.stderr);
     assert.equal(list_workflows(home)[0].id, NOVEL.id);
@@ -99,14 +110,14 @@ test('workflow replacement recovers a complete version after process death and d
 test('a workflow folder carries its other text files like a skill folder, and a save that carries none keeps them', t => {
   const home = home_fixture(t);
   const resources = { 'templates/README.md': '# 〔书名〕', 'templates/正文/第01集_标题.md': '---\n集: 01\n---\n', 'references/示例.md': '例' };
-  save_workflow(home, { ...NOVEL, resources }, validate_preset);
+  save_workflow(home, { ...NOVEL, resources }, validate_preset, REPLACE);
   const folder = join(home, 'workflows', NOVEL.id);
   assert.equal(readFileSync(join(folder, 'templates', '正文', '第01集_标题.md'), 'utf8'), resources['templates/正文/第01集_标题.md']);
   assert.deepEqual(get_workflow(home, NOVEL.id).resources, resources);
   // A file that is not text is kept on disk and named back as ignored, never read as resource text.
   writeFileSync(join(folder, 'templates', 'cover.png'), Buffer.from([0x89, 0x50, 0xff, 0xfe, 0x00]));
   // A host draft or the editor carries no resources: saving keeps the whole folder.
-  save_workflow(home, { ...NOVEL, skill: '新版' }, validate_preset);
+  save_workflow(home, { ...NOVEL, skill: '新版' }, validate_preset, REPLACE);
   assert.deepEqual(get_workflow(home, NOVEL.id).resources, resources);
   assert.deepEqual([...readFileSync(join(folder, 'templates', 'cover.png'))], [0x89, 0x50, 0xff, 0xfe, 0x00]);
   // A folder or zip import brings text files along.
@@ -116,15 +127,15 @@ test('a workflow folder carries its other text files like a skill folder, and a 
   const sent = preview_workflow({ files }, validate_preset, () => true);
   assert.deepEqual([sent.resources, sent.ignored], [{ 'templates/状态.yaml': 'time: 0\n' }, ['logo.png']]);
   for (const path of ['../x.md', 'a/../../x.md', '.hidden', 'a\\b.md', 'C:/x.md', '', 'SKILL.md', 'agents/x.md']) {
-    assert.throws(() => save_workflow(home, { ...NOVEL, resources: { [path]: 'x' } }, validate_preset), /路径不合法/);
+    assert.throws(() => save_workflow(home, { ...NOVEL, resources: { [path]: 'x' } }, validate_preset, REPLACE), /路径不合法/);
   }
-  save_workflow(home, { ...NOVEL, resources: {} }, validate_preset);
+  save_workflow(home, { ...NOVEL, resources: {} }, validate_preset, REPLACE);
   assert.deepEqual(get_workflow(home, NOVEL.id).resources, {});
 });
 
 test('folder import refuses directory links without reading outside the workflow', t => {
   const home = home_fixture(t);
-  save_workflow(home, { ...NOVEL, agents: [] }, validate_preset);
+  save_workflow(home, { ...NOVEL, agents: [] }, validate_preset, REPLACE);
   const outside = join(home, 'outside');
   mkdirSync(outside);
   writeFileSync(join(outside, 'writer.md'), '---\nname: Codex-writer\n---\nprivate');
@@ -168,7 +179,7 @@ test('an import starts write cards read-only and marks platforms this computer l
 /** A room bound to the saved novel workflow, its writer played by an Antigravity member. */
 function room_fixture(t) {
   const home = home_fixture(t);
-  save_workflow(home, NOVEL, validate_preset);
+  save_workflow(home, NOVEL, validate_preset, REPLACE);
   const directory = join(home, 'runtime');
   mkdirSync(directory);
   const config = { mode: 'free', site: 'https://discussion.test', room: 'room', token: 'o'.repeat(32), directory, project: resolve('.'),
@@ -206,14 +217,14 @@ test('the host is told of the workflow to read on demand and its present members
   assert.match(writer.prompt, /克制、具体。/);
   assert.doesNotMatch(writer.prompt, /旧提示词/);
   assert.equal(writer.profile.project_access, 'write');
-  save_workflow(home, { ...NOVEL, agents: [{ ...NOVEL.agents[0], system_prompt: '改后的提示词', project_access: 'full' }] }, validate_preset);
+  save_workflow(home, { ...NOVEL, agents: [{ ...NOVEL.agents[0], system_prompt: '改后的提示词', project_access: 'full' }] }, validate_preset, REPLACE);
   const updated = task('Antigravity-writer', 'member');
   task('Claude', 'host');
   assert.equal(JSON.parse(readFileSync(runtime_file(config.directory, 'free-1.task.json'), 'utf8')).workflow.revision, revision, 'a card edit leaves the host reading as it was');
-  save_workflow(home, { ...NOVEL, skill: '新的做法' }, validate_preset);
+  save_workflow(home, { ...NOVEL, skill: '新的做法' }, validate_preset, REPLACE);
   task('Claude', 'host');
   assert.notEqual(JSON.parse(readFileSync(runtime_file(config.directory, 'free-1.task.json'), 'utf8')).workflow.revision, revision);
-  save_workflow(home, { ...NOVEL, agents: [{ ...NOVEL.agents[0], system_prompt: '改后的提示词', project_access: 'full' }] }, validate_preset);
+  save_workflow(home, { ...NOVEL, agents: [{ ...NOVEL.agents[0], system_prompt: '改后的提示词', project_access: 'full' }] }, validate_preset, REPLACE);
   assert.match(updated.prompt, /改后的提示词/);
   assert.equal(updated.profile.project_access, 'write', 'editing a card never widens the room member permission');
   // Changing the host role moves the playbook to the new host, without binding it to the original name.
@@ -254,7 +265,7 @@ test('sub-workflows live in workflows/<id>/ as workflows of their own: their car
     agents: [{ card: 'hero', name: 'Claude-hero', label: '主角视角', description: '代入主角', project_access: 'write', system_prompt: '你就是主角。' }],
     flow: { nodes: [{ id: 'start', type: 'start' }, { id: 'hero', type: 'card', card: 'hero' }], edges: [{ source: 'start', target: 'hero' }] } };
   const check = { id: 'aigc-check', label: 'AI 率检查', description: '查 AI 率', skill: '运行 scripts/check.py。', agents: [] };
-  save_workflow(home, { ...NOVEL, sub_workflows: [rehearsal, check], resources: { 'workflows/aigc-check/scripts/check.py': 'print(1)\n' } }, validate_preset);
+  save_workflow(home, { ...NOVEL, sub_workflows: [rehearsal, check], resources: { 'workflows/aigc-check/scripts/check.py': 'print(1)\n' } }, validate_preset, REPLACE);
   const folder = join(home, 'workflows', 'novel-serial');
   // Each part is written the Agent Skills way: the display name under metadata, cards and canvas beside its SKILL.md.
   assert.match(readFileSync(join(folder, 'SKILL.md'), 'utf8'), /\nmetadata:\n {2}label: 连载小说\n/);
@@ -265,13 +276,13 @@ test('sub-workflows live in workflows/<id>/ as workflows of their own: their car
     [['aigc-check', 'AI 率检查', [], false], ['rehearsal', '剧情试演', ['hero'], true]]);
   assert.deepEqual(Object.keys(saved.resources), ['workflows/aigc-check/scripts/check.py'], 'only a part\'s other files are resources');
   // A save without sub-workflows (a host draft) keeps them; a save with a list replaces them, keeping a kept part's other files.
-  save_workflow(home, { ...NOVEL, skill: '改过的主线' }, validate_preset);
+  save_workflow(home, { ...NOVEL, skill: '改过的主线' }, validate_preset, REPLACE);
   assert.equal(get_workflow(home, 'novel-serial').sub_workflows.length, 2);
-  save_workflow(home, { ...NOVEL, sub_workflows: [{ ...check, skill: '改过的检查' }] }, validate_preset);
+  save_workflow(home, { ...NOVEL, sub_workflows: [{ ...check, skill: '改过的检查' }] }, validate_preset, REPLACE);
   const edited = get_workflow(home, 'novel-serial');
   assert.deepEqual(edited.sub_workflows.map(sub => [sub.id, sub.skill]), [['aigc-check', '改过的检查']]);
   assert.equal(edited.resources['workflows/aigc-check/scripts/check.py'], 'print(1)\n');
-  save_workflow(home, { ...NOVEL, sub_workflows: [rehearsal, check] }, validate_preset);
+  save_workflow(home, { ...NOVEL, sub_workflows: [rehearsal, check] }, validate_preset, REPLACE);
   for (const [change, pattern] of [
     [{ agents: [...NOVEL.agents, { card: 'hero', name: 'Claude-hero' }] }, /卡片 ID 重复/],
     [{ sub_workflows: [{ ...check, description: '' }] }, /描述不能为空/],
@@ -281,12 +292,12 @@ test('sub-workflows live in workflows/<id>/ as workflows of their own: their car
     [{ sub_workflows: [{ ...rehearsal, flow: { nodes: [{ id: 'start', type: 'start' }, { id: 's', type: 'sub', sub: 'aigc-check' }], edges: [] } }, check] }, /不能再放子工作流/],
     [{ sub_workflows: [check], flow: { nodes: [{ id: 'start', type: 'start' }, { id: 's', type: 'sub', sub: 'rehearsal' }], edges: [] } }, /不存在的子工作流：rehearsal/],
     [{ resources: { 'workflows/x/SKILL.md': 'x' } }, /不算附带文件/],
-  ]) assert.throws(() => save_workflow(home, { ...NOVEL, ...change }, validate_preset), pattern);
+  ]) assert.throws(() => save_workflow(home, { ...NOVEL, ...change }, validate_preset, REPLACE), pattern);
   assert.equal(get_workflow(home, 'novel-serial').sub_workflows.length, 2, 'a refused save leaves the saved version');
   // The main canvas shows where a sub-workflow is used; a sub-workflow's canvas may show a main-flow member taking part.
   const main_flow = { nodes: [{ id: 'start', type: 'start', x: 0, y: 0 }, { id: 's', type: 'sub', sub: 'aigc-check', x: 1, y: 0 }], edges: [{ source: 'start', target: 's' }] };
   const check_flow = { nodes: [{ id: 'start', type: 'start', x: 0, y: 0 }, { id: 'w', type: 'card', card: 'writer', x: 1, y: 0 }], edges: [{ source: 'start', target: 'w' }] };
-  save_workflow(home, { ...NOVEL, flow: main_flow, sub_workflows: [rehearsal, { ...check, flow: check_flow }] }, validate_preset);
+  save_workflow(home, { ...NOVEL, flow: main_flow, sub_workflows: [rehearsal, { ...check, flow: check_flow }] }, validate_preset, REPLACE);
   const drawn = get_workflow(home, 'novel-serial');
   assert.deepEqual([drawn.flow.nodes[1], drawn.sub_workflows.find(sub => sub.id === 'aigc-check').flow.nodes[1]],
     [main_flow.nodes[1], check_flow.nodes[1]]);
@@ -321,6 +332,96 @@ test('sub-workflows live in workflows/<id>/ as workflows of their own: their car
   assert.match(task('Claude-hero').prompt, /你就是主角。/, 'a sub-workflow member gets its card prompt');
 });
 
+test('a save that edits a saved workflow names the version it read, so a stale copy never replaces newer files', t => {
+  const home = home_fixture(t);
+  const rehearsal = { id: 'rehearsal', label: '剧情试演', description: '请主角视角试演一场戏', skill: '试演。',
+    agents: [{ card: 'hero', name: 'Claude-hero', label: '主角视角', system_prompt: '你就是主角。' }] };
+  // A new workflow needs no revision; reading it back gives the folder's revision.
+  const created = save_workflow(home, { ...NOVEL, sub_workflows: [] }, validate_preset);
+  assert.match(created.revision, /^[0-9a-f]{16}$/);
+  assert.equal(get_workflow(home, NOVEL.id).revision, created.revision);
+  // Someone else adds a sub-workflow; the page still holds the version without it.
+  const stale = created.revision;
+  const newer = save_workflow(home, { ...NOVEL, sub_workflows: [rehearsal] }, validate_preset, { base_revision: stale });
+  assert.notEqual(newer.revision, stale, 'the revision follows every change, a sub-workflow included');
+  const folder = join(home, 'workflows', NOVEL.id);
+  const files = () => list_files(folder);
+  const before = files();
+  // The stale page saves its copy, which lacks that sub-workflow: refused, nothing written, the sub-workflow kept.
+  assert.throws(() => save_workflow(home, { ...NOVEL, skill: '旧页面的改动', sub_workflows: [] }, validate_preset, { base_revision: stale }),
+    error => error.code === 'workflow_changed' && /已被修改/.test(error.message));
+  assert.deepEqual(files(), before);
+  assert.ok(existsSync(join(folder, 'workflows', 'rehearsal', 'SKILL.md')));
+  // A save naming no revision may not replace a saved workflow either; only an explicit overwrite does.
+  assert.throws(() => save_workflow(home, { ...NOVEL, sub_workflows: [] }, validate_preset), error => error.code === 'workflow_exists');
+  assert.deepEqual(files(), before);
+  // With the current revision the save goes through, and the revision changes again.
+  const edited = save_workflow(home, { ...NOVEL, skill: '新的主线', sub_workflows: [rehearsal] }, validate_preset, { base_revision: newer.revision });
+  assert.notEqual(edited.revision, newer.revision);
+  assert.equal(get_workflow(home, NOVEL.id).skill, '新的主线');
+  // Any file counts, not only SKILL.md: a template edited on disk changes the revision.
+  writeFileSync(join(folder, 'notes.md'), '手改的文件');
+  assert.notEqual(get_workflow(home, NOVEL.id).revision, edited.revision);
+  // A workflow deleted since it was read is refused too, not recreated from the stale copy.
+  delete_workflow(home, NOVEL.id);
+  assert.throws(() => save_workflow(home, NOVEL, validate_preset, { base_revision: edited.revision }), error => error.code === 'workflow_changed');
+  assert.equal(existsSync(folder), false);
+});
+
+test('every save entry states its intent: the page names its revision or chooses to overwrite, the command line likewise', t => {
+  const home = home_fixture(t);
+  // The page: a new workflow saves as it is; editing a saved one names the revision it loaded.
+  const created = workflows_command(home, { action: 'save', workflow: NOVEL });
+  const loaded = workflows_command(home, { action: 'get', id: NOVEL.id });
+  assert.equal(loaded.revision, created.revision);
+  const edited = workflows_command(home, { action: 'save', workflow: { ...NOVEL, skill: '页面改的' }, base_revision: loaded.revision });
+  assert.throws(() => workflows_command(home, { action: 'save', workflow: { ...NOVEL, skill: '旧页面' }, base_revision: loaded.revision }),
+    error => error.code === 'workflow_changed' && error.error_text?.template.includes('已被修改'));
+  // An import with a taken ID is refused until the user chooses to overwrite.
+  assert.throws(() => workflows_command(home, { action: 'save', workflow: { ...NOVEL, skill: '导入的' }, resources: {} }), error => error.code === 'workflow_exists');
+  workflows_command(home, { action: 'save', workflow: { ...NOVEL, skill: '导入的' }, overwrite: true });
+  assert.equal(get_workflow(home, NOVEL.id).skill, '导入的');
+  // The command line: workflow-save into a taken ID needs --revision (checked) or --overwrite.
+  const folder = join(home, 'source');
+  mkdirSync(join(folder, 'agents'), { recursive: true });
+  writeFileSync(join(folder, 'SKILL.md'), `---
+name: ${NOVEL.id}
+description: 命令行版本
+---
+命令行写的主线。
+`);
+  assert.throws(() => check_or_save_workflow(home, { dir: folder }, true), error => error.code === 'workflow_exists');
+  assert.throws(() => check_or_save_workflow(home, { dir: folder, revision: edited.revision }, true), error => error.code === 'workflow_changed');
+  const current = get_workflow(home, NOVEL.id).revision;
+  assert.equal(check_or_save_workflow(home, { dir: folder, revision: current }, true).skill, '命令行写的主线。');
+  assert.equal(check_or_save_workflow(home, { dir: folder, overwrite: true }, true).description, '命令行版本');
+  // Checking never writes and needs neither.
+  assert.equal(check_or_save_workflow(home, { dir: folder }, false).id, NOVEL.id);
+});
+
+test('a refused stale save reaches the page with its code, through the local website command and the relay alike', async t => {
+  const home = home_fixture(t);
+  const saved = save_workflow(home, NOVEL, validate_preset);
+  save_workflow(home, { ...NOVEL, skill: '别处改过' }, validate_preset, { base_revision: saved.revision });
+  const input = { action: 'save', workflow: { ...NOVEL, skill: '旧页面' }, base_revision: saved.revision };
+  const env = { ...process.env, DISCUSS_SERVICE_HOME: home };
+  // The local website runs the entrypoint as `node discussion_launch.mjs workflows --stdin` and answers with its stderr JSON.
+  const local = spawnSync(process.execPath, [resolve('runner/discussion_launch.mjs'), 'workflows', '--stdin'],
+    { input: JSON.stringify(input), encoding: 'utf8', env, windowsHide: true });
+  assert.equal(local.status, 1);
+  const body = JSON.parse(local.stderr.trim());
+  assert.equal(body.code, 'workflow_changed');
+  assert.match(body.error_text.template, /已被修改/);
+  // The relay runs the same entrypoint with --remote and hands its parsed stderr to the page as the body.
+  const previous = process.env.DISCUSS_SERVICE_HOME;
+  process.env.DISCUSS_SERVICE_HOME = home;
+  t.after(() => { if (previous === undefined) delete process.env.DISCUSS_SERVICE_HOME; else process.env.DISCUSS_SERVICE_HOME = previous; });
+  const relayed = await run_launch_command({ command: 'workflows', input });
+  assert.equal(relayed.status, 400);
+  assert.equal(relayed.body.code, 'workflow_changed');
+  assert.equal(get_workflow(home, NOVEL.id).skill, '别处改过', 'nothing was written');
+});
+
 test('the canvas names its steps and a sub-workflow says where it attaches: soft, warned about but never refused, and told to the host', t => {
   const home = home_fixture(t);
   const nodes = [{ id: 'start', type: 'start' }, { id: 'w', type: 'card', card: 'writer' }, { id: 's', type: 'sub', sub: 'rehearsal' }];
@@ -328,28 +429,28 @@ test('the canvas names its steps and a sub-workflow says where it attaches: soft
     agents: [{ card: 'hero', name: 'Claude-hero', label: '角色', system_prompt: '你就是这个人物。' }] };
   // An older canvas without steps still saves and reads back unchanged.
   const { attach: none, ...standalone } = rehearsal;
-  save_workflow(home, { ...NOVEL, flow: { nodes, edges: [] }, sub_workflows: [standalone] }, validate_preset);
+  save_workflow(home, { ...NOVEL, flow: { nodes, edges: [] }, sub_workflows: [standalone] }, validate_preset, REPLACE);
   assert.equal(get_workflow(home, 'novel-serial').flow.stages, undefined);
   // A standalone sub-workflow, like the main SKILL.md, writes no attach line at all.
   const folder = join(home, 'workflows', 'novel-serial');
   assert.doesNotMatch(readFileSync(join(folder, 'workflows', 'rehearsal', 'SKILL.md'), 'utf8'), /attach/);
   assert.doesNotMatch(readFileSync(join(folder, 'SKILL.md'), 'utf8'), /attach/);
   // A step naming a node the canvas lacks, or a node in two steps, is refused.
-  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages: [{ id: 'brief', nodes: ['ghost'] }] } }, validate_preset), /不存在的节点：ghost/);
-  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages: [{ id: 'a', nodes: ['w'] }, { id: 'b', nodes: ['w'] }] } }, validate_preset), /只能属于一个步骤/);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages: [{ id: 'brief', nodes: ['ghost'] }] } }, validate_preset, REPLACE), /不存在的节点：ghost/);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages: [{ id: 'a', nodes: ['w'] }, { id: 'b', nodes: ['w'] }] } }, validate_preset, REPLACE), /只能属于一个步骤/);
   // Steps and attach points round-trip; attach is written under metadata in the sub-workflow's SKILL.md.
   const stages = [{ id: 'brief', label: '出任务书', nodes: ['w', 's'] }, { id: 'accept', label: '验收', nodes: [] }];
-  const saved = save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages }, sub_workflows: [rehearsal] }, validate_preset);
+  const saved = save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages }, sub_workflows: [rehearsal] }, validate_preset, REPLACE);
   assert.equal(saved.warnings, undefined);
   assert.deepEqual(saved.flow.stages, stages);
   assert.match(readFileSync(join(home, 'workflows', 'novel-serial', 'workflows', 'rehearsal', 'SKILL.md'), 'utf8'), /\n {2}attach: brief\n/);
   assert.deepEqual(get_workflow(home, 'novel-serial').sub_workflows[0].attach, ['brief']);
   // An attach point the canvas lacks, or a sub-workflow node in a step it does not attach to, saves with warnings.
-  const odd = save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages }, sub_workflows: [{ ...rehearsal, attach: ['nowhere'] }] }, validate_preset);
+  const odd = save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages }, sub_workflows: [{ ...rehearsal, attach: ['nowhere'] }] }, validate_preset, REPLACE);
   assert.equal(odd.warnings.length, 2);
   assert.match(odd.warnings.join('\n'), /没有的步骤：nowhere[\s\S]*步骤 brief/);
   assert.deepEqual(get_workflow(home, 'novel-serial').sub_workflows[0].attach, ['nowhere'], 'the save went through');
-  save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages }, sub_workflows: [rehearsal] }, validate_preset);
+  save_workflow(home, { ...NOVEL, flow: { nodes, edges: [], stages }, sub_workflows: [rehearsal] }, validate_preset, REPLACE);
   // The host is told the steps and each sub-workflow's attach points; a card's further member plays it with its prompt.
   const workflow = load_room_workflow({ api_home: home, workflow: { id: 'novel-serial', enabled: true, members: { hero: 'Claude-hero' },
     extra_members: { 'Claude-hero-2': 'hero' } } });
@@ -373,18 +474,18 @@ test('registered commands travel with the workflow, and an API member runs only 
     { id: 'fix', description: '会改文件', run: [node, '-e', 'console.log("fixed")'], access: 'write' },
   ] };
   const resources = { 'commands.json': JSON.stringify(registered), 'tools/check.mjs': 'console.log("checked " + process.argv[2].split(/[\\\\/]/).pop())' };
-  const saved = save_workflow(home, { ...NOVEL, resources }, validate_preset);
+  const saved = save_workflow(home, { ...NOVEL, resources }, validate_preset, REPLACE);
   assert.deepEqual(saved.commands.map(item => [item.id, item.access, item.timeout_seconds]), [['check', 'read', 120], ['fail', 'read', 120], ['slow', 'read', 1], ['fix', 'write', 120]]);
   // An import shows its commands for the user to allow; a host draft carries no files, so it can neither add nor drop them.
   assert.equal(preview_workflow({ folder: saved.directory }, validate_preset, () => true).commands.length, 4);
-  save_workflow(home, { ...NOVEL, skill: '新版' }, validate_preset);
+  save_workflow(home, { ...NOVEL, skill: '新版' }, validate_preset, REPLACE);
   assert.equal(get_workflow(home, NOVEL.id).commands.length, 4);
   for (const [commands, message] of [
     [[{ id: 'x', description: 'd', run: ['a', '{path}'], access: 'read' }], /须用 path 说明/],
     [[{ id: 'x', description: 'd', run: ['a'], access: 'all' }], /access 须为/],
     [[{ id: 'x', description: 'd', run: 'a b', access: 'read' }], /run 须为/],
     [[{ id: 'x', description: 'd', run: ['a'], access: 'read', shell: true }], /不支持的字段/]]) {
-    assert.throws(() => save_workflow(home, { ...NOVEL, resources: { 'commands.json': JSON.stringify({ commands }) } }, validate_preset), message);
+    assert.throws(() => save_workflow(home, { ...NOVEL, resources: { 'commands.json': JSON.stringify({ commands }) } }, validate_preset, REPLACE), message);
   }
 
   const project = mkdtempSync(join(tmpdir(), 'workflow-project-'));
@@ -422,25 +523,25 @@ test('a workflow keeps its canvas in flow.json as an illustration: any arrows ar
   const { home, config, task } = room_fixture(t);
   // Arrows the old relay compiler refused (a branch, a card no arrow reaches) are fine in a picture.
   const flow = canvas([['start', 'writer'], ['writer', 'science'], ['writer', 'host1'], ['science', 'writer']]);
-  assert.throws(() => save_workflow(home, { ...NOVEL, flow: canvas([['start', 'writer'], ['writer', 'ghost']]) }, validate_preset), /不存在的卡片：ghost/);
-  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { nodes: 'x', edges: [] } }, validate_preset), /flow 须为/);
-  save_workflow(home, { ...NOVEL, flow }, validate_preset);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: canvas([['start', 'writer'], ['writer', 'ghost']]) }, validate_preset, REPLACE), /不存在的卡片：ghost/);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { nodes: 'x', edges: [] } }, validate_preset, REPLACE), /flow 须为/);
+  save_workflow(home, { ...NOVEL, flow }, validate_preset, REPLACE);
   assert.deepEqual(JSON.parse(readFileSync(join(home, 'workflows', 'novel-serial', 'flow.json'), 'utf8')), flow);
   assert.deepEqual(get_workflow(home, 'novel-serial').flow, flow);
   assert.equal(get_workflow(home, 'novel-serial').resources['flow.json'], undefined, 'the canvas is its own field, not a resource');
   // A save without a flow (a host draft) keeps the canvas; null removes it.
-  save_workflow(home, { ...NOVEL, skill: '改了说明' }, validate_preset);
+  save_workflow(home, { ...NOVEL, skill: '改了说明' }, validate_preset, REPLACE);
   assert.deepEqual(get_workflow(home, 'novel-serial').flow, flow);
   task('Claude', 'host');
   // The host works from SKILL.md alone.
   assert.equal(JSON.parse(readFileSync(runtime_file(config.directory, 'free-1.task.json'), 'utf8')).workflow.flow, undefined);
-  save_workflow(home, { ...NOVEL, flow: null }, validate_preset);
+  save_workflow(home, { ...NOVEL, flow: null }, validate_preset, REPLACE);
   assert.equal(get_workflow(home, 'novel-serial').flow, undefined);
 });
 
 test('a disabled workflow stays in the library but no room may enable or keep using it; renaming changes only its name', t => {
   const home = home_fixture(t);
-  save_workflow(home, NOVEL, validate_preset);
+  save_workflow(home, NOVEL, validate_preset, REPLACE);
   const config = { api_home: home, workflow: { id: 'novel-serial', enabled: true, members: { writer: 'Antigravity-writer' } } };
   assert.deepEqual(set_workflow_disabled(home, 'novel-serial', true), { id: 'novel-serial', disabled: true });
   assert.equal(list_workflows(home)[0].disabled, true);
@@ -457,14 +558,14 @@ test('a disabled workflow stays in the library but no room may enable or keep us
   // Deleting forgets the switch, so a later workflow of the same ID starts enabled.
   set_workflow_disabled(home, 'novel-serial', true);
   delete_workflow(home, 'novel-serial');
-  save_workflow(home, NOVEL, validate_preset);
+  save_workflow(home, NOVEL, validate_preset, REPLACE);
   assert.equal(list_workflows(home)[0].disabled, undefined);
 });
 
 test('a host draft may carry the canvas and never clears the folder\'s other files', t => {
   const home = home_fixture(t);
   save_workflow(home, { ...NOVEL, resources: { 'templates/outline.md': '提纲模板', 'commands.json': '{ "commands": [] }' },
-    flow: canvas([['start', 'writer']]) }, validate_preset);
+    flow: canvas([['start', 'writer']]) }, validate_preset, REPLACE);
   const draft = flow => [`<!-- workflow-part: 1/1 id: novel-serial -->
 <!-- workflow-file: SKILL.md -->
 ---
@@ -481,13 +582,13 @@ platform: Antigravity
 <!-- workflow-file: flow.json -->
 ${JSON.stringify(flow)}` : ''}`];
   // Without a canvas: the saved one and the templates stay.
-  save_workflow(home, parse_workflow_draft(draft()), validate_preset);
+  save_workflow(home, parse_workflow_draft(draft()), validate_preset, REPLACE);
   let saved = get_workflow(home, 'novel-serial');
   assert.deepEqual([saved.skill, saved.resources['templates/outline.md'], saved.flow.edges.length], ['改过的说明', '提纲模板', 1]);
   // With a canvas written without positions: it replaces the saved one; the templates still stay.
   const flow = { nodes: [{ id: 'start', type: 'start' }, { id: 'w', type: 'card', card: 'writer' }, { id: 'h', type: 'host' }],
     edges: [{ source: 'start', target: 'w' }, { source: 'w', target: 'h' }, { source: 'h', target: 'w' }] };
-  save_workflow(home, parse_workflow_draft(draft(flow)), validate_preset);
+  save_workflow(home, parse_workflow_draft(draft(flow)), validate_preset, REPLACE);
   saved = get_workflow(home, 'novel-serial');
   assert.deepEqual([saved.flow.edges.length, saved.flow.nodes[1], saved.resources['templates/outline.md']], [3, { id: 'w', type: 'card', card: 'writer', x: 0, y: 0 }, '提纲模板']);
   assert.throws(() => parse_workflow_draft([draft().join('').replace('agents/writer.md', 'notes.md')]), /只能包含 SKILL.md、flow.json/);
@@ -497,9 +598,9 @@ test('the canvas keeps short notes on host nodes and arrows, and refuses long or
   const home = home_fixture(t);
   const flow = { nodes: [{ id: 'start', type: 'start', x: 0, y: 0 }, { id: 'w', type: 'card', card: 'writer', x: 1, y: 0 }, { id: 'h', type: 'host', label: ' 验收 ', x: 2, y: 0 }],
     edges: [{ source: 'start', target: 'w' }, { source: 'w', target: 'h', label: '' }, { source: 'h', target: 'w', label: '返工' }] };
-  save_workflow(home, { ...NOVEL, flow }, validate_preset);
+  save_workflow(home, { ...NOVEL, flow }, validate_preset, REPLACE);
   const saved = get_workflow(home, 'novel-serial').flow;
   assert.deepEqual([saved.nodes[2].label, saved.edges.map(edge => edge.label)], ['验收', [undefined, undefined, '返工']]);
-  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { ...flow, edges: [{ source: 'start', target: 'w', label: 'x'.repeat(17) }] } }, validate_preset), /最多 16 字/);
-  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { ...flow, edges: [{ source: 'start', target: 'w', label: '两\n行' }] } }, validate_preset), /不换行/);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { ...flow, edges: [{ source: 'start', target: 'w', label: 'x'.repeat(17) }] } }, validate_preset, REPLACE), /最多 16 字/);
+  assert.throws(() => save_workflow(home, { ...NOVEL, flow: { ...flow, edges: [{ source: 'start', target: 'w', label: '两\n行' }] } }, validate_preset, REPLACE), /不换行/);
 });

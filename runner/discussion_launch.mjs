@@ -113,7 +113,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch workflow-leave (--sub SUB | --member 成员) [--access-file FILE]
       codiscuss launch host-control ACTION [选项] [--access-file FILE]
       codiscuss launch workflow-check (--dir DIR | --draft FILE)
-      codiscuss launch workflow-save (--dir DIR | --draft FILE)
+      codiscuss launch workflow-save (--dir DIR | --draft FILE) [--revision REV | --overwrite]
 
 settings 读取本机软件默认配置；指定文件时保存，不启动 AI。
 start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和预览。
@@ -175,7 +175,7 @@ host-control 主持人代房主控制房间，须房主已为本房间勾选对�
         新房间的主持人权限取本机默认值但不能再新建房间，本房间可新建的数量有上限；两边各留一张链接卡片；重试沿用同一 --submission-id；
         room-post --room 房间编号 --text 话 [--submission-id ID] 在关联房间（你新建的，或新建本房间的）发言，按房主消息唤醒该房间、标注来自本房间；自用户上次发言起两边互传的条数受本机“关联房间互传上限”限制（默认不限）；读它用平常的读取命令、房间编号写新房间的（跨房间只能读）。
   不开放：批准超出上限的轮数、项目权限高于可写或放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己的其他操作。
-workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库（同 ID 覆盖），卡片按声明的项目权限保存。写法见 workflow-creator 技能。
+workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库，卡片按声明的项目权限保存；库里已有同 ID 的工作流时须表明来意：--revision 写读取时的修订号（库在那之后被改过就拒绝，什么都不写），或 --overwrite 明确整份覆盖，两样都没有就拒绝。写法见 workflow-creator 技能。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
 conversation 还须 current_session_id，当前会话接手首个主持任务。
@@ -1979,7 +1979,8 @@ export function workflows_command(home, input = {}) {
   const action = input.action || 'list';
   if (action === 'list') return workflow_library(home);
   if (action === 'get') return get_workflow(home, input.id);
-  if (action === 'save') return save_workflow(home, input.workflow, validate_preset);
+  // The page names the revision it loaded (`base_revision`), or `overwrite` after the user chose to replace an entry.
+  if (action === 'save') return save_workflow(home, input.workflow, validate_preset, { base_revision: input.base_revision, overwrite: input.overwrite === true });
   if (action === 'delete') return delete_workflow(home, input.id);
   if (action === 'rename') return rename_workflow(home, input.id, input.label);
   if (action === 'disable' || action === 'enable') return set_workflow_disabled(home, input.id, action === 'disable');
@@ -2632,7 +2633,9 @@ export async function adopt_workflow(home, { access_file, draft_file, workflow_i
     throw new Error(`本机没有配置这些卡片的软件或 API Key：${missing.join('、')}；卡片的 platform 只能用本机已配置的平台 ID：${ready.join('、')}`);
   }
   workflow = workflow_id ? { ...workflow, agents: host_cards(workflow.agents) }
-    : save_workflow(home, { ...workflow, agents: host_cards(workflow.agents) }, validate_preset);
+    // The host's draft replaces the room's own workflow on purpose (another one is refused above); a draft carries no
+    // sub-workflows or other files, so those are kept as saved.
+    : save_workflow(home, { ...workflow, agents: host_cards(workflow.agents) }, validate_preset, { overwrite: true });
   const owner = { site: config.site, room_id: config.room, token: config.token };
   const members = await join_workflow_cards(home, config, roster, workflow, bound === workflow.id ? config.workflow.members || {} : {});
   const enabled = await room_workflow(home, { ...owner, action: 'enable', workflow: { id: workflow.id, members } });
@@ -2643,14 +2646,15 @@ export async function adopt_workflow(home, { access_file, draft_file, workflow_i
  * Check a workflow folder or one-part draft as an import would, and optionally save it. A local AI uses this outside
  * rooms with its user present, so the cards keep the project access they declare.
  */
-export function check_or_save_workflow(home, { dir, draft }, save = false) {
+export function check_or_save_workflow(home, { dir, draft, revision, overwrite }, save = false) {
   if (!dir === !draft) throw new Error('须提供 --dir 工作流文件夹或 --draft 草稿文件之一');
   const source = dir ? { folder: dir } : { parts: [readFileSync(resolve(draft), 'utf8')] };
   const preview = workflows_command(home, { action: 'preview', ...source });
   if (!save) return preview;
   const declared = list => list.map(({ requested_access, ...agent }) => requested_access ? { ...agent, project_access: requested_access } : agent);
   const sub_workflows = preview.sub_workflows?.map(sub => ({ ...sub, agents: declared(sub.agents) }));
-  return save_workflow(home, { ...preview, agents: declared(preview.agents), ...(sub_workflows ? { sub_workflows } : {}) }, validate_preset);
+  return save_workflow(home, { ...preview, agents: declared(preview.agents), ...(sub_workflows ? { sub_workflows } : {}) }, validate_preset,
+    { base_revision: revision, overwrite: overwrite === true });
 }
 
 const WRITING_ACCESS = new Set(['write', 'auto', 'full', 'own']);
@@ -2703,7 +2707,7 @@ export function command_help(action) {
 export async function launch_main(args = process.argv.slice(2), input_text) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     file: { type: 'string' }, 'dry-run': { type: 'boolean' }, browser: { type: 'boolean' }, remote: { type: 'boolean' }, device: { type: 'string' },
-    'configuration-locked': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+    'configuration-locked': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, overwrite: { type: 'boolean' },
     draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' }, card: { type: 'string' }, sub: { type: 'string' }, id: { type: 'string' },
     member: { type: 'string' }, order: { type: 'string' }, revision: { type: 'string' }, name: { type: 'string' }, access: { type: 'string' },
     model: { type: 'string' }, effort: { type: 'string' }, do: { type: 'string' }, execution: { type: 'string' }, text: { type: 'string' },
@@ -2743,7 +2747,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     return process.stdout.write(`${JSON.stringify(result)}\n`);
   }
   if (['workflow-check', 'workflow-save'].includes(positionals[0])) {
-    const result = check_or_save_workflow(service_home(), { dir: values.dir, draft: values.draft }, positionals[0] === 'workflow-save');
+    const result = check_or_save_workflow(service_home(), { dir: values.dir, draft: values.draft, revision: values.revision, overwrite: values.overwrite === true }, positionals[0] === 'workflow-save');
     return process.stdout.write(`${JSON.stringify(result)}\n`);
   }
   const input = input_text === undefined ? (values.file ? JSON.parse(readFileSync(values.file, 'utf8').replace(/^\uFEFF/, '')) : null) : JSON.parse(input_text);

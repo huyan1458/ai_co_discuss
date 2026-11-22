@@ -2998,7 +2998,8 @@ function message_card(message) {
   const body_html = expanded ? message.rendered_text : preview?.html ?? message.rendered_text;
   // A visual the answer refers to shows in place on every layout, the phone included; the in-message toggle for an
   // unreferenced HTML attachment stays a desktop control, the phone opening that one full screen.
-  const inline_enabled = !view.value.share && message.author !== "用户" && message.attachments?.some(is_inline_html);
+  // A share page has the file only when its owner included attachments; otherwise the message lists none.
+  const inline_enabled = message.author !== "用户" && message.attachments?.some(is_inline_html);
   const visuals = inline_enabled && !edited && message.kind !== 'receipt' ? inline_visual_body(body_html, message.attachments) : null;
   const attachments = visuals?.remaining ?? message.attachments;
   const inline_html = inline_enabled && inline_html_available.value && attachments.some(is_inline_html);

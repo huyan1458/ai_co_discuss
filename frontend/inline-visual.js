@@ -1,6 +1,22 @@
 import { HTML_SANDBOX, html_document } from "./file-preview.js";
 
 export const INLINE_VISUAL_SANDBOX = "allow-scripts";
+// On the share site a page's frames inherit its policy, under which no script of an attachment runs. There an HTML
+// attachment goes into /frame instead: the share site's own page, served sandboxed to an opaque origin with scripts
+// allowed, which writes the document it is sent. The local site and a downloaded share page keep srcdoc.
+export const RELAY_FRAME = typeof window !== "undefined" && window.CODISCUSS_SHARE && /^https?:$/.test(location.protocol) ? "/frame" : "";
+const relayed = new WeakMap();
+
+/**
+ * Call on a frame's load. A relay frame first loads empty: it is sent `html` and loads again with it. Returns true once
+ * the frame shows the document itself.
+ */
+export function relay_frame_loaded(frame, html) {
+  if (!RELAY_FRAME || !frame || relayed.get(frame) === html) return true;
+  relayed.set(frame, html);
+  frame.contentWindow?.postMessage({ codiscuss_frame: html }, "*");
+  return false;
+}
 const inline_visual_heights = new Map();
 const DEFAULT_VISUAL_HEIGHT = 220;
 const COLLAPSED_PREFIX = "ai-codiscuss-visual-collapsed:";

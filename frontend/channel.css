@@ -437,6 +437,9 @@ body:has(.progress-drawer) .file-float { pointer-events: auto; }
 .channel-tabs [data-slot="list"] { width: 100%; padding: 4px 0; gap: 3px; background: transparent; }
 .channel-tabs [data-slot="trigger"] { flex: 1; min-width: 0; height: 30px; padding: 0 9px; gap: 6px; font-size: 12px; color: #a6afbe; }
 .channel-tabs [data-slot="trigger"][data-state="active"] { color: #eef0ff; }
+/* A share page: 消息 and 执行 hold the room, the other tabs only sample pages. */
+.channel-tabs [data-slot="trigger"].is-share-locked { opacity: .4; }
+.channel-tabs [data-slot="trigger"].is-share-locked:hover, .channel-tabs [data-slot="trigger"].is-share-locked[data-state="active"] { opacity: .65; }
 .channel-tabs [data-slot="indicator"] { background: #414552; border-radius: 5px; box-shadow: none; }
 .channel-tabs [data-slot="leadingIcon"] { width: 14px; height: 14px; }
 .channel-body { flex: 1; display: flex; min-height: 0; }
@@ -1227,7 +1230,10 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-message .channel-message-byline { justify-content: flex-start; }
   .channel-message .channel-message-meta { display: contents; }
   .channel-message .channel-message-author { flex: 1 0 100%; padding-right: var(--message-keys); }
-  .channel-message .channel-message-model { flex: 1 1 0; max-width: max-content; min-width: 0; }
+  /* The model asks for about 8em beside the facts: when both do not fit, the facts take a line of their own under it
+     rather than squeezing the model to nothing (its effort then overlapped the facts) or running past the card's edge
+     (user 2026-11-22, #7404). */
+  .channel-message .channel-message-model { flex: 1 1 8em; max-width: max-content; min-width: 0; overflow: hidden; }
   .channel-message .channel-message-facts { align-self: auto; min-height: 0; }
   .channel-message-actions button { width: 25px; height: 24px; padding: 4px; color: #929eb2; }
   .channel-message-actions button [class*="icon"] { width: 13px; height: 13px; }

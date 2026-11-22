@@ -1,4 +1,6 @@
 {
+  "工作流「{id}」已被修改，请重新载入后再保存": "Workflow “{id}” was changed since you loaded it; reload it before saving",
+  "工作流库里已有「{id}」；要整份覆盖它，请明确选择覆盖": "The library already has “{id}”; choose to overwrite it explicitly to replace it",
   "尚未绑定线上网站": "No online site is bound yet",
   "请先启动共议服务，再重连中转": "Start the CoDiscuss service before reconnecting the relay",
   "会话上下文压缩失败（{reason}），下次执行将改用新会话；请缩短输入或拆分任务后重试": "Context compaction failed ({reason}). The next run will use a new session; shorten the input or split the task before retrying",

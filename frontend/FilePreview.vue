@@ -6,11 +6,12 @@ import MediaViewer from "./MediaViewer.vue";
 import { open_image_viewer } from "./image-viewer.js";
 import OfficeViewer from "./OfficeViewer.vue";
 import PreviewLoading from "./PreviewLoading.vue";
+import ZipViewer from "./ZipViewer.vue";
 import Papa from "papaparse";
 import { gunzip } from "fflate";
 import { ATTACHMENT_TEXT_LIMIT, HTML_SANDBOX, add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_range, file_preview, file_size, file_type, hold_selection, html_document, inline_markdown_images, inner_scroll_follower, media_of, modified_time, read_attachment, scrolled_out, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
 import { t } from './i18n.js';
-import { inline_visual_document, inline_visual_theme, observe_visual_theme, send_visual_theme, visual_tab_document } from "./inline-visual.js";
+import { RELAY_FRAME, relay_frame_loaded, inline_visual_document, inline_visual_theme, observe_visual_theme, send_visual_theme, visual_tab_document } from "./inline-visual.js";
 
 // The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
 // and scroll position, so the user can go to the messages or another room and come back. Mounted once for the workspace,
@@ -69,15 +70,18 @@ const reference_path = computed(() => !tab.value?.root ? active_path.value
   : `${tab.value.directory.replace(/[\\/]+$/, "")}/${active_path.value}`);
 const preview = computed(() => tab.value?.data || null);
 const source = computed({ get: () => Boolean(tab.value?.source), set: (value) => { if (tab.value) tab.value.source = value; } });
-const preview_crumbs = computed(() => tab.value?.attachment ? [{ name: t('消息附件'), path: "" }, { name: active_path.value, path: active_path.value }]
+// A file opened from a zip names the archive and its folders, as text: they are not folders of the project.
+const preview_crumbs = computed(() => tab.value?.archive ? active_path.value.split("/").map((name, index, parts) => ({ name, path: parts.slice(0, index + 1).join("/") }))
+  : tab.value?.attachment ? [{ name: t('消息附件'), path: "" }, { name: active_path.value, path: active_path.value }]
   : crumbs_of(tab.value?.directory || "", active_path.value));
 const preview_name = computed(() => name_of(active_path.value));
 const preview_type = computed(() => file_type(preview_name.value));
 const format = computed(() => /\.(md|markdown)$/i.test(active_path.value) ? "markdown" : /\.html?$/i.test(active_path.value) ? "html"
   : text_kind_of(active_path.value) || "text");
-// Word, Excel and PowerPoint files open in the Office previews (`office_kind`); a Premiere project is unpacked to its XML.
+// Word, Excel and PowerPoint files open in the Office previews (`office_kind`); a Premiere project is unpacked to its XML;
+// a zip is listed by ZipViewer.
 const document_kind = computed(() => document_kind_of(active_path.value));
-const office_kind = computed(() => (document_kind.value === "prproj" ? "" : document_kind.value));
+const office_kind = computed(() => (["prproj", "zip"].includes(document_kind.value) ? "" : document_kind.value));
 // Word and Excel previews follow the same size steps as text; slides and PDF fit the window themselves.
 const can_scale = computed(() => office_kind.value ? ["docx", "sheet"].includes(office_kind.value)
   : preview.value?.text != null && !(format.value === "html" && !showing_source.value));
@@ -90,7 +94,8 @@ const table = computed(() => {
 });
 const cues = computed(() => (format.value === "subtitle" && preview.value?.text != null ? subtitle_cues(preview.value.text, active_path.value) : []));
 // Images, video and audio of a project open in the viewer and players instead of as text (an SVG keeps its source view).
-const media_kind = computed(() => (tab.value?.attachment ? "" : media_of(active_path.value)));
+// A file from a zip has no other viewer, so its images and media play here too.
+const media_kind = computed(() => (tab.value?.attachment && !tab.value.archive ? "" : media_of(active_path.value)));
 // Images a project Markdown file refers to by relative path are read by the computer (`tab.page.images`).
 const rendered = computed(() => format.value === "markdown" && preview.value?.text
   ? inline_markdown_images(window.discuss_markdown.render_markdown(preview.value.text, [], { source_lines: true }), tab.value?.page?.images, active_path.value.split("/").slice(0, -1).join("/")) : "");
@@ -189,6 +194,7 @@ const editor_body = ref(null), markdown_scroll = ref(null), markdown_body = ref(
 
 function apply_attachment_theme() {
   const frame = html_frame.value;
+  if (!relay_frame_loaded(frame, html_preview.value)) return;
   if (frame && tab.value?.attachment) send_visual_theme(frame.contentWindow, inline_visual_theme(frame));
 }
 
@@ -255,7 +261,7 @@ async function load(item) {
   try {
     // The tab is already open with its loading animation; an attachment's address (through the relay for the
     // computer's rooms) is fetched only now.
-    if (item.attachment && !item.attachment.url) item.attachment.url = await bridge.attachment_url(item.attachment);
+    if (item.attachment && !item.attachment.url && !item.archive) item.attachment.url = await bridge.attachment_url(item.attachment);
     // An Office attachment is read whole by its preview, never decoded as text.
     const binary = media_of(item.path) || document_kind_of(item.path);
     const result = binary ? { text: null, reason: "", size: item.attachment?.size ?? item.metadata?.size, modified_at: item.attachment?.created_at || item.metadata?.modified_at }
@@ -310,10 +316,37 @@ async function unpack_project(item, request) {
   }
 }
 
-/** Free the Blob a relayed media file was read into, when its tab reloads or closes. */
+/** Free the Blob a relayed media file (or a file unpacked from a zip) was read into, when its tab reloads or closes. */
 function release_media(item) {
   if (item.media?.blob) URL.revokeObjectURL(item.media.url);
   item.media = null;
+  if (item.archive_url) { URL.revokeObjectURL(item.archive_url); item.archive_url = ""; }
+}
+
+/**
+ * Open a file of the zip shown in the active tab in its own tab: it is unpacked here into a Blob and then read like an
+ * attachment. Its path is the archive's followed by the path inside it.
+ */
+async function open_archive_entry(entry) {
+  const parent = tab.value;
+  if (!parent) return;
+  remember_scroll();
+  const id = `${parent.id}
+zip
+${entry.path}`;
+  let item = tabs.value.find(existing => existing.id === id);
+  if (!item) {
+    tabs.value.push({ id, room_id: parent.room_id, directory: parent.directory, root: parent.root, path: `${parent.path}/${entry.path}`, archive: parent.path,
+      attachment: { room_id: parent.room_id, id: parent.attachment?.id || "", message_id: parent.attachment?.message_id, file_name: entry.path.split("/").pop(), size: entry.size, created_at: entry.modified_at },
+      data: null, loading: true, error: "", source: false, scroll: 0, request: 0 });
+    item = tabs.value[tabs.value.length - 1];
+  }
+  active_id.value = id;
+  if (item.attachment.url) { load(item); return; }
+  try {
+    item.archive_url = item.attachment.url = URL.createObjectURL(new Blob([await entry.read()]));
+    load(item);
+  } catch (error) { Object.assign(item, { loading: false, error: t('无法解压 {value1}：{value2}', { value1: entry.path, value2: error.message }) }); }
 }
 
 /** Open a file of the current room in its own tab (or re-read the tab it already has) and show the window. */
@@ -937,8 +970,9 @@ function cancel_comment() { commenting.value = null; hold_selection(null); }
 async function add_excerpt() {
   const { text, start, end, from, to, in_source = false } = commenting.value;
   const attachment = tab.value?.attachment;
-  const excerpt = { path: reference_path.value, name: preview_name.value, start, end, text, from, to, in_source, comment: comment.value.trim(),
-    ...(attachment ? { attachment_id: attachment.id, attachment_message_id: Number(attachment.message_id) || 0 } : {}) };
+  // A file from a zip is named with the archive's path, the only way to find it again.
+  const excerpt = { path: reference_path.value, name: tab.value?.archive ? active_path.value : preview_name.value, start, end, text, from, to, in_source, comment: comment.value.trim(),
+    ...(attachment?.id ? { attachment_id: attachment.id, attachment_message_id: Number(attachment.message_id) || 0 } : {}) };
   cancel_comment();
   clear_selection();
   if (!view.value.room) await to_tab_room();
@@ -1089,6 +1123,11 @@ onBeforeUnmount(() => {
           <OfficeViewer v-else-if="tab.media" :kind="office_kind" :url="tab.media.url" :scale="font_scale" />
           <PreviewLoading v-else :label="tab.media_progress ? t('正在经电脑读取… {value1}%', { value1: Math.round(tab.media_progress * 100) }) : t('正在打开…')" :progress="tab.media_progress || 0" />
         </template>
+        <template v-else-if="document_kind === 'zip'">
+          <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton :label="t('重试')" color="neutral" variant="outline" class="pb-action" size="sm" @click="load(tab)" /></div>
+          <ZipViewer v-else-if="tab.media" :url="tab.media.url" :name="preview_name" @open="open_archive_entry" />
+          <PreviewLoading v-else :label="tab.media_progress ? t('正在经电脑读取… {value1}%', { value1: Math.round(tab.media_progress * 100) }) : t('正在打开…')" :progress="tab.media_progress || 0" />
+        </template>
         <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason || t('这个格式只能下载后用本机软件打开') }}</p></div>
         <textarea v-else-if="tab?.edit" v-model="tab.edit.text" class="project-code-editor" spellcheck="false" :aria-label="t('文件内容')" @keydown.ctrl.s.prevent="save_edit" @keydown.meta.s.prevent="save_edit"></textarea>
         <div v-else-if="showing_source && wrap" ref="code_scroll" class="project-code is-wrapped" tabindex="0" @scroll.passive="schedule_offer" @click="open_mark_at" :aria-label="t('文件内容')" :style="{ '--digits': String(line_count).length }">
@@ -1114,7 +1153,7 @@ onBeforeUnmount(() => {
         </div>
         <PreviewLoading v-else-if="preview && format === 'html' && tab?.loading && !tab.page" :label="t('正在载入页面引用的文件…')" />
         <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :class="{ 'is-themed-attachment': tab?.attachment }"
-          :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :srcdoc="html_preview" :title="t('HTML 文件预览')" @load="apply_attachment_theme"></iframe>
+          :key="RELAY_FRAME ? html_preview : 'frame'" :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :src="RELAY_FRAME || undefined" :srcdoc="RELAY_FRAME ? undefined : html_preview" :title="t('HTML 文件预览')" @load="apply_attachment_theme"></iframe>
         <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer" @scroll.capture.passive="follow_inner_scroll" @click="open_mark_at"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
           <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button></div>

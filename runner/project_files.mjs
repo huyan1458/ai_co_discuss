@@ -405,6 +405,8 @@ export const MEDIA_TYPES = {
   ods: 'application/vnd.oasis.opendocument.spreadsheet',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', prproj: 'application/gzip',
   pdf: 'application/pdf',
+  // A zip archive, listed and unpacked by the page's preview.
+  zip: 'application/zip',
 };
 
 /**
@@ -416,7 +418,7 @@ export function project_media(cwd, path, { download = false } = {}) {
   const root = project_root(cwd);
   const target = project_path(root, path);
   const content_type = MEDIA_TYPES[posix.extname(target.replaceAll('\\', '/')).slice(1).toLowerCase()] || (download ? 'application/octet-stream' : '');
-  if (!content_type) throw new Error('只能打开图片、音视频、Office 文档或剪辑工程文件');
+  if (!content_type) throw new Error('只能打开图片、音视频、Office 文档、剪辑工程或压缩包');
   const info = statSync(target);
   if (!info.isFile()) throw new Error('只能预览普通文件');
   return { file: target, size: info.size, content_type, modified_at: info.mtime.toISOString(), version: `${info.mtimeMs}:${info.size}` };

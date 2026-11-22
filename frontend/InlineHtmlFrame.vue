@@ -1,7 +1,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { HTML_SANDBOX } from "./file-preview.js";
-import { INLINE_VISUAL_SANDBOX, inline_visual_height, inline_visual_theme, observe_inline_visual, observe_visual_theme, remember_visual_height, remembered_visual_height, send_visual_theme } from "./inline-visual.js";
+import { INLINE_VISUAL_SANDBOX, RELAY_FRAME, relay_frame_loaded, inline_visual_height, inline_visual_theme, observe_inline_visual, observe_visual_theme, remember_visual_height, remembered_visual_height, send_visual_theme } from "./inline-visual.js";
 import PreviewLoading from "./PreviewLoading.vue";
 import { t } from "./i18n.js";
 
@@ -13,6 +13,7 @@ const height = ref(remembered_visual_height(props.file));
 let stop_observing, transcript, pending_height = null;
 
 function send_theme() {
+  if (!relay_frame_loaded(frame.value, props.preview?.srcdoc)) return;
   if (frame.value && panel.value) send_visual_theme(frame.value.contentWindow, inline_visual_theme(panel.value));
 }
 
@@ -53,7 +54,7 @@ onBeforeUnmount(() => {
 <template>
   <div ref="panel" class="channel-inline-html" :style="{ '--inline-html-height': height + 'px' }">
     <iframe v-if="visible && preview?.status === 'ready'" ref="frame" :sandbox="automatic ? INLINE_VISUAL_SANDBOX : HTML_SANDBOX" referrerpolicy="no-referrer"
-      :srcdoc="preview.srcdoc" :title="file.file_name" @load="send_theme"></iframe>
+      :key="RELAY_FRAME ? preview.srcdoc : 'frame'" :src="RELAY_FRAME || undefined" :srcdoc="RELAY_FRAME ? undefined : preview.srcdoc" :title="file.file_name" @load="send_theme"></iframe>
     <PreviewLoading v-else-if="visible" :label="t('正在读取附件…')" />
   </div>
 </template>

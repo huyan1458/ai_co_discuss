@@ -4,14 +4,33 @@
  * a file that is not UTF-8 text, or too large, is sent as null so the service names it back as ignored.
  * Reading happens in the page, so another device imports the same way as the computer itself.
  */
+import { t } from "./i18n.js";
+
 const MAX_FILE_BYTES = 1_000_000;
 const ZIP_END = 0x06054b50, ZIP_ENTRY = 0x02014b50, ZIP_END_SIZE = 22, ZIP_COMMENT_MAX = 65535;
 const SKILL = /(^|\/)SKILL\.md$/;
 const decoder = new TextDecoder();
 const strict = new TextDecoder("utf-8", { fatal: true });
+// Zips made on Chinese Windows name files in GBK without marking them as UTF-8.
+const legacy = new TextDecoder("gbk");
 
-/** Entries of a zip, each read only when asked; stored and deflated files are supported. */
-function zip_entries(bytes) {
+/** An entry's name: UTF-8 when flagged or valid as such, otherwise the legacy Chinese code page. */
+function entry_name(raw, flags) {
+  if (flags & 0x800) return decoder.decode(raw);
+  try { return strict.decode(raw); } catch { return legacy.decode(raw); }
+}
+
+/** The local time a zip entry was last modified (MS-DOS date and time), or "" when not set. */
+function entry_time(date, time) {
+  if (!date) return "";
+  return new Date(1980 + (date >> 9), ((date >> 5) & 15) - 1, date & 31, time >> 11, (time >> 5) & 63, (time & 31) * 2).toISOString();
+}
+
+/**
+ * Entries of a zip as `{ path, size, modified_at, encrypted, read }`, each read only when asked; stored and deflated
+ * files are supported, folders are left out (their files name them).
+ */
+export function zip_entries(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let end = -1;
   for (let at = bytes.length - ZIP_END_SIZE; at >= Math.max(0, bytes.length - ZIP_END_SIZE - ZIP_COMMENT_MAX); at--) {
@@ -24,13 +43,14 @@ function zip_entries(bytes) {
   for (let index = 0; index < count; index++) {
     if (offset + 46 > bytes.length || view.getUint32(offset, true) !== ZIP_ENTRY) throw new Error(t('zip 文件目录损坏或使用了不支持的 zip64 格式'));
     const flags = view.getUint16(offset + 8, true), method = view.getUint16(offset + 10, true);
+    const time = view.getUint16(offset + 12, true), date = view.getUint16(offset + 14, true);
     const compressed = view.getUint32(offset + 20, true), size = view.getUint32(offset + 24, true);
     const name_length = view.getUint16(offset + 28, true), extra = view.getUint16(offset + 30, true), comment = view.getUint16(offset + 32, true);
     const local = view.getUint32(offset + 42, true);
-    const path = decoder.decode(bytes.subarray(offset + 46, offset + 46 + name_length)).replace(/\\/g, "/");
+    const path = entry_name(bytes.subarray(offset + 46, offset + 46 + name_length), flags).replace(/\\/g, "/");
     offset += 46 + name_length + extra + comment;
     if (path.endsWith("/")) continue;
-    entries.push({ path, size, read: async () => {
+    entries.push({ path, size, modified_at: entry_time(date, time), encrypted: Boolean(flags & 1), read: async () => {
       if (flags & 1) throw new Error(t('{value1} 已加密，无法读取', { value1: path }));
       const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
       const data = bytes.subarray(start, start + compressed);

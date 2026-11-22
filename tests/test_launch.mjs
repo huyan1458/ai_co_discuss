@@ -12,6 +12,8 @@ import { test } from 'node:test';
 
 import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, leave_sub_workflow, launch_settings, room_configuration, room_files, room_media, room_models, room_page, room_member, room_member_model, room_settings, room_skills, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
+// Saves that replace a saved workflow on purpose; a save naming the version it edited is tested on its own.
+const REPLACE = { overwrite: true };
 import { API_PROVIDERS, save_api_key } from '../runner/discussion_api.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
@@ -529,6 +531,8 @@ test('a project media file is named to the local site, and reaches another devic
   writeFileSync(join(project, 'media', 'cut.prproj'), Buffer.from([0x1f, 0x8b]));
   assert.match((await room_media(f.home, { ...input, path: 'media/report.docx' })).content_type, /wordprocessingml/);
   assert.equal((await room_media(f.home, { ...input, path: 'media/cut.prproj' })).content_type, 'application/gzip');
+  writeFileSync(join(project, 'media', 'evidence.zip'), 'PK');
+  assert.equal((await room_media(f.home, { ...input, path: 'media/evidence.zip' })).content_type, 'application/zip');
   await assert.rejects(room_media(f.home, { ...input, path: 'media/notes.txt' }), /图片、音视频、Office 文档/);
   await assert.rejects(room_media(f.home, { ...input, path: '../outside.mp3' }), /相对路径/);
   await assert.rejects(room_media(f.home, { ...input, token: 'invalid-owner' }), /403/);
@@ -1219,7 +1223,7 @@ test('room cards preserve member text and portable settings without removed memb
   assert.deepEqual(writer, { card: 'role', name: 'Codex-role', label: '执笔', description: '按骨架写正文',
     system_prompt: prompt, project_access: 'read', model: 'saved-model', effort: 'high' });
   assert.equal(new Set(result.body.cards.map(card => card.card.toLowerCase())).size, 2);
-  const saved = save_workflow(f.home, { id: 'room-export', label: '房间导出', skill: '先写再审。', agents: result.body.cards }, validate_preset);
+  const saved = save_workflow(f.home, { id: 'room-export', label: '房间导出', skill: '先写再审。', agents: result.body.cards }, validate_preset, REPLACE);
   assert.equal(saved.agents.find(card => card.name === writer.name).system_prompt, prompt);
   for (const card of result.body.cards) assert.ok(Object.keys(card).every(key =>
     ['card', 'name', 'label', 'description', 'system_prompt', 'project_access', 'model', 'effort'].includes(key)));
@@ -1289,7 +1293,7 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   assert.equal(get_workflow(f.home, 'serial').skill, '先写，再审，再改。');
   assert.equal((await api(config, '')).free.members.length, 2);
   // A workflow already in the library is enabled by its ID, left unchanged there, and its cards still join at most writing.
-  save_workflow(f.home, { id: 'review', label: '评审', skill: '逐段审。', agents: [{ card: 'checker', name: 'Claude-checker', project_access: 'full' }] }, validate_preset);
+  save_workflow(f.home, { id: 'review', label: '评审', skill: '逐段审。', agents: [{ card: 'checker', name: 'Claude-checker', project_access: 'full' }] }, validate_preset, REPLACE);
   await assert.rejects(adopt_workflow(f.home, { access_file: host_access, draft_file: draft, workflow_id: 'review' }), /之一/);
   const enabled = await adopt_workflow(f.home, { access_file: host_access, workflow_id: 'review' });
   assert.deepEqual(enabled.members, { checker: 'Claude-checker' });
@@ -1299,7 +1303,7 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   assert.equal(switched.workflow.id, 'review');
   assert.equal(switched.participants['Claude-checker'].project_access, 'write');
   // A card on a platform without local software joins on its official API once a key for that root is saved here.
-  save_workflow(f.home, { id: 'ledger', label: '记账', skill: '定稿后记账。', agents: [{ card: 'inventory', name: 'DeepSeek-inventory', project_access: 'full', effort: 'high' }] }, validate_preset);
+  save_workflow(f.home, { id: 'ledger', label: '记账', skill: '定稿后记账。', agents: [{ card: 'inventory', name: 'DeepSeek-inventory', project_access: 'full', effort: 'high' }] }, validate_preset, REPLACE);
   await assert.rejects(adopt_workflow(f.home, { access_file: host_access, workflow_id: 'ledger' }), /DeepSeek-inventory/);
   const { api_key_ref } = save_api_key(f.home, { base_url: API_PROVIDERS.DeepSeek.base_url, api_key: 'test-key' });
   assert.deepEqual((await adopt_workflow(f.home, { access_file: host_access, workflow_id: 'ledger' })).members, { inventory: 'DeepSeek-inventory' });
@@ -1408,7 +1412,7 @@ test('a host creates a room inside its project, linked both ways, that cannot cr
 test('a workflow bound at creation ends when its members are sent away, resumes with their sessions, and is replaced by another', async t => {
   const f = await fixture(t), token = randomUUID() + randomUUID();
   save_workflow(f.home, { id: 'writing', label: '写作', skill: '先拟提纲，再写正文。', agents: [
-    { card: 'host', name: 'Codex-host', project_access: 'read' }, { card: 'writer', name: 'Claude-writer', project_access: 'read' }] }, validate_preset);
+    { card: 'host', name: 'Codex-host', project_access: 'read' }, { card: 'writer', name: 'Claude-writer', project_access: 'read' }] }, validate_preset, REPLACE);
   const workflow = { id: 'writing', members: { host: 'Codex', writer: 'Claude' } };
   const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token, workflow,
     room: { title: '无项目工作流', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, f.options);
@@ -1430,7 +1434,7 @@ test('a workflow bound at creation ends when its members are sent away, resumes 
   assert.deepEqual(load_config(launched.config_path).participants, config.participants, 'each member returns to its own session');
   assert.equal(load_config(launched.config_path).workflow.enabled, true);
   // Another workflow replaces this one instead of asking to stop it first; the old members stay as ordinary members.
-  save_workflow(f.home, { id: 'review', label: '评审', skill: '先审再改。', agents: [] }, validate_preset);
+  save_workflow(f.home, { id: 'review', label: '评审', skill: '先审再改。', agents: [] }, validate_preset, REPLACE);
   await room_workflow(f.home, { ...input, action: 'enable', workflow: { id: 'review', members: {} } });
   assert.deepEqual(load_config(launched.config_path).workflow, { id: 'review', enabled: true, members: {} });
   assert.equal((await api(config, '')).free.members.length, 2);
@@ -1440,7 +1444,7 @@ test('a card added to a workflow in use joins when the host names it, and a refr
   const f = await fixture(t), token = randomUUID() + randomUUID();
   save_launch_settings(f.home, { participants: f.input.participants });
   const writer = { card: 'writer', name: 'Claude-writer', project_access: 'read' };
-  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer] }, validate_preset);
+  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer] }, validate_preset, REPLACE);
   const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
     workflow: { id: 'writing', members: { writer: 'Claude' } },
     room: { title: '工作流补卡', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, f.options);
@@ -1451,7 +1455,7 @@ test('a card added to a workflow in use joins when the host names it, and a refr
   writeFileSync(other_access, JSON.stringify({ site: f.site, room: config.room, member: 'Claude', token: config.members.Claude.token }));
   // The library edit adds a card; enabling the workflow authorized its cards, so the host needs no other grant.
   save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer,
-    { card: 'reviewer', name: 'Claude-reviewer', label: '审稿', project_access: 'read' }] }, validate_preset);
+    { card: 'reviewer', name: 'Claude-reviewer', label: '审稿', project_access: 'read' }] }, validate_preset, REPLACE);
   assert.equal(config.host_workflows, undefined);
   await assert.rejects(join_workflow(f.home, { access_file: other_access, cards: ['reviewer'] }), /主持人/);
   await assert.rejects(join_workflow(f.home, { access_file: host_access, cards: ['writer'] }), /已有成员/);
@@ -1462,7 +1466,7 @@ test('a card added to a workflow in use joins when the host names it, and a refr
   assert.equal(room.free.members.find(member => member.name === 'Claude-reviewer').status, 'active');
   assert.equal(room.labels['Claude-reviewer'], '审稿');
   // The owner's refresh after the card is deleted takes it out of the binding; its member stays as an ordinary member.
-  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer] }, validate_preset);
+  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer] }, validate_preset, REPLACE);
   await assert.rejects(room_workflow(f.home, { ...input, token: 'wrong-owner', action: 'sync' }), /403/);
   const synced = await room_workflow(f.home, { ...input, action: 'sync' });
   assert.deepEqual(synced.members, { writer: 'Claude' });
@@ -1476,7 +1480,7 @@ test('a sub-workflow brings its own cards only when the host uses it, and sends 
   const writer = { card: 'writer', name: 'Claude-writer', project_access: 'read' };
   const sub_workflows = [{ id: 'rehearsal', label: '剧情试演', description: '剧情试演', skill: '试演。',
     agents: [{ card: 'hero', name: 'Claude-hero', label: '主角视角', project_access: 'read', system_prompt: '你是主角。' }] }];
-  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer], sub_workflows }, validate_preset);
+  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer], sub_workflows }, validate_preset, REPLACE);
   const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
     workflow: { id: 'writing', members: { writer: 'Claude' } },
     room: { title: '子工作流', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, f.options);
@@ -1508,7 +1512,7 @@ test('one card brings several members under names of their own, and each comes b
   const writer = { card: 'writer', name: 'Claude-writer', project_access: 'read' };
   const sub_workflows = [{ id: 'rehearsal', label: '角色代入', description: '角色代入', skill: '代入。',
     agents: [{ card: 'character', name: 'Claude-character', label: '角色', project_access: 'read', system_prompt: '你是这个人物。' }] }];
-  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer], sub_workflows }, validate_preset);
+  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先写再审。', agents: [writer], sub_workflows }, validate_preset, REPLACE);
   const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
     workflow: { id: 'writing', members: { writer: 'Claude' } },
     room: { title: '一卡多人', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, f.options);

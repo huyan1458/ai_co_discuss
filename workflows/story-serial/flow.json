@@ -4,140 +4,168 @@
       "id": "start",
       "type": "start",
       "x": 0,
-      "y": -20
+      "y": -30
     },
     {
       "id": "stage_plan",
       "type": "host",
       "label": "阶段构思",
-      "x": 254,
-      "y": -68
+      "x": 216,
+      "y": -48
     },
     {
       "id": "stage_screenwriter",
       "type": "card",
       "card": "screenwriter",
-      "x": 560,
+      "x": 576,
       "y": -110
     },
     {
       "id": "stage_critic",
       "type": "card",
       "card": "critic",
-      "x": 560,
+      "x": 576,
       "y": 14
     },
     {
       "id": "draft_brief",
       "type": "host",
       "label": "出任务书",
-      "x": 970,
-      "y": -68
+      "x": 936,
+      "y": -48
     },
     {
       "id": "screenwriter",
       "type": "card",
       "card": "screenwriter",
-      "x": 1276,
-      "y": -132
+      "x": 1296,
+      "y": -110
     },
     {
       "id": "character_plan",
       "type": "sub",
       "sub": "character-play",
-      "x": 1328,
-      "y": 16
+      "x": 1296,
+      "y": 14
     },
     {
       "id": "brief",
       "type": "host",
       "label": "改任务书",
-      "x": 1686,
-      "y": -68
+      "x": 1656,
+      "y": -48
     },
     {
       "id": "writer",
       "type": "card",
       "card": "writer",
-      "x": 1992,
+      "x": 2016,
       "y": -48
     },
     {
       "id": "critic_people",
       "type": "card",
       "card": "critic_people",
-      "x": 2402,
+      "x": 2376,
       "y": -110
     },
     {
       "id": "critic",
       "type": "card",
       "card": "critic",
-      "x": 2402,
+      "x": 2376,
       "y": 14
     },
     {
       "id": "pre_accept",
       "type": "host",
       "label": "判断是否加审",
-      "x": 2812,
-      "y": -68
+      "x": 2736,
+      "y": -48
     },
     {
       "id": "character_review",
       "type": "sub",
       "sub": "character-play",
-      "x": 3170,
-      "y": -304
+      "x": 3096,
+      "y": -388
     },
     {
       "id": "reader_check",
       "type": "card",
       "card": "reader",
-      "x": 3118,
-      "y": -140
+      "x": 3096,
+      "y": -264
     },
     {
       "id": "accept",
       "type": "host",
       "label": "验收",
-      "x": 3528,
-      "y": -68
+      "x": 3456,
+      "y": -48
     },
     {
       "id": "recorder",
       "type": "card",
       "card": "recorder",
-      "x": 3834,
+      "x": 3816,
       "y": -234
     },
     {
       "id": "read_through",
       "type": "card",
       "card": "critic_people",
-      "x": 3834,
+      "x": 3816,
       "y": -110
     },
     {
       "id": "read_through_facts",
       "type": "card",
       "card": "critic",
-      "x": 3834,
+      "x": 3816,
       "y": 14
     },
     {
       "id": "read_through_reader",
       "type": "card",
       "card": "reader",
-      "x": 3834,
+      "x": 3816,
       "y": 138
     },
     {
       "id": "ruling",
       "type": "host",
       "label": "逐条裁定",
-      "x": 4244,
-      "y": -6
+      "x": 4176,
+      "y": -48
+    },
+    {
+      "id": "luke_plan",
+      "type": "sub",
+      "sub": "luke-nichols",
+      "x": 576,
+      "y": 138
+    },
+    {
+      "id": "jack_plan",
+      "type": "sub",
+      "sub": "jack-sparrow",
+      "x": 576,
+      "y": 298
+    },
+    {
+      "id": "luke_review",
+      "type": "sub",
+      "sub": "luke-nichols",
+      "x": 3096,
+      "y": 60
+    },
+    {
+      "id": "jack_review",
+      "type": "sub",
+      "sub": "jack-sparrow",
+      "x": 3096,
+      "y": 220
     }
   ],
   "edges": [
@@ -285,6 +313,44 @@
       "source": "ruling",
       "target": "stage_plan",
       "label": "下一阶段"
+    },
+    {
+      "source": "stage_plan",
+      "target": "luke_plan",
+      "label": "硬约束与换算"
+    },
+    {
+      "source": "luke_plan",
+      "target": "draft_brief"
+    },
+    {
+      "source": "stage_plan",
+      "target": "jack_plan",
+      "label": "硬约束与换算"
+    },
+    {
+      "source": "jack_plan",
+      "target": "draft_brief"
+    },
+    {
+      "source": "pre_accept",
+      "target": "luke_review",
+      "label": "点名或待核实"
+    },
+    {
+      "source": "luke_review",
+      "target": "accept",
+      "label": "逐条裁定"
+    },
+    {
+      "source": "pre_accept",
+      "target": "jack_review",
+      "label": "点名或待核实"
+    },
+    {
+      "source": "jack_review",
+      "target": "accept",
+      "label": "逐条裁定"
     }
   ],
   "stages": [
@@ -294,7 +360,9 @@
       "nodes": [
         "stage_plan",
         "stage_screenwriter",
-        "stage_critic"
+        "stage_critic",
+        "luke_plan",
+        "jack_plan"
       ]
     },
     {
@@ -334,7 +402,9 @@
       "nodes": [
         "pre_accept",
         "character_review",
-        "reader_check"
+        "reader_check",
+        "luke_review",
+        "jack_review"
       ]
     },
     {
