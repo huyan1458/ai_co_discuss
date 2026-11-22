@@ -102,7 +102,8 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
       <p v-if="!view.launch.available" class="workflow-experts-note">{{ t('连接本机服务后才能读取模型列表与本机已配置的软件。') }}</p>
       <p v-if="!entries.length" class="workflow-experts-note">{{ t('这个工作流还没有成员卡片。') }}</p>
       <div v-else class="workflow-experts">
-        <USelect :model-value="current?.agent.card" :items="card_items" size="lg" class="workflow-experts-pick" :aria-label="t('工作流里的卡片')" @update:model-value="focus = $event" />
+        <!-- Wrapped: the select renders more than one root element, so a class on it alone would not hide all of it. -->
+        <div class="workflow-experts-pick"><USelect :model-value="current?.agent.card" :items="card_items" size="lg" class="w-full" :aria-label="t('工作流里的卡片')" @update:model-value="focus = $event" /></div>
         <nav class="workflow-experts-list" :aria-label="t('工作流里的卡片')">
           <section v-for="item in parts" :key="item.key">
             <h4 v-if="parts.length > 1"><UIcon :name="item.key ? 'i-lucide-git-branch' : 'i-lucide-network'" />{{ item.label }}</h4>
@@ -193,7 +194,7 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
 }
 @media (max-width: 640px) {
   .workflow-experts { grid-template-columns: minmax(0, 1fr); gap: 14px; min-height: 0; }
-  .workflow-experts-pick { display: inline-flex; width: 100%; }
+  .workflow-experts-pick { display: block; }
   .workflow-experts-list { display: none; }
   .workflow-experts-grid { grid-template-columns: minmax(0, 1fr); }
 }

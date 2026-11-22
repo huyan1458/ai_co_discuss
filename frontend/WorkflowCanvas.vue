@@ -37,18 +37,21 @@ const shared = defineModel("shared", { type: Array, default: null });
 const props = defineProps({ compact: Boolean, reserved: { type: Array, default: () => [] }, subs: { type: Array, default: null } });
 const { view, bridge } = inject("discussion");
 const tool_size = computed(() => (props.compact ? "xs" : "sm"));
-// The canvas's tools sit in its corners by what they act on (user 2026-11-21): top left adds nodes, top right holds the
-// workflow's own actions (the `actions` slot: 专家配置, 保存), bottom right edits and views the canvas (undo, redo,
-// tidy, zoom), bottom left switches between the main line and sub-workflows (WorkflowParts); the SKILL.md hint takes
-// the bottom edge between the two corners, or stands on the folded switch when compact.
-// Below this canvas width the two labelled top groups would meet, so they show icons only, and the bottom-right
-// tools stand in a column (a wide window can still leave a narrow canvas beside the sidebar and the SKILL.md panel).
-const LABELLED_TOOLBAR_WIDTH = 480;
+// The tools gather in the top-left corner (user 2026-11-21), one group per job: adding a node, editing the canvas (undo,
+// redo, tidy), viewing it (zoom), and the workflow's own actions (the `actions` slot: 专家配置, 保存).
+// Every kind of node is added the same way, from one button's menu (user 2026-11-21): a member, the host, a sub-workflow.
+// Below this canvas width the labelled groups would not fit on one row, so they show icons only
+// (a wide window can still leave a narrow canvas beside the sidebar and the SKILL.md panel).
+const LABELLED_TOOLBAR_WIDTH = 720;
 const narrow = ref(false);
+// A phone's canvas is narrower than even the icon groups side by side.
+const PHONE_WIDTH = 480;
+const tight = ref(false);
 // Whether the toolbar shows words goes by the canvas's own width only: a portrait tablet stacks the page yet has room for them.
 const icons_only = computed(() => narrow.value);
-// On a phone the bottom-right tools fold into one button until asked for (user 2026-11-21): six buttons would line the edge.
-const foldable = computed(() => props.compact && narrow.value);
+// On a phone the corners are shared out instead: adding nodes top left, the workflow's actions top right, and the canvas
+// tools (undo, redo, tidy, zoom) folded into one button in the bottom right until asked for (user 2026-11-21).
+const foldable = computed(() => props.compact && tight.value);
 const tools_open = ref(false);
 // Layout reads each node's size as Vue Flow measured it (node_size), so restyling a node needs no change here; these are
 // only its first guess for a node not drawn yet (a workflow opened without positions, a node just added).
@@ -793,7 +796,10 @@ function gesture(event) {
 
 const TOUCH_LISTENERS = [["touchstart", touch_start], ["touchmove", touch_move], ["touchend", touch_end], ["touchcancel", touch_end], ["wheel", wheel],
   ["gesturestart", gesture], ["gesturechange", gesture]];
-const width_watcher = new ResizeObserver(([entry]) => { narrow.value = entry.contentRect.width < LABELLED_TOOLBAR_WIDTH; });
+const width_watcher = new ResizeObserver(([entry]) => {
+  narrow.value = entry.contentRect.width < LABELLED_TOOLBAR_WIDTH;
+  tight.value = entry.contentRect.width < PHONE_WIDTH;
+});
 onMounted(() => {
   for (const [type, listener] of TOUCH_LISTENERS) canvas_element.value.addEventListener(type, listener, { capture: true, passive: false });
   width_watcher.observe(canvas_element.value);
@@ -867,7 +873,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 </script>
 
 <template>
-  <div ref="canvas_element" class="workflow-canvas" :class="{ 'is-layered': layered, 'is-compact': props.compact, 'is-tight': narrow, 'is-folded': foldable && !tools_open }" @dblclick="pane_double_click" @pointerdown.capture="middle_press" @pointerdown="edge_press">
+  <div ref="canvas_element" class="workflow-canvas" :class="{ 'is-layered': layered, 'is-compact': props.compact, 'is-phone': foldable, 'is-folded': foldable && !tools_open }" @dblclick="pane_double_click" @pointerdown.capture="middle_press" @pointerdown="edge_press">
     <VueFlow v-model:nodes="nodes" v-model:edges="edges" :min-zoom="ZOOM.min" :max-zoom="ZOOM.max" :delete-key-code="['Delete', 'Backspace']" :zoom-on-double-click="false"
       :is-valid-connection="valid_connection" elevate-nodes-on-select @connect="connect" @connect-start="connect_start" @connect-end="connect_end"
       @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once" @move-start="view_moved" @move="view_moving" @move-end="view_settled" @node-double-click="node_double_click">
@@ -961,26 +967,40 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
         </div>
       </template>
       <Background :gap="22" :size="1.2" color="var(--ui-border-accented)" />
-      <!-- Bottom right: what edits and views the canvas itself. -->
-      <Controls :show-interactive="false" position="bottom-right" class="workflow-canvas-controls">
+      <!-- On a phone the canvas tools sit in the bottom right, folded into one button. -->
+      <Controls v-if="foldable" :show-interactive="false" position="bottom-right" class="workflow-canvas-controls">
         <template #top>
           <ControlButton :title="t('撤销 (Ctrl+Z)')" :aria-label="t('撤销')" :disabled="!past.length" @click="undo"><UIcon name="i-lucide-undo-2" class="workflow-icon" /></ControlButton>
           <ControlButton :title="t('重做 (Ctrl+Shift+Z)')" :aria-label="t('重做')" :disabled="!future.length" @click="redo"><UIcon name="i-lucide-redo-2" class="workflow-icon" /></ControlButton>
           <ControlButton class="workflow-canvas-group-end" :title="t('自动整理')" :aria-label="t('自动整理')" @click="arrange"><UIcon name="i-lucide-wand-sparkles" class="workflow-icon" /></ControlButton>
         </template>
-        <ControlButton v-if="foldable" class="workflow-canvas-tools-toggle" :title="t('画布工具')" :aria-label="t('画布工具')" :aria-expanded="tools_open" @click="tools_open = !tools_open">
+        <ControlButton class="workflow-canvas-tools-toggle" :title="t('画布工具')" :aria-label="t('画布工具')" :aria-expanded="tools_open" @click="tools_open = !tools_open">
           <UIcon :name="tools_open ? 'i-lucide-chevron-down' : 'i-lucide-wrench'" class="workflow-icon" /></ControlButton>
       </Controls>
       <MiniMap v-if="!props.compact" pannable zoomable position="bottom-right" class="workflow-canvas-minimap" :width="168" :height="104" :node-border-radius="8" />
-      <!-- Top left: what goes onto the canvas. -->
-      <Panel position="top-left" class="workflow-canvas-toolbar">
-        <UTooltip :text="t('添加成员（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-user-plus" :label="icons_only ? undefined : t('成员')" :aria-label="t('添加成员')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
-        <UTooltip :text="t('主持人节点：示意交回主持人判断的地方')"><UButton icon="i-lucide-crown" :label="icons_only ? undefined : t('主持人')" :aria-label="t('添加主持人节点')" :size="tool_size" color="neutral" variant="ghost" @click="add_host" /></UTooltip>
+      <!-- Top left: one group per job, side by side. -->
+      <Panel position="top-left" class="workflow-canvas-tools">
+        <div class="workflow-canvas-toolbar">
+          <UTooltip :text="t('添加节点：成员、主持人或子工作流（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-plus" :label="icons_only ? undefined : t('添加节点')" :aria-label="t('添加节点')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
+        </div>
+        <template v-if="!foldable">
+          <div class="workflow-canvas-toolbar">
+            <UTooltip :text="t('撤销 (Ctrl+Z)')"><UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" /></UTooltip>
+            <UTooltip :text="t('重做 (Ctrl+Shift+Z)')"><UButton icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" /></UTooltip>
+            <UTooltip :text="t('自动整理')"><UButton icon="i-lucide-wand-sparkles" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('自动整理')" @click="arrange" /></UTooltip>
+          </div>
+          <div class="workflow-canvas-toolbar">
+            <UTooltip :text="t('放大画布')"><UButton icon="i-lucide-zoom-in" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('放大画布')" @click="instance?.zoomIn({ duration: 150 })" /></UTooltip>
+            <UTooltip :text="t('缩小画布')"><UButton icon="i-lucide-zoom-out" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('缩小画布')" @click="instance?.zoomOut({ duration: 150 })" /></UTooltip>
+            <UTooltip :text="t('适应画布')"><UButton icon="i-lucide-maximize" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('适应画布')" @click="fit" /></UTooltip>
+          </div>
+          <div v-if="$slots.actions" class="workflow-canvas-toolbar"><slot name="actions" :icons-only="icons_only" /></div>
+        </template>
       </Panel>
-      <!-- Top right: the workflow's own actions, given by the page. -->
-      <Panel v-if="$slots.actions" position="top-right" class="workflow-canvas-toolbar"><slot name="actions" :icons-only="icons_only" /></Panel>
-      <!-- The arrows only illustrate: a minor hint, on the bottom edge between the corners (over the folded switch on a phone). -->
-      <Panel position="bottom-left" class="workflow-canvas-status">
+      <Panel v-if="foldable && $slots.actions" position="top-right" class="workflow-canvas-toolbar"><slot name="actions" :icons-only="icons_only" /></Panel>
+      <!-- The arrows only illustrate: bottom left; on an upright tablet the bottom left holds the main line / sub-workflow
+           switch, so the hint moves right, and on a phone it stands on that switch. -->
+      <Panel :position="props.compact && !foldable ? 'bottom-right' : 'bottom-left'" class="workflow-canvas-status">
         <UIcon name="i-lucide-info" class="workflow-icon" /><span>{{ t('连线只作示意，派活以') }}</span>
         <button type="button" class="workflow-canvas-skill" @click="emit('open-skill')">SKILL.md</button><span>{{ t('为准') }}</span>
       </Panel>
@@ -1000,14 +1020,14 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
             <UButton v-for="agent in shared" :key="agent.card" :label="label_of(agent.card)" icon="i-lucide-user-round-plus" size="xs" color="neutral" variant="soft"
               :title="t('把主线的「{value1}」放进这个子工作流：同一张卡片，示意它在这里参与', { value1: label_of(agent.card) })" @click="place_again(agent.card)" />
           </div>
-          <!-- A line dropped on empty canvas may end at a sub-workflow; everything else about them is in the parts list. -->
-          <div v-if="drop && props.subs?.length" class="workflow-canvas-add-again">
+          <!-- A sub-workflow node shows where the flow turns to it; everything else about them is in the parts list. -->
+          <div v-if="props.subs?.length" class="workflow-canvas-add-again">
             <span>{{ t('子工作流') }}</span>
             <UButton v-for="sub in props.subs" :key="sub.id" :label="sub.label || sub.id" icon="i-lucide-git-branch" size="xs" color="neutral" variant="soft"
               :title="sub.description || t('示意这里转去这个子工作流')" @click="add_sub_node(sub.id)" />
           </div>
           <div class="workflow-canvas-add-more">
-            <UButton v-if="drop" icon="i-lucide-crown" :label="t('主持人')" size="xs" color="neutral" variant="soft" @click="add_host" />
+            <UButton icon="i-lucide-crown" :label="t('主持人')" size="xs" color="neutral" variant="soft" :title="t('主持人节点：示意交回主持人判断的地方')" @click="add_host" />
             <UButton v-if="view.room?.id && !drop" icon="i-lucide-users" :label="t('当前房间的成员')" size="xs" color="neutral" variant="soft" @click="cards_from_room" />
           </div>
         </div>
@@ -1019,22 +1039,22 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 <style scoped>
 .workflow-canvas { position: relative; width: 100%; height: 100%; min-height: 0; overflow: hidden; background: color-mix(in srgb, var(--ui-bg-elevated) 30%, var(--ui-bg)); }
 .workflow-icon { flex-shrink: 0; width: 14px; height: 14px; }
+/* The groups stand apart in a row, and wrap when the canvas is too narrow for them. */
+.workflow-canvas-tools { display: flex; flex-wrap: wrap; gap: 8px; max-width: calc(100% - 30px); }
 .workflow-canvas-toolbar { display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--ui-border-muted); border-radius: 10px;
   background: var(--ui-bg-elevated); box-shadow: 0 6px 20px rgb(0 0 0 / .14); }
 /* Phone and upright tablet: smaller tools, every panel the same 10px from the edge. */
 .workflow-canvas.is-compact :deep(.vue-flow__panel) { margin: 10px; }
 .workflow-canvas.is-compact .workflow-canvas-toolbar { gap: 0; padding: 2px; border-radius: 9px; }
-.workflow-canvas.is-compact .workflow-canvas-status { right: auto; bottom: 44px; left: 0; max-width: calc(100% - 20px); padding: 4px 10px; font-size: 11px; }
-/* The hint is centred on the bottom edge in what the corners leave: right of the main line / sub-workflow list (260px wide,
-   15px in) and left of the minimap (168px). Compact, it stands on the folded switch instead (38px tall). */
-.workflow-canvas-status { right: 198px; left: 283px; width: fit-content; max-width: calc(100% - 481px); margin: 0 auto 15px; overflow: hidden; display: flex; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid var(--ui-border-muted); border-radius: 999px;
+.workflow-canvas.is-compact .workflow-canvas-status { max-width: calc(100% - 190px); padding: 4px 10px; font-size: 11px; white-space: normal; }
+.workflow-canvas-status { display: flex; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid var(--ui-border-muted); border-radius: 999px;
   background: var(--ui-bg-elevated); color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; }
-/* Phone: the hint stops short of the column of tools in the bottom-right corner, and wraps as running text when it has to. */
-@media (max-width: 480px) {
-  .workflow-canvas.is-compact .workflow-canvas-status { display: block; white-space: normal; max-width: calc(100% - 76px); border-radius: 10px; line-height: 1.5; }
-  .workflow-canvas.is-compact .workflow-canvas-status > .workflow-icon { display: inline-block; margin-right: 4px; vertical-align: -2px; }
-  .workflow-canvas.is-compact .workflow-canvas-skill { margin: 0 4px; }
-}
+/* Phone: the hint stands on the main line / sub-workflow switch (38px tall), stops short of the tools in the bottom-right
+   corner, and wraps as running text when it has to. */
+.workflow-canvas.is-phone .workflow-canvas-status { bottom: 44px; display: block; max-width: calc(100% - 76px); border-radius: 10px; line-height: 1.5; }
+.workflow-canvas.is-phone .workflow-canvas-status > .workflow-icon { display: inline-block; margin-right: 4px; vertical-align: -2px; }
+.workflow-canvas.is-phone .workflow-canvas-skill { margin: 0 4px; }
+.workflow-canvas.is-phone .workflow-canvas-tools { max-width: none; }
 .workflow-canvas.is-layered :deep(.vue-flow__transformationpane) { will-change: transform; }
 
 /* Start: a small card, its drag bar on top like every node's. */
@@ -1157,13 +1177,11 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 :deep(.workflow-canvas-controls .vue-flow__controls-button > .workflow-icon) { width: 15px; height: 15px; }
 :deep(.workflow-canvas-controls .vue-flow__controls-button:disabled > .workflow-icon) { opacity: .35; }
 :deep(.workflow-canvas-controls .workflow-canvas-group-end) { border-right-width: 4px; }
-/* With a minimap in the corner the tools sit on top of it (104px tall, 8px apart). */
-.workflow-canvas:not(.is-compact) :deep(.workflow-canvas-controls) { bottom: 114px; }
 /* Phone: the tools stand in a column up the right edge, clear of the hint and the switch on the left. */
-.workflow-canvas.is-compact.is-tight :deep(.workflow-canvas-controls) { flex-direction: column; }
-.workflow-canvas.is-compact.is-tight :deep(.workflow-canvas-controls .vue-flow__controls-button) { border-right: 0; border-bottom: 1px solid var(--ui-border-muted); }
-.workflow-canvas.is-compact.is-tight :deep(.workflow-canvas-controls .workflow-canvas-group-end) { border-bottom-width: 4px; }
-.workflow-canvas.is-compact.is-tight :deep(.workflow-canvas-controls .vue-flow__controls-button:last-child) { border-bottom: 0; }
+.workflow-canvas.is-phone :deep(.workflow-canvas-controls) { flex-direction: column; }
+.workflow-canvas.is-phone :deep(.workflow-canvas-controls .vue-flow__controls-button) { border-right: 0; border-bottom: 1px solid var(--ui-border-muted); }
+.workflow-canvas.is-phone :deep(.workflow-canvas-controls .workflow-canvas-group-end) { border-bottom-width: 4px; }
+.workflow-canvas.is-phone :deep(.workflow-canvas-controls .vue-flow__controls-button:last-child) { border-bottom: 0; }
 .workflow-canvas.is-folded :deep(.workflow-canvas-controls .vue-flow__controls-button:not(.workflow-canvas-tools-toggle)) { display: none; }
 :deep(.workflow-canvas-minimap) { border: 1px solid var(--ui-border-muted); border-radius: 8px; overflow: hidden; background: var(--ui-bg-elevated); }
 :deep(.workflow-canvas-minimap .vue-flow__minimap-node) { fill: var(--ui-bg-accented); stroke: none; }
