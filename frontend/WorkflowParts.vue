@@ -139,7 +139,7 @@ function remove(id) {
 .workflow-parts.is-compact :is(.workflow-parts-toggle, .workflow-parts-back) { min-height: 28px; }
 .workflow-parts.is-compact .workflow-parts-back { width: 28px; }
 @media (max-width: 480px) {
-  /* Closed on a narrow phone: keep room on the right for the single-line SKILL.md hint; opening expands full width. */
-  .workflow-parts.is-compact:not(.is-open) { max-width: 104px; }
+  /* Closed on a narrow phone: stop short of the zoom buttons in the bottom-right corner; opening expands full width. */
+  .workflow-parts.is-compact:not(.is-open) { max-width: calc(100% - 76px); }
 }
 </style>

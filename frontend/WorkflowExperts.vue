@@ -37,6 +37,9 @@ const current = computed(() => entries.value.find((entry) => entry.agent.card ==
 function platform(agent) { return agent.name.slice(0, agent.name.length - agent.card.length - 1); }
 const identity = (agent) => bridge.identities[platform(agent)] || {};
 const title_of = (agent) => agent.label || agent.card;
+// On a phone the card list is one menu above the settings: every card grouped by its part, marked where its software is missing.
+const card_items = computed(() => parts.value.map((item) => [...(parts.value.length > 1 ? [{ type: "label", label: item.label }] : []),
+  ...item.part.agents.map((agent) => ({ label: title_of(agent), value: agent.card, icon: missing(agent) ? "i-lucide-triangle-alert" : undefined }))]));
 
 /** The software settings the card would start from here, with the card's own choices on top. */
 function profile(agent) {
@@ -99,6 +102,7 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
       <p v-if="!view.launch.available" class="workflow-experts-note">{{ t('连接本机服务后才能读取模型列表与本机已配置的软件。') }}</p>
       <p v-if="!entries.length" class="workflow-experts-note">{{ t('这个工作流还没有成员卡片。') }}</p>
       <div v-else class="workflow-experts">
+        <USelect :model-value="current?.agent.card" :items="card_items" size="lg" class="workflow-experts-pick" :aria-label="t('工作流里的卡片')" @update:model-value="focus = $event" />
         <nav class="workflow-experts-list" :aria-label="t('工作流里的卡片')">
           <section v-for="item in parts" :key="item.key">
             <h4 v-if="parts.length > 1"><UIcon :name="item.key ? 'i-lucide-git-branch' : 'i-lucide-network'" />{{ item.label }}</h4>
@@ -152,8 +156,9 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
 </template>
 
 <style scoped>
-/* A list of every card beside the chosen card's settings; on a phone the list becomes one scrolling row above it. */
+/* A list of every card beside the chosen card's settings; on a phone the list becomes one menu above it. */
 .workflow-experts { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; min-height: 420px; }
+.workflow-experts-pick { display: none; }
 .workflow-experts-list { display: flex; flex-direction: column; gap: 10px; padding-right: 12px; border-right: 1px solid var(--ui-border-muted); overflow-y: auto; }
 .workflow-experts-list section { display: flex; flex-direction: column; gap: 2px; }
 .workflow-experts-list h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 2px; padding: 0 8px; font-size: 11px; font-weight: 500; color: var(--ui-text-dimmed); }
@@ -188,11 +193,8 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
 }
 @media (max-width: 640px) {
   .workflow-experts { grid-template-columns: minmax(0, 1fr); gap: 14px; min-height: 0; }
-  .workflow-experts-list { flex-direction: row; gap: 4px; padding: 0 0 8px; border-right: 0; border-bottom: 1px solid var(--ui-border-muted); overflow-x: auto; overflow-y: hidden; }
-  .workflow-experts-list section { flex-direction: row; flex-shrink: 0; }
-  .workflow-experts-list h4 { display: none; }
-  .workflow-experts-item { width: auto; flex-shrink: 0; }
-  .workflow-experts-item-text small { display: none; }
+  .workflow-experts-pick { display: inline-flex; width: 100%; }
+  .workflow-experts-list { display: none; }
   .workflow-experts-grid { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

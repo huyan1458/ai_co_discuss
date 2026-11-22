@@ -41,6 +41,10 @@ const tool_size = computed(() => (props.compact ? "xs" : "sm"));
 // (a wide window can still leave a narrow canvas beside the sidebar and the SKILL.md panel).
 const LABELLED_TOOLBAR_WIDTH = 680;
 const narrow = ref(false);
+// Below this canvas width the icon toolbar and the zoom buttons no longer fit on one row, so the zoom buttons stack
+// and leave it: on a phone to the bottom-right corner, elsewhere to under the toolbar's row.
+const TIGHT_WIDTH = 480;
+const tight = ref(false);
 // Whether the toolbar shows words goes by the canvas's own width only: a portrait tablet stacks the page yet has room for them.
 const icons_only = computed(() => narrow.value);
 // Layout reads each node's size as Vue Flow measured it (node_size), so restyling a node needs no change here; these are
@@ -775,7 +779,10 @@ function gesture(event) {
 
 const TOUCH_LISTENERS = [["touchstart", touch_start], ["touchmove", touch_move], ["touchend", touch_end], ["touchcancel", touch_end], ["wheel", wheel],
   ["gesturestart", gesture], ["gesturechange", gesture]];
-const width_watcher = new ResizeObserver(([entry]) => { narrow.value = entry.contentRect.width < LABELLED_TOOLBAR_WIDTH; });
+const width_watcher = new ResizeObserver(([entry]) => {
+  narrow.value = entry.contentRect.width < LABELLED_TOOLBAR_WIDTH;
+  tight.value = entry.contentRect.width < TIGHT_WIDTH;
+});
 onMounted(() => {
   for (const [type, listener] of TOUCH_LISTENERS) canvas_element.value.addEventListener(type, listener, { capture: true, passive: false });
   width_watcher.observe(canvas_element.value);
@@ -849,7 +856,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 </script>
 
 <template>
-  <div ref="canvas_element" class="workflow-canvas" :class="{ 'is-layered': layered, 'is-compact': props.compact }" @dblclick="pane_double_click" @pointerdown.capture="middle_press" @pointerdown="edge_press">
+  <div ref="canvas_element" class="workflow-canvas" :class="{ 'is-layered': layered, 'is-compact': props.compact, 'is-tight': tight }" @dblclick="pane_double_click" @pointerdown.capture="middle_press" @pointerdown="edge_press">
     <VueFlow v-model:nodes="nodes" v-model:edges="edges" :min-zoom="ZOOM.min" :max-zoom="ZOOM.max" :delete-key-code="['Delete', 'Backspace']" :zoom-on-double-click="false"
       :is-valid-connection="valid_connection" elevate-nodes-on-select @connect="connect" @connect-start="connect_start" @connect-end="connect_end"
       @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once" @move-start="view_moved" @move="view_moving" @move-end="view_settled" @node-double-click="node_double_click">
@@ -943,7 +950,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
         </div>
       </template>
       <Background :gap="22" :size="1.2" color="var(--ui-border-accented)" />
-      <Controls :show-interactive="false" position="top-right" class="workflow-canvas-controls" />
+      <Controls :show-interactive="false" :position="tight && props.compact ? 'bottom-right' : 'top-right'" class="workflow-canvas-controls" />
       <MiniMap v-if="!props.compact" pannable zoomable position="bottom-right" class="workflow-canvas-minimap" :width="168" :height="104" :node-border-radius="8" />
       <Panel position="top-left" class="workflow-canvas-toolbar">
         <UTooltip :text="t('添加成员（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-user-plus" :label="icons_only ? undefined : t('成员')" :aria-label="t('添加成员')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
@@ -1004,6 +1011,13 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 .workflow-canvas.is-compact .workflow-canvas-status { max-width: calc(100% - 190px); padding: 4px 10px; font-size: 11px; white-space: normal; }
 .workflow-canvas-status { display: flex; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid var(--ui-border-muted); border-radius: 999px;
   background: var(--ui-bg-elevated); color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; }
+/* Phone: the hint sits on the left above the main line / sub-workflow switch (38px tall), clear of the zoom buttons in
+   the bottom-right corner, and wraps as running text when it has to. */
+@media (max-width: 480px) {
+  .workflow-canvas.is-compact .workflow-canvas-status { right: auto; bottom: 44px; left: 0; display: block; max-width: calc(100% - 76px); border-radius: 10px; line-height: 1.5; }
+  .workflow-canvas.is-compact .workflow-canvas-status > .workflow-icon { display: inline-block; margin-right: 4px; vertical-align: -2px; }
+  .workflow-canvas.is-compact .workflow-canvas-skill { margin: 0 4px; }
+}
 .workflow-canvas.is-layered :deep(.vue-flow__transformationpane) { will-change: transform; }
 
 /* Start: a small card, its drag bar on top like every node's. */
@@ -1122,10 +1136,12 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 :deep(.workflow-canvas-controls .vue-flow__controls-button:hover) { background: var(--ui-bg-accented); }
 .workflow-canvas.is-compact :deep(.workflow-canvas-controls) { border-radius: 9px; }
 .workflow-canvas.is-compact :deep(.workflow-canvas-controls .vue-flow__controls-button) { width: 28px; height: 28px; }
-/* Narrow canvas (phone portrait, or desktop squeezed beside drawers): stack zoom vertically below the top toolbar so they never collide. */
+/* Narrow canvas: the zoom buttons stack so they never run under the toolbar: in the bottom-right corner on a phone,
+   below the toolbar's row on a desktop squeezed beside drawers (its bottom-right corner holds the minimap). */
 .workflow-canvas.is-tight .workflow-canvas-toolbar { max-width: calc(100% - 20px); overflow-x: auto; }
-.workflow-canvas.is-tight :deep(.workflow-canvas-controls) { top: 44px; flex-direction: column; }
-@media (pointer: coarse) { .workflow-canvas.is-tight :deep(.workflow-canvas-controls) { top: 56px; } }
+.workflow-canvas.is-tight :deep(.workflow-canvas-controls) { flex-direction: column; }
+.workflow-canvas.is-tight:not(.is-compact) :deep(.workflow-canvas-controls) { top: 44px; }
+@media (pointer: coarse) { .workflow-canvas.is-tight:not(.is-compact) :deep(.workflow-canvas-controls) { top: 56px; } }
 .workflow-canvas.is-tight :deep(.workflow-canvas-controls .vue-flow__controls-button) { border-right: 0; border-bottom: 1px solid var(--ui-border-muted); }
 .workflow-canvas.is-tight :deep(.workflow-canvas-controls .vue-flow__controls-button:last-child) { border-bottom: 0; }
 :deep(.workflow-canvas-minimap) { border: 1px solid var(--ui-border-muted); border-radius: 8px; overflow: hidden; background: var(--ui-bg-elevated); }
