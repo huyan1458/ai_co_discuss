@@ -13,7 +13,7 @@ import { dirname, join, resolve } from 'node:path';
 import { runs_commands } from '../expert_prompts.mjs';
 import { bind_access, cli_max_run_ms, cli_timeout_reason, DENIAL_FIELD, EDIT_TOOLS, edge_entries, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
   clock_reset_at, newest_record, not_sent, page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog,
-  same_path, TASK_SUBCOMMANDS, tree_killable, typed_prompt, watch_events, shell_written_paths } from './common.mjs';
+  remove_session_files, same_path, TASK_SUBCOMMANDS, tree_killable, typed_prompt, watch_events, shell_written_paths } from './common.mjs';
 
 // A message posted to an open Claude window that has not started by then is reported, not failed.
 const INBOX_CHECK_MS = 90_000;
@@ -836,6 +836,20 @@ function session_path(session_id, env = process.env, home = homedir()) {
   return readdirSync(projects).map(dir => join(projects, dir, `${session_id}.jsonl`)).find(existsSync) || '';
 }
 
+/**
+ * Remove a session Claude stored on this machine: its log, the folder beside it (subagent logs, tool output), its file
+ * edit history and shell environment. Returns what was removed and the shared stores Claude may still hold it in.
+ */
+function remove_session(session_id, { env = process.env, home = homedir() } = {}) {
+  const root = env.CLAUDE_CONFIG_DIR || join(home, '.claude');
+  const file = session_path(session_id, env, home);
+  const todos = join(root, 'todos');
+  const paths = [file, file && file.replace(/\.jsonl$/, ''), join(root, 'file-history', session_id), join(root, 'session-env', session_id),
+    ...(existsSync(todos) ? readdirSync(todos).filter(name => name.startsWith(`${session_id}-`)).map(name => join(todos, name)) : [])];
+  // The prompt history (history.jsonl) is shared by every Claude window and stays as it is.
+  return { removed: remove_session_files(paths), kept: ['shared_stores'] };
+}
+
 /** Whether Claude stored a session by that ID on this machine, e.g. whether a pending fork already happened. */
 function session_exists(session_id, { env = process.env, home = homedir() } = {}) {
   return Boolean(session_id && session_path(session_id, env, home));
@@ -999,7 +1013,7 @@ export const claude = {
   into_window: claude_inbox_ready,
   deliver, chat, events,
   session: { path: session_path, exists: session_exists, owns: session_exists, cwd: session_cwd, branch, settings: session_settings,
-    list: list_sessions, preview: preview_session },
+    list: list_sessions, preview: preview_session, remove: remove_session },
   models: { list: models, defaults },
   skills,
 };

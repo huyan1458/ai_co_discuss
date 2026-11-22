@@ -1,6 +1,6 @@
 /** Parts every software adapter shares: running programs, ending process trees, reading session logs and model catalogs. */
 import { spawn, spawnSync } from 'node:child_process';
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
@@ -348,4 +348,22 @@ function zone_parts(instant, zone) {
 function zone_offset(instant, zone) {
   const parts = zone_parts(instant, zone);
   return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) - Math.floor(instant / 1000) * 1000;
+}
+
+/**
+ * Remove one session's own files and folders, then check nothing is left. Files the software shares between sessions
+ * (indexes, prompt histories, databases) are never rewritten here; adapters report them as kept.
+ *
+ * @param {string[]} paths Files or folders holding only this session; missing ones are skipped.
+ * @returns {number} How many files and folders were removed.
+ * @throws When a path is still there (held by a running program, say).
+ */
+export function remove_session_files(paths) {
+  let removed = 0;
+  for (const path of paths.filter(path => path && existsSync(path))) {
+    rmSync(path, { recursive: true, force: true, maxRetries: 3 });
+    if (existsSync(path)) throw new Error(`会话文件仍在：${path}`);
+    removed += 1;
+  }
+  return removed;
 }

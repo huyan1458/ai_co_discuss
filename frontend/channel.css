@@ -138,6 +138,14 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 @media (hover: hover) { .channel-room-row:hover { background: var(--channel-ghost-hover); } }
 .channel-room-row.active, .channel-folder-row.active { color: #f1f2f5; background: var(--channel-ghost-active); }
 .channel-room-row.drag-source, .channel-folder-section.drag-source { opacity: .45; }
+.channel-room-row.is-destroying { opacity: .45; pointer-events: none; }
+.channel-destroy-scope, .channel-destroy-progress { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; line-height: 1.55; }
+.channel-destroy-progress { list-style: none; padding-left: 0; }
+.channel-destroy-progress li { display: flex; justify-content: space-between; gap: 12px; }
+.channel-destroy-progress small { flex: none; color: var(--channel-muted, #8b93a1); }
+.channel-destroy-progress li[data-state="deleted"] small { color: #22a35a; }
+.channel-destroy-progress li[data-state="failed"] small { color: #e5484d; }
+.channel-destroy-export { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; margin-bottom: 4px; border: 1px dashed var(--channel-border, rgba(255,255,255,.14)); border-radius: 8px; font-size: 13px; }
 .directory-dragging, .directory-dragging * { cursor: grabbing !important; }
 .channel-drag-preview { position: fixed; top: 0; left: 0; z-index: 100; max-width: min(240px, calc(100vw - 24px)); padding: 7px 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; border: 1px solid #ffffff24; border-radius: 7px; background: #34373f; color: #eef0f5; box-shadow: 0 6px 18px #0005; font: 12px/1.5 var(--font-sans); }
 /* Touch drags start after a hold (web/app.js), so swipes over grips and folder headings still scroll. */

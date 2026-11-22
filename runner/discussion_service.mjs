@@ -20,7 +20,14 @@ import { answer_by_weixin } from './question_weixin.mjs';
 import { OPERATOR_EVENTS_FILE, account_space } from './account_space.mjs';
 import { install_pi, pi_outdated } from './pi_runtime.mjs';
 import { site_fetch } from './entry_client.mjs';
+import { destroy_room_sessions, room_bindings } from './room_destruction.mjs';
 
+// A destroyed room's cleanup result is reported a few times before giving up; the receipt then shows the room as still cleaning.
+const DESTRUCTION_REPORT_TRIES = 5;
+const DESTRUCTION_REPORT_RETRY_MS = 10_000;
+// A destroyed room's member processes are asked to stop first; its sessions are removed after this wait, retried while held.
+const DESTRUCTION_SESSION_WAIT_MS = 3000;
+const DESTRUCTION_SESSION_TRIES = 3;
 const POLL_MS = 2000;
 // The service loop only checks which rooms are due; each room keeps its own interval, so a short loop costs no site requests.
 const LOOP_MS = 500;
@@ -428,6 +435,8 @@ export class DiscussionService {
     this.create_runner = create_runner;
     this.log = log;
     this.workers = new Map();
+    // Rooms whose destruction this computer is still cleaning up; the loop leaves them to that one cleanup.
+    this.cleaning = new Set();
     // How often each room is checked without a push: a local site costs nothing, a hosted one spends its database quota.
     this.intervals = { local: POLL_MS, remote: REMOTE_POLL_MS, revisions: REVISION_POLL_MS, idle: IDLE_REMOTE_POLL_MS };
     // Per hosted site: when its revisions were last asked, whether a check is in flight, and whether the site offers them.
@@ -447,6 +456,7 @@ export class DiscussionService {
       if (!configs.includes(path)) { await worker.busy; await worker.close(true); this.workers.delete(path); }
     }
     for (const path of configs) {
+      if (this.cleaning.has(path)) continue;
       if (!this.workers.has(path)) {
         const worker = new RoomWorker(path, this.create_runner, this.log, this.home);
         worker.wake = () => { if (this.workers.get(path) === worker) this.start(path, worker); };
@@ -572,13 +582,56 @@ export class DiscussionService {
     await worker.tick();
     if (!worker.removed) return this.write_status();
     // The room no longer exists on its website, so there is nothing to pause; drop the registration once.
-    const directory = worker.config?.directory;
+    const config = worker.config, directory = config?.directory;
+    this.cleaning.add(path);
+    try { await this.clean_removed_room(path, worker, config, directory); } finally { this.cleaning.delete(path); }
+  }
+  /** Remove what a room deleted on its website left here, and report it when the website confirms it was destroyed. */
+  async clean_removed_room(path, worker, config, directory) {
     await worker.close(false);
     this.workers.delete(path);
+    // AI sessions are removed only for a room the website confirms was destroyed and still accepts this room's credential:
+    // a missing room alone may be a replaced database or another site on the same port. They go before the runtime
+    // folder does, since the bindings naming them are in it.
+    const record = config ? await api(config, '/destruction').catch(() => null) : null;
+    let items = [];
+    if (record?.sessions) items = await this.destroy_sessions(config, path, record.sessions);
     try { unregister_room(this.home, path); } catch { /* Already removed by another command. */ }
     // Its runtime, task files and answer drafts serve no one now; a file still held is left to the periodic sweep.
     try { remove_room_files(this.home, path, directory); } catch (error) { this.log(`${worker.state.room || path}: 本机文件未能删除，稍后清理：${error.message}`); }
+    const folder = dirname(resolve(path));
+    const leftover = (dirname(folder) === resolve(this.home, 'launches') && existsSync(folder)) || (directory && existsSync(service_drafts(this.home, directory)));
+    items.push({ kind: 'runtime_files', state: leftover ? 'failed' : 'deleted' });
     this.log(`${worker.state.site || ''}/${worker.state.room || path}: 房间已在网站删除，已撤销登记并删除本机文件`);
+    if (record?.sessions) this.report_destruction(config, items);
+  }
+  /** Remove a destroyed room's sessions once its processes have had time to exit, retrying files still held. */
+  async destroy_sessions(config, path, executed) {
+    // A session removed in an earlier attempt is gone in the next one, so removed counts add up across attempts.
+    const merged = new Map();
+    for (let attempt = 0; attempt < DESTRUCTION_SESSION_TRIES; attempt += 1) {
+      await sleep(DESTRUCTION_SESSION_WAIT_MS);
+      let items;
+      try { items = destroy_room_sessions(config, sessions_in_use(this.home, path), {}, executed); }
+      catch (error) { this.log(`${config.room}: 会话记录未能删除：${error.message}`); items = [{ kind: 'sessions', state: 'failed', count: 0 }]; }
+      for (const item of items) {
+        const key = `${item.kind}:${item.adapter || ''}:${item.detail || ''}`, previous = merged.get(key);
+        merged.set(key, item.kind === 'sessions' && previous ? { ...item, count: (previous.count || 0) + (item.count || 0) } : item);
+      }
+      if (!items.some(item => item.state === 'failed')) break;
+    }
+    return [...merged.values()];
+  }
+  /** Tell the website what this computer removed for a destroyed room; a room deleted before receipts existed has no record. */
+  async report_destruction(config, items) {
+    for (let attempt = 0; attempt < DESTRUCTION_REPORT_TRIES; attempt += 1) {
+      try { await api(config, '/destruction', { items }); return; }
+      catch (error) {
+        if (error.message.startsWith('HTTP 404') || error.message.startsWith('HTTP 403')) return;
+        if (attempt === DESTRUCTION_REPORT_TRIES - 1) this.log(`${config.room}: 销毁结果未能上报：${error.message}`);
+        else await sleep(DESTRUCTION_REPORT_RETRY_MS);
+      }
+    }
   }
   /** Pause running rooms and release every lock and child process, once their current ticks finish. */
   /** Post the owner's Weixin reply to the room it answers, as the owner, and check that room at once. */
@@ -611,6 +664,20 @@ function changed_rooms(frame) {
   const data = frame.match(/^data: (.*)$/m)?.[1];
   try { const rooms = JSON.parse(data).rooms; return Array.isArray(rooms) && rooms.length ? rooms : null; }
   catch { return null; }
+}
+
+/** Session IDs the other rooms registered here use, as invited or as bound, which a destroyed room must leave alone. */
+export function sessions_in_use(home, except) {
+  const used = new Set();
+  for (const path of read_registry(home)) {
+    if (resolve(path) === resolve(except)) continue;
+    try {
+      const config = validate_config(JSON.parse(readFileSync(path, 'utf8')), dirname(resolve(path)));
+      for (const profile of Object.values(config.participants || {})) if (profile?.session_id) used.add(profile.session_id);
+      for (const session_id of Object.values(room_bindings(config.directory))) used.add(session_id);
+    } catch { /* An unreadable room cannot name its sessions; its own destruction handles them. */ }
+  }
+  return used;
 }
 
 /** Delete one room's local files: its adapter state, answer drafts, and its launch folder when created under launches/. */

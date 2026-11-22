@@ -77,6 +77,11 @@ export function room_markdown(snapshot) {
   for (const message of messages) lines.push(message_markdown(message, details.get(message.id), summaries.get(message.id),
     (tables.attachments || []).filter(file => file.message_id === message.id)));
   if (!messages.length) lines.push("暂无消息。");
+  // Private chats are deleted with the room, so the copy taken before destroying it carries them too.
+  const chats = tables.private_chats || [];
+  if (chats.length) lines.push("## 私聊");
+  for (const chat of chats) lines.push(`### 私聊 #${chat.id} · ${members.get(chat.member_id) || `成员 #${chat.member_id}`}`,
+    `状态：${chat.status}；时间：${new Date(chat.created_at * 1000).toISOString()}`, "你：", original_block(chat.text), "回复：", original_block(chat.reply || ""));
   lines.push("## 全部发言安排");
   for (const request of session_plans) {
     const member_request = member_requests.get(request.member_request_id);

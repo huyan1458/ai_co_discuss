@@ -1672,6 +1672,23 @@ CREATE TABLE IF NOT EXISTS stored_texts (
     PRIMARY KEY (owner, owner_id, field)
 );
 CREATE INDEX IF NOT EXISTS room_events_room ON room_events(room_id,id);
+-- A destroyed room's cleanup and its receipt; the room's own rows are already gone. While `cleaning`, the title and the
+-- owner credential's hash stay so the page can show the entry and the room's runner can report what it removed on its
+-- computer; once `done`, they and the session IDs are cleared and only the per-category counts remain.
+CREATE TABLE IF NOT EXISTS room_destructions (
+    room_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    control_hash TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK(status IN ('cleaning','done')),
+    expect_runner INTEGER NOT NULL DEFAULT 0,
+    -- 1 when the room destroyed itself under its auto-destroy setting, not by its owner's hand.
+    automatic INTEGER NOT NULL DEFAULT 0,
+    items TEXT NOT NULL DEFAULT '[]',
+    -- Every session ID the room's runner members ran in, by member: rewinds leave earlier sessions behind on that computer.
+    sessions TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL DEFAULT ''
+);
 DROP TRIGGER IF EXISTS event_message_posted;
 CREATE TRIGGER event_message_posted AFTER INSERT ON messages
 BEGIN

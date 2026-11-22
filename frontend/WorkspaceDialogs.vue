@@ -9,6 +9,7 @@ import SpeechSettings from "./SpeechSettings.vue";
 import WeixinSettings from "./WeixinSettings.vue";
 import LanguagePicker from "./LanguagePicker.vue";
 import { t } from "./i18n.js";
+import { adapter_profile } from "../runner/adapters/profiles.mjs";
 
 const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] }, foldOptions: { type: Array, default: () => [] }, foldKeepOptions: { type: Array, default: () => [] }, cardTextOptions: { type: Array, default: () => [] } });
 const mode = defineModel({ type: String, default: "" });
@@ -22,9 +23,9 @@ watch(mode, (value) => { if (value) rendered_mode.value = value; });
 const { view, bridge, act, pending } = inject("discussion");
 const open = computed({ get: () => Boolean(mode.value), set: (value) => { if (!value) mode.value = ""; } });
 const titles = { settings: t("设置"), create: t("新建房间"), folder: t("新建文件夹"), "rename-folder": t("编辑文件夹"), "delete-folder": t("移除文件夹"), "archive-folder": t("存档文件夹"), edit: t("编辑议题"), message: t("消息原文") };
-Object.assign(titles, { rename: t("重命名房间"), restore: t("恢复房间"), delete: t("删除房间") });
+Object.assign(titles, { rename: t("重命名房间"), restore: t("恢复房间"), delete: t("销毁房间") });
 const descriptions = { create: t("邀请 AI 一起协作；需要深入讨论时，可在创建时或之后随时开启。"), edit: t("维护话题目标、背景与讨论默认上限。"), message: t("保留作者、来源、提交人和引用关系。") };
-Object.assign(descriptions, { rename: t("名称变化不会影响讨论记录和阅读地址。"), restore: t("移回讨论列表，保持当前讨论阶段。"), delete: t("永久删除房间及其所有记录，无法撤销。") });
+Object.assign(descriptions, { rename: t("名称变化不会影响讨论记录和阅读地址。"), restore: t("移回讨论列表，保持当前讨论阶段。"), delete: t("从这台电脑删除房间的记录、附件和成员在本房间的 AI 会话记录，完成后无法恢复。") });
 titles.archives = t("已存档房间");
 descriptions.archives = t("查看记录、恢复房间或彻底删除。");
 const archived_rooms = computed(() => view.value.rooms.filter((room) => room.archived));
@@ -102,9 +103,52 @@ watch(() => [mode.value, props.targetRoom?.id], () => { management_title.value =
 /** Close directory confirmations immediately; background completion never closes a later dialog. */
 async function save_management() {
   const request = { id: props.targetRoom.id, action: mode.value, title: management_title.value };
+  if (mode.value === "delete") return destroy_room(request);
   mode.value = "";
   await act("manage_channel", request);
 }
+
+// Destroying a room keeps its dialog open on the receipt's progress until every item is checked.
+const destroy_id = ref("");
+const export_started = ref(false);
+watch(() => [mode.value, props.targetRoom?.id], () => { if (mode.value !== "delete") { destroy_id.value = ""; export_started.value = false; } });
+const destruction = computed(() => view.value.destructions.find((item) => item.room_id === destroy_id.value) || null);
+watch(() => destruction.value?.status, (status) => { if (status === "done" && mode.value === "delete") mode.value = ""; });
+
+/** Start destroying the room; the dialog then shows what has been removed and checked. */
+async function destroy_room(request) {
+  destroy_id.value = request.id;
+  if (!await act("manage_channel", request)) destroy_id.value = "";
+}
+
+/** Download the room's records before destroying it; the browser, not this page, knows when the file is saved. */
+async function export_before_destroy() {
+  if (await act("backup", props.targetRoom.id)) export_started.value = true;
+}
+
+const DESTROY_STATES = { deleted: t("已删除并复查"), pending: t("进行中"), failed: t("未完成，可重试"), kept: t("保留"), elsewhere: t("不在本机") };
+const software_label = (adapter) => adapter_profile(adapter)?.label || adapter || t("AI 软件");
+
+/** One receipt item as a line of the progress list. */
+function destruction_label(item) {
+  const count = item.count ?? 0;
+  const labels = { messages: () => t("消息 {count} 条", { count }), private_chats: () => t("私聊 {count} 条", { count }),
+    attachments: () => t("附件 {count} 个", { count }), database: () => t("数据库中的删除残留"),
+    sessions: () => t("{software} 的 AI 会话记录 {count} 个", { software: software_label(item.adapter), count }),
+    runtime_files: () => t("运行文件与草稿"), kept_sessions: () => t("沿用你原有的会话，或与其他房间共用的会话 {count} 个", { count }),
+    software_stores: () => t("{software} 自身共用的索引与数据库（未改动）", { software: software_label(item.adapter) }),
+    project_files: () => t("项目文件"), providers: () => t("已发给模型服务商的内容") };
+  return (labels[item.kind] || (() => item.kind))();
+}
+
+/** The receipt's items, with the room's computer still to report while it has not. */
+const destruction_items = computed(() => {
+  const record = destruction.value;
+  if (!record) return [];
+  const local = record.items.some((item) => ["runtime_files", "sessions"].includes(item.kind));
+  return [...record.items, ...(record.status === "cleaning" && !local ? [{ kind: "runtime_files", state: "pending" }] : [])];
+});
+const destruction_failed = computed(() => destruction_items.value.some((item) => item.state === "failed"));
 
 /** Removing the main directory promotes the first other directory, as other directories need a main one. */
 function remove_folder_main() {
@@ -282,9 +326,25 @@ const keep_open = (event) => event.preventDefault();
       <form v-else-if="['rename', 'restore', 'delete'].includes(rendered_mode)" class="dialog-form" @submit.prevent="save_management">
         <p class="channel-management-target">{{ targetRoom?.title }} <span>· {{ t("{count} 条消息", { count: targetRoom?.message_count }) }}</span></p>
         <p v-if="rendered_mode === 'restore'" class="fine-print">{{ t("恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。") }}</p>
-        <p v-if="rendered_mode === 'delete'" class="fine-print">{{ t("消息、共识和发言安排将一起删除，无法撤销。") }}</p>
+        <template v-if="rendered_mode === 'delete' && !destroy_id">
+          <ul class="channel-destroy-scope">
+            <li>{{ t("将删除：消息与私聊、附件、成员在本房间新建的 AI 会话记录、运行文件与草稿。") }}</li>
+            <li>{{ t("保留：项目文件、沿用你原有窗口的会话，以及各 AI 软件自身共用的索引与数据库。") }}</li>
+            <li>{{ t("已发给模型服务商的内容按其政策保留，我们无法删除。") }}</li>
+            <li v-if="view.share_links?.[targetRoom?.id]">{{ t("这个房间发布过分享网页，销毁前会先撤销。") }}</li>
+          </ul>
+          <p class="fine-print">{{ t("资料包含消息、私聊和附件，不含成员写在草稿目录里、没有发进房间的文件；需要的先让成员发进房间或存进项目目录。") }}</p>
+          <div class="channel-destroy-export"><span>{{ export_started ? t("已开始下载，请确认浏览器已保存文件。") : t("销毁前带走一份？") }}</span><UButton :label="t('导出资料包')" icon="i-lucide-download" color="neutral" variant="soft" size="xs" :disabled="view.backup_pending" @click="export_before_destroy" /></div>
+        </template>
+        <template v-if="rendered_mode === 'delete' && destroy_id">
+          <ul class="channel-destroy-progress" role="status">
+            <li v-for="item in destruction_items" :key="`${item.kind}-${item.adapter || ''}`" :data-state="item.state"><span>{{ destruction_label(item) }}</span><small>{{ DESTROY_STATES[item.state] }}</small></li>
+          </ul>
+          <p class="fine-print">{{ t("记录与附件已删除；其余各项逐一核验。可以关闭此窗口，全部完成后房间会自动消失。") }}</p>
+        </template>
         <UFormField v-if="rendered_mode === 'rename'" :label="t('房间名称')" required><UInput v-model="management_title" autofocus :maxlength="80" required class="w-full" autocomplete="off" /></UFormField>
-        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? t('永久删除') : rendered_mode === 'rename' ? t('保存名称') : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="pending === 'manage_channel'" :disabled="rendered_mode === 'rename' && !management_title.trim()" /></div>
+        <div v-if="rendered_mode === 'delete' && destroy_id" class="dialog-actions"><UButton v-if="destruction_failed" :label="t('重试')" color="neutral" variant="soft" @click="act('retry_destruction', destroy_id)" /><UButton :label="t('关闭')" color="neutral" variant="ghost" @click="mode = ''" /></div>
+        <div v-else class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? t('立即销毁') : rendered_mode === 'rename' ? t('保存名称') : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="pending === 'manage_channel' || view.directory_pending.includes(`delete:${targetRoom?.id}`)" :disabled="rendered_mode === 'rename' && !management_title.trim()" /></div>
       </form>
       <div v-else-if="rendered_mode === 'settings'">
         <AccountSettings />

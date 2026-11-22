@@ -325,6 +325,18 @@ async function save_description({ text, label, as_template }) {
 }
 
 const reading = computed(() => `${view.value.room_site}/r/${room.value.id}`);
+// The room's directory entry carries its auto-destroy setting and when its count started (last activity or the setting).
+const listed = computed(() => view.value.rooms.find((item) => item.id === room.value.id) || null);
+const destroy_options = [0, 1, 7, 30].map((days) => ({ value: days, label: days ? t("无活动 {days} 天后销毁", { days }) : t("长期保留") }));
+const HOUR_MS = 3_600_000;
+/** How long the room has left before it destroys itself, counted from its latest message; '' when it is kept. */
+const destroy_left = computed(() => {
+  const days = listed.value?.destroy_after_days;
+  if (!days) return "";
+  if (listed.value.destroy_blocked) return t("暂不计时：房间里还有未完成的工作、待你回答的提问或分享网页");
+  const hours = Math.max(0, Math.ceil((Date.parse(listed.value.destroy_from || listed.value.created_at) + days * 24 * HOUR_MS - Date.now()) / HOUR_MS));
+  return hours >= 24 ? t("还剩 {count} 天", { count: Math.ceil(hours / 24) }) : t("还剩 {count} 小时", { count: hours });
+});
 const created = computed(() => room.value.created_at ? new Date(room.value.created_at).toLocaleString("zh-CN", { hour12: false }) : "");
 </script>
 
@@ -453,6 +465,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div v-if="saved?.registered"><dt>{{ t("API 请求上限") }}</dt><dd>
           <ApiRequestsField :model-value="requests_shown" :disabled="!view.access?.can_manage || room.archived || saving_requests" @update:model-value="save_requests" /></dd></div>
         <div v-if="!free"><dt>{{ t("逐人追问") }}</dt><dd>{{ room.named_followup ? t('开启：主持人每轮给每位专家写针对性追问') : t('关闭：首轮后请专家回应上一轮观点') }}</dd></div>
+        <div><dt>{{ t("自动销毁") }}</dt><dd class="overview-destroy">
+          <USelect :model-value="listed?.destroy_after_days || 0" :items="destroy_options" size="sm" :aria-label="t('自动销毁')" :disabled="!view.access?.can_manage || room.archived" @update:model-value="act('manage_channel', { id: room.id, action: 'auto-destroy', days: $event })" />
+          <span class="overview-muted">{{ destroy_left || t("可随时在左侧房间菜单中销毁") }}</span></dd></div>
         <div><dt>{{ t("阅读地址") }}</dt><dd class="overview-address"><code>{{ reading }}</code><UButton icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" :aria-label="t('复制阅读地址')" @click="act('copy', reading)" /></dd></div>
         <div v-if="created"><dt>{{ t("创建时间") }}</dt><dd>{{ created }}</dd></div>
       </dl>
@@ -513,6 +528,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-ended-name { overflow: hidden; color: var(--ui-text-toned); white-space: nowrap; text-overflow: ellipsis; }
 .overview-ended li > :last-child { margin-left: auto; }
 .overview-workflow { display: flex; align-items: center; gap: 6px; }
+.overview-destroy { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .overview-model > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .overview-model > button { padding: 2px; color: var(--ui-text-muted); }
 .overview-model > button :deep(svg), .overview-model > button :deep(.iconify) { width: 12px; height: 12px; }

@@ -846,5 +846,12 @@
   "后台，不交回": "Background, not handed back",
   "后台进行，谁也不等它；做完不交回，失败时通知主持人": "Runs in the background and nobody waits for it; it is not handed back, and a failure is reported to the host",
   "另有后台：{value1}": "Also in the background: {value1}",
-  "这些成员在后台进行，做完不交回": "These members work in the background and are not handed back"
+  "这些成员在后台进行，做完不交回": "These members work in the background and are not handed back",
+  "无活动 {days} 天后销毁": "Destroy after {days} days without activity",
+  "长期保留": "Keep",
+  "还剩 {count} 天": "{count} days left",
+  "还剩 {count} 小时": "{count} hours left",
+  "自动销毁": "Auto-destroy",
+  "可随时在左侧房间菜单中销毁": "Can be destroyed anytime from the room menu on the left",
+  "暂不计时：房间里还有未完成的工作、待你回答的提问或分享网页": "Paused: the room still has unfinished work, a question for you, or a share page"
 }

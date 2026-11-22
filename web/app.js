@@ -68,6 +68,20 @@ const RESUME_LOADING_MAX_MS = 15000;
 const TOAST_DURATION_MS = 3500;
 // How long an archived room can be taken back before the archive is saved.
 const ARCHIVE_UNDO_MS = 4000;
+// The destroy effect: how long the confirmation takes to close, the wave across the element, each particle's random start and fade,
+// the grain size in CSS pixels, about how many grains it keeps at most, and how many elements and text lines it draws at most.
+const DESTROY_DIALOG_CLOSE_MS = 250;
+const DUST_WAVE_MS = 650;
+const DUST_JITTER_MS = 120;
+const DUST_FADE_MS = 900;
+const DUST_STEP = 2;
+const DUST_PARTICLE_LIMIT = 40000;
+const DUST_ELEMENT_LIMIT = 1500;
+const DUST_TEXT_LIMIT = 800;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+// When this browser last opened the page, to tell about rooms that destroyed themselves meanwhile.
+const LAST_VISIT_KEY = "codiscuss-last-visit";
 // Limits of the new-room form's title and discussion goal, applied when the welcome page fills them from a message.
 const ROOM_TITLE_MAX_LENGTH = 80;
 const ROOM_GOAL_MAX_LENGTH = 1000;
@@ -316,6 +330,11 @@ state.archive_version = 0;
 // The open import's progress for the import dialog: { done, rooms: [{ title, status, members, error }], errors }.
 state.import_progress = null;
 state.directory_pending = new Map();
+// Rooms whose destruction this page started: listed, dimmed, until their receipt is complete; and the website's receipts.
+state.destroying = new Map();
+state.destructions = [];
+// Rooms already warned in this page that they destroy themselves within a day.
+state.expiry_warned = new Set();
 state.directory_version = 0;
 state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
@@ -793,7 +812,8 @@ function room_menu_html(room, index, count) {
 function toggle_archives() { state.archive_view = !state.archive_view; render_rooms(); publish_view(); }
 
 /** Dispatch directory changes without waiting for unrelated reads. */
-async function manage_channel({ id, action, title, before_id, folder_id, undo }) {
+async function manage_channel({ id, action, title, before_id, folder_id, undo, days }) {
+  if (action === "auto-destroy") return set_auto_destroy(id, days);
   if (action === "folder") return assign_channel_folder(id, folder_id ?? null);
   if (["archive", "restore"].includes(action)) return archive_channel(id, action === "archive", { undo });
   if (action === "rename") return rename_channel(id, title);
@@ -868,19 +888,212 @@ async function reorder_channel(id, before_id) {
     save: () => request_json(`/api/rooms/${id}/move`, { actor: "用户", before_id }) });
 }
 
-/** Hide a confirmed deletion immediately and restore only that entry on failure. */
+/**
+ * Destroy a room: the website removes its records and files at once and its computer removes the members' AI sessions.
+ * The room stays listed, dimmed and closed to writing, until every item of the receipt is checked; only then does it
+ * dissolve, so a destroyed room never vanishes and comes back.
+ */
 async function delete_channel(id) {
   const room = state.rooms.find(item => item.id === id);
-  if (!room) return;
-  const previous = state.rooms.map(item => item.id);
-  return update_directory({ key: `delete:${id}`, label: t('「{value1}」删除', { value1: room.title }),
-    error_message: error => t('「{value1}」删除失败，已恢复原状态：{value2}', { value1: room.title, value2: management_error_message(id, error) }),
-    apply: () => {
-      state.rooms = state.rooms.filter(item => item.id !== id);
-      if (state.room?.id === id) run_action(() => select_room(visible_rooms()[0]?.id));
-    },
-    rollback: () => { state.rooms = directory_order([...state.rooms, room], previous); },
-    save: () => request_json(`/api/rooms/${id}/delete`, { actor: "用户", confirm_title: room.title }) });
+  if (!room || state.destroying.has(id)) return;
+  const key = `delete:${id}`;
+  state.directory_pending.set(key, {});
+  publish_view();
+  try {
+    if (share_link(id)) await take_down_share(id);
+    const result = await request_json(`/api/rooms/${id}/delete`, { actor: "用户" });
+    state.destroying.set(id, { room, index: state.rooms.indexOf(room) });
+    if (result.destruction) merge_destruction(result.destruction);
+  } catch (error) {
+    notify_failure(error, t('「{value1}」销毁失败，房间未改变：{value2}', { value1: room.title, value2: management_error_message(id, error) }));
+    throw error;
+  } finally {
+    state.directory_pending.delete(key);
+    publish_view();
+  }
+  settle_destructions();
+}
+
+/** Set how many days without a message a room may stay before it destroys itself; 0 keeps it. */
+async function set_auto_destroy(id, days) {
+  await request_json(`/api/rooms/${id}/auto-destroy`, { actor: "用户", days });
+  patch_directory_room(id, { destroy_after_days: days });
+}
+
+/** Take a room's published share page down at the share site and forget its link, before the room is destroyed. */
+async function take_down_share(id) {
+  const link = await share_link_record(id);
+  if (link) {
+    try { await share_site_request("DELETE", `/api/shares/${encodeURIComponent(link.share_id)}`, null, link.manage_token); }
+    catch (error) { if (![404, 410].includes(error.status)) throw error; }
+  }
+  await save_share_link(id, null);
+}
+
+/** Keep the newest copy of one destruction's receipt. */
+function merge_destruction(record) {
+  state.destructions = [record, ...state.destructions.filter(item => item.room_id !== record.room_id)];
+}
+
+/** Keep rooms still being destroyed in the list the website no longer has them in, where they were. */
+function with_destroying(rooms) {
+  const result = [...rooms];
+  for (const [id, { room, index }] of state.destroying) {
+    if (!result.some(item => item.id === id)) result.splice(Math.min(index, result.length), 0, room);
+  }
+  return result;
+}
+
+/** Retry the website's part of an unfinished destruction (a held attachment file, a busy log). */
+async function retry_destruction(id) {
+  merge_destruction(await request_json(`/api/rooms/${id}/destruction`, { action: "retry" }));
+  settle_destructions();
+}
+
+/** Dissolve each room whose receipt is complete and tell what was removed. */
+function settle_destructions() {
+  for (const [id, { room }] of state.destroying) {
+    const record = state.destructions.find(item => item.room_id === id);
+    if (record?.status !== "done") continue;
+    state.destroying.delete(id);
+    finish_destroyed_room(id, room, record).catch(error => notify("error", error.message));
+  }
+  publish_view();
+}
+
+/** Play the destroy effect on what shows the room (its open conversation, else its list row), then drop it. */
+async function finish_destroyed_room(id, room, record) {
+  // Let the confirmation dialog close first, so the effect plays on the page itself.
+  await new Promise(resolve => setTimeout(resolve, DESTROY_DIALOG_CLOSE_MS));
+  const target = state.room?.id === id ? document.querySelector(".channel-conversation") : document.querySelector(`[data-drag-room="${CSS.escape(id)}"]`);
+  await dust_away(target);
+  state.rooms = state.rooms.filter(item => item.id !== id);
+  if (state.room?.id === id) await select_room(visible_rooms()[0]?.id);
+  if (target) target.style.visibility = "";
+  render_rooms();
+  publish_view();
+  const count = kind => record.items.filter(item => item.kind === kind).reduce((total, item) => total + (item.count || 0), 0);
+  const removed = t('已销毁「{name}」：删除 {messages} 条消息、{files} 个附件、{sessions} 个 AI 会话记录。',
+    { name: room.title, messages: count("messages"), files: count("attachments"), sessions: count("sessions") });
+  const kept = [t('项目文件'), ...(count("kept_sessions") ? [t('沿用或共用的会话 {count} 个', { count: count("kept_sessions") })] : []),
+    ...(record.items.some(item => item.kind === "software_stores") ? [t('AI 软件自身的索引与数据库')] : [])];
+  notify("info", `${removed}${t('保留：{items}。', { items: kept.join(t('、')) })}`);
+}
+
+/** Tell about rooms that destroyed themselves since the last read: present before, gone now, with a receipt. */
+function announce_auto_destroyed(previous, rooms, destructions) {
+  for (const room of previous) {
+    if (rooms.some(item => item.id === room.id) || state.destroying.has(room.id)) continue;
+    if (destructions.some(item => item.room_id === room.id && item.automatic)) notify("warning", t('「{name}」已按自动销毁设置销毁。', { name: room.title }));
+  }
+}
+
+/** On opening the page, tell how many rooms destroyed themselves since this browser last opened it (their names are gone). */
+function announce_away_destructions(destructions) {
+  let last = 0;
+  try { last = Number(localStorage.getItem(LAST_VISIT_KEY)) || 0; localStorage.setItem(LAST_VISIT_KEY, String(Date.now())); } catch { return; }
+  const count = destructions.filter(item => item.automatic && Date.parse(item.created_at) > last).length;
+  if (last && count) notify("warning", t('你上次打开后，有 {count} 个房间按自动销毁设置销毁了。', { count }));
+}
+
+/** Warn once per page about each room set to destroy itself within a day, while it can still be kept. */
+function warn_expiring_rooms() {
+  for (const room of state.rooms) {
+    if (!room.destroy_after_days || !room.destroy_from || room.destroy_blocked || state.expiry_warned.has(room.id)) continue;
+    const left = Date.parse(room.destroy_from) + room.destroy_after_days * DAY_MS - Date.now();
+    if (left > DAY_MS) continue;
+    state.expiry_warned.add(room.id);
+    notify("warning", t('「{name}」将在 {hours} 小时内自动销毁；要保留，请在“房间”页把“自动销毁”改为“长期保留”。',
+      { name: room.title, hours: Math.max(1, Math.ceil(left / HOUR_MS)) }));
+  }
+}
+
+/**
+ * Dissolve an element into particles drifting away from left to right. Its visible boxes and text are drawn onto a
+ * canvas laid over it, the element is hidden (the caller shows it again once it is replaced), and the particles fade.
+ * Resolves at once when motion is off or nothing is visible.
+ */
+function dust_away(element) {
+  const rect = element?.getBoundingClientRect();
+  if (!rect?.width || !rect.height || document.documentElement.dataset.motion === "off" || document.hidden) return Promise.resolve();
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(rect.width * ratio);
+  canvas.height = Math.ceil(rect.height * ratio);
+  Object.assign(canvas.style, { position: "fixed", left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`,
+    height: `${rect.height}px`, pointerEvents: "none", zIndex: "60" });
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.scale(ratio, ratio);
+  paint_element(context, element, rect);
+  const image = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const step = Math.max(1, Math.round(DUST_STEP * ratio));
+  let particles = [];
+  for (let y = 0; y < canvas.height; y += step) for (let x = 0; x < canvas.width; x += step) {
+    const at = (y * canvas.width + x) * 4;
+    if (image[at + 3] < 40) continue;
+    particles.push({ x: x / ratio, y: y / ratio, color: `rgba(${image[at]},${image[at + 1]},${image[at + 2]},`,
+      delay: (x / canvas.width) * DUST_WAVE_MS + Math.random() * DUST_JITTER_MS,
+      dx: 20 + Math.random() * 60, dy: -30 - Math.random() * 60, phase: Math.random() * 6.28 });
+  }
+  // Fine grains, thinned at random so even a whole conversation stays near DUST_PARTICLE_LIMIT particles.
+  if (particles.length > DUST_PARTICLE_LIMIT) particles = particles.filter(() => Math.random() < DUST_PARTICLE_LIMIT / particles.length);
+  document.body.append(canvas);
+  element.style.visibility = "hidden";
+  const size = step / ratio, start = performance.now(), total = DUST_WAVE_MS + DUST_JITTER_MS + DUST_FADE_MS;
+  return new Promise(resolve => {
+    const frame = now => {
+      const elapsed = now - start;
+      context.clearRect(0, 0, rect.width, rect.height);
+      for (const particle of particles) {
+        const progress = Math.max(0, elapsed - particle.delay) / DUST_FADE_MS;
+        if (progress >= 1) continue;
+        const ease = progress * progress;
+        context.fillStyle = `${particle.color}${(1 - progress).toFixed(3)})`;
+        context.fillRect(particle.x + particle.dx * ease + Math.sin(particle.phase + progress * 6) * 4 * progress, particle.y + particle.dy * ease, size, size);
+      }
+      // A page sent to the background ends the effect at once rather than stalling what follows.
+      if (elapsed < total && !document.hidden) requestAnimationFrame(frame);
+      else { canvas.remove(); resolve(); }
+    };
+    requestAnimationFrame(frame);
+  });
+}
+
+/** Draw an element's visible backgrounds and text runs onto a canvas placed at `origin`, as the destroy effect's source. */
+function paint_element(context, element, origin) {
+  const visible = box => box.width && box.height && box.bottom > origin.top && box.top < origin.bottom && box.right > origin.left && box.left < origin.right;
+  const opaque = color => color && color !== "transparent" && !/,\s*0\)$/.test(color);
+  for (const node of [element, ...element.querySelectorAll("*")].slice(0, DUST_ELEMENT_LIMIT)) {
+    const box = node.getBoundingClientRect();
+    if (!visible(box)) continue;
+    const style = getComputedStyle(node);
+    if (style.visibility === "hidden" || !opaque(style.backgroundColor)) continue;
+    context.fillStyle = style.backgroundColor;
+    context.beginPath();
+    context.roundRect(box.left - origin.left, box.top - origin.top, box.width, box.height, parseFloat(style.borderTopLeftRadius) || 0);
+    context.fill();
+  }
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  const range = document.createRange();
+  context.textBaseline = "middle";
+  for (let node = walker.nextNode(), count = 0; node && count < DUST_TEXT_LIMIT; node = walker.nextNode()) {
+    if (!node.textContent.trim() || !node.parentElement) continue;
+    range.selectNodeContents(node);
+    const lines = [...range.getClientRects()].filter(visible);
+    if (!lines.length) continue;
+    count += lines.length;
+    const style = getComputedStyle(node.parentElement);
+    context.fillStyle = style.color;
+    context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    // One line is drawn as its text; a wrapped run as its line boxes, which dissolve the same way.
+    if (lines.length === 1) {
+      context.fillText(node.textContent.trim(), lines[0].left - origin.left, lines[0].top - origin.top + lines[0].height / 2, lines[0].width + 2);
+      continue;
+    }
+    context.globalAlpha = 0.5;
+    for (const line of lines) context.fillRect(line.left - origin.left, line.top - origin.top + line.height * 0.25, line.width, line.height * 0.5);
+    context.globalAlpha = 1;
+  }
 }
 
 /** Keep pending or newer archive changes when an older read finishes. */
@@ -1348,7 +1561,8 @@ async function refresh_room({ room: read_room = true } = {}) {
   const room_id = state.room?.id;
   // The room and its transcript are read beside the directory rather than after it, saving a round trip on every open.
   const directory_read = request_json("/api/rooms");
-  const reading = state.room && read_room ? room_id : null;
+  // A room being destroyed is gone from the website; its open conversation stays as it was until it dissolves.
+  const reading = state.room && read_room && !state.destroying.has(room_id) ? room_id : null;
   const content_read = reading ? refresh_room_content(room_id, version, { folder: folder_version, archive: archive_version, directory: directory_version }) : null;
   // A room removed meanwhile answers 404; the directory decides what is shown, so such answers may go unread.
   content_read?.catch(() => {});
@@ -1358,9 +1572,14 @@ async function refresh_room({ room: read_room = true } = {}) {
   sync_background_rooms(directory.rooms);
   announce_idle_rooms(directory.rooms);
   if (!state.directory_pending.size && directory_version === state.directory_version) {
-    state.rooms = directory.rooms.map((room) => merge_room_folder(room, folder_version, archive_version, directory_version));
+    const previous = state.rooms;
+    state.rooms = with_destroying(directory.rooms.map((room) => merge_room_folder(room, folder_version, archive_version, directory_version)));
+    if (directory.destructions) announce_auto_destroyed(previous, state.rooms, directory.destructions);
     set_folder_directory(directory);
   }
+  if (directory.destructions) state.destructions = directory.destructions;
+  settle_destructions();
+  warn_expiring_rooms();
   render_rooms();
   publish_view();
   if (directory.last_room !== undefined && !state.room) state.last_room = directory.last_room;
@@ -1555,7 +1774,7 @@ function message_payload() {
   if (sequential && named.length) payload.sequential = true;
   if (everyone && named.length) payload.order = "auto";
   // The site queues the message while members still work (or earlier ones wait) and posts it once the room is idle.
-  if (state.room.free?.queued_messages?.queueing !== false) payload.queue = true;
+  payload.queue = true;
   return payload;
 }
 
@@ -2097,13 +2316,22 @@ async function invite_member({ name, access, project_access = "read", session_id
       ...(record.options?.session_id ? { session_id: record.options.session_id } : {}) } };
     result = await local_launch_request("room-member", { room_id, token, action: "add", name: record.member.name, access,
       member_token: record.member.token, participants, cwd: draft.cwd });
-  } else result = await request_json(`/api/rooms/${room_id}/members`, record.member);
+  } else {
+    try { result = await request_json(`/api/rooms/${room_id}/members`, record.member); }
+    catch (error) {
+      // The name was taken meanwhile; drop the pending seat so a retry picks the next free name instead of this one.
+      if (error.status === 409) localStorage.removeItem(record.key);
+      throw error;
+    }
+  }
   // A name a removed member once used stays bound locally, so the local service may admit this one under the next free name.
   if (typeof result.member === "string" && result.member !== record.member.name) record.member = { ...record.member, name: result.member };
   finish_member_request(room_id, token, record, result);
   if (card && workflow_members) workflow_members[card] = record.member.name;
   // The admission answer carries the new roster, so the next invitation in a batch names its instance without a full reload.
-  if (state.room?.id === room_id && result.free?.members && state.room.free) state.room.free = result.free;
+  // The local service wraps it as `free`; the site's own /members answers with the roster view itself.
+  const roster = result.free || (Array.isArray(result.members) ? result : null);
+  if (state.room?.id === room_id && roster && state.room.free) state.room.free = roster;
   await Promise.all([send_descriptions(room_id, token, { [record.member.name]: description_draft(name) }),
     send_labels(room_id, token, { [record.member.name]: label_drafts[name] })]);
   delete description_drafts[name];
@@ -6454,6 +6682,8 @@ async function initialize() {
     if (!computer_rooms_only() || !state.remote_rooms) {
       const result = computer_rooms_only() ? { rooms: [] } : await request_json("/api/rooms");
       state.rooms = result.rooms;
+      state.destructions = result.destructions || [];
+      announce_away_destructions(state.destructions);
       state.last_room = result.last_room || "";
       set_folder_directory(result);
       await select_room(opening_room());
@@ -6493,6 +6723,7 @@ function view_snapshot() {
     room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: shown_room(), archive_view: state.archive_view, directory_sort: state.directory_sort, messages: state.messages, history_cards: state.history_cards, total: state.message_total,
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
+    destroying: [...state.destroying.keys()], destructions: state.destructions,
     connected: state.connected, reconnecting: state.reconnecting, rooms_loading: state.rooms_loading, observed_until: state.observed_until, resuming: state.resuming, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url, placeholder: item.placeholder || "" })),
     upload_status: state.upload_status, sending_message: send_queue.some(job => job.room_id === state.room?.id), sending_previews, sending_preview: sending_previews[0] || null, queueing_previews: room_queueing_previews(), queue_reading: state.queue_reading, queue_taking: [...state.queue_taking],
@@ -7428,7 +7659,7 @@ async function execute_view_action(name, value) {
   if (!["refresh", "create"].includes(name)) state.navigation_version++;
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
-    archives: toggle_archives, backup: backup_room, backup_rooms, share_prepare, share_room, share_cancel, share_publish, share_include_files, share_revoke, share_renew, share_copy, import_rooms, manage_channel, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
+    archives: toggle_archives, backup: backup_room, backup_rooms, share_prepare, share_room, share_cancel, share_publish, share_include_files, share_revoke, share_renew, share_copy, import_rooms, manage_channel, retry_destruction, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_from_composer(event), discard_sending, retry_sending, choose_attachments, remove_attachment, preview_attachment,
     create: ({ folder_id, accepted, rejected }) => submit_room(event, folder_id, { accepted, rejected }), quick_create: quick_create_room, welcome: open_welcome,
     save_context: () => save_context(event), save_topic: () => save_topic(event),
@@ -7441,7 +7672,7 @@ async function execute_view_action(name, value) {
     adopt_recommendation, rate_decision,
     queue_send: send_queued, queue_delete: delete_queued, question_answer: question_request,
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
-    queue_toggle: enabled => queue_request({ action: "queueing", enabled }), queue_edit: edit_queued,
+    queue_edit: edit_queued,
     busy: () => { throw new Error(t('上一个操作仍在处理中，请稍候；长时间无响应请刷新页面')); },
     copy_reading: () => copy_text(`${room_site()}/r/${state.room.id}`), copy: copy_text };
   try {

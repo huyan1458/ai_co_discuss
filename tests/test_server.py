@@ -14,12 +14,13 @@ import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from backend.server import DiscussionServer, connect_db, create_room, image_size, init_database, require_room
+from backend.server import DiscussionServer, connect_db, create_room, expired_rooms, image_size, init_database, require_room
 from backend.texts import Text, incoming_text, load_texts, save_text
 
 
@@ -779,7 +780,7 @@ class DiscussionTests(unittest.TestCase):
         tables = snapshot["tables"]
         self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
                                       "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "member_labels", "member_descriptions", "messages", "message_withdrawals", "message_details", "message_summaries", "message_timings", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
-                                      "scheduler_decisions", "review_plans",
+                                      "scheduler_decisions", "review_plans", "private_chats",
                                       "discussion_sessions", "discussion_conclusions", "session_requests",
                                       "task_message_sources", "session_state", "session_limits", "stored_texts",
                                       "session_round_budgets", "session_options", "session_pauses"})
@@ -1208,6 +1209,46 @@ class DiscussionTests(unittest.TestCase):
                 for table in ("messages", "topic_settings", "room_directory", "room_folder_assignments", "room_briefs", "discussion_limits"):
                     self.assertEqual(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE room_id=?", (self.room["id"],)).fetchone()[0], 0)
                 self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+                # Texts and feedback cases name their room without a foreign key; none of the destroyed room's may remain.
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM stored_texts WHERE template LIKE '%删除测试原文%' OR params LIKE '%删除测试原文%'").fetchone()[0], 0)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM scheduler_feedback_cases WHERE room_id=?", (self.room["id"],)).fetchone()[0], 0)
+        # A room a runner served waits for that runner's report, accepted only under the room's old owner credential.
+        destruction = self.request(base + "/destruction")[1]
+        self.assertEqual(destruction["status"], "cleaning")
+        self.assertEqual({item["kind"]: item["state"] for item in destruction["items"]}["messages"], "deleted")
+        report = {"items": [{"kind": "sessions", "state": "deleted", "count": 1, "adapter": "codex_cli"},
+                            {"kind": "runtime_files", "state": "deleted"}]}
+        self.assertEqual(self.request(base + "/destruction", report, token=self.member_tokens["Codex"])[0], 403)
+        self.assertIn("sessions", self.request(base + "/destruction", token=self.owner)[1])
+        self.assertNotIn("sessions", self.request(base + "/destruction", token=self.member_tokens["Codex"])[1])
+        finished = self.request(base + "/destruction", report, token=self.owner)[1]
+        self.assertEqual((finished["status"], finished["title"]), ("done", ""))
+        self.assertIn("destructions", self.request("/api/rooms")[1])
+
+    def test_auto_destroy_takes_only_rooms_idle_past_their_limit(self):
+        """A room set to destroy itself goes once it has had no message for that many days; other rooms stay."""
+        if self.external:
+            self.skipTest("reads the website's own database")
+        base = f"/api/rooms/{self.room['id']}"
+        self.assertEqual(self.request(base + "/auto-destroy", {"actor": "用户", "days": 3})[0], 400)
+        self.assertEqual(self.request(base + "/auto-destroy", {"actor": "用户", "days": 1})[0], 200)
+        kept = self.request("/api/rooms", {"title": "长期保留"})[1]
+        listed = {room["id"]: room["destroy_after_days"] for room in self.request("/api/rooms")[1]["rooms"]}
+        self.assertEqual((listed[self.room["id"]], listed[kept["id"]]), (1, 0))
+        with closing(connect_db(self.database)) as connection:
+            self.assertEqual(expired_rooms(connection), [])
+            later = datetime.now(timezone.utc) + timedelta(days=2)
+            self.assertEqual(expired_rooms(connection, later), [self.room["id"]])
+            # A room set long after its last message still gets the whole limit, counted from the setting.
+            connection.execute("UPDATE rooms SET created_at='2020-01-01T00:00:00+00:00' WHERE id=?", (self.room["id"],))
+            connection.commit()
+            self.assertEqual(expired_rooms(connection), [])
+            # A published share page can only be taken down by the owner's page, so such a room is neither destroyed nor expired.
+            connection.execute("INSERT INTO room_share_links (room_id,share_id,url,manage_token,expires_at,updated_at) VALUES (?,?,?,?,?,?)",
+                               (self.room["id"], "s" * 22, "https://x/s/1", "t" * 20, "2099-01-01T00:00:00Z", "2026-01-01T00:00:00Z"))
+            connection.commit()
+            self.assertEqual(expired_rooms(connection, later), [])
+        self.assertEqual(self.request(base + "/delete", {"actor": "用户"})[0], 409)
 
     def test_frontend_assets_have_browser_compatible_content_types(self):
         """Compiled assets and every bundled brand icon load through the static routes."""

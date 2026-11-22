@@ -42,8 +42,6 @@
   "{value1}失败，已恢复原状态：{value2}": "{value1} failed. Previous state restored: {value2}",
   "「{value1}」重命名": "Rename “{value1}”",
   "频道排序": "Channel order",
-  "「{value1}」删除": "Delete “{value1}”",
-  "「{value1}」删除失败，已恢复原状态：{value2}": "Could not delete “{value1}”. Previous state restored: {value2}",
   "已存档「{value1}」": "Archived “{value1}”",
   "存档": "Archive",
   "恢复": "Restore",
@@ -504,5 +502,13 @@
   "分享卡上的成果": "Outcome on the share card",
   "卡片上的问题": "Question on the card",
   "可留空": "Optional",
-  "卡片上的成果": "Outcome on the card"
+  "卡片上的成果": "Outcome on the card",
+  "「{value1}」销毁失败，房间未改变：{value2}": "Could not destroy “{value1}”; the room is unchanged: {value2}",
+  "已销毁「{name}」：删除 {messages} 条消息、{files} 个附件、{sessions} 个 AI 会话记录。": "Destroyed “{name}”: deleted {messages} messages, {files} attachments and {sessions} AI sessions. ",
+  "沿用或共用的会话 {count} 个": "{count} taken-over or shared sessions",
+  "AI 软件自身的索引与数据库": "the AI software's own indexes and databases",
+  "保留：{items}。": "Kept: {items}.",
+  "「{name}」已按自动销毁设置销毁。": "“{name}” was destroyed by its auto-destroy setting.",
+  "「{name}」将在 {hours} 小时内自动销毁；要保留，请在“房间”页把“自动销毁”改为“长期保留”。": "“{name}” will be destroyed within {hours} hours. To keep it, set “Auto-destroy” to “Keep” in the “Room” tab.",
+  "你上次打开后，有 {count} 个房间按自动销毁设置销毁了。": "Since you last opened this page, {count} rooms were destroyed by their auto-destroy setting."
 }

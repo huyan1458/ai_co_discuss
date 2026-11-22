@@ -12,7 +12,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { atomic_json } from '../files.mjs';
 import { cli_delivery } from './cli.mjs';
 import { DENIAL_FIELD, EDIT_TOOLS, json_line, launch_directory, MAX_DENIALS, model_entry, MODEL_PATTERN, not_sent, page_sessions, project_directory,
-  prompt_title, query_catalog, read_json, same_path, shell_written_paths, TASK_SUBCOMMANDS, trim_preview } from './common.mjs';
+  prompt_title, query_catalog, read_json, remove_session_files, same_path, shell_written_paths, TASK_SUBCOMMANDS, trim_preview } from './common.mjs';
 
 // agy stores its generation settings as protobuf; field 28 (tag bytes 0xe2 0x01) holds the model actually used.
 const AGY_MODEL_TAG = [0xe2, 0x01];
@@ -455,6 +455,17 @@ export function session_path(session_id, env = process.env, home = homedir()) {
   return existsSync(file) ? file : '';
 }
 
+/**
+ * Remove a conversation agy or the App stored under `root`: its database, artifact folder, annotations and implicit
+ * context. The shared conversation summaries database is reported as kept.
+ */
+export function remove_conversation(root, session_id) {
+  const database = join(root, 'conversations', `${session_id}.db`);
+  const removed = remove_session_files([database, `${database}-wal`, `${database}-shm`, join(root, 'brain', session_id),
+    join(root, 'annotations', `${session_id}.pbtxt`), join(root, 'implicit', `${session_id}.pb`), join(root, 'presence', `${session_id}.lock`)]);
+  return { removed, kept: ['shared_stores'] };
+}
+
 /** Whether agy stored a conversation by that ID on this machine. */
 export function session_exists(session_id, { env = process.env, home = homedir() } = {}) {
   return Boolean(session_id && session_path(session_id, env, home));
@@ -723,7 +734,8 @@ export const antigravity_cli = {
   deliver,
   invocation, lifecycle, events, failure_class: reason => agy_failure_class(reason),
   session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings,
-    list: list_sessions, preview: preview_session },
+    list: list_sessions, preview: preview_session,
+    remove: (id, { home = homedir() } = {}) => remove_conversation(join(home, '.gemini', 'antigravity-cli'), id) },
   models: { list: models, defaults, defaults_stamp },
   skills: agy_skills,
 };

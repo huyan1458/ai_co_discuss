@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { marked, prompt_text, shell_written_paths, tree_killable } from './common.mjs';
+import { marked, prompt_text, remove_session_files, shell_written_paths, tree_killable } from './common.mjs';
 import { WRITE_TOOLS } from './api_files.mjs';
 import { room_text } from '../room_text.mjs';
 import { adapter_profile, takes_images } from './profiles.mjs';
@@ -138,7 +138,12 @@ function branch(profile, session_id, markers, { always, home = homedir() }) {
   return { session_id: id };
 }
 
-export const session = { path: session_path, exists: session_exists, branch, settings: session_settings };
+/** Remove a Pi session this service stored: one file, nothing else holds it. */
+function remove_session(session_id, options = {}) {
+  return { removed: remove_session_files([session_path(session_id, options)]), kept: [] };
+}
+
+export const session = { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings, remove: remove_session };
 
 /** Text of a tool result's content blocks. */
 function result_text(result) {

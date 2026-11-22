@@ -99,7 +99,7 @@ function room_time_title(room) {
 }
 // Everything a room row and its menus read besides the room itself, so a row re-renders only when this, the room or its
 // time label changes rather than on every view publish.
-const row_state = computed(() => JSON.stringify([view.value.directory_pending, view.value.archive_pending, view.value.backup_pending,
+const row_state = computed(() => JSON.stringify([view.value.directory_pending, view.value.archive_pending, view.value.destroying, view.value.backup_pending,
   view.value.folders, view.value.room_site, manual_order.value, view.value.room?.id, pending.value, middle_page.value, open_room_running.value]));
 /** The open room's own live state is fresher than the directory's, so its light follows that. */
 const open_room_running = computed(() => (view.value.room?.free?.members || [])
@@ -128,7 +128,7 @@ const unconfirmed_launches = computed(() => view.value.launch.recoveries.filter(
 function room_row(room, index, count) {
   return { items: actions(room, index, room.folder_id || null, count), active: !middle_page.value && room.id === view.value.room?.id, busy: Boolean(pending.value),
     archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room),
-    running: room_running(room) };
+    running: room_running(room), destroying: view.value.destroying.includes(room.id) };
 }
 /** Whether a room is at work; the open room's own live state is the fresher one. */
 function room_running(room) {
@@ -321,7 +321,7 @@ function actions(room, index, folder_id, folder_room_count) {
     { label: t("下移"), icon: "i-lucide-arrow-down", disabled: ordering || !manual_order.value || index === folder_room_count - 1 || Boolean(pending.value), onSelect: () => act("move_channel", { id: room.id, direction: 1, folder_id }) },
   ], [
     { label: room.archived ? t("恢复房间") : t("存档房间"), icon: room.archived ? "i-lucide-archive-restore" : "i-lucide-archive", disabled: view.value.archive_pending.includes(room.id), onSelect: () => emit("manage", { room, action: room.archived ? "restore" : "archive" }) },
-    { label: t("永久删除"), icon: "i-lucide-trash-2", disabled: view.value.directory_pending.includes(`rename:${room.id}`), onSelect: () => emit("manage", { room, action: "delete" }) },
+    { label: t("销毁房间"), icon: "i-lucide-flame", color: "error", disabled: view.value.directory_pending.includes(`rename:${room.id}`), onSelect: () => emit("manage", { room, action: "delete" }) },
   ]];
 }
 
@@ -361,7 +361,7 @@ function actions(room, index, folder_id, folder_room_count) {
       <MemoBlock v-for="(room, index) in visible_rooms(folder)" :key="room.id" :deps="[JSON.stringify(room), index, folder.rooms.length, row_state, room_time(room)]">
       <template v-for="row in [room_row(room, index, folder.rooms.length)]" :key="room.id">
       <UContextMenu :items="row.items" :ui="{ content: 'channel-menu channel-topic-menu' }">
-        <div class="channel-room-row" :class="{ active: row.active }" :data-drag-room="room.id">
+        <div class="channel-room-row" :class="{ active: row.active, 'is-destroying': row.destroying }" :data-drag-room="room.id" :inert="row.destroying || undefined">
           <button class="channel-room-grip" data-drag-handle :aria-label="t('拖动 {name}', { name: room.title })" :title="t('拖动排序；上下方向键移动')" :disabled="row.busy" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
           <button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><i v-if="row.running" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button>
           <div class="channel-room-actions">

@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { branch_session, execution_marker, session_exists, session_preview, software_sessions } from '../runner/adapters/index.mjs';
 import { browse_sessions } from '../runner/discussion_launch.mjs';
+import { destroy_room_sessions } from '../runner/room_destruction.mjs';
 
 const SESSION = '11111111-2222-3333-4444-555555555555';
 const prompt = id => `请先读取任务文件：D:/runs/${execution_marker(id)}，完成后提交。`;
@@ -224,4 +225,36 @@ test('stored conversations are listed newest first with their titles and preview
   assert.throws(() => browse_sessions({ adapter: 'claude', action: 'preview', session_id: SESSION }, { accept, preview: preview_of }), /未允许/);
   assert.throws(() => browse_sessions({ adapter: 'unknown' }), /适配器/);
   assert.throws(() => browse_sessions({ adapter: 'claude', offset: -1 }), /分页/);
+});
+
+test('a destroyed room removes the sessions it created with their copies and keeps borrowed or shared ones', t => {
+  const home = home_fixture(t), env = {}, room = join(home, 'room'), projects = join(home, '.claude', 'projects', 'D--p');
+  const own = SESSION, borrowed = '22222222-2222-3333-4444-555555555555', shared = '33333333-2222-3333-4444-555555555555';
+  mkdirSync(projects, { recursive: true });
+  mkdirSync(join(projects, own, 'subagents'), { recursive: true });
+  for (const id of [own, borrowed, shared]) writeFileSync(join(projects, `${id}.jsonl`), lines([{ type: 'user', sessionId: id }]));
+  writeFileSync(join(home, '.claude', 'history.jsonl'), lines([{ display: '秘密', sessionId: own }, { display: '别的', sessionId: borrowed }]));
+  const codex = join(home, '.codex', 'sessions', '2026', '11', '22'), thread = '44444444-2222-3333-4444-555555555555';
+  mkdirSync(codex, { recursive: true });
+  writeFileSync(join(codex, `rollout-2026-11-22T00-00-00-${thread}.jsonl`), lines([{ type: 'session_meta', payload: { id: thread } }]));
+  writeFileSync(join(home, '.codex', 'session_index.jsonl'), lines([{ id: thread, thread_name: '机密' }]));
+  mkdirSync(room, { recursive: true });
+  const db = new DatabaseSync(join(room, 'runtime.sqlite3'));
+  db.exec('CREATE TABLE bindings(participant TEXT PRIMARY KEY,session_id TEXT NOT NULL)');
+  for (const [name, id] of [['Claude', own], ['Borrowed', borrowed], ['Shared', shared], ['Codex', thread]]) db.prepare('INSERT INTO bindings VALUES (?,?)').run(name, id);
+  db.close();
+  const config = { directory: room, participants: { Claude: { adapter: 'claude' }, Borrowed: { adapter: 'claude', session_id: borrowed },
+    Shared: { adapter: 'claude' }, Codex: { adapter: 'codex_cli' } } };
+  const rewound = '55555555-2222-3333-4444-555555555555';
+  writeFileSync(join(projects, `${rewound}.jsonl`), lines([{ type: 'user', sessionId: rewound }]));
+  const items = destroy_room_sessions(config, new Set([shared]), { env, home }, { Claude: [rewound, 'never-ran-here'] });
+  assert.deepEqual(items.filter(item => item.kind === 'sessions'), [{ kind: 'sessions', adapter: 'claude', state: 'deleted', count: 2 },
+    { kind: 'sessions', adapter: 'codex_cli', state: 'deleted', count: 1 }]);
+  assert.deepEqual(items.find(item => item.kind === 'kept_sessions'), { kind: 'kept_sessions', state: 'kept', count: 2 });
+  assert.equal(session_exists('claude', own, { env, home }), false);
+  assert.deepEqual(readdirSync(projects).sort(), [`${borrowed}.jsonl`, `${shared}.jsonl`].sort());
+  // The software's shared prompt history and thread index are reported as kept, never rewritten.
+  assert.match(readFileSync(join(home, '.claude', 'history.jsonl'), 'utf8'), /秘密/);
+  assert.deepEqual(items.filter(item => item.kind === 'software_stores').map(item => item.adapter), ['claude', 'codex_cli']);
+  assert.equal(session_exists('codex_cli', thread, { env, home }), false);
 });

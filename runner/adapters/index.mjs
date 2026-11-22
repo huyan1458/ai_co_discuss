@@ -160,6 +160,31 @@ export function session_exists(adapter_id, session_id, options = {}) {
 }
 
 /**
+ * Remove one session a destroyed room created, with every copy its software keeps that this adapter knows of.
+ *
+ * @param {string} adapter_id The member's software.
+ * @param {string} session_id The session the room's member was bound to; the caller has ruled out borrowed or shared ones.
+ * @param {object} options `env` and `home` of the software's user.
+ * @returns {{state: 'deleted'|'kept'|'failed'|'unsupported', removed: number, kept: string[], reason?: string}}
+ *   `kept` names stores the software holds open and this machine leaves alone; `unsupported` when the software keeps
+ *   its sessions where this adapter cannot remove them.
+ */
+export function remove_session(adapter_id, session_id, options = {}) {
+  const session = adapter_of(adapter_id)?.session;
+  if (!session?.remove) return { state: 'unsupported', removed: 0, kept: [] };
+  if (!session.exists(session_id, options)) return { state: 'deleted', removed: 0, kept: [] };
+  // A conversation of the software's own window (a Codex desktop thread, say) is the user's, never the room's.
+  if (!(session.owns || session.exists)(session_id, options)) return { state: 'kept', removed: 0, kept: [], reason: 'not_owned' };
+  try {
+    const result = session.remove(session_id, options);
+    if (session.exists(session_id, options)) return { state: 'failed', removed: result.removed, kept: result.kept, reason: 'still_exists' };
+    return { state: 'deleted', ...result };
+  } catch (error) {
+    return { state: 'failed', removed: 0, kept: [], reason: error.message };
+  }
+}
+
+/**
  * Branch a session before the first of some taken-back executions it contains, leaving the original untouched.
  *
  * @param {object} profile The member's local software profile (`adapter`, `executable`).

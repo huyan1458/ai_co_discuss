@@ -86,7 +86,10 @@ DIRECTORY_OPERATIONS = ("move", "folder")
 INVITE_COMMANDS = ("room-invite", "room-invites", "room-invite-revoke")
 INVITED_COMMANDS = ("invited-list", "invited-join", "invited-trust", "invited-ai", "invited-pause", "invited-approve", "invited-refuse",
                     "invited-lend", "invited-leave", "invited-remove", "invited-room")
-ADMIN_OPERATIONS = ("rename", "archive", "restore", "delete")
+ADMIN_OPERATIONS = ("rename", "archive", "restore", "delete", "auto-destroy")
+# A room may destroy itself after this many days without a message; 0 keeps it. How often the website checks.
+AUTO_DESTROY_DAYS = (0, 1, 7, 30)
+AUTO_DESTROY_CHECK_SECONDS = 600
 DIRECTORY_PICKER_TIMEOUT = 600  # the folder dialog waits for the person at the computer
 # Files are streamed to players in pieces of this size.
 FILE_CHUNK_BYTES = 1024 * 1024
@@ -208,6 +211,8 @@ FREE_BACKUP_QUERIES = {
     "member_suggestions": "SELECT s.* FROM member_suggestions s JOIN messages m ON m.id=s.message_id WHERE m.room_id=? ORDER BY s.message_id,s.member_id",
     "member_recommendations": "SELECT * FROM member_recommendations WHERE room_id=? ORDER BY message_id",
     "review_plans": "SELECT room_id,batch_id,chain_id,host_id,reviewer_id,reviewer_name,scope,implementers,status,review_batch_id FROM review_plans WHERE room_id=? ORDER BY batch_id",
+    # Destroying a room removes its private chats, so the copy taken beforehand must carry them.
+    "private_chats": "SELECT id,room_id,member_id,text,reply,status,reason,created_at,updated_at FROM private_chats WHERE room_id=? ORDER BY id",
 }
 MESSAGE_QUERY = """SELECT messages.*, COALESCE(details.kind,'opinion') AS kind,
 COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','user')
@@ -418,6 +423,8 @@ def connect_db(database):
         connection = sqlite3.connect(database, timeout=10)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        # Deleted rows are overwritten with zeros, so a destroyed room leaves no readable remains in free pages.
+        connection.execute("PRAGMA secure_delete = ON")
         connection.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
     return connection
 
@@ -496,6 +503,11 @@ def init_database(database, seed=True):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE room_goals ADD COLUMN {name} {kind}")
         connection.executescript(SCHEMA)
+        directory_columns = {row[1] for row in connection.execute("PRAGMA table_info(room_directory)")}
+        if "destroy_after_days" not in directory_columns:
+            connection.execute("ALTER TABLE room_directory ADD COLUMN destroy_after_days INTEGER NOT NULL DEFAULT 0")
+        if "destroy_set_at" not in directory_columns:
+            connection.execute("ALTER TABLE room_directory ADD COLUMN destroy_set_at TEXT NOT NULL DEFAULT ''")
         if "directories" not in {row[1] for row in connection.execute("PRAGMA table_info(topic_folders)")}:
             connection.execute("ALTER TABLE topic_folders ADD COLUMN directories TEXT NOT NULL DEFAULT '[]'")
         # Images stored before sizes were recorded keep NULL here and are measured when first read (with_image_sizes).
@@ -928,6 +940,8 @@ def list_rooms(connection, params=None):
     links = {row["room_id"]: {"url": row["url"], "expires_at": row["expires_at"]} for row in connection.execute(
         "SELECT room_id,url,expires_at FROM room_share_links WHERE expires_at>?", (utc_iso_now(),))}
     rooms = [{**dict(row), "archived": bool(directory[row["id"]]["archived"]), "running": bool(row["running"]),
+              "destroy_after_days": directory[row["id"]]["destroy_after_days"], "destroy_from": destroy_from(connection, dict(row), directory[row["id"]]) if directory[row["id"]]["destroy_after_days"] else None,
+              "destroy_blocked": destroy_blocked(connection, row["id"]) if directory[row["id"]]["destroy_after_days"] else False,
               "folder_id": assignments[row["id"]], "texts": room_display_texts(connection, dict(row)),
               "share_link": links.get(row["id"])} for row in rows]
     return {"rooms": sorted(rooms, key=lambda room: directory[room["id"]]["position"]),
@@ -1144,11 +1158,32 @@ def manage_room(connection, room_id, action, payload):
             # An archived room is read-only: nothing it still owes may be delivered or answered later.
             stop_room_work(connection, room_id, "房间已归档", "archived")
         connection.execute("UPDATE room_directory SET archived=? WHERE room_id=?", (int(action == "archive"), room_id))
+    elif action == "auto-destroy":
+        days = payload.get("days")
+        if type(days) is not int or days not in AUTO_DESTROY_DAYS:
+            raise ValueError(Text('自动销毁只能设为 {choices} 天（0 为不自动销毁）', choices="/".join(map(str, AUTO_DESTROY_DAYS))))
+        # Counted from the later of the last activity and this change, so choosing a limit never destroys a room at once.
+        connection.execute("UPDATE room_directory SET destroy_after_days=?,destroy_set_at=? WHERE room_id=?", (days, utc_now(), room_id))
     elif action == "delete":
-        if payload.get("confirm_title") != room["title"]:
+        # The page confirms in its own dialog; a caller that names the title must name it right.
+        if "confirm_title" in payload and payload.get("confirm_title") != room["title"]:
             raise ValueError(Text('请输入完整房间名称确认删除'))
+        if connection.execute("SELECT 1 FROM room_share_links WHERE room_id=? AND expires_at>?", (room_id, utc_iso_now())).fetchone():
+            raise FileExistsError(Text('这个房间发布过分享链接，请先撤销分享链接再销毁'))
+        counts = destruction_counts(connection, room_id)
+        control = connection.execute("SELECT control_hash FROM room_modes WHERE room_id=?", (room_id,)).fetchone()
+        # Only a room some computer's runner served has AI sessions and local files to remove there.
+        expect_runner = bool(control and control[0]) and connection.execute(
+            "SELECT 1 FROM room_members WHERE room_id=? AND access='runner' LIMIT 1", (room_id,)).fetchone() is not None
+        sessions = {}
+        for row in connection.execute("""SELECT DISTINCT m.name,e.session_id FROM member_executions e JOIN room_members m ON m.id=e.member_id
+                WHERE e.room_id=? AND m.access='runner' AND e.session_id<>'' ORDER BY e.id""", (room_id,)):
+            sessions.setdefault(row["name"], []).append(row["session_id"])
         delete_room_records(connection, room_id)
-        return {"deleted": True, "id": room_id}
+        connection.execute("""INSERT OR REPLACE INTO room_destructions (room_id,title,control_hash,status,expect_runner,automatic,items,sessions,created_at)
+            VALUES (?,?,?,'cleaning',?,?,?,?,?)""", (room_id, room["title"], control[0] if control else "", int(expect_runner),
+                                                      int(payload.get("automatic") is True), json.dumps(counts), json.dumps(sessions), utc_now()))
+        return {"deleted": True, "id": room_id, "destruction": destruction_view(connection, room_id)}
     else:
         raise LookupError(Text('地址不存在'))
     return require_room(connection, room_id)
@@ -1156,6 +1191,12 @@ def manage_room(connection, room_id, action, payload):
 
 def delete_room_records(connection, room_id):
     """Remove a room's dependent records in the caller's transaction."""
+    # Stored texts and kept feedback cases name their owner without a foreign key, so they go first, while the
+    # rows that identify them still exist.
+    for owner, query in ROOM_TEXT_OWNERS:
+        connection.execute(f"DELETE FROM stored_texts WHERE owner=? AND owner_id IN ({query})", (owner, room_id))
+    connection.execute("DELETE FROM stored_texts WHERE owner='room' AND owner_id=?", (room_id,))
+    connection.execute("DELETE FROM scheduler_feedback_cases WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM task_message_sources WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM goal_continuations WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM question_events WHERE question_id IN (SELECT id FROM room_questions WHERE room_id=?)", (room_id,))
@@ -1181,6 +1222,220 @@ def delete_room_records(connection, room_id):
     # Last, since deleting the rows above fires the event triggers.
     connection.execute("DELETE FROM room_events WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM rooms WHERE id=?", (room_id,))
+
+
+# Each stored-text owner kind that belongs to a room, and the query listing that room's owner IDs.
+ROOM_TEXT_OWNERS = (
+    ("message", "SELECT id FROM messages WHERE room_id=?"),
+    ("decision", "SELECT id FROM scheduler_decisions WHERE room_id=?"),
+    ("scheduler_decision", "SELECT id FROM scheduler_decisions WHERE room_id=?"),
+    ("execution", "SELECT id FROM member_executions WHERE room_id=?"),
+    ("private_chat", "SELECT id FROM private_chats WHERE room_id=?"),
+    ("queued_message", "SELECT id FROM queued_messages WHERE room_id=?"),
+    ("room_event", "SELECT id FROM room_events WHERE room_id=?"),
+    ("member", "SELECT id FROM room_members WHERE room_id=?"),
+    ("request", "SELECT id FROM member_requests WHERE room_id=?"),
+    ("session", "SELECT id FROM discussion_sessions WHERE room_id=?"),
+    ("session_request", "SELECT id FROM session_requests WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)"),
+)
+# Receipt item states: removed and checked gone, not on this computer, deliberately kept, failed (retried).
+DESTRUCTION_STATES = ("deleted", "elsewhere", "kept", "failed")
+# What a runner may report about its computer, beyond the website's own records and attachments.
+RUNNER_DESTRUCTION_KINDS = ("sessions", "runtime_files", "kept_sessions", "software_stores")
+DESTRUCTION_LIST_LIMIT = 20
+
+
+def destruction_counts(connection, room_id):
+    """The receipt items the website itself removes and checks: records and attachment files, plus what it keeps."""
+    count = lambda query: connection.execute(query, (room_id,)).fetchone()[0]
+    files = connection.execute("SELECT id,size FROM attachments WHERE room_id=?", (room_id,)).fetchall()
+    # The file IDs stay with the item until each file is checked gone, so a held file can be retried later.
+    return [{"kind": "messages", "state": "pending", "count": count("SELECT COUNT(*) FROM messages WHERE room_id=?")},
+            {"kind": "private_chats", "state": "pending", "count": count("SELECT COUNT(*) FROM private_chats WHERE room_id=?")},
+            {"kind": "attachments", "state": "pending", "count": len(files), "bytes": sum(row["size"] for row in files),
+             "ids": [row["id"] for row in files]},
+            {"kind": "database", "state": "pending"},
+            {"kind": "project_files", "state": "kept"},
+            {"kind": "providers", "state": "elsewhere"}]
+
+
+def destruction_view(connection, room_id):
+    """One destruction as the page shows it, or None when the room was never destroyed here."""
+    row = connection.execute("SELECT * FROM room_destructions WHERE room_id=?", (room_id,)).fetchone()
+    if not row:
+        return None
+    items = [{key: value for key, value in item.items() if key != "ids"} for item in json.loads(row["items"])]
+    return {"room_id": row["room_id"], "title": row["title"], "status": row["status"], "automatic": bool(row["automatic"]),
+            "items": items, "created_at": row["created_at"], "finished_at": row["finished_at"]}
+
+
+def list_destructions(connection):
+    """Destructions still cleaning, then the latest receipts, for the room list."""
+    rows = connection.execute("""SELECT room_id FROM room_destructions ORDER BY status='done', created_at DESC LIMIT ?""",
+                              (DESTRUCTION_LIST_LIMIT,)).fetchall()
+    return [destruction_view(connection, row["room_id"]) for row in rows]
+
+
+def update_destruction(connection, room_id, updates, runner_reported=False):
+    """Replace receipt items by kind and finish the destruction once nothing is pending or failed.
+
+    Args:
+        connection: An open connection; the caller commits.
+        room_id: The destroyed room.
+        updates: Items `{kind, state, count?, bytes?, detail?}` replacing those of the same kind (and adapter, for sessions).
+        runner_reported: Whether this is the room's runner's report, which a room served by a runner waits for.
+    """
+    row = connection.execute("SELECT * FROM room_destructions WHERE room_id=?", (room_id,)).fetchone()
+    if not row or row["status"] == "done":
+        return
+    key = lambda item: (item["kind"], item.get("adapter", ""))
+    items = {key(item): item for item in json.loads(row["items"])}
+    items.update({key(item): item for item in updates})
+    expect_runner = row["expect_runner"] and not runner_reported
+    items = list(items.values())
+    done = not expect_runner and all(item["state"] in ("deleted", "elsewhere", "kept") for item in items)
+    if done:
+        # The receipt keeps counts only: neither the title nor the credential hash outlives the cleanup.
+        connection.execute("""UPDATE room_destructions SET status='done',title='',control_hash='',sessions='{}',expect_runner=0,items=?,finished_at=?
+            WHERE room_id=?""", (json.dumps(items), utc_now(), room_id))
+    else:
+        connection.execute("UPDATE room_destructions SET items=?,expect_runner=? WHERE room_id=?",
+                           (json.dumps(items), int(expect_runner), room_id))
+
+
+def destruction_sessions(connection, room_id, token):
+    """`{sessions: {member: [session IDs]}}` for the holder of the destroyed room's owner credential while it is cleaning, else {}."""
+    row = connection.execute("SELECT control_hash,sessions FROM room_destructions WHERE room_id=? AND status='cleaning'", (room_id,)).fetchone()
+    hashed = token_hash(token)
+    if not row or not hashed or not row["control_hash"] or not hmac.compare_digest(hashed, row["control_hash"]):
+        return {}
+    return {"sessions": json.loads(row["sessions"])}
+
+
+def report_destruction(connection, room_id, token, payload):
+    """Accept a runner's report of what it removed on its computer for a destroyed room, under the room's old owner credential."""
+    row = connection.execute("SELECT control_hash,status FROM room_destructions WHERE room_id=?", (room_id,)).fetchone()
+    if not row:
+        raise LookupError(Text('房间不存在'))
+    if row["status"] == "done":
+        return destruction_view(connection, room_id)
+    hashed = token_hash(token)
+    if not hashed or not row["control_hash"] or not hmac.compare_digest(hashed, row["control_hash"]):
+        raise PermissionError(Text('需要本房间的控制凭据；没有凭据只能阅读'))
+    items = payload.get("items")
+    if not isinstance(items, list) or len(items) > 50:
+        raise ValueError(Text('清理结果格式无效'))
+    clean = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("kind") not in RUNNER_DESTRUCTION_KINDS or item.get("state") not in DESTRUCTION_STATES:
+            raise ValueError(Text('清理结果格式无效'))
+        kept = {field: item[field] for field in ("count",) if type(item.get(field)) is int and item[field] >= 0}
+        kept.update({field: str(item[field])[:200] for field in ("adapter", "detail") if isinstance(item.get(field), str)})
+        clean.append({"kind": item["kind"], "state": item["state"], **kept})
+    begin_write(connection)
+    update_destruction(connection, room_id, clean, runner_reported=True)
+    return destruction_view(connection, room_id)
+
+
+def finish_destruction_files(database, room_id):
+    """After the records commit: remove the attachment files, check they are gone, and truncate the write-ahead log.
+
+    A file still held or a log still in use leaves its item failed; the page shows it and the service retries it.
+    """
+    with closing(connect_db(database)) as connection:
+        row = connection.execute("SELECT items FROM room_destructions WHERE room_id=? AND status='cleaning'", (room_id,)).fetchone()
+        if not row:
+            return
+        items = {item["kind"]: item for item in json.loads(row["items"])}
+        files = items["attachments"]
+        left = []
+        for file_id in files.get("ids", []):
+            path = attachment_path(database, {"id": file_id})
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logging.exception("Attachment cleanup failed: %s", file_id)
+            if path.exists():
+                left.append(file_id)
+        # Deleted pages are already zeroed (secure_delete); truncating the log drops its copies of the old rows.
+        busy = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+        with connection:
+            begin_write(connection)
+            updates = [{**items["messages"], "state": "deleted"}, {**items["private_chats"], "state": "deleted"},
+                       {**files, "ids": left, "state": "failed" if left else "deleted"},
+                       {"kind": "database", "state": "failed" if busy else "deleted"}]
+            update_destruction(connection, room_id, updates)
+
+
+def destroy_from(connection, room, directory):
+    """When a room's auto-destroy count starts: the latest of its creation, last message, last private chat and the setting itself."""
+    times = [room["created_at"], directory["destroy_set_at"],
+             connection.execute("SELECT MAX(created_at) FROM messages WHERE room_id=?", (room["id"],)).fetchone()[0]]
+    chat = connection.execute("SELECT MAX(updated_at) FROM private_chats WHERE room_id=?", (room["id"],)).fetchone()[0]
+    moments = [datetime.fromisoformat(value) for value in times if value]
+    moments = [moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc) for moment in moments]
+    if chat:
+        moments.append(datetime.fromtimestamp(chat, timezone.utc))
+    return max(moments).isoformat(timespec="seconds")
+
+
+# What keeps a room set to destroy itself from doing so: it still owes work, an answer, or a share page only its owner can take down.
+DESTROY_BLOCKERS = """EXISTS (SELECT 1 FROM member_executions e WHERE e.room_id=:room AND e.status IN ('dispatched','started') AND e.lease_until>:now)
+    OR EXISTS (SELECT 1 FROM member_requests q WHERE q.room_id=:room AND q.status IN ('pending','delivering'))
+    OR EXISTS (SELECT 1 FROM queued_messages q WHERE q.room_id=:room)
+    OR EXISTS (SELECT 1 FROM room_questions q WHERE q.room_id=:room AND q.status IN ('waiting_user','waiting_recommendation','delegated'))
+    OR EXISTS (SELECT 1 FROM room_share_links s WHERE s.room_id=:room AND s.expires_at>:iso)"""
+
+
+def destroy_blocked(connection, room_id, now=None):
+    """Whether something in the room keeps it from destroying itself now (see DESTROY_BLOCKERS)."""
+    now = now or datetime.now(timezone.utc)
+    return bool(connection.execute(f"SELECT {DESTROY_BLOCKERS}", {"room": room_id, "now": int(now.timestamp()),
+                                                                "iso": now.strftime("%Y-%m-%dT%H:%M:%SZ")}).fetchone()[0])
+
+
+def expired_rooms(connection, now=None):
+    """Rooms past their auto-destroy limit with nothing still owed: not archived, no work running or queued, no open
+    question, no published share page (only the owner's page can take that down)."""
+    now = now or datetime.now(timezone.utc)
+    rows = connection.execute("""SELECT r.id,r.created_at,d.* FROM rooms r JOIN room_directory d ON d.room_id=r.id
+        WHERE d.destroy_after_days>0 AND d.archived=0""").fetchall()
+    return [row["room_id"] for row in rows if not destroy_blocked(connection, row["room_id"], now)
+            if now - datetime.fromisoformat(destroy_from(connection, {"id": row["room_id"], "created_at": row["created_at"]}, row))
+            >= timedelta(days=row["destroy_after_days"])]
+
+
+def destroy_expired_rooms(server):
+    """Destroy every room past its inactivity limit, exactly as its owner's destroy would, and wake the open pages."""
+    with closing(connect_db(server.database)) as connection:
+        for room_id in expired_rooms(connection):
+            try:
+                manage_room(connection, room_id, "delete", {"actor": "用户", "automatic": True})
+                connection.commit()
+            except (LookupError, PermissionError, ValueError, FileExistsError, sqlite3.Error):
+                connection.rollback()
+                logging.exception("Automatic destruction failed: %s", room_id)
+                continue
+            finish_destruction_files(server.database, room_id)
+            server.hub.notify_update(None)
+
+
+def watch_expired_rooms(server):
+    """Check for rooms to destroy automatically every few minutes, for as long as the website runs."""
+    while True:
+        try:
+            destroy_expired_rooms(server)
+        except Exception:
+            logging.exception("Checking rooms to destroy automatically failed")
+        time.sleep(AUTO_DESTROY_CHECK_SECONDS)
+
+
+def retry_destruction(database):
+    """Retry the website's part of every unfinished destruction: attachment files left behind and an untruncated log."""
+    with closing(connect_db(database)) as connection:
+        rows = connection.execute("SELECT room_id FROM room_destructions WHERE status='cleaning'").fetchall()
+    for row in rows:
+        finish_destruction_files(database, row["room_id"])
 
 
 def redact_payload(value, texts=None, path="payload"):
@@ -3220,7 +3475,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(room_revisions(connection, params))
         if parts == ["api", "rooms"]:
             if method == "GET":
-                return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS, "last_room": last_room(connection)})
+                return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS, "last_room": last_room(connection),
+                                     "destructions": list_destructions(connection)})
             room = create_room(connection, self.read_payload(), self.headers.get("X-Discussion-Token", ""))
             connection.commit()
             return self.respond(room, 200 if room["duplicate"] else 201)
@@ -3262,6 +3518,23 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         room_id = parts[2]
         if parts[3:] == ["progress"] and method == "GET":
             return self.respond(room_progress(connection, room_id))
+        if parts[3:] == ["destruction"]:
+            # The room is gone: its runner reports under the old owner credential; the manager may retry the rest.
+            if method == "GET":
+                view = destruction_view(connection, room_id)
+                if view is None:
+                    raise LookupError(Text('房间不存在'))
+                # The room's runner, under the old owner credential, also gets the sessions its members ran in.
+                return self.respond({**view, **destruction_sessions(connection, room_id, self.headers.get("X-Discussion-Token", ""))})
+            payload = self.read_payload()
+            if payload.get("action") == "retry":
+                if not (self.bridged or self.admin_session(connection)):
+                    raise PermissionError(Text('需要管理员身份'))
+                finish_destruction_files(self.server.database, room_id)
+                return self.respond(destruction_view(connection, room_id) or {})
+            result = report_destruction(connection, room_id, self.headers.get("X-Discussion-Token", ""), payload)
+            connection.commit()
+            return self.respond(result)
         self.refuse_read_only(parts, method)
         self.admin_as_owner(connection, room_id)
         token = self.headers.get("X-Discussion-Token", "")
@@ -3430,15 +3703,12 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if session_read_boundary(connection, room_id, token) is not None:
                 raise PermissionError(Text('独立观点阶段需房主凭据导出'))
             return self.respond(room_backup(connection, room_id))
-        if len(parts) == 4 and parts[3] in ("move", "folder", "rename", "archive", "restore", "delete") and method == "POST":
-            files = connection.execute("SELECT id FROM attachments WHERE room_id=?", (room_id,)).fetchall() if parts[3] == "delete" else []
+        if len(parts) == 4 and parts[3] in ("move", "folder", "rename", "archive", "restore", "delete", "auto-destroy") and method == "POST":
             result = manage_room(connection, room_id, parts[3], self.read_payload())
             connection.commit()
-            for attachment in files:
-                try:
-                    attachment_path(self.server.database, attachment).unlink(missing_ok=True)
-                except OSError:
-                    logging.exception("Attachment cleanup failed: %s", attachment["id"])
+            if parts[3] == "delete":
+                finish_destruction_files(self.server.database, room_id)
+                result["destruction"] = destruction_view(connection, room_id)
             return self.respond(result)
         if len(parts) == 3 and method == "GET":
             return self.respond(room_read_view(connection, require_room(connection, room_id), token))
@@ -3856,6 +4126,7 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     init_database(args.database, seed=not args.no_demo)
+    retry_destruction(args.database)
     if args.reset_admin:
         with closing(connect_db(args.database)) as connection, connection:
             connection.execute("DELETE FROM admin_logins")
@@ -3870,6 +4141,7 @@ def main():
         if login_site and connection.execute("SELECT 1 FROM site_admin").fetchone() is None:
             logging.info("尚未注册管理员账号；注册所需安装令牌：%s",
                          "见环境变量 DISCUSS_ADMIN_SETUP_KEY" if os.getenv("DISCUSS_ADMIN_SETUP_KEY") else login_site.admin_setup_key)
+    threading.Thread(target=watch_expired_rooms, args=(server,), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

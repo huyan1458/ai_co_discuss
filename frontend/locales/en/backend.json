@@ -839,5 +839,8 @@
   "只有互相关联的房间之间才能代主持人发言": "Only linked rooms can speak for each other's host",
   "两个房间的主持人自用户上次发言后已互传 {count} 条消息，达到上限；请等用户在任一房间发言后再继续": "The two rooms' hosts have passed {count} messages since the owner last spoke, which is the limit; wait for the owner to speak in either room before continuing",
   "relay.limit 须为 0–100 的整数，0 表示不限": "relay.limit must be an integer from 0 to 100; 0 means no limit",
-  "分享链接格式不正确": "The share link is not in the expected format"
+  "分享链接格式不正确": "The share link is not in the expected format",
+  "清理结果格式无效": "The cleanup report is not in the expected format",
+  "自动销毁只能设为 {choices} 天（0 为不自动销毁）": "Auto-destroy can only be set to {choices} days (0 keeps the room)",
+  "这个房间发布过分享链接，请先撤销分享链接再销毁": "This room has a published share link; revoke it before destroying the room"
 }

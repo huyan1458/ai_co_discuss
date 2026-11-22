@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { cli_delivery } from './cli.mjs';
 import { daemon_chat, daemon_link } from './codex_daemon.mjs';
 import { CALL_TIMEOUT_MS, edge_entries, launch_directory, log_entries, marked, model_entry, json_line, newest_record, not_sent,
-  page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog, same_path, typed_prompt } from './common.mjs';
+  page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog, remove_session_files, same_path, typed_prompt } from './common.mjs';
 import { adapter_capabilities } from './profiles.mjs';
 
 /** Codex exec may linger after its final event; the finished turn is already saved, so stop it to free the session. */
@@ -265,6 +265,16 @@ export function session_path(session_id, env = process.env, home = homedir()) {
   if (!existsSync(sessions)) return '';
   const found = readdirSync(sessions, { recursive: true }).map(String).find(path => path.endsWith(`-${session_id}.jsonl`));
   return found ? join(sessions, found) : '';
+}
+
+/**
+ * Remove a thread Codex stored on this machine: its rollout and writer lock. Its thread index, prompt history and own
+ * databases (state, logs, history) are shared and held open while Codex runs; those are reported as kept.
+ */
+export function remove_session(session_id, { env = process.env, home = homedir() } = {}) {
+  const root = env.CODEX_HOME || join(home, '.codex');
+  const removed = remove_session_files([session_path(session_id, env, home), join(root, 'thread-writer-locks', `${session_id}.lock`)]);
+  return { removed, kept: ['shared_stores'] };
 }
 
 /** One rollout entry as a conversation message; the instructions and context Codex puts in as user messages are left out. */
@@ -521,7 +531,7 @@ export const codex_cli = {
   invocation, lifecycle, exit_error, events,
   on_stderr: remember_writer_conflict,
   session: { path: session_path, exists: session_exists, owns: (id, options) => session_exists(id, options) && !desktop_thread(id, options),
-    branch, settings: session_settings, list: list_sessions, preview: preview_session },
+    branch, settings: session_settings, list: list_sessions, preview: preview_session, remove: remove_session },
   models: { list: models, defaults },
   skills: codex_skills,
 };
