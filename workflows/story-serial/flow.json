@@ -98,13 +98,6 @@
       "y": -140
     },
     {
-      "id": "aigc_reduce",
-      "type": "sub",
-      "sub": "aigc-reduce",
-      "x": 3170,
-      "y": 32
-    },
-    {
       "id": "accept",
       "type": "host",
       "label": "验收",
@@ -237,11 +230,6 @@
       "label": "按需·读感受"
     },
     {
-      "source": "pre_accept",
-      "target": "aigc_reduce",
-      "label": "读着像模型腔"
-    },
-    {
       "source": "character_review",
       "target": "accept",
       "label": "逐条裁定"
@@ -249,11 +237,6 @@
     {
       "source": "reader_check",
       "target": "accept"
-    },
-    {
-      "source": "aigc_reduce",
-      "target": "accept",
-      "label": "改完再验收"
     },
     {
       "source": "accept",
@@ -302,6 +285,81 @@
       "source": "ruling",
       "target": "stage_plan",
       "label": "下一阶段"
+    }
+  ],
+  "stages": [
+    {
+      "id": "plan",
+      "label": "阶段构思",
+      "nodes": [
+        "stage_plan",
+        "stage_screenwriter",
+        "stage_critic"
+      ]
+    },
+    {
+      "id": "brief",
+      "label": "出任务书",
+      "nodes": [
+        "draft_brief",
+        "character_plan"
+      ]
+    },
+    {
+      "id": "suggest",
+      "label": "编剧建议",
+      "nodes": [
+        "screenwriter"
+      ]
+    },
+    {
+      "id": "rebrief",
+      "label": "改任务书",
+      "nodes": [
+        "brief"
+      ]
+    },
+    {
+      "id": "write",
+      "label": "写审",
+      "nodes": [
+        "writer",
+        "critic_people",
+        "critic"
+      ]
+    },
+    {
+      "id": "extra-review",
+      "label": "验收前加审",
+      "nodes": [
+        "pre_accept",
+        "character_review",
+        "reader_check"
+      ]
+    },
+    {
+      "id": "accept",
+      "label": "验收",
+      "nodes": [
+        "accept"
+      ]
+    },
+    {
+      "id": "record",
+      "label": "记账",
+      "nodes": [
+        "recorder"
+      ]
+    },
+    {
+      "id": "read-through",
+      "label": "阶段通读",
+      "nodes": [
+        "read_through",
+        "read_through_facts",
+        "read_through_reader",
+        "ruling"
+      ]
     }
   ]
 }

@@ -2280,8 +2280,8 @@ test("a share page carries none of what only this computer and its owner should 
           retry: { reason: "RETRY-MARK" }, background: true }] } },
     [history]: { has_more: false, cards: { executions: [{ id: 7, request_message_id: 2, result: "CARD-ANSWER-MARK" }] }, messages: [
       { id: 1, text: "see D:\\Work\\Secret-Project\\src\\b.txt, /d/Work/Secret-Project/c.txt, /mnt/d/work/secret-project/e.txt and D:\\Work\\Secret-Project-wt\\d.txt; notes in C:\\Users\\HOME-MARK\\x.md, /c/Users/HOME-MARK/y.md and /home/HOME-MARK/z.md",
-        attachments: [{ name: "ATTACHMENT-MARK" }], submission_id: "SUBMISSION-MARK" },
-      { id: 2, text: "REWOUND-MARK", withdrawn: "rewound" },
+        attachments: [{ name: "ATTACHMENT-MARK", submission_id: "FILE-SUBMISSION-MARK" }], submission_id: "SUBMISSION-MARK" },
+      { id: 2, text: "REWOUND-MARK", withdrawn: "rewound", attachments: [{ name: "WITHDRAWN-FILE-MARK" }] },
       { id: 3, text: "RETRACTED-MARK", withdrawn: "retracted" },
       { id: 4, text: "run failed: NOTICE-MARK", texts: { text: { template: "run failed: {reason}", params: { reason: "NOTICE-MARK" } } } },
       { id: 5, text: "quota used up, resets RESETS-MARK", texts: { text: { template: "quota used up, resets {resets}", params: { resets: "RESETS-MARK" } } } }] },
@@ -2307,6 +2307,10 @@ test("a share page carries none of what only this computer and its owner should 
     [1, "see src\\b.txt, c.txt, e.txt and D:\\Work\\Secret-Project-wt\\d.txt; notes in ~\\x.md, ~/y.md and ~/z.md"], [4, "run failed: 执行失败"], [5, "quota used up, resets 未公开"]]);
   assert.deepEqual(responses["/api/rooms/r1/timeline"].executions.map((item) => item.id), [10]);
   assert.deepEqual(Object.keys(responses).filter((path) => path.endsWith("/notes")), ["/api/rooms/r1/executions/10/notes"]);
+  // With attachments included, only the kept messages' files come along, still without their submission.
+  const with_files = JSON.stringify(context.share_payload(raw, "r1", undefined, { attachments: true }));
+  assert.ok(with_files.includes("ATTACHMENT-MARK"));
+  for (const mark of ["WITHDRAWN-FILE-MARK", "FILE-SUBMISSION-MARK", "SUBMISSION-MARK"]) assert.ok(!with_files.includes(mark), mark);
 });
 
 test("a share link is kept with the room, published once, updated, renewed and revoked with its own manage token only", async () => {

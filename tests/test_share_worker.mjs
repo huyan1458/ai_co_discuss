@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import vm from "node:vm";
 
-import worker from "../backend/share_worker.mjs";
+import worker, { SHARE_FILE_TYPES } from "../backend/share_worker.mjs";
 
 const ORIGIN = "https://share.example.test";
 const DAY = 86400000;
@@ -70,7 +70,11 @@ test("publishes a nonce-protected page and preserves literal text across chunk b
   assert.match(html,/<title>Room \$&amp; · AI CoDiscuss<\/title>/);
   const [,nonce,script] = html.match(/<script nonce="([^"]+)">(window\.CODISCUSS_SHARE = [\s\S]*?;)<\/script>/);
   assert.match(res.headers.get("Content-Security-Policy"),new RegExp("nonce-"+nonce));
-  assert.match(res.headers.get("Content-Security-Policy"),/connect-src blob:;/);
+  // Nothing loads from another site, no inline script runs without the nonce, and no form can send anything out.
+  const csp = res.headers.get("Content-Security-Policy");
+  assert.ok(!/https?:|\*/.test(csp), csp);
+  assert.ok(!/script-src[^;]*'unsafe-inline'/.test(csp), csp);
+  assert.match(csp,/form-action 'none'/);
   assert.equal(res.headers.get("Referrer-Policy"),"no-referrer");
   assert.equal(res.headers.get("X-Robots-Tag"),"noindex, noarchive");
   assert.doesNotMatch(script,/[<\u2028\u2029]/);
@@ -81,17 +85,53 @@ test("publishes a nonce-protected page and preserves literal text across chunk b
   assert.match(html,/type="module" id="modern-script" src="\/modern.js"/);
 });
 
+/** The payload with its message listing these attachments ({ id, file_name, content_type }). */
+function with_files(files, attachments) {
+  const data = payload();
+  data.responses["/api/rooms/example/messages?after=0"].messages[0].attachments = files.map(file => ({ room_id: "example", ...file }));
+  return { ...data, attachments };
+}
+
 test("included attachments are kept as this room's data URLs; any other route or value is refused", async t => {
   const f = fixture(t), route = "/api/rooms/example/attachments/a1/content", file = "data:text/html;base64,PGI+aGk8L2I+";
-  const share = await f.publish({ ...payload(), attachments: { [route]: file } });
+  const listed = [{ id: "a1", file_name: "demo.html", content_type: "text/html" }];
+  const share = await f.publish(with_files(listed, { [route]: file }));
   const html = await (await f.call("GET", share.url)).text();
   const win = {};
   vm.runInNewContext(html.match(/<script nonce="[^"]+">(window\.CODISCUSS_SHARE = [\s\S]*?;)<\/script>/)[1], { window: win });
   assert.deepEqual(JSON.parse(JSON.stringify(win.CODISCUSS_SHARE.attachments)), { [route]: file });
+  // Review lists attachments instead of inlining them, and hands each over only as a download.
+  const admin = "/api/admin/shares/"+share.id;
+  const detail = await (await f.call("GET", admin, undefined, f.env.ADMIN_TOKEN)).json();
+  assert.deepEqual(detail.data.attachments, [{ route, content_type: "text/html", bytes: 9 }]);
+  const download = await f.call("GET", admin+"/attachment?route="+encodeURIComponent(route), undefined, f.env.ADMIN_TOKEN);
+  assert.equal(download.headers.get("Content-Disposition"), "attachment");
+  assert.equal(await download.text(), "<b>hi</b>");
+  assert.equal((await f.call("GET", admin+"/attachment?route="+encodeURIComponent(route), undefined, share.manage_token)).status, 403);
   for (const attachments of [{ "/api/rooms/other/attachments/a1/content": file }, { [route]: "https://example.com/a.png" },
     { [route]: "data:text/html,<script>" }, { "/api/rooms/example/files/a1": file }, [file]]) {
-    assert.equal((await f.call("POST", "/api/shares", { ...payload(), attachments })).status, 400);
+    assert.equal((await f.call("POST", "/api/shares", with_files(listed, attachments))).status, 400);
   }
+  // Only kinds the site takes, named by their message with the type their extension gives: a program declared as text,
+  // a file no message lists, or a type its extension does not give is refused.
+  const text = "data:text/plain;base64,aGk=";
+  for (const [files, attachments] of [
+    [[{ id: "a1", file_name: "setup.exe", content_type: "text/plain" }], { [route]: text }],
+    [[{ id: "a1", file_name: "notes.zip", content_type: "application/zip" }], { [route]: "data:application/zip;base64,aGk=" }],
+    [[], { [route]: text }],
+    [[{ id: "a1", file_name: "notes.txt", content_type: "text/plain" }], { [route]: file }],
+    [[{ id: "a1", file_name: "notes.txt", content_type: "text/html" }], { [route]: text }]]) {
+    const refused = await f.call("POST", "/api/shares", with_files(files, attachments));
+    assert.equal(refused.status, 400);
+    assert.match((await refused.json()).error, /share site takes only/);
+  }
+  assert.equal((await f.call("POST", "/api/shares", with_files([{ id: "a1", file_name: "notes.TXT", content_type: "text/plain" }], { [route]: text }))).status, 201);
+});
+
+test("the page and the share site take the same kinds of attachment", async () => {
+  const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8");
+  const listed = source.match(/const SHARE_SITE_FILE_TYPES = (\{[\s\S]*?\n\});/)[1];
+  assert.deepEqual({ ...vm.runInNewContext("(" + listed + ")") }, { ...SHARE_FILE_TYPES });
 });
 
 test("renewal, management credentials, revocation and expiration", async t => {

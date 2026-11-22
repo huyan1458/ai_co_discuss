@@ -1,7 +1,7 @@
 ---
-name: character_b
+name: character
 platform: Claude
-label: 角色乙
+label: 角色
 description: 代入主持人指定的一位关键人物，只站在这个人物的立场上：开写前推演他会怎么做，定稿前审正文里的他像不像他
 project_access: read
 ---

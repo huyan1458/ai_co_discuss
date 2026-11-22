@@ -20,7 +20,6 @@ import { invite_after_creation } from "./external-members.js";
 import { access_options } from "../runner/expert_prompts.mjs";
 import { t } from "./i18n.js";
 
-const props = defineProps({ targetFolder: { type: Object, default: null } });
 const emit = defineEmits(["submit", "cancel"]);
 const { view, bridge, pending, act } = inject("discussion");
 const EXPERT_CONTAINER = "new-expert-modes";
@@ -238,7 +237,6 @@ const summary = computed(() => {
         <p><UIcon name="i-lucide-plug-zap" />{{ t("本机服务未连接，连接后才能唤醒本机 AI。在运行 AI 的电脑上执行下面的命令并完成网页授权，连上后自动检测。") }}</p>
         <div class="create-connect-command"><code>{{ view.launch.connect_command }}</code><UButton icon="i-lucide-copy" :aria-label="t('复制本机连接命令')" variant="ghost" color="neutral" @click="act('copy', view.launch.connect_command)" /></div>
       </div>
-      <p v-if="targetFolder?.id" class="channel-create-location"><UIcon name="i-lucide-folder" />{{ targetFolder.name }}</p>
       <section class="create-section">
         <h3><span>1</span>{{ t("这次做什么") }}</h3>
         <UFormField class="create-title-field" :label="t('话题名称')" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" :placeholder="t('这次要一起做什么？')" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
@@ -317,8 +315,6 @@ const summary = computed(() => {
 .create-drive > .expert-card-modes { width: 300px; max-width: 100%; }
 .create-drive-hint { margin: -4px 0 0; }
 .create-scroll { overflow-y: auto; scrollbar-gutter: stable; padding: 20px 26px 24px; gap: 26px !important; }
-/* The folder label is a caption for the form, so it hugs the header and the first section. */
-.create-scroll > .channel-create-location { margin: -8px 0 -14px; }
 .create-section { display: flex; flex-direction: column; gap: 14px; }
 .create-extra-directories { margin-top: 6px; }
 .create-section + .create-section { padding-top: 22px; border-top: 1px solid var(--ui-border-muted); }
@@ -374,7 +370,6 @@ const summary = computed(() => {
   .create-discussion { height: calc(100dvh - 130px); }
   /* A phone shows as much of the form as it can at once (user 2026-11-18, #4771): tighter spacing. The topic keeps its label on its own line like the other fields (user 2026-11-19, #5426). */
   .create-scroll { padding: 10px 14px 12px; gap: 12px !important; }
-  .create-scroll > .channel-create-location { margin: 0 0 -6px; }
   .create-section { gap: 8px; }
   .create-section + .create-section { padding-top: 12px; }
   .create-project-field :deep([data-slot="description"]) { display: none; }

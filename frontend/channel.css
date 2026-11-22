@@ -209,7 +209,6 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-folder-heading.drop-folder, .channel-root-rooms.drop-folder { border-radius: 6px; background: #8791ff20; outline: 2px solid var(--channel-accent); outline-offset: -2px; color: #e5e8ff; }
 .channel-folder-heading > .channel-folder-name { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-folder-heading > [class*="icon"] { width: 14px; height: 14px; flex-shrink: 0; }
-.channel-create-location { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ui-text-muted); }
 .channel-management-target { color: #eef0f5; overflow-wrap: anywhere; }
 .channel-management-target > span { color: #949dad; font-size: 12px; }
 .channel-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--ui-bg); }
@@ -874,7 +873,7 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
    keeps iOS from zooming the page on focus. */
 .selection-comment.is-docked { inset: auto 0 0; width: auto; max-width: none; gap: 8px; padding: 14px 16px calc(max(var(--keyboard-inset, 0px), env(safe-area-inset-bottom)) + 12px);
   border-width: 1px 0 0; border-radius: 16px 16px 0 0; box-shadow: 0 -8px 24px #0006; }
-.selection-comment.is-docked textarea { min-height: 66px; max-height: 40dvh; font-size: 16px; line-height: 22px; }
+.selection-comment.is-docked textarea { min-height: 22px; max-height: 40dvh; font-size: 16px; line-height: 22px; }
 .selection-comment.is-docked .selection-comment-actions { justify-content: flex-start; gap: 12px; }
 .selection-comment.is-docked button { width: 40px; height: 40px; }
 .selection-comment.is-docked button > span { width: 20px; height: 20px; }
@@ -1178,25 +1177,31 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-date-divider { padding: 12px 16px; }
   .channel-message { margin: 0 8px 14px !important; padding: 14px 15px 16px !important; }
   .channel-loading-skeleton { padding-inline: 23px; }
-  /* Phone byline: a two-line block beside a centered avatar — name and badges on the first line; below, the model at
-     the left and state, time, number and duration at the right. Flex wrap rather than a grid: a name row spanning
-     grid columns widened the time column in iOS Safari and pushed the elapsed time to the middle of the card. */
-  .channel-message-byline { position: relative; display: flex; flex-wrap: wrap; align-items: center; align-content: center; gap: 1px 8px; min-height: 32px; padding-left: 40px; margin-bottom: 10px; }
+  /* Phone byline, beside an avatar centered on its height. Flex wrap rather than a grid: a name row spanning grid
+     columns widened the time column in iOS Safari and pushed the elapsed time to the middle of the card. */
+  .channel-message-byline { position: relative; display: flex; flex-wrap: wrap; align-items: center; align-content: center; justify-content: space-between; gap: 1px 8px; min-height: 32px; padding-left: 40px; padding-right: 0; margin-bottom: 10px; }
   .channel-message-byline > .channel-avatar { position: absolute; left: 0; top: 50%; width: 32px; height: 32px; font-size: 10px; transform: translateY(-50%); }
-  .channel-message-meta { display: contents; }
-  .channel-message-author { flex: 1 0 100%; min-width: 0; min-height: 20px; column-gap: 6px; }
   .channel-message-byline strong { font-size: 15px; line-height: 20px; }
   .channel-message-byline .channel-message-provenance { line-height: 16px; }
-  /* Only the name line keeps clear of the toolbar; the second line runs across the card. The model takes what the
-     facts leave and is cut from its start; facts too wide for the line wrap at the right rather than overflow. */
-  .channel-message-byline { padding-right: 0; }
-  .channel-message-author { padding-right: 58px; }
-  .channel-message-model { flex: 1 1 0; }
-  .channel-message-facts { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+  /* Phone header (user 2026-11-22, #6944, #6950): one line as on a wide screen, the keys having moved to the card's
+     foot — who at the left (name, tags, model), this turn at the right (state, time, number, duration). The left group
+     takes what the facts leave, down to 96px (room for a name): the model drops under the name when it does not fit
+     beside it, cut from its start if longer than the group. Facts too wide to share the line with that much room
+     (a failed or stopped run) take the next line, from the left under the name (space-between starts a lone item
+     at the left; #6904: at the right it read as detached from the name). */
+  .channel-message-meta { display: flex; flex: 1 1 0; flex-wrap: wrap; align-items: center; min-width: 96px; column-gap: 8px; row-gap: 1px; }
+  .channel-message-author { flex: 0 1 auto; min-width: 0; min-height: 20px; column-gap: 6px; }
+  .channel-message-model { flex: 0 1 auto; max-width: 100%; }
+  /* The facts stay level with the name when the left group runs to a second line. */
+  .channel-message-facts { flex: 0 1 auto; align-self: flex-start; min-width: 0; max-width: 100%; min-height: 20px; margin-left: 0; flex-wrap: wrap; }
   .channel-answer-summary { grid-template-columns: minmax(0, 1fr); gap: 4px; margin-top: 14px; }
   .channel-answer-summary > small > span { display: inline; }
   .channel-answer-summary > .channel-message-text { font-size: calc(14px * var(--card-text-scale, 1)); }
-  .channel-message-actions { top: 10px; right: 8px; width: auto; }
+  /* The card's keys sit at its foot, right end, on a line of their own: the header keeps the whole first line, and
+     the keys are where reading ends (user 2026-11-22, #6950). A message being sent keeps the same foot, so the saved
+     card that replaces it is the same height. */
+  .channel-message-actions { inset: auto 8px 4px auto; width: auto; }
+  .channel-message:has(.channel-message-toolbar), .channel-sending-message:not(.is-failed) { padding-bottom: 38px !important; }
   .channel-message-toolbar { position: static; opacity: 1; pointer-events: auto; padding: 3px; }
   .channel-message-actions button { width: 25px; height: 24px; padding: 4px; color: #929eb2; }
   .channel-message-actions button [class*="icon"] { width: 13px; height: 13px; }
@@ -1681,14 +1686,21 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
    row's right end. */
 .channel-working-main > .channel-working-actions { margin-left: auto; }
 .channel-working-strip .channel-corner-key { flex-shrink: 0; margin-left: auto; width: 24px; height: 24px; padding: 4px; }
+.channel-working-elapsed { display: none; }
 @media (pointer: coarse) {
   .channel-working-strip .channel-corner-key { width: 28px; height: 28px; padding: 6px; }
 }
 @media (max-width: 700px) {
   .channel-corner-key [class*="icon"], .channel-message-toolbar .channel-private-chat-key [class*="icon"] { width: 12px; height: 12px; }
-  /* Phone: the byline is two lines, as on the answered card. Private chat sits in the strip's top-right corner beside
-     the name line, where the answered card has its toolbar. */
-  .channel-working-strip .channel-corner-key { position: absolute; top: 4px; right: 10px; }
+  /* Phone: the strip is two lines on both sides (user 2026-11-22, #6945: the left read as two lines and the right as
+     three). Line one is the name, tags and model with private chat at its right end; line two is the status with the
+     time used and the stop key at its right end. The start time is left out: the time used says as much. */
+  .channel-working-head > .channel-message-byline { flex-wrap: nowrap; }
+  .channel-working-strip .channel-message-meta { flex-wrap: nowrap; min-width: 0; }
+  .channel-working-strip .channel-message-model { flex: 1 1 0; max-width: max-content; }
+  .channel-working-strip .channel-message-facts { display: none; }
+  /* The status is the line's main text: when both do not fit, the time used gives way first. */
+  .channel-working-elapsed { display: block; flex: 0 4 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 /* Placed after the base rules above so the mouse layout overrides them. */
 @media (min-width: 701px) and (hover: hover) and (pointer: fine) {
@@ -1744,7 +1756,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .account-identity-fields { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px; }
   .account-identity-fields > .account-form { flex: 1 1 130px; min-width: 0; }
   .account-identity-fields [data-slot="labelWrapper"] { display: none; }
-  .account-identity-fields [data-slot="container"] { margin-top: 0; }
+  .account-identity-fields :is([data-slot="container"], :has(> .account-name-row)) { margin-top: 0; }
   .account-name-row { gap: 4px; }
   .account-avatar-actions { flex-wrap: nowrap; gap: 4px; }
   .account-icon-action { justify-content: center; width: 32px; height: 32px; padding: 0; }

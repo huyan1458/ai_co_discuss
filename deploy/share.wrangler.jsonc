@@ -11,7 +11,7 @@
     "html_handling": "none",
     "not_found_handling": "none",
     "run_worker_first": ["/*", "!/i18n.js", "!/markdown.js", "!/backup.js", "!/app.js", "!/modern.js",
-      "!/modern.css", "!/markdown.css", "!/icons/*", "!/katex/*"]
+      "!/modern.css", "!/markdown.css", "!/icons/*", "!/katex/*", "!/office/*", "!/pdfjs/*"]
   },
   "triggers": { "crons": ["0 * * * *"] },
   // Set DB.database_id and the custom domain in deploy/wrangler.local.jsonc.

@@ -21,23 +21,9 @@
       "y": 0
     },
     {
-      "id": "plan_character_a",
+      "id": "plan_character",
       "type": "card",
-      "card": "character_a",
-      "x": 0,
-      "y": 0
-    },
-    {
-      "id": "plan_character_b",
-      "type": "card",
-      "card": "character_b",
-      "x": 0,
-      "y": 0
-    },
-    {
-      "id": "plan_character_c",
-      "type": "card",
-      "card": "character_c",
+      "card": "character",
       "x": 0,
       "y": 0
     },
@@ -49,23 +35,9 @@
       "y": 0
     },
     {
-      "id": "review_character_a",
+      "id": "review_character",
       "type": "card",
-      "card": "character_a",
-      "x": 0,
-      "y": 0
-    },
-    {
-      "id": "review_character_b",
-      "type": "card",
-      "card": "character_b",
-      "x": 0,
-      "y": 0
-    },
-    {
-      "id": "review_character_c",
-      "type": "card",
-      "card": "character_c",
+      "card": "character",
       "x": 0,
       "y": 0
     },
@@ -89,75 +61,29 @@
     },
     {
       "source": "dispatch",
-      "target": "plan_character_a",
-      "label": "同时推演"
-    },
-    {
-      "source": "dispatch",
-      "target": "plan_character_b",
-      "label": "同时推演"
-    },
-    {
-      "source": "dispatch",
-      "target": "plan_character_c",
-      "label": "同时推演"
+      "target": "plan_character",
+      "label": "同时推演·每人一位"
     },
     {
       "source": "screenwriter",
       "target": "brief"
     },
     {
-      "source": "plan_character_a",
-      "target": "brief"
-    },
-    {
-      "source": "plan_character_b",
-      "target": "brief"
-    },
-    {
-      "source": "plan_character_c",
+      "source": "plan_character",
       "target": "brief"
     },
     {
       "source": "brief",
-      "target": "plan_character_a",
+      "target": "plan_character",
       "label": "正面交锋·最多再一轮"
     },
     {
       "source": "brief",
-      "target": "plan_character_b",
-      "label": "正面交锋·最多再一轮"
-    },
-    {
-      "source": "brief",
-      "target": "plan_character_c",
-      "label": "正面交锋·最多再一轮"
-    },
-    {
-      "source": "brief",
-      "target": "review_character_a",
+      "target": "review_character",
       "label": "写审通过后各审一次"
     },
     {
-      "source": "brief",
-      "target": "review_character_b",
-      "label": "写审通过后各审一次"
-    },
-    {
-      "source": "brief",
-      "target": "review_character_c",
-      "label": "写审通过后各审一次"
-    },
-    {
-      "source": "review_character_a",
-      "target": "ruling"
-    },
-    {
-      "source": "review_character_b",
-      "target": "ruling"
-    },
-    {
-      "source": "review_character_c",
+      "source": "review_character",
       "target": "ruling"
     }
   ]

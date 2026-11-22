@@ -170,7 +170,9 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
     autoImport: false,
     // Elevated panels are white in the light theme; placeholders need a distinct surface in both themes.
     ui: { colors: { primary: "emerald", neutral: "zinc" }, skeleton: { base: "animate-pulse rounded-md bg-accented" } },
-    icon: { clientBundle: { scan: true } },
+    // The scan reads only templates by default; icon names chosen in script files (file kinds in file-preview.js and
+    // the like) would otherwise load from the Iconify API at run time, which a share page's CSP blocks.
+    icon: { clientBundle: { scan: { globInclude: ["**/*.{vue,jsx,tsx,md,mdc,mdx,yml,yaml}", "frontend/**/*.{js,mjs}"] } } },
   })],
   build: {
     outDir: "web",

@@ -8,7 +8,7 @@ const expanded_tasks = reactive(new Set());
 import { awaiting_member } from "./external-members.js";
 import { t } from './i18n.js';
 /** Right-rail board of a free room, laid out like the discussion progress board. */
-import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
 import WorkflowControl from "./WorkflowControl.vue";
 import { active_workflow } from "./workflow-state.js";
@@ -321,6 +321,51 @@ async function save_description({ text, label, as_template }) {
   finally { describing_saving.value = false; }
 }
 
+/**
+ * Pointing at a member's row floats its card left of the rail: who it is, how it takes part and its description, which
+ * the rail has no line for (2026-11-21). Mouse only; it stays while the pointer moves into it, as the execution
+ * timeline's detail card does, and a press on the row (rename, drag, menu) puts it away.
+ */
+const can_hover = typeof window !== "undefined" && window.matchMedia?.("(hover: hover) and (pointer: fine)").matches === true;
+const CARD_WIDTH = 320, CARD_OPEN_MS = 120, CARD_CLOSE_MS = 200;
+const card = ref(null), card_element = ref(null);
+const card_member = computed(() => card.value && member_named(card.value.name));
+let card_timer = 0;
+
+/** Open the card beside a row after a short rest; with a card already open it follows the pointer at once. */
+function card_enter(name, event) {
+  if (!can_hover || describing.value) return;
+  clearTimeout(card_timer);
+  if (card.value?.name === name) return;
+  const row = event.currentTarget;
+  const show = async () => {
+    const rail = board.value?.getBoundingClientRect();
+    if (!rail || board.value.closest(".progress-drawer") || rail.left - ANCHOR_GAP - ANCHOR_MARGIN < CARD_WIDTH) return;
+    card.value = { name, top: row.getBoundingClientRect().top, right: window.innerWidth - rail.left + ANCHOR_GAP };
+    await nextTick();
+    // Keep the whole card on screen.
+    if (card.value?.name === name) card.value.top = Math.max(ANCHOR_MARGIN, Math.min(card.value.top, window.innerHeight - (card_element.value?.offsetHeight || 0) - ANCHOR_MARGIN));
+  };
+  if (card.value) show();
+  else card_timer = setTimeout(show, CARD_OPEN_MS);
+}
+function card_leave() {
+  clearTimeout(card_timer);
+  card_timer = setTimeout(() => { card.value = null; }, CARD_CLOSE_MS);
+}
+function card_keep() { clearTimeout(card_timer); }
+function card_close() {
+  clearTimeout(card_timer);
+  card.value = null;
+}
+function card_edit() {
+  const { name } = card.value;
+  card_close();
+  describe(name);
+}
+watch(() => room.value.id, card_close);
+onBeforeUnmount(card_close);
+
 /** The host's timed check-in, when it set one. */
 const checkin = computed(() => room.value.free?.host_checkin || null);
 
@@ -382,16 +427,14 @@ watch(() => room.value.id, () => { starting.value = false; });
     </section>
     <section class="pb-section" :aria-label="t('发言顺序')">
       <h4>{{ t('发言顺序') }}</h4>
-      <SpeakingOrder :away="away_names" :round="current_round">
+      <SpeakingOrder :away="away_names" :round="current_round" @enter="card_enter" @leave="card_leave" @press="card_close">
         <template #default="{ item }">
           <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state)]">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body" :data-member="member.name">
               <div class="pb-member-name"><MemberNameEdit :name="member.name" :editable="can_describe" /><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
-              <button v-if="room.descriptions?.[member.name] && can_describe" type="button" class="pb-member-description" :title="room.descriptions[member.name]" :aria-label="t('编辑 {value1} 的描述', { value1: member.name })" @click="describe(member.name)">{{ room.descriptions[member.name] }}</button>
-              <div v-else-if="room.descriptions?.[member.name]" class="pb-member-description" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</div>
               <div v-if="member_setup(member) || in_workflow(member.name)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)"><small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>{{ member_setup(member) }}</div>
-              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span><button v-if="can_describe && !room.descriptions?.[member.name]" type="button" class="pb-member-describe" @click="describe(member.name)">{{ t('添加描述') }}</button></div>
+              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
             <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="t('{value1} 的更多操作', { value1: member.name })" /></UDropdownMenu>
           </MemoBlock>
@@ -425,6 +468,24 @@ watch(() => room.value.id, () => { starting.value = false; });
   <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
     :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving" :anchor="describing_anchor"
     @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
+  <Teleport to="body">
+    <Transition name="pb-card-pop">
+      <aside v-if="card && card_member" ref="card_element" class="pb-member-card" :style="{ top: `${card.top}px`, right: `${card.right}px` }" :aria-label="t('{value1} 的成员卡片', { value1: bridge.display_name(card.name) })" @mouseenter="card_keep" @mouseleave="card_leave">
+        <header class="pb-card-head">
+          <UAvatar :src="bridge.identities[card.name]?.icon" :text="bridge.identities[card.name]?.initials" :alt="card.name" size="md" class="channel-avatar" :class="bridge.identities[card.name]?.style" />
+          <div class="pb-card-title">
+            <span class="pb-card-name"><strong>{{ bridge.display_name(card.name) }}</strong><em v-if="card_member.role === 'host'" class="is-host">{{ t('主持人') }}</em><em v-if="in_workflow(card.name)">{{ t('工作流') }}</em></span>
+            <small>{{ [member_tag(card_member), member_setup(card_member)].filter(Boolean).join(' · ') }}</small>
+          </div>
+        </header>
+        <section class="pb-card-block">
+          <h4>{{ t('描述') }}</h4>
+          <p class="pb-card-text" :class="{ 'is-empty': !room.descriptions?.[card.name] }">{{ room.descriptions?.[card.name] || t('还没有描述') }}</p>
+        </section>
+        <button v-if="can_describe && !room.archived" type="button" class="pb-card-chip" @click="card_edit"><UIcon name="i-lucide-user-pen" />{{ t('编辑名称与描述') }}</button>
+      </aside>
+    </Transition>
+  </Teleport>
   </div>
 </template>
 
@@ -447,11 +508,30 @@ watch(() => room.value.id, () => { starting.value = false; });
 .speaking-order-row .pb-member-body { line-height: 1.35; }
 .pb-workflow-member { color: var(--ui-text-muted); font-size: 10px; }
 .pb-workflow-member:not(:last-child)::after { content: " · "; }
-/* The description takes one line; the full text shows on hover and a click edits it. */
-.pb-member-description { display: block; max-width: 100%; overflow: hidden; padding: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.35; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-button.pb-member-description:hover { color: var(--ui-text-highlighted); }
-/* Offered only while the row is pointed at, on the status line, so no row changes height. */
-.pb-member-describe { display: none; flex-shrink: 0; margin-left: auto; padding: 0; color: var(--channel-accent); font-size: 11px; }
-.pb-member:hover .pb-member-describe, .pb-member-describe:focus-visible { display: block; }
+/* The member card: floats left of the rail beside the row pointed at, built like the execution timeline's detail card. */
+.pb-member-card { position: fixed; z-index: 60; display: grid; gap: 14px; width: 320px; max-height: min(70vh, 480px); padding: 14px 16px 16px; overflow: auto;
+  border: 1px solid var(--channel-edge-float, var(--ui-border-muted)); border-radius: 12px; background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-float, 0 12px 32px rgb(0 0 0 / .3));
+  color: var(--ui-text); font-size: 13px; line-height: 1.6; overscroll-behavior: contain; }
+.pb-card-pop-enter-active { transition: opacity .12s ease-out, transform .12s ease-out; }
+.pb-card-pop-leave-active { transition: opacity .1s ease-in; }
+.pb-card-pop-enter-from { opacity: 0; transform: translateX(4px); }
+.pb-card-pop-leave-to { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .pb-card-pop-enter-active, .pb-card-pop-leave-active { transition: none; } }
+.pb-card-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.pb-card-title { display: grid; flex: 1; gap: 1px; min-width: 0; }
+.pb-card-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pb-card-name strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 15px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.pb-card-name em { flex: none; padding: 0 6px; border-radius: 4px; background: color-mix(in oklab, var(--ui-text) 6%, transparent); color: var(--ui-text-muted); font-size: 11px; font-style: normal; line-height: 18px; }
+.pb-card-name em.is-host { background: color-mix(in oklab, var(--ui-warning, #f59e0b) 14%, transparent); color: var(--ui-warning, #f59e0b); }
+.pb-card-title small { color: var(--ui-text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.pb-card-block { display: grid; gap: 8px; min-width: 0; }
+.pb-card-block h4 { margin: 0; color: var(--ui-text-muted); font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+.pb-card-text { margin: 0; padding: 8px 12px; border-left: 2px solid color-mix(in oklab, var(--ui-text) 18%, transparent); border-radius: 0 6px 6px 0; background: color-mix(in oklab, var(--ui-text) 6%, transparent);
+  color: var(--ui-text); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pb-card-text.is-empty { color: var(--ui-text-dimmed); }
+.pb-card-chip { display: inline-flex; align-items: center; justify-self: start; gap: 6px; height: 30px; padding: 0 12px; border: 1px solid var(--ui-border-muted); border-radius: 8px;
+  background: color-mix(in oklab, var(--ui-text) 6%, transparent); color: var(--ui-text-highlighted); font-size: 12px; cursor: pointer; }
+.pb-card-chip:hover { border-color: color-mix(in oklab, var(--ui-text) 14%, transparent); background: var(--channel-ghost-hover, color-mix(in oklab, var(--ui-text) 4%, transparent)); }
+.pb-card-chip :deep(svg) { width: 14px; height: 14px; }
 .pb-member-model { margin: 1px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
 </style>

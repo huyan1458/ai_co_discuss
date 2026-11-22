@@ -8,6 +8,8 @@ import { computed, inject, nextTick, ref, watch } from "vue";
 
 // `round` numbers this round so later rounds of a plan can be labelled; the discussion board knows it.
 const props = defineProps({ away: { type: Array, default: () => [] }, round: { type: Number, default: 0 } });
+// The pointer entering, leaving or pressing a member's row, with the member ID: the board floats that member's card.
+const emit = defineEmits(["enter", "leave", "press"]);
 const { view, bridge, act } = inject("discussion");
 // One order change at a time; other board actions do not block it.
 const saving = ref(false);
@@ -148,7 +150,8 @@ function step(event, index, direction) {
       <template v-for="(item, index) in rows" :key="item.key">
         <li v-if="item.outside" class="speaking-order-divider" aria-hidden="true"><span>{{ OUTSIDE_LABELS[order.kind] }}</span></li>
         <li class="pb-member speaking-order-row" :class="[`is-${item.state}`, drop_class(index), { 'is-movable': item.state === movable_state && can_reorder }]"
-          :data-key="item.key" :data-movable="item.state === movable_state ? '' : undefined">
+          :data-key="item.key" :data-movable="item.state === movable_state ? '' : undefined"
+          @mouseenter="emit('enter', item.name, $event)" @mouseleave="emit('leave')" @pointerdown="emit('press')">
           <button v-if="item.state === movable_state && can_reorder" type="button" class="speaking-order-grip" :aria-disabled="saving"
             :aria-label="t('{value1}，第 {value2} 位；拖动或用上下方向键调整发言顺序', { value1: item.name, value2: item.place })" :title="grip_title"
             @pointerdown="start($event, movable_index(index))" @pointermove="move" @pointerup="finish" @pointercancel="finish($event, true)" @lostpointercapture="finish($event, true)"
@@ -172,7 +175,8 @@ function step(event, index, direction) {
         </details>
       </li>
       <li v-if="props.away.length" class="speaking-order-divider" aria-hidden="true"><span>{{ t('已离开') }}</span></li>
-      <li v-for="name in props.away" :key="`away-${name}`" class="pb-member speaking-order-row is-away">
+      <li v-for="name in props.away" :key="`away-${name}`" class="pb-member speaking-order-row is-away"
+        @mouseenter="emit('enter', name, $event)" @mouseleave="emit('leave')" @pointerdown="emit('press')">
         <span class="speaking-order-place"></span>
         <slot :item="{ name, state: 'away' }" :place="0" />
       </li>

@@ -536,7 +536,7 @@ const deleted_time = (value) => modified_time(value);
 .project-roots { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
 .project-roots button { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 4px 10px; border: 1px solid var(--ui-border); border-radius: 6px;
   color: var(--ui-text-muted); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.project-roots button:hover { color: var(--ui-text-highlighted); }
+@media (hover: hover) { .project-roots button:hover { color: var(--ui-text-highlighted); } }
 .project-roots button[aria-selected="true"] { border-color: var(--ui-primary); color: var(--ui-text-highlighted); font-weight: 500; }
 .project-roots button > span { flex-shrink: 0; width: 13px; height: 13px; }
 .project-files-ask { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; padding: 8px 12px;
@@ -552,7 +552,7 @@ const deleted_time = (value) => modified_time(value);
 .project-explorer-path { display: flex; flex-wrap: nowrap; align-items: center; gap: 1px; min-height: 38px; padding: 4px 10px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--ui-border); font-size: 13px; }
 .project-explorer-path > * { flex-shrink: 0; }
 .project-explorer-path button { display: inline-flex; align-items: center; padding: 3px 5px; border-radius: 5px; color: var(--ui-text-muted); white-space: nowrap; cursor: pointer; }
-.project-explorer-path button:hover:not(:disabled) { background: var(--ui-bg-accented); color: var(--ui-text); }
+@media (hover: hover) { .project-explorer-path button:hover:not(:disabled) { background: var(--ui-bg-accented); color: var(--ui-text); } }
 .project-explorer-path button[aria-current] { color: var(--ui-text-highlighted); font-weight: 600; cursor: default; }
 .project-explorer-path button:disabled:not([aria-current]) { cursor: default; }
 .project-files-naming { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-bottom: 1px solid var(--ui-border); }
@@ -564,7 +564,7 @@ const deleted_time = (value) => modified_time(value);
 .project-files-columns > :nth-child(2), .project-file-size { text-align: right; }
 .project-files-rows { padding: 4px; }
 .project-file-row { width: 100%; height: var(--row-height); text-align: left; font-size: 13px; border-radius: 6px; padding-inline: 10px; }
-.project-file-row:hover { background: var(--ui-bg-accented); }
+@media (hover: hover) { .project-file-row:hover { background: var(--ui-bg-accented); } }
 .project-file-row.is-unavailable { opacity: .45; }
 .project-file-row.is-hidden .project-file-name > span:last-child { color: var(--ui-text-muted); }
 .project-file-name { display: flex; align-items: center; gap: 9px; min-width: 0; height: 100%; text-align: left; cursor: pointer; }

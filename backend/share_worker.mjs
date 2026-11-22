@@ -5,9 +5,30 @@ const DAY_MS = 86_400_000;
 const ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 const ATTACHMENT_ROUTE = /^\/attachments\/[A-Za-z0-9._~%-]{1,200}\/content$/;
 const DATA_URL = /^data:[\w.+-]+\/[\w.+-]+;base64,[A-Za-z0-9+/]*={0,2}$/;
-const PUBLIC_ASSET = /^\/(?:i18n\.js|markdown\.js|backup\.js|app\.js|modern\.js|modern\.css|markdown\.css|icons\/[\w.-]+|katex\/(?:fonts\/)?[\w.-]+)$/;
+// The attachments the share site takes, by extension, each as this one type: what the page previews (user 2026-11-22).
+// web/app.js SHARE_SITE_FILE_TYPES keeps the same list and leaves other files out of a published link. Anyone may publish,
+// so archives, executables and old Office formats that can carry macros are not handed out from this address; a declared
+// type cannot make an .exe pass as text.
+export const SHARE_FILE_TYPES = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", bmp: "image/bmp", svg: "image/svg+xml", ico: "image/x-icon",
+  mp3: "audio/mpeg", wav: "audio/wav", m4a: "audio/mp4", aac: "audio/aac", ogg: "audio/ogg", oga: "audio/ogg", opus: "audio/opus", flac: "audio/flac", weba: "audio/webm",
+  mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", mov: "video/quicktime", ogv: "video/ogg", mkv: "video/x-matroska",
+  pdf: "application/pdf", html: "text/html", htm: "text/html",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", ods: "application/vnd.oasis.opendocument.spreadsheet",
+  prproj: "application/gzip",
+  txt: "text/plain", md: "text/markdown", markdown: "text/markdown", csv: "text/csv", tsv: "text/tab-separated-values", json: "application/json", jsonc: "text/plain", jsonl: "text/plain",
+  xml: "text/xml", yaml: "text/yaml", yml: "text/yaml", toml: "text/plain", ini: "text/plain", log: "text/plain", css: "text/css",
+  srt: "text/plain", vtt: "text/vtt", ass: "text/plain", ssa: "text/plain", lrc: "text/plain",
+  fcpxml: "text/xml", kdenlive: "text/xml", mlt: "text/xml", otio: "application/json", edl: "text/plain",
+  py: "text/plain", ts: "text/plain", tsx: "text/plain", jsx: "text/plain", java: "text/plain", c: "text/plain", h: "text/plain", cpp: "text/plain",
+  hpp: "text/plain", cs: "text/plain", go: "text/plain", rs: "text/plain", rb: "text/plain", php: "text/plain", swift: "text/plain", kt: "text/plain", sql: "text/plain",
+  sh: "text/plain", vue: "text/plain", diff: "text/plain", patch: "text/plain",
+};
+const PUBLIC_ASSET = /^\/(?:i18n\.js|markdown\.js|backup\.js|app\.js|modern\.js|modern\.css|markdown\.css|icons\/[\w.-]+|katex\/(?:fonts\/)?[\w.-]+|office\/(?:assets\/|chunks\/)?[\w.-]+|pdfjs\/(?:(?:cmaps|iccs|standard_fonts|wasm)\/)?[\w.-]+)$/;
 const CODE = {
   invalid: [400, "分享数据无效", "Invalid share data"],
+  file_type: [400, "分享站只接受页面能预览的附件（图片、音视频、PDF、Office 文档、文本和网页）", "The share site takes only attachments the page can preview (images, audio, video, PDF, Office documents, text and web pages)"],
   ttl: [400, "有效期须为 1、3 或 7 天", "Choose 1, 3 or 7 days"],
   auth: [403, "凭据无效", "Invalid credential"],
   missing: [404, "分享不存在或已撤销", "Share not found or revoked"],
@@ -95,12 +116,28 @@ function snapshot(input) {
   // Attachments the owner chose to include: this room's attachment routes, each its file as a base64 data URL.
   if (input.attachments !== undefined) {
     if (!record(input.attachments)) fail("invalid");
+    const listed = listed_files(input.responses, input.room_id);
     for (const [path, value] of Object.entries(input.attachments)) {
       if (!path.startsWith(base+"/") || !ATTACHMENT_ROUTE.test(path.slice(base.length)) || typeof value !== "string" || !DATA_URL.test(value)) fail("invalid");
+      // Its message names it, by an extension this site takes, with the very type the content is sent as.
+      const file = listed.get(path), type = value.slice(5, value.indexOf(";"));
+      const extension = /\.([^./\\]+)$/.exec(typeof file?.file_name === "string" ? file.file_name : "")?.[1].toLowerCase() || "";
+      if (!Object.hasOwn(SHARE_FILE_TYPES, extension) || SHARE_FILE_TYPES[extension] !== type || file.content_type !== type) fail("file_type");
     }
   }
   const { format, room_id, title, description, exported_at, responses, attachments } = input;
   return { format, room_id, title, description, exported_at, responses, ...(attachments ? { attachments } : {}) };
+}
+/** The attachments the shared messages list, by the route that reads each. */
+function listed_files(responses, room_id) {
+  const files = new Map();
+  for (const [path, body] of Object.entries(responses)) {
+    if (!path.includes("/messages?") || !Array.isArray(body?.messages)) continue;
+    for (const message of body.messages) for (const file of Array.isArray(message?.attachments) ? message.attachments : []) {
+      if (record(file) && file.room_id === room_id) files.set("/api/rooms/"+encodeURIComponent(room_id)+"/attachments/"+encodeURIComponent(String(file.id))+"/content", file);
+    }
+  }
+  return files;
 }
 async function encode_snapshot(data) {
   let raw;
@@ -208,10 +245,12 @@ function escape_html(value) {
 function html_headers(nonce) {
   return { "Content-Type":"text/html; charset=utf-8", "Cache-Control":"private, no-store",
     "Referrer-Policy":"no-referrer", "X-Robots-Tag":"noindex, noarchive", "X-Content-Type-Options":"nosniff",
-    "Content-Security-Policy":"default-src 'none'; script-src 'self' 'nonce-"+nonce+
+    "Content-Security-Policy":"default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'nonce-"+nonce+
       "'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src blob:; font-src 'self' data:; "+
-      // Included attachments are shown from object URLs made in the page; nothing is fetched from anywhere else.
-      "connect-src blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
+      // Included attachments are shown from object URLs made in the page; the PDF and Office viewers load their own parts
+      // (fonts, character maps, decoders) from this site, PDF.js decodes some images in WebAssembly, and the slide viewer
+      // starts its worker from an object URL. Nothing else is fetched.
+      "connect-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
 }
 function render_page(template, data, nonce) {
   const title = escape_html(data.title), description = escape_html(data.description);
@@ -283,14 +322,32 @@ async function admin_list(url, db) {
   const shares = results.slice(0,100);
   return json({ shares, next_cursor:results.length>100 ? shares.at(-1).updated_at+"|"+shares.at(-1).id : null });
 }
-async function admin_detail(db, id) {
+async function admin_share(db, id) {
   const [headers, parts, reports] = await db.batch([
     db.prepare("SELECT "+HEADER_FIELDS+",moderation_reason FROM shares WHERE id=?").bind(id),
     db.prepare("SELECT content FROM share_chunks WHERE share_id=? ORDER BY position").bind(id),
     db.prepare("SELECT reason,created_at FROM share_reports WHERE share_id=? ORDER BY created_at LIMIT 100").bind(id)]);
   const row = headers.results[0];
   state_check(row,new Date().toISOString(),false);
-  return json({ share:row, data:await decode_chunks(parts.results), reports:reports.results });
+  return { share:row, data:await decode_chunks(parts.results), reports:reports.results };
+}
+/** A share for review: its attachments listed (route, type, bytes) rather than inlined, each readable on its own. */
+async function admin_detail(db, id) {
+  const { share, data, reports } = await admin_share(db,id);
+  const attachments = Object.entries(data.attachments || {}).map(([route, value]) => {
+    const [, content_type, base64] = /^data:([^;]+);base64,(.*)$/s.exec(value);
+    return { route, content_type, bytes:Math.floor(base64.length * 3 / 4) - (base64.match(/=*$/)[0].length) };
+  });
+  return json({ share, data:{ ...data, attachments }, reports });
+}
+/** One included attachment's bytes, always as a download so a reviewer's browser never runs it on this origin. */
+async function admin_attachment(db, id, url) {
+  const { data } = await admin_share(db,id);
+  const value = data.attachments?.[url.searchParams.get("route") || ""];
+  if (!value) fail("missing");
+  const [, content_type, base64] = /^data:([^;]+);base64,(.*)$/s.exec(value);
+  return new Response(Uint8Array.from(atob(base64), char => char.charCodeAt(0)), { headers:{ "Content-Type":content_type,
+    "Content-Disposition":"attachment", "X-Content-Type-Options":"nosniff", "Cache-Control":"private, no-store" } });
 }
 async function moderate(request, db, id, action) {
   const now = new Date().toISOString();
@@ -314,6 +371,7 @@ async function admin_route(request, env, url, parts) {
   if (!id && request.method === "GET") return admin_list(url,env.DB);
   if (!ID_PATTERN.test(id) || parts.length > 2) fail("missing");
   if (!action && request.method === "GET") return admin_detail(env.DB,id);
+  if (action === "attachment" && request.method === "GET") return admin_attachment(env.DB,id,url);
   if (["takedown","restore"].includes(action) && request.method === "POST") return moderate(request,env.DB,id,action);
   fail("missing");
 }

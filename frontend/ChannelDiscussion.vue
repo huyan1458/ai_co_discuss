@@ -337,7 +337,9 @@ const MESSAGE_PREVIEW_STRETCH = 1.5;
 // How much the excerpt keeps is a separate choice (设置 → 阅读 → 折叠后显示, user 2026-11-21), also a share of the window's
 // height so phones, tablets and computers each keep lines in proportion to what they show.
 const MESSAGE_FOLD_LEVELS = { loose: { fold: 1.2 }, standard: { fold: 0.7 }, compact: { fold: 0.5 } };
-const MESSAGE_FOLD_KEEP_SHARES = { short: 0.15, medium: 0.3, long: 0.5 };
+// User 2026-11-22, #6937: 0.15 / 0.3 / 0.5 kept only a heading or two on a phone, where the headings alone fill a few
+// tenths of the window; even the shortest level should show some of the answer itself.
+const MESSAGE_FOLD_KEEP_SHARES = { short: 0.35, medium: 0.6, long: 0.9 };
 const MESSAGE_FOLD_KEEP_MIN_LINES = 3;
 // The message text's size in px (frontend/channel.css `.channel-message-text`), for estimating its height without laying it out.
 const MESSAGE_FONT_PX = 16;
@@ -631,16 +633,26 @@ const QUEUED_PURPOSES = new Set(["ask", "route", "group", "all"]);
  * Discussion turns have their own arrangement cards; a member that cannot be taken over shows an undeliverable card.
  */
 const free_queued = computed(() => {
-  if (room.value.archived || view.value.query) return [];
+  // A share page is frozen in time: a request pending when it was made would say "waking" forever.
+  if (room.value.archived || view.value.query || view.value.share) return [];
   const members = new Map((room.value.free?.members || []).map((member) => [member.id, member]));
+  // Several pending requests of one member are delivered together: only the first says it is waking the member.
+  const waking = new Set();
   return (room.value.free?.requests || []).filter((request) => request.status === "pending" && !request.execution_id
     && QUEUED_PURPOSES.has(request.purpose) && !request.discussion_session_id
     && members.get(request.member_id)?.status === "active" && !members.get(request.member_id).adopt_error)
+    .sort((left, right) => left.id - right.id)
     .map((request) => {
       const member = members.get(request.member_id);
       const busy = ["dispatched", "started"].includes(member.execution?.status);
-      return { id: `queued-${request.id}`, author: member.name, member_id: member.id, queued: true, slot_card: true,
-        text: busy ? t('排队中：等当前执行结束') : member.held_until ? t('排队中：等上一轮结束') : t('正在唤醒'),
+      const later = waking.has(member.id);
+      waking.add(member.id);
+      // The same states as the member's line in the side panel: a manual member is not woken by the runner, and one
+      // out of quota is not delivered to until it recovers.
+      const text = member.access === "manual" ? t('等它在自己的会话里接入')
+        : member.quota_until ? t('额度已用尽，预计 {time} 恢复', { time: new Date(member.quota_until * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) })
+        : busy ? t('排队中：等当前执行结束') : later ? t('将和上一条一起处理') : member.held_until ? t('排队中：等上一轮结束') : t('正在唤醒');
+      return { id: `queued-${request.id}`, author: member.name, member_id: member.id, queued: true, slot_card: true, text,
         created_at: request.created_at, request_message_id: request.message_id,
         layout_after: request.layout_after ?? request.message_id, layout_at: request.created_at, marks: line_marks(member.name, null) };
     });
@@ -771,6 +783,13 @@ function dispatch_badges(message_id) {
       title: t('这些成员在后台进行，做完不交回') });
   }
   return badges;
+}
+/** How long the working card has run or waited, with the retry attempt when it is being redelivered. */
+function working_elapsed(message) {
+  const spent = format_elapsed(Math.max(0, free_now.value - message.created_at));
+  const text = message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: spent }) : '' })
+    : message.queued ? t('已等 {value1}', { value1: spent }) : t('已用 {value1}', { value1: spent });
+  return text + (message.attempt ? t(' · 第 {value1}/{value2} 次重试', { value1: message.attempt, value2: MAX_DELIVERY_RETRIES }) : '');
 }
 /**
  * The working card's one status line: the phase while output keeps coming, a warning only after a long silence.
@@ -3252,7 +3271,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><UBadge v-for="badge in message.marks?.badges || []" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UTooltip v-if="message.background" :text="t('后台进行：主持人没有等它，接着在做别的')"><UIcon name="i-lucide-split" class="channel-working-background" role="img" :aria-label="t('后台进行：主持人没有等它')" /></UTooltip></div>
                 <span v-if="message.model || message.effort" class="channel-message-provenance channel-message-model" :title="[message.model, message.effort].filter(Boolean).join(' · ')"><bdi v-if="message.model" class="channel-model-id">{{ message.model }}</bdi><span v-if="message.effort" class="channel-model-effort">{{ message.model ? ` · ${message.effort}` : message.effort }}</span></span>
               </div>
-              <div class="channel-message-provenance channel-message-facts"><time v-if="message.created_at" :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time><span class="channel-message-elapsed">{{ message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) : '' }) : message.queued ? t('已等 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) : t('已用 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) }}{{ message.attempt ? t(' · 第 {value1}/{value2} 次重试', { value1: message.attempt, value2: MAX_DELIVERY_RETRIES }) : '' }}</span></div>
+              <div class="channel-message-provenance channel-message-facts"><time v-if="message.created_at" :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time><span class="channel-message-elapsed">{{ working_elapsed(message) }}</span></div>
             </div>
             <UTooltip v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" :text="t('私聊：查看它正在做什么')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="t('私聊 {value1}：查看本次执行过程', { value1: bridge.display_name(message.author) })" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
           </div>
@@ -3269,6 +3288,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
               <span v-else>{{ status.text }}</span>
             </span>
+            <!-- Phone only: the time used moves here from the head, so both sides of the strip are two lines (user 2026-11-22, #6945). -->
+            <span class="channel-message-provenance channel-working-elapsed">{{ working_elapsed(message) }}</span>
             <span v-if="view.access?.can_manage && !message.queued" class="channel-working-actions">
                 <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
                 <template v-if="speaking_turn?.expert === message.author && message.discussion_request">

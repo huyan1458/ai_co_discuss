@@ -454,7 +454,9 @@ function actions(room, index, folder_id, folder_room_count) {
         <section v-if="share_draft.files?.count" class="share-dialog-section">
           <UCheckbox :model-value="share_draft.files.included" :disabled="share_phase !== 'ready'"
             :label="t('包含附件（{count} 个，共 {size}）', { count: share_draft.files.count, size: bridge.attachment_size(share_draft.files.bytes) })" @update:model-value="act('share_include_files', $event)" />
-          <p class="share-dialog-muted">{{ share_draft.files.included ? t("附件原样公开。文本类附件已一并检查；图片、视频和其他文件的内容程序查不了，请自己核对。") : t("不包含时，消息里的附件标记显示为“未包含在分享中”。") }}</p>
+          <p v-if="share_draft.files.included && share_draft.files.site_left_out.length" class="share-dialog-muted">{{ t("{names} 不能放到分享站：发布链接时不带，消息里显示“未包含在分享中”；下载网页文件仍会带上。", { names: share_draft.files.site_left_out.slice(0, 3).join("、") + (share_draft.files.site_left_out.length > 3 ? t(" 等 {count} 个", { count: share_draft.files.site_left_out.length }) : "") }) }}</p>
+          <p v-if="share_phase === 'checking'" class="share-dialog-muted">{{ t("正在检查文本类附件…") }}</p>
+          <p v-else class="share-dialog-muted">{{ share_draft.files.included ? t("附件原样公开。文本类附件已一并检查；图片、视频和其他文件的内容程序查不了，请自己核对。") : t("不包含时，消息里的附件标记显示为“未包含在分享中”。") }}</p>
         </section>
         <section class="share-dialog-section">
           <h3>{{ share_spots.length ? t("发出前请核对（{count} 处）", { count: share_spot_total }) : t("发出前请核对") }}</h3>

@@ -321,7 +321,7 @@ const keep_open = (event) => event.preventDefault();
           <section class="channel-setting-row">
             <h3 id="channel-fold-keep-label">{{ t("折叠后显示") }}</h3>
             <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-keep-label"><UButton v-for="option in foldKeepOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_keep === option.value }" :aria-pressed="fold_keep === option.value" @click="fold_keep = option.value" /></div>
-            <p class="fine-print">{{ t("折叠后的回答保留开头一段：少约 0.15 屏、中约 0.3 屏、多约半屏。按当前屏幕高度换算成行数，手机、平板、电脑各自不同，只对本设备生效。") }}</p>
+            <p class="fine-print">{{ t("折叠后的回答保留开头一段：少约 0.35 屏、中约 0.6 屏、多约 0.9 屏。按当前屏幕高度换算成行数，手机、平板、电脑各自不同，只对本设备生效。") }}</p>
           </section>
         </div>
         <h3 class="account-appearance-heading">{{ t("房间偏好") }}</h3>
@@ -335,7 +335,7 @@ const keep_open = (event) => event.preventDefault();
         <SpeechSettings />
         <WeixinSettings />
       </div>
-      <CreateDiscussion v-else-if="rendered_mode === 'create'" :target-folder="targetFolder" @submit="save_form" @cancel="mode = ''" />
+      <CreateDiscussion v-else-if="rendered_mode === 'create'" @submit="save_form" @cancel="mode = ''" />
       <form v-else-if="rendered_mode === 'edit'" class="dialog-form" @submit.prevent="save_form">
         <UFormField :label="t('话题名称')" required><UInput :model-value="view.fields[form_id('title')]" :maxlength="80" required :placeholder="t('这次想讨论什么？')" class="w-full" @update:model-value="bridge.write_field(form_id('title'), $event)" /></UFormField>
         <UFormField :label="t('讨论目标')"><UTextarea :model-value="view.fields[form_id('goal')]" :maxlength="1000" :rows="2" :placeholder="t('希望通过讨论解决的问题')" class="w-full" @update:model-value="bridge.write_field(form_id('goal'), $event)" /></UFormField>

@@ -16,7 +16,31 @@ const SHARE_FORMAT = 1;
 const SHARE_DAYS = [1, 3, 7];
 const SHARE_DEFAULT_DAYS = 7;
 const SHARE_MAX_BYTES = 5 * 1024 * 1024;
+// A downloaded page holds its attachments in memory as one string; past this the browser cannot build it.
+const SHARE_FILE_MAX_BYTES = 100 * 1024 * 1024;
+// The attachments the share site takes, by extension, each sent as this one type: every kind the page previews, since
+// showing them is part of what a share is for (user 2026-11-22). Left out are kinds it cannot show and that could carry
+// a program or macros (archives, executables, old-format doc/xls/ppt): anyone may publish, and these would be handed out
+// from the share site's own address. The share site checks the same list (SHARE_FILE_TYPES in backend/share_worker.mjs).
+// Scripts a desktop runs on a double click go as text under a name ending in .txt (SHARE_SITE_AS_TEXT).
+const SHARE_SITE_FILE_TYPES = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", bmp: "image/bmp", svg: "image/svg+xml", ico: "image/x-icon",
+  mp3: "audio/mpeg", wav: "audio/wav", m4a: "audio/mp4", aac: "audio/aac", ogg: "audio/ogg", oga: "audio/ogg", opus: "audio/opus", flac: "audio/flac", weba: "audio/webm",
+  mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", mov: "video/quicktime", ogv: "video/ogg", mkv: "video/x-matroska",
+  pdf: "application/pdf", html: "text/html", htm: "text/html",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", ods: "application/vnd.oasis.opendocument.spreadsheet",
+  prproj: "application/gzip",
+  txt: "text/plain", md: "text/markdown", markdown: "text/markdown", csv: "text/csv", tsv: "text/tab-separated-values", json: "application/json", jsonc: "text/plain", jsonl: "text/plain",
+  xml: "text/xml", yaml: "text/yaml", yml: "text/yaml", toml: "text/plain", ini: "text/plain", log: "text/plain", css: "text/css",
+  srt: "text/plain", vtt: "text/vtt", ass: "text/plain", ssa: "text/plain", lrc: "text/plain",
+  fcpxml: "text/xml", kdenlive: "text/xml", mlt: "text/xml", otio: "application/json", edl: "text/plain",
+  py: "text/plain", ts: "text/plain", tsx: "text/plain", jsx: "text/plain", java: "text/plain", c: "text/plain", h: "text/plain", cpp: "text/plain",
+  hpp: "text/plain", cs: "text/plain", go: "text/plain", rs: "text/plain", rb: "text/plain", php: "text/plain", swift: "text/plain", kt: "text/plain", sql: "text/plain",
+  sh: "text/plain", vue: "text/plain", diff: "text/plain", patch: "text/plain",
+};
 // Where an earlier version kept a room's published link in this browser; it moves to the room when first read.
+const SHARE_SITE_AS_TEXT = /\.(?:js|mjs|cjs|ps1|bat|cmd|vbs)$/i;
 const SHARE_LINK_PREFIX = "codiscuss-share:";
 // A share page is a record of one moment: every "how long ago" and running clock is read at that moment.
 if (SHARE && Number.isFinite(Date.parse(SHARE.exported_at))) {
@@ -6481,7 +6505,8 @@ function view_snapshot() {
     share: SHARE ? { exported_at: SHARE.exported_at, home: SHARE_HOME } : null,
     share_draft: share_draft ? { room_id: share_draft.room_id, title: share_draft.title, phase: share_draft.phase || "ready",
       spots: [...share_draft.spots || [], ...share_draft.include_files ? share_draft.file_spots || [] : []],
-      files: { count: share_draft.files?.length || 0, bytes: (share_draft.files || []).reduce((total, file) => total + file.size, 0), included: Boolean(share_draft.include_files) },
+      files: { count: share_draft.files?.length || 0, bytes: (share_draft.files || []).reduce((total, file) => total + file.size, 0), included: Boolean(share_draft.include_files),
+        site_left_out: (share_draft.files || []).filter(file => !file.site_type).map(file => file.file_name) },
       linked: Boolean(share_link(share_draft.room_id)), link: share_draft.link || null } : null,
     share_links: SHARE ? {} : share_links(), share_days: SHARE_DAYS,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
@@ -6847,30 +6872,86 @@ function share_sensitive_spots(responses, extra = []) {
   return [...places.values()];
 }
 
-/** The attachments a share page could carry: those of the messages it shows, each once, by the route that reads it. */
-function share_files(responses) {
+/**
+ * The attachments a share page could carry: those of the messages it shows, each once, by the route that reads it. Only
+ * this room's own: the share site takes no route outside the shared room.
+ */
+function share_files(responses, room_id) {
   const files = new Map();
   for (const [path, body] of Object.entries(responses)) {
     if (!/\/messages\?/.test(path)) continue;
     for (const message of body.messages || []) for (const file of message.attachments || []) {
-      const route = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
+      if (file.room_id !== room_id) continue;
+      const route = share_file_route(file);
       // A data URL names the plain type; parameters such as a charset would not survive the share site's check.
-      files.set(route, { route, file_name: file.file_name, size: Number(file.size) || 0, message_id: message.id,
+      files.set(route, { route, file_name: file.file_name, size: Number(file.size) || 0, message_id: message.id, ...share_site_file(file.file_name),
         content_type: String(file.content_type || "").split(";")[0].trim() || "application/octet-stream" });
     }
   }
   return [...files.values()];
 }
 
-/** What looks sensitive inside the attachments whose text can be read; images and other files are left to the owner. */
+/**
+ * What looks sensitive inside the attachments whose text can be read; images and other files are left to the owner. A file
+ * that cannot be read is listed as unchecked rather than stopping the share.
+ */
 async function share_file_spots(files) {
-  const extra = [];
+  const extra = [], unread = [];
   for (const file of files) {
     if (!is_text_attachment(file) || SHARE_PACKED_TEXT.test(file.file_name) || file.size > SHARE_SCAN_BYTES) continue;
-    const text = new TextDecoder().decode(await read_room_file(file.route));
-    extra.push({ texts: [text], where: t('#{id} 的附件 {name}', { id: file.message_id, name: file.file_name }) });
+    const where = t('#{id} 的附件 {name}', { id: file.message_id, name: file.file_name });
+    try {
+      extra.push({ texts: [new TextDecoder().decode(await read_room_file(file.route))], where });
+    } catch {
+      unread.push({ where, count: 1, text: t('读取失败，没能检查，请自己核对') });
+    }
   }
-  return share_sensitive_spots({}, extra);
+  return [...share_sensitive_spots({}, extra), ...unread];
+}
+
+/** Where an attachment's content is read; the key it has in a share page. */
+function share_file_route(file) {
+  return `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
+}
+
+/**
+ * How the share site takes a file of this name: { site_name, site_type }, the type "" for a kind it does not take. A
+ * script a desktop would run on a double click is named as text, so a reader who downloads it opens it to read.
+ */
+function share_site_file(file_name) {
+  const site_name = SHARE_SITE_AS_TEXT.test(file_name || "") ? `${file_name}.txt` : String(file_name || "");
+  const extension = /\.([^./\\]+)$/.exec(site_name)?.[1].toLowerCase() || "";
+  return { site_name, site_type: Object.hasOwn(SHARE_SITE_FILE_TYPES, extension) ? SHARE_SITE_FILE_TYPES[extension] : "" };
+}
+
+/** The attachments a page carries: none unless included; on the share site (`site`) only the kinds it takes. */
+function share_carried_files(draft, site) {
+  if (!draft.include_files) return [];
+  return site ? draft.files.filter(file => file.site_type) : draft.files;
+}
+
+/**
+ * The answers a page carries. For the share site, a file it does not take is left out of its message (its tag then reads
+ * "not included"), and the rest are listed by the type they are sent as.
+ */
+function share_responses(draft, site) {
+  if (!draft.include_files) return draft.responses;
+  if (!site) return draft.responses_with_files;
+  const taken = new Map(draft.files.filter(file => file.site_type).map(file => [file.route, file]));
+  const responses = structuredClone(draft.responses_with_files);
+  for (const [path, body] of Object.entries(responses)) {
+    if (!/\/messages\?/.test(path)) continue;
+    for (const message of body.messages || []) if (message.attachments) message.attachments = message.attachments
+      .filter(file => taken.has(share_file_route(file)))
+      .map(file => ({ ...file, file_name: taken.get(share_file_route(file)).site_name, content_type: taken.get(share_file_route(file)).site_type }));
+  }
+  return responses;
+}
+
+/** About how large a share page's data is before its attachments are read: base64 makes each file a third larger. */
+function share_estimated_bytes(draft, site) {
+  const text = new Blob([JSON.stringify(share_responses(draft, site))]).size;
+  return text + share_carried_files(draft, site).reduce((total, file) => total + Math.ceil(file.size / 3) * 4 + file.route.length + file.content_type.length + 32, 0);
 }
 
 /** A file a share page carries, as a Blob; one it does not carry was left out when the page was made. */
@@ -6880,20 +6961,32 @@ function share_file_blob(path) {
   return new Blob([base64_to_bytes(match[2])], { type: match[1] });
 }
 
-/** What a confirmed share page carries: the room's answers, and every attachment's bytes when the owner chose to include them. */
-async function share_contents(draft) {
+/**
+ * What a confirmed share page carries: the room's answers, and the attachments' bytes when the owner chose to include them;
+ * `site` for the share site, which takes only some kinds of file.
+ */
+async function share_contents(draft, site = false) {
   const share = { room_id: draft.room_id, title: draft.title, description: draft.description, exported_at: draft.exported_at,
-    responses: draft.include_files ? draft.responses_with_files : draft.responses };
-  if (!draft.include_files || !draft.files.length) return share;
+    responses: share_responses(draft, site) };
+  const files = share_carried_files(draft, site);
+  if (!files.length) return share;
   share.attachments = {};
-  for (const file of draft.files) share.attachments[file.route] = await data_url(new Blob([await read_room_file(file.route)], { type: file.content_type }));
+  for (const file of files) share.attachments[file.route] = await data_url(new Blob([await read_room_file(file.route)], { type: site ? file.site_type : file.content_type }));
   return share;
 }
 
-/** Include or leave out the attachments of the page being prepared. */
-function share_include_files(include) {
-  if (!share_draft || share_draft.phase !== "ready") return;
-  share_draft.include_files = Boolean(include);
+/** Include or leave out the attachments of the page being prepared; the first time they go in, their text is checked. */
+async function share_include_files(include) {
+  const draft = share_draft;
+  if (!draft || draft.phase !== "ready") return;
+  draft.include_files = Boolean(include);
+  if (draft.include_files && !draft.file_spots) {
+    // Read only now: a page shared without its attachments need not wait for them, nor fail on one.
+    draft.phase = "checking";
+    publish_view();
+    draft.file_spots = await share_file_spots(draft.files);
+    if (draft.phase === "checking") draft.phase = "ready";
+  }
   publish_view();
 }
 
@@ -6968,13 +7061,12 @@ async function share_prepare(room_id = state.room?.id) {
     const responses = share_payload(recorded.responses, room_id, folders);
     // The same page with its messages' attachments listed, used when the owner chooses to include them.
     const responses_with_files = share_payload(recorded.responses, room_id, folders, { attachments: true });
-    const files = share_files(responses_with_files);
-    const file_spots = await share_file_spots(files);
+    const files = share_files(responses_with_files, room_id);
     const room = responses[`/api/rooms/${room_id}`];
     const members = (room.members || []).filter(member => member.status !== "removed").map(member => member.label || display_name(member.name));
     const description = t('{members} 在同一个房间协作 · {messages} 条消息 · {runs} 次执行', { members: members.join("、"), messages: room.message_count, runs: recorded.runs });
     // Closed while reading: the owner no longer wants it.
-    if (share_draft === draft) Object.assign(draft, { title: room.title, description, responses, responses_with_files, files, file_spots, include_files: false,
+    if (share_draft === draft) Object.assign(draft, { title: room.title, description, responses, responses_with_files, files, file_spots: null, include_files: false,
       exported_at, runs: recorded.runs, spots: share_sensitive_spots(responses), phase: "ready" });
   } catch (error) {
     if (share_draft === draft) share_draft = null;
@@ -7018,6 +7110,11 @@ function share_cancel() {
 async function share_room() {
   const draft = share_draft;
   if (!draft || draft.phase !== "ready" || state.backup_pending) return;
+  const file_bytes = draft.include_files ? draft.files.reduce((total, file) => total + file.size, 0) : 0;
+  if (file_bytes > SHARE_FILE_MAX_BYTES) {
+    notify("error", t('附件共 {size}，超过网页文件能带的 100 MB；请取消“包含附件”，附件另行发送。', { size: attachment_size(file_bytes) }));
+    return;
+  }
   draft.phase = "downloading";
   state.backup_pending = true;
   publish_view();
@@ -7108,11 +7205,13 @@ async function share_publish(ttl_days = SHARE_DEFAULT_DAYS) {
   state.backup_pending = true;
   publish_view();
   try {
-    const body = { format: SHARE_FORMAT, ...await share_contents(draft), ttl_days: days };
-    const bytes = new Blob([JSON.stringify(body)]).size;
+    // Estimated first, so a room with large attachments is told at once rather than after reading them all.
+    const estimate = share_estimated_bytes(draft, true);
+    const body = estimate > SHARE_MAX_BYTES ? null : { format: SHARE_FORMAT, ...await share_contents(draft, true), ttl_days: days };
+    const bytes = body ? new Blob([JSON.stringify(body)]).size : estimate;
     if (bytes > SHARE_MAX_BYTES) {
       draft.phase = "ready";
-      notify("error", draft.include_files && draft.files.length
+      notify("error", share_carried_files(draft, true).length
         ? t('这个房间连同附件整理后有 {size}，超过分享链接 5 MB 的上限；请取消“包含附件”，或改用“下载网页文件”。', { size: attachment_size(bytes) })
         : t('这个房间整理后有 {size}，超过分享链接 5 MB 的上限；请改用“下载网页文件”。', { size: attachment_size(bytes) }));
       return;

@@ -484,7 +484,7 @@
   "折叠后显示": "Lines shown when folded",
   "少": "Fewer",
   "多": "More",
-  "折叠后的回答保留开头一段：少约 0.15 屏、中约 0.3 屏、多约半屏。按当前屏幕高度换算成行数，手机、平板、电脑各自不同，只对本设备生效。": "A folded answer keeps its opening: Fewer about 0.15 of a screen, Medium about 0.3, More about half. Converted to lines from this screen's height, so phones, tablets and computers each differ. Saved on this device only.",
+  "折叠后的回答保留开头一段：少约 0.35 屏、中约 0.6 屏、多约 0.9 屏。按当前屏幕高度换算成行数，手机、平板、电脑各自不同，只对本设备生效。": "A folded answer keeps its opening: Fewer about 0.35 of a screen, Medium about 0.6, More about 0.9. Converted to lines from this screen's height, so phones, tablets and computers each differ. Saved on this device only.",
   "关联房间互传上限": "Linked-room message limit",
   "关联房间互传条数": "Messages between linked rooms",
   "条": "messages",
