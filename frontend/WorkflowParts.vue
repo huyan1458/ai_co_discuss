@@ -1,8 +1,8 @@
 <script setup>
 /**
- * The open workflow's parts, floating on its canvas under the toolbar (on a phone, in its bottom-left corner): the main flow and its sub-workflows (each a
+ * The open workflow's parts, floating in the bottom-left corner of its canvas (user 2026-11-21): the main flow and its sub-workflows (each a
  * workflow of its own, used on demand beside the main flow, with its own SKILL.md, cards and canvas). Picking one shows
- * its canvas and SKILL.md; all of them save together. Folded, it names where you are; on a phone it starts folded.
+ * its canvas and SKILL.md; all of them save together. It starts folded, naming where you are, and opens upwards.
  * A row's tools (place on / find on the main canvas, delete) show over its member count on hover; touch shows them always.
  */
 import { computed, ref, watch } from "vue";
@@ -12,7 +12,7 @@ const props = defineProps({ compact: Boolean });
 const emit = defineEmits(["place"]);
 const library = use_workflow_library();
 const { draft, scope, subs } = library;
-const open = ref(!props.compact);
+const open = ref(false);
 // The sub-workflow whose removal awaits a second tap, so one slip does not drop it.
 const confirming = ref("");
 watch(scope, () => { confirming.value = ""; if (props.compact) open.value = false; });
@@ -89,8 +89,8 @@ function remove(id) {
 </template>
 
 <style scoped>
-/* Under the canvas toolbar (Vue Flow panels sit 15px in); above the canvas, below popovers. */
-.workflow-parts { position: absolute; top: 60px; left: 15px; z-index: 6; display: grid; grid-template-columns: minmax(0, 1fr); width: 260px; max-width: calc(100% - 30px); padding: 4px;
+/* In the canvas's bottom-left corner (Vue Flow panels sit 15px in), opening upwards; above the canvas, below popovers. */
+.workflow-parts { position: absolute; bottom: 15px; left: 15px; z-index: 6; display: flex; flex-direction: column-reverse; width: 260px; max-width: calc(100% - 30px); padding: 4px;
   border: 1px solid var(--ui-border-muted); border-radius: 10px; background: var(--ui-bg-elevated); box-shadow: 0 6px 20px rgb(0 0 0 / .14); font-size: 13px; }
 .workflow-parts:not(.is-open) { width: auto; }
 .workflow-parts-icon { flex-shrink: 0; width: 14px; height: 14px; }
@@ -103,7 +103,7 @@ function remove(id) {
 .workflow-parts-chevron { margin-left: auto; transition: transform .15s; }
 .workflow-parts-toggle small + .workflow-parts-chevron { margin-left: 2px; }
 .workflow-parts.is-open .workflow-parts-chevron { transform: rotate(180deg); }
-.workflow-parts-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; margin: 4px 0 0; padding: 4px 0 0; border-top: 1px solid var(--ui-border-muted); list-style: none; }
+.workflow-parts-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; margin: 0 0 4px; padding: 0 0 4px; border-bottom: 1px solid var(--ui-border-muted); list-style: none; }
 /* Every row is as wide as the list, so the counts line up and the current row's highlight spans it all. */
 .workflow-parts-row { position: relative; display: flex; align-items: center; gap: 4px; }
 .workflow-parts-row.is-confirming { min-height: 30px; padding: 0 2px 0 0; border-radius: 7px; background: color-mix(in srgb, var(--ui-error, #e5484d) 10%, transparent); }
@@ -130,16 +130,13 @@ function remove(id) {
   .workflow-parts-toggle, .workflow-parts-back, .workflow-parts-item, .workflow-parts-action { min-height: 40px; }
   .workflow-parts-back, .workflow-parts-action { width: 40px; }
   .workflow-parts-actions { position: static; padding: 0; background: none; opacity: 1; pointer-events: auto; }
-  .workflow-parts { top: 66px; }
 }
-/* Phone and upright tablet: the top row holds the toolbar and zoom buttons, so the parts sit in the bottom-left corner,
-   10px in like the canvas panels, and open upwards. */
-.workflow-parts.is-compact { top: auto; bottom: 10px; left: 10px; display: flex; flex-direction: column-reverse; max-width: calc(100% - 20px); font-size: 12px; }
-.workflow-parts.is-compact .workflow-parts-list { margin: 0 0 4px; padding: 0 0 4px; border-top: 0; border-bottom: 1px solid var(--ui-border-muted); }
+/* Phone and upright tablet: 10px in like the canvas panels, and smaller. */
+.workflow-parts.is-compact { bottom: 10px; left: 10px; max-width: calc(100% - 20px); font-size: 12px; }
 .workflow-parts.is-compact :is(.workflow-parts-toggle, .workflow-parts-back) { min-height: 28px; }
 .workflow-parts.is-compact .workflow-parts-back { width: 28px; }
 @media (max-width: 480px) {
-  /* Closed on a narrow phone: stop short of the zoom buttons in the bottom-right corner; opening expands full width. */
+  /* Closed on a narrow phone: stop short of the tools in the bottom-right corner; opening expands full width. */
   .workflow-parts.is-compact:not(.is-open) { max-width: calc(100% - 76px); }
 }
 </style>
