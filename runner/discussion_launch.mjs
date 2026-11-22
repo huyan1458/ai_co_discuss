@@ -1,7 +1,7 @@
 /** Shared launch configuration for an existing AI conversation and the local website. */
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, win32 } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -32,7 +32,9 @@ import { run_image_tool } from './adapters/api_images.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, check_extra_directories, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
-import { assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, workflow_member_list, WORKFLOW_ID_PATTERN } from './workflows.mjs';
+import { assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, workflow_member_list, WORKFLOW_ID_PATTERN,
+  card_folder, CARD_ID_PATTERN, expert_skills, experts_home, load_room_workflow as load_workflow_for_cards, parse_markdown, serialize_markdown, SKILL_FILE,
+  SKILL_NAME_PATTERN, SKILLS_DIRECTORY } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 import { site_fetch } from './entry_client.mjs';
 import { t } from './i18n.mjs';
@@ -112,6 +114,9 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch workflow-join [--card ID[,ID] | --sub SUB | --card ID --label 显示名] [--access-file FILE]
       codiscuss launch workflow-leave (--sub SUB | --member 成员) [--access-file FILE]
       codiscuss launch host-control ACTION [选项] [--access-file FILE]
+      codiscuss launch expert-export (--preset NAME | --workflow ID --card CARD) --dir DIR
+      codiscuss launch expert-import --from PATH [--overwrite-preset] [--replace-knowledge]
+      codiscuss launch expert-import --from PATH --workflow ID [--sub SUB]
       codiscuss launch workflow-check (--dir DIR | --draft FILE)
       codiscuss launch workflow-save (--dir DIR | --draft FILE) [--revision REV | --overwrite]
 
@@ -1988,7 +1993,348 @@ export function workflows_command(home, input = {}) {
     return preview_workflow(input, validate_preset, name => card_platform_ready(home, name));
   }
   if (action === 'room-cards') return room_cards(home, input);
-  throw new Error('action 须为 list、get、save、rename、disable、enable、delete、preview 或 room-cards');
+  if (action === 'save-preset') return save_card_preset(home, { ...input, replace_knowledge: input.replace_knowledge === true });
+  // The page's expert export and import (the command line has expert-export / expert-import), by files `{path: text}`.
+  if (action === 'export-expert') return expert_export_files(home, input);
+  if (action === 'import-expert') return import_expert(home, { files: input.files, overwrite_preset: input.overwrite_preset === true, replace_knowledge: input.replace_knowledge === true });
+  if (action === 'import-expert-workflow') return import_expert_to_workflow(home, { files: input.files, workflow: input.workflow, sub: input.sub || '' });
+  // An expert's skills, file by file, outside the workflow's save (see expert_skill_files).
+  if (action === 'skills') return expert_skill_files(home, input);
+  if (action === 'skill-write') return write_skill_file(home, input);
+  if (action === 'skill-delete') return delete_skill_file(home, input);
+  if (action === 'skill-remove') return remove_skill(home, input);
+  throw new Error('action 须为 list、get、save、rename、disable、enable、delete、preview、room-cards、save-preset、export-expert、import-expert、import-expert-workflow、skills、skill-write、skill-delete 或 skill-remove');
+}
+
+// Exporting and importing an expert (user 2026-11-22): a definition `<id>.md` in the card format (front matter, prompt
+// as body), and, for an expert with knowledge, `skills/<skill>/` beside it. The page and the command line send the
+// same files map; only text files under skills/ and the one definition are taken.
+const EXPERT_FILE_FIELDS = ['label', 'description', 'project_access', 'model', 'effort'];
+const MAX_EXPERT_FILE_BYTES = 1000000;
+const EXPERT_SEGMENT = /^[^./\\:*?"<>|\x00-\x1f][^/\\:*?"<>|\x00-\x1f]{0,99}$/;
+const utf8_strict = new TextDecoder('utf-8', { fatal: true });
+
+/** A refusal the page shows in its own language, with a stable code. */
+function expert_failure(code, template, params = {}) {
+  return Object.assign(new Error(template.replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(params, name) ? String(params[name]) : match)),
+    { code, error_text: { template, params } });
+}
+
+/** A preset's or card's definition as the card file writes it; the key is the suffix after the platform ('' for none). */
+function expert_definition(preset) {
+  const platform = platform_of(preset.name);
+  const key = preset.name.slice(platform.length + 1);
+  const fields = { ...(key ? { name: key } : {}), platform, ...Object.fromEntries(EXPERT_FILE_FIELDS.map(field => [field, preset[field] || ''])) };
+  return { key, text: serialize_markdown(fields, preset.system_prompt || '') };
+}
+
+/** Every text file under a folder as `{relative path: text}`; others go to `ignored`. */
+function read_text_tree(directory, prefix = '', files = {}, ignored = []) {
+  for (const name of readdirSync(join(directory, prefix)).sort()) {
+    const path = prefix ? `${prefix}/${name}` : name;
+    const full = join(directory, path);
+    if (lstatSync(full).isSymbolicLink()) { ignored.push(path); continue; }
+    if (statSync(full).isDirectory()) { read_text_tree(directory, path, files, ignored); continue; }
+    const bytes = readFileSync(full);
+    try { if (bytes.length > MAX_EXPERT_FILE_BYTES) throw new Error('too large'); files[path] = utf8_strict.decode(bytes); }
+    catch { ignored.push(path); }
+  }
+  return { files, ignored };
+}
+
+/**
+ * Export an expert (`expert-export`): a preset (`preset`, its name) or a saved workflow's card (`workflow`, `card`) into
+ * the folder `dir`. Without knowledge it is one `<id>.md`; with knowledge a folder `<id>/` holding `<id>.md` and the
+ * expert's skills (a folder card's in its workflow, a preset's in the service home). An existing target is never replaced.
+ * No local path or credential is written.
+ */
+export function export_expert(home, { preset, workflow, card, dir }) {
+  if (!dir) throw new Error('须用 --dir 指定导出到哪个文件夹');
+  const { id, files, skills } = expert_export_files(home, { preset, workflow, card });
+  const target = resolve(dir, skills.length ? id : `${id}.md`);
+  if (existsSync(target)) throw expert_failure('expert_target_exists', '导出目标已存在：{path}', { path: target });
+  for (const [path, text] of Object.entries(files)) {
+    const file = skills.length ? join(target, path) : target;
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, text);
+  }
+  return { path: target, skills };
+}
+
+/**
+ * What exporting an expert gives, as `{id, files: {path: text}, skills}` relative to the package: `<id>.md`, and with
+ * knowledge `skills/<skill>/…`: a workflow's folder card's from the workflow, a preset's from `experts/<id>/` in the
+ * service home; the two never stand in for each other. The package is the folder card's shape. The command line writes these
+ * to a folder; the page zips them or downloads the one md. No local path or credential is in them.
+ */
+export function expert_export_files(home, { preset: preset_name, workflow: workflow_id, card }) {
+  let preset, folder = '';
+  if (preset_name) {
+    const { presets, builtin_presets } = expert_presets(home);
+    preset = [...presets, ...builtin_presets].find(item => item.name === preset_name);
+    if (!preset) throw new Error(`没有预设 ${preset_name}`);
+  } else {
+    const workflow = get_workflow(home, workflow_id);
+    const agent = workflow_cards(workflow).find(item => item.card === card);
+    if (!agent) throw new Error(`工作流 ${workflow_id} 没有卡片 ${card}`);
+    preset = Object.fromEntries(PRESET_FIELDS.filter(field => agent[field]).map(field => [field, agent[field]]));
+    folder = card_folder(load_workflow_for_cards({ api_home: home, workflow: { id: workflow_id, enabled: true, members: {} } }), card);
+  }
+  const { key, text } = expert_definition(preset);
+  const id = key || platform_of(preset.name);
+  const source = preset_name ? (key ? join(experts_home(home), key) : '') : folder;
+  const files = { [`${id}.md`]: text };
+  const skills = source ? expert_skills(source) : [];
+  for (const skill of skills) {
+    for (const [path, content] of Object.entries(read_text_tree(join(source, SKILLS_DIRECTORY, skill)).files)) {
+      files[`${SKILLS_DIRECTORY}/${skill}/${path}`] = content;
+    }
+  }
+  return { id, files, skills };
+}
+
+// An expert's skills edited from the page (user 2026-11-22), one file at a time: a saved workflow's folder card's, or a
+// panel preset's in the service home. Never through the workflow's save, whose revision leaves skills out. The expert
+// may be writing them at the same time, so each file read carries a digest of its bytes, and a write or deletion names
+// the digest it read ('' for a file it creates): one that changed since is refused, never overwritten unseen.
+const SKILL_DIGEST_LENGTH = 16;
+
+/** A short hash of a skill file's bytes. */
+function skill_digest(bytes) { return createHash('sha256').update(bytes).digest('hex').slice(0, SKILL_DIGEST_LENGTH); }
+
+/** The skills folder a request names: `workflow` and `card` (a saved folder card) or `preset` (its name). */
+function skills_folder(home, { workflow, card, preset } = {}) {
+  if (preset) {
+    const { presets, builtin_presets } = expert_presets(home);
+    const found = [...presets, ...builtin_presets].find(item => item.name === preset);
+    if (!found) throw new Error(`没有预设 ${preset}`);
+    const { key } = expert_definition(found);
+    if (!CARD_ID_PATTERN.test(key)) throw new Error(`预设 ${preset} 的名字没有“平台-编号”的编号，不能带技能`);
+    return join(experts_home(home), key, SKILLS_DIRECTORY);
+  }
+  const folder = card_folder(load_workflow_for_cards({ api_home: home, workflow: { id: workflow, enabled: true, members: {} } }), card);
+  if (!folder) throw new Error(`工作流 ${workflow} 的卡片 ${card} 没有技能；先给它添加技能并保存工作流`);
+  return join(folder, SKILLS_DIRECTORY);
+}
+
+/**
+ * A path below a skills folder, `<skill>/<file…>` (or only `<skill>` when `file` is false): the skill name follows the
+ * workflow ID rule, each segment the export rule, and no link on the way. Returns the full path.
+ */
+function skill_target(root, path, file = true) {
+  const parts = String(path || '').split('/');
+  if (parts.length < (file ? 2 : 1) || (!file && parts.length !== 1) || !SKILL_NAME_PATTERN.test(parts[0]) || !parts.every(part => EXPERT_SEGMENT.test(part))) {
+    throw new Error(`技能路径不合法：${path || '（空）'}`);
+  }
+  let current = root;
+  for (const part of ['', ...parts]) {
+    current = part ? join(current, part) : current;
+    if (existsSync(current) && lstatSync(current).isSymbolicLink()) throw new Error(`技能路径含链接：${path}`);
+  }
+  return current;
+}
+
+/** Refuse a change to a file whose bytes are no longer the ones read (`digest`, '' for a file that should not exist yet). */
+function check_skill_digest(target, digest, path) {
+  const now = existsSync(target) ? skill_digest(readFileSync(target)) : '';
+  if ((digest || '') !== now) {
+    throw expert_failure('skill_changed', '技能文件 {path} 在你读取之后变了（专家可能刚写过），请重新载入后再改', { path });
+  }
+}
+
+/**
+ * Every skill of an expert (`skills`): its name, the SKILL.md description, and each file as `{path, text, digest}`
+ * relative to skills/; a file that is not text or is over the size limit comes with `text: null` and cannot be edited.
+ */
+export function expert_skill_files(home, input) {
+  const root = skills_folder(home, input);
+  const names = existsSync(root) ? readdirSync(root).filter(name => SKILL_NAME_PATTERN.test(name) && statSync(join(root, name)).isDirectory()).sort() : [];
+  return { skills: names.map(name => {
+    const { files, ignored } = read_text_tree(join(root, name));
+    let description = '';
+    try { description = files[SKILL_FILE] ? String(parse_markdown(files[SKILL_FILE], SKILL_FILE).fields.description || '') : ''; } catch { /* shown as text */ }
+    const entry = (path, text) => ({ path: `${name}/${path}`, text, digest: skill_digest(readFileSync(join(root, name, path))) });
+    return { name, description, files: [...Object.entries(files).map(([path, text]) => entry(path, text)),
+      ...ignored.filter(path => existsSync(join(root, name, path)) && !lstatSync(join(root, name, path)).isSymbolicLink()).map(path => entry(path, null))]
+      // SKILL.md first, as an expert reads it first; then the references by path.
+      .sort((a, b) => (a.path === `${name}/${SKILL_FILE}` ? '' : a.path).localeCompare(b.path === `${name}/${SKILL_FILE}` ? '' : b.path)) };
+  }) };
+}
+
+/** Write one skill file (`skill-write`): creates the skill and folders it needs; returns the new digest. */
+export function write_skill_file(home, { path, text, digest, ...input } = {}) {
+  const root = skills_folder(home, input);
+  const target = skill_target(root, path);
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > MAX_EXPERT_FILE_BYTES) throw new Error(`技能文件须为文本，最多 ${MAX_EXPERT_FILE_BYTES / 1000000} MB`);
+  check_skill_digest(target, digest, path);
+  mkdirSync(dirname(target), { recursive: true });
+  const temporary = `${target}.${randomUUID().slice(0, 8)}.tmp`;
+  writeFileSync(temporary, text);
+  renameSync(temporary, target);
+  return { path, digest: skill_digest(Buffer.from(text, 'utf8')) };
+}
+
+/** Delete one skill file (`skill-delete`) the user read as `digest`. */
+export function delete_skill_file(home, { path, digest, ...input } = {}) {
+  const target = skill_target(skills_folder(home, input), path);
+  if (!existsSync(target)) throw expert_failure('skill_changed', '技能文件 {path} 在你读取之后变了（专家可能刚写过），请重新载入后再改', { path });
+  check_skill_digest(target, digest, path);
+  rmSync(target);
+  return { path, deleted: true };
+}
+
+/** Remove a whole skill (`skill-remove`): its folder moves into the service home's backups/ first. */
+export function remove_skill(home, { skill, ...input } = {}) {
+  const target = skill_target(skills_folder(home, input), skill, false);
+  if (!existsSync(target)) throw new Error(`没有技能 ${skill}`);
+  const backup = `skill-${input.preset ? platform_of(input.preset) : input.workflow}-${input.card || expert_definition({ name: input.preset }).key}-${skill}-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
+  mkdirSync(join(home, 'backups'), { recursive: true });
+  cpSync(target, join(home, 'backups', backup), { recursive: true });
+  rmSync(target, { recursive: true, force: true });
+  return { skill, backup };
+}
+
+/** The files an import offers, read from a definition file or an expert folder on this computer. */
+export function read_expert_source(path) {
+  const full = resolve(path);
+  if (!existsSync(full)) throw new Error(`找不到 ${full}`);
+  if (statSync(full).isDirectory()) return read_text_tree(full);
+  return { files: { [basename(full)]: readFileSync(full, 'utf8') }, ignored: [] };
+}
+
+/**
+ * Import an expert (`expert-import`) as a preset of this computer, from files `{relative path: text}` (the page reads a
+ * zip or folder into these; the command line a .md or folder). The one top-level .md is the definition; skills/<skill>/
+ * files with a SKILL.md become its knowledge; anything else is ignored and listed. Nothing is replaced silently: a preset
+ * of that name needs `overwrite_preset`, and existing knowledge is kept unless `replace_knowledge`, which first moves
+ * the old one into backups/. Project access above reading starts read-only, as a workflow import does.
+ */
+export function import_expert(home, { files = {}, ignored: unread = [], overwrite_preset = false, replace_knowledge = false } = {}) {
+  const { preset, key, requested, skills, ignored } = expert_package(files, unread);
+  const current = expert_presets(home);
+  const taken = current.presets.some(item => item.name === preset.name);
+  if (taken && overwrite_preset !== true) throw expert_failure('expert_preset_exists', '面板上已有预设「{name}」；要用导入的替换它，请明确选择覆盖', { name: preset.name });
+  // The preset is saved first: a full list or a bad field stops the import before any knowledge is written.
+  const presets = taken ? current.presets.map(item => item.name === preset.name ? preset : item) : [...current.presets, preset];
+  save_expert_presets(home, { presets });
+  const { knowledge, backup } = install_knowledge(home, key, skills, replace_knowledge === true);
+  return { preset, ...(requested ? { requested_access: requested } : {}), knowledge, skills: Object.keys(skills).sort(), ...(backup ? { backup } : {}),
+    ignored: [...new Set(ignored)].sort() };
+}
+
+/**
+ * Read an expert package `{relative path: text}`: the one top-level .md is the definition, `skills/<skill>/` files of a
+ * skill with a SKILL.md its knowledge; anything else is ignored. Project access above reading starts read-only.
+ * Returns the preset, its key (the definition's name), the requested access, `{skill: {path: text}}` and the ignored.
+ */
+function expert_package(files, unread = []) {
+  const ignored = [...unread];
+  const definitions = Object.keys(files).filter(path => !path.includes('/') && path.endsWith('.md'));
+  if (definitions.length !== 1) throw expert_failure('expert_definition', '导入的内容须正好有一个专家定义 .md，现有 {count} 个', { count: definitions.length });
+  const { fields, body } = parse_markdown(files[definitions[0]], definitions[0]);
+  const platform = typeof fields.platform === 'string' ? fields.platform : '';
+  const key = typeof fields.name === 'string' ? fields.name : '';
+  if (key && !CARD_ID_PATTERN.test(key)) throw new Error(`专家编号只能用小写英文、数字和下划线，1—16 位：${key}`);
+  const preset = { name: key ? `${platform}-${key}` : platform,
+    ...Object.fromEntries(EXPERT_FILE_FIELDS.filter(field => typeof fields[field] === 'string' && fields[field]).map(field => [field, fields[field]])),
+    ...(body ? { system_prompt: body } : {}) };
+  const requested = preset.project_access && preset.project_access !== 'read' ? preset.project_access : '';
+  if (requested) preset.project_access = 'read';
+  validate_preset(preset);
+  // Skills: only text files below skills/<skill>/ whose skill has a SKILL.md, and paths that stay inside it.
+  const skills = {};
+  for (const [path, text] of Object.entries(files)) {
+    if (path === definitions[0]) continue;
+    const parts = path.split('/');
+    if (parts[0] !== SKILLS_DIRECTORY || parts.length < 3 || !SKILL_NAME_PATTERN.test(parts[1]) || !parts.every(part => EXPERT_SEGMENT.test(part))
+      || typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > MAX_EXPERT_FILE_BYTES) { ignored.push(path); continue; }
+    (skills[parts[1]] ||= {})[parts.slice(2).join('/')] = text;
+  }
+  for (const [skill, content] of Object.entries(skills)) {
+    if (!Object.hasOwn(content, SKILL_FILE)) { ignored.push(...Object.keys(content).map(path => `${SKILLS_DIRECTORY}/${skill}/${path}`)); delete skills[skill]; }
+  }
+  if (Object.keys(skills).length && !key) throw new Error('带技能的专家须有编号（定义文件的 name）');
+  return { preset, key, requested, skills, ignored };
+}
+
+/**
+ * Put skills `{skill: {path: text}}` into a panel expert's knowledge, `experts/<key>/skills/` in the service home. One
+ * already there is kept (`kept`) unless `replace`, which first moves it into backups/ (`replaced`); else `added`.
+ */
+function install_knowledge(home, key, skills, replace) {
+  const live = key ? join(experts_home(home), key) : '';
+  const had = Boolean(live && existsSync(live));
+  let knowledge = 'none', backup = '';
+  if (Object.keys(skills).length) {
+    if (had && !replace) knowledge = 'kept';
+    else {
+      if (had) {
+        backup = join(home, 'backups', `expert-${key}-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`);
+        mkdirSync(dirname(backup), { recursive: true });
+        renameSync(live, backup);
+      }
+      for (const [skill, content] of Object.entries(skills)) {
+        for (const [path, text] of Object.entries(content)) {
+          const target = join(live, SKILLS_DIRECTORY, skill, path);
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, text);
+        }
+      }
+      knowledge = had ? 'replaced' : 'added';
+    }
+  }
+  return { knowledge, backup };
+}
+
+/**
+ * Import an expert package as a card of a saved workflow (`expert-import --workflow ID [--sub SUB]`): into the main
+ * flow's agents/ or a sub-workflow's, a folder card with its skills when the package has any, else a card file. A card
+ * ID the workflow already uses anywhere is refused, never replaced. The save names the revision just read, so it keeps
+ * every other card's skills as they are. Project access above reading starts read-only, as any import does.
+ */
+export function import_expert_to_workflow(home, { files = {}, ignored: unread = [], workflow: id, sub } = {}) {
+  const { preset, key, requested, skills, ignored } = expert_package(files, unread);
+  if (!key) throw new Error('导入到工作流的专家须有编号（定义文件的 name），它就是卡片 ID');
+  const workflow = get_workflow(home, id);
+  if (workflow_cards(workflow).some(agent => agent.card.toLowerCase() === key.toLowerCase())) {
+    throw expert_failure('expert_card_exists', '工作流「{id}」里已有卡片 {card}；不会替换它，要换请先删掉原卡片', { id, card: key });
+  }
+  const knowledge = Object.fromEntries(Object.entries(skills).flatMap(([skill, content]) => Object.entries(content).map(([path, text]) => [`${skill}/${path}`, text])));
+  const card = { card: key, ...preset, ...(Object.keys(knowledge).length ? { knowledge } : {}) };
+  let { agents, sub_workflows: subs } = workflow;
+  if (sub) {
+    if (!subs.some(item => item.id === sub)) throw new Error(`工作流 ${id} 没有子工作流 ${sub}`);
+    subs = subs.map(item => item.id === sub ? { ...item, agents: [...item.agents, card] } : item);
+  } else agents = [...agents, card];
+  const saved = save_workflow(home, { ...workflow, agents, sub_workflows: subs }, validate_preset, { base_revision: workflow.revision });
+  return { workflow: saved.id, ...(sub ? { sub } : {}), card: key, revision: saved.revision, ...(requested ? { requested_access: requested } : {}),
+    skills: Object.keys(skills).sort(), ignored: [...new Set(ignored)].sort() };
+}
+
+/**
+ * Save a saved workflow's card as one of this computer's expert presets (`save-preset`, user 2026-11-22): a card is a
+ * preset already (same fields, same check), so it is copied as it is; its preset name `平台-卡片ID` keeps the suffix
+ * that finds the panel's knowledge folder. A preset of that name is replaced only with `overwrite`; the preset limit
+ * holds. A folder card's skills are copied from the workflow into `experts/<card>/skills/` in the service home; one
+ * already there is kept unless `replace_knowledge`, as an import does (the old one goes to backups/).
+ */
+function save_card_preset(home, { id, card, overwrite, replace_knowledge } = {}) {
+  const workflow = get_workflow(home, id);
+  const agent = workflow_cards(workflow).find(item => item.card === card);
+  if (!agent) throw new Error(`工作流 ${id} 没有卡片 ${card}`);
+  const preset = Object.fromEntries(PRESET_FIELDS.filter(field => agent[field]).map(field => [field, agent[field]]));
+  const current = expert_presets(home);
+  const taken = current.presets.some(item => item.name === preset.name);
+  if (taken && overwrite !== true) {
+    const template = '面板上已有预设「{name}」；要用这张卡片替换它，请明确选择覆盖';
+    throw Object.assign(new Error(template.replace('{name}', preset.name)), { code: 'preset_exists', error_text: { template, params: { name: preset.name } } });
+  }
+  const presets = taken ? current.presets.map(item => item.name === preset.name ? preset : item) : [...current.presets, preset];
+  const saved = save_expert_presets(home, { presets });
+  const folder = card_folder(load_workflow_for_cards({ api_home: home, workflow: { id, enabled: true, members: {} } }), card);
+  const skills = Object.fromEntries((folder ? expert_skills(folder) : []).map(skill => [skill, read_text_tree(join(folder, SKILLS_DIRECTORY, skill)).files]));
+  const { knowledge, backup } = install_knowledge(home, card, skills, replace_knowledge === true);
+  return { ...saved, preset, knowledge, ...(backup ? { backup } : {}) };
 }
 
 /** Cards made from a registered room's members as configured here, prompts verbatim; no credential or path is returned. */
@@ -2707,7 +3053,8 @@ export function command_help(action) {
 export async function launch_main(args = process.argv.slice(2), input_text) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     file: { type: 'string' }, 'dry-run': { type: 'boolean' }, browser: { type: 'boolean' }, remote: { type: 'boolean' }, device: { type: 'string' },
-    'configuration-locked': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, overwrite: { type: 'boolean' },
+    'configuration-locked': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, overwrite: { type: 'boolean' }, preset: { type: 'string' }, workflow: { type: 'string' }, from: { type: 'string' },
+    'overwrite-preset': { type: 'boolean' }, 'replace-knowledge': { type: 'boolean' },
     draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' }, card: { type: 'string' }, sub: { type: 'string' }, id: { type: 'string' },
     member: { type: 'string' }, order: { type: 'string' }, revision: { type: 'string' }, name: { type: 'string' }, access: { type: 'string' },
     model: { type: 'string' }, effort: { type: 'string' }, do: { type: 'string' }, execution: { type: 'string' }, text: { type: 'string' },
@@ -2774,6 +3121,11 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   if (positionals[0] === 'settings') result.invite_site = await (await import('./external_gateway.mjs')).invite_site_state(home);
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
   else if (positionals[0] === 'presets') result = input ? save_expert_presets(home, input) : expert_presets(home);
+  else if (positionals[0] === 'expert-export') result = export_expert(home, input || { preset: values.preset, workflow: values.workflow, card: values.card, dir: values.dir });
+  else if (positionals[0] === 'expert-import' && (values.workflow || input?.workflow)) {
+    result = import_expert_to_workflow(home, input || { ...read_expert_source(values.from || ''), workflow: values.workflow, sub: values.sub });
+  } else if (positionals[0] === 'expert-import') result = import_expert(home, input || { ...read_expert_source(values.from || ''),
+    overwrite_preset: values['overwrite-preset'] === true, replace_knowledge: values['replace-knowledge'] === true });
   else if (positionals[0] === 'workflows') result = await workflows_command(home, input || {});
   else if (positionals[0] === 'room-workflow' && input) result = await room_workflow(home, input);
   else if (positionals[0] === 'room-settings' && input) result = await room_settings(home, input);

@@ -92,3 +92,98 @@ export async function workflow_files_from_zip(file) {
 export async function workflow_files_from_folder(files) {
   return collect(files.map((file) => ({ path: file.webkitRelativePath || file.name, size: file.size, read: async () => new Uint8Array(await file.arrayBuffer()) })));
 }
+
+/** Let the browser save bytes or text as a file of this name. */
+export function download_file(name, content, type = "application/octet-stream") {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = Object.assign(document.createElement("a"), { href: url, download: name });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Download what exporting an expert gave: its one .md, or with skills a zip of `<id>/…`. */
+export function download_expert({ id, files, skills }) {
+  if (skills.length) download_file(`${id}.zip`, zip_store(files, id), "application/zip");
+  else download_file(`${id}.md`, files[`${id}.md`], "text/markdown;charset=utf-8");
+}
+
+// Experts (2026-11-22): a package is `<id>.md` plus `skills/<skill>/…`; the page reads one from a zip, a folder or a
+// single .md, and writes one as a zip with stored (uncompressed) entries that zip_entries above reads back.
+const DEFINITION = /(^|\/)[^/]+\.md$/;
+
+/** Keep the folder holding the shallowest definition (.md outside skills/, not a SKILL.md) and read its files as text. */
+async function collect_expert(entries) {
+  const definitions = entries.filter((entry) => DEFINITION.test(entry.path) && !SKILL.test(entry.path) && !entry.path.startsWith("__MACOSX/")
+    && !entry.path.split("/").slice(0, -1).includes("skills"))
+    .sort((left, right) => left.path.split("/").length - right.path.split("/").length);
+  if (!definitions.length) throw new Error(t('没有找到专家定义的 .md 文件'));
+  const prefix = definitions[0].path.slice(0, definitions[0].path.lastIndexOf("/") + 1);
+  const files = {};
+  for (const entry of entries) {
+    if (!entry.path.startsWith(prefix)) continue;
+    const path = entry.path.slice(prefix.length);
+    if (entry.size > MAX_FILE_BYTES) { files[path] = null; continue; }
+    try { files[path] = strict.decode(await entry.read()); } catch { files[path] = null; }
+  }
+  return files;
+}
+
+/** An expert from a .zip file. */
+export async function expert_files_from_zip(file) {
+  return collect_expert(zip_entries(new Uint8Array(await file.arrayBuffer())));
+}
+
+/** An expert from the files of a folder chosen with a directory input. */
+export async function expert_files_from_folder(files) {
+  return collect_expert(files.map((file) => ({ path: file.webkitRelativePath || file.name, size: file.size, read: async () => new Uint8Array(await file.arrayBuffer()) })));
+}
+
+/** An expert without knowledge: its one .md file. */
+export async function expert_files_from_md(file) {
+  if (file.size > MAX_FILE_BYTES) throw new Error(t('{value1} 超过 1 MB', { value1: file.name }));
+  return { [file.name]: strict.decode(new Uint8Array(await file.arrayBuffer())) };
+}
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  return value >>> 0;
+});
+
+/** The CRC-32 a zip entry records. */
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** `{path: text}` as a zip with stored entries and UTF-8 names under `root/`, in path order. */
+export function zip_store(files, root = "") {
+  const encoder = new TextEncoder(), parts = [], central = [];
+  let offset = 0;
+  for (const path of Object.keys(files).sort()) {
+    const name = encoder.encode(`${root ? `${root}/` : ""}${path}`), data = encoder.encode(files[path]);
+    const crc = crc32(data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x800, true); local.setUint16(8, 0, true);
+    local.setUint32(14, crc, true); local.setUint32(18, data.length, true); local.setUint32(22, data.length, true); local.setUint16(26, name.length, true);
+    const entry = new DataView(new ArrayBuffer(46));
+    entry.setUint32(0, ZIP_ENTRY, true); entry.setUint16(4, 20, true); entry.setUint16(6, 20, true); entry.setUint16(8, 0x800, true);
+    entry.setUint32(16, crc, true); entry.setUint32(20, data.length, true); entry.setUint32(24, data.length, true); entry.setUint16(28, name.length, true);
+    entry.setUint32(42, offset, true);
+    parts.push(new Uint8Array(local.buffer), name, data);
+    central.push(new Uint8Array(entry.buffer), name);
+    offset += 30 + name.length + data.length;
+  }
+  const size = central.reduce((sum, part) => sum + part.length, 0);
+  const end = new DataView(new ArrayBuffer(ZIP_END_SIZE));
+  end.setUint32(0, ZIP_END, true); end.setUint16(8, Object.keys(files).length, true); end.setUint16(10, Object.keys(files).length, true);
+  end.setUint32(12, size, true); end.setUint32(16, offset, true);
+  const all = [...parts, ...central, new Uint8Array(end.buffer)];
+  const result = new Uint8Array(all.reduce((sum, part) => sum + part.length, 0));
+  let at = 0;
+  for (const part of all) { result.set(part, at); at += part.length; }
+  return result;
+}

@@ -1,4 +1,5 @@
 {
+  "面板上已有预设「{name}」；要用这张卡片替换它，请明确选择覆盖": "The panel already has a preset “{name}”; choose to replace it explicitly to use this card",
   "工作流「{id}」已被修改，请重新载入后再保存": "Workflow “{id}” was changed since you loaded it; reload it before saving",
   "工作流库里已有「{id}」；要整份覆盖它，请明确选择覆盖": "The library already has “{id}”; choose to overwrite it explicitly to replace it",
   "尚未绑定线上网站": "No online site is bound yet",
@@ -846,5 +847,8 @@
   "分享链接格式不正确": "The share link is not in the expected format",
   "清理结果格式无效": "The cleanup report is not in the expected format",
   "自动销毁只能设为 {choices} 天（0 为不自动销毁）": "Auto-destroy can only be set to {choices} days (0 keeps the room)",
-  "这个房间发布过分享链接，请先撤销分享链接再销毁": "This room has a published share link; revoke it before destroying the room"
+  "这个房间发布过分享链接，请先撤销分享链接再销毁": "This room has a published share link; revoke it before destroying the room",
+  "技能文件 {path} 在你读取之后变了（专家可能刚写过），请重新载入后再改": "The skill file {path} changed after you read it (the expert may have just written it); reload before changing it",
+  "工作流「{id}」里已有卡片 {card}；不会替换它，要换请先删掉原卡片": "The workflow “{id}” already has the card {card}; it is not replaced: delete that card first to change it",
+  "导入的内容须正好有一个专家定义 .md，现有 {count} 个": "The import must hold exactly one expert definition .md; it has {count}"
 }

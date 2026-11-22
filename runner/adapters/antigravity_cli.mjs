@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { atomic_json } from '../files.mjs';
 import { cli_delivery } from './cli.mjs';
-import { DENIAL_FIELD, EDIT_TOOLS, json_line, launch_directory, MAX_DENIALS, model_entry, MODEL_PATTERN, not_sent, page_sessions, project_directory,
+import { carve_protected, DENIAL_FIELD, EDIT_TOOLS, json_line, launch_directory, MAX_DENIALS, model_entry, MODEL_PATTERN, not_sent, page_sessions, project_directory,
   prompt_title, query_catalog, read_json, remove_session_files, same_path, shell_written_paths, TASK_SUBCOMMANDS, trim_preview } from './common.mjs';
 
 // agy stores its generation settings as protobuf; field 28 (tag bytes 0xe2 0x01) holds the model actually used.
@@ -251,11 +251,17 @@ function agy_project_grants(config, task, folders, user_home) {
   const write_rule = directory => `write_file(${resolve(directory).replaceAll('\\', '/')})`;
   // 全放开 also allows commands outside agy's sandbox and MCP tools; deny rules are still written, but bypass may override them.
   const full = config.project_access === 'full';
-  return { allow: [agy_rule(), write_rule(task.draft_directory),
+  // The expert's own knowledge is written like its drafts, whatever its project access: a protected folder holding it
+  // (its workflow) is denied entry by entry around it, since agy's deny wins over allow.
+  const denied = carve_protected(protected_paths, task.knowledge_directory).map(item => item.path);
+  if (task.knowledge_directory && denied.some(directory => within_directory(directory, task.knowledge_directory))) {
+    throw new Error('agy 知识库目录不能位于只读项目、运行目录、技能或 .gemini 配置目录中，未交付讨论任务');
+  }
+  return { allow: [agy_rule(), write_rule(task.draft_directory), ...(task.knowledge_directory ? [write_rule(task.knowledge_directory)] : []),
     ...(config.project_access === 'read' ? [] : [...projects.map(write_rule), 'command(*)']), ...(full ? ['unsandboxed_command(*)'] : []),
     // Grants the owner allowed from a refused operation on the page.
     ...(config.allowed_tools || [])],
-  deny: [...new Set(protected_paths.map(write_rule)), ...(full ? [] : ['mcp(*)'])] };
+  deny: [...new Set(denied.map(write_rule)), ...(full ? [] : ['mcp(*)'])] };
 }
 
 /**
@@ -346,7 +352,7 @@ function invocation(config, binding, task, user_home) {
   const extra = (project ? project.directories : (task.extra_directories || []).map(item => item.path))
     .filter(directory => !same_path(directory, cwd));
   // Only the member's own runtime folder: the runtime directory holds every member's credential (凭据文件隔离).
-  const added = unique_paths([task.member_directory, task.draft_directory, ...task.skill_directories,
+  const added = unique_paths([task.member_directory, task.draft_directory, task.tool_lockdown ? '' : task.knowledge_directory, ...task.skill_directories,
     ...agy_skill_directories(user_home), ...extra]);
   const args = ['--output-format', 'stream-json', '--print-timeout', '0',
     ...added.flatMap(directory => ['--add-dir', directory])];

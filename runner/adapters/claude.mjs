@@ -11,7 +11,7 @@ import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { runs_commands } from '../expert_prompts.mjs';
-import { bind_access, cli_max_run_ms, cli_timeout_reason, DENIAL_FIELD, EDIT_TOOLS, edge_entries, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
+import { bind_access, carve_protected, cli_max_run_ms, cli_timeout_reason, DENIAL_FIELD, EDIT_TOOLS, edge_entries, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
   clock_reset_at, newest_record, not_sent, page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog,
   remove_session_files, same_path, TASK_SUBCOMMANDS, tree_killable, typed_prompt, watch_events, shell_written_paths } from './common.mjs';
 
@@ -182,17 +182,19 @@ export function claude_rule_path(directory) {
 export function claude_permissions(config, task) {
   const extras = task.extra_directories || [];
   // Only the member's own runtime folder: the runtime directory holds every member's credential (凭据文件隔离).
-  const added = [task.member_directory, task.draft_directory, ...task.skill_directories, ...extras.map(item => item.path)].filter(Boolean);
+  // The expert's own knowledge (`task.knowledge_directory`) is edited like its drafts, whatever its project access.
+  const added = [task.member_directory, task.draft_directory, task.knowledge_directory, ...task.skill_directories, ...extras.map(item => item.path)].filter(Boolean);
   // A headless run cannot ask for approval: 自动 and a taken-over manual member use auto mode, as the original window
   // does, and 全放开 skips every check; the website commands and drafts stay pre-approved either way.
   if (['own', 'auto', 'full'].includes(config.project_access)) {
     const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
     return ['--permission-mode', config.project_access === 'full' ? 'bypassPermissions' : 'auto', '--add-dir', ...added, '--allowedTools',
-      ...commands, `Edit(${claude_rule_path(task.draft_directory)}/**)`, ...(config.allowed_tools || []), ...edit_denial(task)];
+      ...commands, ...[task.draft_directory, task.knowledge_directory].filter(Boolean).map(directory => `Edit(${claude_rule_path(directory)}/**)`),
+      ...(config.allowed_tools || []), ...edit_denial(task)];
   }
   const commands = runs_commands(config, extras) ? ['Bash', 'PowerShell']
     : TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
-  const writable = [task.draft_directory, ...(runs_commands(config, extras)
+  const writable = [task.draft_directory, ...(task.knowledge_directory ? [task.knowledge_directory] : []), ...(runs_commands(config, extras)
     ? [project_directory(config), ...extras.filter(item => item.access === 'write').map(item => item.path)].filter(Boolean) : [])];
   return ['--add-dir', ...added, '--allowedTools',
     ...commands, ...writable.map(directory => `Edit(${claude_rule_path(directory)}/**)`), ...(config.allowed_tools || []), ...edit_denial(task)];
@@ -231,12 +233,14 @@ export function claude_lockdown_env(task, env = process.env, home = homedir()) {
 
 /**
  * Skill folders (the shared skills and an enabled workflow) are read, never edited, and so are the room's project
- * directories this member may only read. This stops Claude's own edit tools only; a command the member may run can
- * still write there, and Windows has no native sandbox to prevent it.
+ * directories this member may only read; an expert's own skills inside them are carved out (carve_protected), each
+ * other entry denied by itself, a folder with `/**` and a file by its path. This stops Claude's own edit tools only; a
+ * command the member may run can still write there, and Windows has no native sandbox to prevent it.
  */
 function edit_denial(task) {
   const read_only = (task.extra_directories || []).filter(item => item.access === 'read').map(item => item.path);
-  return ['--disallowedTools', ...[...task.skill_directories, ...read_only].map(directory => `Edit(${claude_rule_path(directory)}/**)`)];
+  const denied = carve_protected([...task.skill_directories, ...read_only], task.knowledge_directory);
+  return ['--disallowedTools', ...denied.map(({ path, directory }) => `Edit(${claude_rule_path(path)}${directory ? '/**' : ''})`)];
 }
 
 /** What Claude's stream-json events say the agent is doing, which tool it starts, and text it wrote to the user. */

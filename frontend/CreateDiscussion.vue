@@ -18,6 +18,7 @@ import HostWorkflowSwitch from "./HostWorkflowSwitch.vue";
 import ExternalExpertCard from "./ExternalExpertCard.vue";
 import PlatformConfigDialog from "./PlatformConfigDialog.vue";
 import { invite_after_creation } from "./external-members.js";
+import { download_expert, expert_files_from_folder, expert_files_from_md, expert_files_from_zip } from "./workflow-files.js";
 import { access_options } from "../runner/expert_prompts.mjs";
 import { t } from "./i18n.js";
 
@@ -149,6 +150,45 @@ function library_description(name) {
 
 // Presets follow the platforms, after a divider; each adds a named instance already set up for its job.
 const PRESET_PREFIX = "preset:";
+// Experts in and out of the presets (2026-11-22): an import waits here while the user decides on a conflict.
+const expert_inputs = { md: ref(null), zip: ref(null), folder: ref(null) };
+const expert_import = ref(null);
+const expert_items = computed(() => [[
+  { label: t('导入专家（.md）'), icon: "i-lucide-file-text", onSelect: () => expert_inputs.md.value?.click() },
+  { label: t('导入专家（压缩包）'), icon: "i-lucide-file-archive", onSelect: () => expert_inputs.zip.value?.click() },
+  { label: t('导入专家（文件夹）'), icon: "i-lucide-folder-input", onSelect: () => expert_inputs.folder.value?.click() },
+], (view.value ? bridge.expert_presets() : []).map((preset) => ({ label: t('导出「{value1}」', { value1: preset.label || preset.name }), icon: "i-lucide-download",
+  onSelect: () => export_preset(preset.name) }))].filter((group) => group.length));
+
+async function export_preset(name) {
+  try { download_expert(await bridge.local_request("workflows", { action: "export-expert", preset: name })); }
+  catch (error) { bridge.notify("error", error.message); }
+}
+
+/** Read the chosen files, then import; a conflict stays open for the user to choose. */
+async function read_expert(kind, event) {
+  const list = [...event.target.files || []];
+  event.target.value = "";
+  if (!list.length) return;
+  try {
+    const files = kind === "md" ? await expert_files_from_md(list[0]) : kind === "zip" ? await expert_files_from_zip(list[0]) : await expert_files_from_folder(list);
+    await import_expert_files({ files });
+  } catch (error) { bridge.notify("error", error.message); }
+}
+
+async function import_expert_files(input) {
+  try {
+    const result = await bridge.import_expert(input);
+    const notes = [t('已导入专家「{value1}」', { value1: result.preset.label || result.preset.name })];
+    if (result.requested_access) notes.push(t('它要求的项目权限“{value1}”已降为只读，需要时在预设里改', { value1: result.requested_access }));
+    if (result.ignored?.length) notes.push(t('已忽略：{value1}', { value1: result.ignored.join("、") }));
+    bridge.notify(result.ignored?.length || result.requested_access ? "warning" : "info", notes.join("；"));
+    expert_import.value = result.knowledge === "kept" ? { input, kind: "knowledge", name: result.preset.name } : null;
+  } catch (error) {
+    if (error.code === "expert_preset_exists") expert_import.value = { input, kind: "preset", message: error.message };
+    else { expert_import.value = null; bridge.notify("error", error.message); }
+  }
+}
 // An AI on another computer joins like a manual member: its card here holds the invitation's choices, and the room
 // generates the invitation once it exists. The same chip and card as the invite dialog.
 const EXTERNAL_CHIP = "external:computer";
@@ -253,6 +293,18 @@ const summary = computed(() => {
         <h3><span>2</span>{{ t("谁来参与") }}</h3>
         <PlatformConfigDialog v-model="configuring" />
         <RosterAdd ref="library" :label="t('添加 AI')" :items="library_items" @add="add_expert" @configure="configure_platform" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
+        <div class="create-expert-io">
+          <UDropdownMenu :items="expert_items" :ui="{ content: 'channel-menu' }"><UButton :label="t('导入导出专家')" icon="i-lucide-arrow-down-up" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
+          <input :ref="expert_inputs.md" type="file" accept=".md,text/markdown" hidden @change="read_expert('md', $event)" />
+          <input :ref="expert_inputs.zip" type="file" accept=".zip,application/zip" hidden @change="read_expert('zip', $event)" />
+          <input :ref="expert_inputs.folder" type="file" webkitdirectory hidden @change="read_expert('folder', $event)" />
+          <div v-if="expert_import" class="create-expert-conflict" role="alert">
+            <span>{{ expert_import.kind === 'preset' ? expert_import.message : t('本机已有这位专家的知识库，已保留本机的') }}</span>
+            <UButton v-if="expert_import.kind === 'preset'" :label="t('覆盖')" size="xs" color="error" variant="soft" @click="import_expert_files({ ...expert_import.input, overwrite_preset: true })" />
+            <UButton v-else :label="t('用导入的替换（原来的会备份）')" size="xs" color="warning" variant="soft" @click="import_expert_files({ ...expert_import.input, overwrite_preset: true, replace_knowledge: true })" />
+            <UButton :label="expert_import.kind === 'preset' ? t('取消') : t('保留本机的')" size="xs" color="neutral" variant="ghost" @click="expert_import = null" />
+          </div>
+        </div>
         <div v-if="selected_names.length || external_drafts.length" class="create-experts" role="group" :aria-label="t('参与的 AI')">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
@@ -309,6 +361,8 @@ const summary = computed(() => {
 </template>
 
 <style scoped>
+.create-expert-io { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.create-expert-conflict { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; color: var(--ui-text-muted); }
 /* A fixed height keeps the dialog still when switching room use or delivery adds or removes sections. */
 .create-discussion { display: flex; flex-direction: column; height: min(78dvh, 820px); }
 .create-scroll { flex: 1; min-height: 0; }

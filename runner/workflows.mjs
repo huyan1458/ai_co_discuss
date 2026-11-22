@@ -30,6 +30,13 @@ const CARD_FILE_FIELDS = ['name', 'platform', 'label', 'description', 'project_a
 const PART_LINE = /^<!-- workflow-part: (\d+)\/(\d+) id: ([a-z0-9_-]{1,40}) -->$/;
 const FILE_LINE = /^<!-- workflow-file: (\S+) -->$/;
 const CARD_PATH = /^agents\/([A-Za-z0-9_]{1,16})\.md$/;
+// A card may instead be a folder (user 2026-11-22): `agents/<card>/<card>.md` is its definition, shaped like a card file,
+// and `agents/<card>/skills/<skill>/` its skills (SKILL.md plus references), which the member playing it maintains. Only
+// the skills differ, so the folder is also the expert's export package. One card ID is either a file or a folder.
+const SKILLS_FOLDER = 'skills';
+// A folder card's skills, relative to the workflow folder: the main flow's or a sub-workflow's. A save keeps them as they
+// are on disk and the folder's revision leaves them out, since the member writes them while the workflow is in use.
+const CARD_SKILLS_PATH = /^(?:workflows\/[^/]+\/)?agents\/[^/]+\/skills$/;
 // Like a skill folder, a workflow carries any other text files beside SKILL.md (templates, references, examples).
 const MAX_RESOURCE_FILES = 100;
 const MAX_RESOURCE_BYTES = 1000000;
@@ -197,6 +204,46 @@ function card_from_markdown(card, text, file = `agents/${card}.md`) {
   return value;
 }
 
+/**
+ * The cards in one agents/ folder, from its files `{path below agents/: text, or null when not text}`: `<card>.md`, or a
+ * folder `<card>/` with `<card>/<card>.md` and the skills under `<card>/skills/` (kept as `knowledge`, `{path below
+ * skills/: text}`, with `skills` naming those that have a SKILL.md). Anything else is pushed to `ignored` with
+ * `prefix`; a card ID that is both a file and a folder is refused.
+ */
+function cards_from_files(files, prefix, ignored) {
+  const definitions = {}, folders = new Set(), knowledge = {};
+  for (const [path, text] of Object.entries(files)) {
+    const parts = path.split('/');
+    const [card] = parts;
+    if (parts.length === 1 && /^[A-Za-z0-9_]{1,16}\.md$/.test(card) && typeof text === 'string') {
+      const id = card.slice(0, -3);
+      if (folders.has(id)) throw new Error(`${prefix}${id}.md 与 ${prefix}${id}/ 不能同时存在`);
+      definitions[id] = { text, folder: false };
+      continue;
+    }
+    if (!/^[A-Za-z0-9_]{1,16}$/.test(card) || parts.length < 2) { ignored.push(`${prefix}${path}`); continue; }
+    if (definitions[card] && !definitions[card].folder) throw new Error(`${prefix}${card}.md 与 ${prefix}${card}/ 不能同时存在`);
+    folders.add(card);
+    if (parts.length === 2 && parts[1] === `${card}.md` && typeof text === 'string') definitions[card] = { text, folder: true };
+    else if (parts[1] === SKILLS_FOLDER && parts.length > 3 && typeof text === 'string' && parts.slice(2).every(part => RESOURCE_SEGMENT.test(part))) {
+      (knowledge[card] ||= {})[parts.slice(2).join('/')] = text;
+    } else ignored.push(`${prefix}${path}`);
+  }
+  for (const card of folders) {
+    if (!definitions[card]) ignored.push(...Object.keys(knowledge[card] || {}).map(path => `${prefix}${card}/${SKILLS_FOLDER}/${path}`));
+  }
+  return Object.entries(definitions).sort(([a], [b]) => a.localeCompare(b)).map(([card, { text, folder }]) => {
+    const value = card_from_markdown(card, text, folder ? `${prefix}${card}/${card}.md` : `${prefix}${card}.md`);
+    return folder ? { ...value, ...knowledge_fields(knowledge[card] || {}) } : value;
+  });
+}
+
+/** A folder card's `knowledge` with the names of its skills (those with a SKILL.md). */
+function knowledge_fields(knowledge) {
+  const skills = [...new Set(Object.keys(knowledge).filter(path => /^[^/]+\/SKILL\.md$/.test(path)).map(path => path.split('/')[0]))].sort();
+  return { skills, knowledge };
+}
+
 /** A canvas file read as JSON; `file` names it in the error. */
 function parse_flow_text(text, file) {
   try { return JSON.parse(text); } catch (error) { throw new Error(`${file} 不是合法 JSON：${error.message}`); }
@@ -206,11 +253,11 @@ function parse_flow_text(text, file) {
  * Take the sub-workflows' own files (`workflows/<id>/SKILL.md`, `agents/<card>.md`, `flow.json`) out of a folder's other
  * files and read each like a workflow, unchecked; their other files (scripts, references) stay resources.
  */
-function split_sub_workflows(resources) {
+function split_sub_workflows(resources, ignored = []) {
   const found = new Map(), rest = {};
   for (const [path, text] of Object.entries(resources)) {
     const match = SUB_FILE.exec(path);
-    if (!match || typeof text !== 'string') { rest[path] = text; continue; }
+    if (!match || (typeof text !== 'string' && match[3] === undefined)) { rest[path] = text; continue; }
     const [, id, file, card] = match;
     if (!found.has(id)) found.set(id, { cards: {} });
     if (card !== undefined) found.get(id).cards[card] = text;
@@ -224,19 +271,22 @@ function split_sub_workflows(resources) {
     const flow = typeof files[FLOW_FILE] === 'string' ? parse_flow_text(files[FLOW_FILE], `${prefix}${FLOW_FILE}`) : undefined;
     const attach = skill_attach(fields);
     return { id, label: skill_label(fields), description: typeof fields.description === 'string' ? fields.description : '', skill: body,
-      ...(attach.length ? { attach } : {}), agents: Object.entries(files.cards).map(([card, text]) => card_from_markdown(card, text, `${prefix}agents/${card}.md`)), ...(flow ? { flow } : {}) };
+      ...(attach.length ? { attach } : {}), agents: cards_from_files(files.cards, `${prefix}agents/`, ignored), ...(flow ? { flow } : {}) };
   });
   return { sub_workflows, rest };
 }
 
-/** Turn SKILL.md, card files and the folder's other files into one workflow object, unchecked; flow.json becomes `flow`. */
-function workflow_from_files(skill_text, cards, resources = {}) {
+/**
+ * Turn SKILL.md, the files under agents/ (`{path below agents/: text or null}`, see cards_from_files) and the folder's
+ * other files into one workflow object, unchecked; flow.json becomes `flow`. Card files it cannot use go to `ignored`.
+ */
+function workflow_from_files(skill_text, cards, resources = {}, ignored = []) {
   const { fields, body } = parse_markdown(skill_text, 'SKILL.md');
   const { [FLOW_FILE]: flow_text, ...others } = resources;
   const flow = typeof flow_text === 'string' ? parse_flow_text(flow_text, FLOW_FILE) : undefined;
-  const { sub_workflows, rest } = split_sub_workflows(others);
+  const { sub_workflows, rest } = split_sub_workflows(others, ignored);
   return { id: fields.name || '', label: skill_label(fields), description: fields.description || '', skill: body,
-    agents: Object.entries(cards).map(([card, text]) => card_from_markdown(card, text)), resources: rest, sub_workflows, ...(flow ? { flow } : {}) };
+    agents: cards_from_files(cards, 'agents/', ignored), resources: rest, sub_workflows, ...(flow ? { flow } : {}) };
 }
 
 /**
@@ -266,14 +316,36 @@ function revision_of(text) {
 /** Check one card against the preset rule and the member name it implies; returns it with only known, filled fields. */
 function normalize_card(agent, validate_card) {
   // requested_access and needs_platform are an import preview's notes for the page, not card fields.
-  const { card, sub_workflow: ignored_sub, requested_access: ignored_request, needs_platform: ignored_platform, ...preset } = agent || {};
+  const { card, sub_workflow: ignored_sub, requested_access: ignored_request, needs_platform: ignored_platform, skills, knowledge, ...preset } = agent || {};
   if (!CARD_ID_PATTERN.test(card || '')) throw new Error(`卡片 ID 只能用小写英文、数字和下划线，1—16 位：${card || '（空）'}`);
   // Empty fields are dropped; unknown ones stay so the preset check refuses them.
   const kept = Object.fromEntries(Object.entries(preset).filter(([, value]) => value !== undefined && value !== ''));
   try { validate_card(kept); } catch (error) { throw new Error(`卡片 ${card}：${error.message}`); }
   if (!kept.name?.endsWith(`-${card}`)) throw new Error(`卡片 ${card} 的成员名须为“平台-${card}”：${kept.name || '（空）'}`);
   if ((kept.description || '').includes('\n')) throw new Error(`${kept.name} 的描述不能换行`);
-  return { card, ...kept };
+  return { card, ...kept, ...card_knowledge(card, skills, knowledge) };
+}
+
+/**
+ * A folder card's fields: `knowledge` (`{path below skills/: text}`, carried by an import or a folder being saved) with
+ * the skill names it gives, or only `skills` (the names a read gave, marking the card a folder), or none for a file card.
+ */
+function card_knowledge(card, skills, knowledge) {
+  if (knowledge !== undefined) {
+    if (!knowledge || typeof knowledge !== 'object' || Array.isArray(knowledge)) throw new Error(`卡片 ${card} 的技能须为 { 路径: 文本 }`);
+    const entries = Object.entries(knowledge);
+    if (entries.length > MAX_RESOURCE_FILES) throw new Error(`卡片 ${card} 的技能文件最多 ${MAX_RESOURCE_FILES} 个`);
+    for (const [path, text] of entries) {
+      const parts = path.split('/');
+      if (parts.length < 2 || !parts.every(part => RESOURCE_SEGMENT.test(part))) throw new Error(`卡片 ${card} 的技能文件路径不合法：${path}`);
+      if (typeof text !== 'string') throw new Error(`卡片 ${card} 的技能文件 ${path} 须为文本`);
+      if (Buffer.byteLength(text, 'utf8') > MAX_RESOURCE_BYTES) throw new Error(`卡片 ${card} 的技能文件 ${path} 超过 ${MAX_RESOURCE_BYTES / 1000000} MB`);
+    }
+    return knowledge_fields(Object.fromEntries(entries.sort(([a], [b]) => a.localeCompare(b))));
+  }
+  if (skills === undefined) return {};
+  if (!Array.isArray(skills) || skills.some(name => typeof name !== 'string')) throw new Error(`卡片 ${card} 的 skills 须为技能名列表`);
+  return { skills: [...skills] };
 }
 
 /**
@@ -296,7 +368,8 @@ export function workflow_cards(workflow) {
 // A sub-workflow is a workflow inside one, in `workflows/<id>/` (SKILL.md, agents/, flow.json and its own other files):
 // used on demand beside the main flow, its cards join the room only when it is used. It has no sub-workflows of its own.
 const SUB_DIRECTORY = 'workflows';
-const SUB_FILE = /^workflows\/([^/]+)\/(SKILL\.md|flow\.json|agents\/([^/]+)\.md)$/;
+// A sub-workflow's cards are everything under its agents/: card files, folder cards and their skills.
+const SUB_FILE = /^workflows\/([^/]+)\/(SKILL\.md|flow\.json|agents\/(.+))$/;
 const MAX_SUB_WORKFLOWS = 10;
 // A stage ID a sub-workflow attaches to follows the canvas's node ID rule.
 const STAGE_ID = /^[A-Za-z0-9_-]{1,40}$/;
@@ -331,8 +404,11 @@ function validate_sub_workflows(list, validate_card, main_cards) {
   });
 }
 
-/** Write checked sub-workflows into a staging folder, replacing their own files and removing ones the list dropped. */
-function write_sub_workflows(staging, list) {
+/**
+ * Write checked sub-workflows into a staging folder, replacing their own files and removing ones the list dropped. Folder
+ * cards' skills come back from the saved folder (`carry`, see write_cards), so removing agents/ here loses none.
+ */
+function write_sub_workflows(staging, list, carry) {
   const root = join(staging, SUB_DIRECTORY);
   const keep = new Set(list.map(sub => sub.id));
   if (existsSync(root)) {
@@ -346,18 +422,62 @@ function write_sub_workflows(staging, list) {
     const folder = join(root, sub.id);
     mkdirSync(join(folder, 'agents'), { recursive: true });
     writeFileSync(join(folder, 'SKILL.md'), serialize_markdown(skill_fields(sub.id, sub.label, sub.description, sub.attach), sub.skill));
-    write_cards(join(folder, 'agents'), sub.agents);
+    write_cards(join(folder, 'agents'), sub.agents, carry);
     if (sub.flow) writeFileSync(join(folder, FLOW_FILE), `${JSON.stringify(sub.flow, null, 2)}\n`);
   }
 }
 
-/** Write card files `<card>.md` into a folder. */
-function write_cards(directory, agents) {
-  for (const { card, system_prompt, name, ...fields } of agents) {
+/**
+ * Write cards into an agents/ folder: a file `<card>.md`, or for a folder card `<card>/<card>.md` with its skills. A card
+ * is a folder when it says so (`skills` or `knowledge`) or was one in the saved folder (`carry.folders`, card ID → its
+ * folder there). Skills the saved folder has are copied back as they are; a card's own `knowledge` replaces them only
+ * when `carry.replace` (an explicit overwrite, or no saved entry), after `carry.backup` keeps the card's old folder, and
+ * otherwise is written only where none were saved.
+ */
+function write_cards(directory, agents, carry = { folders: new Map(), replace: true }) {
+  for (const { card, system_prompt, name, skills, knowledge, ...fields } of agents) {
     const platform = name.slice(0, name.length - card.length - 1);
-    writeFileSync(join(directory, `${card}.md`), serialize_markdown({ name: card, platform,
-      ...Object.fromEntries(CARD_FIELDS.slice(1).map(key => [key, fields[key]])) }, system_prompt));
+    const text = serialize_markdown({ name: card, platform, ...Object.fromEntries(CARD_FIELDS.slice(1).map(key => [key, fields[key]])) }, system_prompt);
+    const saved = carry.folders.get(card);
+    if (!saved && skills === undefined && knowledge === undefined) { writeFileSync(join(directory, `${card}.md`), text); continue; }
+    const folder = join(directory, card);
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, `${card}.md`), text);
+    const saved_skills = saved ? join(saved, SKILLS_FOLDER) : '';
+    const has_saved = Boolean(saved_skills && existsSync(saved_skills));
+    if (knowledge !== undefined && (carry.replace || !has_saved)) {
+      if (has_saved) carry.backup?.(card, saved);
+      write_resources(join(folder, SKILLS_FOLDER), knowledge);
+    }
+    else if (has_saved) cpSync(saved_skills, join(folder, SKILLS_FOLDER), { recursive: true });
   }
+}
+
+/**
+ * Copy a folder card's folder into the service home's backups/ before a save or deletion drops or replaces it; returns
+ * the backup folder's name (`workflow-<id>-<card>-<time>-<random>`).
+ */
+function backup_card(home, id, card, folder) {
+  const name = `workflow-${id}-${card}-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
+  mkdirSync(join(home, 'backups'), { recursive: true });
+  cpSync(folder, join(home, 'backups', name), { recursive: true });
+  return name;
+}
+
+/** The folder cards a saved workflow folder has, main flow's and sub-workflows', as card ID → folder path. */
+function card_folders(directory) {
+  const found = new Map();
+  if (!existsSync(directory)) return found;
+  const scan = agents => {
+    if (!existsSync(agents)) return;
+    for (const name of readdirSync(agents)) {
+      if (CARD_ID_PATTERN.test(name) && lstatSync(join(agents, name)).isDirectory()) found.set(name, join(agents, name));
+    }
+  };
+  scan(join(directory, 'agents'));
+  const subs = join(directory, SUB_DIRECTORY);
+  if (existsSync(subs)) for (const name of readdirSync(subs)) scan(join(subs, name, 'agents'));
+  return found;
 }
 
 /** A path, relative to the workflow folder, that a resource may take: inside it, not SKILL.md and not under agents/. */
@@ -394,7 +514,9 @@ function read_resource_folder(directory, prefix, resources, ignored) {
     if (lstatSync(path).isDirectory()) { read_resource_folder(path, `${relative}/`, resources, ignored); continue; }
     let text = null;
     try { text = utf8.decode(readFileSync(path)); } catch { /* not text */ }
-    if (text !== null && resource_path_allowed(relative)) resources[relative] = text;
+    // A sub-workflow's card files go on to be read as cards, where one that is not text is named back as ignored.
+    if (SUB_FILE.test(relative) && SUB_FILE.exec(relative)[3] !== undefined) resources[relative] = text;
+    else if (text !== null && resource_path_allowed(relative)) resources[relative] = text;
     else ignored.push(relative);
   }
 }
@@ -490,14 +612,18 @@ export function read_workflow_folder(directory) {
   const cards = {};
   const resources = {}, ignored = [];
   read_resource_folder(directory, '', resources, ignored);
-  if (existsSync(agents)) {
-    for (const name of readdirSync(agents).sort()) {
-      const match = CARD_PATH.exec(`agents/${name}`);
-      if (match) cards[match[1]] = readFileSync(join(agents, name), 'utf8');
-      else ignored.push(`agents/${name}`);
-    }
+  if (existsSync(agents)) read_text_files(agents, '', cards);
+  const workflow = workflow_from_files(readFileSync(join(directory, 'SKILL.md'), 'utf8'), cards, resources, ignored);
+  return { workflow, ignored: [...new Set(ignored)].sort() };
+}
+
+/** Every file below a folder as `{relative path: UTF-8 text, or null when it is not text}`. */
+function read_text_files(directory, prefix, files) {
+  for (const name of readdirSync(directory).sort()) {
+    const path = join(directory, name);
+    if (lstatSync(path).isDirectory()) { read_text_files(path, `${prefix}${name}/`, files); continue; }
+    try { files[`${prefix}${name}`] = utf8.decode(readFileSync(path)); } catch { files[`${prefix}${name}`] = null; }
   }
-  return { workflow: workflow_from_files(readFileSync(join(directory, 'SKILL.md'), 'utf8'), cards, resources), ignored };
 }
 
 /**
@@ -511,12 +637,13 @@ export function read_workflow_files(files) {
   const cards = {}, resources = {}, ignored = [];
   for (const path of Object.keys(files).sort()) {
     if (path === 'SKILL.md') continue;
-    const match = CARD_PATH.exec(path);
-    if (match && typeof files[path] === 'string') cards[match[1]] = files[path];
+    if (path.startsWith('agents/')) cards[path.slice('agents/'.length)] = typeof files[path] === 'string' ? files[path] : null;
+    else if (SUB_FILE.test(path) && SUB_FILE.exec(path)[3] !== undefined) resources[path] = typeof files[path] === 'string' ? files[path] : null;
     else if (typeof files[path] === 'string' && (path === FLOW_FILE || resource_path_allowed(path))) resources[path] = files[path];
     else ignored.push(path);
   }
-  return { workflow: workflow_from_files(files['SKILL.md'], cards, resources), ignored };
+  const workflow = workflow_from_files(files['SKILL.md'], cards, resources, ignored);
+  return { workflow, ignored: [...new Set(ignored)].sort() };
 }
 
 /** Summaries for the library list; a broken folder is listed with its error instead of hiding it. */
@@ -583,14 +710,15 @@ export function rename_workflow(home, id, label) {
 
 /**
  * The whole folder's revision as saved on disk: every file under it (SKILL.md, cards, canvases, sub-workflows and
- * their files, templates, scripts), by relative path and bytes. Any change anywhere changes it. Call under the lock.
+ * their files, templates, scripts), by relative path and bytes, except folder cards' skills, which their members write
+ * while the workflow is in use and a save keeps as they are. Any other change anywhere changes it. Call under the lock.
  */
 export function folder_revision(directory) {
   const hash = createHash('sha256');
   const walk = relative => {
     for (const name of readdirSync(join(directory, relative)).sort()) {
       const path = relative ? `${relative}/${name}` : name;
-      if (lstatSync(join(directory, path)).isDirectory()) walk(path);
+      if (lstatSync(join(directory, path)).isDirectory()) { if (!CARD_SKILLS_PATH.test(path)) walk(path); }
       else hash.update(`${path}\0`).update(readFileSync(join(directory, path))).update('\0');
     }
   };
@@ -604,7 +732,10 @@ function read_saved_workflow(home, id) {
   if (!existsSync(directory)) throw new Error(`工作流不存在：${id}`);
   const { workflow } = read_workflow_folder(directory);
   workflow_cards(workflow);
-  return { ...workflow, id, directory, commands: workflow_commands(workflow.resources), revision: folder_revision(directory) };
+  // Skills are named, not carried: the page and the host never send them back, so no save writes an old copy of them.
+  const named = agents => agents.map(({ knowledge: ignored, ...agent }) => agent);
+  return { ...workflow, agents: named(workflow.agents), sub_workflows: workflow.sub_workflows.map(sub => ({ ...sub, agents: named(sub.agents) })),
+    id, directory, commands: workflow_commands(workflow.resources), revision: folder_revision(directory) };
 }
 
 /** A refusal the page shows in its own language (template and parameters) with a stable code. */
@@ -663,23 +794,30 @@ export function save_workflow(home, input, validate_card, base = {}) {
   const workflow = validate_workflow(input, validate_card);
   return with_workflow_lock(home, () => {
     check_save_base(workflow_directory(home, workflow.id), workflow.id, base);
+    const backups = [];
     publish_directory(home, workflow.id, (staging, directory) => {
+      // Folder cards keep their skills as saved; only an explicit overwrite (or a new entry) takes the ones the save carries.
+      // A folder card whose skills are replaced or that the save drops is backed up first.
+      const carry = { folders: card_folders(directory), replace: base.overwrite === true || !existsSync(directory),
+        backup: (card, folder) => backups.push(backup_card(home, workflow.id, card, folder)) };
       mkdirSync(join(staging, 'agents'), { recursive: true });
       writeFileSync(join(staging, 'SKILL.md'), serialize_markdown(skill_fields(workflow.id, workflow.label, workflow.description), workflow.skill));
-      write_cards(join(staging, 'agents'), workflow.agents);
+      write_cards(join(staging, 'agents'), workflow.agents, carry);
       if (workflow.resources) write_resources(staging, workflow.resources);
       else if (existsSync(directory)) keep_resources(directory, staging);
       if (workflow.flow) writeFileSync(join(staging, FLOW_FILE), `${JSON.stringify(workflow.flow, null, 2)}
 `);
       else if (workflow.flow === null || workflow.resources) rmSync(join(staging, FLOW_FILE), { force: true });
-      if (workflow.sub_workflows) write_sub_workflows(staging, workflow.sub_workflows);
+      if (workflow.sub_workflows) write_sub_workflows(staging, workflow.sub_workflows, carry);
+      const kept = card_folders(staging);
+      for (const [card, folder] of carry.folders) if (!kept.has(card)) carry.backup(card, folder);
       // Kept sub-workflows were not part of the check: their cards must not clash with the main flow's new ones.
       try { workflow_cards(read_workflow_folder(staging).workflow); }
       catch (error) { rmSync(staging, { recursive: true, force: true }); throw error; }
     });
     const saved = read_saved_workflow(home, workflow.id);
     const warnings = workflow_warnings(saved);
-    return { ...saved, ...(warnings.length ? { warnings } : {}) };
+    return { ...saved, ...(warnings.length ? { warnings } : {}), ...(backups.length ? { backups } : {}) };
   });
 }
 
@@ -704,15 +842,16 @@ export function workflow_warnings(workflow) {
   return warnings;
 }
 
-/** Remove one workflow folder. */
+/** Remove one workflow folder; its folder cards (experts with skills) are backed up into backups/ first. */
 export function delete_workflow(home, id) {
   return with_workflow_lock(home, () => {
     const directory = workflow_directory(home, id);
     if (!existsSync(directory)) throw new Error(`工作流不存在：${id}`);
     assert_no_links(directory);
+    const backups = [...card_folders(directory)].map(([card, folder]) => backup_card(home, id, card, folder));
     rmSync(directory, { recursive: true, force: true });
     if (disabled_workflows(home).includes(id)) write_disabled(home, disabled_workflows(home).filter(item => item !== id));
-    return { deleted: id };
+    return { deleted: id, ...(backups.length ? { backups } : {}) };
   });
 }
 
@@ -751,7 +890,7 @@ export function parse_workflow_draft(parts) {
   if (!files.size) throw new Error('草稿里没有任何 <!-- workflow-file: 路径 --> 分隔行');
   if (!files.has('SKILL.md')) throw new Error('草稿里缺少 SKILL.md');
   const text = path => files.get(path).join('\n').replace(/\s+$/, '');
-  const cards = Object.fromEntries([...files.keys()].filter(path => CARD_PATH.test(path)).map(path => [CARD_PATH.exec(path)[1], text(path)]));
+  const cards = Object.fromEntries([...files.keys()].filter(path => CARD_PATH.test(path)).map(path => [path.slice('agents/'.length), text(path)]));
   // A draft carries no other files, so it leaves the saved folder's templates, tools and sub-workflows alone (no
   // `resources` or `sub_workflows` at all); its canvas, when it has one, replaces the saved one.
   const { resources: none, sub_workflows: kept, ...workflow } = workflow_from_files(text('SKILL.md'), cards, files.has(FLOW_FILE) ? { [FLOW_FILE]: text(FLOW_FILE) } : {});
@@ -823,6 +962,60 @@ export function workflow_member_list(workflow) {
     ...Object.entries(workflow?.extra_members || {}).map(([name, card]) => ({ card, name }))];
 }
 
+// An expert's knowledge (user 2026-11-22): its skills, each `skills/<skill>/` with a SKILL.md (Agent Skills front matter:
+// name, description) and references/. A workflow's expert is a folder card, its skills inside the workflow folder (see
+// CARD_SKILLS_PATH); a panel expert's are `experts/<card>/skills/` in the service home, found by its member name's
+// suffix. The two never share. An exported expert is the folder card's shape: `<card>.md` beside skills/.
+export const SKILLS_DIRECTORY = SKILLS_FOLDER;
+export const SKILL_FILE = 'SKILL.md';
+// A skill's folder name follows the workflow ID rule.
+export const SKILL_NAME_PATTERN = WORKFLOW_ID_PATTERN;
+
+/** The folder holding panel experts' knowledge on this computer. */
+export function experts_home(home) { return join(home, 'experts'); }
+
+/** The skill names under an expert folder's skills/ that have a SKILL.md; none when the folder is missing. */
+export function expert_skills(directory) {
+  const skills = join(directory, SKILLS_DIRECTORY);
+  if (!existsSync(skills)) return [];
+  return readdirSync(skills).filter(name => SKILL_NAME_PATTERN.test(name) && existsSync(join(skills, name, SKILL_FILE))).sort();
+}
+
+/** A folder card's folder in its workflow (main flow's or sub-workflow's agents/), or '' for a card file or no card. */
+export function card_folder(workflow, card) {
+  const source = workflow?.cards?.[card];
+  if (!source || !Array.isArray(source.skills) || !workflow.directory) return '';
+  return join(workflow.directory, ...(source.sub_workflow ? [SUB_DIRECTORY, source.sub_workflow] : []), 'agents', card);
+}
+
+/** The expert key a member's name gives (`平台-后缀`, as a preset names it; an instance number after it is tried without). */
+function name_keys(member_name) {
+  const match = /^[A-Za-z]+-([a-z0-9_]{1,16})$/.exec(member_name);
+  return match ? [...new Set([match[1], match[1].replace(/\d+$/, '')])].filter(Boolean) : [];
+}
+
+/**
+ * The skills folder a member maintains, or '' for none. A workflow member playing a folder card gets that card's skills/
+ * in the workflow folder (created when missing, so it can write its first skill); one playing a card file has none.
+ * Any other member gets `experts/<suffix>/skills/` in the service home when it has a skill there.
+ */
+export function member_knowledge(home, member_name, workflow) {
+  if (!member_name) return '';
+  const card = workflow && !workflow.error ? card_of_member(workflow, member_name) : '';
+  if (card) {
+    const folder = card_folder(workflow, card);
+    if (!folder) return '';
+    mkdirSync(join(folder, SKILLS_DIRECTORY), { recursive: true });
+    return join(folder, SKILLS_DIRECTORY);
+  }
+  if (!home) return '';
+  for (const key of name_keys(member_name)) {
+    const directory = join(experts_home(home), key);
+    if (expert_skills(directory).length) return join(directory, SKILLS_DIRECTORY);
+  }
+  return '';
+}
+
 /** The member's profile for this execution: a workflow member's prompt comes from its card as it is now. */
 export function effective_profile(profile, member_name, workflow) {
   if (!profile || !workflow || workflow.error) return profile;
@@ -837,7 +1030,8 @@ export function effective_profile(profile, member_name, workflow) {
 /**
  * The host's view of the workflow: which card is which member now (a card may have several, each with its own name in
  * the room), whether present, and what it may do. A card the workflow dropped is left out; `missing` lists cards added
- * after it was enabled, which no member plays yet. `stages` and each sub-workflow's `attach` say where sub-workflows
+ * after it was enabled, which no member plays yet. A folder card lists its `skills` (an expert keeping knowledge in the
+ * workflow). `stages` and each sub-workflow's `attach` say where sub-workflows
  * attach to the main flow's steps; both are soft, followed through SKILL.md.
  */
 export function workflow_task_field(workflow, room_members, participants) {
@@ -846,15 +1040,17 @@ export function workflow_task_field(workflow, room_members, participants) {
     const source = workflow.cards[card];
     if (!member || member.status === 'removed' || !source) return null;
     return { card, member: member.label || name, label: source.label || '', description: source.description || '',
-      status: member.status, project_access: participants?.[name]?.project_access || 'read', ...(source.sub_workflow ? { sub_workflow: source.sub_workflow } : {}) };
+      status: member.status, project_access: participants?.[name]?.project_access || 'read', ...(source.sub_workflow ? { sub_workflow: source.sub_workflow } : {}),
+      ...(source.skills ? { skills: source.skills } : {}) };
   }).filter(Boolean);
   // A sub-workflow's cards join only when it is used, so only the main flow's cards count as missing.
   const missing = Object.values(workflow.cards).filter(card => !card.sub_workflow && !workflow.members[card.card])
-    .map(card => ({ card: card.card, label: card.label || '', description: card.description || '' }));
+    .map(card => ({ card: card.card, label: card.label || '', description: card.description || '', ...(card.skills ? { skills: card.skills } : {}) }));
   // Like the main SKILL.md, a sub-workflow is read only when a request fits its description and its revision is new.
   const sub_workflows = (workflow.sub_workflows || []).map(sub => ({ id: sub.id, label: sub.label, description: sub.description,
     revision: sub.revision, skill_path: sub.skill_path, ...(sub.attach?.length ? { attach: sub.attach } : {}),
-    cards: sub.cards.map(card => ({ card, label: workflow.cards[card]?.label || '', description: workflow.cards[card]?.description || '' })) }));
+    cards: sub.cards.map(card => ({ card, label: workflow.cards[card]?.label || '', description: workflow.cards[card]?.description || '',
+      ...(workflow.cards[card]?.skills ? { skills: workflow.cards[card].skills } : {}) })) }));
   // The host reads SKILL.md only when a request fits the description and its revision is one it has not read.
   return { id: workflow.id, label: workflow.label, description: workflow.description || '', revision: workflow.revision || '', members,
     ...(workflow.stages?.length ? { stages: workflow.stages } : {}), ...(missing.length ? { missing } : {}), ...(sub_workflows.length ? { sub_workflows } : {}) };

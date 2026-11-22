@@ -14,7 +14,7 @@ import { image_settings } from './image_service.mjs';
 import { outside_directory, room_directories } from './project_files.mjs';
 import { SessionDriver } from './session_driver.mjs';
 import { slash_names } from './slash_names.mjs';
-import { effective_profile, load_room_workflow, workflow_directory, workflow_in_use, workflow_task_field } from './workflows.mjs';
+import { effective_profile, load_room_workflow, member_knowledge, workflow_directory, workflow_in_use, workflow_task_field } from './workflows.mjs';
 import { GOAL_CONFIDENCE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_GUIDED_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, SCHEDULER_MODE, decide_review_completion, route_free_message, some_members } from './scheduler.mjs';
 import { room_text, room_payload } from './room_text.mjs';
 import { question_notice } from './question_weixin.mjs';
@@ -298,6 +298,8 @@ export function free_task_files(config, member, execution, binding, { session = 
     session_id: binding.session_id || '', execution_id: execution.id });
   const adapter = adapter_of(profile.adapter);
   const extra_directories = member_extra_directories(config, profile);
+  // The expert this member plays keeps its own knowledge, which only it may write (its project access stays as set).
+  const knowledge_directory = member_knowledge(config.api_home, member.name, workflow);
   const cli = process.platform === 'win32' ? adapter?.windows_command || 'codiscuss.cmd' : 'codiscuss';
   const inbox = Boolean(adapter?.into_window?.(profile, binding));
   const bound_access = process_access && !inbox && Boolean(adapter?.capabilities.access_env);
@@ -308,7 +310,8 @@ export function free_task_files(config, member, execution, binding, { session = 
   const { instructions, prompt } = free_task_text({ name: member.label || member.name, role: member.role, discussion: direct_question,
     discussion_request, profile, cli,
     room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path,
-    access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox, extra_directories, attachments, requests, workflow: Boolean(host_workflow) });
+    access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox, extra_directories, attachments, requests, workflow: Boolean(host_workflow),
+    knowledge: Boolean(knowledge_directory) });
   // Software that declares it takes images gets them with the prompt, like a screenshot pasted into its own window.
   const images = takes_images(profile) && !inbox
     ? attachments.filter(item => item.path && IMAGE_TYPES.has(item.content_type)).map(item => ({ path: item.path, content_type: item.content_type, size: item.size }))
@@ -382,6 +385,7 @@ export function free_task_files(config, member, execution, binding, { session = 
     // Only where the adapter declares capture: without it, only a submitted answer is saved, as the skill already says.
     ...(adapter?.capabilities.capture ? { answer_capture: '正常结束且本次没有提交时，你最后一段文字收为本次回答（标自动收录，不派活）；已提交或被拒则不收录' } : {}),
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
+    ...(knowledge_directory ? { knowledge_directory } : {}),
     ...(extra_directories.length ? { extra_directories } : {}),
     skills: skills.map(file => join(config.project, '.agents/skills', file)),
     // The workflow's SKILL.md is not a skill read on every task: the host opens it when a request fits its description.
@@ -391,7 +395,8 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(image ? { image: { model: image.model, command: `${cli} launch image --file REQUEST.json` } } : {}),
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
-  return { id, participant: member.name, directory: config.directory, member_directory, task_path, draft_directory, extra_directories, ...(goal_field ? { goal: goal_field } : {}),
+  return { id, participant: member.name, directory: config.directory, member_directory, task_path, draft_directory, extra_directories,
+    ...(knowledge_directory ? { knowledge_directory } : {}), ...(goal_field ? { goal: goal_field } : {}),
     ...(goal_of_room ? { room_goal: goal_of_room } : {}),
     // Every member may read the folder of the room's workflow (templates, tools, a review of the workflow itself), also
     // while its members are away and the host no longer follows it; only the host's task names it.
@@ -1122,7 +1127,9 @@ export class FreeRoomRunner {
         ...(review_request ? { before_model_start: () => this.check_review_delivery(member, review_request) } : {}),
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
-          cwd: directory, project_access: adapter.project_access, extra_directories: task.extra_directories,
+          // An API member reads its knowledge through the file tools; writing it waits for per-directory write access.
+          cwd: directory, project_access: adapter.project_access,
+          extra_directories: [...(task.extra_directories || []), ...(task.knowledge_directory ? [{ path: task.knowledge_directory, access: 'read' }] : [])],
           requests: execution.requests, read_after: execution.read_until, session, discussion_request: session_request,
           ...(attachments.length ? { attachments: attachments.map(({ path, error, ...item }) => item) } : {}),
           scheduler_suggestions, review_handoffs, ...(task.workflow ? { workflow: task.workflow } : {}),

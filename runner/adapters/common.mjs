@@ -1,7 +1,7 @@
 /** Parts every software adapter shares: running programs, ending process trees, reading session logs and model catalogs. */
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, rmSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { closeSync, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, rmSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { TASK_SUBCOMMANDS } from '../expert_prompts.mjs';
@@ -67,6 +67,33 @@ export function same_path(left, right) {
   if (!left || !right) return false;
   const normalize = value => process.platform === 'win32' ? resolve(value).toLowerCase() : resolve(value);
   return normalize(left) === normalize(right);
+}
+
+/**
+ * Folders a member may not write, with its own knowledge (`keep`) carved out (user 2026-11-22: an expert's skills live
+ * in its card's folder inside the workflow, which stays protected). A folder holding `keep` is replaced by every entry
+ * beside the path down to it, as they are on disk now, so deny rules, which win over allow rules in Claude Code and
+ * agy, still cover the rest; an entry created later beside that path is not covered. Returns `{ path, directory }`.
+ */
+export function carve_protected(paths, keep) {
+  const result = [];
+  for (const path of paths.filter(Boolean)) {
+    const rest = keep ? relative(resolve(path), resolve(keep)) : '';
+    if (!rest || rest === '..' || rest.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rest)) {
+      result.push({ path, directory: true });
+      continue;
+    }
+    let current = resolve(path);
+    for (const segment of rest.split(/[\\/]/)) {
+      let names = [];
+      try { names = readdirSync(current); } catch { break; }
+      for (const name of names.filter(item => !same_path(join(current, item), join(current, segment)))) {
+        result.push({ path: join(current, name), directory: lstatSync(join(current, name)).isDirectory() });
+      }
+      current = join(current, segment);
+    }
+  }
+  return result;
 }
 
 /** The participant's discussion project directory; workdir is the legacy field name. */

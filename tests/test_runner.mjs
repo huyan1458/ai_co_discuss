@@ -1274,6 +1274,51 @@ test(`codex refuses conflicting or unavailable permission profiles: ${JSON.strin
 });
 }
 
+test('an expert writes its own knowledge folder and nothing else while its project stays read-only', t => {
+  const f = task_fixture(t);
+  // A folder card's skills sit inside the workflow folder, which every member reads and none may write.
+  const main = join(f.config.directory, 'main'), library = mkdtempSync(join(tmpdir(), 'expert-library-'));
+  t.after(() => rmSync(library, { recursive: true, force: true }));
+  mkdirSync(main);
+  const workflow = join(library, 'novel');
+  for (const folder of ['agents/luke/skills/cold', 'agents/jack/skills/sail', 'workflows/advisor/agents/kit/skills/sea']) mkdirSync(join(workflow, folder), { recursive: true });
+  for (const file of ['SKILL.md', 'agents/writer.md', 'agents/luke/luke.md', 'agents/luke/skills/cold/SKILL.md', 'agents/jack/jack.md', 'workflows/advisor/SKILL.md']) writeFileSync(join(workflow, file), 'x');
+  const knowledge = join(workflow, 'agents', 'luke', 'skills');
+  const task = { ...session_task(f.config), knowledge_directory: knowledge, skill_directories: [...session_task(f.config).skill_directories, workflow],
+    extra_directories: [{ path: main, access: 'read' }] };
+  const config = { cwd: main, project_access: 'read' };
+  const others = [join(workflow, 'SKILL.md'), join(workflow, 'agents', 'writer.md'), join(workflow, 'agents', 'luke', 'luke.md')];
+  const other_folders = [join(workflow, 'workflows'), join(workflow, 'agents', 'jack')];
+
+  const claude = claude_permissions(config, task);
+  const allowed = claude.slice(0, claude.indexOf('--disallowedTools')), denied = claude.slice(claude.indexOf('--disallowedTools'));
+  assert.ok(claude.includes(knowledge) && allowed.includes(`Edit(${claude_rule_path(knowledge)}/**)`), 'its knowledge is a working directory it edits');
+  assert.ok(!denied.some(rule => rule.startsWith(`Edit(${claude_rule_path(workflow)}/**`)) && !denied.includes(`Edit(${claude_rule_path(knowledge)}/**)`),
+    'the workflow is not denied whole, its own skills not at all');
+  for (const path of others) assert.ok(denied.includes(`Edit(${claude_rule_path(path)})`), `${path} stays denied`);
+  for (const path of other_folders) assert.ok(denied.includes(`Edit(${claude_rule_path(path)}/**)`), `${path} stays denied`);
+  assert.ok(!allowed.includes(`Edit(${claude_rule_path(main)}/**)`) && denied.includes(`Edit(${claude_rule_path(main)}/**)`) && !allowed.includes('Bash'),
+    'the project stays read-only, no general commands');
+  const plain = claude_permissions(config, { ...task, knowledge_directory: undefined });
+  assert.ok(!plain.includes(`Edit(${claude_rule_path(knowledge)}/**)`) && plain.includes(`Edit(${claude_rule_path(workflow)}/**)`), 'without knowledge the workflow is denied whole');
+
+  // Codex: the sandbox grants its own skills by path; the workflow is not writable, and no read-only entry is added for
+  // it, since on Windows such an entry under a writable folder becomes a lasting deny (tested 2026-11-22).
+  const codex = codex_permissions(config, task, 'linux').args.find(arg => arg.startsWith('permissions.'));
+  const entry = (path, access) => `${JSON.stringify(resolve(path).replaceAll('\\', '/'))}=${JSON.stringify(access)}`;
+  assert.ok(codex.includes('extends=":read-only"') && codex.includes(entry(knowledge, 'write')) && codex.includes(entry(main, 'read')));
+  assert.ok(!codex.includes(entry(workflow, 'write')) && !codex.includes(entry(join(workflow, 'agents', 'jack'), 'write')));
+
+  const user_home = join(f.config.directory, 'user');
+  mkdirSync(join(user_home, '.gemini', 'config', 'projects'), { recursive: true });
+  const agy = prepare_agy_project(config, {}, task, user_home);
+  const grants = JSON.parse(readFileSync(agy.settings_path, 'utf8')).permissions;
+  const rule = path => `write_file(${resolve(path).replaceAll('\\', '/')})`;
+  assert.ok(grants.allow.includes(rule(knowledge)) && !grants.deny.includes(rule(knowledge)) && !grants.deny.includes(rule(workflow)));
+  for (const path of [...others, ...other_folders]) assert.ok(grants.deny.includes(rule(path)), `${path} stays denied`);
+  assert.ok(grants.deny.includes(rule(main)) && !grants.allow.includes('command(*)'), 'the project is protected and only codiscuss commands run');
+});
+
 test('extra project directories follow the member access, and stay read-only for a member working outside the room project', t => {
   const f = task_fixture(t);
   const [main, docs, elsewhere] = ['main', 'docs', 'elsewhere'].map(name => join(f.config.directory, name));

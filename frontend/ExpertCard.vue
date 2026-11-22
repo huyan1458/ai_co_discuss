@@ -14,6 +14,7 @@ import ApiSettings from "./ApiSettings.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberTextDialog from "./MemberTextDialog.vue";
 import SessionBrowser from "./SessionBrowser.vue";
+import ExpertSkills from "./ExpertSkills.vue";
 import { LEND_DURATIONS, SCOPES, WAKES, scope_label } from "./external-members.js";
 import { adapter_profile, same_session_family } from "../runner/adapters/profiles.mjs";
 import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
@@ -265,6 +266,13 @@ function save_description({ text, label, as_template }) {
 // A preset keeps this card's description, prompt, project access, model and effort under its name for later rooms.
 // A card added from a saved preset (built-in ones included) updates that preset; any other card saves a new one.
 const own_preset = computed(() => Boolean(view.value && bridge.preset_origin(props.name)) || view.value.launch.presets.some((preset) => preset.name === props.name));
+// A member added from a saved preset named `平台-编号` may keep skills of its own in the service home (user 2026-11-22).
+const skills_preset = computed(() => {
+  if (!view.value?.launch.available || props.workflow || props.joining) return "";
+  const name = bridge.preset_origin(props.name) || (view.value.launch.presets.some((preset) => preset.name === props.name) ? props.name : "");
+  return /^[A-Za-z]+-[a-z0-9_]{1,16}$/.test(name) ? name : "";
+});
+const skills_open = ref(false);
 // A card not added from its own preset is saved under a name the user gives; the platform prefix is only a suggestion.
 const naming = ref(false), naming_draft = ref("");
 const saving_preset = ref(false);
@@ -490,6 +498,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span class="expert-card-heading-tools">
           <button v-if="!joining" type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="t('编辑 {value1} 的名称与描述', { value1: name })" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="preset || profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="t('编辑 {value1} 的专属提示词', { value1: name })" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
+          <button v-if="skills_preset" type="button" class="expert-card-back-tool" :aria-label="t('{value1} 的技能', { value1: name })" :title="t('技能：这位预设专家自己读写的知识，存在本机服务目录')" @click="skills_open = true"><UIcon name="i-lucide-book-open" /></button>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="t('检查 {value1} 的 API 配置', { value1: name })" :title="t('检查配置：发送一次极短请求，核对地址、密钥、协议与模型')" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></span></div>
         <div v-if="!preset && automatic && !restricted && entry_items.length > 1" class="expert-card-field">
           <span>{{ t('接入') }}</span><USelect :model-value="profile.adapter || ''" :items="entry_items" :placeholder="t('选择 API / App / CLI')" :aria-label="t('{value1} 软件入口', { value1: name })" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
@@ -558,6 +567,10 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
       :placeholder="t('例如：回答先给结论，控制在三段以内。')" :max="MAX_EXPERT_PROMPT" :rows="8" :readonly="Boolean(workflow)"
       :note="workflow ? t('只读') : prompt_note" :source="prompt_source" :fixed="prompt_fixed" :changed="prompt_changed" @save="save_prompt">
     </MemberTextDialog>
+    <UModal v-if="skills_preset" v-model:open="skills_open" :title="t('{value1} 的技能', { value1: member_label })" :description="t('预设「{value1}」的技能，存在本机服务目录，和工作流里的同名专家互不共用。', { value1: skills_preset })"
+      :content="{ onInteractOutside: (event) => event.preventDefault() }" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+      <template #body><ExpertSkills :source="{ preset: skills_preset }" /></template>
+    </UModal>
     <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="naming" :title="t('存为专家预设')" :description="t('存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入。')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <form class="expert-card-naming" @submit.prevent="save_named_preset">

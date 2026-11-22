@@ -2056,6 +2056,25 @@ async function move_browser_description_templates() {
   } catch (error) { console.warn("Moving description templates failed:", error.message); }
 }
 
+/** Import an expert as a preset (`import_expert` in the local service) and keep the presets it leaves; the result says the rest. */
+async function import_expert(input) {
+  const result = await local_launch_request("workflows", { action: "import-expert", ...input });
+  await load_launch_settings();
+  return result;
+}
+
+/**
+ * Save a saved workflow's card as an expert preset (`overwrite` replaces one of its name; `replace_knowledge` replaces this
+ * computer's skills of that expert, backed up) and keep the presets it returns. Returns the preset and what became of
+ * its skills (`knowledge`: none, added, kept or replaced).
+ */
+async function save_card_preset(input) {
+  const result = await local_launch_request("workflows", { action: "save-preset", ...input });
+  Object.assign(state.launch, { presets: result.presets, builtin_presets: result.builtin_presets || [], hidden_builtins: result.hidden_builtins || [] });
+  publish_view();
+  return { preset: result.preset, knowledge: result.knowledge };
+}
+
 /** Save the user's presets, default descriptions and/or deleted built-ins in the local service and keep its answer. */
 async function save_presets(input) {
   const result = await local_launch_request("presets", input);
@@ -7912,7 +7931,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_download_link, attachment_size, attachment_file_icon, add_attachments, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
-  reload_workflows, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_auto_destroy, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,
+  reload_workflows, save_card_preset, import_expert, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_auto_destroy, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },

@@ -172,12 +172,14 @@ export const READ_RULE = '读含中文的文件用 rg --encoding utf-8 . 文件�
  * `extra_directories` are the room's other project directories this member works with, each read-only or writable.
  */
 export function free_task_text({ name, discussion, discussion_request, profile, cli, messages, read_after, task_path, access_file = '', read_rule = '',
-  extra_directories = [], attachments = [], requests = [], workflow = false }) {
+  extra_directories = [], attachments = [], requests = [], workflow = false, knowledge = false }) {
   const files = attachments_text(attachments, cli);
   const scope = discussion ? `讨论进行中，用户直接向你提问（${messages}）：只回答这个提问，不改变讨论安排和进度。` : '';
   const commands = runs_commands(profile, extra_directories) ? '' : `命令只用 subcommands 列出的 ${cli} 子命令。`;
   const extras = extra_directories.length ? 'extra_directories 是本房间的其他项目目录，access 为 read 的只读、不修改。' : '';
-  const instructions = `${software_rules(profile, cli, extra_directories)}${scope}${project_rule(profile, '按请求', extra_directories)}${extras}${commands}草稿写在 draft_directory。`;
+  // The expert's own knowledge: read its index, write what it verified; it may write there whatever its project access.
+  const knowing = knowledge ? 'knowledge_directory 里每个文件夹是一条你自己的技能：先读各条 SKILL.md 开头的描述，用到哪条再读哪条的 references；查证过的新知识写进对应技能的 references；可以新建一条技能，新建时写好 SKILL.md（头信息有 name、description）；写之前先读当前内容（别的房间可能刚写过）。' : '';
+  const instructions = `${software_rules(profile, cli, extra_directories)}${scope}${project_rule(profile, '按请求', extra_directories)}${extras}${commands}草稿写在 draft_directory。${knowing}`;
   if (discussion_request) {
     const role = discussion_request.purpose === 'discuss_host' ? '主持任务' : '发言请求';
     const prompt = `你（${name}）收到了讨论中的${role}。先读任务文件 ${task_path}，按其中列出的技能处理本次请求并保存结果。${read_rule}${files}`;

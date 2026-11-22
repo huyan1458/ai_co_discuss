@@ -96,7 +96,9 @@ export function codex_permissions(config, task, platform = process.platform) {
   // Codex 0.169 on Windows writes it to disk as a lasting DENY for the CodexSandboxUsers group that every Codex sandbox
   // shares, which then locks other Codex members out of their own folders (tested 2026-11-15, 凭据文件隔离), so none
   // is added (必 10, review M3).
-  const filesystem = { ':root': 'read', ...extras, [drafts]: 'write' };
+  // The expert's own knowledge is writable like its drafts, whatever its project access.
+  const knowledge = task.knowledge_directory ? { [resolve(task.knowledge_directory).replaceAll('\\', '/')]: 'write' } : {};
+  const filesystem = { ':root': 'read', ...extras, [drafts]: 'write', ...knowledge };
   const rules = Object.entries(filesystem).map(([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`).join(',');
   const profile = `{extends=${JSON.stringify(base)},filesystem={${rules}},network={enabled=true}}`;
   // The Windows sandbox account cannot write the user's TEMP, so PowerShell starts in ConstrainedLanguage and Codex's
