@@ -43,7 +43,7 @@ Yes. New room sessions run independently of conversations you open in your IDE o
 
 ### 9. Where is my data, and how do I move it to another computer?
 
-The default service directory is `~/.codiscuss`. It holds the website database (`local/discuss.sqlite3`), settings, keys, presets, and workflows. Rooms created without a project folder use `~/.codiscuss-workspace` for their files. Use **Export conversation** or **Export all rooms** to create a room backup ZIP. On the other computer, select **Import rooms…**. To move a workflow, copy its folder from `~/.codiscuss/workflows/`.
+The default service directory is `~/.codiscuss`. It holds the website database (`local/discuss.sqlite3`), settings, keys, presets, and workflows. Rooms created without a project folder use `~/.codiscuss-workspace` for their files. Use **Export conversation** or **Export all rooms** to create a room backup ZIP. On the other computer, select **Import rooms**. To move a workflow, copy its folder from `~/.codiscuss/workflows/`.
 
 ### 10. What happens if the computer shuts down, sleeps, or loses internet access?
 

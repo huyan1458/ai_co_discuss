@@ -3013,6 +3013,9 @@ def fire_host_checkin(connection, room_id):
 
 def inbox(connection, room_id, token):
     """List what the runner should deliver or reconcile; owner credential only."""
+    # A deleted room answers 404, not 403: its credential went with it, and the runner tells deletion apart by this.
+    if not connection.execute("SELECT 1 FROM rooms WHERE id=?", (room_id,)).fetchone():
+        raise LookupError(Text("房间不存在"))
     require_owner(connection, room_id, token)
     begin_write(connection)
     enforce_session_limits(connection, room_id)

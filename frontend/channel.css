@@ -139,6 +139,7 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-room-row.active, .channel-folder-row.active { color: #f1f2f5; background: var(--channel-ghost-active); }
 .channel-room-row.drag-source, .channel-folder-section.drag-source { opacity: .45; }
 .channel-room-row.is-destroying { opacity: .45; pointer-events: none; }
+.channel-destroy-final { margin: 0 0 12px; font-size: 14px; line-height: 1.6; }
 .channel-destruction-records { display: grid; gap: 10px; max-height: 60vh; overflow: auto; }
 .channel-destroy-all { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid #e5484d66; border-radius: 8px; font-size: 13px; line-height: 1.55; }
 .channel-destroy-all p { margin: 0; }

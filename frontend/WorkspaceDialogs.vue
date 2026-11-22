@@ -73,7 +73,19 @@ async function delete_archive() {
   const room = archive_delete_room.value;
   if (!room || archive_busy(room)) return;
   archive_delete_id.value = null;
+  announce_destroying(1);
   await act("manage_channel", { id: room.id, action: "delete" });
+}
+
+/** Say at once that the rooms are being destroyed and how it will end; each then dissolves with its own receipt. */
+function announce_destroying(count) {
+  bridge.notify("info", t('正在销毁 {count} 个房间：逐项删除并复查后，房间会逐个消散并给出回执；也可在“销毁记录”里查看。', { count }));
+}
+
+/** Resolve once none of these rooms is still being destroyed here, or after DESTROY_WAIT_MS. */
+async function destroyed(ids) {
+  const deadline = Date.now() + DESTROY_WAIT_MS;
+  while (ids.some((id) => view.value.destroying.includes(id)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, DESTROY_POLL_MS));
 }
 
 /** Delete every archived channel in the current list, one request at a time. */
@@ -82,12 +94,16 @@ async function delete_all_archives() {
   const rooms = archive_results.value.filter((room) => !archive_busy(room));
   archive_delete_all.value = false;
   archives_deleting.value = true;
+  if (rooms.length) announce_destroying(rooms.length);
   try {
     for (const room of rooms) await act("manage_channel", { id: room.id, action: "delete" });
   } finally { archives_deleting.value = false; }
 }
 
 const management_title = ref("");
+// How long removing a folder with its rooms waits for them to finish dissolving, and how often it checks.
+const DESTROY_WAIT_MS = 120_000;
+const DESTROY_POLL_MS = 1000;
 const folder_name = ref("");
 // The folder's project paths, edited as the new-room form does: a main directory, then other directories.
 const folder_main = ref("");
@@ -105,9 +121,25 @@ watch(() => [mode.value, props.targetRoom?.id], () => { management_title.value =
 /** Close directory confirmations immediately; background completion never closes a later dialog. */
 async function save_management() {
   const request = { id: props.targetRoom.id, action: mode.value, title: management_title.value };
-  if (mode.value === "delete") return destroy_room(request);
+  if (mode.value === "delete") return ask_final(1, () => destroy_room(request));
   mode.value = "";
   await act("manage_channel", request);
+}
+
+// Every destroy is confirmed twice (2026-11-22 user decision): its own confirmation, then this one saying the data is lost.
+const final_confirm = ref(null);
+const final_open = computed({ get: () => Boolean(final_confirm.value), set: (value) => { if (!value) final_confirm.value = null; } });
+
+/** Ask once more before destroying `count` rooms; `run` destroys them only after this second confirmation. */
+function ask_final(count, run) {
+  final_confirm.value = { count, run };
+}
+
+/** The second confirmation was given: destroy. */
+function confirm_final() {
+  const pending = final_confirm.value;
+  final_confirm.value = null;
+  pending?.run();
 }
 
 // Destroying a room keeps its dialog open on the receipt's progress until every item is checked.
@@ -190,8 +222,11 @@ async function remove_folder(with_rooms) {
   const id = props.targetFolder.id;
   const rooms = with_rooms ? folder_rooms.value : [];
   mode.value = "";
+  if (rooms.length) announce_destroying(rooms.length);
   let deleted = true;
   for (const room of rooms) deleted = await act("manage_channel", { id: room.id, action: "delete" }) && deleted;
+  // The rooms dissolve inside their folder first, so the folder goes only once they are gone.
+  await destroyed(rooms.map((room) => room.id));
   if (deleted) await act("delete_folder", id);
 }
 
@@ -293,7 +328,7 @@ const keep_open = (event) => event.preventDefault();
           <USelect v-model="archive_content" :items="archive_content_options" icon="i-lucide-list-filter" :aria-label="t('筛选房间内容')" />
           <UButton :label="t('全部销毁（{count}）', { count: archive_results.length })" icon="i-lucide-trash-2" color="error" variant="soft" size="sm" class="channel-archive-delete-all" :loading="archives_deleting" :disabled="archives_deleting || !archive_results.length" @click="archive_delete_all = true; archive_delete_id = null" />
         </div>
-        <div v-if="archive_delete_all && archive_results.length" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("将销毁当前列表中的 {count} 个房间：记录、附件、成员的 AI 会话与草稿都会删除，分享网页会先撤销，项目文件保留，无法撤销。需要留底请先导出。", { count: archive_results.length }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_all = false" /><UButton :label="t('全部删除')" color="error" size="xs" @click="delete_all_archives" /></div>
+        <div v-if="archive_delete_all && archive_results.length" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("将销毁当前列表中的 {count} 个房间：记录、附件、成员的 AI 会话与草稿都会删除，分享网页会先撤销，项目文件保留，无法撤销。需要留底请先导出。", { count: archive_results.length }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_all = false" /><UButton :label="t('全部销毁')" color="error" size="xs" @click="ask_final(archive_results.length, delete_all_archives)" /></div>
         <div v-keep-reading class="channel-archive-results">
           <ul v-if="archive_results.length" class="channel-archive-list" :aria-label="t('已存档房间列表')">
           <li v-for="room in archive_results" :key="room.id" class="channel-archive-item">
@@ -304,7 +339,7 @@ const keep_open = (event) => event.preventDefault();
                 <UButton :label="t('恢复')" :aria-label="t('恢复 {name}', { name: room.title })" color="neutral" variant="soft" size="xs" class="channel-archive-restore" :disabled="archive_busy(room)" @click="act('manage_channel', { id: room.id, action: 'restore' })" />
               </div>
             </div>
-            <div v-if="archive_delete_id === room.id" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("销毁「{name}」：记录、附件、成员的 AI 会话与草稿都会删除，分享网页会先撤销，项目文件保留，无法撤销。", { name: room.title }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_id = null" /><UButton :label="t('删除')" color="error" size="xs" :disabled="archive_busy(room)" @click="delete_archive" /></div>
+            <div v-if="archive_delete_id === room.id" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("销毁「{name}」：记录、附件、成员的 AI 会话与草稿都会删除，分享网页会先撤销，项目文件保留，无法撤销。", { name: room.title }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_id = null" /><UButton :label="t('销毁')" color="error" size="xs" :disabled="archive_busy(room)" @click="ask_final(1, delete_archive)" /></div>
           </li>
           </ul>
         <p v-else class="channel-archive-empty">{{ archived_rooms.length ? t('没有匹配的存档房间') : t('暂无已存档房间') }}</p>
@@ -328,7 +363,7 @@ const keep_open = (event) => event.preventDefault();
       <form v-else-if="rendered_mode === 'delete-folder'" class="dialog-form" @submit.prevent="remove_folder(false)">
         <p class="fine-print">{{ t("仅移除「{name}」时，房间变为未分组，所有消息和存档状态都会保留。", { name: targetFolder?.name }) }}</p>
         <p v-if="folder_rooms.length" class="fine-print">{{ t("也可以连同其中的 {count} 个房间一起销毁：记录、附件、成员的 AI 会话与草稿都会删除，项目文件保留，无法撤销。", { count: folder_rooms.length }) }}</p>
-        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton v-if="folder_rooms.length" :label="t('连同 {count} 个房间删除', { count: folder_rooms.length })" color="error" variant="soft" @click="remove_folder(true)" /><UButton type="submit" :label="t('仅移除文件夹')" color="neutral" variant="solid" /></div>
+        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton v-if="folder_rooms.length" :label="t('连同 {count} 个房间销毁', { count: folder_rooms.length })" color="error" variant="soft" @click="ask_final(folder_rooms.length, () => remove_folder(true))" /><UButton type="submit" :label="t('仅移除文件夹')" color="neutral" variant="solid" /></div>
       </form>
       <form v-else-if="rendered_mode === 'archive-folder'" class="dialog-form" @submit.prevent="archive_folder">
         <p class="fine-print">{{ t("存档「{name}」中的 {count} 个房间，文件夹保留。存档后可在侧栏「已存档」中查阅与恢复；尚未收束的讨论会暂停。", { name: targetFolder?.name, count: folder_rooms.length }) }}</p>
@@ -437,6 +472,12 @@ const keep_open = (event) => event.preventDefault();
         <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" class="channel-primary-button" :label="t('保存议题')" :loading="pending === 'create' || pending === 'save_topic'" /></div>
       </form>
       <div v-else-if="rendered_mode === 'message'" class="original-message"><p v-if="detail_error" role="alert">{{ detail_error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" @click="load_detail(detail_target)" /></p><template v-else-if="detail"><div class="original-meta"><strong>{{ bridge.display_name(detail.author) }}</strong><span>#{{ detail.id }}</span><UBadge color="neutral" variant="subtle">{{ bridge.sources[detail.source] }}</UBadge></div><p class="fine-print">{{ bridge.provenance(detail) }} · {{ new Date(detail.created_at).toLocaleString('zh-CN') }}</p><section v-if="detail.summary" class="channel-answer-summary"><small>{{ t("回答摘要 · {name}", { name: bridge.display_name(detail.summary_by) }) }}</small><p class="message-prose">{{ detail.summary }}</p></section><p class="message-prose">{{ detail.text }}</p><div v-if="detail.attachments?.length" @click="open_attachment" v-html="bridge.attachment_markup(detail.attachments)"></div><UButton v-if="detail.reply_to" :label="t('查看被回复的原文 #{id}', { id: detail.reply_to })" icon="i-lucide-corner-up-left" variant="outline" color="neutral" class="channel-surface-button" @click="follow_reply" /></template><div v-else class="grid gap-4 py-2" role="status" :aria-label="t('正在读取原文')"><USkeleton class="h-5 w-36" /><USkeleton v-for="line in 6" :key="line" class="h-4" :class="line % 3 ? 'w-full' : 'w-2/3'" /></div></div>
+    </template>
+  </UModal>
+  <UModal v-model:open="final_open" :title="t('再次确认销毁')" :ui="{ content: 'glass-panel studio-modal channel-folder-modal' }">
+    <template #body>
+      <p class="channel-destroy-final">{{ (final_confirm?.count || 0) === 1 ? t("销毁后，这个房间的消息、附件、成员的 AI 会话记录与草稿都会被删除，数据将永久丢失，无法恢复。确定要销毁吗？") : t("销毁后，这 {count} 个房间的消息、附件、成员的 AI 会话记录与草稿都会被删除，数据将永久丢失，无法恢复。确定要销毁吗？", { count: final_confirm?.count || 0 }) }}</p>
+      <div class="dialog-actions"><UButton :label="t('返回')" color="neutral" variant="ghost" @click="final_confirm = null" /><UButton :label="t('确认销毁')" color="error" @click="confirm_final" /></div>
     </template>
   </UModal>
 </template>

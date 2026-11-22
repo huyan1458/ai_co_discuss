@@ -53,7 +53,7 @@ The local site stores rooms and serves the web interface. The discussion service
 
 ### Backups, export, and import
 
-Export or import room ZIP files in the web app. Use the room menu’s **Export conversation**, the directory menu’s **Export all rooms** and **Import rooms…**. See [Room directory and setup](rooms.md#5-export-import-and-branch-rooms). For a separately deployed Python service, stop writes, then back up the SQLite database and its sibling `<database-name>.attachments/` directory. See [the deployment guide](../deployment.md#python).
+Export or import room ZIP files in the web app. Use the room menu’s **Export conversation**, the directory menu’s **Export all rooms** and **Import rooms**. See [Room directory and setup](rooms.md#5-export-import-and-branch-rooms). For a separately deployed Python service, stop writes, then back up the SQLite database and its sibling `<database-name>.attachments/` directory. See [the deployment guide](../deployment.md#python).
 
 ### Local administration over SSH
 

@@ -412,7 +412,8 @@ class RoomWorker {
   }
   /** Confirm a 404 against the room itself, so a room deleted on the website is told apart from a missing route. */
   async deleted(error) {
-    if (!error.message.startsWith('HTTP 404')) return false;
+    // A deleted room's credential is gone too, so a request needing it may be refused (403) before the room is looked up.
+    if (!/^HTTP 40[34]/.test(error.message)) return false;
     try {
       await api(this.config || validate_config(configuration_snapshot(this.path).config, dirname(this.path)), '');
       return false;

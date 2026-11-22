@@ -1202,6 +1202,8 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + "/delete", {"actor": "用户", "confirm_title": self.room["title"]})[0], 200)
         for suffix in ("", "/messages", f"/messages/{original['id']}", "/turns"):
             self.assertEqual(self.request(base + suffix)[0], 404)
+        # The runner polls its inbox with the owner credential and tells a deleted room by the 404.
+        self.assertEqual(self.request(base + "/inbox", token=self.owner)[0], 404)
         self.assertEqual(self.request(f"/r/{self.room['id']}")[0], 404)
         self.assertEqual(self.request(f"/api/rooms/{other['id']}")[0], 200)
         if not self.external:

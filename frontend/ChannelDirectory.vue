@@ -49,10 +49,10 @@ const directory_actions = computed(() => [
     onSelect: () => act("sort_directory", item.value),
   })),
   { type: "separator" },
-  { label: t("导入房间…"), icon: "i-lucide-download", disabled: view.value.backup_pending, onSelect: () => choose_import_target(null) },
+  { label: t("导入房间"), icon: "i-lucide-download", disabled: view.value.backup_pending, onSelect: () => choose_import_target(null) },
   { label: t("导出全部房间"), icon: "i-lucide-upload", disabled: view.value.backup_pending || !view.value.rooms.length,
     onSelect: () => act("backup_rooms", { ids: view.value.rooms.map((room) => room.id), name: t("全部房间") }) },
-  { label: t("销毁记录…"), icon: "i-lucide-flame", onSelect: () => emit("destructions") },
+  { label: t("销毁记录"), icon: "i-lucide-flame", onSelect: () => emit("destructions") },
 ]);
 const import_input = ref(null);
 const import_open = ref(false);
@@ -192,7 +192,7 @@ function folder_actions(folder, index) {
   return [...(folder.id ? [[{ label: t("编辑"), icon: "i-lucide-pencil", disabled: folder.pending || view.value.directory_pending.includes(`folder-name:${folder.id}`), onSelect: () => emit("manage-folder", folder) }]] : []), [
     { label: t("上移"), icon: "i-lucide-arrow-up", disabled: ordering || index === 0 || Boolean(pending.value), onSelect: () => act("move_folder", { id: folder.order_id, direction: -1 }) },
     { label: t("下移"), icon: "i-lucide-arrow-down", disabled: ordering || index === folders.value.length - 1 || Boolean(pending.value), onSelect: () => act("move_folder", { id: folder.order_id, direction: 1 }) },
-  ], [{ label: t("导入房间…"), icon: "i-lucide-download", disabled: folder.pending || view.value.backup_pending, onSelect: () => choose_import_target(folder.id || null) },
+  ], [{ label: t("导入房间"), icon: "i-lucide-download", disabled: folder.pending || view.value.backup_pending, onSelect: () => choose_import_target(folder.id || null) },
     folder_export(folder)], ...(folder.id ? [[{ label: t("存档文件夹"), icon: "i-lucide-archive",
     disabled: folder.pending || !folder.rooms.length || folder.rooms.some(room => view.value.archive_pending.includes(room.id)),
     onSelect: () => emit("archive-folder", folder) }, { label: t("移除文件夹"), icon: "i-lucide-folder-minus",
@@ -309,7 +309,7 @@ function actions(room, index, folder_id, folder_room_count) {
     ...(current ? [{ label: t("编辑议题"), icon: "i-lucide-pencil", onSelect: () => emit("manage", { room, action: "edit" }) }] : []),
     { label: t("复制阅读入口"), icon: "i-lucide-link", onSelect: () => act("copy", `${view.value.room_site}/r/${encodeURIComponent(room.id)}`) },
     { label: t("导出对话"), icon: "i-lucide-upload", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("backup", room.id) },
-    { label: t("分享为网页…"), icon: "i-lucide-share-2", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("share_prepare", room.id) },
+    { label: t("分享"), icon: "i-lucide-share-2", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("share_prepare", room.id) },
     ...(share_link(room) ? [{ label: t("复制分享链接"), icon: "i-lucide-link-2", onSelect: () => act("share_copy", room.id) },
       { label: t("撤销分享链接"), icon: "i-lucide-link-2-off", disabled: view.value.backup_pending, onSelect: () => { revoking.value = room; } }] : []),
   ], ...(current ? [[{ label: t("刷新消息"), icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") }]] : []), [
