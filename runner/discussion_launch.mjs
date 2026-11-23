@@ -373,6 +373,43 @@ export async function cached_software_models(home, profile, { refresh = false, q
   return { ...result, defaults, ...(effort ? { efforts: effort.levels, ...(effort.error ? { effort_error: effort.error } : {}) } : {}) };
 }
 
+/**
+ * The model a card or preset names that this computer's software is known not to offer, or '' (user 2026-11-22: an
+ * expert whose model cannot run here shows as unusable and cannot be invited until the model is changed). Known only
+ * from the last good model list kept for the software as installed now (same key as cached_software_models, any age);
+ * no list yet, an API member, a software that takes models beyond its list (`models_open`) or no model at all (the
+ * software's default) is never flagged. The model is compared by its exact ID, as the page's model list does.
+ */
+export function unknown_model(home, profile) {
+  if (!profile?.model) return '';
+  const facts = adapter_profile(profile.adapter);
+  if (!facts?.models || facts.kind === 'api' || facts.models_open) return '';
+  let cache = {};
+  try { cache = JSON.parse(readFileSync(join(home, 'model-catalogs.json'), 'utf8')); } catch { return ''; }
+  const models = cache[JSON.stringify([profile.adapter, profile.executable || '', executable_stamp(profile)])]?.result?.models;
+  if (!Array.isArray(models) || !models.length) return '';
+  return models.some(model => model.id === profile.model) ? '' : profile.model;
+}
+
+/** Refuse to start a member whose model this computer's software is known not to offer (see unknown_model). */
+function assert_model_available(home, name, profile) {
+  const model = unknown_model(home, profile);
+  if (!model) return;
+  throw expert_failure('model_unavailable', '{name} 的模型 {model} 不在本机这个软件的模型列表里，不能调用：请在专家配置或卡片背面把模型改成列表里的（或留空用软件默认），或在模型下拉旁刷新列表后再试',
+    { name, model });
+}
+
+/**
+ * Whether an expert a package brings can run here, for the import's notice: `needs_platform` when its software is not
+ * set up, `unknown_model` when that software's list lacks its model. The import goes ahead either way.
+ */
+function expert_readiness(home, preset) {
+  if (!card_platform_ready(home, preset.name)) return { needs_platform: true };
+  const saved = launch_settings(home).participants[platform_of(preset.name)];
+  const model = saved ? unknown_model(home, { ...saved, model: preset.model || '' }) : '';
+  return model ? { unknown_model: model } : {};
+}
+
 /** Read private defaults without selecting a global room or identity. */
 export function launch_settings(home) {
   const path = join(home, 'launch-settings.json');
@@ -1011,6 +1048,7 @@ function launch_config(home, input, room, directory, options) {
   for (const name of new Set([room.host, ...Object.keys(room.experts)])) {
     if (!manual.has(name)) participants[name] = participant_profile(name, defaults, input, name === room.host);
   }
+  for (const [name, profile] of Object.entries(participants)) assert_model_available(home, name, profile);
   const members = launch_members(input, Object.keys(participants), options);
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
     scheduler: input.scheduler || undefined,
@@ -1026,6 +1064,7 @@ function free_launch_config(home, input, room, directory, options) {
   const defaults = options.defaults || launch_settings(home).participants;
   const names = room.members.filter(woken_member).map(member => typeof member === 'string' ? member : member.name);
   const participants = Object.fromEntries(names.map(name => [name, participant_profile(name, defaults, input, false)]));
+  for (const [name, profile] of Object.entries(participants)) assert_model_available(home, name, profile);
   const members = launch_members(input, names, options);
   // A workflow chosen at creation is written with the members, so the first wake already carries it.
   const workflow = input.workflow ? bind_room_workflow({}, { ...input.workflow, enabled: true }).workflow : undefined;
@@ -1069,7 +1108,7 @@ export function participant_profile(name, defaults, input, current_host) {
   const profile = { ...saved, ...inherited, ...input.participants?.[name] };
   for (const field of ['cwd', 'model', 'effort', 'project_name', 'project_id', 'project_access']) if (profile[field] === '') delete profile[field];
   validate_profile(name, profile, true);
-  if (!clients_of(name)?.includes(profile.adapter)) throw new Error(`请配置 ${name} 的 CLI / App 客户端`);
+  if (!clients_of(name)?.includes(profile.adapter)) throw new Error(`请配置 ${name} 的 CLI / App 客户端，或在专家配置里把这位专家换成本机已配置的软件`);
   const facts = adapter_profile(profile.adapter);
   if (facts?.kind === 'api') {
     if (input.entry === 'conversation' && current_host) throw new Error('API 主持人请从网页启动；当前软件会话主持须选择对应 CLI / App');
@@ -1204,6 +1243,7 @@ export async function room_member(home, raw, locked = false, headers = {}) {
     if (!manual) {
       if (action === 'add') {
         profile = participant_profile(name, launch_settings(home).participants, { ...input, cwd: input.cwd || config.cwd }, false);
+        assert_model_available(home, name, profile);
         if (profile.session_id) profile = borrowed_session(name, profile, input.cwd || config.cwd);
       }
       if (!profile) throw new Error(`${name} 没有本机接入配置；请移除后重新邀请`);
@@ -2218,8 +2258,8 @@ export function import_expert(home, { files = {}, ignored: unread = [], overwrit
   const presets = taken ? current.presets.map(item => item.name === preset.name ? preset : item) : [...current.presets, preset];
   save_expert_presets(home, { presets });
   const { knowledge, backup } = install_knowledge(home, key, skills, replace_knowledge === true);
-  return { preset, ...(requested ? { requested_access: requested } : {}), knowledge, skills: Object.keys(skills).sort(), ...(backup ? { backup } : {}),
-    ignored: [...new Set(ignored)].sort() };
+  return { preset, ...(requested ? { requested_access: requested } : {}), ...expert_readiness(home, preset), knowledge, skills: Object.keys(skills).sort(),
+    ...(backup ? { backup } : {}), ignored: [...new Set(ignored)].sort() };
 }
 
 /**
@@ -2308,7 +2348,7 @@ export function import_expert_to_workflow(home, { files = {}, ignored: unread = 
   } else agents = [...agents, card];
   const saved = save_workflow(home, { ...workflow, agents, sub_workflows: subs }, validate_preset, { base_revision: workflow.revision });
   return { workflow: saved.id, ...(sub ? { sub } : {}), card: key, revision: saved.revision, ...(requested ? { requested_access: requested } : {}),
-    skills: Object.keys(skills).sort(), ignored: [...new Set(ignored)].sort() };
+    ...expert_readiness(home, preset), skills: Object.keys(skills).sort(), ignored: [...new Set(ignored)].sort() };
 }
 
 /**

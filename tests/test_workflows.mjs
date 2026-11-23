@@ -1,6 +1,7 @@
 /** Room workflows: the library on disk, pasted drafts, and what a room's host and members receive. */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,7 +9,7 @@ import { test } from 'node:test';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { run_command } from '../runner/adapters/api_commands.mjs';
 import { open_project } from '../runner/adapters/api_files.mjs';
-import { check_or_save_workflow, export_expert, import_expert, import_expert_to_workflow, read_expert_source, validate_preset, workflows_command } from '../runner/discussion_launch.mjs';
+import { cached_software_models, check_or_save_workflow, export_expert, import_expert, import_expert_to_workflow, launch_discussion, read_expert_source, validate_preset, workflows_command } from '../runner/discussion_launch.mjs';
 import { free_task_files, member_folders } from '../runner/free_runner.mjs';
 import { run_launch_command } from '../runner/remote_launch.mjs';
 
@@ -718,6 +719,36 @@ test('a folder card dropped by a save, skills replaced by an overwrite, or a wor
   const deleted = workflows_command(home, { action: 'delete', id: NOVEL.id });
   assert.equal(deleted.backups.length, 2);
   assert.ok(deleted.backups.some(name => name.includes('-luke-') && backed(name) === '最后\n'));
+});
+
+test('an expert whose software or model cannot run here is imported with a notice, and refused at launch until its model is changed', async t => {
+  const home = home_fixture(t);
+  // This computer has Codex set up, and its model list (as the page reads it) offers gpt-a only.
+  const codex = { adapter: 'codex_cli', executable: process.execPath };
+  writeFileSync(join(home, 'launch-settings.json'), JSON.stringify({ participants: { Codex: codex } }));
+  await cached_software_models(home, codex, { query: async () => ({ adapter: 'codex_cli', models: [{ id: 'gpt-a', label: 'A' }] }),
+    query_effort: async () => ({ levels: [] }), query_defaults: async () => ({ model: '', effort: '' }) });
+  const definition = (platform, model) => ({ 'luke.md': `---\nname: luke\nplatform: ${platform}\n${model ? `model: ${model}\n` : ''}---\n顾问\n` });
+  // Imports go ahead and say why the expert cannot run yet: its software is not set up, or that software lacks its model.
+  assert.equal(import_expert(home, { files: definition('Antigravity', 'gemini-x') }).needs_platform, true);
+  const missing = import_expert(home, { files: definition('Codex', 'gpt-zz') });
+  assert.equal(missing.unknown_model, 'gpt-zz');
+  assert.ok(JSON.parse(readFileSync(join(home, 'expert-presets.json'), 'utf8')).presets.some(preset => preset.name === 'Codex-luke'));
+  assert.equal(import_expert(home, { files: definition('Codex', 'gpt-a'), overwrite_preset: true }).unknown_model, undefined);
+  save_workflow(home, { ...NOVEL, agents: [] }, validate_preset);
+  assert.equal(import_expert_to_workflow(home, { files: definition('Codex', 'gpt-zz'), workflow: NOVEL.id }).unknown_model, 'gpt-zz');
+  // Starting such a member is refused, naming the model; a listed model, or none (the software's default), starts.
+  const launch = (model, at = home) => launch_discussion(at, { site: 'http://127.0.0.1:9', entry: 'web', cwd: home,
+    participants: { 'Codex-luke': { ...codex, ...(model ? { model } : {}) } },
+    room: { mode: 'free', title: '模型检查', members: [{ name: 'Codex-luke', access: 'runner' }], submission_id: randomUUID() } }, { dry_run: true });
+  await assert.rejects(launch('gpt-zz'), error => error.code === 'model_unavailable' && /gpt-zz/.test(error.message));
+  assert.equal((await launch('gpt-a')).participants['Codex-luke'].model, 'gpt-a');
+  assert.equal((await launch('')).participants['Codex-luke'].model, undefined);
+  // Without a model list for this software on this computer, nothing is refused.
+  const fresh = home_fixture(t);
+  writeFileSync(join(fresh, 'launch-settings.json'), JSON.stringify({ participants: { Codex: codex } }));
+  assert.equal((await launch('gpt-zz', fresh)).participants['Codex-luke'].model, 'gpt-zz');
+  assert.equal(import_expert(fresh, { files: definition('Codex', 'gpt-zz') }).unknown_model, undefined);
 });
 
 test('the canvas names its steps and a sub-workflow says where it attaches: soft, warned about but never refused, and told to the host', t => {

@@ -182,7 +182,10 @@ async function import_expert_files(input) {
     const notes = [t('已导入专家「{value1}」', { value1: result.preset.label || result.preset.name })];
     if (result.requested_access) notes.push(t('它要求的项目权限“{value1}”已降为只读，需要时在预设里改', { value1: result.requested_access }));
     if (result.ignored?.length) notes.push(t('已忽略：{value1}', { value1: result.ignored.join("、") }));
-    bridge.notify(result.ignored?.length || result.requested_access ? "warning" : "info", notes.join("；"));
+    // Imported either way; until fixed, the preset's chip is greyed (software) or its card is marked (model).
+    if (result.needs_platform) notes.push(t('本机未配置它的软件，点它的按钮去配置后才能加入'));
+    else if (result.unknown_model) notes.push(t('本机这个软件没有模型 {value1}，加入后在卡片背面改成列表里的模型并“更新预设”', { value1: result.unknown_model }));
+    bridge.notify(result.ignored?.length || result.requested_access || result.needs_platform || result.unknown_model ? "warning" : "info", notes.join("；"));
     expert_import.value = result.knowledge === "kept" ? { input, kind: "knowledge", name: result.preset.name } : null;
   } catch (error) {
     if (error.code === "expert_preset_exists") expert_import.value = { input, kind: "preset", message: error.message };

@@ -109,10 +109,18 @@ async function import_package(kind, event) {
     const notes = [t('已导入专家「{value1}」', { value1: result.card })];
     if (result.requested_access) notes.push(t('它要求的项目权限“{value1}”已降为只读，需要时在这里改', { value1: result.requested_access }));
     if (result.ignored?.length) notes.push(t('已忽略：{value1}', { value1: result.ignored.join("、") }));
-    bridge.notify(result.ignored?.length || result.requested_access ? "warning" : "info", notes.join("；"));
+    notes.push(...readiness_notes(result));
+    bridge.notify(result.ignored?.length || result.requested_access || result.needs_platform || result.unknown_model ? "warning" : "info", notes.join("；"));
     reload();
     focus.value = result.card;
   } catch (error) { bridge.notify("error", error.message); }
+}
+
+/** What an import says about whether the expert can run here; it is imported either way. */
+function readiness_notes(result) {
+  if (result.needs_platform) return [t('本机未配置它的软件，配置好或在这里换成本机已配置的软件之前不能调用')];
+  if (result.unknown_model) return [t('本机这个软件没有模型 {value1}，改成列表里的模型之前不能调用', { value1: result.unknown_model })];
+  return [];
 }
 
 /** The card's platform, from its member name `platform-card`. */
@@ -130,6 +138,8 @@ function profile(agent) {
 }
 
 function missing(agent) { return ready.value.length > 0 && !ready.value.includes(platform(agent)); }
+/** The card's model is known not to run here: its software's list was read and lacks it (see launch_model_state). */
+function model_missing(agent) { return !missing(agent) && Boolean(models(agent).unknown); }
 
 function platform_items(agent) {
   const names = [...new Set([...ready.value, platform(agent)])];
@@ -195,6 +205,7 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
               <UAvatar :src="identity(agent).icon" :text="identity(agent).initials || '?'" size="xs" class="channel-avatar" :class="identity(agent).style" />
               <span class="workflow-experts-item-text"><strong>{{ title_of(agent) }}</strong><small>{{ where ? `${bridge.default_name(platform(agent))} · ${where}` : bridge.default_name(platform(agent)) }}</small></span>
               <UIcon v-if="missing(agent)" name="i-lucide-triangle-alert" class="workflow-experts-warn" :aria-label="t('本机未配置 {value1}', { value1: bridge.default_name(platform(agent)) })" />
+              <UIcon v-else-if="model_missing(agent)" name="i-lucide-triangle-alert" class="workflow-experts-warn" :aria-label="t('本机没有模型 {value1}', { value1: agent.model })" />
             </button>
           </section>
           <UTooltip :text="!saved_id ? t('先保存工作流') : dirty ? t('先保存这页的修改') : t('放进「{value1}」', { value1: package_target ? package_target.label || package_target.id : t('主线') })">
@@ -221,6 +232,7 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
               :title="t('导出这位专家：没有技能是一个 md，有技能是一个压缩包（取工作流里的技能）')" @click="export_card" />
           </header>
           <p v-if="missing(current.agent)" class="workflow-experts-missing"><UIcon name="i-lucide-triangle-alert" />{{ t('本机未配置 {value1}，换一个本机已配置的软件才能运行', { value1: bridge.default_name(platform(current.agent)) }) }}</p>
+          <p v-else-if="model_missing(current.agent)" class="workflow-experts-missing"><UIcon name="i-lucide-triangle-alert" />{{ t('本机的 {value1} 没有模型 {value2}，不能调用：在下面“模型”里改成列表里的（或用软件默认），改完保存', { value1: bridge.default_name(platform(current.agent)), value2: current.agent.model }) }}</p>
           <label class="workflow-experts-field">
             <span>{{ t('描述') }}</span>
             <UTextarea :model-value="current.agent.description || ''" :rows="4" :maxlength="MAX_DESCRIPTION" :placeholder="t('一两句：这个角色负责什么')"

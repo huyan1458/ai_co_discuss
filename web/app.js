@@ -5097,10 +5097,14 @@ function launch_model_state(name, launch = state.launch, profile = launch.profil
   // The list shows model IDs as they are; a list kept from last time needs no "reading" note while it is refreshed.
   const items = [{ label: defaults.model ? t('软件默认 · {value1}', { value1: defaults.model }) : t('软件默认模型'), value: "__default__" }, ...models.map(model => ({ label: model.id, value: model.id }))];
   if (profile.model && !selected) items.push({ label: profile.model, value: profile.model, disabled: true });
+  // The model is known not to run here only when this software's list was read and lacks it; a software that also takes
+  // models beyond its list (`models_open`, Claude's aliases) is never flagged. The local service refuses such a member.
+  const open = Boolean(window.discuss_backup?.adapter_profile(profile.adapter)?.models_open);
+  const unknown = Boolean(profile.model && !selected && models.length && !catalog?.error && !open);
   const loading = Boolean(catalog?.loading && !models.length);
   // "Software default" offers the levels of the model the software's own settings name, when the list has it.
   const effective = selected || (!profile.model && models.find(model => model.id === defaults.model));
-  return { supported: MODEL_CLIENTS.includes(profile.adapter), items, defaults, loading, refreshing: Boolean(catalog?.loading),
+  return { supported: MODEL_CLIENTS.includes(profile.adapter), items, defaults, loading, refreshing: Boolean(catalog?.loading), unknown,
     efforts: effective?.efforts, source: MODEL_SOURCE_LABELS[catalog?.source] || catalog?.source || "",
     effort_note: !effective
       ? t('选择模型后显示可用思考强度；默认值由软件决定。') : t('所选模型不提供单独思考强度。'),

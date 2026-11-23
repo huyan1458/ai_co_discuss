@@ -850,5 +850,6 @@
   "这个房间发布过分享链接，请先撤销分享链接再销毁": "This room has a published share link; revoke it before destroying the room",
   "技能文件 {path} 在你读取之后变了（专家可能刚写过），请重新载入后再改": "The skill file {path} changed after you read it (the expert may have just written it); reload before changing it",
   "工作流「{id}」里已有卡片 {card}；不会替换它，要换请先删掉原卡片": "The workflow “{id}” already has the card {card}; it is not replaced: delete that card first to change it",
-  "导入的内容须正好有一个专家定义 .md，现有 {count} 个": "The import must hold exactly one expert definition .md; it has {count}"
+  "导入的内容须正好有一个专家定义 .md，现有 {count} 个": "The import must hold exactly one expert definition .md; it has {count}",
+  "{name} 的模型 {model} 不在本机这个软件的模型列表里，不能调用：请在专家配置或卡片背面把模型改成列表里的（或留空用软件默认），或在模型下拉旁刷新列表后再试": "The model {model} of {name} is not in this computer’s list for its software, so it cannot run: pick a listed model (or leave it empty for the software default) in Experts or on the card’s back, or refresh the list beside the model menu and try again"
 }

@@ -168,7 +168,8 @@ const platform_missing = computed(() => {
 // The front states only what is decided or an exception; placeholders such as "set in the original software" stay off it.
 const facts = computed(() => preset.value ? [
   ...preset.value.needs_platform || platform_missing.value ? [{ label: t('平台'), value: t('本机未配置此软件'), tone: "warn" }] : [],
-  { label: t('模型'), value: profile.value.model || t('软件默认模型') },
+  models.value.unknown ? { label: t('模型'), value: t('本机没有 {value1}，不能调用；在背面改模型', { value1: profile.value.model }), tone: "warn" }
+    : { label: t('模型'), value: profile.value.model || t('软件默认模型') },
   ...profile.value.effort ? [{ label: t('强度'), value: effort_label.value }] : [],
   { label: t('项目'), value: access_label(access.value), ...(access.value !== "read" ? { tone: "warn" } : {}) },
 ] : [
@@ -176,7 +177,8 @@ const facts = computed(() => preset.value ? [
   { label: t('启动'), value: launch_fact.value },
   ...automatic.value && resuming.value ? [{ label: t('会话'), value: session_label.value }] : [],
   ...automatic.value ? [{ label: t('软件'), value: entry_label.value }] : [],
-  ...configurable.value ? [{ label: t('模型'), value: profile.value.model || models.value.defaults?.model || t('软件默认模型') }] : [],
+  ...configurable.value ? [models.value.unknown ? { label: t('模型'), value: t('本机没有 {value1}，不能调用；在背面改模型', { value1: profile.value.model }), tone: "warn" }
+    : { label: t('模型'), value: profile.value.model || models.value.defaults?.model || t('软件默认模型') }] : [],
   ...configurable.value && (profile.value.adapter !== "api" || profile.value.effort) ? [{ label: t('强度'), value: effort_label.value }] : [],
   // A workflow card that may change files is pointed out before it joins.
   ...sets_access.value && !props.joining ? [{ label: t('项目'), value: access_label(access.value), ...(props.workflow && access.value !== "read" ? { tone: "warn" } : {}) }] : [],

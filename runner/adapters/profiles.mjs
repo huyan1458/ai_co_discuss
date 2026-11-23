@@ -110,7 +110,9 @@ export const ADAPTER_PROFILES = {
   },
   claude: {
     platform: 'Claude', label: 'Claude Code', kind: 'cli', location: 'executable', fields: ['allowed_tools'],
-    efforts: ['low', 'medium', 'high', 'xhigh', 'max'], models: true, access_levels: ALL_ACCESS, per_tool_allow: true,
+    // `models_open`: the listed models are its picker's aliases and the CLI also takes full model IDs, so a model missing
+    // from the list is not known to be unavailable.
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'], models: true, models_open: true, access_levels: ALL_ACCESS, per_tool_allow: true,
     access_hints: { read: '只放行网站命令与草稿，不改项目文件、不跑其他命令', write: '可改项目文件，Bash / PowerShell 命令全部放行（无沙箱）',
       auto: 'Claude auto 模式：由分类器判断，实测项目外写入和联网都会放行', full: 'bypassPermissions：跳过全部权限检查' },
     client: 'claude', adopt: 'own_cwd', host_existing: true, restore_manual: true, browse_sessions: true, copy_bound: true,

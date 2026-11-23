@@ -810,5 +810,12 @@
   "用工作流里的技能替换本机的（原来的会备份）": "Replace this computer’s skills with the workflow’s (the current ones are backed up)",
   "导出这位专家：没有技能是一个 md，有技能是一个压缩包（取工作流里的技能）": "Export this expert: one md without skills, otherwise a zip (with the workflow’s skills)",
   "添加技能": "Add skill",
-  "给这位专家一组自己读写的技能；保存工作流后它变成带技能的文件夹，归到“顾问”": "Give this expert skills it reads and writes itself; after saving the workflow it becomes a folder with skills, listed under Advisors"
+  "给这位专家一组自己读写的技能；保存工作流后它变成带技能的文件夹，归到“顾问”": "Give this expert skills it reads and writes itself; after saving the workflow it becomes a folder with skills, listed under Advisors",
+  "本机未配置它的软件，点它的按钮去配置后才能加入": "Its software is not set up on this computer; click its button to set it up before adding it",
+  "本机这个软件没有模型 {value1}，加入后在卡片背面改成列表里的模型并“更新预设”": "This computer’s software has no model {value1}; after adding it, pick a listed model on the card’s back and “Update preset”",
+  "本机没有 {value1}，不能调用；在背面改模型": "{value1} is not available here and cannot run; change the model on the back",
+  "本机未配置它的软件，配置好或在这里换成本机已配置的软件之前不能调用": "Its software is not set up on this computer; it cannot run until you set it up or switch it here to software that is",
+  "本机这个软件没有模型 {value1}，改成列表里的模型之前不能调用": "This computer’s software has no model {value1}; it cannot run until you pick a listed model",
+  "本机没有模型 {value1}": "Model {value1} is not available here",
+  "本机的 {value1} 没有模型 {value2}，不能调用：在下面“模型”里改成列表里的（或用软件默认），改完保存": "{value1} on this computer has no model {value2}, so it cannot run: pick a listed model (or the software default) under “Model” below, then save"
 }
