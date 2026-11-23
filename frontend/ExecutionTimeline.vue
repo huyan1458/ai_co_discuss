@@ -312,6 +312,8 @@ const WINDOW_STEP = 20;
 const window_count = ref(WINDOW_STEP);
 const view_mode = ref("timeline");
 // Names say what each view answers (#8118): every run in detail, how busy the room was over the whole span, the tasks as a list.
+// Busy & idle shows the whole room, so it reads every execution as it opens (#8162); the lists stay as they were.
+watch(view_mode, (mode) => { if (mode === "realtime") read_all(); });
 const VIEW_MODES = [{ value: "timeline", label: t('执行明细') }, { value: "realtime", label: t('全程忙闲') }, { value: "tasks", label: t('任务清单') }];
 // Both the task overview and the real-time view take every execution read, rather than the timeline's window.
 const overview = computed(() => view_mode.value !== "timeline");
@@ -346,12 +348,12 @@ async function show_earlier() {
   window_count.value += WINDOW_STEP;
 }
 /**
- * Read every remaining page back to the room's first execution, then show them all (#8102). The pages are gathered first
+ * Read every remaining page back to the room's first execution (#8102). The pages are gathered first
  * and put in at once: put in one by one, each redrew every row, and 600 executions took 18 seconds.
  */
-async function show_all() {
+async function read_all() {
   const id = room_id.value;
-  if (!id || loading_earlier.value) return;
+  if (!id || loading_earlier.value || !earlier.value) return;
   loading_earlier.value = true;
   const gathered = new Map(executions.value);
   let more = earlier.value;
@@ -365,12 +367,16 @@ async function show_all() {
     }
     executions.value = gathered;
     earlier.value = false;
-    window_count.value = Infinity;
   } catch (failure) {
     bridge.notify("error", t('读取执行记录失败：{value1}', { value1: failure.message }));
   } finally {
     loading_earlier.value = false;
   }
+}
+/** Show every execution on the timeline, reading the rest first. */
+async function show_all() {
+  await read_all();
+  window_count.value = Infinity;
 }
 const partial = (task) => !task.opened && truncated.value;
 /** A task is named by the message that opened it; a short one ("全部同意", "继续") also shows the answer it got. */
@@ -729,7 +735,7 @@ const segment_piece = (segment) => ({ label: `${PHASE_LABELS[segment.phase]}${se
 const note_piece = (note) => ({ note, start: note.at, end: note.at });
 /** Each member keeps one hue on every mark that is theirs, on the timeline and the task overview alike, so a glance says who
  *  worked when. Hues go by first appearance in the room. */
-const MEMBER_TONES = 5;
+const MEMBER_TONES = 8;
 const member_tone = computed(() => {
   const tones = new Map();
   for (const item of [...(timeline.value?.executions || [])].sort((a, b) => requested_at(a) - requested_at(b))) {
@@ -1054,12 +1060,17 @@ const selected_notes = computed(() => {
   --wf-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
   --wf-wake: light-dark(oklch(0.70 0.12 75), oklch(0.78 0.11 75));
   --wf-plain: color-mix(in oklab, var(--ui-text) 22%, var(--wf-surface));
-  /* Member hues: one lightness and a moderate chroma, no green, amber or red, so none reads as a status. */
-  --wf-h1: light-dark(oklch(0.55 0.11 255), oklch(0.70 0.11 255));
-  --wf-h2: light-dark(oklch(0.55 0.11 300), oklch(0.70 0.11 300));
-  --wf-h3: light-dark(oklch(0.55 0.11 335), oklch(0.70 0.11 335));
-  --wf-h4: light-dark(oklch(0.55 0.11 215), oklch(0.70 0.11 215));
-  --wf-h5: light-dark(oklch(0.55 0.03 255), oklch(0.70 0.03 255));
+  /* Member hues (#8162): no green, amber or red, so none reads as a status. Within cyan to rose the hues alone cannot
+     be told apart under colour blindness, so neighbours alternate a darker and a lighter step; run through the dataviz
+     palette validator in both themes (adjacent normal-vision ΔE ≥ 16, CVD ≥ 7.7 with names and hover as second cue). */
+  --wf-h1: light-dark(oklch(0.52 0.12 300), oklch(0.54 0.125 300));
+  --wf-h2: light-dark(oklch(0.68 0.12 245), oklch(0.655 0.125 245));
+  --wf-h3: light-dark(oklch(0.52 0.12 330), oklch(0.54 0.125 330));
+  --wf-h4: light-dark(oklch(0.68 0.12 215), oklch(0.655 0.125 215));
+  --wf-h5: light-dark(oklch(0.52 0.12 270), oklch(0.54 0.125 270));
+  --wf-h6: light-dark(oklch(0.68 0.12 355), oklch(0.655 0.125 355));
+  --wf-h7: light-dark(oklch(0.52 0.12 245), oklch(0.54 0.125 245));
+  --wf-h8: light-dark(oklch(0.68 0.12 300), oklch(0.655 0.125 300));
   --wf-bar-h: 16px;
   --wf-row-h: 38px;
   --wf-label-col: 270px;
@@ -1249,6 +1260,9 @@ const selected_notes = computed(() => {
 .wf [data-tone="3"] { --tone: var(--wf-h3); }
 .wf [data-tone="4"] { --tone: var(--wf-h4); }
 .wf [data-tone="5"] { --tone: var(--wf-h5); }
+.wf [data-tone="6"] { --tone: var(--wf-h6); }
+.wf [data-tone="7"] { --tone: var(--wf-h7); }
+.wf [data-tone="8"] { --tone: var(--wf-h8); }
 /* Without phases, an execution is a tint of its member's hue with an outline in it, so it never reads as a solid phase. */
 .wf-bar.is-work[data-tone] { background: color-mix(in oklab, var(--tone) 32%, var(--wf-surface)); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--tone) 70%, transparent); }
 /* With phases recorded, the execution's own extent is only a faint frame under them. */

@@ -266,4 +266,7 @@ onBeforeUnmount(pause);
 [data-tone="3"] { --tone: var(--wf-h3); }
 [data-tone="4"] { --tone: var(--wf-h4); }
 [data-tone="5"] { --tone: var(--wf-h5); }
+[data-tone="6"] { --tone: var(--wf-h6); }
+[data-tone="7"] { --tone: var(--wf-h7); }
+[data-tone="8"] { --tone: var(--wf-h8); }
 </style>

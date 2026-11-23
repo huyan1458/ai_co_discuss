@@ -95,7 +95,7 @@ const reader = use_read_aloud({ bridge, container: () => transcript.value,
   voice_for: async (name) => (await speech_settings(SPEECH_VOICE_MS)).member_voices?.[bridge.platform_of(name)] || "",
   title: () => room.value?.title || "",
   prepare: async (id) => {
-    if (!answer_previews.value.get(id)?.truncated || expanded_answers.value.has(id)) return;
+    if (!answer_preview(view.value.messages.find((message) => message.id === id))?.truncated || expanded_answers.value.has(id)) return;
     expanded_answers.value.add(id);
     await nextTick();
   } });
@@ -453,11 +453,16 @@ onMounted(() => { if (transcript.value) { fold_area.value = read_fold_area(trans
 onBeforeUnmount(() => fold_area_observer.disconnect());
 const answer_preview_cache = new WeakMap();
 /** Reuse immutable message excerpts while the room refreshes; they are made again for a screen of another size. */
-const answer_previews = computed(() => new Map(view.value.messages.map((message) => {
+/**
+ * A message's folded preview, built when its card is drawn (#8162): building one for every message parsed the whole
+ * history's HTML and rendered all its Markdown as the room opened, though only the newest cards are mounted.
+ */
+function answer_preview(message) {
+  if (!message) return null;
   let cached = answer_preview_cache.get(message);
   if (cached?.area !== fold_area.value) answer_preview_cache.set(message, cached = { area: fold_area.value, preview: build_answer_preview(message, fold_area.value) });
-  return [message.id, cached.preview];
-})));
+  return cached.preview;
+}
 const message_map = ref(null);
 const navigation_keyboard = ref(false);
 const active_message = ref(null);
@@ -1961,6 +1966,13 @@ const render_start = computed(() => {
 watch(follow_tail, (following) => {
   if (!following && render_floor.value === null) render_floor.value = floor_before(transcript_messages.value, transcript_messages.value.length - RENDER_BATCH);
 });
+// Earlier messages arriving above the first one (a room opened first shows its latest 40, then reads the rest, #8131)
+// mount in slices like any others. A short list rendered to its top has floor 0, "from the very first"; left so, the
+// whole history mounted at once when it arrived (627 cards: 2.2s and 1.4s long tasks), so the floor moves to the old top.
+watch(() => transcript_messages.value.find((message) => !message.slot_card)?.id, (first, previous) => {
+  if (first == null || previous == null || Number(first) >= Number(previous) || render_floor.value === null) return;
+  if (Number(render_floor.value) <= Number(previous)) render_floor.value = Number(previous);
+});
 /** Whether message `id` is in the history but not rendered yet. */
 function not_rendered(id) {
   const index = id == null ? -1 : transcript_messages.value.findIndex((message) => message.id === id);
@@ -1972,6 +1984,13 @@ let preload_busy = false;
 // The map entry under the pointer is rendered ahead of a click; a click on one still being reached jumps once it is.
 let preload_wanted = null;
 let pending_jump = null;
+// A jump to a message older than any read yet waits here for the earlier messages (jump_to).
+let awaiting_jump = null;
+watch(() => transcript_messages.value.length, () => {
+  if (awaiting_jump == null || !transcript_messages.value.some((message) => message.id === awaiting_jump)) return;
+  const id = awaiting_jump;
+  nextTick(() => jump_to(id));
+});
 // The reader's own scrolling owns the position: a finger on the transcript, and the scroll events of their drag, wheel or
 // momentum until SCROLL_SETTLE_MS after the last. Meanwhile the page writes no scrollTop (on iOS one written into a touch
 // scroll also lands on the main thread's older offset, and the page jumps back), renders no earlier cards and keeps the
@@ -2420,7 +2439,7 @@ watch([() => view.value.room?.id, () => view.value.query, () => view.value.sourc
   reset_preview();
   follow_tail.value = true;
   render_floor.value = null;
-  pending_jump = preload_wanted = null;
+  pending_jump = preload_wanted = awaiting_jump = null;
   settle_until = performance.now() + ROOM_SETTLE_MS;
   moved_by_hand = false;
   // Another room or filter starts from its end with its first slice small; nothing of the last one's scrolling holds it.
@@ -2450,8 +2469,20 @@ async function toggle_answer(message, event) {
   track_scroll();
 }
 
-/** Jump anywhere in the history while preserving the shared composer draft; a message still being rendered is jumped to once it is. */
+/**
+ * Jump anywhere in the history while preserving the shared composer draft; a message still being rendered is jumped to
+ * once it is, and one older than any read yet (a room opened first shows its latest messages, then reads the earlier ones,
+ * #8131) once the earlier messages arrive.
+ */
 function jump_to(id) {
+  awaiting_jump = null;
+  const messages = transcript_messages.value;
+  const first = messages.find((message) => !message.slot_card);
+  if (id != null && first && Number(id) < Number(first.id) && !messages.some((message) => message.id === id)) {
+    close_preview();
+    awaiting_jump = id;
+    return;
+  }
   if (not_rendered(id)) {
     close_preview();
     pending_jump = id;
@@ -2513,7 +2544,7 @@ function resume_tracking(event) {
   touch_scroll = touch_active = event.type === "touchstart";
   if (touch_active) { touch_at = performance.now(); touch_scrolled = false; }
   // Scrolling by hand drops a jump still waiting for its card.
-  pending_jump = null;
+  pending_jump = awaiting_jump = null;
   if (is_scroll_input) jump_target.value = null;
 }
 
@@ -2690,7 +2721,7 @@ function return_to_latest() {
   reader.state.following = false;
   jump_target.value = null;
   follow_tail.value = true;
-  pending_jump = null;
+  pending_jump = awaiting_jump = null;
   follow_messages();
 }
 
@@ -3066,7 +3097,7 @@ function message_card(message) {
   const edited = editing.value.id === message.id;
   const waits = waits_for_host(message);
   const expanded = expanded_answers.value.has(message.id);
-  const preview = answer_previews.value.get(message.id);
+  const preview = answer_preview(message);
   const body_html = expanded ? message.rendered_text : preview?.html ?? message.rendered_text;
   // A visual the answer refers to shows in place on every layout, the phone included; the in-message toggle for an
   // unreferenced HTML attachment stays a desktop control, the phone opening that one full screen.

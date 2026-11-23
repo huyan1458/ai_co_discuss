@@ -437,6 +437,7 @@ CREATE TABLE IF NOT EXISTS member_requests (
 );
 CREATE INDEX IF NOT EXISTS member_requests_open ON member_requests(member_id,status);
 CREATE INDEX IF NOT EXISTS member_requests_execution ON member_requests(execution_id);
+CREATE INDEX IF NOT EXISTS member_requests_answer ON member_requests(answer_id);
 CREATE INDEX IF NOT EXISTS member_requests_room ON member_requests(room_id);
 CREATE INDEX IF NOT EXISTS member_requests_room_status ON member_requests(room_id,status);
 CREATE INDEX IF NOT EXISTS member_requests_batch ON member_requests(batch_id,status);

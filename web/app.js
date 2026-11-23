@@ -1525,6 +1525,19 @@ function message_provenance(message) {
   return `${role}${forwarding}`;
 }
 
+/**
+ * A message whose Markdown is rendered the first time a card reads it (#8162): rendering the whole history as a room
+ * opened took ~0.3s for 600 messages, though only the newest cards are drawn. Read-only getters, cached in the closure,
+ * so reading one changes nothing a view depends on.
+ */
+function rendered_on_read(shown, message) {
+  let text = null, summary = null;
+  return Object.defineProperties(shown, {
+    rendered_text: { enumerable: true, configurable: true, get: () => text ??= link_attachment_placeholders(render_room_markdown(message.text), message.attachments) },
+    rendered_summary: { enumerable: true, configurable: true, get: () => summary ??= render_room_markdown(message.summary || "") },
+  });
+}
+
 /** Render continuous history while retaining expanded answers and reading position. */
 // Rendered copies by the cached record they came from, so leaving a filter reuses them instead of rendering every
 // message's Markdown again.
@@ -1539,8 +1552,7 @@ function render_messages(result) {
     let shown;
     // A message shown straight from its send response is replaced by the copy the transcript reads.
     if (saved && !saved.just_sent) shown = (saved.withdrawn || "") === kind ? saved : { ...saved, withdrawn: kind };
-    else shown = { ...message, withdrawn: kind, rendered_text: link_attachment_placeholders(render_room_markdown(message.text), message.attachments),
-      rendered_summary: render_room_markdown(message.summary || "") };
+    else shown = rendered_on_read({ ...message, withdrawn: kind }, message);
     rendered_messages.set(message, shown);
     return shown;
   });
