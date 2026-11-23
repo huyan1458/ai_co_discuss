@@ -1,7 +1,7 @@
 <script setup>
 /**
  * The file preview's view of one zip archive: its folders and files listed like the room's file page, read in this
- * page (nothing is unpacked on the computer). Clicking a file emits `open` with its entry (`{ path, size, read }`),
+ * the room or, for legacy and shared pages, in the browser. Clicking a file emits `open` with its entry (`{ path, size, read }`),
  * which the preview opens in its own tab; folders are browsed in place.
  * `url` is an attachment's address, a stream of the computer's website, or a Blob URL read through the relay.
  */
@@ -11,21 +11,23 @@ import { file_size, file_type, modified_time } from "./file-preview.js";
 import { t } from "./i18n.js";
 import { zip_entries } from "./workflow-files.js";
 
-const props = defineProps({ url: { type: String, required: true }, name: { type: String, default: "" } });
+const props = defineProps({ entries: { type: Array, default: null }, url: { type: String, default: "" }, name: { type: String, default: "" } });
 const emit = defineEmits(["open"]);
 // macOS adds resource forks under this folder; they are not the archive's content.
-const JUNK = /(^|\/)(__MACOSX\/|\.DS_Store$)/;
+const INVALID_PATH = /(^|\/)(?:\.{0,2}|__MACOSX|\.DS_Store)(?:\/|$)|[:\x00-\x1f\x7f]/;
 const state = ref("loading"), error = ref(""), entries = ref([]), folder = ref("");
 let version = 0;
 
-watch(() => props.url, async (url) => {
+watch([() => props.entries, () => props.url], async ([listed, url]) => {
   const current = ++version;
   state.value = "loading";
   folder.value = "";
   try {
+    if (listed) { entries.value = listed; state.value = "ready"; return; }
     const response = await fetch(url);
     if (!response.ok) throw new Error(t('文件读取失败（{value1}）', { value1: response.status }));
-    const list = zip_entries(new Uint8Array(await response.arrayBuffer())).filter((entry) => !JUNK.test(entry.path));
+    const list = zip_entries(new Uint8Array(await response.arrayBuffer())).filter(entry => !INVALID_PATH.test(entry.path))
+      .map(entry => ({ ...entry, read: () => entry.read(64 * 1024 * 1024) }));
     if (current !== version) return;
     entries.value = list;
     state.value = "ready";

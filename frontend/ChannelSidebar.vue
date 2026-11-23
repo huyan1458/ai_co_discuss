@@ -54,7 +54,7 @@ const account_status = computed(() => {
       <InvitedRooms @open="emit('invited', $event)" />
       <!-- The workflow library belongs to this computer, not a room: its own section below the rooms; a row opens the workflow page in the middle. -->
       <div class="channel-directory-heading channel-tools-heading">
-        <button type="button" class="channel-section-toggle" :aria-expanded="workflows_open" @click="workflows_open = !workflows_open"><UIcon :name="workflows_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t("工作流") }}</button>
+        <button type="button" class="channel-section-toggle" :aria-expanded="workflows_open" @click="workflows_open = !workflows_open; if (workflows_open) library.refresh_list()"><UIcon :name="workflows_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t("工作流") }}</button>
         <div v-if="available" class="channel-directory-actions">
           <UDropdownMenu :items="add_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-plus" :aria-label="t('新建或导入工作流')" :title="t('新建或导入')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         </div>

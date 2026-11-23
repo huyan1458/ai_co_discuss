@@ -326,6 +326,10 @@ test('room files use the saved project and require the authenticated bridge and 
   assert.equal(models.project_directory, project);
   assert.deepEqual((await room_files(f.home, input)).entries.map(item => item.name), ['报告.md']);
   assert.equal((await room_files(f.home, { ...input, path: '报告.md', cwd: f.directory })).text, '# 项目报告\n正文');
+  const batch = await room_files(f.home, { ...input, op: 'stat-batch', items: [
+    { root: 0, path: '报告.md' }, { root: 0, path: '../' }, { root: 0, path: 'missing' }] });
+  assert.deepEqual(batch.items.map(item => item?.kind ?? null), ['file', null, null]);
+  assert.equal(batch.items[0].size, statSync(join(project, '报告.md')).size);
   // The browser's cached file list: only a changed folder is sent again, and nothing outside the project is read.
   mkdirSync(join(project, '缓存'));
   const [first] = (await room_files(f.home, { ...input, folders: [{ path: '缓存' }] })).folders;
@@ -360,6 +364,13 @@ test('room files use the saved project and require the authenticated bridge and 
   const command = computer_command(f.home, 'https://paired.test', 'room-files', body);
   assert.equal(command.command, 'room-files');
   assert.equal((await room_files(f.home, command.input)).text, local.body.text);
+  const { zip_store } = await import('../frontend/workflow-files.js');
+  writeFileSync(join(project, 'project.zip'), zip_store({ '笔记.txt': 'selected' }));
+  const archive_request = { room_id: config.room, path: 'project.zip', op: 'zip-entry', entry_path: '笔记.txt' };
+  const file_command = computer_command(f.home, 'https://paired.test', 'room-files', archive_request);
+  const entry = await room_files(f.home, file_command.input, { trust: true });
+  assert.equal(Buffer.from(entry.data, 'base64').toString(), 'selected');
+
   assert.equal(relayed_command(f.site, 'room-files', { ...input, site: 'https://evil.test', access_file: 'ignored' }).input.access_file, undefined);
   assert.equal(relayed_command(f.site, 'room-files', { ...input, site: 'https://evil.test' }).input.site, f.site);
   const saved = JSON.parse(readFileSync(launched.config_path, 'utf8'));
@@ -370,6 +381,7 @@ test('room files use the saved project and require the authenticated bridge and 
   assert.equal(no_project.project_directory, '', 'a member directory does not enable the room project page');
   await assert.rejects(room_files(f.home, input), /未设置项目目录/);
 });
+
 
 test('the file page reaches an account\'s projects and drafts by id, and a folder a room works in cannot be deleted', async t => {
   const f = await fixture(t);
@@ -1878,6 +1890,18 @@ test('the relay channel reaches only local room routes, as the bridge, and answe
   assert.equal(calls.length, 2);
 
   // An answer over the website's 1 MiB frame would close the connection for every request; only that request fails.
+  // An in-process manager without a service lock cannot answer from a cold launch subprocess.
+  const share_manager = (await import('../runner/share_service.mjs')).start_share_manager(home);
+  try {
+    const share_id = 'relay-share-jobs-0000001';
+    const request = { action: 'share-job', target: 'computer', payload: { op: 'list' } };
+    const envelope = await seal(key, await device.seal(share_id, request), share_id);
+    const answer = await answer_request(home, 'https://site.test', link, { id: share_id, envelope: { ...envelope, key: { kty, crv, x, y } } });
+    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(answer.envelope.iv, 'base64'), additionalData: new TextEncoder().encode(share_id + ':response') },
+      key, Buffer.from(answer.envelope.data, 'base64'));
+    assert.deepEqual(JSON.parse(gunzipSync(Buffer.from(plaintext)).toString()), { status: 200, body: { enabled: true, jobs: [] } });
+  } finally { share_manager.close(); }
+
   const huge = 'relay-request-0000000003';
   const big = await seal(key, await device.seal(huge, { action: 'room-api', payload: { method: 'GET', path: '/api/rooms/abc123/messages' } }), huge);
   const noise = (await import('node:crypto')).randomBytes(900 * 1024).toString('base64');
@@ -1915,6 +1939,15 @@ test('the relay channel reads and sends files in parts, and runs computer-room o
   const rest = await room_api(home, 'https://site.test', { path, offset: Buffer.from(first.body_base64, 'base64').length }, { fetcher: reader });
   assert.equal(first.total, file.length);
   assert.ok(Buffer.concat([Buffer.from(first.body_base64, 'base64'), Buffer.from(rest.body_base64, 'base64')]).equals(file));
+
+  // A selected ZIP entry asks the computer for only its requested byte range.
+  const archive_entry = '/api/rooms/abc123/attachments/f1/zip?entry=notes%2Etxt';
+  const selected = await room_api(home, 'https://site.test', { path: archive_entry, offset: 5 }, { fetcher: async (url, options) => {
+    assert.match(options.headers.Range, /^bytes=5-\d+$/);
+    return new Response('rest', { status: 206, headers: { 'Content-Type': 'application/octet-stream', 'Content-Range': 'bytes 5-8/9' } });
+  } });
+  assert.equal(selected.total, 9);
+  assert.equal(Buffer.from(selected.body_base64, 'base64').toString(), 'rest');
 
   // An upload reaches the local website once, whole, after every part has arrived; a resent part is not counted twice.
   const sent = [];

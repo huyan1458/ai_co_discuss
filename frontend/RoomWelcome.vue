@@ -14,7 +14,7 @@ import { t } from "./i18n.js";
 const EDITOR_MAX_ROWS = 6;
 const LENGTH_WARNING_RATIO = 0.9;
 
-const { view, bridge, field, act, pending } = inject("discussion");
+const { view, bridge, field, act, is_running } = inject("discussion");
 // The room composer's own field, so a file's [图片 #n] placeholder is kept in step with its thumbnail here too.
 const draft = field("message-input", { quiet: true });
 const prompt = ref(null);
@@ -30,7 +30,7 @@ function drop_unreferenced(event) {
   if (bridge.drop_unreferenced_attachments(draft.value) && area) nextTick(() => area.setSelectionRange(Math.min(caret, area.value.length), Math.min(caret, area.value.length)));
   nextTick(sync_mirror);
 }
-const creating = computed(() => pending.value === "quick_create");
+const creating = computed(() => is_running("quick_create"));
 const has_draft = computed(() => Boolean(draft.value.trim() || view.value.attachment_drafts.length));
 const text_length = computed(() => [...draft.value].length);
 const near_length_limit = computed(() => text_length.value >= bridge.max_message_length * LENGTH_WARNING_RATIO);
@@ -54,7 +54,7 @@ function pick_attachments(event) {
 
 /** Create the room and post the message; a failed creation keeps the draft and files here for another try. */
 async function start() {
-  if (!has_draft.value || pending.value) return;
+  if (!has_draft.value || creating.value) return;
   const text = draft.value;
   draft.value = "";
   try {
@@ -97,7 +97,7 @@ async function start() {
           <template v-else>
             <label class="channel-attach-button" :class="{ 'is-disabled': creating }"><UIcon name="i-lucide-paperclip" class="size-4" aria-hidden="true" /><input type="file" multiple class="channel-attach-input" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" :disabled="creating" @change="pick_attachments"></label>
             <UTooltip :text="ENTER_SENDS ? t('语音输入 · 也可按住空格说话') : t('按住说话，或轻点开始')"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" :aria-label="t('语音输入')" :disabled="creating" @pointerdown="voice_press.pointerdown" @click="voice_press.click" @contextmenu.prevent /></UTooltip>
-            <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('新建房间并发送')" :title="t('发送 · Enter')" :loading="creating" :disabled="!has_draft || Boolean(pending)" @click="start" />
+            <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('新建房间并发送')" :title="t('发送 · Enter')" :loading="creating" :disabled="!has_draft || creating" @click="start" />
           </template>
         </template>
       </UChatPrompt>

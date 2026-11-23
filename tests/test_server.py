@@ -12,6 +12,7 @@ import threading
 import time
 import unittest
 import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -573,6 +574,40 @@ class DiscussionTests(unittest.TestCase):
             response = error
         with response:
             return response.status, response.headers, response.read()
+
+    def test_zip_attachment_directory_and_bounded_entry_reads(self):
+        """Listing skips hidden paths and single-entry downloads retain ordinary attachment isolation."""
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, "w") as archive:
+            archive.writestr("ABCD.md", b"preview text", compress_type=zipfile.ZIP_DEFLATED)
+            archive.writestr("目录/说明.txt", "这是说明")
+            archive.writestr("__MACOSX/noise", "noise")
+            archive.writestr("a/.DS_Store", "noise")
+            archive.writestr("../outside.txt", "noise")
+        base = f"/api/rooms/{self.room['id']}/attachments"
+        def upload(name, data):
+            params = urlencode({"actor": "用户", "file_name": name, "submission_id": "preview-" + uuid.uuid4().hex})
+            status, _, answer = self.attachment_request(base + "?" + params, data)
+            self.assertEqual(status, 201, answer)
+            return base + "/" + json.loads(answer)["attachment"]["id"] + "/zip"
+        route = upload("test.zip", raw.getvalue().replace(b"ABCD.md", "中文.md".encode("gbk")))
+        status, _, response = self.attachment_request(route)
+        self.assertEqual(status, 200)
+        entries = json.loads(response)["entries"]
+        self.assertEqual([e["path"] for e in entries], ["中文.md", "目录/说明.txt"])
+        entry = route + "?" + urlencode({"entry": "中文.md"})
+        status, headers, data = self.attachment_request(entry, headers={"Range": "bytes=2-5"})
+        self.assertEqual((status, data, headers["Content-Range"]), (206, b"evie", "bytes 2-5/12"))
+        self.assertIn("sandbox", headers["Content-Security-Policy"])
+        self.assertTrue(headers["Content-Disposition"].startswith("attachment"))
+        self.assertEqual(self.attachment_request(route + "?" + urlencode({"entry": "../outside.txt"}))[0], 400)
+        self.assertEqual(self.attachment_request(route + "?entry=")[0], 400)
+        self.assertEqual(self.attachment_request(route.replace(self.room["id"], "other-room"))[0], 404)
+        self.assertEqual(self.attachment_request(upload("bad.zip", b"invalid"))[0], 400)
+        if not self.external:
+            from unittest.mock import patch
+            with patch("backend.server.ZIP_ENTRY_LIMIT", 4):
+                self.assertEqual(self.attachment_request(route + "?" + urlencode({"entry": "目录/说明.txt"}))[0], 400)
 
     def test_attachments_round_trip_link_replay_and_room_delete(self):
         """Published files retain exact bytes, provenance, readable links, and backup metadata."""

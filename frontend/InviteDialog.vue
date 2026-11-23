@@ -10,7 +10,7 @@ import { t } from "./i18n.js";
 
 const props = defineProps({ description: { type: String, default: () => t("新成员由程序按本机软件配置启动，或由你手动启动。") }, workflowId: { type: String, default: "" } });
 const inviting = defineModel("open", { type: Boolean, default: false });
-const { view, bridge, act, pending } = inject("discussion");
+const { view, bridge, act, is_running } = inject("discussion");
 const room = computed(() => view.value.room);
 const record = (name) => (room.value.members || []).find((member) => member.name === name);
 const COPY_FEEDBACK_MS = 2000;
@@ -267,7 +267,7 @@ async function refresh_after(invited_any) {
             <UAvatar :src="bridge.identities[bridge.platform_of(name)]?.icon" :text="bridge.identities[bridge.platform_of(name)]?.initials" :alt="name" size="xs" class="channel-avatar" :class="bridge.identities[bridge.platform_of(name)]?.style" />
             <strong>{{ bridge.display_name(name) }}</strong>
             <small :class="{ 'is-registered': record(name)?.registered_at }">{{ record(name)?.registered_at ? t('已注册') : t('待注册') }}</small>
-            <UButton :icon="launch_copied === name ? 'i-lucide-check' : 'i-lucide-rocket'" :label="launch_copied === name ? t('已复制') : t('复制启动指令')" size="sm" :color="launch_copied === name ? 'success' : 'primary'" variant="soft" class="pb-launch-button" :loading="pending === 'copy_member_launch'" :disabled="Boolean(pending)" @click="copy_launch(name)" />
+            <UButton :icon="launch_copied === name ? 'i-lucide-check' : 'i-lucide-rocket'" :label="launch_copied === name ? t('已复制') : t('复制启动指令')" size="sm" :color="launch_copied === name ? 'success' : 'primary'" variant="soft" class="pb-launch-button" :loading="is_running('copy_member_launch')" @click="copy_launch(name)" />
           </li>
           <li v-for="id in invited_external" :key="`seat-${id}`">
             <UAvatar src="/icons/external-expert.svg" :alt="t('外部专家')" size="xs" class="channel-avatar external" />

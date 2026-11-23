@@ -13,7 +13,7 @@ import { gzipSync } from 'node:zlib';
 import { atomic_json } from './files.mjs';
 import { network_failure, reconnect_reader } from './relay_health.mjs';
 import { t } from './i18n.mjs';
-import { remote_execution_details, remote_room_files, remote_room_media, remote_room_page } from './discussion_launch.mjs';
+import { room_share_job, remote_execution_details, remote_room_files, remote_room_media, remote_room_page } from './discussion_launch.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { local_settings } from './discussion_setup.mjs';
 import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, sync_remote_launches, unseal } from './remote_launch.mjs';
@@ -134,6 +134,8 @@ export async function room_api(home, site, payload, { fetcher = site_fetch, devi
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   // A read the device already holds is asked conditionally; unchanged, the answer is a bare 304 with no body.
   if (method === 'GET' && typeof etag === 'string' && /^"[0-9a-f]{1,64}"$/.test(etag)) headers['If-None-Match'] = etag;
+  const zip_range = method === 'GET' && /^\/api\/rooms\/[\w-]+\/attachments\/[\w-]+\/zip\?entry=/.test(path);
+  if (zip_range) headers.Range = 'bytes=' + offset + '-' + (offset + RESPONSE_MAX_BYTES - 1);
   const on_request = timing?.route ? () => { timing.local_request_at = performance.now(); } : undefined;
   if (on_request) headers['X-CoDiscuss-Relay-Request-Id'] = timing.id;
   const response = await fetcher(`${local_origin(home)}${path}`, { method, headers, redirect: 'error',
@@ -144,6 +146,12 @@ export async function room_api(home, site, payload, { fetcher = site_fetch, devi
   if (type.startsWith('application/json')) return { status: response.status, body: await response.json(), ...(tag ? { etag: tag } : {}) };
   // A file larger than one frame comes back in parts; the device asks again from where the previous part ended.
   const bytes = Buffer.from(await response.arrayBuffer());
+  if (zip_range && response.status === 206) {
+    const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('Content-Range') || '');
+    if (!range || Number(range[1]) !== offset || Number(range[2]) - offset + 1 !== bytes.length
+        || Number(range[3]) <= Number(range[2])) throw new Error(t('无法读取这个压缩包条目'));
+    return { status: 206, content_type: type, offset, total: Number(range[3]), body_base64: bytes.toString('base64') };
+  }
   return { status: response.status, content_type: type, offset, total: bytes.length,
     body_base64: bytes.subarray(offset, offset + RESPONSE_MAX_BYTES).toString('base64') };
 }
@@ -238,6 +246,7 @@ export function computer_command(home, site, action, payload) {
  */
 async function run_command(home, command, run) {
   if (run !== run_launch_command) return run(command);
+  if (command.command === 'share-job') return { status: 200, body: await room_share_job(home, command.input, { trust: true }) };
   if (command.command === 'room-files') return { status: 200, body: await remote_room_files(home, command.input) };
   if (command.command === 'room-page') return { status: 200, body: await remote_room_page(home, command.input) };
   if (command.command === 'room-media') return { status: 200, body: await remote_room_media(home, command.input) };

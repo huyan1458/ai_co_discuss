@@ -1,10 +1,10 @@
 <script setup>
-import { LEVELS, LEVEL_SHORT, awaiting_member, copy_seat_link, external_ai, external_of, remaining_label, revoke_member, room_operations } from "./external-members.js";
+import { LEVELS, LEVEL_SHORT, awaiting_member, copy_seat_link, external_ai, external_of, remaining_label, revoke_member } from "./external-members.js";
 /**
  * Everything about who is in the room and how it is set up, laid out in full: the rail's member menu is only the quick
  * entry to the same actions, so nothing here hides behind a menu.
  */
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, ref, shallowRef, watch } from "vue";
 import ApiRequestsField from "./ApiRequestsField.vue";
 import AutoDestroyField from "./AutoDestroyField.vue";
 import ImageService from "./ImageService.vue";
@@ -53,8 +53,6 @@ const local_state = computed(() => {
 /** An agy member waits for its default model to be read, so its switches stay greyed out until then. */
 const waiting = (name) => Boolean(saved.value?.participants?.[name]?.defaults_pending);
 // Members whose switch is being saved: the new choice already shows, and only that member's switches wait.
-const switching = ref(new Set());
-const set_switching = (name, on) => { const names = new Set(switching.value); if (on) names.add(name); else names.delete(name); switching.value = names; };
 // The round limit the field shows: the saved one, or the value being saved until the room refreshes.
 const saving_rounds = ref(false), rounds_shown = ref(0);
 watch(() => room.value.free?.max_rounds, (value) => { rounds_shown.value = value || 0; }, { immediate: true });
@@ -116,34 +114,74 @@ const members = computed(() => {
   return [...(room.value.members || [])].sort((left, right) => place(left.name) - place(right.name));
 });
 // Dragging a card sets the same default order as the rail; while members answer in turn or a discussion runs, the rail arranges them.
+const drag = shallowRef(null);
+const member_groups = computed(() => drag.value?.groups ?? [
+  { away: false, members: members.value.filter(member => member.status !== "away") },
+  { away: true, members: members.value.filter(member => member.status === "away") },
+].filter(group => group.members.length));
+const folded_away_rooms = ref(new Set());
 const reorderable = computed(() => Boolean(view.value.access?.can_manage) && !room.value.archived
   && order.value.kind === "default" && order.value.movable.length > 1);
-const dragged = ref(""), drop_target = ref(""), grabbed = ref("");
-
-function drag_start(member, event) {
-  dragged.value = member.name;
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("text/plain", member.name);
-}
-
-function drag_over(member, event) {
-  if (!dragged.value || dragged.value === member.name || !order.value.movable.includes(member.name)) return;
+const movable_names = computed(() => drag.value?.names ?? (reorderable.value ? order.value.movable : []));
+function start_drag(member, event) {
+  if (drag.value || event.button !== 0 || !event.isPrimary) return;
   event.preventDefault();
-  drop_target.value = member.name;
+  const grip = event.currentTarget;
+  grip.setPointerCapture(event.pointerId);
+  drag.value = { grip, pointer: event.pointerId, name: member.name, gap: null, groups: member_groups.value,
+    names: movable_names.value, revision: order.value.revision, room_id: room.value.id };
+  document.addEventListener("keydown", escape_drag, true);
 }
 
-/** Move the dragged member to the dropped card's place and send the whole order with the revision shown; a stale one is refused. */
-function drop(member) {
-  const names = [...order.value.movable];
-  const from = names.indexOf(dragged.value), to = names.indexOf(member.name);
-  drag_end();
-  if (from < 0 || to < 0 || from === to) return;
+function move_drag(event) {
+  const active = drag.value;
+  if (!active || active.pointer !== event.pointerId) return;
+  const list = active.grip.closest("ul");
+  const box = list.getBoundingClientRect();
+  let gap = null;
+  if (event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom) {
+    const cards = [...list.querySelectorAll("[data-movable]")];
+    const before = cards.findIndex(card => { const rect = card.getBoundingClientRect(); return event.clientY < rect.top + rect.height / 2; });
+    gap = before < 0 ? cards.length : before;
+  }
+  if (gap !== active.gap) drag.value = { ...active, gap };
+}
+
+function clear_drag() {
+  const active = drag.value;
+  drag.value = null;
+  document.removeEventListener("keydown", escape_drag, true);
+  if (active?.grip.hasPointerCapture(active.pointer)) active.grip.releasePointerCapture(active.pointer);
+}
+function escape_drag(event) {
+  if (event.key === "Escape") { event.preventDefault(); clear_drag(); }
+}
+onBeforeUnmount(clear_drag);
+watch(() => room.value.id, clear_drag);
+
+function commit_move(name, to) {
+  const names = [...order.value.movable], from = names.indexOf(name);
+  if (!reorderable.value || from < 0 || to < 0 || to >= names.length || to === from) return;
   names.splice(to, 0, names.splice(from, 1)[0]);
   act("reorder_speakers", { revision: order.value.revision, order: names });
 }
-
-function drag_end() {
-  dragged.value = drop_target.value = grabbed.value = "";
+function finish_drag(event, cancelled = false) {
+  if (!drag.value || event.pointerId !== drag.value.pointer) return;
+  if (!cancelled) move_drag(event);
+  const { name, names, revision, gap, room_id } = drag.value;
+  clear_drag();
+  if (cancelled || room_id !== room.value.id) return;
+  if (revision !== order.value.revision) { bridge.notify("warning", t('发言顺序刚有变化，已更新为最新顺序，请重新调整')); return; }
+  if (gap !== null) commit_move(name, gap > names.indexOf(name) ? gap - 1 : gap);
+}
+function drag_class(name) {
+  const active = drag.value;
+  if (!active) return "";
+  if (name === active.name) return "is-dimmed";
+  const from = active.names.indexOf(active.name), gap = active.gap;
+  if (gap === null || gap === from || gap === from + 1) return "";
+  if (active.names[gap] === name) return "drop-before";
+  return gap === active.names.length && active.names.at(-1) === name ? "drop-after" : "";
 }
 // The room's workflow as this computer registered it; its members carry a mark while it is enabled.
 const workflow = computed(() => active_workflow(saved.value?.workflow, room.value.free?.members));
@@ -177,13 +215,11 @@ function live(member) {
 
 /** Switch a Codex member between App and CLI; its conversation stays. */
 async function switch_adapter(member, adapter) {
-  if (switching.value.has(member.name) || access(live(member)).value === adapter) return;
-  set_switching(member.name, true);
+  if (access(live(member)).value === adapter) return;
   try {
-    await bridge.set_member_adapter({ name: member.name, adapter });
+    if (!await bridge.set_member_adapter({ name: member.name, adapter })) return;
     bridge.notify("info", t("{name} 已改为 {adapter} 接入，下次处理请求起生效。", { name: bridge.display_name(member.name), adapter: adapter === "codex" ? "App" : "CLI" }));
   } catch (error) { bridge.notify("error", error.message); }
-  finally { set_switching(member.name, false); }
 }
 
 /** Project file access, and whether it can be switched here; anything that cannot says why on hover. */
@@ -200,13 +236,11 @@ function files(member) {
 
 /** Switch one member's project files; the change applies from its next request and keeps its session. */
 async function switch_access(member, project_access) {
-  if (switching.value.has(member.name) || files(member).value === project_access) return;
-  set_switching(member.name, true);
+  if (files(member).value === project_access) return;
   try {
-    await bridge.set_member_access({ name: member.name, project_access });
+    if (!await bridge.set_member_access({ name: member.name, project_access })) return;
     bridge.notify("info", t("{name} 已改为{access}，下次处理请求起生效。", { name: bridge.display_name(member.name), access: access_label(project_access) }));
   } catch (error) { bridge.notify("error", error.message); }
-  finally { set_switching(member.name, false); }
 }
 
 const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra" };
@@ -253,7 +287,7 @@ async function save_model() {
   const { name, draft } = model_edit.value;
   model_edit.value = null;
   try {
-    await bridge.set_member_model({ name, model: draft.model, effort: draft.effort });
+    if (!await bridge.set_member_model({ name, model: draft.model, effort: draft.effort })) return;
     // A member working in its own open window runs with that window's model until the window is closed.
     const in_window = saved.value?.participants?.[name]?.model_pending === "window";
     bridge.notify(in_window ? "warning" : "info", in_window
@@ -277,7 +311,7 @@ const HOST_LABEL = t("设为主持人");
 function actions(member) {
   const [taking_part, place = [], removal = []] = member_actions(live(member), { view: view.value, act, describe: (name) => { describing.value = name; },
     external: open_external,
-    revoke: (target) => revoke_member(bridge, act, view.value.room.id, target),
+    revoke: (target) => revoke_member(bridge, act, target),
     copy_link: async (target) => { if (await copy_seat_link(bridge, view.value.room.id, target.id)) bridge.notify("info", t("已复制邀请链接")); } });
   if (!free.value) return { taking_part, host: null, place: [] };
   return { taking_part, host: place.find((item) => item.label === HOST_LABEL) || null, place: [...place.filter((item) => item.label !== HOST_LABEL), ...removal] };
@@ -290,8 +324,7 @@ function actions(member) {
 function card_key(member) {
   const identity = bridge.identities[member.name];
   return JSON.stringify([member, live(member), saved.value?.participants?.[member.name], view.value.access, view.value.launch.available, free.value,
-    reorderable.value && order.value.movable.includes(member.name), dragged.value === member.name, drop_target.value === member.name,
-    grabbed.value === member.name, switching.value.has(member.name), in_workflow(member.name) && workflow.value.label, room.value.descriptions?.[member.name],
+    movable_names.value.indexOf(member.name), drag_class(member.name), in_workflow(member.name) && workflow.value.label, room.value.descriptions?.[member.name],
     identity?.icon, identity?.initials, identity?.style, bridge.display_name(member.name), bridge.participant_model(member.name, room.value, saved.value),
     bridge.participant_access(member.name, room.value), room.value.session?.status]);
 }
@@ -309,13 +342,10 @@ const END_REASONS = { revoked: t("已撤销"), expired: t("已到期"), left: t(
 async function narrow_external(member, level) {
   const info = external_of(live(member));
   if (!info || level === info.level || level !== "discuss") return;
-  set_switching(member.name, true);
   try {
-    await room_operations(bridge).update(room.value.id, member.id, { scope: "discuss" });
+    if (!await act("change_member", { member_id: member.id, name: member.name, action: "narrow" })) return;
     bridge.notify("info", t("已降为只讨论，之后不能再读项目文件"));
-    await act("refresh");
   } catch (error) { bridge.notify("error", error.message); }
-  finally { set_switching(member.name, false); }
 }
 
 const inviting = ref(false);
@@ -377,12 +407,19 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
     <section class="overview-section">
       <h3 class="overview-phone-hidden">{{ t("成员") }}</h3>
       <p v-if="local_state" class="overview-local" role="status">{{ local_state.text }}<button v-if="local_state.retry" type="button" class="subtle-link" @click="bridge.reload_room_models()">{{ t("重试") }}</button></p>
-      <ul class="member-cards" :aria-label="t('成员')">
-        <MemoBlock v-for="member in members" :key="member.name" :deps="[card_key(member)]">
-        <li class="member-card" :class="{ 'is-dimmed': dragged === member.name, 'is-drop-target': drop_target === member.name }"
-          :draggable="grabbed === member.name" @dragstart="drag_start(member, $event)" @dragover="drag_over(member, $event)" @dragleave="drop_target === member.name && (drop_target = '')" @drop.prevent="drop(member)" @dragend="drag_end">
+      <template v-for="group in member_groups" :key="group.away">
+      <button v-if="group.away" type="button" class="away-divider" :aria-expanded="!folded_away_rooms.has(room.id)" @click="folded_away_rooms.has(room.id) ? folded_away_rooms.delete(room.id) : folded_away_rooms.add(room.id)">
+        <UIcon :name="folded_away_rooms.has(room.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" />{{ t('已离开 {value1}', { value1: group.members.length }) }}
+      </button>
+      <ul v-show="!group.away || !folded_away_rooms.has(room.id)" class="member-cards" :aria-label="group.away ? t('已离开 {value1}', { value1: group.members.length }) : t('成员')">
+        <MemoBlock v-for="member in group.members" :key="member.name" :deps="[card_key(member)]">
+        <li class="member-card" :class="[drag_class(member.name), { 'is-away': group.away }]" :data-movable="!group.away && movable_names.includes(member.name) ? '' : undefined">
           <header class="member-card-head">
-            <span v-if="reorderable && order.movable.includes(member.name)" class="member-card-grip" :title="t('拖动调整成员顺序，右栏发言顺序与 @全体依次 同步')" @pointerdown="grabbed = member.name" @pointerup="grabbed = ''"><UIcon name="i-lucide-grip-vertical" /></span>
+            <button v-if="!group.away && movable_names.includes(member.name)" type="button" class="member-card-grip"
+              :aria-label="t('{value1}，第 {value2} 位；拖动或用上下方向键调整发言顺序', { value1: bridge.display_name(member.name), value2: movable_names.indexOf(member.name) + 1 })"
+              :title="t('拖动调整成员顺序，右栏发言顺序与 @全体依次 同步')" @pointerdown="start_drag(member, $event)" @pointermove="move_drag" @pointerup="finish_drag"
+              @pointercancel="finish_drag($event, true)" @lostpointercapture="finish_drag($event, true)"
+              @keydown.up.prevent="commit_move(member.name, movable_names.indexOf(member.name) - 1)" @keydown.down.prevent="commit_move(member.name, movable_names.indexOf(member.name) + 1)"><UIcon name="i-lucide-grip-vertical" /></button>
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="member-card-name"><strong><MemberNameEdit :name="member.name" :editable="Boolean(view.access?.can_manage)" /><span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
             <!-- The host's crown sits where the other cards offer 设为主持人, so every card shows it in one place. -->
@@ -397,9 +434,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
               <div><dt>{{ t("模型") }}</dt><dd class="overview-model"><span>{{ external_ai(live(member)) || t("对方未说明") }}</span></dd></div>
               <div><dt>{{ t("对方能看到") }}</dt><dd>
                 <div class="expert-card-modes overview-switch" :class="{ 'is-locked': !view.access?.can_manage || external_of(live(member)).level !== 'read' }" role="radiogroup"
-                  :aria-label="t('{name} 能看到的内容', { name: member.name })" :aria-busy="switching.has(member.name)" :title="external_of(live(member)).level === 'read' ? t('可改为只看消息；再开放项目须重新邀请') : t('再开放项目须重新邀请')">
+                  :aria-label="t('{name} 能看到的内容', { name: member.name })" :title="external_of(live(member)).level === 'read' ? t('可改为只看消息；再开放项目须重新邀请') : t('再开放项目须重新邀请')">
                   <button v-for="option in LEVELS" :key="option.value" type="button" role="radio" :aria-checked="external_of(live(member)).level === option.value" :title="option.description"
-                    :disabled="!view.access?.can_manage || external_of(live(member)).level !== 'read' || switching.has(member.name)" @click="narrow_external(member, option.value)">{{ option.label }}</button>
+                    :disabled="!view.access?.can_manage || external_of(live(member)).level !== 'read'" @click="narrow_external(member, option.value)">{{ option.label }}</button>
                 </div>
               </dd></div>
               <div class="overview-span"><dt>{{ t("剩余时间") }}</dt><dd :title="t('借出多久由对方决定，你可随时撤销')">{{ external_of(live(member)).pending ? t("由对方加入时决定") : [remaining_label(external_of(live(member)).expires_at) || "—", t("对方设定")].join(" · ") }}</dd></div>
@@ -409,7 +446,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <div><dt>{{ t("接入") }}</dt><dd>
               <div v-if="access(live(member)).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !access(live(member)).editable }" role="radiogroup" :aria-label="t('{name} 的接入方式', { name: member.name })" :title="access(live(member)).hint">
                 <button v-for="option in CODEX_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="access(live(member)).value === option.value"
-                  :disabled="!access(live(member)).editable || switching.has(member.name)" @click="switch_adapter(member, option.value)">{{ option.label }}</button>
+                  :disabled="!access(live(member)).editable" @click="switch_adapter(member, option.value)">{{ option.label }}</button>
               </div>
               <span v-else>{{ access(member).text }}</span>
               <span v-if="adopted(member)" class="overview-muted" :title="t('从这台电脑上已有的会话接入，续接时沿用该会话的上下文与软件权限')"> · {{ t("接管已有会话") }}</span>
@@ -417,9 +454,9 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <div><dt>{{ t("模型") }}</dt><dd class="overview-model" :class="{ 'overview-muted': waiting(member.name) }" :title="bridge.participant_model(member.name, room, saved) || undefined"><span>{{ member.access === 'runner' ? bridge.participant_model(member.name, room, saved) || '—' : t('在它自己的会话里设置') }}</span>
               <UButton v-if="model_editable(member)" icon="i-lucide-pencil" size="xs" variant="ghost" color="neutral" :aria-label="t('更改 {name} 的模型与强度', { name: member.name })" :title="t('更改模型与思考强度')" @click="edit_model(member)" /></dd></div>
             <div><dt>{{ t("项目文件") }}</dt><dd>
-              <div v-if="files(member).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !files(member).editable }" role="radiogroup" :aria-label="t('{name} 的项目文件权限', { name: member.name })" :aria-busy="switching.has(member.name)" :title="files(member).hint || undefined">
+              <div v-if="files(member).value" class="expert-card-modes overview-switch" :class="{ 'is-locked': !files(member).editable }" role="radiogroup" :aria-label="t('{name} 的项目文件权限', { name: member.name })" :title="files(member).hint || undefined">
                 <button v-for="option in access_options(saved?.participants?.[member.name]?.adapter, bridge.full_only_hint?.(saved?.participants?.[member.name]?.adapter))" :key="option.value" type="button" role="radio" :aria-checked="files(member).value === option.value" :title="option.hint"
-                  :disabled="option.disabled || !files(member).editable || switching.has(member.name)" @click="switch_access(member, option.value)">{{ option.label }}</button>
+                  :disabled="option.disabled || !files(member).editable" @click="switch_access(member, option.value)">{{ option.label }}</button>
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
             </dd></div>
@@ -439,6 +476,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         </li>
         </MemoBlock>
       </ul>
+      </template>
       <ul v-if="ended_externals.length" class="overview-ended" :aria-label="t('已离开的外部专家')">
         <li v-for="member in ended_externals" :key="member.id">
           <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
@@ -517,13 +555,19 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .member-card { position: relative; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg-elevated); }
 .member-card-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px 0; }
 .member-card { transition: opacity .18s; }
+.away-divider { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 0; color: var(--ui-text-toned); font-size: 13px; cursor: pointer; }
+.away-divider::after { content: ""; flex: 1; border-top: 1px solid var(--ui-border); }
+.member-card.is-away { border-style: dashed; background: color-mix(in srgb, var(--ui-bg-elevated) 30%, transparent); }
+.member-card.is-away :is(.member-card-head, .member-card-facts) { opacity: .8; }
+.member-card.is-away :deep(.channel-avatar) { filter: grayscale(1); }
 .member-card.is-dimmed { opacity: .5; }
-.member-card.is-drop-target { box-shadow: inset 0 2px 0 var(--channel-accent, var(--ui-primary)); }
+.member-card.drop-after { box-shadow: inset 0 -2px 0 var(--channel-accent, var(--ui-primary)); }
+.member-card.drop-before { box-shadow: inset 0 2px 0 var(--channel-accent, var(--ui-primary)); }
 /* The grip fills the card's left padding from top to bottom, so it is easy to grab. */
-.member-card-grip { position: absolute; top: 0; bottom: 0; left: 0; display: grid; place-items: center; width: 16px; border-radius: 9px 0 0 9px;
+.member-card-grip { touch-action: none; position: absolute; top: 0; bottom: 0; left: 0; display: grid; place-items: center; width: 16px; border-radius: 9px 0 0 9px;
   color: var(--ui-text-dimmed); cursor: grab; opacity: 0; transition: opacity .12s, background-color .12s; }
 .member-card-grip > * { width: 16px; height: 16px; }
-.member-card:hover .member-card-grip { opacity: 1; }
+.member-card:hover .member-card-grip, .member-card-grip:focus-visible { opacity: 1; }
 .member-card-grip:hover { color: var(--ui-text-highlighted); background: color-mix(in srgb, currentColor 10%, transparent); }
 .member-card-name { display: grid; flex: 1; min-width: 0; }
 .member-card-name strong { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
@@ -593,6 +637,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-settings dt { flex: none; width: 112px; color: var(--ui-text-muted); font-size: 12px; }
 .overview-settings dd { flex: 1; min-width: 0; margin: 0; color: var(--ui-text); overflow-wrap: anywhere; }
 @media (max-width: 720px) {
+  .away-divider { padding: 5px 0; }
   /* A phone shows as much as it can at once (user 2026-11-18, #4568): explanations that repeat the page give way, labels sit
      beside their values, and each card's actions share one line. */
   .overview-phone-hidden { display: none; }
@@ -606,7 +651,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
   .member-card-head { gap: 8px; padding: 8px 10px 0; }
   .member-card-head :deep(.channel-avatar) { width: 26px; height: 26px; }
   /* The card's left padding is too narrow for the grip here, and a phone has no hover: it takes its own place at the row's end. */
-  .member-card-grip { position: static; order: 1; flex-shrink: 0; width: 20px; height: 20px; margin-right: -4px; border-radius: 4px; opacity: 1; }
+  .member-card-grip { position: static; order: 1; flex-shrink: 0; width: 28px; height: 28px; margin-right: -4px; border-radius: 4px; opacity: 1; }
   .member-card-host :deep([data-slot="label"]) { display: none; }
   /* 接入 keeps its width and the model takes the rest of the line; a long model name is cut with an ellipsis. */
   .member-card-facts { grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; padding: 6px 10px; }

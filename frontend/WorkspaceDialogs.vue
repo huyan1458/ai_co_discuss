@@ -20,12 +20,12 @@ const fold_keep = defineModel("foldKeep", { type: String, default: "medium" });
 const card_text = defineModel("cardText", { type: String, default: "medium" });
 const rendered_mode = ref(mode.value);
 watch(mode, (value) => { if (value) rendered_mode.value = value; });
-const { view, bridge, act, pending } = inject("discussion");
+const { view, bridge, act, is_running } = inject("discussion");
 const open = computed({ get: () => Boolean(mode.value), set: (value) => { if (!value) mode.value = ""; } });
 const titles = { settings: t("设置"), create: t("新建房间"), folder: t("新建文件夹"), "rename-folder": t("编辑文件夹"), "delete-folder": t("移除文件夹"), "archive-folder": t("存档文件夹"), edit: t("编辑议题"), message: t("消息原文") };
 Object.assign(titles, { rename: t("重命名房间"), restore: t("恢复房间"), delete: t("销毁房间") });
 const descriptions = { create: t("邀请 AI 一起协作；需要深入讨论时，可在创建时或之后随时开启。"), edit: t("维护话题目标、背景与讨论默认上限。"), message: t("保留作者、来源、提交人和引用关系。") };
-Object.assign(descriptions, { rename: t("名称变化不会影响讨论记录和阅读地址。"), restore: t("移回讨论列表，保持当前讨论阶段。"), delete: t("从这台电脑删除房间的记录、附件和成员在本房间的 AI 会话记录，完成后无法恢复。") });
+Object.assign(descriptions, { rename: t("名称变化不会影响讨论记录和阅读地址。"), restore: t("移回讨论列表，保持当前讨论阶段。"), delete: t("销毁后无法恢复。") });
 titles.archives = t("已存档房间");
 titles.destructions = t("销毁记录");
 descriptions.destructions = t("查看销毁回执：删除了什么、保留了什么；未完成的可以重试。");
@@ -79,7 +79,7 @@ async function delete_archive() {
 
 /** Say at once that the rooms are being destroyed and how it will end; each then dissolves with its own receipt. */
 function announce_destroying(count) {
-  bridge.notify("info", t('正在销毁 {count} 个房间：逐项删除并复查后，房间会逐个消散并给出回执；也可在“销毁记录”里查看。', { count }));
+  bridge.notify("info", t('正在销毁 {count} 个房间，可在“销毁记录”查看进度。', { count }));
 }
 
 
@@ -187,7 +187,7 @@ function remove_folder_main() {
 /** Capture the folder edit and release the dialog before saving. */
 async function save_folder() {
   const name = folder_name.value.trim();
-  if (!name || pending.value) return;
+  if (!name) return;
   const renaming = mode.value === "rename-folder";
   const main = folder_main.value.trim();
   const directories = main ? [main, ...folder_extras.value.map(path => path.trim()).filter(Boolean)] : [];
@@ -303,7 +303,7 @@ const keep_open = (event) => event.preventDefault();
   <UModal v-model:open="open" :title="final_confirm ? t('再次确认销毁') : titles[rendered_mode] || t('讨论')" :description="final_confirm ? undefined : descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', ['rename', 'restore', 'delete'].includes(rendered_mode) && 'channel-folder-modal channel-manage-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'settings' && 'channel-settings-modal', rendered_mode === 'create' && 'channel-create-modal', rendered_mode === 'message' && 'channel-message-modal'], body: 'dialog-body' }" :content="{ onInteractOutside: keep_open }" @after:leave="after_dialog_leave">
     <template #body>
       <section v-if="final_confirm" class="dialog-form">
-        <p class="channel-destroy-final">{{ final_confirm.count === 1 ? t("销毁后，这个房间的消息、附件、成员的 AI 会话记录与草稿都会被删除，数据将永久丢失，无法恢复。确定要销毁吗？") : t("销毁后，这 {count} 个房间的消息、附件、成员的 AI 会话记录与草稿都会被删除，数据将永久丢失，无法恢复。确定要销毁吗？", { count: final_confirm.count }) }}</p>
+        <p class="channel-destroy-final">{{ final_confirm.count === 1 ? t("确定销毁此房间？记录、附件、AI 会话与草稿将永久删除，无法恢复。") : t("确定销毁这 {count} 个房间？记录、附件、AI 会话与草稿将永久删除，无法恢复。", { count: final_confirm.count }) }}</p>
         <div class="dialog-actions"><UButton :label="t('返回')" color="neutral" variant="ghost" @click="final_confirm = null" /><UButton :label="t('确认销毁')" color="error" @click="confirm_final" /></div>
       </section>
       <section v-else-if="rendered_mode === 'archives'" class="channel-archive-manager">
@@ -312,18 +312,18 @@ const keep_open = (event) => event.preventDefault();
           <USelect v-model="archive_content" :items="archive_content_options" icon="i-lucide-list-filter" :aria-label="t('筛选房间内容')" />
           <UButton :label="t('全部销毁（{count}）', { count: archive_results.length })" icon="i-lucide-trash-2" color="error" variant="soft" size="sm" class="channel-archive-delete-all" :loading="archives_deleting" :disabled="archives_deleting || !archive_results.length" @click="archive_delete_all = true; archive_delete_id = null" />
         </div>
-        <div v-if="archive_delete_all && archive_results.length" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("将销毁当前列表中的 {count} 个房间：记录、附件、成员的 AI 会话与草稿都会删除，分享网页会先撤销，项目文件保留，无法撤销。需要留底请先导出。", { count: archive_results.length }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_all = false" /><UButton :label="t('全部销毁')" color="error" size="xs" @click="ask_final(archive_results.length, delete_all_archives)" /></div>
+        <div v-if="archive_delete_all && archive_results.length" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("将销毁这 {count} 个房间的记录、附件、AI 会话与草稿（项目文件保留），无法恢复；需留底请先导出。", { count: archive_results.length }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_all = false" /><UButton :label="t('全部销毁')" color="error" size="xs" @click="ask_final(archive_results.length, delete_all_archives)" /></div>
         <div v-keep-reading class="channel-archive-results">
           <ul v-if="archive_results.length" class="channel-archive-list" :aria-label="t('已存档房间列表')">
           <li v-for="room in archive_results" :key="room.id" class="channel-archive-item">
             <div class="channel-archive-row">
-              <div class="channel-archive-info"><button class="channel-archive-title" :title="room.title" :disabled="Boolean(pending)" @click="read_archive(room)">{{ room.title }}</button><small><span v-if="room.created_at">{{ t("创建于") }} <time :datetime="room.created_at">{{ archive_created(room.created_at) }}</time> · </span>{{ t("{count} 条消息", { count: room.message_count }) }}</small></div>
+              <div class="channel-archive-info"><button class="channel-archive-title" :title="room.title" @click="read_archive(room)">{{ room.title }}</button><small><span v-if="room.created_at">{{ t("创建于") }} <time :datetime="room.created_at">{{ archive_created(room.created_at) }}</time> · </span>{{ t("{count} 条消息", { count: room.message_count }) }}</small></div>
               <div class="channel-archive-actions">
                 <UButton :aria-label="t('销毁 {name}', { name: room.title })" :title="t('销毁房间')" icon="i-lucide-trash-2" color="neutral" variant="ghost" size="xs" class="channel-archive-delete" :disabled="archive_busy(room)" @click="archive_delete_id = room.id; archive_delete_all = false" />
                 <UButton :label="t('恢复')" :aria-label="t('恢复 {name}', { name: room.title })" color="neutral" variant="soft" size="xs" class="channel-archive-restore" :disabled="archive_busy(room)" @click="act('manage_channel', { id: room.id, action: 'restore' })" />
               </div>
             </div>
-            <div v-if="archive_delete_id === room.id" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("销毁「{name}」：记录、附件、成员的 AI 会话与草稿都会删除，分享网页会先撤销，项目文件保留，无法撤销。", { name: room.title }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_id = null" /><UButton :label="t('销毁')" color="error" size="xs" :disabled="archive_busy(room)" @click="ask_final(1, delete_archive)" /></div>
+            <div v-if="archive_delete_id === room.id" class="channel-archive-confirm channel-archive-bulk" role="alert"><span>{{ t("销毁「{name}」的记录、附件、AI 会话与草稿（项目文件保留），无法恢复。", { name: room.title }) }}</span><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="archive_delete_id = null" /><UButton :label="t('销毁')" color="error" size="xs" :disabled="archive_busy(room)" @click="ask_final(1, delete_archive)" /></div>
           </li>
           </ul>
         <p v-else class="channel-archive-empty">{{ archived_rooms.length ? t('没有匹配的存档房间') : t('暂无已存档房间') }}</p>
@@ -346,7 +346,7 @@ const keep_open = (event) => event.preventDefault();
       </section>
       <form v-else-if="rendered_mode === 'delete-folder'" class="dialog-form" @submit.prevent="remove_folder(false)">
         <p class="fine-print">{{ t("仅移除「{name}」时，房间变为未分组，所有消息和存档状态都会保留。", { name: targetFolder?.name }) }}</p>
-        <p v-if="folder_rooms.length" class="fine-print">{{ t("也可以连同其中的 {count} 个房间一起销毁：记录、附件、成员的 AI 会话与草稿都会删除，项目文件保留，无法撤销。", { count: folder_rooms.length }) }}</p>
+        <p v-if="folder_rooms.length" class="fine-print">{{ t("也可以连同其中的 {count} 个房间一起销毁（项目文件保留），无法恢复。", { count: folder_rooms.length }) }}</p>
         <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton v-if="folder_rooms.length" :label="t('连同 {count} 个房间销毁', { count: folder_rooms.length })" color="error" variant="soft" @click="ask_final(folder_rooms.length, () => remove_folder(true))" /><UButton type="submit" :label="t('仅移除文件夹')" color="neutral" variant="solid" /></div>
       </form>
       <form v-else-if="rendered_mode === 'archive-folder'" class="dialog-form" @submit.prevent="archive_folder">
@@ -354,37 +354,36 @@ const keep_open = (event) => event.preventDefault();
         <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="t('存档全部房间')" color="primary" /></div>
       </form>
       <form v-else-if="folder_dialog" class="dialog-form" @submit.prevent="save_folder">
-        <UInput v-model="folder_name" icon="i-lucide-folder" :aria-label="rendered_mode === 'folder' ? t('新文件夹名称') : t('文件夹名称')" :placeholder="t('文件夹名称')" autofocus required :maxlength="40" class="w-full" autocomplete="off" :readonly="Boolean(pending)" @keydown.enter.prevent="!$event.isComposing && save_folder()" />
+        <UInput v-model="folder_name" icon="i-lucide-folder" :aria-label="rendered_mode === 'folder' ? t('新文件夹名称') : t('文件夹名称')" :placeholder="t('文件夹名称')" autofocus required :maxlength="40" class="w-full" autocomplete="off" @keydown.enter.prevent="!$event.isComposing && save_folder()" />
         <UFormField v-if="['folder', 'rename-folder'].includes(rendered_mode)" :label="t('项目路径（可选）')" :description="t('在此文件夹中新建房间时自动带入，已有房间不受影响。')">
           <div v-if="view.launch.available" class="channel-folder-directories">
-            <ProjectDirectoryField v-model="folder_main" compact :placeholder="t('粘贴或输入临时路径')" :disabled="Boolean(pending)">
+            <ProjectDirectoryField v-model="folder_main" compact :placeholder="t('粘贴或输入临时路径')">
               <template v-if="folder_main.trim()" #badge><span class="channel-folder-primary">{{ t("主目录") }}</span></template>
-              <template v-if="folder_main.trim()" #actions><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="self-center" :aria-label="t('移除主目录 {path}', { path: folder_main })" :disabled="Boolean(pending)" @click="remove_folder_main" /></template>
+              <template v-if="folder_main.trim()" #actions><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="self-center" :aria-label="t('移除主目录 {path}', { path: folder_main })" @click="remove_folder_main" /></template>
             </ProjectDirectoryField>
-            <ExtraDirectoriesField v-if="folder_main.trim()" v-model="folder_extras" :disabled="Boolean(pending)" />
+            <ExtraDirectoriesField v-if="folder_main.trim()" v-model="folder_extras" />
           </div>
           <div v-else class="channel-folder-directories">
             <code v-for="path in [folder_main, ...folder_extras].filter(Boolean)" :key="path" class="channel-folder-path">{{ path }}</code>
             <p class="fine-print">{{ t("项目路径须在电脑上或已连接电脑的网页中设置。") }}</p>
           </div>
         </UFormField>
-        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'folder' ? t('创建文件夹') : t('保存')" class="channel-primary-button" :loading="pending === 'create_folder' || pending === 'rename_folder'" :disabled="!folder_name.trim() || Boolean(pending)" /></div>
+        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'folder' ? t('创建文件夹') : t('保存')" class="channel-primary-button" :loading="is_running('create_folder') || is_running('rename_folder')" :disabled="!folder_name.trim()" /></div>
       </form>
       <form v-else-if="['rename', 'restore', 'delete'].includes(rendered_mode)" class="dialog-form" @submit.prevent="save_management">
         <p class="channel-management-target">{{ targetRoom?.title }} <span>· {{ t("{count} 条消息", { count: targetRoom?.message_count }) }}</span></p>
         <p v-if="rendered_mode === 'restore'" class="fine-print">{{ t("恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。") }}</p>
         <template v-if="rendered_mode === 'delete'">
           <ul class="channel-destroy-scope">
-            <li>{{ t("将删除：消息与私聊、附件、成员在本房间新建的 AI 会话记录、运行文件与草稿，以及建房时自动创建的草稿文件夹（含其中的文件）。") }}</li>
-            <li>{{ t("保留：你选的项目文件夹、沿用你原有窗口的会话，以及各 AI 软件自身共用的索引与数据库。") }}</li>
-            <li>{{ t("已发给模型服务商的内容按其政策保留，我们无法删除。") }}</li>
-            <li v-if="view.share_links?.[targetRoom?.id]">{{ t("这个房间发布过分享网页，销毁前会先撤销。") }}</li>
+            <li>{{ t("删除：消息、私聊、附件、本房间新建的 AI 会话与草稿。") }}</li>
+            <li>{{ t("保留：项目目录、沿用或共用的会话、AI 软件共用索引。") }}</li>
+            <li>{{ t("已发给模型服务商的内容按其政策保留，无法删除。") }}</li>
+            <li v-if="view.share_links?.[targetRoom?.id]">{{ t("已发布的分享网页会先撤销。") }}</li>
           </ul>
-          <p class="fine-print">{{ t("资料包含消息、私聊和附件，不含成员写在草稿目录里、没有发进房间的文件；需要的先让成员发进房间或存进项目目录。") }}</p>
-          <div class="channel-destroy-export"><span>{{ export_started ? t("已开始下载，请确认浏览器已保存文件。") : t("销毁前带走一份？") }}</span><UButton :label="t('导出资料包')" icon="i-lucide-download" color="neutral" variant="soft" size="xs" :disabled="view.backup_pending" @click="export_before_destroy" /></div>
+          <div class="channel-destroy-export"><span>{{ export_started ? t("已开始下载，请确认浏览器已保存。") : t("销毁前导出消息、私聊与附件？（不含草稿文件）") }}</span><UButton :label="t('导出资料包')" icon="i-lucide-download" color="neutral" variant="soft" size="xs" :disabled="view.backup_pending" @click="export_before_destroy" /></div>
         </template>
         <UFormField v-if="rendered_mode === 'rename'" :label="t('房间名称')" required><UInput v-model="management_title" autofocus :maxlength="80" required class="w-full" autocomplete="off" /></UFormField>
-        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? t('立即销毁') : rendered_mode === 'rename' ? t('保存名称') : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="pending === 'manage_channel' || view.directory_pending.includes(`delete:${targetRoom?.id}`)" :disabled="rendered_mode === 'rename' && !management_title.trim()" /></div>
+        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? t('立即销毁') : rendered_mode === 'rename' ? t('保存名称') : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="is_running('manage_channel') || view.directory_pending.includes(`delete:${targetRoom?.id}`)" :disabled="rendered_mode === 'rename' && !management_title.trim()" /></div>
       </form>
       <div v-else-if="rendered_mode === 'settings'">
         <AccountSettings />
@@ -443,7 +442,7 @@ const keep_open = (event) => event.preventDefault();
             @update:rounds="bridge.write_field(form_id('limit-max_rounds'), String($event))" @update:minutes="bridge.write_field(form_id('limit-max_minutes'), String($event))" />
           <p v-if="limits_locked" class="fine-print">{{ t("讨论未结束时，上限不可在此修改。") }}</p></section>
         <UCollapsible v-model:open="details_open" class="advanced-fields"><UButton :trailing-icon="details_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" :label="t('用户原文、背景与边界')" color="neutral" variant="ghost" block class="advanced-trigger" /><template #content><div class="advanced-content"><UFormField v-for="item in [{ key: 'user_request', label: t('用户原文') }, { key: 'background', label: t('背景') }, { key: 'boundaries', label: t('讨论边界') }]" :key="item.key" :label="item.label"><UTextarea :model-value="view.fields[form_id(item.key)]" :maxlength="4000" :rows="2" class="w-full" @update:model-value="bridge.write_field(form_id(item.key), $event)" /></UFormField></div></template></UCollapsible>
-        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" class="channel-primary-button" :label="t('保存议题')" :loading="pending === 'create' || pending === 'save_topic'" /></div>
+        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" class="channel-primary-button" :label="t('保存议题')" :loading="is_running('create') || is_running('save_topic')" /></div>
       </form>
       <div v-else-if="rendered_mode === 'message'" class="original-message"><p v-if="detail_error" role="alert">{{ detail_error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" @click="load_detail(detail_target)" /></p><template v-else-if="detail"><div class="original-meta"><strong>{{ bridge.display_name(detail.author) }}</strong><span>#{{ detail.id }}</span><UBadge color="neutral" variant="subtle">{{ bridge.sources[detail.source] }}</UBadge></div><p class="fine-print">{{ bridge.provenance(detail) }} · {{ new Date(detail.created_at).toLocaleString('zh-CN') }}</p><section v-if="detail.summary" class="channel-answer-summary"><small>{{ t("回答摘要 · {name}", { name: bridge.display_name(detail.summary_by) }) }}</small><p class="message-prose">{{ detail.summary }}</p></section><p class="message-prose">{{ detail.text }}</p><div v-if="detail.attachments?.length" @click="open_attachment" v-html="bridge.attachment_markup(detail.attachments)"></div><UButton v-if="detail.reply_to" :label="t('查看被回复的原文 #{id}', { id: detail.reply_to })" icon="i-lucide-corner-up-left" variant="outline" color="neutral" class="channel-surface-button" @click="follow_reply" /></template><div v-else class="grid gap-4 py-2" role="status" :aria-label="t('正在读取原文')"><USkeleton class="h-5 w-36" /><USkeleton v-for="line in 6" :key="line" class="h-4" :class="line % 3 ? 'w-full' : 'w-2/3'" /></div></div>
     </template>

@@ -196,16 +196,38 @@ function create_library({ view, bridge, act }) {
     });
   }
 
+  const REFRESH_COOLDOWN_MS = 3000;
+  let last_reloaded_at = 0;
+  let refreshing = null;
+  /** Quietly refresh the library from disk after CLI/AI saves without polling while idle. */
+  function refresh_list({ force = false } = {}) {
+    if (!available.value) return Promise.resolve();
+    const now = Date.now();
+    if (refreshing || (!force && now - last_reloaded_at < REFRESH_COOLDOWN_MS)) return refreshing || Promise.resolve();
+    last_reloaded_at = now;
+    refreshing = bridge.reload_workflows().catch(() => {}).finally(() => { refreshing = null; });
+    return refreshing;
+  }
+
   // Keep a valid selection when the library changes, and open the first workflow when the page opens empty.
   watch([workflows, page_open], ([list, open]) => {
     if (saved_id.value && !list.some((item) => item.id === saved_id.value)) open_saved(open ? list[0]?.id || "" : "");
     else if (open && !draft.value && !loading.value && !failure.value && list.length) open_saved(saved_id.value || list[0].id);
     if (open) prefetch(list);
   });
-  watch(available, (value) => { if (value) bridge.reload_workflows(); }, { immediate: true });
+  watch(available, (value) => { if (value) refresh_list({ force: true }); }, { immediate: true });
+  watch(page_open, (open) => { if (open) refresh_list(); });
   // Software set up or a key saved may make a workflow's cards usable (or not), so the list's health is read again.
   watch(() => JSON.stringify([Object.keys(view.value.launch.saved_profiles || {}), Object.keys(view.value.launch.api_keys || {})]),
-    (now, before) => { if (available.value && before !== undefined) bridge.reload_workflows().catch(() => {}); });
+    (now, before) => { if (available.value && before !== undefined) refresh_list({ force: true }); });
+  // An AI member may have saved a workflow via CLI during a run; reload once the run completes.
+  watch(() => (view.value.room?.free?.executions || []).filter((item) => item.status === "completed").map((item) => item.id).join(","),
+    (now, before) => { if (available.value && before !== undefined && now !== before) refresh_list(); });
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") refresh_list();
+    });
+  }
 
   const add_items = [[
     { label: t('新建'), icon: "i-lucide-plus", onSelect: () => guard(() => edit_draft({ label: t('未命名工作流'), description: "", skill: NEW_SKILL, agents: [] })) },
@@ -395,7 +417,7 @@ function create_library({ view, bridge, act }) {
     finally { pending_items.value.delete(item.id); }
   }
 
-  return { conflict, reload, available, workflows, page_open, draft, saved_id, canvas_key, scope, subs, current, reserved, open_scope, enter_sub, add_sub, remove_sub, commands_allowed, busy, loading, failure, pending_items, retry: () => retry_read?.(), deleting, deleting_label, leaving,
+  return { conflict, reload, refresh_list, available, workflows, page_open, draft, saved_id, canvas_key, scope, subs, current, reserved, open_scope, enter_sub, add_sub, remove_sub, commands_allowed, busy, loading, failure, pending_items, retry: () => retry_read?.(), deleting, deleting_label, leaving,
     renaming, rename_text, inputs, skill_request, dirty, add_items, guard, discard, select, close_page, on_zip, on_folder, save,
     remove, item_menu, start_rename, commit_rename };
 }

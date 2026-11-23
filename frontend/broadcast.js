@@ -35,7 +35,7 @@ export function use_broadcast({ view, bridge, reader }) {
       room_id: room().id,
       message_id: Math.max(0, ...view.value.messages.map((message) => Number(message.id) || 0)),
       failed: new Set(executions.filter((item) => item.status === "failed").map((item) => item.id)),
-      refused: new Set(executions.filter((item) => item.denials?.length).map((item) => item.id)),
+      refused: new Set(executions.filter((item) => item.status !== "completed" && item.denials?.length).map((item) => item.id)),
       round: discussion_round(), speaker: speaker(), concluded: room().session?.status === "concluded",
     };
   }
@@ -69,7 +69,8 @@ export function use_broadcast({ view, bridge, reader }) {
     const members = new Map((room().free?.members || []).map((member) => [member.id, member.name]));
     for (const execution of room().free?.executions || []) {
       const who = name(execution.member || members.get(execution.member_id) || t("成员"));
-      const refused = Boolean(execution.denials?.length) && !seen.refused.has(execution.id);
+      // A completed run worked around its refused calls on its own; only incomplete runs wait for approval.
+      const refused = execution.status !== "completed" && Boolean(execution.denials?.length) && !seen.refused.has(execution.id);
       if (execution.status === "failed" && !seen.failed.has(execution.id)) {
         seen.failed.add(execution.id);
         if (refused) seen.refused.add(execution.id);

@@ -2,6 +2,8 @@
 
 Manage room members: invite local apps or model APIs, resume existing sessions, change models and permissions, choose a host, or let an already-open local AI conversation join manually.
 
+On the Room tab you can update several members in succession. Access, model and attendance changes appear immediately. If a save fails, the page restores the previous setting and explains why.
+
 ## Invite members
 
 ### Steps
@@ -34,6 +36,10 @@ Use “History” to bring context from an existing local AI conversation into a
 - **Private prompt.** Flip the member card and select “Expert prompt” on its back. Write instructions for this member alone, such as “Start with the conclusion”. This does not change its permissions. Restore the app’s default prompt at any time.
 
 ## Set the host, pause participation, invite back, or remove
+
+The Room tab lists present members first. Members who have stepped away appear in a separate group below, expanded by default. Select its heading to collapse or expand it. Each card still offers actions such as inviting the member back.
+
+To change the default speaking order, drag a present member’s handle and release it at the insertion line. The handle is on the right of the card header on phones and on the left on desktop. With the handle focused, press Up or Down to move the member one place. Press Esc during a drag to cancel.
 
 - **Choose the host.** When creating a room, select the crown on a member card. In an existing room, open the member menu and select “Make host”. Changing the host during a discussion pauses it. The new host's project access is raised to match the previous host: it gets the highest level its own software supports that does not exceed the previous host's (for example, if the previous host had “Automatic” and the new host's software has no such level, it gets “Can write”). Access is only ever raised, a notice in the lower right says what changed, and the previous host keeps its own. Change it back in the member table if that is not what you want.
 - **“Leave”.** In the right sidebar, open the member menu and select “Leave”. The member becomes “Away”, stops receiving work, and its pending requests are canceled. Its session is kept.

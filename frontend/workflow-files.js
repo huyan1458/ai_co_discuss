@@ -50,13 +50,29 @@ export function zip_entries(bytes) {
     const path = entry_name(bytes.subarray(offset + 46, offset + 46 + name_length), flags).replace(/\\/g, "/");
     offset += 46 + name_length + extra + comment;
     if (path.endsWith("/")) continue;
-    entries.push({ path, size, modified_at: entry_time(date, time), encrypted: Boolean(flags & 1), read: async () => {
+    entries.push({ path, size, modified_at: entry_time(date, time), encrypted: Boolean(flags & 1), read: async (limit = Infinity) => {
+      if (size > limit) throw new Error(t("压缩包内单个文件最多预览 64 MiB"));
       if (flags & 1) throw new Error(t('{value1} 已加密，无法读取', { value1: path }));
       const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
       const data = bytes.subarray(start, start + compressed);
-      if (method === 0) return data;
+      if (method === 0 && data.length === size) return data;
+      if (method === 0) throw new Error(t("无法读取这个压缩包条目"));
       if (method !== 8) throw new Error(t('{value1} 的压缩方式不支持', { value1: path }));
-      return new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer());
+      const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      if (!Number.isFinite(limit)) return new Uint8Array(await new Response(stream).arrayBuffer());
+      const result = new Uint8Array(size), reader = stream.getReader();
+      let offset = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (offset + value.byteLength > size) throw new Error(t("无法读取这个压缩包条目"));
+          result.set(value, offset);
+          offset += value.byteLength;
+        }
+      } finally { await reader.cancel(); }
+      if (offset !== size) throw new Error(t("无法读取这个压缩包条目"));
+      return result;
     } });
   }
   return entries;

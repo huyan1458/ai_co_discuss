@@ -1,3 +1,4 @@
+import { local_settings } from './discussion_setup.mjs';
 /** Shared launch configuration for an existing AI conversation and the local website. */
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -10,11 +11,12 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { account_projects, account_space, create_or_restore_account_project, draft_folder, hide_account_projects, listed_account_projects } from './account_space.mjs';
+import { request_share_job, sharing_available } from './share_service.mjs';
 import { atomic_json } from './files.mjs';
 import { room_draft_space } from './room_destruction.mjs';
 import { ISOLATED_ACCOUNT_VARIABLE } from './os_users.mjs';
 import { read_store } from './external_client.mjs';
-import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, project_root, read_only_enforced, read_project_files, read_project_folders, room_directories, search_project_roots } from './project_files.mjs';
+import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, project_root, project_zip, read_only_enforced, read_project_files, read_project_folders, room_directories, search_project_roots } from './project_files.mjs';
 import { delete_entry, make_folder, paste_entry, read_text, RecycleArea, rename_entry, save_text, upload_part } from './project_manage.mjs';
 import { guard_remote_request, list_remote_directories, remote_allows, remote_roots } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
@@ -80,6 +82,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch room-models --file FILE
       codiscuss launch room-skills --file FILE
       codiscuss launch room-files --file FILE
+      codiscuss launch share-job --file FILE
       codiscuss launch room-page --file FILE
       codiscuss launch room-media --file FILE
       codiscuss launch execution-details --file FILE
@@ -589,6 +592,21 @@ function recycle_area(home) {
  */
 export async function room_files(home, raw, { trust = false } = {}) {
   const { input, config } = await member_room_context(home, raw, { trust });
+  if (input.op === 'zip-list' || input.op === 'zip-entry') {
+    return project_zip(files_root(home, config, input.root ?? 0), input, trust);
+  }
+  if (input.op === 'stat-batch') {
+    const directories = room_directories(config);
+    if (!Array.isArray(input.items) || input.items.length > 2000) throw new Error(t('批量文件查询最多支持 2000 个位置'));
+    const items = input.items.map(item => {
+      if (!Number.isInteger(item?.root) || !directories[item.root]) return null;
+      try {
+        const { size, modified_at } = project_media(directories[item.root], item.path, { download: true });
+        return { kind: 'file', size, modified_at };
+      } catch { return null; }
+    });
+    return { room_id: input.room_id, items };
+  }
   if (input.op) return { room_id: input.room_id, ...file_operation(home, config, input) };
   const directories = room_directories(config);
   if (input.query) return { room_id: input.room_id, ...search_project_roots(directories, input.query) };
@@ -596,6 +614,22 @@ export async function room_files(home, raw, { trust = false } = {}) {
   const directory = files_root(home, config, root);
   if (input.folders) return { room_id: input.room_id, root, folders: read_project_folders(directory, input.folders) };
   return { room_id: input.room_id, root, ...read_project_files(directory, input.path, input.offset) };
+}
+
+/** Share only the computer's own rooms, under the same owner proof as project file reads. */
+export async function room_share_job(home, raw, { trust = false } = {}) {
+  if (!sharing_available(home)) return { enabled: false };
+  const { op, room_id, id, room_title, selection } = raw;
+  const url = new URL(raw.site || 'http://127.0.0.1:' + (local_settings(home).port || 8765));
+  if (url.protocol !== 'http:' || !['localhost','127.0.0.1','[::1]'].includes(url.hostname)
+      || Number(url.port) !== Number(local_settings(home).port || 8765)) return { enabled: false };
+  if (op !== 'list') {
+    launch_input({ ...raw, site: url.origin, entry: 'web' });
+    if (!room_id || (!raw.token && !trust)) throw new Error('管理成员须提供房间编号和房间控制凭据');
+    // A paired computer request has already proved the administrator device. Imported rooms can have no runner configuration.
+    await site_request(url.origin, '/api/rooms/' + room_id + '/inbox', raw.token || '');
+  }
+  return request_share_job(home, { op, room_id, id, room_title, selection, locale: raw.locale, token: op === 'list' ? undefined : raw.token });
 }
 
 /** The file page's changes; each names its folder by `root` and a relative `path`, as reading does. */
@@ -1380,6 +1414,7 @@ export async function room_member_model(home, raw, headers = {}) {
   const model = typeof input.model === 'string' ? input.model.trim() : '';
   const effort = typeof input.effort === 'string' ? input.effort.trim() : '';
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  let saved, before, after;
   try {
     const config = configuration_snapshot(path).config;
     const profile = config.participants?.[name];
@@ -1399,9 +1434,19 @@ export async function room_member_model(home, raw, headers = {}) {
     const updated = { ...config, participants: { ...config.participants, [name]: next } };
     validate_config(updated, dirname(path));
     atomic_json(path, updated);
-    const recorded = label(profile) === label(next) ? null : await record_model_change(input, name, label(profile), label(next), headers);
-    return { room_id: input.room_id, member: name, model: next.model || '', effort, ...(recorded ? { notice_id: recorded } : {}) };
+    before = label(profile);
+    after = label(next);
+    let session_id = profile.session_id, applied = 0;
+    try {
+      session_id = bound_sessions(config, path)[name] || session_id;
+      applied = settings_applied(config, path)[name] || 0;
+    } catch { /* An older runtime can lack the bindings or metadata table. */ }
+    const pending = Number(next.model_changed_at) > applied;
+    const model_pending = pending ? (adapter_of(next.adapter)?.into_window?.(next, { session_id }) ? 'window' : 'next') : '';
+    saved = { room_id: input.room_id, member: name, model: next.model || '', effort, model_pending };
   } finally { release(); }
+  const recorded = before === after ? null : await record_model_change(input, name, before, after, headers);
+  return recorded ? { ...saved, notice_id: recorded } : saved;
 }
 
 /**
@@ -3228,6 +3273,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'stt' && input) result = await stt_part(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
   else if (positionals[0] === 'room-skills' && input) result = await room_skills(home, input);
+  else if (positionals[0] === 'share-job' && input) result = await room_share_job(home, input);
   else if (positionals[0] === 'room-files' && input) result = await room_files(home, input);
   else if (positionals[0] === 'room-page' && input) result = await room_page(home, input, { parts: Boolean(values.remote) });
   else if (positionals[0] === 'room-media' && input) result = await room_media(home, input, { parts: Boolean(values.remote) });

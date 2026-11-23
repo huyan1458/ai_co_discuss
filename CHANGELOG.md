@@ -2,6 +2,14 @@
 
 Versions match the npm package. Recorded from 0.5.0 on, listing only the changes you will notice. The Chinese version is `CHANGELOG.zh-CN.md`; on the website, click the version number at the top left to read it.
 
+## 0.5.18 (2026-11-23)
+
+- New: Sharing prepares and uploads in the background even if you lock or leave the page, and "Filter files" supports preview and sorting.
+- New: The workflow canvas adds "User" and "Branch" nodes to mark where you step in and where flows split.
+- Changed: Reorder speaking order by dragging in the "Room" tab, edit multiple members in a row, and find paused members grouped below.
+- Changed: Previewing a ZIP archive now lists its contents first and loads a file only when you click it, so large archives open faster.
+- Changed: Sent images keep their local preview and scroll position, and denied operations on finished answers are folded by default.
+
 ## 0.5.17 (2026-11-23)
 
 - New: Pick attachments by type or with "Choose files" when sharing; share links now carry up to 300 MB (100 MB per file).

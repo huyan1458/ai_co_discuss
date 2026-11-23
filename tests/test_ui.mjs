@@ -1,3 +1,4 @@
+import { SHARE_DAYS, SHARE_DEFAULT_DAYS, SHARE_SITE_FILES_MAX_BYTES } from '../runner/share_shared.mjs';
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -376,6 +377,99 @@ test("consecutive sends survive a room switch and retry in order without changin
   assert.equal(state.failed_sends.length, 0);
 });
 
+test("two members leave or are removed immediately while acknowledgements arrive out of order", async () => {
+  const { context } = theme_fixture();
+  const state = context.test_state;
+  const members = [1, 2].map(id => ({ id, name: "Member" + id, status: "active" }));
+  state.room = { id: "one", members, free: { members } };
+  const writes = [];
+  context.refresh_room = async () => {};
+  context.request_json = (path, body) => {
+    const deferred = Promise.withResolvers();
+    writes.push({ path, body, ...deferred });
+    return deferred.promise;
+  };
+  for (const action of ["away", "remove"]) {
+    const start = writes.length;
+    const saving = members.map(member => context.change_member({ action, name: member.name, member_id: member.id }));
+    assert.equal(writes.length, start + 2);
+    const shown = () => Array.from(context.shown_room().members, member => member.status);
+    const expected = action === "away" ? ["away", "away"] : [];
+    assert.deepEqual(shown(), expected);
+    writes[start + 1].resolve({ members: action === "away" ? [{ ...members[1], status: "away" }] : [members[0]] });
+    await saving[1];
+    assert.deepEqual(shown(), expected);
+    writes[start].resolve({ members: action === "away" ? [{ ...members[0], status: "away" }] : [] });
+    await saving[0];
+    assert.deepEqual(shown(), expected);
+  }
+});
+
+test("newer member settings survive stale reads and superseded failures", async () => {
+  const { context } = theme_fixture();
+  const state = context.test_state;
+  context.structuredClone = structuredClone;
+  const profile = { adapter: "codex_cli", project_access: "read", model: "m", actual_model: "m", actual_effort: "low" };
+  state.room = { id: "one", members: [{ name: "Codex", access: "runner" }] };
+  state.launch.room_models = { room_id: "one", participants: { Codex: profile } };
+  const writes = [];
+  context.local_launch_request = () => {
+    const deferred = Promise.withResolvers();
+    writes.push(deferred);
+    return deferred.promise;
+  };
+  const shown = () => context.shown_launch().room_models;
+  const access = value => context.set_member_access({ name: "Codex", project_access: value });
+  const model = (model, effort) => context.set_member_model({ name: "Codex", model, effort });
+  const first = access("write"), last = access("full");
+  assert.equal(shown().participants.Codex.project_access, "full");
+  writes[0].reject(new Error("first request failed"));
+  assert.equal(await first, false);
+  writes[1].resolve({ project_access: "full" });
+  await last;
+  const changed = model("m", "high");
+  assert.match(context.participant_model("Codex", state.room, shown()), /high/);
+  const reset = model("", "");
+  const stale = { ...state.launch.room_models, participants: { Codex: { ...profile, project_access: "full" } } };
+  state.launch.room_models = stale;
+  assert.equal(shown().participants.Codex.model, "");
+  assert.equal(shown().participants.Codex.model_pending, "next");
+  writes[2].resolve({ model: "m", effort: "high" });
+  await changed;
+  writes[3].resolve({ model: "", effort: "", model_pending: "next" });
+  await reset;
+  assert.equal(shown().participants.Codex.model, "");
+  assert.equal(shown().participants.Codex.project_access, "full");
+});
+
+test("late profile reads and a failed access change preserve the acknowledged model", async () => {
+  const { context } = theme_fixture();
+  context.structuredClone = structuredClone;
+  const state = context.test_state;
+  const profile = { model: "old", adapter: "codex_cli", project_access: "read" };
+  state.room = { id: "one", members: [{ name: "Codex", access: "runner" }] };
+  state.launch.available = true;
+  state.launch.room_models = { room_id: "one", participants: { Codex: profile } };
+  const read = Promise.withResolvers(), latest = Promise.withResolvers();
+  context.local_launch_request = (command, body) => {
+    if (command === "room-models") return read.promise;
+    if (command === "room-member-access") return latest.promise;
+    return Promise.resolve({ model: body.model, effort: body.effort, model_pending: "window" });
+  };
+  const reading = context.load_room_models(true);
+  await context.set_member_model({ name: "Codex", model: "new", effort: "high" });
+  const changing = context.set_member_access({ name: "Codex", project_access: "write" });
+  read.resolve({ room_id: "one", participants: { Codex: profile } });
+  await reading;
+  const shown = () => context.shown_launch().room_models.participants.Codex;
+  assert.equal(shown().project_access, "write");
+  assert.equal(shown().model_pending, "window");
+  latest.reject(new Error("refused"));
+  await assert.rejects(changing, /refused/);
+  assert.equal(shown().project_access, "read");
+  assert.equal(shown().model, "new");
+});
+
 test("saving host permissions keeps the settings rows, member model and expanded details during reload", async () => {
   const read = Promise.withResolvers();
   const room = { id: "one" };
@@ -691,7 +785,7 @@ function create_form_fixture() {
     } };
   const context = vm.createContext({ computed, ref, nextTick, defineProps: () => ({}), defineEmits: () => event => submissions.push(event),
     invite_after_creation: ref(null),
-    inject: () => ({ view, bridge, pending, act: () => {} }), onMounted: callback => callback(), onBeforeUnmount: () => {},
+    inject: () => ({ view, bridge, is_running: name => pending.value === name, act: () => {} }), onMounted: callback => callback(), onBeforeUnmount: () => {},
     window: { setInterval: () => 0, clearInterval: () => {} }, document: { hidden: false },
     watch: (...args) => { const stop = watch(...args); cleanups.push(stop); return stop; } });
   const component = readFileSync(new URL("../frontend/CreateDiscussion.vue", import.meta.url), "utf8");
@@ -1038,6 +1132,36 @@ test('a relayed upload resends only lost parts, and a try after a failure carrie
   const restarted = await context.relay_upload('/api/rooms/r/attachments?submission_id=c', third);
   assert.deepEqual([...sent].sort(), [0, 0, 1, 2, 3]);
   assert.ok(whole(restarted.attachment.id).equals(Buffer.from(third)));
+});
+
+test('ZIP preview lists once and reads only a clicked entry, preserving old-service fallback', async () => {
+  const { context } = theme_fixture(), calls = [];
+  const entry = { path: '资料/notes..txt', size: 3 };
+  context.request_json = async path => { calls.push(path); return { entries: [entry] }; };
+  context.read_room_file = async path => { calls.push(path); return Uint8Array.of(1, 2, 3); };
+  const attachment = { id: 'a', room_id: 'r' };
+  const rows = await context.read_zip_directory('r', 'test.zip', 0, attachment);
+  assert.deepEqual(calls, ['/api/rooms/r/attachments/a/zip']);
+  assert.deepEqual(Array.from(await rows[0].read()), [1, 2, 3]);
+  assert.equal(new URL(calls[1], 'https://local.test').searchParams.get('entry'), entry.path);
+  context.request_json = async () => { throw Object.assign(new Error('old'), { status: 404 }); };
+  assert.equal(await context.read_zip_directory('r', 'test.zip', 0, attachment), null);
+  context.request_json = async () => { throw Object.assign(new Error('invalid'), { status: 400 }); };
+  await assert.rejects(context.read_zip_directory('r', 'test.zip', 0, attachment), /invalid/);
+  const offsets = [];
+  context.atob = atob;
+  context.manage_room_files = async (_, input) => {
+    if (input.op === 'zip-list') return { entries: [entry] };
+    offsets.push(input.offset);
+    return { total: 3, offset: input.offset, version: 'one', data: input.offset ? 'Aw==' : 'AQI=' };
+  };
+  const listed = await context.read_zip_directory('r', 'project.zip', 1);
+  assert.deepEqual(offsets, []);
+  assert.deepEqual(Array.from(await listed[0].read()), [1, 2, 3]);
+  assert.deepEqual(offsets, [0, 2]);
+  context.manage_room_files = async () => { throw new Error('文件操作只能为 roots/read/save'); };
+  assert.equal(await context.read_zip_directory('r', 'project.zip', 1), null);
+
 });
 
 test('attachment button metadata reaches preview without a metadata or relay read first', async () => {
@@ -2379,6 +2503,167 @@ test("a share link is kept with the room, published once, updated, renewed and r
   await context.share_revoke("r1");
   assert.deepEqual([calls.at(-1).method, calls.at(-1).auth, kept], ["DELETE", "Bearer TOKEN", null]);
   assert.ok(!notified.some(([level]) => level === "error"), JSON.stringify(notified));
+});
+
+test("a background share survives closing its progress and keeps concurrent notes bound to its room", async () => {
+  const { context } = theme_fixture(), notices = [], releases = [];
+  let peak = 0, active = 0;
+  context.test_state.rooms = [{ id: 'one', title: 'First room' }];
+  context.request_json = async (path, payload, token, trace, recording) => {
+    if (path.includes('/notes')) {
+      peak = Math.max(peak, ++active);
+      await new Promise(resolve => setImmediate(resolve));
+      active--;
+    }
+    const body = path === '/api/rooms' ? { rooms: context.test_state.rooms } : path.endsWith('/timeline')
+      ? { executions: Array.from({ length: 10 }, (_, id) => ({ id, last_note: 'note' })) }
+      : path.includes('/messages?') ? { messages: [], has_more: false } : { id: 'one', title: 'First room', members: [] };
+    recording.set(path, body);
+    return body;
+  };
+  const recorded = await context.record_share_reads('one');
+  assert.equal(peak, 6);
+  assert.equal(Object.keys(recorded.responses).filter(key => key.endsWith('/notes')).length, 10);
+  context.record_share_reads = () => new Promise(resolve => releases.push(resolve));
+  context.notify = (level, message, options) => notices.push(options);
+  context.structuredClone = structuredClone;
+  const work = context.share_prepare('one');
+  assert.equal(vm.runInContext('share_draft', context), null);
+  assert.ok(!context.test_state.backup_pending);
+  await context.share_prepare('one');
+  assert.equal(vm.runInContext('share_draft.phase', context), 'preparing');
+  context.share_cancel();
+  releases[0](recorded);
+  await work;
+  assert.equal(vm.runInContext('share_draft', context), null);
+  notices.at(-1).actions[0].onClick();
+  assert.equal(vm.runInContext('share_draft.phase', context), 'ready');
+});
+
+test("share preparation batches delivered file locations and sorts attachments by their source messages", async () => {
+  const { context } = theme_fixture(), calls = [];
+  const messages = [1, 2].map(id => ({ id, author_label: 'Editor', created_at: '2026-11-23', execution_id: 1,
+    text: '`report.pdf`', attachments: [{ room_id: 'one', id: 'file' + id, file_name: 'photo.png', size: 9 - id }] }));
+  const responses = { '/api/rooms/one': { free: { executions: [{ id: 1, created_at: 1 }] } }, '/api/rooms/one/messages?after=0': { messages } };
+  context.manage_room_files = async (room, request) => {
+    calls.push(request); return { items: [null, { kind: 'file', modified_at: '2026-11-23', size: 120 }] };
+  };
+  const delivered = await context.share_delivered_files(responses, 'one', ['main','extra']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].items.length, 2);
+  assert.equal(delivered.size, 2);
+  const photos = context.share_file_kinds({ files: context.share_files(responses, 'one') }).find(kind => kind.kind === 'image');
+  assert.deepEqual(Array.from(photos.files, item => [item.message_id, item.author, item.created_at]), [[2,'Editor','2026-11-23'],[1,'Editor','2026-11-23']]);
+});
+
+test("text scans and older runners use up to six reads and retain each file's association", async () => {
+  const { context } = theme_fixture();
+  const names = Array.from({ length: 9 }, (_, index) => "report-" + index + ".md");
+  const files = names.map((file_name, id) => ({ message_id: id + 1, file_name, content_type: "text/markdown", size: 4 }));
+  let peak = 0, active = 0;
+  const read = async () => {
+    peak = Math.max(peak, ++active);
+    await new Promise(resolve => setImmediate(resolve));
+    active--;
+  };
+  context.TextDecoder = TextDecoder;
+  context.share_file_bytes = async file => {
+    await read();
+    if (file.message_id === 5) throw new Error("missing");
+    return new TextEncoder().encode("text");
+  };
+  const spots = await context.share_file_spots(files);
+  assert.equal(peak, 6);
+  assert.equal(spots.length, 1);
+  assert.ok(spots[0].where.includes("report-4.md"));
+  peak = 0;
+  let batches = 0;
+  context.manage_room_files = async () => { batches++; throw new Error("unknown operation"); };
+  context.read_room_files = async () => { await read(); return { kind: "file", modified_at: "2026-11-23", size: 4 }; };
+  const messages = names.map((file_name, id) => ({ id: id + 1, text: "`" + file_name + "`", execution_id: 1 }));
+  const responses = { "/api/rooms/one": { free: { executions: [{ id: 1, created_at: 1 }] } }, "/api/rooms/one/messages?after=0": { messages } };
+  const delivered = await context.share_delivered_files(responses, "one", ["main"]);
+  assert.equal(batches, 1);
+  assert.equal(peak, 6);
+  assert.equal(delivered.size, names.length);
+});
+
+test("sharing without a connected computer uses six browser uploads and reports a failed publication for retry", async () => {
+  const { context } = theme_fixture(), notices = [];
+  const files = Array.from({ length: 8 }, (_, index) => ({ route: "/api/rooms/r/attachments/" + index + "/content", site_type: "text/plain", size: 1 }));
+  let peak = 0, active = 0;
+  context.share_carried_files = () => files;
+  context.share_file_bytes = async () => new Uint8Array(1);
+  context.fetch = async () => {
+    peak = Math.max(peak, ++active);
+    await new Promise(resolve => setImmediate(resolve));
+    active--;
+    return { ok: true };
+  };
+  const draft = { room_id: "r" };
+  await context.share_upload_files(draft, { share_id: "share", manage_token: "token" }, "revision");
+  assert.equal(peak, 6);
+  assert.equal(draft.upload.done, files.length);
+  context.Blob = Blob;
+  context.share_contents = async () => ({});
+  context.share_link_record = async () => null;
+  context.share_site_request = async () => { throw new Error("offline"); };
+  context.notify = (level, message, options) => notices.push({ level, message, options });
+  vm.runInContext('share_draft = { room_id: "r", phase: "ready" }; share_tasks.set("r", share_draft);', context);
+  await context.share_publish(7);
+  assert.equal(vm.runInContext('share_draft', context), null);
+  assert.equal(notices.at(-1).level, "error");
+  assert.match(notices.at(-1).message, /offline/);
+  notices.at(-1).options.actions[0].onClick();
+  assert.equal(vm.runInContext('share_draft.phase', context), "ready");
+});
+
+test("publishing checks the exact snapshot and attachment limits before closing the dialog or sending anything", async () => {
+  const { context, notified } = theme_fixture();
+  context.Blob = Blob;
+  let files = [], description = "";
+  context.share_carried_files = () => files;
+  context.share_contents = async () => ({ description });
+  context.share_link_record = () => assert.fail("preflight must finish before network access");
+  vm.runInContext('share_draft = { room_id: "one", phase: "ready" };', context);
+  const mb = 1024 * 1024;
+  for (const [sizes, text, limit] of [[[101 * mb], "", "100 MB"], [Array(4).fill(76 * mb), "", "300 MB"], [[], "x".repeat(5 * mb), "5 MB"]]) {
+    files = sizes.map(size => ({ size, site_name: "example.pdf" }));
+    description = text;
+    await context.share_publish(7);
+    assert.equal(vm.runInContext("share_draft.phase", context), "ready");
+    assert.equal(notified.at(-1)[0], "error");
+    assert.ok(notified.at(-1)[1].includes(limit));
+  }
+});
+
+test("share attachment filters open above the cap, sort without changing selections, and use each file's viewer", () => {
+  const opened = [], watches = [];
+  const view = { value: { share_draft: { room_id: "one", files: { included: true, bytes: 300 * 1024 * 1024 } } } };
+  const context = vm.createContext({
+    inject: () => ({ view, act: (...args) => opened.push(args) }), ref: value => ({ value }),
+    computed: getter => ({ get value() { return getter(); } }), watch: (source, run) => watches.push([source, run]),
+    SHARE_DAYS, SHARE_DEFAULT_DAYS, SHARE_SITE_FILES_MAX_BYTES,
+    file_preview: { open: (...args) => opened.push(args) },
+  });
+  const component = readFileSync(new URL("../frontend/ShareDialog.vue", import.meta.url), "utf8");
+  vm.runInContext(component.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/gm, ""), context);
+  const [included, update] = watches.find(([source]) => typeof source === "function" && source() === true);
+  update(included());
+  assert.equal(vm.runInContext("filters_open.value", context), false);
+  view.value.share_draft.files.bytes++;
+  update(included());
+  assert.equal(vm.runInContext("filters_open.value", context), true);
+  const files = [{ message_id: 2, size: 5, selected: true }, { message_id: 1, size: 12, selected: false, project: { path: "report.md", root: 1 } }];
+  context.files = files;
+  assert.deepEqual(vm.runInContext("sorted_files(files)", context), files);
+  const sizes = vm.runInContext('sort_by.value = "size"; sorted_files(files)', context);
+  assert.deepEqual(Array.from(sizes, item => item.message_id), [1, 2]);
+  assert.deepEqual(files.map(item => item.selected), [true, false]);
+  vm.runInContext("files.forEach(preview)", context);
+  assert.equal(opened[0][0], "preview_attachment");
+  assert.equal(opened[0][1].from_share, true);
+  assert.deepEqual(opened[1], ["report.md", "", 1, files[1]]);
 });
 
 test("a visual panel's result is accepted only from its own frame and within the limit", () => {

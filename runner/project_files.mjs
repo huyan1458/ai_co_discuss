@@ -2,6 +2,8 @@
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, posix, relative, resolve } from 'node:path';
+import { crc32, inflateRawSync } from 'node:zlib';
+import { t } from './i18n.mjs';
 import { adapter_capabilities, adapter_profile } from './adapters/profiles.mjs';
 import { PINYIN_TABLE } from './pinyin_table.mjs';
 
@@ -422,6 +424,111 @@ export function project_media(cwd, path, { download = false } = {}) {
   const info = statSync(target);
   if (!info.isFile()) throw new Error('只能预览普通文件');
   return { file: target, size: info.size, content_type, modified_at: info.mtime.toISOString(), version: `${info.mtimeMs}:${info.size}` };
+}
+
+const ZIP_END_BYTES = 22;
+const ZIP_MAX_COMMENT = 65535;
+const ZIP_ENTRY_LIMIT = 64 * 1024 * 1024;
+const ZIP_DIRECTORY_LIMIT = 16 * 1024 * 1024;
+const ZIP_PART_BYTES = 192 * 1024;
+const zip_utf8 = new TextDecoder('utf-8', { fatal: true });
+const zip_gbk = new TextDecoder('gbk');
+let last_zip_entry;
+
+function invalid_zip() { return new Error(t('无法读取 ZIP 压缩包')); }
+
+/** Read exactly one validated region of the open archive. */
+function zip_region(fd, offset, length, end) {
+  if (offset < 0 || length < 0 || offset + length > end) throw invalid_zip();
+  const buffer = Buffer.alloc(length);
+  for (let read = 0; read < length;) {
+    const count = readSync(fd, buffer, read, length - read, offset + read);
+    if (!count) throw invalid_zip();
+    read += count;
+  }
+  return buffer;
+}
+
+function zip_name(raw, flags) {
+  let name;
+  try { name = zip_utf8.decode(raw); }
+  catch { if (flags & 0x800) throw invalid_zip(); name = zip_gbk.decode(raw); }
+  name = name.replaceAll('\\', '/');
+  return /[\x00-\x1f\x7f:]/.test(name) || name.split('/').some(part => ['', '.', '..', '__MACOSX', '.DS_Store'].includes(part)) ? '' : name;
+}
+
+/** Locate the end record. Archives without a comment need only the final 22 bytes. */
+function zip_directory(fd, size) {
+  let end = size - ZIP_END_BYTES;
+  let record = zip_region(fd, end, ZIP_END_BYTES, size);
+  if (record.readUInt32LE(0) !== 0x06054b50 || record.readUInt16LE(20)) {
+    const start = Math.max(0, end - ZIP_MAX_COMMENT), tail = zip_region(fd, start, size - start, size);
+    let cursor = tail.length - ZIP_END_BYTES;
+    for (; cursor >= 0; cursor--) {
+      if (tail.readUInt32LE(cursor) === 0x06054b50 && cursor + ZIP_END_BYTES + tail.readUInt16LE(cursor + 20) === tail.length) break;
+    }
+    if (cursor < 0) throw invalid_zip();
+    end = start + cursor;
+    record = tail.subarray(cursor);
+  }
+  const count = record.readUInt16LE(10), length = record.readUInt32LE(12), offset = record.readUInt32LE(16);
+  if (record.readUInt32LE(4) || count !== record.readUInt16LE(8) || length > ZIP_DIRECTORY_LIMIT || offset + length !== end) throw invalid_zip();
+  const directory = zip_region(fd, offset, length, end), entries = new Map();
+  let cursor = 0;
+  for (let index = 0; index < count; index++) {
+    if (cursor + 46 > length || directory.readUInt32LE(cursor) !== 0x02014b50) throw invalid_zip();
+    const row = directory.subarray(cursor), name_length = row.readUInt16LE(28);
+    cursor += 46 + name_length + row.readUInt16LE(30) + row.readUInt16LE(32);
+    if (cursor > length) throw invalid_zip();
+    const flags = row.readUInt16LE(8), raw = row.subarray(46, 46 + name_length), path = zip_name(raw, flags);
+    if (!path || entries.has(path)) continue;
+    const date = row.readUInt16LE(14), time = row.readUInt16LE(12);
+    const modified_at = date ? new Date(1980 + (date >> 9), ((date >> 5) & 15) - 1, date & 31, time >> 11, (time >> 5) & 63, (time & 31) * 2).toISOString() : '';
+    entries.set(path, { path, size: row.readUInt32LE(24), modified_at, encrypted: Boolean(flags & 1),
+      raw, local: row.readUInt32LE(42), method: row.readUInt16LE(10), compressed: row.readUInt32LE(20), crc: row.readUInt32LE(16) });
+  }
+  return { entries, offset };
+}
+
+function unzip_file(fd, item, end) {
+  if (!item || item.encrypted || ![0, 8].includes(item.method)) throw new Error(t('无法读取这个压缩包条目'));
+  if (item.size > ZIP_ENTRY_LIMIT || item.compressed > ZIP_ENTRY_LIMIT + 1024 * 1024) throw new Error(t('压缩包内单个文件最多预览 64 MiB'));
+  const header = zip_region(fd, item.local, 30, end);
+  const name_length = header.readUInt16LE(26);
+  if (header.readUInt32LE() !== 0x04034b50 || header.readUInt16LE(8) !== item.method || header.readUInt16LE(6) & 1
+      || !zip_region(fd, item.local + 30, name_length, end).equals(item.raw)) throw invalid_zip();
+  const start = item.local + 30 + name_length + header.readUInt16LE(28);
+  const compressed = zip_region(fd, start, item.compressed, end);
+  let bytes = compressed;
+  if (item.method === 8) {
+    try { bytes = inflateRawSync(compressed, { maxOutputLength: Math.max(1, item.size) }); }
+    catch { throw invalid_zip(); }
+  }
+  if (bytes.length !== item.size || crc32(bytes) !== item.crc) throw invalid_zip();
+  return bytes;
+}
+
+/** List a project's ZIP directory, or return one bounded part of a selected entry. */
+export function project_zip(directory, input, relayed = false) {
+  const { file } = project_media(directory, input.path);
+  const fd = openSync(file, 'r');
+  try {
+    const stat = fstatSync(fd);
+    const version = [stat.ino, stat.ctimeMs, stat.mtimeMs, stat.size].join(':');
+    const key = JSON.stringify([file, version, input.entry_path]);
+    const offset = input.offset ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) throw invalid_zip();
+    if (input.op === 'zip-list' || last_zip_entry?.key !== key) {
+      const archive = zip_directory(fd, stat.size);
+      if (input.op === 'zip-list') return { entries: Array.from(archive.entries.values(), ({ path, size, modified_at, encrypted }) => ({ path, size, modified_at, encrypted })) };
+      last_zip_entry = { key, bytes: unzip_file(fd, archive.entries.get(input.entry_path), archive.offset) };
+    }
+    const bytes = last_zip_entry.bytes;
+    if (offset > bytes.length) throw invalid_zip();
+    // The local bridge runs one CLI process per call. Send the chosen entry once there.
+    const part = relayed ? bytes.subarray(offset, offset + ZIP_PART_BYTES) : bytes.subarray(offset);
+    return { total: bytes.length, offset, version, data: part.toString('base64') };
+  } finally { closeSync(fd); }
 }
 
 /** Search names under every directory of a room at once; each entry's `root` is the index of its directory. */

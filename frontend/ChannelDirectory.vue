@@ -22,10 +22,9 @@ import MemoBlock from "./memo-block.js";
 import { use_workflow_library } from "./workflow-library.js";
 import { use_invited_rooms } from "./external-members.js";
 import { locale, t } from "./i18n.js";
-import { draw_share_card, share_card_blob } from "./share-card.js";
 
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions"]);
-const { view, bridge, act, pending } = inject("discussion");
+const { view, bridge, act, is_running } = inject("discussion");
 // While the workflow page or an invited room fills the middle, no room row is shown as the open one.
 const { page_open: workflow_library_open } = use_workflow_library();
 const { page_open: invited_open } = use_invited_rooms();
@@ -102,7 +101,7 @@ function room_time_title(room) {
 // Everything a room row and its menus read besides the room itself, so a row re-renders only when this, the room or its
 // time label changes rather than on every view publish.
 const row_state = computed(() => JSON.stringify([view.value.directory_pending, view.value.archive_pending, view.value.destroying, view.value.backup_pending,
-  view.value.folders, view.value.room_site, manual_order.value, view.value.room?.id, pending.value, middle_page.value, open_room_running.value]));
+  view.value.folders, view.value.room_site, manual_order.value, view.value.room?.id, middle_page.value, open_room_running.value]));
 /** The open room's own live state is fresher than the directory's, so its light follows that. */
 const open_room_running = computed(() => (view.value.room?.free?.members || [])
   .some((member) => ["dispatched", "started"].includes(member.execution?.status)));
@@ -116,7 +115,7 @@ const open_room_running = computed(() => (view.value.room?.free?.members || [])
  * room), opens the room when one is known, or drops the record (user 2026-11-18, replacing the banner over every room).
  */
 function recovery_items(item) {
-  const busy = Boolean(pending.value);
+  const busy = is_running("resume_launch") || is_running("discard_launch");
   return [[
     { label: t("重试"), icon: "i-lucide-rotate-cw", disabled: busy, onSelect: () => act("resume_launch", item.id) },
     ...(item.room_id ? [{ label: t("查看房间"), icon: "i-lucide-arrow-right", onSelect: () => emit("select", item.room_id) }] : []),
@@ -128,7 +127,7 @@ function recovery_items(item) {
 const unconfirmed_launches = computed(() => view.value.launch.recoveries.filter((item) => item.id !== view.value.creating_room?.submission_id));
 
 function room_row(room, index, count) {
-  return { items: actions(room, index, room.folder_id || null, count), active: !middle_page.value && room.id === view.value.room?.id, busy: Boolean(pending.value),
+  return { items: actions(room, index, room.folder_id || null, count), active: !middle_page.value && room.id === view.value.room?.id,
     archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room),
     running: room_running(room), destroying: view.value.destroying.includes(room.id) };
 }
@@ -191,8 +190,8 @@ function folder_open(id) { return !id || expanded.value.has(id); }
 function folder_actions(folder, index) {
   const ordering = view.value.directory_pending.includes("folder-order") || view.value.directory_pending.includes("create-folder");
   return [...(folder.id ? [[{ label: t("编辑"), icon: "i-lucide-pencil", disabled: folder.pending || view.value.directory_pending.includes(`folder-name:${folder.id}`), onSelect: () => emit("manage-folder", folder) }]] : []), [
-    { label: t("上移"), icon: "i-lucide-arrow-up", disabled: ordering || index === 0 || Boolean(pending.value), onSelect: () => act("move_folder", { id: folder.order_id, direction: -1 }) },
-    { label: t("下移"), icon: "i-lucide-arrow-down", disabled: ordering || index === folders.value.length - 1 || Boolean(pending.value), onSelect: () => act("move_folder", { id: folder.order_id, direction: 1 }) },
+    { label: t("上移"), icon: "i-lucide-arrow-up", disabled: ordering || index === 0, onSelect: () => act("move_folder", { id: folder.order_id, direction: -1 }) },
+    { label: t("下移"), icon: "i-lucide-arrow-down", disabled: ordering || index === folders.value.length - 1, onSelect: () => act("move_folder", { id: folder.order_id, direction: 1 }) },
   ], [{ label: t("导入房间"), icon: "i-lucide-download", disabled: folder.pending || view.value.backup_pending, onSelect: () => choose_import_target(folder.id || null) },
     folder_export(folder)], ...(folder.id ? [[{ label: t("存档文件夹"), icon: "i-lucide-archive",
     disabled: folder.pending || !folder.rooms.length || folder.rooms.some(room => view.value.archive_pending.includes(room.id)),
@@ -222,74 +221,35 @@ function toggle_folder(id) {
   expanded.value = next;
 }
 
-// The share page read and cleaned, waiting for the owner to confirm; what looks sensitive in it is listed first.
-const SHARE_SPOTS_SHOWN = 6;
-const share_draft = computed(() => view.value.share_draft);
-// The title stays while the dialog fades out after the draft is gone.
-const share_title = ref("");
-watch(() => share_draft.value?.title, (title) => { if (title) share_title.value = title; });
-const share_spots = computed(() => share_draft.value?.spots || []);
-const share_phase = computed(() => share_draft.value?.phase || "");
-const share_expiry = computed(() => share_draft.value?.link ? new Date(share_draft.value.link.expires_at).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "");
-// The share card of a published link, drawn once the dialog shows it.
-const card_canvas = ref(null);
-// The two texts on the card are the owner's to adjust before the picture is saved or copied.
-const card_text = ref({ question: "", outcome: "" });
-watch(() => share_draft.value?.link?.card, (card) => { if (card) card_text.value = { question: card.question, outcome: card.outcome }; });
-watch([() => share_draft.value?.link?.card, card_canvas, card_text], ([card, canvas, text]) => { if (card && canvas) draw_share_card(canvas, { ...card, ...text }); }, { deep: true });
-/** Save the card as a PNG named after the room. */
-async function save_card() {
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(await share_card_blob(card_canvas.value));
-  link.download = `${share_title.value.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 60) || "share"}.png`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 60000);
-}
-// A copy button says it worked for a moment.
-const COPIED_MS = 2000;
-// Pictures reach the clipboard only where the browser offers it (not Firefox, not a plain-http address); elsewhere the button is left out.
-const can_copy_image = typeof ClipboardItem !== "undefined" && Boolean(navigator.clipboard?.write);
-const card_copied = ref(false);
-/** Put the card on the clipboard as an image, for pasting straight into a chat. */
-async function copy_card() {
-  try {
-    await navigator.clipboard.write([new ClipboardItem({ "image/png": share_card_blob(card_canvas.value) })]);
-    card_copied.value = true;
-    setTimeout(() => { card_copied.value = false; }, COPIED_MS);
-  } catch { bridge.notify("warning", t("这个浏览器不能复制图片，请用“保存图片”。")); }
-}
-const copied_link = ref(false);
-// Publishing already put the link on the clipboard, so the button opens saying so.
-const link_copied = computed(() => copied_link.value || Boolean(share_draft.value?.link?.copied && !link_seen.value));
-const link_seen = ref(false);
-watch(() => share_draft.value?.link?.url, (url) => { link_seen.value = false; if (url) setTimeout(() => { link_seen.value = true; }, COPIED_MS * 2); });
-async function copy_share_link() {
-  await act("copy", share_draft.value.link.url);
-  copied_link.value = true;
-  setTimeout(() => { copied_link.value = false; }, COPIED_MS);
-}
-// Attachment kinds unfolded to their files in the share dialog; a new page starts folded.
-const open_kinds = ref(new Set());
-watch(() => share_draft.value?.room_id, () => { open_kinds.value = new Set(); });
-function toggle_kind_open(kind) {
-  const next = new Set(open_kinds.value);
-  next.has(kind) ? next.delete(kind) : next.add(kind);
-  open_kinds.value = next;
-}
-const share_spot_total = computed(() => share_spots.value.reduce((total, spot) => total + spot.count, 0));
-// How long a published link lives; the share site keeps it at most seven days.
-const share_days = ref(7);
-const share_day_items = computed(() => (view.value.share_days || [1, 3, 7]).map((days) => ({ label: t("{count} 天后过期", { count: days }), value: days })));
-/** Closing the dialog without choosing drops the prepared page. */
-function close_share(open) {
-  if (!open && share_draft.value) bridge.execute("share_cancel");
-}
 // Every room with a live share link, for the "shared" list: newest expiry last.
 const shares_open = ref(false);
 const shared_rooms = computed(() => view.value.rooms.filter((room) => view.value.share_links?.[room.id])
   .map((room) => ({ ...room, share_link: view.value.share_links[room.id] }))
   .sort((a, b) => Date.parse(a.share_link.expires_at) - Date.parse(b.share_link.expires_at)));
-watch(() => shared_rooms.value.length, (count) => { if (!count) shares_open.value = false; });
+const jobs = computed(() => view.value.managed_share_jobs || []);
+const active_job = computed(() => jobs.value.find(job => ["preparing","publishing"].includes(job.phase)));
+function phase_label(job) {
+  switch (job.phase) {
+    case "preparing": return t("整理中");
+    case "publishing": return t("上传 {done}/{total}", job.progress);
+    case "ready": return t("待确认");
+    case "failed": return t("失败");
+    case "cancelled": return t("已取消");
+    case "published": return t("已发布");
+  }
+}
+const share_badge = computed(() => {
+  if (active_job.value) return phase_label(active_job.value);
+  const pending = jobs.value.filter(job => job.phase === "ready").length;
+  const failed = jobs.value.filter(job => job.phase === "failed").length;
+  return [pending && t("{count} 待确认", { count: pending }), failed && t("{count} 失败", { count: failed })].filter(Boolean).join(" · ") || shared_rooms.value.length || jobs.value.length;
+});
+function job_action(op, job) {
+  if (op === "open") { shares_open.value = false; emit("manage", { action: "share_job_action", job }); }
+  else act("share_job_action", { op, job });
+}
+watch(shares_open, open => { if (open) act("share_job_refresh"); });
+watch(() => shared_rooms.value.length + jobs.value.length, count => { if (!count) shares_open.value = false; });
 // Under a day left is marked so the owner sees which links are about to go.
 const SOON_MS = 24 * 3600 * 1000;
 const expires_soon = (link) => Date.parse(link.expires_at) - Date.now() < SOON_MS;
@@ -317,18 +277,18 @@ function actions(room, index, folder_id, folder_room_count) {
     { label: t("重命名"), icon: "i-lucide-pencil", disabled: view.value.directory_pending.includes(`rename:${room.id}`), onSelect: () => emit("manage", { room, action: "rename" }) },
     ...(current ? [{ label: t("编辑议题"), icon: "i-lucide-pencil", onSelect: () => emit("manage", { room, action: "edit" }) }] : []),
     { label: t("复制阅读入口"), icon: "i-lucide-link", onSelect: () => act("copy", `${view.value.room_site}/r/${encodeURIComponent(room.id)}`) },
-    { label: t("导出对话"), icon: "i-lucide-upload", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("backup", room.id) },
-    { label: t("分享"), icon: "i-lucide-share-2", disabled: view.value.backup_pending || Boolean(pending.value), onSelect: () => act("share_prepare", room.id) },
+    { label: t("导出对话"), icon: "i-lucide-upload", disabled: view.value.backup_pending, onSelect: () => act("backup", room.id) },
+    { label: t("分享"), icon: "i-lucide-share-2", onSelect: () => emit("manage", { room, action: "share_prepare" }) },
     ...(share_link(room) ? [{ label: t("复制分享链接"), icon: "i-lucide-link-2", onSelect: () => act("share_copy", room.id) },
       { label: t("撤销分享链接"), icon: "i-lucide-link-2-off", disabled: view.value.backup_pending, onSelect: () => { revoking.value = room; } }] : []),
   ], ...(current ? [[{ label: t("刷新消息"), icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") }]] : []), [
-    { label: t("移至文件夹"), icon: "i-lucide-folder-input", disabled: Boolean(pending.value) || (!room.folder_id && !view.value.folders?.length), children: [
+    { label: t("移至文件夹"), icon: "i-lucide-folder-input", disabled: (!room.folder_id && !view.value.folders?.length), children: [
       { label: t("移出文件夹"), icon: "i-lucide-folder-minus", disabled: !room.folder_id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: null }) },
       ...(view.value.folders || []).map((folder) => ({ label: folder.name, icon: "i-lucide-folder", disabled: folder.pending || room.folder_id === folder.id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: folder.id }) })),
     ] },
   ], [
-    { label: t("上移"), icon: "i-lucide-arrow-up", disabled: ordering || !manual_order.value || index === 0 || Boolean(pending.value), onSelect: () => act("move_channel", { id: room.id, direction: -1, folder_id }) },
-    { label: t("下移"), icon: "i-lucide-arrow-down", disabled: ordering || !manual_order.value || index === folder_room_count - 1 || Boolean(pending.value), onSelect: () => act("move_channel", { id: room.id, direction: 1, folder_id }) },
+    { label: t("上移"), icon: "i-lucide-arrow-up", disabled: ordering || !manual_order.value || index === 0, onSelect: () => act("move_channel", { id: room.id, direction: -1, folder_id }) },
+    { label: t("下移"), icon: "i-lucide-arrow-down", disabled: ordering || !manual_order.value || index === folder_room_count - 1, onSelect: () => act("move_channel", { id: room.id, direction: 1, folder_id }) },
   ], [
     { label: room.archived ? t("恢复房间") : t("存档房间"), icon: room.archived ? "i-lucide-archive-restore" : "i-lucide-archive", disabled: view.value.archive_pending.includes(room.id), onSelect: () => emit("manage", { room, action: room.archived ? "restore" : "archive" }) },
     { label: t("销毁房间"), icon: "i-lucide-flame", color: "error", disabled: view.value.directory_pending.includes(`rename:${room.id}`), onSelect: () => emit("manage", { room, action: "delete" }) },
@@ -359,7 +319,7 @@ function actions(room, index, folder_id, folder_room_count) {
        <template v-for="head in [folder_head(folder, folder_index)]" :key="folder.order_id">
        <MemoBlock v-if="folder.id" :deps="[head.key]">
        <div class="channel-folder-row" :class="{ active: head.collapsed && head.active }">
-       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="folder.name" :aria-expanded="!head.collapsed" :title="t('拖动文件夹排序；上下方向键移动')" @pointerdown="!pending && bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="head.collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><i v-if="head.running && !folder.pending" class="channel-room-running" :title="t('正在执行')" /><small v-else-if="folder.pending" class="channel-directory-count" aria-hidden="true">{{ t('保存中') }}</small></button>
+       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="folder.name" :aria-expanded="!head.collapsed" :title="t('拖动文件夹排序；上下方向键移动')" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="head.collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><i v-if="head.running && !folder.pending" class="channel-room-running" :title="t('正在执行')" /><small v-else-if="folder.pending" class="channel-directory-count" aria-hidden="true">{{ t('保存中') }}</small></button>
         <div class="channel-folder-actions">
           <UTooltip :text="t('在{name}中新建房间', { name: folder.name })"><UButton icon="i-lucide-plus" :aria-label="t('在{name}中新建房间', { name: folder.name })" :disabled="folder.pending || head.creating" size="xs" color="neutral" variant="ghost" @click="emit('create', folder.id ? folder : null)" /></UTooltip>
           <UDropdownMenu :items="head.items" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="t('管理文件夹 {name}', { name: folder.name })" :title="t('文件夹选项')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
@@ -372,11 +332,11 @@ function actions(room, index, folder_id, folder_room_count) {
       <template v-for="row in [room_row(room, index, folder.rooms.length)]" :key="room.id">
       <UContextMenu :items="row.items" :ui="{ content: 'channel-menu channel-topic-menu' }">
         <div class="channel-room-row" :class="{ active: row.active, 'is-destroying': row.destroying }" :data-drag-room="room.id" :inert="row.destroying || undefined">
-          <button class="channel-room-grip" data-drag-handle :aria-label="t('拖动 {name}', { name: room.title })" :title="t('拖动排序；上下方向键移动')" :disabled="row.busy" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
-          <button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="!pending && bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><i v-if="row.running" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button>
+          <button class="channel-room-grip" data-drag-handle :aria-label="t('拖动 {name}', { name: room.title })" :title="t('拖动排序；上下方向键移动')"  @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
+          <button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><i v-if="row.running" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button>
           <div class="channel-room-actions">
             <UTooltip :text="room.archived ? t('恢复房间') : t('存档房间')" :ui="{ content: 'channel-topic-tooltip' }">
-              <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="room.archived ? t('恢复 {name}', { name: room.title }) : t('存档 {name}', { name: room.title })" class="channel-room-archive" size="xs" color="neutral" variant="ghost" :disabled="row.busy || row.archiving" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
+              <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="room.archived ? t('恢复 {name}', { name: room.title }) : t('存档 {name}', { name: room.title })" class="channel-room-archive" size="xs" color="neutral" variant="ghost" :disabled="row.archiving" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
             </UTooltip>
             <UDropdownMenu :items="row.items" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="t('管理 {name}', { name: room.title })" :title="t('更多操作')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
           </div>
@@ -394,11 +354,33 @@ function actions(room, index, folder_id, folder_room_count) {
       <p v-if="!rooms.length" class="channel-directory-empty">{{ view.rooms_loading ? t("正在读取房间…") : t("暂无协作房间") }}</p>
     </nav>
     <UButton v-show="rooms_open" icon="i-lucide-archive" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="emit('archives')"><span class="channel-archive-label">{{ t("已存档") }}</span><small v-if="archived_count" class="channel-archive-count">{{ archived_count }}</small></UButton>
-    <UButton v-show="rooms_open && shared_rooms.length" icon="i-lucide-share-2" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="shares_open = true"><span class="channel-archive-label">{{ t("已分享") }}</span><small class="channel-archive-count">{{ shared_rooms.length }}</small></UButton>
+    <UButton v-show="rooms_open && (shared_rooms.length || jobs.length)" :icon="active_job ? 'i-lucide-loader-circle' : 'i-lucide-share-2'" :ui="{ leadingIcon: active_job ? 'animate-spin' : '' }" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="shares_open = true"><span class="channel-archive-label">{{ t("已分享") }}</span><small class="channel-archive-count">{{ share_badge }}</small></UButton>
     <SitesPanel :visible="rooms_open" />
     <UModal v-model:open="shares_open" :title="t('已分享的房间')" :description="t('到期自动删除。续期只延长时间，内容不变；要换成最新内容，在房间菜单里重新分享。')"
       :ui="{ content: 'glass-panel studio-modal channel-folder-modal channel-manage-modal share-dialog', body: 'dialog-body' }">
       <template #body>
+        <section v-if="jobs.length" class="share-jobs">
+          <h3>{{ t("分享任务") }}</h3>
+          <article v-for="job in jobs" :key="job.id" class="share-job">
+            <div class="share-job-title"><strong>{{ job.room_title }}</strong><span>{{ phase_label(job) }}</span></div>
+            <template v-if="job.phase === 'publishing'">
+              <progress :value="job.progress.bytes_done" :max="job.progress.bytes_total || 1" :aria-label="t('上传进度')" />
+              <small>{{ bridge.attachment_size(job.progress.bytes_done) }} / {{ bridge.attachment_size(job.progress.bytes_total) }}</small>
+            </template>
+            <p v-if="job.error" class="text-error">{{ job.error }}</p>
+            <div class="share-job-actions">
+              <UButton v-if="job.phase === 'ready'" size="xs" :label="t('打开确认')" @click="job_action('open', job)" />
+              <UButton v-if="['ready','preparing','publishing'].includes(job.phase)" size="xs" color="neutral" variant="soft" :label="t('取消')" @click="job_action('cancel', job)" />
+              <UButton v-if="['failed','cancelled'].includes(job.phase)" size="xs" :label="t('重试')" @click="job_action('retry', job)" />
+              <UButton v-if="job.phase === 'failed' && job.adjustable" size="xs" color="neutral" variant="soft" :label="t('调整附件')" @click="job_action('open', job)" />
+              <template v-if="job.phase === 'published'">
+                <UButton size="xs" :label="t('查看分享卡')" @click="job_action('open', job)" />
+                <UButton size="xs" color="neutral" variant="soft" :label="t('复制链接')" @click="job_action('copy', job)" />
+              </template>
+              <UButton v-if="['failed','cancelled','published'].includes(job.phase)" size="xs" color="neutral" variant="ghost" :label="t('清除')" @click="job_action('dismiss', job)" />
+            </div>
+          </article>
+        </section>
         <ul class="shared-rooms">
           <li v-for="room in shared_rooms" :key="room.id" class="shared-room" :class="{ 'is-soon': expires_soon(room.share_link) }">
             <div class="shared-room-main">
@@ -408,6 +390,9 @@ function actions(room, index, folder_id, folder_room_count) {
             <div class="shared-room-side">
               <span class="shared-room-expiry"><UIcon name="i-lucide-clock" />{{ expiry_label(room.share_link) }}</span>
               <div class="shared-room-actions">
+                <UButton v-if="view.share_tasks?.[room.id]?.phase === 'publishing'" color="primary" size="xs" variant="soft"
+                  :label="view.share_tasks[room.id].upload ? t('正在上传附件 {done}/{total}', view.share_tasks[room.id].upload) : t('正在上传…')"
+                  @click="shares_open = false; emit('manage', { room, action: 'share_open' })" />
                 <UTooltip :text="t('复制链接')"><UButton icon="i-lucide-copy" size="xs" color="neutral" variant="ghost" :aria-label="t('复制「{name}」的分享链接', { name: room.title })" @click="act('share_copy', room.id)" /></UTooltip>
                 <UTooltip :text="t('打开分享页')"><UButton icon="i-lucide-external-link" size="xs" color="neutral" variant="ghost" :aria-label="t('打开「{name}」的分享页', { name: room.title })" :to="room.share_link.url" target="_blank" rel="noopener noreferrer" /></UTooltip>
                 <UDropdownMenu :items="renew_items(room)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
@@ -421,154 +406,22 @@ function actions(room, index, folder_id, folder_room_count) {
       </template>
     </UModal>
     <ImportDialog v-model:open="import_open" />
-    <UModal :open="Boolean(share_draft)" :title="share_phase === 'published' ? t('分享链接已发布') : t('分享「{name}」', { name: share_title })"
-      :description="share_phase === 'published' ? share_title : t('生成只读网页，没装共议的人也能打开看。')"
-      :content="{ onInteractOutside: (event) => event.preventDefault() }" :ui="{ content: `glass-panel studio-modal channel-folder-modal channel-manage-modal share-dialog${share_phase === 'published' ? ' share-dialog-wide' : ''}`, body: 'dialog-body' }" @update:open="close_share">
-      <template v-if="share_phase === 'published'" #title><span class="share-done-title"><UIcon name="i-lucide-circle-check" />{{ t('分享链接已发布') }}</span></template>
-      <template #body>
-        <div v-if="share_phase === 'preparing'" class="share-dialog-loading" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ t("正在整理房间：读取消息与执行记录，去掉本机信息…") }}</div>
-        <template v-else-if="share_phase === 'published'">
-          <!-- The link first: it is what was asked for, and it is already on the clipboard. -->
-          <div class="share-done-link">
-            <UIcon name="i-lucide-link-2" class="share-done-link-icon" />
-            <input :value="share_draft.link.url.replace(/^https?:\/\//, '')" readonly class="share-done-url" :aria-label="t('分享链接')" @focus="$event.target.select()">
-            <UTooltip :text="t('打开分享页')"><UButton icon="i-lucide-external-link" color="neutral" variant="ghost" size="sm" :aria-label="t('打开分享页')" :to="share_draft.link.url" target="_blank" rel="noopener noreferrer" /></UTooltip>
-            <UButton :label="link_copied ? t('已复制') : t('复制链接')" :icon="link_copied ? 'i-lucide-check' : 'i-lucide-copy'" color="primary" size="sm" class="share-done-copy" @click="copy_share_link" />
-          </div>
-          <p class="share-done-meta"><UIcon name="i-lucide-clock" />{{ share_draft.link.updated ? t("已更新原链接的内容，{time} 前有效。", { time: share_expiry }) : t("{time} 前有效，到期自动删除。", { time: share_expiry }) }}</p>
-          <div class="share-done-card">
-            <figure class="share-done-stage"><canvas ref="card_canvas" :aria-label="t('分享卡：{name}', { name: share_title })"></canvas></figure>
-            <div class="share-done-side">
-              <h3>{{ t('分享卡') }}</h3>
-              <label class="share-dialog-field"><span>{{ t('卡片上的问题') }}</span>
-                <UTextarea v-model="card_text.question" :rows="2" autoresize :maxrows="4" variant="soft" :placeholder="t('可留空')" :aria-label="t('分享卡上的问题')" /></label>
-              <label class="share-dialog-field"><span>{{ t('卡片上的成果') }}</span>
-                <UTextarea v-model="card_text.outcome" :rows="3" autoresize :maxrows="5" variant="soft" :placeholder="t('可留空')" :aria-label="t('分享卡上的成果')" /></label>
-              <div class="share-done-card-actions">
-                <UButton :label="t('保存图片')" icon="i-lucide-image-down" color="neutral" variant="subtle" @click="save_card" />
-                <UButton v-if="can_copy_image" :label="card_copied ? t('已复制') : t('复制图片')" :icon="card_copied ? 'i-lucide-check' : 'i-lucide-clipboard-copy'" color="neutral" variant="subtle" @click="copy_card" />
-              </div>
-            </div>
-          </div>
-          <div class="share-done-foot">
-            <p>{{ t("之后在左侧“已分享”里可以复制、续期或撤销，已配对的手机和平板也能操作。") }}</p>
-            <UButton :label="t('完成')" color="neutral" variant="outline" @click="close_share(false)" />
-          </div>
-        </template>
-        <template v-else>
-        <section class="share-dialog-section">
-          <h3>{{ t("分享的内容") }}</h3>
-          <p>{{ t("消息、卡片、执行时间线与过程说明，停在此刻；读者只能看，不能操作。") }}</p>
-          <p class="share-dialog-muted">{{ t("不含私聊、事件记录、调度决策、排队消息、会话与凭据；本机用户目录写作 ~，项目目录写成相对路径，失败原因只写“执行失败”。") }}</p>
-        </section>
-        <!-- Attachments go in only when the owner ticks this (user 2026-11-21): every kind of file, as it was sent. -->
-        <section v-if="share_draft.files?.count" class="share-dialog-section">
-          <UCheckbox :model-value="share_draft.files.included" :disabled="share_phase !== 'ready'"
-            :label="t('包含附件（{count} 个，共 {size}）', { count: share_draft.files.count, size: bridge.attachment_size(share_draft.files.bytes) })" @update:model-value="act('share_include_files', $event)" />
-          <!-- Kinds of attachment the owner can leave out, as when a room's zips take it past what a link carries. -->
-          <div v-if="share_draft.files.included" class="share-dialog-kinds">
-            <div v-for="kind in share_draft.files.kinds" :key="kind.kind" class="share-dialog-kind">
-              <div class="share-dialog-kind-head">
-                <UCheckbox :model-value="kind.included" :disabled="share_phase !== 'ready'"
-                  :label="t('{kind} {count} 个 · {size}', { kind: kind.label, count: kind.count, size: bridge.attachment_size(kind.bytes) })"
-                  @update:model-value="act('share_toggle_kind', { kind: kind.kind, include: $event === true })" />
-                <UButton :icon="open_kinds.has(kind.kind) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" color="neutral" variant="ghost" size="xs"
-                  :label="open_kinds.has(kind.kind) ? t('收起') : t('逐个选择')" :aria-expanded="open_kinds.has(kind.kind)" @click="toggle_kind_open(kind.kind)" />
-              </div>
-              <ul v-if="open_kinds.has(kind.kind)" class="share-dialog-files">
-                <li v-for="file in kind.files" :key="file.route">
-                  <UCheckbox :model-value="file.included" :disabled="share_phase !== 'ready'" @update:model-value="act('share_toggle_file', { route: file.route, include: $event === true })">
-                    <template #label><span class="share-dialog-file-name" :title="file.name">{{ file.name }}</span><span class="share-dialog-file-meta">#{{ file.message_id }} · {{ bridge.attachment_size(file.size) }}</span></template>
-                  </UCheckbox>
-                </li>
-              </ul>
-            </div>
-            <p class="share-dialog-muted">{{ t("已选 {size}；发布链接最多带 300 MB 附件（单个 100 MB），网页文件最多 100 MB。", { size: bridge.attachment_size(share_draft.files.carried) }) }}</p>
-          </div>
-          <p v-if="share_draft.files.included && share_draft.files.site_left_out.length" class="share-dialog-muted">{{ t("{names} 不能放到分享站：发布链接时不带，消息里显示“未包含在分享中”；下载网页文件仍会带上。", { names: share_draft.files.site_left_out.slice(0, 3).join("、") + (share_draft.files.site_left_out.length > 3 ? t(" 等 {count} 个", { count: share_draft.files.site_left_out.length }) : "") }) }}</p>
-          <p v-if="share_phase === 'checking'" class="share-dialog-muted">{{ t("正在检查文本类附件…") }}</p>
-          <p v-else class="share-dialog-muted">{{ share_draft.files.included ? t("附件原样公开。文本类附件已一并检查；图片、视频和其他文件的内容程序查不了，请自己核对。") : t("不包含时，消息里的附件标记显示为“未包含在分享中”。") }}</p>
-        </section>
-        <section class="share-dialog-section">
-          <h3>{{ share_spots.length ? t("发出前请核对（{count} 处）", { count: share_spot_total }) : t("发出前请核对") }}</h3>
-          <p v-if="!share_spots.length" class="share-dialog-clear"><UIcon name="i-lucide-circle-check" />{{ t("没有找到疑似密钥、令牌或联系方式。正文会原样公开，程序查不全，仍请自己看一遍。") }}</p>
-          <template v-else>
-            <p class="share-dialog-muted">{{ t("疑似密钥、令牌、邮箱或手机号，正文会原样公开：") }}</p>
-            <ul class="share-dialog-spots">
-              <li v-for="spot in share_spots.slice(0, SHARE_SPOTS_SHOWN)" :key="spot.where"><b>{{ spot.where }}</b><span v-if="spot.count > 1" class="share-dialog-count">{{ t("{count} 处", { count: spot.count }) }}</span><code>{{ spot.text }}</code></li>
-            </ul>
-            <p v-if="share_spots.length > SHARE_SPOTS_SHOWN" class="share-dialog-muted">{{ t("另有 {count} 个位置，请在生成的网页里查找。", { count: share_spots.length - SHARE_SPOTS_SHOWN }) }}</p>
-          </template>
-        </section>
-        <div class="share-dialog-choices">
-          <div class="share-dialog-choice">
-            <UButton :label="t('下载网页文件')" icon="i-lucide-download" color="neutral" variant="outline" block :loading="share_phase === 'downloading'" :disabled="share_phase !== 'ready'" @click="act('share_room')" />
-            <p>{{ t("得到一个 .html 文件，发出后无法过期或撤回。") }}</p>
-          </div>
-          <div class="share-dialog-choice">
-            <div class="share-dialog-publish">
-              <USelect v-model="share_days" :items="share_day_items" class="share-dialog-days" :disabled="share_phase !== 'ready'" :aria-label="t('分享链接的有效期')" />
-              <UButton :label="share_phase === 'publishing' ? (share_draft?.upload ? t('正在上传附件 {done}/{total}', share_draft.upload) : t('正在上传…')) : share_draft?.linked ? t('更新链接') : t('发布链接')" icon="i-lucide-link-2" color="primary" class="share-dialog-publish-button"
-                :loading="share_phase === 'publishing'" :disabled="share_phase !== 'ready'" @click="act('share_publish', share_days)" />
-            </div>
-            <p>{{ t("上传到 AI CoDiscuss 分享站，运营方与审核 AI 能读到全文；到期自动删除，可随时撤销，撤销后缓存副本留到原定到期时才清除。") }}</p>
-          </div>
-        </div>
-        </template>
-      </template>
-    </UModal>
     <ConfirmDialog :open="Boolean(revoking)" :title="t('撤销「{name}」的分享链接', { name: revoking?.title || '' })" :description="t('分享站上的这份记录会立即删除，打开链接的人会看到“分享不存在”。')"
       :items="[t('已经下载的离线网页文件不受影响。')]" :confirm-label="t('撤销链接')" danger @update:open="(value) => { if (!value) revoking = null; }" @confirm="act('share_revoke', revoking.id)" />
   </div>
 </template>
 
 <style scoped>
-.share-dialog-loading { display: flex; align-items: center; gap: 8px; padding: 20px 0 28px; color: var(--ui-text-toned); font-size: 13px; }
-/* Published. The link is one field with its two actions inside it; below, the card on a stage with its texts beside it. */
-.share-done-title { display: inline-flex; align-items: center; gap: 8px; }
-.share-done-title .iconify { width: 18px; height: 18px; color: var(--ui-success); }
-.share-done-link { display: flex; align-items: center; gap: 4px; padding: 5px 5px 5px 12px; border: 1px solid var(--ui-border-accented); border-radius: 11px; background: var(--ui-bg); transition: border-color .15s, box-shadow .15s; }
-.share-done-link:focus-within { border-color: var(--channel-accent, var(--ui-primary)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 18%, transparent); }
-.share-done-link-icon { flex-shrink: 0; width: 16px; height: 16px; color: var(--ui-text-muted); }
-.share-done-url { flex: 1; min-width: 0; height: 30px; padding: 0 6px; border: 0; outline: 0; background: none; color: var(--ui-text-highlighted); font: 13px/30px ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace; text-overflow: ellipsis; }
-.share-done-copy { flex-shrink: 0; min-width: 92px; justify-content: center; }
-.share-done-meta { display: flex; align-items: center; gap: 6px; margin: 8px 2px 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.5; }
-.share-done-meta .iconify { flex-shrink: 0; width: 13px; height: 13px; }
-.share-done-card { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: 20px; align-items: stretch; margin-top: 18px; }
-.share-done-stage { display: flex; align-items: center; justify-content: center; margin: 0; padding: 18px; border: 1px solid var(--ui-border-muted); border-radius: 14px;
-  background: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 14%, transparent), transparent 70%), color-mix(in srgb, var(--ui-text) 3%, transparent); }
-.share-done-stage canvas { display: block; width: 100%; max-width: 228px; height: auto; border-radius: 10px; box-shadow: 0 1px 0 #ffffff14 inset, 0 14px 32px -10px #000000b3, 0 2px 6px #0000004d; }
-.share-done-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.share-done-side h3 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
-.share-dialog-field { display: grid; gap: 5px; }
-.share-dialog-field > span { color: var(--ui-text-muted); font-size: 12px; }
-.share-dialog-field :deep(textarea) { font-size: 13px; line-height: 1.6; }
-.share-done-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
-.share-done-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
-.share-done-foot p { margin: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.5; }
-.share-done-foot button { flex-shrink: 0; }
-@media (max-width: 640px) {
-  .share-done-card { grid-template-columns: 1fr; }
-  .share-done-stage canvas { max-width: 240px; }
-  .share-done-copy { min-width: 0; }
-}
-.share-dialog-section { display: grid; gap: 4px; margin-bottom: 16px; font-size: 13px; line-height: 1.6; color: var(--ui-text-toned); }
-.share-dialog-section h3 { margin: 0 0 2px; font-size: 13px; font-weight: 600; color: var(--ui-text-highlighted); }
-.share-dialog-section p { margin: 0; }
-.share-dialog-muted { color: var(--ui-text-muted); font-size: 12px; }
-.share-dialog-clear { display: flex; align-items: flex-start; gap: 6px; }
-.share-dialog-clear .iconify { flex-shrink: 0; margin-top: 3px; color: var(--ui-success); }
-.share-dialog-spots { display: grid; gap: 4px; max-height: 180px; overflow-y: auto; margin: 2px 0 0; padding: 0; list-style: none; }
-.share-dialog-spots li { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: baseline; gap: 6px; padding: 4px 8px; border-radius: 6px; background: var(--ui-bg-elevated); font-size: 12px; }
-.share-dialog-spots b { font-weight: 600; color: var(--ui-text-highlighted); white-space: nowrap; }
-.share-dialog-count { color: var(--ui-text-muted); white-space: nowrap; }
-.share-dialog-spots code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-text-toned); }
-.share-dialog-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
-.share-dialog-choice { display: grid; align-content: start; gap: 6px; }
-.share-dialog-choice p { margin: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.5; }
-.share-dialog-publish { display: flex; gap: 6px; }
-.share-dialog-days { width: 118px; flex-shrink: 0; }
-.share-dialog-publish-button { flex: 1; justify-content: center; }
-@media (max-width: 560px) { .share-dialog-choices { grid-template-columns: 1fr; } }
+.share-jobs { display: grid; gap: .65rem; margin-bottom: 1rem; }
+.share-jobs h3 { font-weight: 600; }
+.share-job { display: grid; gap: .35rem; border-bottom: 1px solid var(--ui-border); padding: .45rem 0 .7rem; }
+.share-job-title, .share-job-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.share-job-title { justify-content: space-between; }
+.share-job-title strong, .share-job p { overflow-wrap: anywhere; }
+.share-job-title span, .share-job small { color: var(--ui-text-muted); }
+.share-job progress { appearance: none; width: 100%; height: 6px; border: 0; border-radius: 999px; overflow: hidden; background: var(--ui-bg-accented); accent-color: var(--channel-accent, var(--ui-primary)); }
+.share-job progress::-webkit-progress-bar { border-radius: 999px; background: var(--ui-bg-accented); }
+.share-job progress::-webkit-progress-value { border-radius: 999px; background: var(--channel-accent, var(--ui-primary)); }
+.share-job progress::-moz-progress-bar { border-radius: 999px; background: var(--channel-accent, var(--ui-primary)); }
 .channel-room-alert { justify-self: center; width: 14px; height: 14px; color: var(--ui-error); }
 </style>

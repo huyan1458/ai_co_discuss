@@ -62,15 +62,18 @@ watch(() => external_of(live.value)?.pending, (pending, was) => { if (open.value
 /** One change through the room backend; the room is read again so the rail shows it. */
 async function change(action, extra, success) {
   if (busy.value) return;
+  const member = props.member;
+  const room_id = room.value.id;
+  const previous = detail.value;
+  load_serial++;
   busy.value = action;
+  if (action === "revoke") open.value = false;
+  else if (previous) detail.value = { ...previous, ...extra, directories: [] };
   try {
-    if (action === "revoke") await operations.revoke(room.value.id, props.member.id);
-    else await operations.update(room.value.id, props.member.id, extra);
-    bridge.notify("info", success);
-    await Promise.all([act("refresh"), action === "revoke" ? null : load()]);
-    if (action === "revoke") open.value = false;
-  } catch (error) { bridge.notify("error", error.message); }
-  finally { busy.value = ""; }
+    const saved = await act("change_member", { member_id: member.id, name: member.name, action: action === "revoke" ? "revoke" : "narrow" });
+    if (saved) bridge.notify("info", success);
+    else if (member.id === props.member?.id && room_id === room.value.id) detail.value = previous;
+  } finally { busy.value = ""; }
 }
 const pending_expiry = computed(() => t("{count} 天内未签到自动结束", { count: Math.max(0, Math.ceil(((info.value?.expires_at || 0) - Date.now()) / 86400000)) }));
 const revoke_items = [t("立即生效：之后的请求与读取一律被拒，未完成的执行作废。"), t("已经读出去的内容收不回，会留在对方 AI 的会话里。")];

@@ -65,10 +65,12 @@ function place_notices() {
 
 const toast = useToast();
 /** Show the controller's notices; a repeat of one still open restarts it instead of stacking a copy. */
-function show_notice({ detail: { level, message } }) {
+function show_notice({ detail: { level, message, duration, actions, id } }) {
   place_notices();
   const text = String(message);
-  toast.add({ ...(NOTICE_LEVELS[level] || NOTICE_LEVELS.info), ...NOTICE_EVENTS, ui: NOTICE_UI, id: `${level}:${text}`,
+  toast.add({ ...(NOTICE_LEVELS[level] || NOTICE_LEVELS.info), ...NOTICE_EVENTS, ui: NOTICE_UI, id: id ?? `${level}:${text}`,
+    ...(duration == null ? {} : { duration }),
+    ...(actions ? { actions: actions.map(action => ({ ...action, color: "neutral", variant: "soft", size: "xs" })) } : {}),
     title: text.length > NOTICE_MAX_LENGTH ? `${text.slice(0, NOTICE_MAX_LENGTH - 1)}…` : text });
 }
 document.addEventListener("discuss:notice", show_notice);

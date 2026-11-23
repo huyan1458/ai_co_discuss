@@ -67,7 +67,7 @@ const name_of = (path) => path.split("/").pop() || t('文件预览');
 // 2026-11-23): another folder's room shows its own tabs, and each scope keeps its own open tab and window state.
 const room_folders = computed(() => new Map(view.value.rooms.map((room) => [room.id, room.folder_id || ""])));
 const scope_of = (room_id) => { const folder = room_folders.value.get(room_id); return folder ? `folder:${folder}` : `room:${room_id}`; };
-const current_scope = computed(() => view.value.room?.id ? scope_of(view.value.room.id) : "");
+const current_scope = computed(() => scope_of(view.value.share_draft?.room_id || view.value.room?.id || ""));
 const shown_tabs = computed(() => tabs.value.filter((item) => scope_of(item.room_id) === current_scope.value));
 const scope_states = new Map();
 watch(current_scope, (next, previous) => {
@@ -244,6 +244,18 @@ const reader = use_read_aloud({ bridge, container: () => markdown_scroll.value, 
   voice_for: async () => { try { return (await speech_settings()).file_voice || ""; } catch { return ""; } },
   title: () => view.value.room?.title || "" });
 const can_read = computed(() => speech_ready.value && format.value === "markdown" && !source.value && Boolean(preview.value?.text));
+/** Read the entire archive only after a download is requested. */
+async function download_zip() {
+  const item = tab.value;
+  try {
+    if (!item.attachment) return await bridge.download_project_file(item.room_id, item.path, item.root ?? 0);
+    const link = document.createElement("a");
+    link.href = item.attachment.url || await bridge.attachment_url(item.attachment);
+    link.download = item.attachment.file_name;
+    link.click();
+  } catch (error) { bridge.notify("error", error.message); }
+}
+
 /** Phones fold the file's actions into the head's "..." menu; font steps keep it open so taps can repeat. */
 const file_menu = computed(() => {
   const keep_open = (action) => (event) => { event.preventDefault(); action(); };
@@ -254,6 +266,7 @@ const file_menu = computed(() => {
     { label: t('恢复默认字号（当前 {value1}%）', { value1: Math.round(font_scale.value * 100) }), icon: "i-lucide-rotate-ccw", disabled: font_scale.value === 1, onSelect: keep_open(() => change_font_scale(0)) },
   ]);
   const rest = [];
+  if (document_kind.value === "zip") rest.push({ label: t("下载"), icon: "i-lucide-download", onSelect: download_zip });
   if (showing_source.value) rest.push({ label: wrap.value ? t('关闭自动换行') : t('自动换行'), icon: "i-lucide-wrap-text", onSelect: () => { wrap.value = !wrap.value; } });
   if (can_edit.value) rest.push({ label: t('编辑'), icon: "i-lucide-pencil", disabled: tab.value.starting_edit, onSelect: () => start_edit() });
   if (can_read.value) rest.push(reader.state.reading ? { label: t('停止朗读'), icon: "i-lucide-square", onSelect: () => reader.stop() } : { label: t('朗读'), icon: "i-lucide-volume-2", onSelect: () => read_file() });
@@ -282,6 +295,22 @@ async function load(item) {
   try {
     // The tab is already open with its loading animation; an attachment's address (through the relay for the
     // computer's rooms) is fetched only now.
+    if (item.archive_read && !item.attachment.url) {
+      const bytes = await item.archive_read().catch(error => {
+        throw new Error(t('无法解压 {value1}：{value2}', { value1: item.attachment.file_name, value2: error.message }));
+      });
+      if (request !== item.request) return;
+      item.archive_url = item.attachment.url = URL.createObjectURL(new Blob([bytes]));
+    }
+    if (!item.archive && document_kind_of(item.path) === "zip") {
+      const entries = await bridge.read_zip_directory(item.room_id, item.path, item.root ?? 0, item.attachment);
+      if (request !== item.request) return;
+      item.zip_entries = entries;
+      if (entries) {
+        item.data = { text: null, size: item.attachment?.size ?? item.metadata?.size };
+        return;
+      }
+    }
     if (item.attachment && !item.attachment.url && !item.archive) item.attachment.url = await bridge.attachment_url(item.attachment);
     // An Office attachment is read whole by its preview, never decoded as text.
     const binary = media_of(item.path) || document_kind_of(item.path);
@@ -363,17 +392,14 @@ ${entry.path}`;
     item = tabs.value[tabs.value.length - 1];
   }
   active_id.value = id;
-  if (item.attachment.url) { load(item); return; }
-  try {
-    item.archive_url = item.attachment.url = URL.createObjectURL(new Blob([await entry.read()]));
-    load(item);
-  } catch (error) { Object.assign(item, { loading: false, error: t('无法解压 {value1}：{value2}', { value1: entry.path, value2: error.message }) }); }
+  item.archive_read = entry.read;
+  await load(item);
 }
 
 /** Open a file of the current room in its own tab (or re-read the tab it already has) and show the window. */
 function open_file(path, directory, root = 0, metadata = null) {
   remember_scroll();
-  const room_id = view.value.room?.id;
+  const room_id = metadata?.room_id || view.value.room?.id;
   if (!room_id) return;
   const id = `${room_id}\n${root}\n${path}`;
   let item = tabs.value.find(entry => entry.id === id);
@@ -497,7 +523,7 @@ const dock_preferred = ref(read_dock_width());
 // The width right of the room list that the messages and the pane share; 0 when the window is too narrow to split.
 const dock_room = ref(0);
 const dock_max = computed(() => dock_room.value - DOCK_CHAT_MIN);
-const can_dock = computed(() => dock_max.value >= DOCK_MIN);
+const can_dock = computed(() => !view.value.share_draft && dock_max.value >= DOCK_MIN);
 const clamp_dock = (width) => Math.round(Math.min(dock_max.value, Math.max(DOCK_MIN, width)));
 const dock_width = computed(() => can_dock.value ? clamp_dock(dock_preferred.value || dock_room.value / 2) : 0);
 const dock_chosen = ref(read_dock_choice());
@@ -1149,6 +1175,7 @@ onBeforeUnmount(() => {
             <button type="button" class="project-editor-font-value" :title="t('恢复默认字号')" :aria-label="t('恢复默认字号')" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
             <button type="button" :title="t('放大字号')" :aria-label="t('放大字号')" :disabled="font_scale >= FONT_SCALE_MAX" @click="change_font_scale(1)"><UIcon name="i-lucide-a-arrow-up" /></button>
           </div>
+          <UButton v-if="document_kind === 'zip'" icon="i-lucide-download" color="neutral" variant="ghost" size="sm" :title="t('下载')" :aria-label="t('下载')" @click="download_zip" />
           <UButton v-if="can_edit" icon="i-lucide-pencil" color="neutral" variant="ghost" size="sm" :title="t('编辑')" :aria-label="t('编辑此文件')" :loading="tab.starting_edit" :disabled="tab.starting_edit" @click="start_edit" />
           <UButton v-if="showing_source" icon="i-lucide-wrap-text" color="neutral" :variant="wrap ? 'soft' : 'ghost'" size="sm" :aria-pressed="wrap"
             :title="wrap ? t('关闭自动换行') : t('自动换行')" :aria-label="t('自动换行')" @click="wrap = !wrap" />
@@ -1198,7 +1225,7 @@ onBeforeUnmount(() => {
         </template>
         <template v-else-if="document_kind === 'zip'">
           <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton :label="t('重试')" color="neutral" variant="outline" class="pb-action" size="sm" @click="load(tab)" /></div>
-          <ZipViewer v-else-if="tab.media" :url="tab.media.url" :name="preview_name" @open="open_archive_entry" />
+          <ZipViewer v-else-if="tab.zip_entries || tab.media" :entries="tab.zip_entries" :url="tab.media?.url" :name="preview_name" @open="open_archive_entry" />
           <PreviewLoading v-else :label="tab.media_progress ? t('正在经电脑读取… {value1}%', { value1: Math.round(tab.media_progress * 100) }) : t('正在打开…')" :progress="tab.media_progress || 0" />
         </template>
         <div v-else-if="preview?.text === null" class="project-editor-state"><UIcon :name="preview_type[1]" /><p>{{ preview.reason || t('这个格式只能下载后用本机软件打开') }}</p></div>

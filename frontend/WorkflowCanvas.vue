@@ -17,7 +17,7 @@ import "@vue-flow/minimap/dist/style.css";
 import RosterAdd from "./RosterAdd.vue";
 import { sub_member_count } from "./workflow-library.js";
 import { access_label as source_access_label } from "../runner/expert_prompts.mjs";
-import { MAX_EDGE_LABEL, MAX_HOST_LABEL, MAX_LOOP_OFFSET, empty_flow, flow_shape } from "../runner/workflow_flow.mjs";
+import { MAX_BRANCHES, MAX_BRANCH_LABEL, MAX_BRANCH_NODE_LABEL, MAX_EDGE_LABEL, MAX_HOST_LABEL, MAX_LOOP_OFFSET, MAX_USER_LABEL, edge_key, empty_flow, flow_shape } from "../runner/workflow_flow.mjs";
 import { t } from './i18n.js';
 const access_label = level => ({ read: t('只读'), write: t('可写'), auto: t('自动'), full: t('全放开'), own: t('自行决定') }[level] || source_access_label(level));
 
@@ -54,10 +54,11 @@ const icons_only = computed(() => narrow.value);
 const foldable = computed(() => props.compact && tight.value);
 // Layout reads each node's size as Vue Flow measured it (node_size), so restyling a node needs no change here; these are
 // only its first guess for a node not drawn yet (a workflow opened without positions, a node just added).
-// Member, host and sub-workflow nodes share one flat shape and one delete (user 2026-11-21, #6830); the start stays small.
+// Member, host, user, branch and sub-workflow nodes share one flat shape and one delete (user 2026-11-21, #6830); the start stays small.
 // A card on the canvas only says who it is (user 2026-11-17); its settings live in the 专家配置 panel.
-const NODE_WIDTH = { card: 240, start: 96, host: 240, sub: 240 };
-const NODE_HEIGHT = { card: 96, start: 60, host: 96, sub: 96 };
+const NODE_WIDTH = { card: 240, start: 96, host: 240, user: 240, branch: 240, sub: 240 };
+const NODE_HEIGHT = { card: 96, start: 60, host: 96, user: 96, branch: 132, sub: 96 };
+const BRANCH_HEADER_HEIGHT = 64, BRANCH_ROW_HEIGHT = 30, BRANCH_PAD_BOTTOM = 10;
 const COLUMN_GAP = 120, ROW_GAP = 28;
 // A step's frame: padding around its nodes, and the height of its title above them.
 const STAGE_PADDING = 20, STAGE_TITLE = 26;
@@ -86,19 +87,30 @@ const PRESET_PREFIX = "preset:";
 const CARD_BASE = /^[a-z0-9_]{1,14}$/;
 const PRESET_FIELDS = ["label", "description", "project_access", "model", "effort", "system_prompt"];
 
+/** First guess for a node's height before Vue Flow measures it; branch nodes grow with their branches. */
+function estimated_height(node) {
+  if (node.type === "branch") return BRANCH_HEADER_HEIGHT + Math.max(1, node.data?.branches?.length || 2) * BRANCH_ROW_HEIGHT + BRANCH_PAD_BOTTOM;
+  return NODE_HEIGHT[node.type] || NODE_HEIGHT.card;
+}
+
 /** A stored node as Vue Flow draws it; a card is dragged by its top bar so its own buttons and swipes keep working. */
 function to_node(item) {
   const base = { id: item.id, type: item.type, position: { x: item.x || 0, y: item.y || 0 } };
   // Not by Vue Flow's Delete: the key presses the node's × instead (delete_key), so it asks twice like the button.
   if (item.type === "card") return { ...base, data: { card: item.card }, dragHandle: NODE_HANDLE, deletable: false };
-  if (item.type === "host") return { ...base, data: { label: item.label || "" }, dragHandle: NODE_HANDLE, deletable: false };
+  if (item.type === "host" || item.type === "user") return { ...base, data: { label: item.label || "" }, dragHandle: NODE_HANDLE, deletable: false };
+  if (item.type === "branch") {
+    const branches = (item.branches || []).map((branch) => ({ id: branch.id, label: branch.label || "" }));
+    return { ...base, data: { label: item.label || "", branches: branches.length ? branches : [{ id: "b1", label: t('分支 1') }] }, dragHandle: NODE_HANDLE, deletable: false };
+  }
   if (item.type === "sub") return { ...base, data: { sub: item.sub }, dragHandle: NODE_HANDLE, deletable: false };
   return { ...base, deletable: false, dragHandle: NODE_HANDLE };
 }
 
-/** A stored arrow as Vue Flow draws it; its note and a loop's up-or-down offset (if any) ride in `data`. */
-function to_edge({ source, target, label, offset }) {
-  return { id: `${source}>${target}`, source, target, type: "flow", data: { label: label || "", offset: offset || 0 }, markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 } };
+/** A stored arrow as Vue Flow draws it; its note, branch port and a loop's up-or-down offset (if any) ride on it. */
+function to_edge({ source, branch, target, label, offset }) {
+  return { id: edge_key({ source, branch, target }), source, ...(branch ? { sourceHandle: branch } : {}), target, type: "flow",
+    data: { label: label || "", offset: offset || 0 }, markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 } };
 }
 
 // Every node's × asks twice (user 2026-11-21): the first press turns it into a red bin for a few seconds.
@@ -126,10 +138,39 @@ function delete_key(event) {
   if (node) press_remove(node);
 }
 
-/** Set the note on a host node or an arrow (trimmed when stored); `kind` is "nodes" or "edges". */
+/** Set the note on a host, user or branch node, or on an arrow (trimmed when stored); `kind` is "nodes" or "edges". */
 function set_note(kind, id, label) {
   const list = kind === "nodes" ? nodes : edges;
   list.value = list.value.map((item) => item.id === id ? { ...item, data: { ...item.data, label } } : item);
+}
+
+/** Rename one branch on a conditional branch node. */
+function set_branch_label(node_id, branch_id, label) {
+  nodes.value = nodes.value.map((item) => item.id !== node_id ? item
+    : { ...item, data: { ...item.data, branches: item.data.branches.map((branch) => branch.id === branch_id ? { ...branch, label } : branch) } });
+}
+
+/** Append one execution branch to a conditional branch node and let Vue Flow re-measure its handles. */
+function add_branch_case(node_id) {
+  const target = nodes.value.find((item) => item.id === node_id);
+  if (!target || target.data.branches.length >= MAX_BRANCHES) return;
+  const taken = new Set(target.data.branches.map((branch) => branch.id));
+  let number = target.data.branches.length + 1;
+  while (taken.has(`b${number}`)) number++;
+  const next = { id: `b${number}`, label: t('分支 {value1}', { value1: number }) };
+  nodes.value = nodes.value.map((item) => item.id !== node_id ? item
+    : { ...item, data: { ...item.data, branches: [...item.data.branches, next] } });
+  nextTick(() => instance.value?.updateNodeInternals([node_id]));
+}
+
+/** Remove one branch (and any arrows leaving it) from a conditional branch node; at least one branch stays. */
+function remove_branch_case(node_id, branch_id) {
+  const target = nodes.value.find((item) => item.id === node_id);
+  if (!target || target.data.branches.length <= 1) return;
+  nodes.value = nodes.value.map((item) => item.id !== node_id ? item
+    : { ...item, data: { ...item.data, branches: item.data.branches.filter((branch) => branch.id !== branch_id) } });
+  edges.value = edges.value.filter((edge) => !(edge.source === node_id && edge.sourceHandle === branch_id));
+  nextTick(() => instance.value?.updateNodeInternals([node_id]));
 }
 
 // Vue Flow's instance (set once its pane is ready; layout reads measured sizes from it) and the canvas element.
@@ -170,7 +211,7 @@ const initial = initial_nodes();
  */
 function node_size(node) {
   const measured = instance.value?.findNode(node.id)?.dimensions;
-  return { width: measured?.width || NODE_WIDTH[node.type] || NODE_WIDTH.card, height: measured?.height || NODE_HEIGHT[node.type] || NODE_HEIGHT.card };
+  return { width: measured?.width || NODE_WIDTH[node.type] || NODE_WIDTH.card, height: measured?.height || estimated_height(node) };
 }
 const nodes = ref(initial.list);
 const edges = ref(initial.edges.filter((edge) => nodes.value.some((node) => node.id === edge.source) && nodes.value.some((node) => node.id === edge.target)).map(to_edge));
@@ -197,8 +238,11 @@ const live = computed(() => {
   const noted = (item) => item.data?.label?.trim() ? { label: item.data.label.trim() } : {};
   return { nodes: nodes.value.map((node) => ({ id: node.id, type: node.type, ...(node.type === "card" ? { card: node.data.card } : {}),
     ...(node.type === "sub" ? { sub: node.data.sub } : {}),
-    ...(node.type === "host" ? noted(node) : {}), x: Math.round(node.position.x), y: Math.round(node.position.y) })),
-    edges: edges.value.filter((edge) => ids.has(edge.source) && ids.has(edge.target)).map((edge) => ({ source: edge.source, target: edge.target, ...noted(edge),
+    ...(node.type === "host" || node.type === "user" || node.type === "branch" ? noted(node) : {}),
+    ...(node.type === "branch" ? { branches: (node.data.branches || []).map((item) => ({ id: item.id, ...(item.label?.trim() ? { label: item.label.trim() } : {}) })) } : {}),
+    x: Math.round(node.position.x), y: Math.round(node.position.y) })),
+    edges: edges.value.filter((edge) => ids.has(edge.source) && ids.has(edge.target)).map((edge) => ({ source: edge.source,
+      ...(edge.sourceHandle ? { branch: edge.sourceHandle } : {}), target: edge.target, ...noted(edge),
       ...(edge.data?.offset ? { offset: Math.round(edge.data.offset) } : {}) })), ...(kept.length ? { stages: kept } : {}) };
 });
 // The saved form (and through it the undo history, the loop layout and the page's unsaved check) follows the canvas,
@@ -214,30 +258,37 @@ function tails() {
 }
 
 /** Place a node and, when it has a source, join it on the next tick (Vue Flow drops arrows to nodes it has not seen). */
-function place(node, position, source) {
+function place(node, position, source, sourceHandle = null) {
   node.position = position;
   nodes.value = [...nodes.value, node];
-  if (source) nextTick(() => { edges.value = [...edges.value, to_edge({ source, target: node.id })]; });
+  if (source) nextTick(() => { edges.value = [...edges.value, to_edge({ source, branch: sourceHandle || undefined, target: node.id })]; });
 }
 
 /** Where a node goes after a source: beside it, centred on its row (the new node is not drawn yet: its kind's guess). */
-function beside(source, type) {
+function beside(source, node) {
   const { width, height } = node_size(source);
-  return { x: source.position.x + width + COLUMN_GAP, y: source.position.y + (height - NODE_HEIGHT[type]) / 2 };
+  return { x: source.position.x + width + COLUMN_GAP, y: source.position.y + (height - estimated_height(node)) / 2 };
+}
+
+/** Pick the first open branch on a conditional branch node (or its first branch) when appending from the toolbar. */
+function default_branch(source) {
+  if (source?.type !== "branch") return null;
+  const open = source.data.branches.find((item) => !edges.value.some((edge) => edge.source === source.id && edge.sourceHandle === item.id));
+  return open?.id || source.data.branches[0]?.id || null;
 }
 
 /** Put a node at a dropped arrow's end, at the single open end, or (several open ends) unjoined on the right. */
 function add_node(node) {
   if (drop.value) {
-    const { source, flow_point } = drop.value;
+    const { source, sourceHandle, flow_point } = drop.value;
     drop.value = null;
-    place(node, { x: flow_point.x, y: flow_point.y - NODE_HEIGHT[node.type] / 2 }, source);
+    place(node, { x: flow_point.x, y: flow_point.y - estimated_height(node) / 2 }, source, sourceHandle);
     return;
   }
   const ends = tails();
   const tail = ends.length === 1 ? ends[0] : null;
   const right = Math.max(...nodes.value.map((item) => item.position.x + node_size(item).width));
-  place(node, tail ? beside(tail, node.type) : { x: right + COLUMN_GAP, y: 0 }, tail?.id);
+  place(node, tail ? beside(tail, node) : { x: right + COLUMN_GAP, y: 0 }, tail?.id, default_branch(tail));
 }
 
 /** A node ID not yet taken. */
@@ -248,6 +299,16 @@ function next_id(prefix) {
 function add_host() {
   adding.value = false;
   add_node(to_node({ id: next_id("host_"), type: "host" }));
+}
+
+function add_user() {
+  adding.value = false;
+  add_node(to_node({ id: next_id("user_"), type: "user" }));
+}
+
+function add_branch() {
+  adding.value = false;
+  add_node(to_node({ id: next_id("branch_"), type: "branch", branches: [{ id: "b1", label: t('分支 1') }, { id: "b2", label: t('分支 2') }] }));
 }
 
 // A card added to the workflow goes onto the canvas; a card or sub-workflow removed from it leaves the canvas.
@@ -321,8 +382,8 @@ watch(adding, (open) => { if (!open) setTimeout(() => { if (!adding.value) drop.
 
 // An arrow started from a node's right side that ends on no node offers to add one there.
 let connecting = null, connected = false;
-function connect_start({ nodeId, handleType }) {
-  connecting = handleType === "source" ? nodeId : null;
+function connect_start({ nodeId, handleType, handleId }) {
+  connecting = handleType === "source" ? { nodeId, handleId: handleId || null } : null;
   connected = false;
 }
 
@@ -334,7 +395,8 @@ function connect_end(event) {
   const rect = { x: point.clientX, y: point.clientY, width: 0, height: 0, top: point.clientY, left: point.clientX, right: point.clientX, bottom: point.clientY };
   // Screen to canvas coordinates: undo the pane's offset on the page, then the viewport's pan and zoom.
   const pane = canvas_element.value.getBoundingClientRect(), viewport = instance.value.getViewport();
-  drop.value = { source, flow_point: { x: (point.clientX - pane.left - viewport.x) / viewport.zoom, y: (point.clientY - pane.top - viewport.y) / viewport.zoom } };
+  drop.value = { source: source.nodeId, sourceHandle: source.handleId,
+    flow_point: { x: (point.clientX - pane.left - viewport.x) / viewport.zoom, y: (point.clientY - pane.top - viewport.y) / viewport.zoom } };
   add_anchor.value = { getBoundingClientRect: () => rect };
   adding.value = true;
 }
@@ -345,11 +407,13 @@ function valid_connection(connection) {
   return connection.source !== connection.target && connection.target !== "start";
 }
 
-/** Keep a newly drawn arrow, once per pair and direction. */
+/** Keep a newly drawn arrow, once per pair, branch and direction. */
 function connect(connection) {
   connected = true;
-  if (valid_connection(connection) && !edges.value.some((edge) => edge.source === connection.source && edge.target === connection.target)) {
-    edges.value = [...edges.value, to_edge(connection)];
+  const branch = connection.sourceHandle || undefined;
+  const id = edge_key({ source: connection.source, branch, target: connection.target });
+  if (valid_connection(connection) && !edges.value.some((edge) => edge.id === id)) {
+    edges.value = [...edges.value, to_edge({ source: connection.source, branch, target: connection.target })];
   }
 }
 
@@ -471,10 +535,15 @@ function arrange() {
 }
 
 
+/** The key of either a stored edge or a Vue Flow edge. */
+function arrow_key(edge) {
+  return edge_key({ source: edge.source, branch: edge.branch ?? edge.sourceHandle, target: edge.target });
+}
+
 /** The gap after a column: wide enough for the longest note on a forward arrow leaving it (loops run below). */
 function column_gap(column, arrows, loops) {
   const ids = new Set(column.map((node) => node.id));
-  const notes = arrows.filter((edge) => ids.has(edge.source) && !loops.has(`${edge.source}>${edge.target}`))
+  const notes = arrows.filter((edge) => ids.has(edge.source) && !loops.has(arrow_key(edge)))
     .map((edge) => (edge.label ?? edge.data?.label ?? "").trim().length).filter(Boolean);
   return Math.max(COLUMN_GAP, ...notes.map((length) => length * NOTE_CHAR + NOTE_PAD + 2 * NOTE_MARGIN));
 }
@@ -493,19 +562,30 @@ function row_gap(upper, lower) {
  */
 function layout(list, { layers, loops }, arrows) {
   const columns = [];
+  const by_id = new Map(list.map((node) => [node.id, node]));
   const index_of = (id) => layers.has(id) ? layers.get(id) : Math.max(0, ...layers.values()) + 1;
   for (const node of list) (columns[index_of(node.id)] ||= []).push(node);
+  // When nodes share a y (e.g. a freshly drafted flow.json), keep targets of a branch node in its top-to-bottom branch order.
+  const branch_rank = new Map();
+  for (const edge of arrows) {
+    if (loops.has(arrow_key(edge))) continue;
+    const source = by_id.get(edge.source), branch = edge.branch ?? edge.sourceHandle;
+    if (source?.type !== "branch" || !branch) continue;
+    const rank = source.data.branches.findIndex((item) => item.id === branch);
+    if (rank >= 0 && (!branch_rank.has(edge.target) || rank < branch_rank.get(edge.target))) branch_rank.set(edge.target, rank);
+  }
   // Columns a forward arrow skips (a branch that leaves a step out) move up, so that arrow runs straight below them.
   const skipped = new Set();
   for (const edge of arrows) {
-    if (loops.has(`${edge.source}>${edge.target}`) || !list.some((node) => node.id === edge.source) || !list.some((node) => node.id === edge.target)) continue;
+    if (loops.has(arrow_key(edge)) || !by_id.has(edge.source) || !by_id.has(edge.target)) continue;
     for (let column = index_of(edge.source) + 1; column < index_of(edge.target); column++) skipped.add(column);
   }
   let x = 0;
   const placed = new Map();
   for (const [index, column] of columns.entries()) {
     if (!column) continue;
-    column.sort((left, right) => left.position.y - right.position.y);
+    column.sort((left, right) => left.position.y - right.position.y
+      || (branch_rank.get(left.id) ?? Infinity) - (branch_rank.get(right.id) ?? Infinity));
     const sizes = column.map(node_size);
     const gaps = column.map((node, row) => row ? row_gap(column[row - 1].id, node.id) : 0);
     const height = sizes.reduce((sum, size, row) => sum + size.height + gaps[row], 0);
@@ -630,8 +710,8 @@ let card_pan = null, card_pan_frame = 0;
 // A press that moved this far is a pan, so the click it ends in does not select the arrow under it.
 const PAN_CLICK_REACH_PX = 4;
 
-// Controls inside a node's body keep their own presses.
-const BODY_CONTROL = "button, input, textarea, select, label, a";
+// Controls (including branch source handles) inside a node's body keep their own presses.
+const BODY_CONTROL = "button, input, textarea, select, label, a, .vue-flow__handle";
 
 /** Whether `target` is an arrow's line (its note is drawn apart and keeps its own input and delete button). */
 function on_edge_line(target) {
@@ -838,7 +918,7 @@ function commit() {
 }
 watch(state, () => { if (restoring || dragging) return; clearTimeout(timer); timer = setTimeout(commit, HISTORY_DELAY); });
 
-/** Put back a snapshot; arrows follow on the next tick, once Vue Flow has its nodes. */
+/** Put back a snapshot; arrows follow on the next tick, once Vue Flow has its nodes and branch handles. */
 function restore(text) {
   const saved = JSON.parse(text);
   restoring = true;
@@ -846,7 +926,12 @@ function restore(text) {
   agents.value = saved.agents;
   nodes.value = saved.flow.nodes.map(to_node);
   edges.value = [];
-  nextTick(() => { edges.value = saved.flow.edges.map(to_edge); nextTick(() => { restoring = false; }); });
+  nextTick(() => {
+    const branch_ids = nodes.value.filter((item) => item.type === "branch").map((item) => item.id);
+    if (branch_ids.length) instance.value?.updateNodeInternals(branch_ids);
+    edges.value = saved.flow.edges.map(to_edge);
+    nextTick(() => { restoring = false; });
+  });
 }
 
 function undo() {
@@ -916,6 +1001,59 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           </div>
         </UTooltip>
       </template>
+      <template #node-user="node">
+        <UTooltip :text="t('用户：示意需要用户介入、确认或发言的地方；选中后可写上做什么')">
+          <div class="workflow-user" :class="{ 'is-selected': node.selected }">
+            <Handle type="target" :position="Position.Left" class="workflow-handle" />
+            <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
+              <button type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次删除用户节点') : t('删除用户节点')"
+                :title="removing === node.id ? t('再点一次删除用户节点') : t('删除用户节点')" @click.stop="press_remove(node)"><UIcon :name="removing === node.id ? 'i-lucide-trash-2' : 'i-lucide-x'" class="workflow-icon" /></button></div>
+            <div class="workflow-node-body nodrag">
+              <UIcon name="i-lucide-user-round" class="workflow-user-icon" />
+              <div class="workflow-node-text"><strong>{{ t('用户') }}</strong>
+              <input v-if="node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input" :maxlength="MAX_USER_LABEL" :placeholder="t('做什么，如“确认方案”')"
+                :aria-label="t('用户在这里做什么')" @input="set_note('nodes', node.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
+              <p v-else-if="node.data.label" class="workflow-host-note">{{ node.data.label }}</p></div>
+            </div>
+            <Handle type="source" :position="Position.Right" class="workflow-handle" />
+          </div>
+        </UTooltip>
+      </template>
+      <template #node-branch="node">
+        <div class="workflow-branch" :class="{ 'is-selected': node.selected }">
+          <Handle type="target" :position="Position.Left" class="workflow-handle" />
+          <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
+            <button type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次删除条件分支节点') : t('删除条件分支节点')"
+              :title="removing === node.id ? t('再点一次删除条件分支节点') : t('删除条件分支节点')" @click.stop="press_remove(node)"><UIcon :name="removing === node.id ? 'i-lucide-trash-2' : 'i-lucide-x'" class="workflow-icon" /></button></div>
+          <div class="workflow-node-body workflow-branch-body nodrag">
+            <div class="workflow-branch-head">
+              <UIcon name="i-lucide-split" class="workflow-branch-icon" />
+              <div class="workflow-node-text">
+                <input v-if="node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input" :maxlength="MAX_BRANCH_NODE_LABEL" :placeholder="t('条件名称')"
+                  :aria-label="t('条件分支的名称')" @input="set_note('nodes', node.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
+                <template v-else>
+                  <strong>{{ node.data.label || t('条件分支') }}</strong>
+                  <small v-if="node.data.label">{{ t('条件分支') }}</small>
+                </template>
+              </div>
+            </div>
+            <div class="workflow-branch-list">
+              <div v-for="item in node.data.branches" :key="item.id" class="workflow-branch-row">
+                <template v-if="node.selected">
+                  <input :value="item.label" class="workflow-note-input workflow-branch-input" :maxlength="MAX_BRANCH_LABEL" :placeholder="t('分支条件')"
+                    :aria-label="t('分支 {value1} 的条件说明', { value1: item.id })" @input="set_branch_label(node.id, item.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
+                  <button v-if="node.data.branches.length > 1" type="button" class="workflow-branch-remove" :aria-label="t('删除分支 {value1}', { value1: item.label || item.id })"
+                    :title="t('删除这条分支')" @click.stop="remove_branch_case(node.id, item.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
+                </template>
+                <span v-else class="workflow-branch-label" :title="item.label || item.id">{{ item.label || item.id }}</span>
+                <Handle :id="item.id" type="source" :position="Position.Right" class="workflow-handle workflow-branch-handle" />
+              </div>
+              <button v-if="node.selected && node.data.branches.length < MAX_BRANCHES" type="button" class="workflow-branch-add"
+                @click.stop="add_branch_case(node.id)"><UIcon name="i-lucide-plus" class="workflow-icon" /><span>{{ t('添加分支') }}</span></button>
+            </div>
+          </div>
+        </div>
+      </template>
       <template #node-sub="node">
         <div v-if="sub_of(node.data.sub)" class="workflow-sub" :class="{ 'is-selected': node.selected }" :title="sub_of(node.data.sub).description || undefined">
           <Handle type="target" :position="Position.Left" class="workflow-handle" />
@@ -982,7 +1120,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       <!-- Top left: one group per job, side by side (zoom sits top right). -->
       <Panel position="top-left" class="workflow-canvas-tools">
         <div class="workflow-canvas-toolbar">
-          <UTooltip :text="t('添加节点：成员、主持人或子工作流（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-plus" :label="icons_only ? undefined : t('添加节点')" :aria-label="t('添加节点')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
+          <UTooltip :text="t('添加节点：成员、主持人、用户、条件分支或子工作流（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-plus" :label="icons_only ? undefined : t('添加节点')" :aria-label="t('添加节点')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
           <slot v-if="foldable" name="actions" :icons-only="icons_only" :arrange="arrange" />
         </div>
         <template v-if="!foldable">
@@ -1046,6 +1184,8 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           </div>
           <div class="workflow-canvas-add-more">
             <UButton icon="i-lucide-crown" :label="t('主持人')" size="xs" color="neutral" variant="soft" :title="t('主持人节点：示意交回主持人判断的地方')" @click="add_host" />
+            <UButton icon="i-lucide-user-round" :label="t('用户')" size="xs" color="neutral" variant="soft" :title="t('用户节点：示意需要用户介入、确认或发言的地方')" @click="add_user" />
+            <UButton icon="i-lucide-split" :label="t('条件分支')" size="xs" color="neutral" variant="soft" :title="t('条件分支节点：按条件分成多条执行分支')" @click="add_branch" />
             <UButton v-if="view.room?.id && !drop" icon="i-lucide-users" :label="t('当前房间的成员')" size="xs" color="neutral" variant="soft" @click="cards_from_room" />
           </div>
           <!-- The workflow's own experts and advisors come first; the generic ones from the new-room panel stay folded (user 2026-11-23). -->
@@ -1094,7 +1234,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
    has no hover, so a tap there removed the node unseen. Armed (first press), it turns into a red bin until pressed again. */
 .workflow-node-close { position: absolute; top: 50%; right: 4px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
   transform: translateY(-50%); color: var(--ui-text-dimmed); opacity: 0; pointer-events: none; cursor: pointer; transition: opacity .15s; }
-:is(.workflow-host, .workflow-sub, .workflow-card):is(:hover, .is-selected) .workflow-node-close, .workflow-node-close.is-armed { opacity: 1; pointer-events: auto; }
+:is(.workflow-host, .workflow-user, .workflow-branch, .workflow-sub, .workflow-card):is(:hover, .is-selected) .workflow-node-close, .workflow-node-close.is-armed { opacity: 1; pointer-events: auto; }
 .workflow-node-close:hover { background: var(--ui-bg-accented); color: var(--ui-error, #e5484d); }
 .workflow-node-close.is-armed { background: color-mix(in srgb, var(--ui-error, #e5484d) 18%, transparent); color: var(--ui-error, #e5484d); }
 .workflow-node-close > .workflow-icon { width: 12px; height: 12px; }
@@ -1107,12 +1247,42 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
   border: 1.5px solid var(--workflow-card-edge); border-radius: 12px; background: color-mix(in srgb, #e0b44a 10%, var(--ui-bg-elevated));
   box-shadow: 0 6px 18px rgb(0 0 0 / .28); color: #d6a63a; text-align: center; }
 .workflow-host.is-selected { box-shadow: 0 0 0 3px color-mix(in srgb, #e0b44a 45%, transparent), 0 6px 18px rgb(0 0 0 / .28); }
-.workflow-host > .workflow-node-body, .workflow-sub > .workflow-node-body { display: flex; flex: 1; align-items: center; gap: 10px; min-height: 0; padding: 0 12px; }
-.workflow-host-icon, .workflow-sub-icon { flex-shrink: 0; width: 26px; height: 26px; }
-.workflow-host strong { font-size: 14px; font-weight: 600; }
+.workflow-host > .workflow-node-body, .workflow-user > .workflow-node-body, .workflow-sub > .workflow-node-body { display: flex; flex: 1; align-items: center; gap: 10px; min-height: 0; padding: 0 12px; }
+.workflow-host-icon, .workflow-user-icon, .workflow-sub-icon { flex-shrink: 0; width: 26px; height: 26px; }
+.workflow-host strong, .workflow-user strong { font-size: 14px; font-weight: 600; }
 .workflow-node-text > .workflow-host-note { display: -webkit-box; margin: 0; color: var(--ui-text-toned); font-size: 12px; line-height: 17px; white-space: normal;
   -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
 .workflow-host-input { width: 100%; }
+
+/* User: emerald, its note under the title. */
+.workflow-user { --workflow-grip-tint: #2eb886; --workflow-card-edge: color-mix(in srgb, #2eb886 70%, var(--ui-border)); position: relative; display: flex; flex-direction: column; width: 240px; height: 96px;
+  border: 1.5px solid var(--workflow-card-edge); border-radius: 12px; background: color-mix(in srgb, #2eb886 10%, var(--ui-bg-elevated));
+  box-shadow: 0 6px 18px rgb(0 0 0 / .28); color: #2eb886; text-align: center; }
+.workflow-user.is-selected { box-shadow: 0 0 0 3px color-mix(in srgb, #2eb886 45%, transparent), 0 6px 18px rgb(0 0 0 / .28); }
+
+/* Conditional branch: sky blue, header over N named branches, each with its own right port. */
+.workflow-branch { --workflow-grip-tint: #38bdf8; --workflow-card-edge: color-mix(in srgb, #38bdf8 70%, var(--ui-border)); position: relative; display: flex; flex-direction: column; width: 240px;
+  border: 1.5px solid var(--workflow-card-edge); border-radius: 12px; background: color-mix(in srgb, #38bdf8 10%, var(--ui-bg-elevated));
+  box-shadow: 0 6px 18px rgb(0 0 0 / .28); color: #38bdf8; }
+.workflow-branch.is-selected { box-shadow: 0 0 0 3px color-mix(in srgb, #38bdf8 45%, transparent), 0 6px 18px rgb(0 0 0 / .28); }
+.workflow-branch-body { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 10px; }
+.workflow-branch-head { display: flex; align-items: center; gap: 8px; padding: 0 12px; min-height: 30px; }
+.workflow-branch-icon { flex-shrink: 0; width: 20px; height: 20px; }
+.workflow-branch strong { color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.workflow-branch small { color: var(--ui-text-muted); font-size: 11px; }
+.workflow-branch-list { display: flex; flex-direction: column; gap: 4px; }
+.workflow-branch-row { position: relative; display: flex; align-items: center; gap: 4px; min-height: 26px; margin: 0 10px; padding: 2px 10px 2px 8px;
+  border: 1px solid color-mix(in srgb, #38bdf8 30%, var(--ui-border-muted)); border-radius: 7px; background: color-mix(in srgb, var(--ui-bg) 72%, transparent); }
+.workflow-branch-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-text); font-size: 12px; text-align: left; }
+.workflow-branch-input { flex: 1; width: 100%; }
+.workflow-branch-remove { display: grid; flex-shrink: 0; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--ui-text-dimmed); cursor: pointer; }
+.workflow-branch-remove:hover { background: var(--ui-bg-accented); color: var(--ui-error, #e5484d); }
+.workflow-branch-remove > .workflow-icon { width: 11px; height: 11px; }
+.workflow-branch-row :deep(.workflow-branch-handle) { right: -11px; }
+.workflow-branch-add { display: inline-flex; align-items: center; justify-content: center; gap: 4px; margin: 2px 10px 0; height: 24px; border: 1px dashed color-mix(in srgb, #38bdf8 45%, var(--ui-border));
+  border-radius: 7px; color: inherit; font-size: 11px; cursor: pointer; }
+.workflow-branch-add:hover { background: color-mix(in srgb, #38bdf8 16%, transparent); }
+.workflow-branch-add > .workflow-icon { width: 12px; height: 12px; }
 
 /* Sub-workflow: violet, entered by its button. */
 .workflow-sub { --workflow-grip-tint: #9b7cf0; --workflow-card-edge: color-mix(in srgb, #9b7cf0 70%, var(--ui-border)); position: relative; display: flex; flex-direction: column; width: 240px; height: 96px;
@@ -1203,6 +1373,8 @@ html[data-theme="channel-light"] .workflow-canvas .expert-card-names > small,
 html[data-theme="channel-light"] .workflow-canvas .expert-card-facts dt,
 html[data-theme="channel-light"] .workflow-canvas .workflow-edge-note { color: var(--ui-text-toned); }
 html[data-theme="channel-light"] .workflow-canvas .workflow-sub { color: #6a4bc4; }
+html[data-theme="channel-light"] .workflow-canvas .workflow-user { color: #157a55; }
+html[data-theme="channel-light"] .workflow-canvas .workflow-branch { color: #0369a1; }
 html[data-theme="channel-light"] .workflow-canvas .workflow-host,
 html[data-theme="channel-light"] .workflow-canvas .workflow-edge-note.is-loop { color: #8a5d00; }
 
@@ -1211,7 +1383,7 @@ html[data-theme="channel-light"] .workflow-canvas .workflow-edge-note.is-loop { 
 /* Phone: zoom in, zoom out and fit, opened from the one zoom button in the top-right corner. */
 .workflow-canvas-zoom { display: flex; padding: 2px; border-radius: 9px; }
 .workflow-canvas-add-body { display: grid; gap: 10px; justify-items: start; }
-.workflow-canvas-add-more { display: flex; gap: 6px; }
+.workflow-canvas-add-more { display: flex; flex-wrap: wrap; gap: 6px; }
 .workflow-canvas-add-more:empty { display: none; }
 .workflow-canvas-add-again { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 520px; padding-top: 8px; border-top: 1px solid var(--ui-border-muted); }
 .workflow-canvas-add-again > span { width: 100%; color: var(--ui-text-muted); font-size: 12px; }

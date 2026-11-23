@@ -933,3 +933,54 @@ test('the canvas keeps short notes on host nodes and arrows, and refuses long or
   assert.throws(() => save_workflow(home, { ...NOVEL, flow: { ...flow, edges: [{ source: 'start', target: 'w', label: 'x'.repeat(17) }] } }, validate_preset, REPLACE), /最多 16 字/);
   assert.throws(() => save_workflow(home, { ...NOVEL, flow: { ...flow, edges: [{ source: 'start', target: 'w', label: '两\n行' }] } }, validate_preset, REPLACE), /不换行/);
 });
+
+test('the canvas supports user nodes and conditional branch nodes with N branches, validating branch references and loops', async t => {
+  const { flow_shape, edge_key } = await import('../runner/workflow_flow.mjs');
+  const home = home_fixture(t);
+  const flow = {
+    nodes: [
+      { id: 'start', type: 'start', x: 0, y: 0 },
+      { id: 'u1', type: 'user', label: ' 确认大纲 ', x: 1, y: 0 },
+      { id: 'b1', type: 'branch', label: ' 判断路线 ', branches: [
+        { id: 'normal', label: ' 日常集 ' },
+        { id: 'key', label: '关键集' },
+        { id: 'rework', label: '返工' },
+      ], x: 2, y: 0 },
+      { id: 'w', type: 'card', card: 'writer', x: 3, y: 0 },
+      { id: 's', type: 'card', card: 'science', x: 3, y: 1 },
+    ],
+    edges: [
+      { source: 'start', target: 'u1' },
+      { source: 'u1', target: 'b1' },
+      { source: 'b1', branch: 'normal', target: 'w' },
+      // Two distinct branches may target the same node, and one branch may fan out to multiple nodes.
+      { source: 'b1', branch: 'key', target: 'w', label: '主执笔' },
+      { source: 'b1', branch: 'key', target: 's', label: '并行核对' },
+      { source: 'b1', branch: 'rework', target: 'u1', label: '退回用户' },
+    ],
+  };
+  save_workflow(home, { ...NOVEL, flow }, validate_preset, REPLACE);
+  const saved = get_workflow(home, 'novel-serial').flow;
+  assert.equal(saved.nodes[1].label, '确认大纲');
+  assert.equal(saved.nodes[2].label, '判断路线');
+  assert.deepEqual(saved.nodes[2].branches, [{ id: 'normal', label: '日常集' }, { id: 'key', label: '关键集' }, { id: 'rework', label: '返工' }]);
+  assert.equal(saved.edges.length, 6);
+  const shape = flow_shape(saved);
+  assert.equal(shape.loops.has(edge_key({ source: 'b1', branch: 'rework', target: 'u1' })), true);
+  assert.equal(shape.layers.get('u1'), 1);
+  assert.equal(shape.layers.get('b1'), 2);
+  assert.equal(shape.layers.get('w'), 3);
+  assert.equal(shape.layers.get('s'), 3);
+  // Validation rejects missing branches, unknown branch IDs, branch on non-branch sources, and duplicate branch-to-target edges.
+  for (const [bad, pattern] of [
+    [{ ...flow, nodes: flow.nodes.map(n => n.id === 'b1' ? { ...n, branches: [] } : n) }, /须包含 1—20 个分支/],
+    [{ ...flow, nodes: flow.nodes.map(n => n.id === 'b1' ? { ...n, branches: [{ id: 'a' }, { id: 'a' }] } : n) }, /不重复的 id/],
+    [{ ...flow, nodes: flow.nodes.map(n => n.id === 'b1' ? { ...n, branches: [{ id: null }] } : n) }, /不重复的 id/],
+    [{ ...flow, nodes: flow.nodes.map(n => n.id === 'b1' ? { ...n, branches: [{ id: 123 }] } : n) }, /不重复的 id/],
+    [{ ...flow, nodes: [...flow.nodes, { id: 123, type: 'user' }] }, /不重复的 id/],
+    [{ ...flow, edges: [{ source: 'start', target: 'u1' }, { source: 'b1', target: 'w' }] }, /须指明 branch/],
+    [{ ...flow, edges: [{ source: 'start', target: 'u1' }, { source: 'b1', branch: 'nope', target: 'w' }] }, /不存在的分支：b1\.nope/],
+    [{ ...flow, edges: [{ source: 'u1', branch: 'normal', target: 'w' }] }, /只能用于条件分支节点/],
+    [{ ...flow, edges: [{ source: 'b1', branch: 'normal', target: 'w' }, { source: 'b1', branch: 'normal', target: 'w' }] }, /同一分支到同一节点只能有一条连线/],
+  ]) assert.throws(() => save_workflow(home, { ...NOVEL, flow: bad }, validate_preset, REPLACE), pattern);
+});

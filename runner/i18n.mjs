@@ -18,10 +18,11 @@ export function resolve_locale(environment = process.env, system_locale = SYSTEM
  * Translate a Chinese source literal, substituting named parameters in either language.
  * @param {string} source Chinese source text, also the dictionary key.
  * @param {object} [params] Values for {name} placeholders.
+ * @param {string} [locale] Interface language of the caller, defaulting to the CLI language.
  * @returns {string} The translated text, falling back to the source when a key is missing.
  */
-export function t(source, params) {
-  const text = (resolve_locale() === 'en' && english[source]) || source;
+export function t(source, params, locale = resolve_locale()) {
+  const text = (locale === 'en' && english[source]) || source;
   if (!params) return text;
   return text.replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(params, name) ? String(params[name]) : match);
 }

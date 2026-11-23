@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { project_zip } from '../runner/project_files.mjs';
+import { zip_store } from '../frontend/workflow-files.js';
 import { delete_entry, make_folder, paste_entry, read_text, RecycleArea, rename_entry, save_text, TRASH_KEEP_MS, upload_part } from '../runner/project_manage.mjs';
 
 function fixture(t) {
@@ -17,6 +19,30 @@ function fixture(t) {
   writeFileSync(join(base, 'secret.txt'), 'outside');
   return { base, root, other, recycle: new RecycleArea(join(base, 'trash')), parts: join(base, 'service', 'file-uploads') };
 }
+
+test('project ZIP lists GBK and UTF-8 names and reads only the bounded selected entry in parts', t => {
+  const f = fixture(t), path = 'fixture.zip', archive = join(f.root, path);
+  const query = (op, parameters = {}) => project_zip(f.root, { path, op, ...parameters }, true);
+  // A standard deflated archive with the unflagged GBK filename 中文.md.
+  const gbk = Buffer.from('UEsDBBQAAAAIAAAAIQC2a6WWDgAAAAwAAAAHAAAA1tDOxC5tZCsoSi3LTC1XKEmtKAEAUEsBAhQAFAAAAAgAAAAhALZrpZYOAAAADAAAAAcAAAAAAAAAAAAAAIABAAAAANbQzsQubWRQSwUGAAAAAAEAAQA1AAAAMwAAAAAA', 'base64');
+  writeFileSync(archive, gbk);
+  assert.deepEqual(query('zip-list').entries.map(item => item.path), ['中文.md']);
+  assert.equal(Buffer.from(query('zip-entry', { entry_path: '中文.md' }).data, 'base64').toString(), 'preview text');
+  const name = '资料/样本.txt', text = 'A'.repeat(200 * 1024);
+  writeFileSync(archive, zip_store({ [name]: text, '__MACOSX/._data': '', '.DS_Store': '', '../outside': '' }));
+  assert.deepEqual(query('zip-list').entries.map(item => item.path), [name]);
+  const first = query('zip-entry', { entry_path: name }), second = query('zip-entry', { entry_path: name, offset: 192 * 1024 });
+  assert.equal(first.version, second.version);
+  assert.equal(first.total, text.length);
+  assert.equal(Buffer.from(second.data, 'base64').length, 8 * 1024);
+  assert.throws(() => query('zip-entry', { entry_path: '../outside' }));
+  assert.throws(() => query('zip-entry', { entry_path: name, offset: text.length + 1 }));
+  assert.throws(() => query('zip-list', { path: '../fixture.zip' }));
+  // Exercise the pre-decompression size check using just the directory metadata.
+  gbk.writeUInt32LE(64 * 1024 * 1024 + 1, gbk.indexOf(Buffer.from([80, 75, 1, 2])) + 24);
+  writeFileSync(archive, gbk);
+  assert.throws(() => query('zip-entry', { entry_path: '中文.md' }), /64 MiB/);
+});
 
 test('changes stay inside the root and never touch the root folder itself', t => {
   const f = fixture(t);

@@ -15,7 +15,7 @@ import { computed, inject, nextTick, ref, watch } from "vue";
  * back as the owner left it, with the error in the notice bar.
  */
 const props = defineProps({ questions: { type: Array, required: true } });
-const { bridge, act, pending } = inject("discussion");
+const { bridge, act } = inject("discussion");
 const card_key = (question) => `${question.id}:${question.version}`;
 // Cards the owner has already acted on: a snapshot read before the write landed must not bring them back.
 const sent = ref(new Set());
@@ -147,9 +147,9 @@ async function cancel() {
         </div>
         <UButton :icon="minimized ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" size="xs" color="neutral" variant="ghost"
           :aria-label="minimized ? t('展开答题卡') : t('收起答题卡')" :title="minimized ? t('展开答题卡') : t('收起答题卡')" :aria-expanded="!minimized"
-          :disabled="!!pending" @click="minimized = !minimized" />
+          @click="minimized = !minimized" />
         <UButton icon="i-lucide-x" size="xs" color="neutral" variant="ghost" :aria-label="t('取消这个问题')"
-          :title="t('取消这个问题；绑定接力的问题取消后接力停止')" :disabled="!!pending" @click="cancel" />
+          :title="t('取消这个问题；绑定接力的问题取消后接力停止')" @click="cancel" />
       </header>
       <template v-if="!minimized">
         <div ref="body" class="question-body" tabindex="-1" @keydown.enter.self="on_enter">
@@ -159,7 +159,7 @@ async function cancel() {
           <div class="question-options" :role="item.multiSelect ? 'group' : 'radiogroup'" :aria-label="item.question">
             <button v-for="(option, index) in item.options" :key="option.id" type="button" class="question-option"
               :class="{ 'is-selected': draft.selected.includes(option.id) }" :role="item.multiSelect ? 'checkbox' : 'radio'"
-              :aria-checked="draft.selected.includes(option.id)" :disabled="!!pending" @click="choose(option, $event)" @keydown.enter="on_option_enter(option, $event)">
+              :aria-checked="draft.selected.includes(option.id)" @click="choose(option, $event)" @keydown.enter="on_option_enter(option, $event)">
               <span v-if="item.multiSelect" class="question-check" aria-hidden="true"><UIcon v-if="draft.selected.includes(option.id)" name="i-lucide-check" /></span>
               <span v-else class="question-number" aria-hidden="true">{{ index + 1 }}</span>
               <span class="question-copy">
@@ -174,7 +174,7 @@ async function cancel() {
               <span v-if="item.multiSelect && item.options.length" class="question-check" aria-hidden="true"><UIcon v-if="draft.custom.trim()" name="i-lucide-check" /></span>
               <span v-else class="question-number" aria-hidden="true"><UIcon name="i-lucide-pencil" /></span>
               <UTextarea :model-value="draft.custom" :rows="1" autoresize :maxrows="6" variant="none" class="question-custom-field"
-                :placeholder="item.options.length ? t('其他回答或修改意见') : t('填写你的回答')" :disabled="!!pending"
+                :placeholder="item.options.length ? t('其他回答或修改意见') : t('填写你的回答')"
                 @update:model-value="type_custom" @keydown.enter="on_enter" />
             </label>
           </div>
@@ -182,17 +182,17 @@ async function cancel() {
         </div>
         <footer class="question-foot">
           <div class="question-pager">
-            <UButton icon="i-lucide-chevron-left" size="xs" color="neutral" variant="ghost" :aria-label="t('上一题')" :disabled="page === 0 || !!pending" @click="turn(page - 1)" />
+            <UButton icon="i-lucide-chevron-left" size="xs" color="neutral" variant="ghost" :aria-label="t('上一题')" :disabled="page === 0" @click="turn(page - 1)" />
             <span class="question-progress">{{ page + 1 }} / {{ items.length }}</span>
-            <UButton icon="i-lucide-chevron-right" size="xs" color="neutral" variant="ghost" :aria-label="t('下一题')" :disabled="last || !!pending" @click="turn(page + 1)" />
+            <UButton icon="i-lucide-chevron-right" size="xs" color="neutral" variant="ghost" :aria-label="t('下一题')" :disabled="last" @click="turn(page + 1)" />
           </div>
           <div class="question-room-actions">
-            <UButton size="xs" color="neutral" variant="ghost" :label="t('请主持人先讨论并给推荐')" :disabled="!!pending" @click="send('recommend')" />
-            <UButton size="xs" color="neutral" variant="ghost" :label="t('交给主持人决定')" :disabled="!!pending" @click="send('delegate')" />
+            <UButton size="xs" color="neutral" variant="ghost" :label="t('请主持人先讨论并给推荐')" @click="send('recommend')" />
+            <UButton size="xs" color="neutral" variant="ghost" :label="t('交给主持人决定')" @click="send('delegate')" />
           </div>
           <div class="question-actions">
-            <UButton size="sm" color="neutral" variant="outline" :label="t('跳过')" :disabled="!!pending" @click="skip" />
-            <UButton size="sm" :label="last ? t('提交回答') : t('下一题')" :disabled="!!pending || (!answered(draft) && last && !drafts.some(answered))" @click="go_on" />
+            <UButton size="sm" color="neutral" variant="outline" :label="t('跳过')" @click="skip" />
+            <UButton size="sm" :label="last ? t('提交回答') : t('下一题')" :disabled="(!answered(draft) && last && !drafts.some(answered))" @click="go_on" />
           </div>
         </footer>
       </template>

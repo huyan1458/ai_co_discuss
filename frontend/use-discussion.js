@@ -1,13 +1,11 @@
 import { computed, onBeforeUnmount, ref, shallowRef } from "vue";
 
-const LOCAL_ACTIONS = new Set(["room", "tab", "filter", "refresh", "archives", "reply", "cancel_reply", "discard_sending", "choose_attachments",
-  "remove_attachment", "preview_attachment", "copy", "copy_cli", "copy_background", "copy_reading"]);
-
 /** Adapt shared controller snapshots and drafts to Vue's reactive bindings. */
 export function use_discussion() {
   const bridge = window.discuss_view;
   const view = shallowRef(bridge.snapshot());
-  const pending = ref("");
+  const running = ref(new Map());
+  const is_running = name => running.value.has(name);
   // Quiet fields keep what was typed here until the next snapshot carries it, so a keystroke re-renders only its readers.
   const typed = shallowRef({});
   const sync = () => { view.value = bridge.snapshot(); typed.value = {}; };
@@ -27,18 +25,14 @@ export function use_discussion() {
       bridge.write_field(id, value, { publish: false });
     } });
   async function act(name, value) {
-    // Ordering runs beside other actions, like the directory's moves; the speaking order guards its own sends.
-    if (["manage_channel", "move_channel", "create_folder", "rename_folder", "delete_folder", "move_folder", "create", "reorder_speakers", "send", "retry_sending"].includes(name)) return bridge.execute(name, value);
-    // Navigation and local-only actions never wait for a write in flight: writes check the room they started in.
-    if (LOCAL_ACTIONS.has(name)) return bridge.execute(name, value);
-    // The question card has already closed when this runs: its write stays in the background and blocks nothing else.
-    if (name === "question_answer") return bridge.execute(name, value);
-    // A removed member has already left the page: saving it stays in the background and blocks nothing else.
-    if (name === "change_member" && value?.action === "remove") return bridge.execute(name, value);
-    if (pending.value) return bridge.execute("busy", pending.value);
-    pending.value = name;
+    const counts = running.value;
+    counts.set(name, (counts.get(name) || 0) + 1);
     try { return await bridge.execute(name, value); }
-    finally { pending.value = ""; }
+    finally {
+      const remaining = counts.get(name) - 1;
+      if (remaining) counts.set(name, remaining);
+      else counts.delete(name);
+    }
   }
-  return { bridge, view, pending, field, act };
+  return { bridge, view, is_running, field, act };
 }

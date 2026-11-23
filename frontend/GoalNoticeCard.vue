@@ -5,7 +5,7 @@ import ScheduleCard from "./ScheduleCard.vue";
 import StartGoalDialog from "./StartGoalDialog.vue";
 
 const props = defineProps({ message: { type: Object, required: true } });
-const { view, pending } = inject("discussion");
+const { view } = inject("discussion");
 const room = computed(() => view.value.room);
 const goal = computed(() => room.value.goal_state?.goal || null);
 // Only the newest goal's end notice continues it, and not while another goal or a discussion is open.
@@ -20,7 +20,7 @@ const continuing = ref(false);
     <template #text>{{ message.text }}</template>
     <p class="channel-checkin-answer">{{ message.text }}</p>
     <template v-if="continuable" #actions><UButton icon="i-lucide-rotate-ccw" :label="t('继续 Goal')" size="xs" color="neutral" variant="ghost" :title="t('沿用这个目标重新开启 Goal，需本机接入程序在运行')"
-      :disabled="!view.access?.can_manage || room.archived || Boolean(pending)" @click="continuing = true" /></template>
+      :disabled="!view.access?.can_manage || room.archived" @click="continuing = true" /></template>
   </ScheduleCard>
   <StartGoalDialog v-if="continuable" v-model:open="continuing" continuing :initial="goal" />
 </template>

@@ -23,7 +23,7 @@ import { access_options } from "../runner/expert_prompts.mjs";
 import { t } from "./i18n.js";
 
 const emit = defineEmits(["submit", "cancel"]);
-const { view, bridge, pending, act } = inject("discussion");
+const { view, bridge, is_running, act } = inject("discussion");
 const EXPERT_CONTAINER = "new-expert-modes";
 const experts = Object.keys(bridge.identities).filter((name) => name !== "用户");
 const field_id = (key) => `new-room-${key}`;
@@ -93,7 +93,7 @@ const blocker = computed(() => {
   if (unready.length && relay.value) return t("在电脑「{computer}」上配置 {names}", { computer: relay.value.name, names: unready.join(t("、")) });
   return unready.length ? t("补齐 {names} 的接入配置", { names: unready.join(t("、")) }) : scheduler_unready.value ? t("补齐决策模型配置，或移出决策模型") : "";
 });
-const submit_disabled = computed(() => !room_ready.value || Boolean(blocker.value) || scheduler_unready.value || pending.value === "create");
+const submit_disabled = computed(() => !room_ready.value || Boolean(blocker.value) || scheduler_unready.value || is_running("create"));
 
 /** Keep the host inside the selected members that answer by themselves. */
 function ensure_host() {
@@ -360,7 +360,7 @@ const summary = computed(() => {
       <div class="create-footer-row">
         <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="blocker || summary" role="status"><UIcon v-if="blocker" name="i-lucide-circle-alert" />{{ blocker ? t("还差：{reason}", { reason: blocker }) : selected_names.length || driven ? summary : "" }}</span>
         <UButton :label="t('取消')" color="neutral" variant="ghost" @click="emit('cancel')" />
-        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="discussing ? t('创建并开启讨论') : goal ? t('创建并开启 Goal') : automatic ? t('创建并连接') : t('创建协作房间')" :disabled="submit_disabled" :loading="pending === 'create'" />
+        <UButton type="submit" form="create-discussion-form" class="channel-primary-button" :icon="launching ? 'i-lucide-play' : 'i-lucide-plus'" :label="discussing ? t('创建并开启讨论') : goal ? t('创建并开启 Goal') : automatic ? t('创建并连接') : t('创建协作房间')" :disabled="submit_disabled" :loading="is_running('create')" />
       </div>
     </footer>
   </div>

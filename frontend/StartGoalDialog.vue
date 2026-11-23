@@ -7,7 +7,7 @@ const open = defineModel("open", { type: Boolean, default: false });
 // edit: change the open goal; otherwise start a new one, prefilled from `initial` when continuing an ended goal.
 // continuing: reopen an ended goal from its end notice, prefilled with its objective and budgets.
 const props = defineProps({ edit: Boolean, continuing: Boolean, initial: { type: Object, default: null } });
-const { view, act, pending } = inject("discussion");
+const { view, act, is_running } = inject("discussion");
 const objective = ref("");
 const continues = ref(0);
 const minutes = ref(0);
@@ -41,7 +41,7 @@ async function submit() {
         <div class="start-goal-footer">
           <UButton :label="t('取消')" color="neutral" variant="ghost" @click="open = false" />
           <UButton type="submit" :icon="edit ? 'i-lucide-check' : 'i-lucide-target'" :label="edit ? t('保存') : t('开始 Goal')" class="channel-primary-button"
-            :loading="pending === action" :disabled="Boolean(pending) || !objective.trim() || !view.access?.can_manage" />
+            :loading="is_running(action)" :disabled="!objective.trim() || !view.access?.can_manage" />
         </div>
       </form>
     </template>

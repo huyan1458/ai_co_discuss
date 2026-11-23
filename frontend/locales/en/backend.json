@@ -1,4 +1,7 @@
 {
+  "无法读取 ZIP 压缩包": "Could not read the ZIP archive",
+  "无法读取这个压缩包条目": "Could not read this archive entry",
+  "压缩包内单个文件最多预览 64 MiB": "Individual archive entries can be previewed up to 64 MiB",
   "面板上已有预设「{name}」；要用这张卡片替换它，请明确选择覆盖": "The panel already has a preset “{name}”; choose to replace it explicitly to use this card",
   "工作流「{id}」已被修改，请重新载入后再保存": "Workflow “{id}” was changed since you loaded it; reload it before saving",
   "工作流库里已有「{id}」；要整份覆盖它，请明确选择覆盖": "The library already has “{id}”; choose to overwrite it explicitly to replace it",

@@ -24,7 +24,7 @@ import MemoBlock from "./memo-block.js";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import { copy_seat_link, declined, external_of, external_tag, revoke_member } from "./external-members.js";
 
-const { view, bridge, act, pending } = inject("discussion");
+const { view, bridge, act, is_running } = inject("discussion");
 const LIVE = ["dispatched", "started"];
 const ACCESS_LABELS = { runner: t('本机唤醒'), manual: t('手动接入') };
 const TASK_PREVIEW_LENGTH = 90;
@@ -256,7 +256,7 @@ function member_row_key(member, state) {
 function member_menu(member) {
   return member_actions(member, { view: view.value, act, describe,
     external: (target) => { external_member.value = target; external_reinvite.value = false; external_open.value = true; },
-    revoke: (target) => revoke_member(bridge, act, room.value.id, target),
+    revoke: (target) => revoke_member(bridge, act, target),
     copy_link: async (target) => { if (await copy_seat_link(bridge, room.value.id, target.id)) bridge.notify("info", t("已复制邀请链接")); } });
 }
 
@@ -382,8 +382,8 @@ watch(() => room.value.id, () => { starting.value = false; });
     <section v-else class="pb-status" :class="`is-${status.tone}`" :aria-label="t('房间状态')">
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong>
         <UButton v-if="status.title === t('处理中') &amp;&amp; view.access?.can_manage" :label="t('全部停止')" size="xs" color="error" variant="soft" class="pb-stop-all" :title="t('停止所有成员正在做的工作，并取消还没投递的请求；发新消息即重新开始')"
-          :loading="pending === 'stop_room'" :disabled="!!pending" @click="act('stop_room')">
-          <template #leading><span v-if="pending !== 'stop_room'" class="pb-stop-glyph" aria-hidden="true"></span></template>
+          :loading="is_running('stop_room')" @click="act('stop_room')">
+          <template #leading><span v-if="!is_running('stop_room')" class="pb-stop-glyph" aria-hidden="true"></span></template>
         </UButton>
       </div>
       <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
@@ -393,7 +393,7 @@ watch(() => room.value.id, () => { starting.value = false; });
       </div>
       <div v-if="checkin" class="pb-checkin" :title="t('主持人给自己设的定时检查：房间还有进行中的工作时按间隔唤醒它查看进展，房间空闲后自动结束')">
         <span>{{ t('定时检查 · 每 {value1} 分钟 · 下次 {value2}', { value1: checkin.minutes, value2: bridge.format_time(checkin.due_at * 1000) }) }}</span>
-        <UButton v-if="view.access?.can_manage" :label="t('关闭')" size="xs" color="neutral" variant="ghost" :loading="pending === 'stop_host_checkin'" :disabled="!!pending" @click="act('stop_host_checkin')" />
+        <UButton v-if="view.access?.can_manage" :label="t('关闭')" size="xs" color="neutral" variant="ghost" :loading="is_running('stop_host_checkin')" @click="act('stop_host_checkin')" />
       </div>
       <div v-if="status.continue_chain && view.access?.can_manage" class="pb-chain-actions">
         <UButton v-for="rounds in continue_choices" :key="rounds" :label="rounds === status.asked_rounds ? t('批准 {value1} 轮', { value1: rounds }) : t('继续 {value1} 轮', { value1: rounds })" icon="i-lucide-play" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="success"
@@ -410,10 +410,10 @@ watch(() => room.value.id, () => { starting.value = false; });
       <div v-if="view.access?.can_manage && !room.archived" class="pb-goal-actions">
         <UButton :label="goal.status === 'active' ? t('暂停') : t('继续')" :icon="goal.status === 'active' ? 'i-lucide-pause' : 'i-lucide-play'" size="xs" color="neutral" variant="outline" class="pb-action" :data-tone="goal.status === 'active' ? 'warning' : 'success'"
           :title="goal.status === 'active' ? t('房间空闲时不再唤醒主持人，正在进行的工作不受影响') : t('继续推进，房间空闲时唤醒主持人')"
-          :loading="pending === 'goal_control'" :disabled="Boolean(pending)" @click="act('goal_control', goal.status === 'active' ? 'pause' : 'resume')" />
-        <UButton :label="t('编辑')" icon="i-lucide-pencil" size="xs" color="neutral" variant="outline" class="pb-action" data-tone="accent" :disabled="Boolean(pending)" @click="goal_dialog = true" />
+          :loading="is_running('goal_control')" @click="act('goal_control', goal.status === 'active' ? 'pause' : 'resume')" />
+        <UButton :label="t('编辑')" icon="i-lucide-pencil" size="xs" color="neutral" variant="outline" class="pb-action" data-tone="accent" @click="goal_dialog = true" />
         <UButton :label="t('结束')" icon="i-lucide-square" size="xs" color="neutral" variant="outline" class="pb-action" data-tone="danger" :title="t('结束 Goal，主持人不再自动推进；正在进行的工作不受影响')"
-          :loading="pending === 'goal_control'" :disabled="Boolean(pending)" @click="act('goal_control', 'clear')" />
+          :loading="is_running('goal_control')" @click="act('goal_control', 'clear')" />
       </div>
     </section>
     <section v-if="task && !discussion" class="pb-section" :aria-label="t('当前任务')">

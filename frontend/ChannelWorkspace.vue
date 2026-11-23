@@ -3,6 +3,7 @@ import { computed, inject, onBeforeUnmount, onMounted, provide, ref, watch } fro
 import ChannelDiscussion from "./ChannelDiscussion.vue";
 import TopicPanel from "./TopicPanel.vue";
 import WorkspaceDialogs from "./WorkspaceDialogs.vue";
+import ShareDialog from "./ShareDialog.vue";
 import ChannelSidebar from "./ChannelSidebar.vue";
 import FreeBoard from "./FreeBoard.vue";
 import TopicCard from "./TopicCard.vue";
@@ -25,7 +26,7 @@ import RoomWelcome from "./RoomWelcome.vue";
 import { busy } from "./member-actions.js";
 import { locale, t } from "./i18n.js";
 
-const { view, bridge, field, act, pending } = inject("discussion");
+const { view, bridge, field, act, is_running } = inject("discussion");
 const room = computed(() => view.value.room);
 // A share page: one room, read only, with its messages and executions and nothing that would change it.
 const share = computed(() => view.value.share);
@@ -234,6 +235,8 @@ const creating_tabs = computed(() => tabs.value.map((item) => ({ ...item, disabl
  * has its own 工作流 section, and a workflow chosen there fills the middle in place of the room (with no room selected too). */
 const workflow_library = use_workflow_library();
 const { page_open: workflow_page, draft: workflow_draft, saved_id: workflow_saved, deleting: workflow_deleting, leaving: workflow_leaving } = workflow_library;
+// Opening the mobile sidebar drawer should reflect workflows saved via CLI without a full page reload.
+watch(nav_open, (open) => { if (open) workflow_library.refresh_list(); });
 // An invited room (a room on another computer this computer's AI joined) also fills the middle in place of the room.
 const invited_rooms = use_invited_rooms();
 const { page_open: invited_page, selected: invited_record } = invited_rooms;
@@ -268,8 +271,10 @@ async function save_consensus() {
 }
 
 /** Open management for the exact sidebar item while leaving its draft untouched; archiving needs no dialog, it offers undo. */
-function manage_room({ room, action }) {
+function manage_room({ room, action, job }) {
   nav_open.value = false;
+  if (action === "share_job_action") return act(action, { op: "open", job });
+  if (action === "share_prepare" || action === "share_open") return act(action, room.id);
   if (action === "archive") return act("manage_channel", { id: room.id, action, undo: true });
   managed_room.value = room;
   modal.value = action;
@@ -590,7 +595,7 @@ function resize_nav_by_key(event) {
             <form v-if="editing_context" class="summary-form" @submit.prevent="save_consensus">
               <UFormField :label="t('主持简报')" :description="t('简述结论、共识、歧义，以及接下来要追问或调整什么、为什么。')" class="channel-brief-editor"><UTextarea v-model="brief" :aria-label="t('主持简报正文')" :rows="4" class="w-full summary-brief-editor" :placeholder="t('让返回房间的人快速理解讨论进展和主持意图。')" /></UFormField>
               <UFormField :label="t('详细共识与进度')" :description="t('已达成的共识、尚未解决的问题与下一步，用 #消息编号 标注依据。')" class="channel-state-field"><UTextarea v-model="summary" :aria-label="t('共识与分歧正文')" :rows="12" :maxlength="4000" class="summary-editor" :placeholder="t('已达成的共识、尚未解决的问题与下一步…')" /></UFormField>
-              <div class="form-footer"><span>{{ t("依据消息截止 #{id}", { id: view.snapshot_id }) }}</span><div class="button-row"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="editing_context = false" /><UButton type="submit" color="neutral" icon="i-lucide-check" :label="t('保存共识')" class="channel-primary-button" :loading="pending === 'save_context'" /></div></div>
+              <div class="form-footer"><span>{{ t("依据消息截止 #{id}", { id: view.snapshot_id }) }}</span><div class="button-row"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="editing_context = false" /><UButton type="submit" color="neutral" icon="i-lucide-check" :label="t('保存共识')" class="channel-primary-button" :loading="is_running('save_context')" /></div></div>
             </form>
             <template v-else-if="room.host_brief?.text || room.state_text">
               <div class="consensus-card is-brief"><h3>{{ t("主持简报") }}<button v-if="room.state_until" type="button" class="subtle-link" @click="detail_from_consensus(room.state_until)">{{ t("整理至 #{id}", { id: room.state_until }) }}</button></h3><div class="markdown-body" @click="open_message_ref($event, detail_from_consensus)" v-html="room.rendered_brief"></div></div>
@@ -615,6 +620,7 @@ function resize_nav_by_key(event) {
         <div v-else class="progress-board is-docked"><header class="pb-header"><strong>{{ t("讨论进度") }}</strong></header><p class="channel-rail-empty">{{ t("暂无房间，新建讨论后在这里查看进度与参与者。") }}</p></div></section>
     </aside>
 
+    <ShareDialog />
     <USlideover v-model:open="nav_open" side="left" :title="t('房间导航')" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-navigation-drawer' }">
       <template #content><ChannelSidebar :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @settings="nav_open = false; modal = 'settings'" /></template>
     </USlideover>

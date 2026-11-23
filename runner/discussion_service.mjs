@@ -27,7 +27,7 @@ const DESTRUCTION_REPORT_TRIES = 5;
 const DESTRUCTION_REPORT_RETRY_MS = 10_000;
 // A destroyed room's member processes are asked to stop first; its sessions are removed after this wait, retried while held.
 const DESTRUCTION_SESSION_WAIT_MS = 3000;
-const DESTRUCTION_SESSION_TRIES = 3;
+const DESTRUCTION_SESSION_TRIES = 4;
 // How often sessions a destroyed room left held are tried again, and where those rooms are kept until they clear.
 const DESTRUCTION_RETRY_MS = 10 * 60_000;
 const DESTRUCTION_RETRIES_FILE = 'destruction-retries.json';
@@ -642,12 +642,12 @@ export class DiscussionService {
       drop_destruction_retry(this.home, pending);
     }
   }
-  /** Remove a destroyed room's sessions once its processes have had time to exit, retrying files still held. */
+  /** Remove a destroyed room's sessions at once, waiting between retries when an exiting process still holds a file. */
   async destroy_sessions(config, path, executed) {
     // A session removed in an earlier attempt is gone in the next one, so removed counts add up across attempts.
     let merged = [];
     for (let attempt = 0; attempt < DESTRUCTION_SESSION_TRIES; attempt += 1) {
-      await sleep(DESTRUCTION_SESSION_WAIT_MS);
+      if (attempt > 0) await sleep(DESTRUCTION_SESSION_WAIT_MS);
       let items;
       try { items = destroy_room_sessions(config, sessions_in_use(this.home, path), {}, executed); }
       catch (error) { this.log(`${config.room}: 会话记录未能删除：${error.message}`); items = [{ kind: 'sessions', state: 'failed', count: 0 }]; }
@@ -885,12 +885,14 @@ export async function run_service(home, output = () => {}) {
   service.push = true;
   const stop_path = join(home, 'stop.request');
   if (existsSync(stop_path)) unlinkSync(stop_path);
+  let share_manager;
   let stopped = false, syncing = null, relaying = null, channels = null, direct = null, receiving = null, updating_pi = null, pi_checked = false;
   const relay_stop = new AbortController();
   const stop = () => { stopped = true; relay_stop.abort(); };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   try {
+    share_manager = (await import('./share_service.mjs')).start_share_manager(home);
     log_line(`讨论服务已启动 pid=${process.pid}`);
     atomic_json(join(home, 'status.json'), { pid: process.pid, ready: true,
       updated_at: Math.floor(Date.now() / 1000), rooms: [] });
@@ -958,6 +960,7 @@ export async function run_service(home, output = () => {}) {
     }
   } finally {
     relay_stop.abort();
+    share_manager?.close();
     direct?.close();
     await Promise.all([syncing, relaying, channels?.done(), receiving, updating_pi]);
     await service.close();

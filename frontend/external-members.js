@@ -208,12 +208,11 @@ export async function copy_seat_link(bridge, room_id, member_id) {
 }
 
 /** End an external member from its menu at once: a seat awaiting check-in is removed, a joined member loses its access. */
-export async function revoke_member(bridge, act, room_id, member) {
+export async function revoke_member(bridge, act, member) {
   const pending = external_of(member).pending;
   try {
-    await room_operations(bridge).revoke(room_id, member.id);
+    if (!await act("change_member", { member_id: member.id, name: member.name, action: "revoke" })) return;
     bridge.notify("info", pending ? t("席位已移除") : t("已撤销，对方之后的请求都会被拒绝"));
-    await act("refresh");
   } catch (error) { bridge.notify("error", error.message); }
 }
 

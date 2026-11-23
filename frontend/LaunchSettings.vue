@@ -9,7 +9,7 @@ import { t } from './i18n.js';
 // The create form shows directory, access and model choices beside their related controls.
 const props = defineProps({ participants: { type: Array, default: () => [] }, workspace: { type: Boolean, default: true },
   modelSelection: { type: Boolean, default: true } });
-const { view, bridge, act, pending } = inject("discussion");
+const { view, bridge, act, is_running } = inject("discussion");
 const names = computed(() => [...new Set(props.participants)].filter(name => bridge.launch_clients[name]));
 const profile = name => view.value.launch.profiles[name] || {};
 const write = (name, field, value) => bridge.write_launch(name, field, value);
@@ -32,7 +32,7 @@ watch(() => [props.modelSelection, view.value.launch.available, ...names.value.m
       <h3>{{ t('连接这台电脑') }}</h3>
       <p class="fine-print">{{ t('先安装并配置 codiscuss，在运行 AI 的这台电脑上执行以下命令，使用命令打开的网页完成连接。浏览器询问时允许访问本机网络。') }}</p>
       <div class="launch-connect-command"><code>{{ view.launch.connect_command }}</code><UButton icon="i-lucide-copy" :aria-label="t('复制本机连接命令')" variant="ghost" color="neutral" @click="act('copy', view.launch.connect_command)" /></div>
-      <UButton :label="t('重新检查连接')" variant="outline" class="pb-action" color="neutral" :loading="pending === 'retry_launch_connection'" @click="act('retry_launch_connection')" />
+      <UButton :label="t('重新检查连接')" variant="outline" class="pb-action" color="neutral" :loading="is_running('retry_launch_connection')" @click="act('retry_launch_connection')" />
       <p v-if="view.launch.error" role="alert" class="fine-print">{{ view.launch.error }}</p>
     </template>
     <template v-else>
@@ -66,7 +66,7 @@ watch(() => [props.modelSelection, view.value.launch.available, ...names.value.m
         <USelect :model-value="view.launch.workspace.project_access || 'read'" :items="ACCESS" class="w-full" @update:model-value="write('workspace', 'project_access', $event)" />
       </UFormField>
     </div>
-    <UButton :label="t('保存为本机软件默认配置')" variant="outline" class="pb-action" color="neutral" :loading="pending === 'save_launch_defaults'" @click="act('save_launch_defaults')" />
+    <UButton :label="t('保存为本机软件默认配置')" variant="outline" class="pb-action" color="neutral" :loading="is_running('save_launch_defaults')" @click="act('save_launch_defaults')" />
     </template>
   </section>
 </template>

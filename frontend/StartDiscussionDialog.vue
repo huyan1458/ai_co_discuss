@@ -6,7 +6,7 @@ import DiscussionLimits from "./DiscussionLimits.vue";
 // A room saved without a round limit still opens with this many rounds; the user may clear it.
 const FALLBACK_ROUNDS = 3;
 const open = defineModel("open", { type: Boolean, default: false });
-const { view, act, pending } = inject("discussion");
+const { view, act, is_running } = inject("discussion");
 const goal = ref("");
 const rounds = ref(FALLBACK_ROUNDS);
 const minutes = ref(0);
@@ -39,7 +39,7 @@ async function submit() {
         <DiscussionLimits ref="limits" v-model:rounds="rounds" v-model:minutes="minutes" v-model:named_followup="named_followup" />
         <div class="start-discussion-footer">
           <UButton :label="t('取消')" color="neutral" variant="ghost" @click="open = false" />
-          <UButton type="submit" icon="i-lucide-play" :label="t('开始讨论')" class="channel-primary-button" :loading="pending === 'start_room_discussion'" :disabled="Boolean(pending) || !view.access?.can_manage" />
+          <UButton type="submit" icon="i-lucide-play" :label="t('开始讨论')" class="channel-primary-button" :loading="is_running('start_room_discussion')" :disabled="!view.access?.can_manage" />
         </div>
       </form>
     </template>

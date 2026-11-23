@@ -8,7 +8,7 @@ import { t } from './i18n.js';
 /** The session layer of the shared room board: progress, focus and discussion controls. */
 import { computed, inject, ref, watch } from "vue";
 
-const { view, bridge, act, pending } = inject("discussion");
+const { view, bridge, act, is_running } = inject("discussion");
 const room = computed(() => view.value.room);
 const session = computed(() => room.value.session);
 const limits = computed(() => room.value.limits || {});
@@ -83,12 +83,12 @@ async function finish() {
     <button v-if="focus.length > FOCUS_PREVIEW_LENGTH" type="button" class="pb-link" @click="focus_expanded = !focus_expanded">{{ focus_expanded ? t('收起') : t('展开') }}</button>
   </section>
   <section v-if="!room.archived" class="pb-actions" :aria-label="t('讨论操作')">
-    <UButton v-if="paused" icon="i-lucide-play" :label="t('继续')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="success" :disabled="!can_control || !!pending" :loading="pending === 'restart_discussion'" @click="act('restart_discussion')" />
-    <UButton v-else icon="i-lucide-pause" :label="t('暂停')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="warning" :title="t('停止本次讨论执行，继续时由主持人重新安排')" :disabled="!can_control || !!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" />
-    <UButton v-if="turn && !paused" icon="i-lucide-skip-forward" :label="t('跳过')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="info" :title="t('跳过 {value1} 本次发言', { value1: bridge.display_name(turn.expert) })" :disabled="!can_control || !!pending" :loading="pending === 'skip_turn'" @click="act('skip_turn')" />
-    <UButton icon="i-lucide-flag" :label="t('结束')" size="sm" color="neutral" variant="outline" class="pb-action pb-end" data-tone="danger" :disabled="!can_control || !!pending" @click="ending = true" />
+    <UButton v-if="paused" icon="i-lucide-play" :label="t('继续')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="success" :disabled="!can_control" :loading="is_running('restart_discussion')" @click="act('restart_discussion')" />
+    <UButton v-else icon="i-lucide-pause" :label="t('暂停')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="warning" :title="t('停止本次讨论执行，继续时由主持人重新安排')" :disabled="!can_control" :loading="is_running('pause_discussion')" @click="act('pause_discussion')" />
+    <UButton v-if="turn && !paused" icon="i-lucide-skip-forward" :label="t('跳过')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="info" :title="t('跳过 {value1} 本次发言', { value1: bridge.display_name(turn.expert) })" :disabled="!can_control" :loading="is_running('skip_turn')" @click="act('skip_turn')" />
+    <UButton icon="i-lucide-flag" :label="t('结束')" size="sm" color="neutral" variant="outline" class="pb-action pb-end" data-tone="danger" :disabled="!can_control" @click="ending = true" />
   </section>
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="ending" :title="t('结束讨论')" :description="t('当前发言安排会被取消，已有消息全部保留。')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
-    <template #body><div class="progress-ending"><button type="button" class="progress-ending-option" :disabled="!!pending" @click="finish"><strong>{{ t('结束讨论') }}</strong><span>{{ t('保留全部记录；需要总结时可直接请主持人写一份。') }}</span></button></div></template>
+    <template #body><div class="progress-ending"><button type="button" class="progress-ending-option" @click="finish"><strong>{{ t('结束讨论') }}</strong><span>{{ t('保留全部记录；需要总结时可直接请主持人写一份。') }}</span></button></div></template>
   </UModal>
 </template>

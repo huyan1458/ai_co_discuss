@@ -19,6 +19,8 @@ import subprocess
 import threading
 import time
 import uuid
+import zipfile
+import zlib
 from functools import lru_cache
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -1771,6 +1773,63 @@ SVG_START = re.compile(rb"^(?:\xef\xbb\xbf)?\s*(?:<\?xml[^>]*>\s*)?(?:<!--.*?-->
 SVG_SNIFF_BYTES = 4096
 
 
+ZIP_ENTRY_LIMIT = 64 * 1024 * 1024
+
+
+def zip_preview_path(info):
+    """Decode the archive spelling and return a safe file path for display and lookup."""
+    name = info.orig_filename
+    if not info.flag_bits & 0x800:
+        raw = name.encode("cp437")
+        try:
+            name = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            name = raw.decode("gbk", errors="replace")
+    name = name.replace("\\", "/")
+    parts = name.split("/")
+    if any(part in ("", ".", "..", "__MACOSX", ".DS_Store") for part in parts) or re.search(r"[\x00-\x1f\x7f:]", name):
+        return None
+    return name
+
+
+def zip_preview(path, entry=None):
+    """List central-directory metadata or read one bounded entry into memory."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            files = {}
+            for info in archive.infolist():
+                name = zip_preview_path(info)
+                if name:
+                    files.setdefault(name, info)
+            if entry is None:
+                entries = []
+                for name, info in files.items():
+                    try:
+                        modified = datetime(*info.date_time).astimezone(timezone.utc).isoformat()
+                    except (ValueError, OverflowError, OSError):
+                        modified = ""
+                    entries.append({"path": name, "size": info.file_size, "modified_at": modified, "encrypted": bool(info.flag_bits & 1)})
+                return {"entries": entries}
+            info = files.get(entry)
+            if not info or info.flag_bits & 1 or info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                raise ValueError(Text('无法读取这个压缩包条目'))
+            if info.file_size > ZIP_ENTRY_LIMIT:
+                raise ValueError(Text('压缩包内单个文件最多预览 64 MiB'))
+            with archive.open(info) as source:
+                data = source.read(ZIP_ENTRY_LIMIT + 1)
+            if len(data) != info.file_size:
+                raise ValueError(Text('无法读取这个压缩包条目'))
+            return data
+    except (zipfile.BadZipFile, UnicodeError, RuntimeError, EOFError, zlib.error, NotImplementedError, OSError) as error:
+        raise ValueError(Text('无法读取 ZIP 压缩包')) from error
+
+
+@lru_cache(maxsize=1)
+def zip_entry_bytes(path, sha256, entry):
+    """Reuse immutable attachment bytes across consecutive relay ranges after checking room access."""
+    return zip_preview(path, entry)
+
+
 def attachment_content_type(data):
     """Allow inline preview only for recognized images and PDF bytes.
 
@@ -3347,9 +3406,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
     def handle_local_launch(self, parts, method):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
-        site = self.local_request_site(method)
         route = parts[2:]
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["wipe-histories"], ["room-models"], ["room-skills"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["sessions"], ["api-key"], ["api-check"],
+        if route == ["share-job"] and method == "POST" and not self.server.local_launch:
+            return self.respond({"enabled": False})
+        site = self.local_request_site(method)
+        if method == "OPTIONS" and route in (["settings"], ["launch"], ["wipe-histories"], ["room-models"], ["room-skills"], ["room-files"], ["share-job"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["sessions"], ["api-key"], ["api-check"],
                                              ["scheduler-check"], ["image-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]) or (method == "OPTIONS" and len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS + SITE_COMMANDS):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
@@ -3374,7 +3435,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = route[0]
         elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"]) and method == "POST":
             command = route[0]
-        elif route in (["room-profiles"], ["room-skills"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-restore"], ["room-fork"]) and method == "POST":
+        elif route in (["room-profiles"], ["room-skills"], ["room-files"], ["share-job"], ["room-page"], ["room-media"], ["execution-details"], ["room-restore"], ["room-fork"]) and method == "POST":
             command = route[0]
         elif route == ["pick-directory"] and method == "POST":
             command = "pick-directory"
@@ -3406,10 +3467,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError(Text('本机操作须使用 application/json'))
             payload = self.read_payload(MAX_FILE_PART_BODY_BYTES if command == "room-files" else MAX_BODY_BYTES)
-            if command in ("start", "room-config", "room-models", "room-skills", "room-files", "room-page", "room-media", "execution-details", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows") + SITE_COMMANDS:
+            if command in ("start", "room-config", "room-models", "room-skills", "room-files", "share-job", "room-page", "room-media", "execution-details", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows") + SITE_COMMANDS:
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
-            if command in ("room-skills", "room-files", "room-page", "room-media", "execution-details", "room-workflow", "room-settings", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") + SITE_COMMANDS and payload.get("room_id") and not payload.get("token") and not self.bridge_origin:
+            if command in ("room-skills", "room-files", "share-job", "room-page", "room-media", "execution-details", "room-workflow", "room-settings", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") + SITE_COMMANDS and payload.get("room_id") and not payload.get("token") and not self.bridge_origin:
                 with closing(connect_db(self.server.database)) as connection:
                     self.admin_as_owner(connection, payload.get("room_id", ""))
                     payload["token"] = self.headers.get("X-Discussion-Token", "")
@@ -3422,6 +3483,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 with closing(connect_db(self.server.database)) as connection:
                     self.admin_as_owner(connection, payload.get("source_room_id", ""))
                     payload["source_token"] = self.headers.get("X-Discussion-Token", "")
+            if command == "share-job" and payload.get("op") == "list" and not self.bridge_origin:
+                with closing(connect_db(self.server.database)) as connection:
+                    if not self.admin_session(connection):
+                        raise PermissionError(Text('需要管理员登录'))
             if command == "machine-link":
                 payload = {"site": site}
         if command == "room-config" and "participants" in payload:
@@ -4049,6 +4114,17 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 return self.respond(attachment)
             if parts[5] == "content":
                 return self.respond_attachment(attachment, params.get("download") == "1")
+            if parts[5] == "zip":
+                path = attachment_path(self.server.database, attachment)
+                if not path.is_file():
+                    raise LookupError(Text('附件不存在'))
+                entries = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("entry")
+                if entries is None:
+                    return self.respond(zip_preview(path))
+                entry = entries[-1]
+                data = (zip_entry_bytes(path, attachment["sha256"], entry) if self.headers.get("Range")
+                        else zip_preview(path, entry))
+                return self.send_file(None, "application/octet-stream", entry.split("/")[-1], "attachment", data=data)
         raise LookupError(Text('地址不存在'))
 
     def import_attachment(self, connection, room_id, attachment_id):
@@ -4072,12 +4148,12 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         disposition = "attachment" if download or attachment["content_type"] == "application/octet-stream" else "inline"
         self.send_file(path, attachment["content_type"], attachment["file_name"], disposition, {"X-Content-SHA256": attachment["sha256"]})
 
-    def send_file(self, path, content_type, file_name, disposition, extra=None):
+    def send_file(self, path, content_type, file_name, disposition, extra=None, data=None):
         """Send one stored file, or the single byte range a player asks for, never as executable content."""
-        size = path.stat().st_size
+        size = path.stat().st_size if data is None else len(data)
         start, end, status = 0, size - 1, 200
         match = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", "").strip())
-        if match and (match[1] or match[2]):
+        if match and (match[1] or match[2]) and (data is None or size > 0):
             if match[1]:
                 start, end = int(match[1]), min(int(match[2]), size - 1) if match[2] else size - 1
             else:
@@ -4103,6 +4179,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
+        if data is not None:
+            self.wfile.write(memoryview(data)[start:end + 1])
+            return
         with path.open("rb") as source:
             source.seek(start)
             left = end - start + 1

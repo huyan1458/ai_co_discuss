@@ -9,7 +9,7 @@ import UploadPercent from "./UploadPercent.vue";
  * A mouse drags a row at once; a finger holds it first, so a swipe still scrolls the list.
  */
 const props = defineProps({ queue: { type: Object, required: true }, roomId: { type: String, required: true } });
-const { bridge, view, act, pending } = inject("discussion");
+const { bridge, view, act } = inject("discussion");
 const PREVIEW_DELAY_MS = 700;
 const LONG_PRESS_MS = 350;
 const MOUSE_DRAG_THRESHOLD_PX = 4;
@@ -36,7 +36,7 @@ const items = computed(() => {
   const ordered = local_order.value.map((id) => by_id.get(id)).filter(Boolean);
   return [...ordered, ...queued.filter((item) => !local_order.value.includes(item.id))];
 });
-const reorderable = computed(() => items.value.length > 1 && !pending.value);
+const reorderable = computed(() => items.value.length > 1);
 
 /** Short text for the row: the message, else what it carries. */
 function summary(item) {
@@ -204,7 +204,7 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
     <div v-if="queue.paused" class="queued-row queued-paused-row">
       <UIcon name="i-lucide-pause" class="queued-leading" />
       <span class="queued-text">{{ t('已暂停排队：你停止了运行') }}</span>
-      <UButton :label="t('继续')" icon="i-lucide-play" size="xs" color="neutral" variant="ghost" :disabled="!!pending" @click="act('queue_resume')" />
+      <UButton :label="t('继续')" icon="i-lucide-play" size="xs" color="neutral" variant="ghost" @click="act('queue_resume')" />
     </div>
     <!-- Rows glide only to a dropped order: when the row just sent turns into its queued row, nothing above it has moved. -->
     <TransitionGroup name="queued" :move-class="local_order ? 'queued-move' : 'queued-still'">
@@ -235,9 +235,9 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
         <span class="queued-actions">
           <UTooltip v-for="action in [send_action(item)]" :key="action.label" :text="action.tip" :ui="{ content: 'queued-tooltip' }">
             <UButton :aria-label="action.label" :icon="action.icon" size="xs" color="neutral" variant="ghost" class="queued-action queued-send-now"
-              :disabled="!!pending || sending !== null" @click.stop="send_now(item)" />
+              :disabled="sending !== null" @click.stop="send_now(item)" />
           </UTooltip>
-          <UButton icon="i-lucide-trash-2" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('删除排队消息')" :disabled="sending === item.id || !!pending" @click.stop="act('queue_delete', item.id)" />
+          <UButton icon="i-lucide-trash-2" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('删除排队消息')" :disabled="sending === item.id" @click.stop="act('queue_delete', item.id)" />
           <!-- Focus goes to the composer for 编辑消息, not back to this button. -->
           <UDropdownMenu v-if="menu(item)[0].length" :items="menu(item)" :content="{ align: 'end', sideOffset: 4, onCloseAutoFocus: (event) => event.preventDefault() }" :ui="{ content: 'channel-menu' }">
             <UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('排队消息操作')" :disabled="sending === item.id" />

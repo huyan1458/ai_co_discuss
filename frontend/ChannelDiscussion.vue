@@ -52,7 +52,7 @@ import RequestStatus from "./RequestStatus.vue";
 const pending_seat = ref(null), pending_seat_open = ref(false);
 const emit = defineEmits(["detail", "edit"]);
 let topic_card = null;
-const { view, bridge, field, act, pending } = inject("discussion");
+const { view, bridge, field, act, is_running } = inject("discussion");
 // The 设置 → 外观 folding level (ChannelWorkspace.vue FOLD_LEVELS); read where messages fold.
 const fold_level = inject("fold_level", ref(null));
 const fold_keep = inject("fold_keep", ref(null));
@@ -117,7 +117,7 @@ const voice = use_voice_input({ bridge, on_text: (spoken) => {
   nextTick(() => { if (ENTER_SENDS) area?.focus(); area?.setSelectionRange(start + spoken.length, start + spoken.length); });
 } });
 // Tap, hold or Space to talk, the same as on the welcome page's composer.
-const voice_press = use_voice_press({ voice, textarea: () => prompt.value?.textareaRef, text, busy: () => Boolean(pending.value) });
+const voice_press = use_voice_press({ voice, textarea: () => prompt.value?.textareaRef, text, busy: () => is_running("send") });
 const voice_hold = voice_press.hold;
 // Where "listen from here" shows for text selected in a message, with the selection kept for the click.
 const listen_here = ref(null);
@@ -500,6 +500,25 @@ const preview_round = computed(() => preview_group.value?.label);
 const preview_index = computed(() => preview_open.value ? navigation_entries.value.findIndex((entry) => entry.key === preview_entry.value) : -1);
 const prompt = ref(null);
 const follow_tail = ref(true);
+let sent_position = null;
+
+/** Keep the send's first landing while its receipt and execution status replace the preview. */
+function follow_destination(element) {
+  const bottom = element.scrollHeight - element.clientHeight;
+  if (!sent_position) return bottom;
+  const latest = view.value.messages.at(-1);
+  if (view.value.sending_preview?.id !== sent_position.id && latest?.submission_id !== sent_position.id) {
+    sent_position = null;
+    return bottom;
+  }
+  if (sent_position.top == null) {
+    const preview = element.querySelector(`[data-sending-id="${CSS.escape(sent_position.id)}"]`);
+    if (!preview) return bottom;
+    const heading = element.scrollTop + preview.getBoundingClientRect().top - reading_top(element) - send_y.get();
+    sent_position.top = Math.max(0, Math.min(bottom, heading));
+  }
+  return Math.min(bottom, sent_position.top);
+}
 const FOLLOW_TAIL_THRESHOLD = 70;
 // A room just opened keeps following its end this long while cards settle, unless the reader scrolls by hand: estimated
 // heights turning into measured ones make the browser shift the page by itself, and that scroll used to count as the
@@ -1065,7 +1084,7 @@ const recommendations = stable_computed(() => {
     if (item.status !== "open" || remaining <= 0) continue;
     const host_busy = ["pending", "delivering"].includes(routes.get(item.message_id)?.status);
     rows.set(item.message_id, { ...item, remaining, host_busy, label: SCHEDULER_LABELS[item.provider] || item.provider,
-      can_adopt: item.status === "open" && view.value.access?.can_manage && !room.value.archived && !pending.value });
+      can_adopt: item.status === "open" && view.value.access?.can_manage && !room.value.archived });
   }
   return rows;
 });
@@ -2345,7 +2364,7 @@ function track_scroll() {
   // After a resize the cards have rewrapped; until the reading position is restored this scrollTop is not the reader's.
   if (reading_position?.stale()) return;
   schedule_preload(preload_urgent(element));
-  const distance = element.scrollHeight - element.scrollTop - element.clientHeight - visual_tail_space;
+  const distance = follow_destination(element) - element.scrollTop - visual_tail_space;
   if (distance >= 0) set_visual_tail_space(0);
   const near_end = !visual_tail_space && distance < FOLLOW_TAIL_THRESHOLD;
   if (!near_end && follow_tail.value && !moved_by_hand && !reader_busy() && performance.now() < settle_until && jump_target.value == null && !pending_jump) {
@@ -2406,7 +2425,7 @@ glide.on("change", (value) => { if (transcript.value) write_scroll(transcript.va
 // size); a glide that stopped short of it left the page above the end and turned following off (2026-11-20 recording).
 glide.on("animationComplete", () => {
   const element = transcript.value;
-  const bottom = element && element.scrollHeight - element.clientHeight;
+  const bottom = element && follow_destination(element);
   if (element && follow_tail.value && Math.abs(element.scrollTop - bottom) > 1) write_scroll(element, bottom);
   track_scroll();
 });
@@ -2420,7 +2439,7 @@ async function follow_messages(smooth = false) {
   if (follow_tail.value && element && smooth !== true && reader_busy()) { follow_pending = true; arm_settle(); }
   else if (follow_tail.value && element) {
     set_visual_tail_space(0);
-    const bottom = element.scrollHeight - element.clientHeight;
+    const bottom = follow_destination(element);
     // While a send is in flight every follow glides, whichever watcher sees the new card first.
     if ((smooth === true || glide.isAnimating() || view.value.sending_message) && document.documentElement.dataset.motion !== "off") {
       if (!glide.isAnimating()) glide.jump(element.scrollTop);
@@ -2468,8 +2487,9 @@ send_entry.on("animationComplete", () => {
   rising_id = null;
 });
 // The sending card shows before the site answers; it rises in while the transcript glides to it.
-watch(() => Boolean(view.value.sending_preview), (shown) => {
-  if (!shown) return;
+watch(() => view.value.sending_preview?.id, (id) => {
+  if (!id) return;
+  sent_position = { id, top: null };
   // Sending is the reader's own move to the end; a scroll of theirs still settling no longer holds the transcript.
   release_reader();
   if (document.documentElement.dataset.motion === "off") send_entry.jump(1);
@@ -2491,6 +2511,7 @@ watch([() => view.value.room?.id, () => view.value.query, () => view.value.sourc
   locating.value = null;
   reset_preview();
   follow_tail.value = true;
+  sent_position = null;
   render_floor.value = null;
   pending_jump = preload_wanted = awaiting_jump = null;
   settle_until = performance.now() + ROOM_SETTLE_MS;
@@ -2588,6 +2609,7 @@ function stop_following(event) {
 function resume_tracking(event) {
   const is_scroll_input = event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key);
   if (is_scroll_input) {
+    sent_position = null;
     moved_by_hand = true;
     // The reader's own scroll ends a fold control's hold: it pulled the card back to its place on every frame, against the
     // swipe (user 2026-11-22, a scheduler card opened on the phone and scrolled down).
@@ -2914,7 +2936,7 @@ const dock_observer = new ResizeObserver(([entry]) => {
   entry.target.parentElement?.style.setProperty("--channel-composer-height", `${height}px`);
   if (!follow_tail.value || !transcript.value) return;
   if (reader_busy()) { follow_pending = true; arm_settle(); }
-  else write_scroll(transcript.value, transcript.value.scrollHeight);
+  else write_scroll(transcript.value, follow_destination(transcript.value));
 });
 onMounted(() => composer_dock.value && dock_observer.observe(composer_dock.value));
 /** On a phone the comment sheet is at least as tall as the composer, so it covers it whole (two input boxes never show at once). */
@@ -2935,10 +2957,10 @@ function docked_sheet_style() {
 const growth_observer = new ResizeObserver(() => {
   const element = transcript.value;
   if (!element || toggle_hold) return;
-  if (glide.isAnimating()) { if (follow_tail.value) glide.set(element.scrollHeight - element.clientHeight); return; }
+  if (glide.isAnimating()) { if (follow_tail.value) glide.set(follow_destination(element)); return; }
   if (!follow_tail.value) { keep_reading(); return; }
   if (reader_busy()) { follow_pending = true; arm_settle(); return; }
-  const bottom = element.scrollHeight - element.clientHeight;
+  const bottom = follow_destination(element);
   if (Math.abs(element.scrollTop - bottom) > 1) write_scroll(element, bottom);
 });
 const group_observer = new MutationObserver(() => {
@@ -3161,7 +3183,7 @@ function message_card(message) {
     message, identity_version: view.value.admin?.identity_version, narrow: narrow.value, reading: reader.state.message_id === message.id,
     attachments: message.attachments, body_html, visuals,
     can_branch: can_branch(message), can_take_back: can_take_back(message), can_retract: can_retract(message), retracting: retracting_id.value === message.id, private_chat: has_private_chat(message),
-    editing: edited, editing_plan: edited && editing.value.plan, editing_error: edited && editing.value.error, editing_pending: edited && pending.value,
+    editing: edited, editing_plan: edited && editing.value.plan, editing_error: edited && editing.value.error, editing_pending: edited && is_running("rewind_and_send"),
     round_label: message_round_labels.value.get(message.id), expanded, preview,
     marks: excerpt_marks.value.get(message.id) || NO_ITEMS, waits, speaking_expert: waits ? speaking_turn.value?.expert : null,
     badges: request_badges.value.get(message.id) || NO_ITEMS, elapsed: message_elapsed(message), model: execution?.model || "", effort: execution?.effort || "",
@@ -3177,7 +3199,12 @@ function message_card(message) {
   card.deps = [...Object.values(card), ...line.badges.map((badge) => badge.label), line.edge];
   card.line = line;
   card.actions = message_actions(message);
-  card.report_rows = card.reports.map((report) => ({ report, allowable: Boolean(denial_allowance(report)), failed: Boolean(failed_request_message(report)) }));
+  card.report_rows = card.reports.map((report) => ({
+    report,
+    completed: report.status === "completed",
+    allowable: report.status !== "completed" && Boolean(denial_allowance(report)),
+    failed: Boolean(failed_request_message(report)),
+  }));
   return card;
 }
 /**
@@ -3207,7 +3234,7 @@ function cancel_edit() { editing.value = NO_EDIT; }
 /** Rewind to just before the message with the plan read on opening, then send the edited text in its place. */
 async function submit_edit() {
   const { id, text: edited, plan } = editing.value;
-  if (!plan || !edited.trim() || pending.value) return;
+  if (!plan || !edited.trim() || is_running("rewind_and_send")) return;
   follow_tail.value = true;
   if (await act("rewind_and_send", { message_id: id, revision: plan.revision, text: edited.trim() })) cancel_edit();
 }
@@ -3282,7 +3309,7 @@ function open_message_ref(event) {
 
 /** Send the shared draft through the established idempotent controller. */
 async function send() {
-  if (!has_draft.value || pending.value) return;
+  if (!has_draft.value) return;
   mention_context.value = null;
   const draft = text.value;
   const extra = [file_refs_line(), excerpts_markdown(excerpts.value)].filter(Boolean).join("\n\n");
@@ -3396,7 +3423,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :removable="!mark_editing.touch" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? docked_sheet_style() : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
     <!-- A locate far back waits for the earlier cards to render; the end of the room stays covered meanwhile so it is not taken for the result. -->
     <div v-if="locating !== null" class="channel-locating" role="status"><UIcon name="i-lucide-loader" class="animate-spin" />{{ t('正在定位到 #{value1}…', { value1: locating }) }}</div>
-    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, message_groups,view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, message_groups,view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, is_running('rewind_and_send'), is_running('skip_turn'), is_running('pause_discussion'), is_running('retry_delivery'), open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view_query && !view_source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -3480,12 +3507,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <span v-if="can_manage && !message.queued" class="channel-working-actions">
                 <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
                 <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
-                  <UTooltip :text="t('暂停讨论')"><UButton icon="i-lucide-pause" size="xs" variant="ghost" color="neutral" :aria-label="t('暂停讨论，停止 {value1} 本次发言', { value1: bridge.display_name(message.author) })" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
-                  <UTooltip :text="t('停止本次发言，轮到下一位')"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="t('停止 {value1} 本次发言，轮到下一位', { value1: bridge.display_name(message.author) })" :disabled="!!pending" :loading="pending === 'skip_turn'"
-                    @click="act('skip_turn')"><span v-if="pending !== 'skip_turn'" class="channel-stop-square" /></UButton></UTooltip>
+                  <UTooltip :text="t('暂停讨论')"><UButton icon="i-lucide-pause" size="xs" variant="ghost" color="neutral" :aria-label="t('暂停讨论，停止 {value1} 本次发言', { value1: bridge.display_name(message.author) })" :loading="is_running('pause_discussion')" @click="act('pause_discussion')" /></UTooltip>
+                  <UTooltip :text="t('停止本次发言，轮到下一位')"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="t('停止 {value1} 本次发言，轮到下一位', { value1: bridge.display_name(message.author) })" :loading="is_running('skip_turn')"
+                    @click="act('skip_turn')"><span v-if="!is_running('skip_turn')" class="channel-stop-square" /></UButton></UTooltip>
                 </template>
-                <UTooltip v-else :text="t('停止')"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="t('停止 {value1} 本次执行', { value1: bridge.display_name(message.author) })" :disabled="!!pending"
-                  :loading="pending === 'change_member' && stopping_member === message.member_id" @click="stop_member(message)"><span v-if="!(pending === 'change_member' && stopping_member === message.member_id)" class="channel-stop-square" /></UButton></UTooltip>
+                <UTooltip v-else :text="t('停止')"><UButton variant="solid" color="neutral" class="channel-stop-button" :aria-label="t('停止 {value1} 本次执行', { value1: bridge.display_name(message.author) })"
+                  :loading="is_running('change_member') && stopping_member === message.member_id" @click="stop_member(message)"><span v-if="!(is_running('change_member') && stopping_member === message.member_id)" class="channel-stop-square" /></UButton></UTooltip>
             </span>
           </div>
           <LiveClock :message="message" v-slot="{ work }"><ul v-if="work.tools?.length" class="channel-working-tools" :aria-label="t('工具调用次数')">
@@ -3521,9 +3548,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <div class="channel-failure-actions">
                 <LiveClock v-slot="{ now }"><span class="channel-message-provenance">{{ t('{value1}（第 {value2}/{value3} 次）', { value1: message.retry.retry_at > now ? t('{value1} 秒后自动重试', { value1: message.retry.retry_at - now }) : t('正在重试'), value2: message.retry.attempt, value3: MAX_DELIVERY_RETRIES }) }}</span></LiveClock>
                 <template v-if="can_manage">
-                  <UButton :label="t('立即重试')" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="t('立即重新投递给 {value1}', { value1: bridge.display_name(message.author) })" :disabled="!!pending"
+                  <UButton :label="t('立即重试')" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="t('立即重新投递给 {value1}', { value1: bridge.display_name(message.author) })"
                     @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_now' })" />
-                  <UButton :label="t('停止')" icon="i-lucide-circle-stop" size="sm" variant="soft" color="error" :aria-label="t('停止自动重试 {value1} 的投递', { value1: bridge.display_name(message.author) })" :disabled="!!pending"
+                  <UButton :label="t('停止')" icon="i-lucide-circle-stop" size="sm" variant="soft" color="error" :aria-label="t('停止自动重试 {value1} 的投递', { value1: bridge.display_name(message.author) })"
                     @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_stop' })" />
                 </template>
               </div>
@@ -3546,7 +3573,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <p class="channel-message-text channel-failure-reason">{{ message.failure.result || t('执行失败，未提供原因') }}</p>
             <div v-if="can_retry(message.failure)" class="channel-working-actions">
               <UTooltip :text="t('重试')"><UButton icon="i-lucide-rotate-cw" variant="solid" color="neutral" class="channel-stop-button channel-retry-button" :aria-label="t('把执行 #{value1} 的请求重新派给 {value2}', { value1: message.failure.id, value2: bridge.display_name(message.author) })"
-                :disabled="!!pending" :loading="pending === 'retry_delivery'" @click="act('retry_delivery', { execution_id: message.failure.id, action: 'retry' })" /></UTooltip>
+                :loading="is_running('retry_delivery')" @click="act('retry_delivery', { execution_id: message.failure.id, action: 'retry' })" /></UTooltip>
             </div>
           </div>
           <!-- A retried failure stays in place; the retry's own card follows it under the same message. The note sits under
@@ -3597,7 +3624,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <p class="channel-edit-note" :class="{ 'is-error': card.editing_error }" role="status">{{ card.editing_error || (card.editing_plan ? rewind_summary(card.editing_plan) : t('正在读取回退范围…')) }}</p>
               <div class="channel-edit-actions">
                 <UButton :label="t('取消')" size="xs" variant="ghost" color="neutral" @click="cancel_edit" />
-                <UButton type="submit" :label="t('回退并发送')" size="xs" color="primary" :disabled="!card.editing_plan || (!!card.editing_pending && card.editing_pending !== 'rewind_and_send')" :loading="card.editing_pending === 'rewind_and_send'" />
+                <UButton type="submit" :label="t('回退并发送')" size="xs" color="primary" :disabled="!card.editing_plan" :loading="card.editing_pending" />
               </div>
             </form>
             <div v-else class="channel-answer">
@@ -3613,7 +3640,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <AnswerFiles v-if="card.execution_started_at" :message="message" :room-id="current_room_id" :started-at="card.execution_started_at" :attachments="card.attachments || []" />
             <AnswerSites :message="message" :room-id="current_room_id" :execution-id="message.execution_id || 0" />
             <LiveClock v-if="card.notes_count || card.steps" v-slot="{ note_map }"><ExecutionNotes :count="card.notes_count || 0" :steps="card.steps || 0" :notes="note_map.get(card.execution_id)" :load="() => load_notes(card.execution_id)" :preload="(near) => preload_notes(card.execution_id, near)" /></LiveClock>
-            <div v-for="{ report, allowable, failed } in card.report_rows" :key="report.id" class="channel-execution-report" role="group" :aria-label="t('执行报告 #{value1}', { value1: report.id })">
+            <div v-for="{ report, completed, allowable, failed } in card.report_rows" :key="report.id" class="channel-execution-report" role="group" :aria-label="t('执行报告 #{value1}', { value1: report.id })">
               <div v-if="report.changes?.length || report.tallying" class="channel-answer-summary channel-execution-files">
                 <small>{{ t('文件改动') }}</small>
                 <div class="channel-message-text">
@@ -3628,7 +3655,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                   <UButton v-if="failed" :label="t('重发')" icon="i-lucide-rotate-ccw" size="xs" variant="soft" color="neutral" :aria-label="t('把执行 #{value1} 的原消息填回输入框重发', { value1: report.id })" @click="resend_failed(report)" />
                 </div>
               </div>
-              <ExecutionDenials v-if="report.denials?.length" :denials="report.denials" :allowable="allowable"
+              <ExecutionDenials v-if="report.denials?.length" :denials="report.denials" :allowable="allowable" :folded="completed"
                 :busy="card.allowing === report.id" :error="card.allow_errors?.[report.id]" @allow="allow_and_resend(report)" />
             </div>
             <div v-if="card.recommendation" class="channel-recommendation" :class="`is-${card.recommendation.status}`" :aria-label="t('智能调度推荐')" aria-live="polite">
@@ -3700,7 +3727,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </div>
       <!-- The message being sent shows at once; the saved copy replaces it when the site answers, and a failed send becomes a failed card above. -->
       <!-- It mirrors a saved card line for line, so the swap changes only "发送中…" into the message number. -->
-      <motion.div v-for="(card, index) in view.sending_previews" :key="card.id || card.created_at" class="channel-message-group" :style="index === 0 ? { opacity: send_entry, y: send_y } : undefined">
+      <motion.div v-for="(card, index) in view.sending_previews" :key="card.id || card.created_at" :data-sending-id="card.id" class="channel-message-group" :style="index === 0 ? { opacity: send_entry, y: send_y } : undefined">
         <USeparator v-if="index === 0 && sending_day_label" :label="sending_day_label" class="channel-date-divider" />
         <UChatMessage :id="index === 0 ? 'channel-sending-message' : undefined" :data-author="bridge.identities[card.author]?.style" role="user" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message channel-sending-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>

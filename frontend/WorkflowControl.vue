@@ -12,7 +12,7 @@ import { t } from './i18n.js';
 // action that sends the members away: ending a workflow is rare, so it stays on the room settings page.
 const props = defineProps({ workflow: { type: Object, required: true }, dismissible: { type: Boolean, default: false } });
 defineEmits(["dismiss"]);
-const { view, bridge, act, pending } = inject("discussion");
+const { view, bridge, act, is_running } = inject("discussion");
 const room = computed(() => view.value.room || {});
 // The members it brought who are here, without the host (who stays).
 const present = computed(() => {
@@ -45,8 +45,8 @@ const items = computed(() => [
       <UIcon name="i-lucide-network" class="workflow-control-icon" />
       <span class="workflow-control-name" :title="workflow.label">{{ workflow.label }}</span>
       <span class="workflow-control-state"><span class="workflow-control-dot"></span>{{ workflow.available ? t('进行中') : t('不可用') }}</span>
-      <button v-if="can_manage && out_of_sync" type="button" class="workflow-control-action" :disabled="Boolean(pending)" :title="t('刷新：按工作流库里的最新版本补齐成员：新增的卡片加入、离开的请回，已删卡片的成员转为普通成员')" :aria-label="t('刷新工作流')" @click="act('sync_room_workflow')"><UIcon name="i-lucide-refresh-cw" class="workflow-control-action-icon" :class="{ 'animate-spin': pending === 'sync_room_workflow' }" /></button>
-      <button v-if="can_manage && !dismissible" type="button" class="workflow-control-action" :disabled="Boolean(pending)" :title="present.length ? t('请离成员：请离工作流带来的成员并结束工作流，会话保留') : t('结束工作流')" :aria-label="present.length ? t('请离成员') : t('结束工作流')" @click="confirming = true"><UIcon :name="present.length ? 'i-lucide-user-minus' : 'i-lucide-square'" class="workflow-control-action-icon" /></button>
+      <button v-if="can_manage && out_of_sync" type="button" class="workflow-control-action" :title="t('刷新：按工作流库里的最新版本补齐成员：新增的卡片加入、离开的请回，已删卡片的成员转为普通成员')" :aria-label="t('刷新工作流')" @click="act('sync_room_workflow')"><UIcon name="i-lucide-refresh-cw" class="workflow-control-action-icon" :class="{ 'animate-spin': is_running('sync_room_workflow') }" /></button>
+      <button v-if="can_manage && !dismissible" type="button" class="workflow-control-action" :title="present.length ? t('请离成员：请离工作流带来的成员并结束工作流，会话保留') : t('结束工作流')" :aria-label="present.length ? t('请离成员') : t('结束工作流')" @click="confirming = true"><UIcon :name="present.length ? 'i-lucide-user-minus' : 'i-lucide-square'" class="workflow-control-action-icon" /></button>
       <button v-if="dismissible" type="button" class="workflow-control-close" :title="t('收起此区，工作流照常进行；“成员与设置”里仍可请离成员')" :aria-label="t('收起工作流区')" @click="$emit('dismiss')"><UIcon name="i-lucide-x" class="workflow-control-close-icon" /></button>
     </div>
     <p v-if="!workflow.available" class="workflow-control-note is-warning">{{ t('无法读取工作流，成员沿用房间里的提示词。') }}</p>
