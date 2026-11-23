@@ -570,6 +570,10 @@ const stable_computed = (getter) => computed((previous) => {
   return previous !== undefined && same_value(previous, next) ? previous : next;
 });
 const can_manage = computed(() => Boolean(view.value.access?.can_manage));
+// Every view snapshot rebuilds these lists, empty ones included; the transcript's v-memo keys on them, so keep the old
+// reference while their content is the same.
+const sending_previews = stable_computed(() => view.value.sending_previews);
+const failed_sends = stable_computed(() => view.value.failed_sends);
 const speaking_turn = computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
   && !["paused", "concluded"].includes(room.value.phase) ? room.value.current_turn : null);
 const is_manual_member = (member) => member?.access === "manual" && member.status === "active";
@@ -628,6 +632,35 @@ const free_busy = computed(() => {
     return [];
   }).sort((left, right) => (left.created_at ?? Infinity) - (right.created_at ?? Infinity));
 });
+/**
+ * What a working card reports while it runs. These change with every progress report (the heartbeat alone moves
+ * activity_at), so the transcript's cards leave them out and each card reads them through LiveClock: a report redraws that
+ * card's status and tool counts instead of the whole transcript.
+ */
+const PROGRESS_FIELDS = ["text", "activity", "activity_at", "notes", "steps", "tools"];
+const working_progress = computed(() => new Map(free_busy.value.map((item) =>
+  [item.execution_id, Object.fromEntries(PROGRESS_FIELDS.map((field) => [field, item[field]]))])));
+function without_progress(item) {
+  const rest = { ...item };
+  for (const field of PROGRESS_FIELDS) delete rest[field];
+  return rest;
+}
+function with_progress(message) {
+  const progress = message?.execution_id && working_progress.value.get(message.execution_id);
+  return progress ? { ...message, ...progress } : message;
+}
+/**
+ * The same reports in the room's member and execution lists, plus the runner's lease renewals, which nothing on the page
+ * shows: the transcript's v-memo keys on the rest of the room.
+ */
+const EXECUTION_PROGRESS_FIELDS = new Set(["activity", "activity_at", "notes", "steps", "tools", "lease_until"]);
+const execution_shape = (execution) => execution && Object.fromEntries(Object.entries(execution).filter(([key]) => !EXECUTION_PROGRESS_FIELDS.has(key)));
+const free_shape = stable_computed(() => {
+  const free = room.value.free;
+  if (!free) return free;
+  return { ...free, members: (free.members || []).map((member) => member.execution ? { ...member, execution: execution_shape(member.execution) } : member),
+    executions: (free.executions || []).map(execution_shape) };
+});
 /** Requests that name who answers next: a user's @, a host dispatch, a message to the host. Internal wake-ups are not. */
 const QUEUED_PURPOSES = new Set(["ask", "route", "group", "all"]);
 /**
@@ -685,11 +718,18 @@ watch(() => free_busy.value.length > 0 || free_queued.value.length > 0, (busy, _
  * Reads the ticking clock for its slot only: the slot renders inside this component, so each second redraws just the
  * elapsed texts instead of the whole transcript (a 580-message room spent most of every second redrawing it).
  */
-const LiveClock = { setup: (_props, { slots }) => () => slots.default?.({ now: free_now.value }) };
+// With a working card as `message`, the slot's `work` is that card with its latest progress (see working_progress). Both
+// are getters, so a slot that reads only `work` does not redraw every second.
+const LiveClock = { props: { message: { type: Object, default: null } },
+  setup: (props, { slots }) => () => slots.default?.({ get now() { return free_now.value; }, get work() { return with_progress(props.message); },
+    // Process notes, by execution: each arriving note or opened fold redraws only the cards that read them.
+    get note_map() { return execution_notes.value; } }) };
 const free_working = computed(() => view.value.query ? [] : free_busy.value);
 /** Late text is owner-only and fetched only when its fold opens; never cache it across rooms or loss of access. */
 const late_answers = ref(new Map());
-watch(() => [room.value.id, view.value.access?.can_manage], () => { late_answers.value = new Map(); });
+// Separate sources, compared one by one: a getter returning a new array fired on every view update, and the new Map
+// redrew the whole transcript each time.
+watch([() => room.value.id, () => view.value.access?.can_manage], () => { late_answers.value = new Map(); });
 async function load_late_answer(execution_id, event) {
   if (!event.target.open || !view.value.access?.can_manage || late_answers.value.has(execution_id)) return;
   const room_id = room.value.id;
@@ -707,10 +747,6 @@ async function load_late_answer(execution_id, event) {
 /** What a working card calls a tool: its own name, or the kind of action for software that does not report names. */
 const TOOL_KIND_LABELS = { command: t('命令'), editing: t('编辑'), tool: t('工具') };
 const tool_label = (item) => item.tool || TOOL_KIND_LABELS[item.phase];
-/** Notes read so far for a working item's execution. */
-function working_notes(message) {
-  return execution_notes.value.get(message.execution_id) || [];
-}
 async function read_note_texts(room_id, execution_id) {
   const { notes } = await bridge.request(`/api/rooms/${room_id}/executions/${execution_id}/notes`);
   return notes;
@@ -724,8 +760,8 @@ async function load_notes(execution_id) {
     if (room.value.id === room_id) execution_notes.value = new Map(execution_notes.value).set(execution_id, notes);
   } catch (error) { return error.message || t('过程说明读取失败'); }
 }
-// Reads of folded notes, by execution. Kept out of execution_notes until opened: that map redraws the transcript,
-// which must not happen for every card scrolled past.
+// Reads of folded notes, by execution. Kept out of execution_notes until opened: that map redraws every card that reads
+// it (each through LiveClock), which must not happen for every card scrolled past.
 const NOTE_PRELOAD_CONCURRENCY = 2;
 const note_preloads = new Map();
 const note_preload_queue = new Set();
@@ -1877,7 +1913,7 @@ const free_layout = computed(() => {
     }
   }
   free_queued.value.forEach(place);
-  const tail = free_working.value.map((item) => ({ ...item, slot_card: true })).filter((item) => !place(item));
+  const tail = free_working.value.map((item) => ({ ...without_progress(item), slot_card: true })).filter((item) => !place(item));
   const by_start = (left, right) => ((left.layout_at ?? 0) - (right.layout_at ?? 0)) || ((left.execution_id || 0) - (right.execution_id || 0));
   const ordered = [];
   layout_anchors.clear();
@@ -3034,7 +3070,7 @@ function message_card(message) {
     marks: excerpt_marks.value.get(message.id) || NO_ITEMS, waits, speaking_expert: waits ? speaking_turn.value?.expert : null,
     badges: request_badges.value.get(message.id) || NO_ITEMS, elapsed: message_elapsed(message), model: execution?.model || "", effort: execution?.effort || "",
     recommendation: recommendations.value.get(message.id), adopting: adopting.value === message.id,
-    execution_id: execution?.id, execution_started_at: execution?.created_at, notes_count: execution?.notes, steps: execution?.steps, notes: execution ? execution_notes.value.get(execution.id) : undefined,
+    execution_id: execution?.id, execution_started_at: execution?.created_at, notes_count: execution?.notes, steps: execution?.steps,
     reports: reports || NO_ITEMS, allowing: reports ? allowing.value : 0, allow_errors: reports ? allow_errors.value : null,
     launch_available: reports ? view.value.launch?.available : null, report_messages: reports ? view.value.messages : null,
     armed: armed_cards.has(message.id), menu_open: menu_open_id.value === message.id,
@@ -3247,7 +3283,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </div>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :removable="!mark_editing.touch" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? docked_sheet_style() : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, message_groups,view.messages_loading, view.messages_failure, view.sending_previews, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, message_groups,view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -3295,7 +3331,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <div class="channel-message-text channel-late-answer">{{ late_answers.get(run.id)?.text ?? t('正在读取…') }}</div>
               </details>
             </template>
-            <ExecutionNotes v-if="run?.notes || run?.steps" :count="run.notes || 0" :steps="run.steps || 0" :notes="execution_notes.get(run.id)" :load="() => load_notes(run.id)" :preload="(near) => preload_notes(run.id, near)" />
+            <LiveClock v-if="run?.notes || run?.steps" v-slot="{ note_map }"><ExecutionNotes :count="run.notes || 0" :steps="run.steps || 0" :notes="note_map.get(run.id)" :load="() => load_notes(run.id)" :preload="(near) => preload_notes(run.id, near)" /></LiveClock>
           </template></template>
         </UChatMessage>
         <!-- Work in progress is a compact card: who and how long, the stage as the main line with the stop key at its end, -->
@@ -3321,9 +3357,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </div></div></div>
           </template>
           <div class="channel-working-main">
-            <LiveClock v-slot="{ now }"><span v-for="status in [working_status(message, now)]" :key="message.id" class="channel-working-status" :class="{ 'channel-working-warning': status.warning }" role="status" :title="shows_progress(message) ? (message.waiting ? message.text : status.text) : t('此接入方式看不到进度，可在原窗口查看')">
+            <LiveClock :message="message" v-slot="{ now, work }"><span v-for="status in [working_status(work, now)]" :key="message.id" class="channel-working-status" :class="{ 'channel-working-warning': status.warning }" role="status" :title="shows_progress(message) ? (message.waiting ? message.text : status.text) : t('此接入方式看不到进度，可在原窗口查看')">
               <span v-if="message.waiting">{{ message.text }}</span>
-              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
+              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="work.activity_at" :silent="now - (work.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
               <span v-else>{{ status.text }}</span>
             </span>
             <!-- Phone only: the time used moves here from the head, so both sides of the strip are two lines (user 2026-11-22, #6945). -->
@@ -3339,16 +3375,16 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                   :loading="pending === 'change_member' && stopping_member === message.member_id" @click="stop_member(message)"><span v-if="!(pending === 'change_member' && stopping_member === message.member_id)" class="channel-stop-square" /></UButton></UTooltip>
             </span>
           </div>
-          <ul v-if="message.tools?.length" class="channel-working-tools" :aria-label="t('工具调用次数')">
-            <li v-for="item in message.tools" :key="`${item.phase}:${item.tool}`"><span>{{ tool_label(item) }} ×</span><span class="channel-working-tool-count" role="img" :aria-label="String(item.count)"><FlipDigit v-for="(digit, index) in String(item.count)" :key="String(item.count).length - index" :digit="digit" /></span></li>
-          </ul>
-          <div v-for="notes in [working_notes(message)].filter((list) => list.length)" :key="message.execution_id" class="channel-working-notes" :class="{ 'is-open': open_working_notes.has(message.execution_id), 'is-single': notes.length === 1 }">
+          <LiveClock :message="message" v-slot="{ work }"><ul v-if="work.tools?.length" class="channel-working-tools" :aria-label="t('工具调用次数')">
+            <li v-for="item in work.tools" :key="`${item.phase}:${item.tool}`"><span>{{ tool_label(item) }} ×</span><span class="channel-working-tool-count" role="img" :aria-label="String(item.count)"><FlipDigit v-for="(digit, index) in String(item.count)" :key="String(item.count).length - index" :digit="digit" /></span></li>
+          </ul></LiveClock>
+          <LiveClock v-slot="{ note_map }"><div v-for="notes in [note_map.get(message.execution_id) || []].filter((list) => list.length)" :key="message.execution_id" class="channel-working-notes" :class="{ 'is-open': open_working_notes.has(message.execution_id), 'is-single': notes.length === 1 }">
             <template v-if="open_working_notes.has(message.execution_id)"><p v-for="note in notes.slice(0, -1)" :key="note.seq">{{ note.text }}</p></template>
             <p class="channel-working-latest" @click="notes.length === 1 || open_working_notes.has(message.execution_id) || toggle_working_notes(message.execution_id)">
               <span class="channel-working-latest-text">{{ notes.at(-1).text }}</span>
               <button v-if="notes.length > 1" type="button" class="channel-working-count" :aria-expanded="open_working_notes.has(message.execution_id)" :aria-label="open_working_notes.has(message.execution_id) ? t('收起过程说明') : t('展开全部 {value1} 段过程说明', { value1: notes.length })" @click.stop="toggle_working_notes(message.execution_id)">{{ t('{value1} 段', { value1: notes.length }) }}<UIcon name="i-lucide-chevron-down" /></button>
             </p>
-          </div>
+          </div></LiveClock>
         </div>
         <!-- Waiting to redeliver keeps the full card: the reason and its buttons do not fit one line. -->
         <UChatMessage v-else-if="message.slot_card && !message.failure" :id="`execution-${message.id}`" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
@@ -3361,9 +3397,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <div class="channel-message-provenance channel-message-facts"><time v-if="message.created_at" :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time><LiveClock v-slot="{ now }"><span class="channel-message-elapsed">{{ message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: format_elapsed(Math.max(0, now - message.created_at)) }) : '' }) : t('已用 {value1}', { value1: format_elapsed(Math.max(0, now - message.created_at)) }) }}</span></LiveClock></div>
             </div>
             <div class="channel-working-row">
-              <LiveClock v-slot="{ now }"><div v-for="status in [working_status(message, now)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="shows_progress(message) ? undefined : t('此接入方式看不到进度，可在原窗口查看')">
+              <LiveClock :message="message" v-slot="{ now, work }"><div v-for="status in [working_status(work, now)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="shows_progress(message) ? undefined : t('此接入方式看不到进度，可在原窗口查看')">
                 <span v-if="message.waiting">{{ message.text }}</span>
-                <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
+                <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="work.activity_at" :silent="now - (work.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
                 <span v-else>{{ status.text }}</span>
               </div></LiveClock>
             </div>
@@ -3380,7 +3416,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               </div>
             </template>
             <!-- The same row the answer keeps folded after its result: open while working. -->
-            <ExecutionNotes v-if="execution_notes.get(message.execution_id)?.length" live :notes="execution_notes.get(message.execution_id)" />
+            <LiveClock v-slot="{ note_map }"><ExecutionNotes v-if="note_map.get(message.execution_id)?.length" live :notes="note_map.get(message.execution_id)" /></LiveClock>
           </template>
         </UChatMessage>
         <section v-else-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :class="message.marks?.edge" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} ${message.undeliverable ? t('无法投递') : t('执行失败')}`">
@@ -3404,7 +3440,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                the reason, full width, so a long reason is not squeezed into half the card beside it. -->
           <p v-if="message.failure.retried" class="channel-message-provenance channel-retried-note"><UIcon name="i-lucide-corner-down-right" />{{ t('已重试，新的执行接在下方') }}</p>
           <p v-if="failure_advice(message.failure)" class="channel-message-text">{{ failure_advice(message.failure) }}</p>
-          <ExecutionNotes v-if="message.failure.notes || message.failure.steps" :count="message.failure.notes || 0" :steps="message.failure.steps || 0" :notes="execution_notes.get(message.failure.id)" :load="() => load_notes(message.failure.id)" :preload="(near) => preload_notes(message.failure.id, near)" />
+          <LiveClock v-if="message.failure.notes || message.failure.steps" v-slot="{ note_map }"><ExecutionNotes :count="message.failure.notes || 0" :steps="message.failure.steps || 0" :notes="note_map.get(message.failure.id)" :load="() => load_notes(message.failure.id)" :preload="(near) => preload_notes(message.failure.id, near)" /></LiveClock>
           <ExecutionDenials v-if="message.failure.denials?.length" :denials="message.failure.denials" :allowable="Boolean(denial_allowance(message.failure))"
             :busy="allowing === message.failure.id" :error="allow_errors[message.failure.id]" @allow="allow_and_resend(message.failure)" />
         </section>
@@ -3489,7 +3525,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </div>
             <div v-else-if="card.attachments?.length" v-html="bridge.attachment_markup(card.attachments)"></div>
             <AnswerFiles v-if="card.execution_started_at" :message="message" :room-id="room.id" :started-at="card.execution_started_at" />
-            <ExecutionNotes v-if="card.notes_count || card.steps" :count="card.notes_count || 0" :steps="card.steps || 0" :notes="card.notes" :load="() => load_notes(card.execution_id)" :preload="(near) => preload_notes(card.execution_id, near)" />
+            <LiveClock v-if="card.notes_count || card.steps" v-slot="{ note_map }"><ExecutionNotes :count="card.notes_count || 0" :steps="card.steps || 0" :notes="note_map.get(card.execution_id)" :load="() => load_notes(card.execution_id)" :preload="(near) => preload_notes(card.execution_id, near)" /></LiveClock>
             <div v-for="{ report, allowable, failed } in card.report_rows" :key="report.id" class="channel-execution-report" role="group" :aria-label="t('执行报告 #{value1}', { value1: report.id })">
               <div v-if="report.changes?.length || report.tallying" class="channel-answer-summary channel-execution-files">
                 <small>{{ t('文件改动') }}</small>
@@ -3619,9 +3655,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <div ref="composer_dock" class="channel-composer-dock"><div v-if="view.share || view.destroying.includes(view.room?.id)" class="channel-composer-column channel-share-composer">
       <UChatPrompt model-value="" disabled :autofocus="false" :rows="1" :placeholder="view.share ? t('这是只读分享，不能在这里发消息') : t('房间正在销毁，不能再发消息')" :aria-label="t('留言正文')" variant="outline" color="neutral" class="channel-composer" :ui="{ base: 'channel-editor', footer: 'channel-composer-footer' }">
         <template #footer>
-          <a class="channel-share-start" :href="view.share.home" target="_blank" rel="noopener noreferrer"><UIcon name="i-lucide-sparkles" />{{ t("用自己的 AI 开一个房间") }}</a>
-          <span class="channel-share-stamp">{{ t("只读分享 · 生成于 {time}", { time: new Date(view.share.exported_at).toLocaleString(locale, { hour12: false }) }) }}</span>
-          <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('发送')" disabled />
+          <template v-if="view.share">
+            <span class="channel-share-stamp"><UIcon name="i-lucide-eye" />{{ t("只读分享 · 生成于 {time}", { time: new Date(view.share.exported_at).toLocaleString(locale, { hour12: false }) }) }}</span>
+            <a class="channel-share-start" :href="view.share.home" target="_blank" rel="noopener noreferrer"><UIcon name="i-lucide-sparkles" />{{ t("用自己的 AI 开一个房间") }}<UIcon name="i-lucide-arrow-up-right" /></a>
+          </template>
+          <UButton v-else type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('发送')" disabled />
         </template>
       </UChatPrompt>
     </div><div v-else class="channel-composer-column" @dragover="bridge.drop_attachments" @dragleave="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event); step_over_token($event, view.attachment_drafts)" @beforeinput="guard_token_edit($event, view.attachment_drafts)" @input.capture="hold_transcript" @input="release_transcript(); update_mention($event); drop_unreferenced($event)" @click="update_mention($event); snap_caret($event, view.attachment_drafts)" @keyup="update_mention($event); snap_caret($event, view.attachment_drafts)" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">

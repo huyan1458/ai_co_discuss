@@ -404,6 +404,14 @@ function close_tab(id) {
   if (!tabs.value.length) open.value = false;
 }
 
+// A destroyed room's files must not stay on screen: once it leaves the list after dissolving, its tabs close.
+const destroyed_rooms = new Set();
+watch(() => view.value.destroying, (ids) => { for (const id of ids || []) destroyed_rooms.add(id); });
+watch(() => view.value.rooms, (rooms) => {
+  const live = new Set(rooms.map((room) => room.id));
+  for (const item of [...tabs.value]) if (destroyed_rooms.has(item.room_id) && !live.has(item.room_id)) close_tab(item.id);
+});
+
 /** Fold the window into the floating button; every tab stays as it is. */
 function minimize() {
   remember_scroll();
@@ -1058,7 +1066,7 @@ onBeforeUnmount(() => {
   <UModal :open="open" :title="preview_name" :description="active_path" :content="modal_content" :modal="!can_dock" :overlay="!can_dock" :transition="!can_dock"
     :ui="{ content: `project-editor${can_dock ? ' is-switchable' : ''}${docked ? ' is-docked' : ''}` }" @update:open="value => value ? (open = true) : fold()">
     <template #content>
-     <div ref="frame" class="project-editor-frame" :class="{ 'is-docked': docked }" @touchstart.passive="pull_start" @touchmove="pull_move" @touchend="pull_end" @touchcancel="pull_end">
+     <div ref="frame" class="project-editor-frame" :class="{ 'is-docked': docked }" :data-preview-room="tab?.room_id" @touchstart.passive="pull_start" @touchmove="pull_move" @touchend="pull_end" @touchcancel="pull_end">
       <div v-if="docked" class="file-dock-resizer" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="t('调整文件预览宽度')" :aria-valuemin="DOCK_MIN" :aria-valuemax="dock_max" :aria-valuenow="dock_width"
         :title="t('拖动调整文件预览宽度，也可使用左右方向键')" @pointerdown="dock_press" @pointermove="dock_move" @pointerup="dock_release" @pointercancel="dock_release" @keydown="dock_key"></div>
       <div ref="head_element" class="project-editor-head" :class="{ 'is-tight': tight_head && !folded_actions }">
@@ -1197,7 +1205,7 @@ onBeforeUnmount(() => {
 
   <!-- Folded: a floating button on a screen edge, over every channel and room, until the files are closed. -->
   <Teleport to="body">
-    <div v-if="tabs.length && !open" class="file-float" :class="{ 'is-right': float_side === 'right' && !float_drag_place, 'is-dragging': float_drag_place }" :style="float_style"
+    <div v-if="tabs.length && !open" class="file-float" :data-preview-room="tab?.room_id" :class="{ 'is-right': float_side === 'right' && !float_drag_place, 'is-dragging': float_drag_place }" :style="float_style"
       @pointerdown="float_press" @pointermove="float_move" @pointerup="float_release" @pointercancel="float_release" @click.capture="float_click">
       <button type="button" class="file-float-open" :title="tabs.length > 1 ? t('回到文件预览（{value1} 个文件）', { value1: tabs.length }) : t('回到文件预览：{value1}', { value1: preview_name })" @click="unfold">
         <UIcon :name="preview_type[1]" class="project-file-icon" :class="preview_type[2]" /><span class="file-float-name">{{ preview_name }}</span>

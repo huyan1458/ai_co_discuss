@@ -8,7 +8,7 @@ const SHARE = window.CODISCUSS_SHARE || null;
 // While a share page is being assembled, the raw answers of its reads, by route.
 let share_recording = null;
 // Where a reader of a share page learns about the product.
-const SHARE_HOME = "https://github.com/huyan1458/ai_co_discuss";
+const SHARE_HOME = "https://codiscuss.com";
 // The official share site that hosts published links (backend/share_worker.mjs); changing the domain changes only this.
 const SHARE_SITE = "https://share.codiscuss.com";
 // What a published link carries and how long it lives (the site enforces the same).
@@ -955,7 +955,9 @@ async function dissolve_room(id) {
   // Wait one frame so the confirmation has begun to close; the effect draws the page itself, not what covers it.
   await new Promise(resolve => requestAnimationFrame(resolve));
   const row = document.querySelector(`[data-drag-room="${CSS.escape(id)}"]`);
-  const targets = [row, state.room?.id === id ? document.querySelector(".channel-main") : null].filter(Boolean);
+  // A preview of the room's files (docked, floating, or folded into its capsule) dissolves too, then closes with the room.
+  const previews = [...document.querySelectorAll(`[data-preview-room="${CSS.escape(id)}"]`)];
+  const targets = [row, state.room?.id === id ? document.querySelector(".channel-main") : null, ...previews].filter(Boolean);
   await Promise.all(targets.map(dust_away));
   state.rooms = state.rooms.filter(item => item.id !== id);
   if (state.room?.id === id) await select_room(visible_rooms()[0]?.id);
