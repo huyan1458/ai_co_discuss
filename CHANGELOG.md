@@ -1,116 +1,96 @@
-# 更新日志
+# Changelog
 
-版本号与 npm 包一致，自 0.5.0 起记录，只列用户能感知的重点。
+Versions match the npm package. Recorded from 0.5.0 on, listing only the changes you will notice. The Chinese version is `CHANGELOG.zh-CN.md`; on the website, click the version number at the top left to read it.
 
-## 0.5.14（2026-11-23）
+## 0.5.15 (2026-11-23)
 
-- 修复：消息多的房间里，悬停或点击左侧消息导航、滚动聊天记录时反应迟缓，比其他房间卡很多。
-- 调整：未点名的消息等待智能调度判断时只显示“智能调度分析中”；模型调用失败时显示“没有模型判断”和失败原因，再交给主持人。
-- 调整：排队项右侧改为一个箭头按钮，悬停可看到点了之后会怎样。
-- 调整：回答里交付的项目文件与附件显示为同样的文件行，标出“项目文件”和所在路径。
+- New: Pages members make can go to a public address with "Deploy as website", live for 7 days and renewable.
+- New: "Busy & idle" view on the Runs page replays the whole session at its real length, with pinch zoom on phones and tablets.
+- New: Members can put small interactive pages right inside their answers.
+- New: Click the version number at the top left to read the "Changelog".
+- Changed: Rooms with many messages open faster and scroll more smoothly.
 
-## 0.5.13（2026-11-23）
+## 0.5.14 (2026-11-23)
 
-- 修复：消息多的房间里有成员在执行时，页面每隔一阵卡顿一两秒，滚动和点击没有反应。
-- 修复：销毁房间后，它的文件预览窗口仍留在屏幕上。
-- 调整：分享页底部的“用自己的 AI 开一个房间”改为前往官网，按钮更醒目。
+- Fixed: Scrolling and clicking the message navigation lagged badly in rooms with many messages.
+- Changed: While smart scheduling decides who answers, the card just says "Smart scheduling analyzing"; if it fails, it explains why and hands over to the host.
+- Changed: Project files and attachments delivered in answers now look the same, so they are easier to find.
 
-## 0.5.12（2026-11-23）
+## 0.5.13 (2026-11-23)
 
-- 调整：新建房间时“主持人完整权限”移到“高级设置”里。
-- 调整：成员做出的文档、表格、图片、网页等成品默认作为附件交付，卡片里可直接预览，分享页和其他设备也看得到。
-- 修复：Antigravity CLI 在网络不稳时误报需要登录，执行直接失败；现在会先自动重启一次。
+- Fixed: In rooms with many messages, the page froze for a second or two now and then while a member was working.
+- Fixed: A destroyed room's file preview window stayed on screen.
 
-## 0.5.11（2026-11-23）
+## 0.5.12 (2026-11-23)
 
-- 新增：分享链接可带最多 100 MB 附件，发布时逐个上传，按钮显示“正在上传附件 n/总数”；zip 压缩包也能放进分享页。
-- 新增：分享时勾选“包含附件”，成员回答交付的项目文件也会一起带上。
-- 新增：“房间偏好 → 主持人默认权限”，可设置新建房间时主持人的项目权限。
-- 新增：“销毁房间”前可点“导出资料包”，下载消息、私聊、附件和可直接打开的“讨论记录.html”。
-- 调整：排队区的按钮写明点了之后会怎样（“立即发送”“插话”“打断并发送”）；成员正忙时答题卡上的回答也先进入排队。
+- Changed: Documents, spreadsheets, images, web pages and other finished work from members are sent as attachments by default, previewable right in the card.
+- Changed: "Full host control" moved into "Advanced settings" when creating a room.
+- Fixed: On an unstable network, Antigravity wrongly asked to sign in again and the work failed.
 
-## 0.5.10（2026-11-22）
+## 0.5.11 (2026-11-23)
 
-- 新增：专家的软件本机未配置、或本机没有它写的模型时，导入专家包会提示，卡片和“专家配置”里标出“不能调用”，建房和请进房间时拦下并说明怎么改；配好软件或改成本机有的模型即恢复。
-- 调整：随包工作流 story-serial 的航海与寒区生存顾问改为带技能的专家。
+- New: Share links can carry attachments (up to 100 MB), including project files members delivered.
+- New: Set the project access the host gets by default in new rooms.
+- New: Before destroying a room, "Export package" keeps a copy of its messages, private chats and attachments.
 
-## 0.5.9（2026-11-22）
+## 0.5.10 (2026-11-22)
 
-- 新增：工作流里的专家可以带自己的技能，在“专家配置”里查看和编辑；专家可导入、导出（.md、压缩包或文件夹），也可“存为面板预设”。
-- 新增：带技能的专家在“专家配置”里归入“顾问”一组；普通专家可“添加技能”；“导入专家包”可把专家放进工作流。
-- 新增：新建房间面板上，来自预设的专家卡片背面有“技能”按钮，可查看和编辑它的技能。
-- 调整：删除带技能的专家或整个工作流时，先把它的技能备份到服务目录的 backups 下。
-- 调整：销毁房间要确认两次；发布过分享链接的房间须先撤销链接才能销毁。
-- 修复：房间多时停止本机服务超时，管理面板更新时提示“本机服务尚未停止”。
+- New: An imported expert that needs software or a model this computer lacks is marked as unable to run, with how to fix it.
 
-## 0.5.8（2026-11-22）
+## 0.5.9 (2026-11-22)
 
-- 新增：文件预览可直接查看压缩包里的文件列表。
-- 新增：分享页每次进入“执行”都从头回放协作过程，可“结束回放”。
-- 新增：随包工作流 story-serial 增加航海与寒区生存两个顾问子工作流。
-- 调整：工作流在别处被改过时保存会被拒绝并提示“重新载入”；导入同 ID 的工作流须点“覆盖保存”。
-- 调整：托管账号的随包工作流在标题旁显示“已是最新”或可同步的数量。
-- 修复：发布的分享链接页面一直停在旧界面。
+- New: Experts in a workflow can carry their own skills, and can be imported, exported or saved as presets on their own.
+- Changed: Destroying a room needs two confirmations; a shared room's link must be revoked first.
+- Fixed: With many rooms, updating got stuck at "The local service has not stopped".
 
-## 0.5.7（2026-11-22）
+## 0.5.8 (2026-11-22)
 
-- 调整：手机上成员回答引用的 HTML 附件也直接显示在引用位置。
-- 调整：“主持人权限”勾选后自动保存，保存时显示“保存中…”。
-- 调整：工作流画布的缩放与小地图移到右上角；托管账号的随包工作流检查与同步合成一个按钮。
-- 修复：手机上展开调度卡片后向下滑动，页面被拉回原处。
+- New: Preview which files are inside a zip archive.
+- New: Opening "Runs" on a shared page replays the session from the start.
+- Changed: A workflow changed elsewhere is no longer overwritten; you are asked to "Reload".
+- Fixed: Share links already sent kept showing the old interface.
 
-## 0.5.6（2026-11-22）
+## 0.5.7 (2026-11-22)
 
-- 新增：“永久删除”改为“销毁房间”，连同成员的 AI 会话、运行文件与草稿一起删除，可先“导出资料包”；另有“销毁记录”与“销毁全部房间”。
-- 新增：房间可设“自动销毁”，无活动 1、7 或 30 天后销毁。
-- 新增：项目文件可“下载文件夹”，打包成 ZIP。
-- 调整：消息排队不再需要开启，成员正忙时新消息自动进入排队区。
-- 调整：工作流画布的成员、主持人、子工作流统一从“添加节点”放入。
+- Changed: Web demos members make can be viewed right in their answers on phones too.
+- Changed: "Host permissions" save automatically when ticked.
+- Fixed: On phones, scrolling down after opening a scheduling card pulled the page back.
 
-## 0.5.5（2026-11-21）
+## 0.5.6 (2026-11-22)
 
-- 调整：等待中的消息说明成员为何还没开始，如额度用尽时显示预计恢复时间，或“将和上一条一起处理”。
-- 调整：“折叠后显示”三档保留更多开头内容。
-- 调整：发布分享链接只带可在页面预览的附件，其余附件仅随“下载网页文件”带上。
-- 修复：工作流画布与专家配置在手机上布局错乱。
+- New: "Destroy room" also removes members' AI conversations and drafts, and a room can destroy itself after 1, 7 or 30 idle days.
+- New: Download a whole project folder as a zip.
+- Changed: New messages queue automatically while a member is busy; no need to turn queueing on.
 
-## 0.5.4（2026-11-21）
+## 0.5.5 (2026-11-21)
 
-- 新增：左侧“已分享”集中管理分享链接，可复制、续期或撤销；分享可“包含附件”，并可生成带二维码的分享卡图片。
-- 新增：成员正文引用的 HTML 附件直接显示在引用位置，可操作、放大或查看源码。
-- 新增：管理面板显示中转断线原因，可“立即重连”；托管实例端口无法连接时自动重启。
-- 新增：托管账号的随包工作流可“同步到最新版”。
-- 调整：卡片头部左边显示名字与模型强度，右边显示状态、时间与耗时。
+- Changed: A message not yet picked up says why, such as a member out of quota and when it should be back.
+- Changed: Folded long answers keep more of their opening.
+- Fixed: The workflow canvas and expert settings were laid out wrongly on phones.
 
-## 0.5.3（2026-11-21）
+## 0.5.4 (2026-11-21)
 
-- 新增：房间菜单“分享为网页…”，生成只读的单文件网页，不含私聊、凭据与本机路径。
-- 新增：分享时可“发布链接”，在官方分享站 share.codiscuss.com 生成 1、3、7 天有效的只读链接，可更新、撤销。
-- 新增：托管账号登录页加入小克等三只像素小家伙的动画，输入密码时会闭眼回避。
-- 新增：“主持人完整权限”可按项勾选；勾选“新建房间”后，主持人可把工作拆到关联房间。
-- 新增：成员卡显示该次执行实际使用的模型与思考强度。
-- 新增：上一条消息仍在发送时可继续发送，发送失败的消息可“重新发送”。
-- 新增：设置“房间偏好 → 主持人项目权限”，新建房间时主持人按此档位获得项目权限。
-- 新增：设置“卡片文字大小”；双击成员名可直接改名。
-- 新增：成员回答的 HTML 附件可“在消息内展开”操作。
-- 新增：房间工作全部结束时，右下角提示“「房间名」已空闲”。
-- 新增：工作流画布支持步骤分组；循环线选中后可上下拖动调整高度。
-- 调整：“房间”“文件”“执行”等页面入口从左栏移到房间顶部。
-- 调整：`message post --body` 限 200 字以内，长回答须用 `--body-file`。
-- 修复：有成员执行时消息区滚不到底；`@A、@B` 只识别第一位成员。
-- 修复：自有域名换到另一个 Cloudflare 域名时，域名记录建错位置、面板却显示“已连接”。
+- New: "Shared" on the left gathers your share links to renew or revoke them, and can make a share card image with a QR code.
+- New: Web demos a member refers to in an answer show right in the text and can be used there.
+- New: Hosted accounts show why the relay dropped and offer "Reconnect now"; an unresponsive instance restarts by itself.
 
-## 0.5.2（2026-11-20）
+## 0.5.3 (2026-11-21)
 
-- 修复：新建房间后返回原房间，文件预览、展开状态与草稿丢失。
-- 修复：打开新建房间窗口后取消，会退出当前外部房间。
+- New: "Share" downloads a room as a file or publishes a read-only link valid for 1–7 days, leaving out private chats and details of your computer.
+- New: Tick only some parts of "Full host control"; the host can also split work into a new room.
+- New: Member cards show the model and reasoning effort used.
+- New: Keep sending while the last message is still on its way; a failed message can be "Resend".
+- Changed: The "Room", "Files" and "Runs" tabs moved to the top of the room.
 
-## 0.5.1（2026-11-20）
+## 0.5.2 (2026-11-20)
 
-- 调整：“长回答折叠”移除“不折叠”档。
-- 修复：智能调度卡片显示成员 ID 而非显示名。
+- Fixed: Returning to a room after creating a new one lost the file preview, expanded cards and unsent drafts.
 
-## 0.5.0（2026-11-20）
+## 0.5.1 (2026-11-20)
 
-- 调整：执行中卡片的抬头与已回答消息一致，显示开始时间与已用时长。
-- 修复：iOS Safari 中附件选择菜单位置错误。
+- Fixed: Smart scheduling cards showed member IDs instead of names.
+
+## 0.5.0 (2026-11-20)
+
+- Changed: Cards of members at work match answered cards, showing the start time and time spent.
+- Fixed: On iPhone and iPad, the file picker for attachments opened in the wrong place.

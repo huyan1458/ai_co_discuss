@@ -438,6 +438,8 @@ export async function room_models(home, raw, { read_defaults = profile => cached
   const profiles = config.participants || {};
   let sessions = {};
   try { if (paths.length) sessions = bound_sessions(config, paths[0]); } catch { /* No readable runtime yet: fall back to borrowed sessions. */ }
+  let applied = {};
+  try { if (paths.length) applied = settings_applied(config, paths[0]); } catch { /* No run yet: every change is still to apply. */ }
   const participants = Object.fromEntries(await Promise.all(Object.entries(profiles).map(async ([name, profile]) => {
     const facts = adapter_profile(profile.adapter);
     // An App chooses its model itself; a CLI or API member's card sets it.
@@ -446,7 +448,11 @@ export async function room_models(home, raw, { read_defaults = profile => cached
     const pending = input.quick === true && Boolean(facts?.defaults_by_query);
     const defaults = pending ? { model: '', effort: '' } : await read_defaults(profile);
     const actual = read_session(profile.adapter, sessions[name] || profile.session_id);
-    return [name, { ...(pending ? { defaults_pending: true } : {}), adapter: profile.adapter, model: card_model ? profile.model || '' : '',
+    // A changed model or effort not yet started with; while the member works in its own open window, that window's model runs.
+    const model_pending = card_model && Number(profile.model_changed_at) > (applied[name] || 0);
+    const in_window = model_pending && Boolean(adapter_of(profile.adapter)?.into_window?.(profile, { session_id: sessions[name] || profile.session_id }));
+    return [name, { ...(pending ? { defaults_pending: true } : {}), ...(model_pending ? { model_pending: in_window ? 'window' : 'next' } : {}),
+      adapter: profile.adapter, model: card_model ? profile.model || '' : '',
       effort: facts?.efforts ? profile.effort || '' : '', default_model: defaults.model, default_effort: defaults.effort,
       ...(actual.model ? { actual_model: actual.model } : {}), ...(actual.effort ? { actual_effort: actual.effort } : {}),
       project_access: !facts?.capabilities.project ? 'read' : profile.project_access || config.project_access || 'read',
@@ -1387,10 +1393,12 @@ export async function room_member_model(home, raw, headers = {}) {
     const next = { ...profile, model: model || (facts.kind === 'api' ? profile.model : ''), effort };
     if (!next.model) delete next.model;
     if (!effort) delete next.effort;
+    const label = item => [item.model || '默认', item.effort].filter(Boolean).join(' · ');
+    // The card marks the change as not yet applied until a run starts with it (`settings-applied` in the runtime store).
+    if (label(profile) !== label(next)) next.model_changed_at = Date.now();
     const updated = { ...config, participants: { ...config.participants, [name]: next } };
     validate_config(updated, dirname(path));
     atomic_json(path, updated);
-    const label = item => [item.model || '默认', item.effort].filter(Boolean).join(' · ');
     const recorded = label(profile) === label(next) ? null : await record_model_change(input, name, label(profile), label(next), headers);
     return { room_id: input.room_id, member: name, model: next.model || '', effort, ...(recorded ? { notice_id: recorded } : {}) };
   } finally { release(); }
@@ -1564,10 +1572,21 @@ export function wipe_histories(home, env = process.env) {
 
 /** The session each participant actually resumes, read without writing to a runtime the service may be using. */
 function bound_sessions(config, path) {
+  return runtime_read(config, path, db => Object.fromEntries(db.prepare('SELECT participant,session_id FROM bindings').all().map(row => [row.participant, row.session_id]))) || {};
+}
+
+/** When each member last started a run with its card's model and effort (not a task posted into its own window), in ms. */
+function settings_applied(config, path) {
+  return runtime_read(config, path, db => Object.fromEntries(db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'settings-applied:%'").all()
+    .map(row => [row.key.slice('settings-applied:'.length), Number(row.value) || 0]))) || {};
+}
+
+/** Run one read on the room's runtime store; null when it does not exist yet. */
+function runtime_read(config, path, read) {
   const file = join(resolve(config.data_directory || join(dirname(path), `discussion-${config.room}`)), 'runtime.sqlite3');
-  if (!existsSync(file)) return {};
+  if (!existsSync(file)) return null;
   const db = new DatabaseSync(file, { readOnly: true });
-  try { return Object.fromEntries(db.prepare('SELECT participant,session_id FROM bindings').all().map(row => [row.participant, row.session_id])); }
+  try { return read(db); }
   finally { db.close(); }
 }
 
@@ -3259,6 +3278,9 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });
   // Rooms on other computers this one was invited to (runner/external_client.mjs, CONTRACT of 子Task4).
   else if (positionals[0].startsWith('invited-')) result = await (await import('./external_client.mjs')).invited_command(home, positionals[0], input || {});
+  else if (['site-stage', 'site-publish', 'site-list', 'site-renew', 'site-rollback', 'site-revoke'].includes(positionals[0])) {
+    result = await (await import('./site_deploy.mjs')).site_command(home, positionals[0], input || {});
+  }
   else throw new Error(HELP);
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
@@ -3271,8 +3293,12 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     const need = error.need ? { need: error.need, ...(error.room_id ? { room_id: error.room_id } : {}) } : {};
     // An error the page shows in its own language carries its template and a stable code (runner/external_client.mjs).
     if (error.error_text) Object.assign(need, { error_text: error.error_text, ...(typeof error.code === 'string' ? { code: error.code } : {}) });
+    // Structured errors from site deployment carry code, HTTP status, and offending files/spots lists.
+    if (error.details && typeof error.code === 'string') {
+      Object.assign(need, { code: error.code, ...(Number.isInteger(error.http_status) ? { http_status: error.http_status } : {}), ...error.details });
+    }
     const failure = args.includes('--browser') ? JSON.stringify({ error: error.message, ...need, launch: error.launch || { stage: 'not_started' } })
-      : error.need || error.error_text ? JSON.stringify({ error: error.message, ...need }) : error.message;
+      : error.need || error.error_text || (error.details && typeof error.code === 'string') ? JSON.stringify({ error: error.message, ...need }) : error.message;
     process.stderr.write(`${failure}\n`); process.exitCode = 1;
   });
 }

@@ -48,6 +48,7 @@ from .free_room import review_capability, review_roster, checked_review_plan, sa
 from .free_room import review_ready, advance_review, late_answer, execution_diffs
 from .free_room import checked_sequence, continue_sequence, sequence_view
 from . import questions
+from .visual_fences import fold_message_visuals
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label_text, is_ai, is_participant
 from .message_queue import drain as drain_queue, enqueue, enqueue_share, queue_action, queue_split, queue_view
 from .room_import import import_room, imported_attachment
@@ -86,6 +87,7 @@ DIRECTORY_OPERATIONS = ("move", "folder")
 INVITE_COMMANDS = ("room-invite", "room-invites", "room-invite-revoke")
 INVITED_COMMANDS = ("invited-list", "invited-join", "invited-trust", "invited-ai", "invited-pause", "invited-approve", "invited-refuse",
                     "invited-lend", "invited-leave", "invited-remove", "invited-room")
+SITE_COMMANDS = ("site-stage", "site-publish", "site-list", "site-renew", "site-rollback", "site-revoke")
 ADMIN_OPERATIONS = ("rename", "archive", "restore", "delete", "auto-destroy")
 # A room may destroy itself after this many days without a message; 0 keeps it. How often the website checks.
 AUTO_DESTROY_DAYS = (0, 1, 7, 30)
@@ -987,6 +989,158 @@ def save_share_link(connection, room_id, payload):
         ON CONFLICT(room_id) DO UPDATE SET share_id=excluded.share_id,url=excluded.url,manage_token=excluded.manage_token,
         expires_at=excluded.expires_at,updated_at=excluded.updated_at""", (room_id, share_id, url, token, expires, utc_iso_now()))
     return share_link_record(connection, room_id)
+
+
+SITE_ID_PATTERN = re.compile(r"[a-z2-7]{10}")
+STAGE_ID_PATTERN = re.compile(r"[a-zA-Z0-9_-]{8,64}")
+SITE_STATUSES = ("active", "expired", "taken_down", "revoked")
+
+
+def _json_list(raw):
+    try:
+        parsed = json.loads(raw or "[]")
+        return parsed if isinstance(parsed, list) else []
+    except ValueError:
+        return []
+
+
+def _site_public_row(row, now_iso):
+    status = row["status"]
+    if status == "active" and row["expires_at"] and row["expires_at"] <= now_iso:
+        status = "expired"
+    result = {
+        "site_id": row["site_id"], "room_id": row["room_id"], "message_id": row["message_id"],
+        "execution_id": row["execution_id"], "member": row["member"], "title": row["title"],
+        "url": row["url"], "directory": row["directory"],
+        "current_version": row["current_version"], "previous_version": row["previous_version"],
+        "file_count": row["file_count"], "bytes": row["bytes"], "status": status,
+        "versions": _json_list(row["versions_json"]), "files": _json_list(row["files_json"]),
+        "expires_at": row["expires_at"], "created_at": row["created_at"], "updated_at": row["updated_at"],
+    }
+    if "room_title" in row.keys():
+        result["room_title"] = row["room_title"]
+    return result
+
+
+def _stage_public_row(row):
+    return {
+        "stage_id": row["id"], "room_id": row["room_id"], "execution_id": row["execution_id"],
+        "message_id": row["message_id"], "member": row["member"], "title": row["title"],
+        "directory": row["directory"], "kind": row["kind"], "file_count": row["file_count"],
+        "bytes": row["bytes"], "ready": bool(row["ready"]), "site_id": row["site_id"] or None,
+        "files": _json_list(row["files_json"]), "spots": _json_list(row["spots_json"]),
+        "rejected_files": _json_list(row["rejected_json"]),
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
+    }
+
+
+def list_room_sites(connection, room_id):
+    """Public metadata of deployed websites and staged directories in one room (never exposes device_token)."""
+    require_room(connection, room_id)
+    now_iso = utc_iso_now()
+    sites = [_site_public_row(row, now_iso) for row in connection.execute(
+        "SELECT * FROM room_sites WHERE room_id=? ORDER BY updated_at DESC", (room_id,))]
+    stages = [_stage_public_row(row) for row in connection.execute(
+        "SELECT * FROM room_site_stages WHERE room_id=? ORDER BY updated_at DESC LIMIT 50", (room_id,))]
+    return {"room_id": room_id, "sites": sites, "stages": stages}
+
+
+def list_all_sites(connection):
+    """Public metadata of deployed websites across all rooms for the left sidebar published list."""
+    now_iso = utc_iso_now()
+    rows = connection.execute(
+        """SELECT s.*, r.title AS room_title FROM room_sites s JOIN rooms r ON r.id=s.room_id
+           ORDER BY s.updated_at DESC LIMIT 200""")
+    return {"sites": [_site_public_row(row, now_iso) for row in rows]}
+
+
+def save_room_site(connection, room_id, payload):
+    """Persist public website or stage metadata written by local runner commands; never accepts device_token."""
+    require_room(connection, room_id)
+    if not isinstance(payload, dict) or "device_token" in payload:
+        raise ValueError("Invalid site payload")
+    action = payload.get("action")
+    now_iso = utc_iso_now()
+    if action == "stage":
+        stage_id = str(payload.get("stage_id") or "")
+        if not STAGE_ID_PATTERN.fullmatch(stage_id):
+            raise ValueError("Invalid stage_id")
+        kind = payload.get("kind") or "directory"
+        if kind not in ("directory", "file"):
+            raise ValueError("Invalid stage kind")
+        connection.execute(
+            """INSERT INTO room_site_stages
+               (id,room_id,execution_id,message_id,member,title,directory,kind,file_count,bytes,files_json,spots_json,rejected_json,ready,site_id,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+               execution_id=excluded.execution_id,message_id=excluded.message_id,member=excluded.member,
+               title=excluded.title,directory=excluded.directory,kind=excluded.kind,file_count=excluded.file_count,
+               bytes=excluded.bytes,files_json=excluded.files_json,spots_json=excluded.spots_json,
+               rejected_json=excluded.rejected_json,ready=excluded.ready,site_id=excluded.site_id,updated_at=excluded.updated_at""",
+            (stage_id, room_id, payload.get("execution_id"), payload.get("message_id"),
+             str(payload.get("member") or "")[:120], str(payload.get("title") or "")[:200],
+             str(payload.get("directory") or "")[:300], kind, int(payload.get("file_count") or 0),
+             int(payload.get("bytes") or 0), json.dumps(payload.get("files") or [], ensure_ascii=False),
+             json.dumps(payload.get("spots") or [], ensure_ascii=False),
+             json.dumps(payload.get("rejected_files") or [], ensure_ascii=False),
+             1 if payload.get("ready", True) else 0, str(payload.get("site_id") or "")[:32], now_iso, now_iso))
+        row = connection.execute("SELECT * FROM room_site_stages WHERE id=?", (stage_id,)).fetchone()
+        return {"stage": _stage_public_row(row)}
+    if action == "upsert":
+        site_id = str(payload.get("site_id") or "")
+        url = str(payload.get("url") or "")
+        status = str(payload.get("status") or "active")
+        if not SITE_ID_PATTERN.fullmatch(site_id) or not url.startswith("https://") or len(url) > 300 or status not in SITE_STATUSES:
+            raise ValueError("Invalid site metadata")
+        connection.execute(
+            """INSERT INTO room_sites
+               (site_id,room_id,message_id,execution_id,member,title,url,directory,current_version,previous_version,file_count,bytes,status,versions_json,files_json,expires_at,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(site_id) DO UPDATE SET
+               message_id=COALESCE(excluded.message_id, room_sites.message_id),
+               execution_id=COALESCE(excluded.execution_id, room_sites.execution_id),
+               member=CASE WHEN excluded.member<>'' THEN excluded.member ELSE room_sites.member END,
+               title=CASE WHEN excluded.title<>'' THEN excluded.title ELSE room_sites.title END,
+               url=excluded.url,
+               directory=CASE WHEN excluded.directory<>'' THEN excluded.directory ELSE room_sites.directory END,
+               current_version=excluded.current_version,previous_version=excluded.previous_version,
+               file_count=excluded.file_count,bytes=excluded.bytes,status=excluded.status,
+               versions_json=excluded.versions_json,files_json=excluded.files_json,
+               expires_at=excluded.expires_at,updated_at=excluded.updated_at""",
+            (site_id, room_id, payload.get("message_id"), payload.get("execution_id"),
+             str(payload.get("member") or "")[:120], str(payload.get("title") or "")[:200],
+             url, str(payload.get("directory") or "")[:300], int(payload.get("current_version") or 1),
+             int(payload.get("previous_version") or 0), int(payload.get("file_count") or 0),
+             int(payload.get("bytes") or 0), status, json.dumps(payload.get("versions") or [], ensure_ascii=False),
+             json.dumps(payload.get("files") or [], ensure_ascii=False), str(payload.get("expires_at") or ""),
+             str(payload.get("created_at") or now_iso), now_iso))
+        if payload.get("stage_id"):
+            connection.execute("UPDATE room_site_stages SET site_id=?, updated_at=? WHERE id=? AND room_id=?",
+                               (site_id, now_iso, str(payload["stage_id"]), room_id))
+        row = connection.execute("SELECT * FROM room_sites WHERE site_id=?", (site_id,)).fetchone()
+        return {"site": _site_public_row(row, now_iso)}
+    if action == "update_status":
+        site_id = str(payload.get("site_id") or "")
+        status = str(payload.get("status") or "")
+        if not SITE_ID_PATTERN.fullmatch(site_id) or status not in SITE_STATUSES:
+            raise ValueError("Invalid site status")
+        updates = ["status=?", "updated_at=?"]
+        values = [status, now_iso]
+        for col, key in (("expires_at", "expires_at"), ("current_version", "current_version"),
+                         ("previous_version", "previous_version"), ("file_count", "file_count"), ("bytes", "bytes")):
+            if key in payload and payload[key] is not None:
+                updates.append(f"{col}=?")
+                values.append(payload[key])
+        if "versions" in payload and isinstance(payload["versions"], list):
+            updates.append("versions_json=?")
+            values.append(json.dumps(payload["versions"], ensure_ascii=False))
+        values.extend([site_id, room_id])
+        connection.execute(f"UPDATE room_sites SET {', '.join(updates)} WHERE site_id=? AND room_id=?", values)
+        row = connection.execute("SELECT * FROM room_sites WHERE site_id=? AND room_id=?", (site_id, room_id)).fetchone()
+        if not row:
+            raise LookupError("Site record not found")
+        return {"site": _site_public_row(row, now_iso)}
+    raise ValueError("Unknown site write action")
 
 
 def last_room(connection):
@@ -2412,6 +2566,8 @@ def query_messages(connection, room_id, params, token=""):
     shown = member_display_names(connection, room_id)
     messages = [{**message, "author_label": shown.get(message["author"], message["author"])}
                 for message in (message_with_attachments(connection, row) for row in rows[:size])]
+    if params.get("fold_visuals") in ("1", "en"):
+        messages = [fold_message_visuals(message, params["fold_visuals"] == "en") for message in messages]
     has_more = len(rows) > size
     budget_stopped = False
     if params.get("max_chars") not in (None, ""):
@@ -3194,7 +3350,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["wipe-histories"], ["room-models"], ["room-skills"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["sessions"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["image-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]) or (method == "OPTIONS" and len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS):
+                                             ["scheduler-check"], ["image-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]) or (method == "OPTIONS" and len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS + SITE_COMMANDS):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -3239,9 +3395,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = route[0]
         elif route == ["machine-link"] and method == "POST":
             command = "machine-link"
-        elif len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS and method == "POST":
-            # Invites for members on other computers (runner/external_gateway.mjs) and the rooms this computer was invited to
-            # (runner/external_client.mjs); the latter are this computer's own records and need no room credential.
+        elif len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS + SITE_COMMANDS and method == "POST":
+            # Invites for members on other computers (runner/external_gateway.mjs), invited rooms (runner/external_client.mjs),
+            # and website publishing commands (runner/site_deploy.mjs).
             command = route[0]
         else:
             raise LookupError(Text('本机入口不存在'))
@@ -3250,10 +3406,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 raise ValueError(Text('本机操作须使用 application/json'))
             payload = self.read_payload(MAX_FILE_PART_BODY_BYTES if command == "room-files" else MAX_BODY_BYTES)
-            if command in ("start", "room-config", "room-models", "room-skills", "room-files", "room-page", "room-media", "execution-details", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows"):
+            if command in ("start", "room-config", "room-models", "room-skills", "room-files", "room-page", "room-media", "execution-details", "room-member", "room-member-access", "room-member-allow", "room-member-adapter", "room-member-model", "room-profiles", "room-restore", "room-fork", "room-workflow", "room-settings", "workflows") + SITE_COMMANDS:
                 payload.pop("access_file", None)
                 payload.update(site=site, entry="web")
-            if command in ("room-skills", "room-files", "room-page", "room-media", "execution-details", "room-workflow", "room-settings", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") and not payload.get("token") and not self.bridge_origin:
+            if command in ("room-skills", "room-files", "room-page", "room-media", "execution-details", "room-workflow", "room-settings", "room-member", "room-member-access", "room-member-allow", "room-member-model", "room-member-adapter") + SITE_COMMANDS and payload.get("room_id") and not payload.get("token") and not self.bridge_origin:
                 with closing(connect_db(self.server.database)) as connection:
                     self.admin_as_owner(connection, payload.get("room_id", ""))
                     payload["token"] = self.headers.get("X-Discussion-Token", "")
@@ -3358,7 +3514,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 failure = json.loads(result.stderr.strip())
             except ValueError:
                 raise ValueError(result.stderr.strip())
-            return 400, failure
+            status_code = failure.pop("http_status", 400) if isinstance(failure, dict) else 400
+            if not isinstance(status_code, int) or not 400 <= status_code <= 599:
+                status_code = 400
+            return status_code, failure
         return 200, json.loads(result.stdout)
 
     def admin_token(self):
@@ -3542,6 +3701,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.handle_remote_launch_api(connection, parts, method)
         if parts == ["api", "revisions"] and method == "GET":
             return self.respond(room_revisions(connection, params))
+        if parts == ["api", "sites"] and method == "GET":
+            return self.respond(list_all_sites(connection))
         if parts == ["api", "rooms"]:
             if method == "GET":
                 return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS, "last_room": last_room(connection),
@@ -3756,6 +3917,16 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if method == "GET":
                 return self.respond(share_link_record(connection, room_id))
             result = save_share_link(connection, room_id, self.read_payload())
+            connection.commit()
+            return self.respond(result)
+        if parts[3:] == ["sites"] and method in ("GET", "POST"):
+            if method == "GET":
+                return self.respond(list_room_sites(connection, room_id))
+            if token:
+                require_owner(connection, room_id, token)
+            else:
+                self.require_entry_owner(connection, room_id, token)
+            result = save_room_site(connection, room_id, self.read_payload())
             connection.commit()
             return self.respond(result)
         free_actor = None

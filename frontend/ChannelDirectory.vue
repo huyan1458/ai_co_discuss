@@ -17,6 +17,7 @@ const listed_counts = module_ref(new Map());
 import { computed, inject, ref, watch } from "vue";
 import ImportDialog from "./ImportDialog.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import SitesPanel from "./SitesPanel.vue";
 import MemoBlock from "./memo-block.js";
 import { use_workflow_library } from "./workflow-library.js";
 import { use_invited_rooms } from "./external-members.js";
@@ -386,6 +387,7 @@ function actions(room, index, folder_id, folder_room_count) {
     </nav>
     <UButton v-show="rooms_open" icon="i-lucide-archive" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="emit('archives')"><span class="channel-archive-label">{{ t("已存档") }}</span><small v-if="archived_count" class="channel-archive-count">{{ archived_count }}</small></UButton>
     <UButton v-show="rooms_open && shared_rooms.length" icon="i-lucide-share-2" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="shares_open = true"><span class="channel-archive-label">{{ t("已分享") }}</span><small class="channel-archive-count">{{ shared_rooms.length }}</small></UButton>
+    <SitesPanel :visible="rooms_open" />
     <UModal v-model:open="shares_open" :title="t('已分享的房间')" :description="t('到期自动删除。续期只延长时间，内容不变；要换成最新内容，在房间菜单里重新分享。')"
       :ui="{ content: 'glass-panel studio-modal channel-folder-modal channel-manage-modal share-dialog', body: 'dialog-body' }">
       <template #body>

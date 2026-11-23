@@ -254,7 +254,11 @@ async function save_model() {
   model_edit.value = null;
   try {
     await bridge.set_member_model({ name, model: draft.model, effort: draft.effort });
-    bridge.notify("info", t("{name} 的模型与强度已更新，下次处理请求起生效，保留原会话。", { name: bridge.display_name(name) }));
+    // A member working in its own open window runs with that window's model until the window is closed.
+    const in_window = saved.value?.participants?.[name]?.model_pending === "window";
+    bridge.notify(in_window ? "warning" : "info", in_window
+      ? t("{name} 的模型与强度已保存，但它正在自己打开的窗口里工作，任务会用那个窗口的模型；关闭该窗口后按此设置运行，或在窗口里自行切换。", { name: bridge.display_name(name) })
+      : t("{name} 的模型与强度已更新，下次处理请求起生效，保留原会话。", { name: bridge.display_name(name) }));
   } catch (error) { bridge.notify("error", error.message); }
 }
 
@@ -378,7 +382,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <li class="member-card" :class="{ 'is-dimmed': dragged === member.name, 'is-drop-target': drop_target === member.name }"
           :draggable="grabbed === member.name" @dragstart="drag_start(member, $event)" @dragover="drag_over(member, $event)" @dragleave="drop_target === member.name && (drop_target = '')" @drop.prevent="drop(member)" @dragend="drag_end">
           <header class="member-card-head">
-            <UIcon v-if="reorderable && order.movable.includes(member.name)" name="i-lucide-grip-vertical" class="member-card-grip" :title="t('拖动调整成员顺序，右栏发言顺序与 @全体依次 同步')" @pointerdown="grabbed = member.name" @pointerup="grabbed = ''" />
+            <span v-if="reorderable && order.movable.includes(member.name)" class="member-card-grip" :title="t('拖动调整成员顺序，右栏发言顺序与 @全体依次 同步')" @pointerdown="grabbed = member.name" @pointerup="grabbed = ''"><UIcon name="i-lucide-grip-vertical" /></span>
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="member-card-name"><strong><MemberNameEdit :name="member.name" :editable="Boolean(view.access?.can_manage)" /><span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
             <!-- The host's crown sits where the other cards offer 设为主持人, so every card shows it in one place. -->
@@ -510,13 +514,17 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 .overview-section h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--ui-text-highlighted); }
 /* One card per member: who it is, three aligned facts, then its actions in a footer. */
 .member-cards { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.member-card { border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg-elevated); }
-.member-card-head { position: relative; display: flex; align-items: center; gap: 12px; padding: 14px 16px 0; }
+.member-card { position: relative; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg-elevated); }
+.member-card-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px 0; }
 .member-card { transition: opacity .18s; }
 .member-card.is-dimmed { opacity: .5; }
 .member-card.is-drop-target { box-shadow: inset 0 2px 0 var(--channel-accent, var(--ui-primary)); }
-.member-card-grip { position: absolute; left: 2px; top: 22px; width: 14px; color: var(--ui-text-dimmed); cursor: grab; opacity: 0; transition: opacity .12s; }
+/* The grip fills the card's left padding from top to bottom, so it is easy to grab. */
+.member-card-grip { position: absolute; top: 0; bottom: 0; left: 0; display: grid; place-items: center; width: 16px; border-radius: 9px 0 0 9px;
+  color: var(--ui-text-dimmed); cursor: grab; opacity: 0; transition: opacity .12s, background-color .12s; }
+.member-card-grip > * { width: 16px; height: 16px; }
 .member-card:hover .member-card-grip { opacity: 1; }
+.member-card-grip:hover { color: var(--ui-text-highlighted); background: color-mix(in srgb, currentColor 10%, transparent); }
 .member-card-name { display: grid; flex: 1; min-width: 0; }
 .member-card-name strong { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; }
 .member-card-host.is-current { display: inline-flex; flex-shrink: 0; align-items: center; gap: 6px; padding: 0 8px; color: var(--ui-warning, #e5b54a); font-size: 12px; }
@@ -598,7 +606,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
   .member-card-head { gap: 8px; padding: 8px 10px 0; }
   .member-card-head :deep(.channel-avatar) { width: 26px; height: 26px; }
   /* The card's left padding is too narrow for the grip here, and a phone has no hover: it takes its own place at the row's end. */
-  .member-card-grip { position: static; order: 1; flex-shrink: 0; width: 20px; height: 20px; margin-right: -4px; opacity: 1; }
+  .member-card-grip { position: static; order: 1; flex-shrink: 0; width: 20px; height: 20px; margin-right: -4px; border-radius: 4px; opacity: 1; }
   .member-card-host :deep([data-slot="label"]) { display: none; }
   /* 接入 keeps its width and the model takes the rest of the line; a long model name is cut with an ellipsis. */
   .member-card-facts { grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; padding: 6px 10px; }

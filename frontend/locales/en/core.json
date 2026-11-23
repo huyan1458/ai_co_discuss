@@ -204,6 +204,7 @@
   "{name} 已改为{access}，下次处理请求起生效。": "{name} is now {access}, from its next request.",
   "默认强度": "Default effort",
   "{name} 的模型与强度已更新，下次处理请求起生效，保留原会话。": "{name}'s model and effort are updated from its next request; the session is kept.",
+  "{name} 的模型与强度已保存，但它正在自己打开的窗口里工作，任务会用那个窗口的模型；关闭该窗口后按此设置运行，或在窗口里自行切换。": "{name}'s model and effort are saved, but it is working in its own open window, so tasks run with that window's model. Close the window to run with this setting, or switch the model in the window.",
   "未开启": "Off",
   "设为主持人": "Make host",
   "成员与设置": "Members and settings",

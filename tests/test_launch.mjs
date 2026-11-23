@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, wr
 import { request as http_request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
@@ -1591,6 +1592,16 @@ test('members join, leave and return while a free room keeps running', async t =
     assert.equal(again.member, 'Codex-2');
     await room_member_model(f.home, { site: f.site, room_id, token: owner, name: 'Codex-2', model: 'gpt-x', effort: 'high' });
     assert.deepEqual([load_config(launched.config_path).participants['Codex-2'].model, load_config(launched.config_path).participants['Codex-2'].effort], ['gpt-x', 'high']);
+    // The card marks the change until a run starts with it; a task posted into the member's own window does not count.
+    const pending = async () => (await room_models(f.home, { site: f.site, room_id, token: owner }, { read_defaults: async () => ({}), read_session: () => ({}) }))
+      .participants['Codex-2'].model_pending;
+    assert.equal(await pending(), 'next');
+    const runtime = new DatabaseSync(join(load_config(launched.config_path).data_directory, 'runtime.sqlite3'));
+    try {
+      runtime.exec('CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+      runtime.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run('settings-applied:Codex-2', String(Date.now() + 1));
+    } finally { runtime.close(); }
+    assert.equal(await pending(), undefined);
     await assert.rejects(room_member_model(f.home, { site: f.site, room_id, token: owner, name: 'Codex-2', effort: 'huge' }), /不支持思考强度/);
     await room_member_model(f.home, { site: f.site, room_id, token: owner, name: 'Codex-2', model: '', effort: '' });
     assert.equal(Object.hasOwn(load_config(launched.config_path).participants['Codex-2'], 'model'), false);

@@ -8,6 +8,7 @@
 import { computed, inject, onBeforeUnmount, onMounted, ref } from "vue";
 import { t } from "./i18n.js";
 import { file_preview } from "./file-preview.js";
+import { open_deploy } from "./sites.js";
 
 // What counts as a deliverable: documents, tables, slides, pages and media, not source code.
 const DELIVERABLE = /\.(docx?|xlsx?|ods|csv|tsv|pptx?|pdf|md|txt|html?|png|jpe?g|gif|webp|svg|mp3|wav|m4a|mp4|webm|mov|srt|vtt)$/i;
@@ -80,6 +81,9 @@ async function read_files() {
   if (files.value.length) found_files.set(cache_key.value, files.value);
 }
 
+// A page the answer delivered can go public as a website, after the owner confirms what it holds.
+const deployable = (file) => /\.html?$/i.test(file.name);
+const deploy_file = (file) => open_deploy(bridge, { room_id: props.roomId, message_id: props.message.id, execution_id: props.message.execution_id || 0, member: props.message.author, file });
 const open_file = (file) => file_preview.open?.(file.path, directories.value[file.root] || "", file.root, file);
 
 onMounted(() => {
@@ -104,6 +108,7 @@ onBeforeUnmount(() => observer?.disconnect());
           <small>{{ t('项目文件 · {path}', { path: file.path }) }}</small>
         </span>
       </button>
+      <UTooltip v-if="deployable(file)" :text="t('部署为网站')"><UButton icon="i-lucide-rocket" size="xs" color="neutral" variant="ghost" class="answer-file-deploy" :aria-label="t('把 {value1} 部署为网站', { value1: file.name })" @click="deploy_file(file)" /></UTooltip>
       <button type="button" class="attachment-download" :title="t('在文件预览中打开 {value1}', { value1: file.path })" :aria-label="t('打开文件 {value1}', { value1: file.name })" @click="open_file(file)">
         <UIcon name="i-lucide-arrow-up-right" />
       </button>
@@ -121,4 +126,5 @@ onBeforeUnmount(() => observer?.disconnect());
 .answer-file:hover { background: color-mix(in srgb, currentColor 4%, transparent); }
 .answer-file .attachment-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .answer-file .attachment-download { font-size: 18px; }
+.answer-file-deploy { align-self: center; }
 </style>

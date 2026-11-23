@@ -343,11 +343,11 @@ async function save_projects() {
   border-radius: 6px; background: var(--ui-bg); transition: border-color .15s, box-shadow .15s; }
 .project-box:hover:not(.is-disabled) { border-color: var(--ui-border-accented); }
 .project-box.is-disabled { cursor: not-allowed; opacity: .6; }
-.project-prefix { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; max-width: 200px; padding: 0 8px 0 10px; border-right: 1px solid var(--ui-border-muted);
+/* One fixed width, so stacked rows (main and other directories) line their paths up whatever the project names. */
+.project-prefix { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; width: 160px; padding: 0 8px 0 10px; border-right: 1px solid var(--ui-border-muted);
   border-radius: 5px 0 0 5px; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; transition: background-color .15s, color .15s; }
 .project-prefix:hover:not(:disabled) { background: var(--channel-ghost-hover, var(--ui-bg-elevated)); color: var(--ui-text-highlighted); }
-.project-box.is-compact .project-prefix { max-width: 148px; }
-.project-prefix > span { overflow: hidden; text-overflow: ellipsis; }
+.project-prefix > span { flex: 1; min-width: 0; overflow: hidden; text-align: left; text-overflow: ellipsis; }
 .project-prefix > [class*="icon"] { flex-shrink: 0; width: 13px; height: 13px; }
 .project-prefix > .project-prefix-chevron { width: 12px; height: 12px; color: var(--ui-text-dimmed); }
 .project-prefix.is-chosen { color: var(--ui-text-highlighted); font-weight: 500; }
@@ -417,7 +417,7 @@ async function save_projects() {
 /* Phone: the picker and actions share the first line, so the path keeps a full line of its own. */
 @media (max-width: 600px) {
   .project-box { flex-wrap: wrap; align-items: center; }
-  .project-box .project-prefix, .project-box.is-compact .project-prefix { flex: 0 1 auto; min-width: 0; min-height: 40px; max-width: none; margin-right: auto; border-right: 0; }
+  .project-box .project-prefix { flex: 0 1 auto; width: auto; min-width: 0; min-height: 40px; margin-right: auto; border-right: 0; }
   .project-path { flex: 1 0 100%; order: 1; margin-right: -3px; border-top: 1px solid var(--ui-border-muted); }
 }
 </style>

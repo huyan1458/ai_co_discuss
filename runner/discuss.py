@@ -348,7 +348,8 @@ def room_commands(subcommands, registry):
 def message_commands(subcommands, registry):
     """Register bounded search, exact reads, and attributed message writes."""
     listing = add_leaf(subcommands, registry, "message list", "检索原文：每次最多 20 条且不超过约 8000 字符（含元数据），未列完时按 next_after 用 --after 续读；remaining 是本次之后还剩的匹配条数；"
-                    "过长的单条只给开头并标 text_complete=false，用 message view 编号 --offset 续读全文", True)
+                    "过长的单条只给开头并标 text_complete=false，用 message view 编号 --offset 续读全文；"
+                    "```visual 交互式可视化代码块折叠成一行并注明字符数，要看源码用 message view", True)
     paging = listing.add_mutually_exclusive_group()
     paging.add_argument("--page", type=positive_int, default=1)
     paging.add_argument("--after", type=non_negative_int, help="只读此消息编号之后的内容；按 next_after 续读")
@@ -832,7 +833,7 @@ def plan_message(args):
     if args.action == "list":
         params = {"page": args.page, "q": args.query, "author": args.author, "mention": args.mention,
                   "after": args.after, "kind": args.kind, "submission_id": args.submission_id,
-                  "max_output_chars": LIST_OUTPUT_CHARS, **read_context_params(args)}
+                  "max_output_chars": LIST_OUTPUT_CHARS, "fold_visuals": "1", **read_context_params(args)}
         return RequestPlan(base, params={key: value for key, value in params.items() if value is not None}, view="message_list")
     actor = require_actor(args)
     if args.proactive and (args.execution or args.request or args.kind != "chat"):

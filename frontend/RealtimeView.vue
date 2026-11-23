@@ -85,10 +85,16 @@ const blocks = computed(() => seen(model.value.steps.filter((step) => step.total
     return block;
   });
 }));
+// The two figures this view is opened for (#8279) lead: how much of the span the room worked by itself, and how many of
+// its executions started without the owner; idle shows in the chart as hatching.
+const percent = (part, whole) => (whole ? Math.round(part / whole * 100) : 0);
 const summary = computed(() => [
-  t('跨度 {value1}', { value1: format_duration(span.value) }),
-  t('最多同时 {value1} 位', { value1: model.value.peak }),
-  t('空闲 {value1}（{value2}%）', { value1: format_duration(model.value.idle_ms), value2: Math.round(model.value.idle_ms / span.value * 100) }),
+  { text: t('自动执行 {value1}（占 {value2}%）', { value1: format_duration(model.value.busy_ms), value2: percent(model.value.busy_ms, span.value) }), lead: true,
+    title: t('有成员在执行的时长占整个跨度的比例；其余是房间空闲、等你回应的时间') },
+  { text: t('无需介入 {value1}/{value2} 次（{value3}%）', { value1: model.value.self_started, value2: model.value.runs, value3: percent(model.value.self_started, model.value.runs) }), lead: true,
+    title: t('不是由你的消息触发、而是由主持人派活、接力、交回或程序唤醒自动接上的执行') },
+  { text: t('跨度 {value1}', { value1: format_duration(span.value) }) },
+  { text: t('最多同时 {value1} 位', { value1: model.value.peak }) },
 ]);
 
 const chart = ref(null);
@@ -170,9 +176,9 @@ onBeforeUnmount(pause);
 </script>
 
 <template>
-  <section class="rt" :aria-label="t('全程忙闲')">
+  <section class="rt" :aria-label="t('并发全景')">
     <div class="rt-bar">
-      <p class="rt-summary"><span v-for="part in summary" :key="part">{{ part }}</span></p>
+      <p class="rt-summary"><span v-for="part in summary" :key="part.text" :class="{ 'is-lead': part.lead }" :title="part.title">{{ part.text }}</span></p>
       <span class="rt-tools">
         <button type="button" class="rt-tool" :title="t('缩小')" :aria-label="t('缩小')" :disabled="!zoomed" @click="zoom_by(1 / BUTTON_ZOOM)">−</button>
         <button type="button" class="rt-tool" :title="t('放大')" :aria-label="t('放大')" @click="zoom_by(BUTTON_ZOOM)">+</button>
@@ -213,7 +219,7 @@ onBeforeUnmount(pause);
     <p class="rt-key">
       <span v-for="member in model.members" :key="member"><i class="rt-swatch" :data-tone="tones.get(member)"></i>{{ name(member) }}</span>
       <span><i class="rt-swatch is-idle"></i>{{ t('空闲') }}</span>
-      <span>{{ touch ? t('上方高度为同时在执行的成员数，点色块看那次执行的详情；下方为任务分段，点任务在执行明细中查看') : t('上方高度为同时在执行的成员数，指向色块看那次执行的详情；下方为任务分段，点任务在执行明细中查看') }}</span>
+      <span>{{ touch ? t('上方高度为同时在执行的成员数，点色块看那次执行的详情；下方为任务分段，点任务在执行轨迹中查看') : t('上方高度为同时在执行的成员数，指向色块看那次执行的详情；下方为任务分段，点任务在执行轨迹中查看') }}</span>
       <span>{{ touch ? t('双指缩放，放大后左右拖动平移，双击还原') : t('Ctrl + 滚轮缩放，放大后左键或中键拖动、Shift + 滚轮平移，双击还原') }}</span>
     </p>
   </section>
@@ -223,7 +229,8 @@ onBeforeUnmount(pause);
 .rt { padding: 12px 16px 14px; }
 .rt-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-bottom: 10px; }
 .rt-summary, .rt-key { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; color: var(--wf-muted); font-size: 12px; }
-.rt-summary { color: var(--wf-text); font-variant-numeric: tabular-nums; }
+.rt-summary { color: var(--wf-muted); font-variant-numeric: tabular-nums; }
+.rt-summary .is-lead { color: var(--wf-text); font-weight: 600; }
 .rt-tools, .rt-speeds { display: inline-flex; align-items: center; gap: 4px; }
 .rt-tool { min-width: 24px; height: 22px; padding: 0 6px; border: 1px solid var(--wf-border); border-radius: 5px; background: transparent; color: var(--wf-text);
   font: inherit; font-size: 12px; cursor: pointer; font-variant-numeric: tabular-nums; }

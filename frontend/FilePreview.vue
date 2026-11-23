@@ -11,7 +11,7 @@ import Papa from "papaparse";
 import { gunzip } from "fflate";
 import { ATTACHMENT_TEXT_LIMIT, HTML_SANDBOX, add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_range, file_preview, file_size, file_type, hold_selection, html_document, inline_markdown_images, inner_scroll_follower, media_of, modified_time, read_attachment, scrolled_out, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
 import { t } from './i18n.js';
-import { RELAY_FRAME, relay_frame_loaded, inline_visual_document, inline_visual_theme, observe_visual_theme, send_visual_theme, visual_tab_document } from "./inline-visual.js";
+import { INLINE_VISUAL_SANDBOX, RELAY_FRAME, relay_frame_loaded, inline_visual_document, inline_visual_theme, observe_visual_theme, open_html_preview_tab, send_visual_theme } from "./inline-visual.js";
 
 // The file preview window: several files open as tabs; it folds into a floating button that keeps every tab, its mode
 // and scroll position, so the user can go to the messages or another room and come back. Mounted once for the workspace,
@@ -63,7 +63,23 @@ function change_font_scale(steps) {
 }
 
 const name_of = (path) => path.split("/").pop() || t('文件预览');
-const tab = computed(() => tabs.value.find(item => item.id === active_id.value) || null);
+// Files show only within the room folder they were opened in, or within their room when it is in no folder (user
+// 2026-11-23): another folder's room shows its own tabs, and each scope keeps its own open tab and window state.
+const room_folders = computed(() => new Map(view.value.rooms.map((room) => [room.id, room.folder_id || ""])));
+const scope_of = (room_id) => { const folder = room_folders.value.get(room_id); return folder ? `folder:${folder}` : `room:${room_id}`; };
+const current_scope = computed(() => view.value.room?.id ? scope_of(view.value.room.id) : "");
+const shown_tabs = computed(() => tabs.value.filter((item) => scope_of(item.room_id) === current_scope.value));
+const scope_states = new Map();
+watch(current_scope, (next, previous) => {
+  const left = tabs.value.find((item) => item.id === active_id.value);
+  if (left && open.value && scroller()) left.scroll = scroller().scrollTop;
+  if (previous) { scope_states.set(previous, { active_id: active_id.value, open: open.value }); }
+  const kept = scope_states.get(next);
+  const active = shown_tabs.value.find((item) => item.id === kept?.active_id) || shown_tabs.value[shown_tabs.value.length - 1];
+  active_id.value = active?.id || "";
+  open.value = Boolean(active && kept?.open);
+});
+const tab = computed(() => shown_tabs.value.find(item => item.id === active_id.value) || null);
 const active_path = computed(() => tab.value?.path || "");
 // How a message names the open file: relative in the main project directory, in full in another one.
 const reference_path = computed(() => !tab.value?.root ? active_path.value
@@ -71,7 +87,8 @@ const reference_path = computed(() => !tab.value?.root ? active_path.value
 const preview = computed(() => tab.value?.data || null);
 const source = computed({ get: () => Boolean(tab.value?.source), set: (value) => { if (tab.value) tab.value.source = value; } });
 // A file opened from a zip names the archive and its folders, as text: they are not folders of the project.
-const preview_crumbs = computed(() => tab.value?.archive ? active_path.value.split("/").map((name, index, parts) => ({ name, path: parts.slice(0, index + 1).join("/") }))
+const preview_crumbs = computed(() => tab.value?.visual ? [{ name: t('交互式可视化'), path: "" }, { name: active_path.value, path: active_path.value }]
+  : tab.value?.archive ? active_path.value.split("/").map((name, index, parts) => ({ name, path: parts.slice(0, index + 1).join("/") }))
   : tab.value?.attachment ? [{ name: t('消息附件'), path: "" }, { name: active_path.value, path: active_path.value }]
   : crumbs_of(tab.value?.directory || "", active_path.value));
 const preview_name = computed(() => name_of(active_path.value));
@@ -111,13 +128,14 @@ addEventListener("pointerdown",e=>{down=e.pointerType!=="touch";},true);addEvent
 addEventListener("message",e=>{if(e.source===parent&&e.data&&e.data.codiscuss_clear){const s=getSelection();if(s)s.removeAllRanges();}});})();<\/script>`;
 // A project's HTML file is shown as the computer bundles it (the files it refers to inlined); an attachment as it is.
 const html_text = computed(() => tab.value?.page?.text ?? preview.value?.text ?? "");
-const html_preview = computed(() => tab.value?.attachment
-  ? inline_visual_document(html_text.value, false, { extra: selection_bridge(), measure: false })
+const themed_html = computed(() => Boolean(tab.value?.attachment || tab.value?.visual));
+const html_preview = computed(() => themed_html.value
+  ? inline_visual_document(html_text.value, Boolean(tab.value?.visual), { extra: tab.value?.visual ? "" : selection_bridge(), measure: false })
   : html_document(html_text.value, selection_bridge()));
 const can_open_html = computed(() => format.value === "html" && can_render.value && !tab.value?.loading);
 // What the rendered HTML lacks: files it refers to that could not be included, or none at all for an attachment.
 const html_notice = computed(() => {
-  if (!["markdown", "html"].includes(format.value) || media_kind.value || !tab.value || tab.value.loading) return "";
+  if (!["markdown", "html"].includes(format.value) || media_kind.value || !tab.value || tab.value.loading || tab.value.visual) return "";
   if (format.value === "markdown" && tab.value.attachment) return "";
   if (tab.value.attachment) return t('附件没有所在目录，相对路径引用的样式、脚本与图片不会载入');
   if (tab.value.page_error) return format.value === "markdown" ? t('引用的图片未能载入（{value1}）', { value1: tab.value.page_error }) : t('引用的文件未能载入（{value1}），只显示 HTML 本身', { value1: tab.value.page_error });
@@ -128,15 +146,14 @@ const html_notice = computed(() => {
 
 /** Show the HTML file in a new tab: a page of ours holding only the sandboxed file, so it never runs as this site. */
 function open_html_tab() {
-  const theme = tab.value?.attachment ? inline_visual_theme(document.documentElement) : null;
-  const page = visual_tab_document(preview_name.value, html_text.value, theme);
-  window.open(URL.createObjectURL(new Blob([page], { type: "text/html" })), "_blank");
+  const theme = themed_html.value ? inline_visual_theme(document.documentElement) : null;
+  open_html_preview_tab(preview_name.value, html_text.value, theme, Boolean(tab.value?.visual));
 }
 const can_render = computed(() => preview.value?.text != null && (format.value !== "text" || Boolean(media_kind.value)) && !(format.value === "html" && preview.value.truncated && !tab.value?.page));
 const showing_source = computed(() => preview.value?.text != null && (!can_render.value || source.value));
 // A project's text file can be edited from its source view; the computer reads it again in full to edit.
 // A file past the preview's first part is read whole when editing starts; the computer refuses one over its edit limit.
-const can_edit = computed(() => showing_source.value && !tab.value?.attachment && !tab.value?.edit);
+const can_edit = computed(() => showing_source.value && !themed_html.value && !tab.value?.edit);
 
 /** Read the open file whole and turn its source view into an editor. */
 async function start_edit() {
@@ -192,13 +209,17 @@ const OFFER_GAP = 6;
 const FOLLOW_KEYS = ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "];
 const editor_body = ref(null), markdown_scroll = ref(null), markdown_body = ref(null), code_scroll = ref(null), comment_input = ref(null), crumbs_nav = ref(null), code_text = ref(null), html_frame = ref(null);
 
-function apply_attachment_theme() {
-  const frame = html_frame.value;
-  if (!relay_frame_loaded(frame, html_preview.value)) return;
-  if (frame && tab.value?.attachment) send_visual_theme(frame.contentWindow, inline_visual_theme(frame));
+/** The HTML frame's load: on the share site the first load is the empty relay page, which is sent the document first. */
+function html_frame_loaded() {
+  if (relay_frame_loaded(html_frame.value, html_preview.value)) apply_attachment_theme();
 }
 
-watch(() => tab.value?.attachment ? html_frame.value : null, (frame, previous, on_cleanup) => {
+function apply_attachment_theme() {
+  const frame = html_frame.value;
+  if (frame && themed_html.value) send_visual_theme(frame.contentWindow, inline_visual_theme(frame));
+}
+
+watch(() => themed_html.value ? html_frame.value : null, (frame, previous, on_cleanup) => {
   if (frame) on_cleanup(observe_visual_theme(apply_attachment_theme));
 });
 // A deep path shows its end, where the file's own folder is, instead of the root levels.
@@ -240,7 +261,7 @@ const file_menu = computed(() => {
   if (can_render.value) rest.push(source.value ? { label: t('预览'), icon: "i-lucide-eye", onSelect: () => { source.value = false; } } : { label: t('源码'), icon: "i-lucide-code-xml", onSelect: () => { source.value = true; } });
   if (rest.length) groups.push(rest);
   // Kept out of the head so it is not mistaken for the active tab's own close button.
-  if (narrow.value && tabs.value.length > 1) groups.push([{ label: t('关闭全部文件'), icon: "i-lucide-x", onSelect: () => close_all() }]);
+  if (narrow.value && shown_tabs.value.length > 1) groups.push([{ label: t('关闭全部文件'), icon: "i-lucide-x", onSelect: () => close_all() }]);
   return groups;
 });
 
@@ -383,6 +404,18 @@ function open_attachment(attachment, show_source) {
   load(item);
 }
 
+/** Open the source already present in a member's answer, with no file read or write. */
+function open_visual(visual) {
+  remember_scroll();
+  const id = `${visual.room_id}\nvisual\n${visual.id}`;
+  const data = { text: visual.source, encoding: "utf-8", size: new Blob([visual.source]).size, modified_at: visual.created_at };
+  const item = tabs.value.find(entry => entry.id === id);
+  if (item) Object.assign(item, { data, source: false });
+  else tabs.value.push({ id, room_id: visual.room_id, path: visual.name, visual, data, source: false, scroll: 0, request: 0 });
+  active_id.value = id;
+  open.value = true;
+}
+
 /** The element that scrolls the active tab's content. */
 const scroller = () => markdown_scroll.value || code_scroll.value;
 function remember_scroll() { if (tab.value && open.value && scroller()) tab.value.scroll = scroller().scrollTop; }
@@ -396,20 +429,37 @@ function activate(id) {
 function close_tab(id) {
   const index = tabs.value.findIndex(item => item.id === id);
   if (index < 0) return;
+  const shown_index = shown_tabs.value.findIndex(item => item.id === id);
   tabs.value[index].request++;
   release_media(tabs.value[index]);
   tabs.value.splice(index, 1);
   if (id !== active_id.value) return;
-  active_id.value = tabs.value[Math.min(index, tabs.value.length - 1)]?.id || "";
-  if (!tabs.value.length) open.value = false;
+  const rest = shown_tabs.value;
+  active_id.value = rest[Math.min(shown_index, rest.length - 1)]?.id || "";
+  if (!rest.length) open.value = false;
 }
+
+// The panel follows revisions and withdrawals of the answer it opened.
+watch(() => view.value.messages, (messages) => {
+  for (const item of tabs.value.filter(tab => tab.visual)) {
+    const message = messages.find(record => record.room_id === item.room_id && record.id === item.visual.message_id);
+    if (!message) continue;
+    const text = message.visual_blocks?.[item.visual.ordinal - 1];
+    if (message.withdrawn || text === undefined) close_tab(item.id);
+    else if (text !== item.data.text) item.data = { ...item.data, text, size: new Blob([text]).size };
+  }
+});
 
 // A destroyed room's files must not stay on screen: once it leaves the list after dissolving, its tabs close.
 const destroyed_rooms = new Set();
 watch(() => view.value.destroying, (ids) => { for (const id of ids || []) destroyed_rooms.add(id); });
-watch(() => view.value.rooms, (rooms) => {
-  const live = new Set(rooms.map((room) => room.id));
-  for (const item of [...tabs.value]) if (destroyed_rooms.has(item.room_id) && !live.has(item.room_id)) close_tab(item.id);
+// They close once the room has dissolved, not while the effect still plays on them.
+watch(() => [view.value.rooms, view.value.dissolving], () => {
+  const live = new Set(view.value.rooms.map((room) => room.id)), dissolving = new Set(view.value.dissolving || []);
+  const gone = tabs.value.filter((item) => destroyed_rooms.has(item.room_id) && !live.has(item.room_id) && !dissolving.has(item.room_id));
+  for (const item of gone) close_tab(item.id);
+  // The preview was hidden by the destroy effect; once only other rooms' files are left in it, it shows again.
+  if (gone.length) for (const element of document.querySelectorAll("[data-preview-room]")) element.style.visibility = "";
 });
 
 /** Fold the window into the floating button; every tab stays as it is. */
@@ -709,8 +759,9 @@ function pull_end() {
 }
 
 function close_all() {
-  for (const item of tabs.value) { item.request++; release_media(item); }
-  tabs.value = [];
+  const closing = new Set(shown_tabs.value);
+  for (const item of closing) { item.request++; release_media(item); }
+  tabs.value = tabs.value.filter((item) => !closing.has(item));
   active_id.value = "";
   open.value = false;
 }
@@ -828,6 +879,7 @@ function source_selection(range) {
 
 /** Offer quoting (and reading from) a selection made in the Markdown preview or the source view: above it, or in the bottom dock on touch screens. */
 function track_selection() {
+  if (tab.value?.visual) return;
   if (commenting.value) return;
   const selection = document.getSelection();
   const range = selection?.rangeCount && !selection.isCollapsed ? selection.getRangeAt(0) : null;
@@ -841,8 +893,12 @@ function track_selection() {
   if (source.value || !body?.contains(range.startContainer)) return;
   const text = offer_text(range.toString());
   if (!text) return;
-  const to = body.contains(range.endContainer) ? text_offset(body, range.endContainer, range.endOffset) : body.textContent.length;
-  const from = text_offset(body, range.startContainer, range.startOffset);
+  const all = body.textContent;
+  let to = body.contains(range.endContainer) ? text_offset(body, range.endContainer, range.endOffset) : all.length;
+  let from = text_offset(body, range.startContainer, range.startOffset);
+  // A triple-click ends at the next block, taking the blank between blocks, which has no box to mark: trim it off.
+  while (to > from && /\s/.test(all[to - 1])) to--;
+  while (from < to && /\s/.test(all[from])) from++;
   offer.value = { range: range.cloneRange(), text, from, to, ...selected_lines(range), touch: touch_screen(),
     ...place_by(range, OFFER_WIDTH, OFFER_HEIGHT) };
 }
@@ -1027,6 +1083,7 @@ watch(markdown_body, (root) => { if (root) { reader.rebind_document(root); nextT
 watch(code_scroll, (root) => { if (root) nextTick(place_file_marks); });
 onMounted(() => {
   file_preview.open = open_file;
+  file_preview.open_visual = open_visual;
   window.addEventListener("message", frame_selection);
   bridge.set_text_preview(open_attachment);
   bridge.set_image_viewer((file) => open_image_viewer(file, () => bridge.attachment_url(file)));
@@ -1047,6 +1104,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   if (file_preview.open === open_file) file_preview.open = null;
+  if (file_preview.open_visual === open_visual) file_preview.open_visual = null;
   window.removeEventListener("message", frame_selection);
   bridge.set_text_preview(null);
   bridge.set_image_viewer(null);
@@ -1078,7 +1136,7 @@ onBeforeUnmount(() => {
         :title="t('拖动调整文件预览宽度，也可使用左右方向键')" @pointerdown="dock_press" @pointermove="dock_move" @pointerup="dock_release" @pointercancel="dock_release" @keydown="dock_key"></div>
       <div ref="head_element" class="project-editor-head" :class="{ 'is-tight': tight_head && !folded_actions }">
         <div class="project-editor-tablist" role="tablist" :aria-label="t('已打开的文件')">
-          <div v-for="item in tabs" :key="item.id" class="project-editor-tab" :class="{ 'is-active': item.id === active_id }" :title="item.path">
+          <div v-for="item in shown_tabs" :key="item.id" class="project-editor-tab" :class="{ 'is-active': item.id === active_id }" :title="item.path">
             <button type="button" role="tab" class="project-editor-tab-name" :aria-selected="item.id === active_id" @click="activate(item.id)">
               <UIcon :name="file_type(name_of(item.path))[1]" class="project-file-icon" :class="file_type(name_of(item.path))[2]" /><span>{{ name_of(item.path) }}</span>
             </button>
@@ -1106,12 +1164,12 @@ onBeforeUnmount(() => {
           <UDropdownMenu v-if="folded_actions && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('文件操作')" :title="t('字号、朗读、显示方式')" :loading="tab?.starting_edit" /></UDropdownMenu>
           <UButton v-if="can_dock" :icon="docked ? 'i-lucide-picture-in-picture-2' : 'i-lucide-panel-right'" color="neutral" variant="ghost" size="sm" :title="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" :aria-label="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" @click="toggle_dock" />
           <UButton :icon="narrow ? 'i-lucide-chevron-down' : 'i-lucide-minus'" color="neutral" variant="ghost" size="sm" :title="t('收起到屏幕边缘（手机上也可下拉收起）')" :aria-label="t('收起预览')" @click="fold" />
-          <UButton v-if="!narrow" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" :aria-label="tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" @click="close_all" />
+          <UButton v-if="!narrow" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="shown_tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" :aria-label="shown_tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" @click="close_all" />
         </div>
         <nav ref="crumbs_nav" class="project-editor-breadcrumbs" :aria-label="t('文件位置')">
           <template v-for="(part, index) in preview_crumbs" :key="part.path">
             <UIcon v-if="index" name="i-lucide-chevron-right" class="project-crumb-separator" />
-            <span v-if="index < preview_crumbs.length - 1 && tab?.attachment">{{ part.name }}</span>
+            <span v-if="index < preview_crumbs.length - 1 && themed_html">{{ part.name }}</span>
             <button v-else-if="index < preview_crumbs.length - 1" type="button" :title="t('在列表中打开此文件夹')" @click="reveal_folder(part.path)">{{ part.name }}</button>
             <span v-else class="project-crumb-file"><UIcon :name="preview_type[1]" class="project-file-icon" :class="preview_type[2]" />{{ part.name }}</span>
           </template>
@@ -1167,8 +1225,8 @@ onBeforeUnmount(() => {
           </tbody></table>
         </div>
         <PreviewLoading v-else-if="preview && format === 'html' && tab?.loading && !tab.page" :label="t('正在载入页面引用的文件…')" />
-        <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :class="{ 'is-themed-attachment': tab?.attachment }"
-          :key="RELAY_FRAME ? html_preview : 'frame'" :sandbox="HTML_SANDBOX" referrerpolicy="no-referrer" :src="RELAY_FRAME || undefined" :srcdoc="RELAY_FRAME ? undefined : html_preview" :title="t('HTML 文件预览')" @load="apply_attachment_theme"></iframe>
+        <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :class="{ 'is-themed-attachment': themed_html }"
+          :key="RELAY_FRAME ? html_preview : tab.id" :sandbox="tab.visual ? INLINE_VISUAL_SANDBOX : HTML_SANDBOX" referrerpolicy="no-referrer" :src="RELAY_FRAME || undefined" :srcdoc="RELAY_FRAME ? undefined : html_preview" :title="t('HTML 文件预览')" @load="html_frame_loaded"></iframe>
         <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer" @scroll.capture.passive="follow_inner_scroll" @click="open_mark_at"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
           <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
@@ -1212,11 +1270,11 @@ onBeforeUnmount(() => {
 
   <!-- Folded: a floating button on a screen edge, over every channel and room, until the files are closed. -->
   <Teleport to="body">
-    <div v-if="tabs.length && !open" class="file-float" :data-preview-room="tab?.room_id" :class="{ 'is-right': float_side === 'right' && !float_drag_place, 'is-dragging': float_drag_place }" :style="float_style"
+    <div v-if="shown_tabs.length && !open" class="file-float" :data-preview-room="tab?.room_id" :class="{ 'is-right': float_side === 'right' && !float_drag_place, 'is-dragging': float_drag_place }" :style="float_style"
       @pointerdown="float_press" @pointermove="float_move" @pointerup="float_release" @pointercancel="float_release" @click.capture="float_click">
-      <button type="button" class="file-float-open" :title="tabs.length > 1 ? t('回到文件预览（{value1} 个文件）', { value1: tabs.length }) : t('回到文件预览：{value1}', { value1: preview_name })" @click="unfold">
+      <button type="button" class="file-float-open" :title="shown_tabs.length > 1 ? t('回到文件预览（{value1} 个文件）', { value1: shown_tabs.length }) : t('回到文件预览：{value1}', { value1: preview_name })" @click="unfold">
         <UIcon :name="preview_type[1]" class="project-file-icon" :class="preview_type[2]" /><span class="file-float-name">{{ preview_name }}</span>
-        <span v-if="tabs.length > 1" class="file-float-count">{{ tabs.length }}</span>
+        <span v-if="shown_tabs.length > 1" class="file-float-count">{{ shown_tabs.length }}</span>
       </button>
       <button type="button" class="file-float-close" :aria-label="t('关闭全部文件预览')" :title="t('关闭')" @click="close_all"><UIcon name="i-lucide-x" /></button>
     </div>

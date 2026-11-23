@@ -833,5 +833,11 @@
   "本机的 {value1} 没有模型 {value2}，不能调用：在下面“模型”里改成列表里的（或用软件默认），改完保存": "{value1} on this computer has no model {value2}, so it cannot run: pick a listed model (or the software default) under “Model” below, then save",
   "检查通过：地址与密钥可用，模型列表里有 {value1}": "Check passed: the address and key work, and {value1} is in the model list",
   "检查生图配置": "Check image generation configuration",
-  "检查配置：用密钥读取模型列表并查找所选模型，不生成图片、不计费；无法确认账号能否实际出图": "Check configuration: list the key's models and look for the chosen one; no image is generated and nothing is billed. It cannot confirm the account can actually generate images"
+  "检查配置：用密钥读取模型列表并查找所选模型，不生成图片、不计费；无法确认账号能否实际出图": "Check configuration: list the key's models and look for the chosen one; no image is generated and nothing is billed. It cannot confirm the account can actually generate images",
+  "查看更新日志": "View changelog",
+  "更新日志": "Changelog",
+  "当前版本 v{version}": "Current version v{version}",
+  "还没有更新日志。": "No changelog yet.",
+  "收起更早的版本": "Hide earlier versions",
+  "查看更早的版本（{count}）": "Show earlier versions ({count})"
 }

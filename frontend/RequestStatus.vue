@@ -23,7 +23,7 @@ const items = computed(() => [props.badges.map((badge) => ({ label: badge.label,
 
 <template>
   <button v-if="only?.answer_id" type="button" class="channel-source channel-request-status is-link" :title="only.answer_label" @click="emit('locate', only.answer_id)">{{ only.label }}</button>
-  <span v-else-if="only" class="channel-source channel-request-status" :class="{ 'is-delivering': only.delivering }" :title="only.title || only.label"><UIcon v-if="only.delivering" name="i-lucide-loader-circle" class="channel-request-spin" />{{ only.label }}<template v-if="only.title"> · {{ only.title }}</template></span>
+  <span v-else-if="only" class="channel-source channel-request-status" :class="{ 'is-delivering': only.delivering }" :title="only.title || only.label"><UIcon v-if="only.delivering" name="i-lucide-loader-circle" class="channel-request-spin" /><span class="channel-request-text">{{ only.label }}<template v-if="only.title"> · {{ only.title }}</template></span></span>
   <UDropdownMenu v-else :items="items" :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-request-menu' }">
     <button type="button" class="channel-source channel-request-status is-link" :class="{ 'is-delivering': delivering }"><UIcon v-if="delivering" name="i-lucide-loader-circle" class="channel-request-spin" />{{ summary }}<UIcon name="i-lucide-chevron-down" /></button>
   </UDropdownMenu>

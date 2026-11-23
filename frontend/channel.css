@@ -236,7 +236,7 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
    scroll frame (measured ~14x more frame time on long rooms), so a fixed gradient over the same grid cell draws the fade. */
 /* The composer floats over the transcript's lower edge: the transcript runs under it, padded by the composer's height,
    and only the strip below the composer fades out, so cards scroll on right up to the composer's top edge. */
-.channel-conversation .channel-transcript { grid-row: 2 / 4; padding-bottom: calc(var(--channel-composer-height, 0px) + 28px + var(--inline-html-tail-space, 0px)); }
+.channel-conversation .channel-transcript { grid-row: 2 / 4; padding-bottom: calc(var(--channel-composer-height, 0px) + 28px + var(--visual-tail-space, 0px)); }
 /* Messages fade out above the composer only: from its top edge down the dock is solid, so no cut line of text shows
    between the composer and the note under it (user 2026-11-20, #6124). */
 /* A question card above the composer floats: the dock is see-through down to the card's lower edge
@@ -266,7 +266,9 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 /* An execution's report is labelled rows like the progress notes, with no frame of its own (user 2026-11-21, #6448). */
 .channel-execution-report { overflow-wrap: anywhere; }
 .channel-execution-report p { margin: 0; }
-.channel-execution-report .channel-execution-tallying { display: flex; align-items: center; gap: 6px; color: var(--ui-text-muted); font-size: 12px; }
+/* Inline, not flex: a flex row takes its baseline from the icon's bottom edge, which put the text above the label's baseline. */
+.channel-execution-report .channel-execution-tallying { color: var(--ui-text-muted); font-size: 12px; }
+.channel-execution-tallying > [class*="icon"] { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px; }
 /* The file list's head row is the row's content, on the label's baseline. */
 .channel-execution-files .execution-changes { margin-top: -4px; }
 .channel-execution-denials ul { margin: 0 0 6px; padding-left: 18px; list-style: disc; }
@@ -277,28 +279,28 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-answer-toggle { justify-content: flex-start; gap: 4px; width: fit-content; min-height: 28px; margin-top: 6px; padding: 3px 0 !important; border-radius: 3px; color: #a9b5dd; font-size: 13px !important; font-weight: 400; text-decoration: none !important; }
 .channel-answer-toggle:hover { color: #d9e0fb; }
 .channel-answer-toggle [class*="icon"] { width: 14px; height: 14px; }
-.channel-html-attachments .channel-attachment-item { width: 100%; }
-.channel-attachment-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-.channel-attachment-heading > div { width: min(400px, 100%); }
-.channel-attachment-heading .message-attachments { margin: 0; }
-.channel-inline-html { display: flex; height: min(var(--inline-html-height, 220px), 80dvh); margin-top: 8px; overflow: hidden; }
+.channel-inline-html { display: flex; box-sizing: content-box; height: var(--inline-html-height, 220px); margin-top: 8px; overflow: hidden;
+  /* A faint edge and inset keep the visual apart from the answer text around it without boxing it in. */
+  padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--ui-border) 55%, transparent); border-radius: var(--ui-radius); }
 .channel-inline-html > iframe { display: block; width: 100%; height: 100%; border: 0; background: transparent; }
+/* Until its document is in, the frame keeps its place but is not seen; the placeholder covers it. */
+.channel-inline-html { position: relative; }
+.channel-inline-html > iframe.is-waiting { visibility: hidden; }
+.channel-inline-html > .channel-inline-html-loading { position: absolute; inset: 0; }
 .channel-visual-slot, .channel-message-visual { display: block; min-width: 0; }
 .channel-message-visual { margin: .4em 0 .65em; }
 .channel-visual-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 4px; margin-top: 4px; color: var(--ui-text-muted); font-size: 12px; }
 /* The tools stay out of sight beside a shown visual so it reads as part of the answer; they keep their space, so
    pointing at the visual does not move the text below. A collapsed visual and touch screens always show them. */
-@media (hover: hover) {
+@media (hover: hover) and (pointer: fine) and (min-width: 701px) {
   .channel-message-visual:not(.is-collapsed) .channel-visual-actions { opacity: 0; transition: opacity .15s; }
   .channel-message-visual:not(.is-collapsed):hover .channel-visual-actions,
+  .channel-message-visual:has(.channel-inline-html.is-hovered) .channel-visual-actions,
   .channel-message-visual:not(.is-collapsed):focus-within .channel-visual-actions { opacity: 1; }
 }
 .channel-visual-name { min-width: 0; overflow-wrap: anywhere; margin-inline-end: 4px; }
-.channel-visual-actions .channel-visual-download { color: inherit; padding: 3px 8px; border-radius: var(--ui-radius); text-decoration: none; }
-.channel-visual-actions .channel-visual-download:hover { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
-.channel-message-visual .channel-visual-fallback { color: var(--ui-text-muted); font-size: 12px; margin-top: 4px; }
-.channel-inline-html-status { display: grid; flex: 1; align-content: center; justify-items: center; gap: 10px; padding: 16px; text-align: center; color: var(--ui-text-muted); }
-.channel-inline-html-status p { overflow-wrap: anywhere; }
+.channel-visual-slot:not(:has(.channel-message-visual)) { color: var(--ui-text-muted); }
+.channel-visual-slot:has(.channel-message-visual) > .channel-visual-caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .channel-answer .markdown-body pre { border: 0; border-radius: 6px; padding: 12px 14px; background: #27292e; }
 .channel-answer .markdown-body .markdown-copy { background: #27292e; }
 .channel-answer .markdown-body :is(th, td) { border-inline: 0; border-color: #ffffff0e; padding: .45em .8em; }
@@ -500,8 +502,16 @@ body.progress-drawer-open .file-float { pointer-events: auto; }
 .channel-conversation, .room-welcome { position: relative; min-height: 0; flex: 1; display: grid; grid-template-columns: 84px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
 .channel-filter-summary { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; justify-content: space-between; padding: 7px 24px; background: #5865f214; border-bottom: 1px solid #5865f224; font-size: 12px; color: #bfc7f4; }
 /* Inset like the card above it, with the link padding dropped, so the label ends on the card's right edge. */
-.channel-locate { display: flex; justify-content: flex-end; margin: -6px var(--message-inset-end, 16px) 6px 16px; }
+.channel-locate { display: flex; justify-content: flex-end; margin: 10px 0 -4px; }
+.channel-locate.is-outside { margin: -6px var(--message-inset-end, 16px) 6px 16px; }
 .channel-locate > button { padding-inline-end: 0; }
+/* Covers the transcript while a locate waits for earlier cards; the transcript keeps rendering underneath. */
+.channel-locating { grid-column: 2; grid-row: 2; z-index: 3; display: flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--ui-bg); color: var(--ui-text-muted); font-size: 13px; }
+.channel-locating > [class*="icon"] { width: 16px; height: 16px; }
+/* The card a locate landed on, outlined for a moment. */
+[data-located] { animation: channel-located 1.6s ease-out; }
+@keyframes channel-located { 0%, 40% { outline: 2px solid var(--channel-accent); outline-offset: 2px; } 100% { outline: 2px solid transparent; outline-offset: 2px; } }
 /* The map spans the composer row too, so a growing draft never shifts its center. */
 .channel-message-map { grid-column: 1; grid-row: 2 / 4; align-self: center; height: 320px; max-height: calc(100% - 32px); min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; display: flex; flex-direction: column; align-items: center; justify-content: safe center; padding: 12px 0; mask-image: linear-gradient(transparent, #000 12px, #000 calc(100% - 12px), transparent); }
 .channel-message-map::-webkit-scrollbar { display: none; }
@@ -606,7 +616,9 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 /* Two groups (user 2026-11-21, #6820, #6823): who at the left — name, tags (host ones included) and the model and
    effort the run used; how this one went at the right — state, time, number, then the duration, always last so a
    ticking "已用" moves nothing else. Only the model ID is cut, from its start: IDs of one family differ at the end. */
-.channel-message-facts { flex: none; margin-left: auto; flex-wrap: nowrap; white-space: nowrap; }
+.channel-message-facts { flex: 0 1 auto; min-width: 0; margin-left: auto; flex-wrap: nowrap; white-space: nowrap; }
+/* Only a request's state gives way (a long failure reason, user 2026-11-23); time, number and duration stay whole. */
+.channel-message-facts > :not(.channel-request-status) { flex: none; }
 .channel-message-elapsed { white-space: nowrap; }
 .channel-message-model { display: inline-flex; flex-wrap: nowrap; column-gap: 0; min-width: 0; white-space: nowrap; color: var(--ui-text-toned); }
 .channel-model-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
@@ -1210,7 +1222,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-transcript { padding-top: 2px; }
   .channel-date-divider { padding: 12px 16px; }
   .channel-message { margin: 0 8px 14px !important; padding: 14px 15px 16px !important; }
-  .channel-locate { margin-inline: 8px; }
+  .channel-locate.is-outside { margin-inline: 8px; }
   .channel-loading-skeleton { padding-inline: 23px; }
   /* Phone byline, beside an avatar centered on its height. Flex wrap rather than a grid: a name row spanning grid
      columns widened the time column in iOS Safari and pushed the elapsed time to the middle of the card. */
@@ -1861,6 +1873,7 @@ html[data-theme^="channel"] .content-page > .timeline-switch { max-width: 1280px
 /* Model pickers: IDs are long, so the list is compact and an ID wraps instead of being cut off. */
 /* A message's request status: one line in the card's header, however many members it went to. */
 .channel-request-status { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-request-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .channel-request-status.is-link { cursor: pointer; }
 .channel-request-status.is-link:hover { color: var(--ui-text-highlighted) !important; }
 .channel-request-status > [class*="icon"] { flex-shrink: 0; width: 12px; height: 12px; }

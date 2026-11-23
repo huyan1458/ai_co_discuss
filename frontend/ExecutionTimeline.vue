@@ -321,10 +321,10 @@ onBeforeUnmount(() => {
 const WINDOW_STEP = 20;
 const window_count = ref(WINDOW_STEP);
 const view_mode = ref("timeline");
-// Names say what each view answers (#8118): every run in detail, how busy the room was over the whole span, the tasks as a list.
-// Busy & idle shows the whole room, so it reads every execution as it opens (#8162); the lists stay as they were.
+// Names say what each view answers (#8118, #8272): each run traced, how many ran at once over the whole span, the tasks as a list.
+// The concurrency view shows the whole room, so it reads every execution as it opens (#8162); the lists stay as they were.
 watch(view_mode, (mode) => { if (mode === "realtime") read_all(); });
-const VIEW_MODES = [{ value: "timeline", label: t('执行明细') }, { value: "realtime", label: t('全程忙闲') }, { value: "tasks", label: t('任务清单') }];
+const VIEW_MODES = [{ value: "timeline", label: t('执行轨迹') }, { value: "realtime", label: t('并发全景') }, { value: "tasks", label: t('任务清单') }];
 // Both the task overview and the real-time view take every execution read, rather than the timeline's window.
 const overview = computed(() => view_mode.value !== "timeline");
 watch(room_id, () => { window_count.value = WINDOW_STEP; view_mode.value = "timeline"; });
@@ -442,8 +442,10 @@ const bounds = computed(() => {
   const { start, end } = base_digest.value;
   return start ? { start, end, duration: Math.max(0, end - start) } : { start: 0, end: 0, duration: 0 };
 });
-// A replay draws the run as it stood at the playback position, which stands in for now; live work is never replayed.
-const replaying = computed(() => replay.position !== null && !base_live.value);
+// A replay draws the run as it stood at the playback position, which stands in for now. Work still running replays up to
+// now and the board is live again when the replay ends (user 2026-11-23: the room's own page could not replay while a
+// member worked).
+const replaying = computed(() => replay.position !== null);
 const view_time = computed(() => replaying.value ? bounds.value.start + replay.position : now.value);
 const all_rows = computed(() => replaying.value
   ? timeline_rows(snapshot_at(shown.value, view_time.value, note_texts.value), view_time.value) : base_rows.value);
@@ -466,7 +468,7 @@ const now_x = computed(() => {
 const auto_speed = computed(() => Math.max(1, bounds.value.duration / REPLAY_TARGET_MS));
 const speed_items = computed(() => [{ label: t('自动 · {value1}×', { value1: Math.round(auto_speed.value) }), value: 0 }, ...REPLAY_SPEEDS.map((speed) => ({ label: `${speed}×`, value: speed }))]);
 const replay_speed = computed(() => replay.speed || auto_speed.value);
-const can_replay = computed(() => !overview.value && !base_live.value && bounds.value.duration > 0);
+const can_replay = computed(() => !overview.value && bounds.value.duration > 0);
 
 /** One clock for live growth and replay: a replay every frame (at most ten times a second with many rows), live work
  *  every LIVE_CLOCK_MS; a hidden page skips the frames (the browser pauses them). */
@@ -498,7 +500,7 @@ function pause() { replay.playing = false; }
 function restart() { play_position = 0; Object.assign(replay, { position: 0, playing: true }); }
 function scrub(event) { play_position = Number(event.target.value); Object.assign(replay, { position: play_position, playing: false }); load_run_notes(); }
 function close_player() { show_player.value = false; Object.assign(replay, { position: null, playing: false }); }
-/** The share page's replay button: start the replay, or end it and show the room as it finished (user 2026-11-22). */
+/** The replay button: start the replay, or end it and show the room as it is (share page 2026-11-22, the room 2026-11-23). */
 function toggle_replay() {
   if (replaying.value) close_player();
   else { show_player.value = true; play(); }
@@ -868,8 +870,8 @@ const selected_notes = computed(() => {
           <button v-if="compact && zoomed" type="button" class="wf-text-button" @click="zoom = WHOLE">{{ t('还原 {value1}×', { value1: (1 / zoom.span).toFixed(1) }) }}</button>
           <span v-if="replaying" class="wf-state is-replay">{{ t('回放中 · {value1}', { value1: clock(view_time) }) }}</span>
           <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? t('{value1} 个进行中', { value1: digest.running.length }) : t('均已结束') }}</span>
-          <!-- On a share page the replay is the quickest way to see several AIs at work, so it starts from the top. -->
-          <button v-if="view.share && (can_replay || replaying)" type="button" class="wf-share-replay" :class="{ 'is-playing': replaying }" @click="toggle_replay">
+          <!-- The same button in the room and on a share page; only a share page starts the replay by itself. -->
+          <button v-if="can_replay || replaying" type="button" class="wf-share-replay" :class="{ 'is-playing': replaying }" @click="toggle_replay">
             <UIcon :name="replaying ? 'i-lucide-square' : 'i-lucide-play'" />{{ replaying ? t('结束回放') : t('回放协作过程') }}</button>
         </div>
         <p v-if="headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
@@ -918,14 +920,14 @@ const selected_notes = computed(() => {
                   <span v-if="step_note(task, step)" class="wf-run-step-note" :class="{ 'is-failed': step.state === 'failed' }">{{ step_note(task, step) }}</span>
                 </li>
               </ol>
-              <p v-if="task.steps.length > TASK_STEPS_SHOWN" class="wf-run-more">{{ t('另 {value1} 次执行，在执行明细中查看', { value1: task.steps.length - TASK_STEPS_SHOWN }) }}</p>
+              <p v-if="task.steps.length > TASK_STEPS_SHOWN" class="wf-run-more">{{ t('另 {value1} 次执行，在执行轨迹中查看', { value1: task.steps.length - TASK_STEPS_SHOWN }) }}</p>
             </section>
             <section>
               <h4>{{ t('结果') }}<small v-if="task.changes">{{ t('改动 {value1} 个文件', { value1: task.changes }) }}</small></h4>
               <p v-if="task.outcome" class="wf-run-text"><strong>{{ name(task.outcome.member) }}：</strong>{{ task.outcome.text }}</p>
               <p v-else class="wf-run-text is-muted">{{ task.running ? t('仍在进行，还没有结果') : t('没有记录到回答') }}</p>
             </section>
-            <button type="button" class="wf-text-button wf-run-jump" @click="open_task(task)"><UIcon name="i-lucide-arrow-right" />{{ t('在执行明细中查看') }}</button>
+            <button type="button" class="wf-text-button wf-run-jump" @click="open_task(task)"><UIcon name="i-lucide-arrow-right" />{{ t('在执行轨迹中查看') }}</button>
           </div>
         </li>
       </ol>
@@ -1064,7 +1066,6 @@ const selected_notes = computed(() => {
         <span class="wf-key"><i class="wf-swatch is-queue"></i>{{ t('排队') }}<i class="wf-swatch is-wake"></i>{{ t('唤醒') }}<i class="wf-swatch is-model"></i>{{ t('模型') }}<i class="wf-swatch is-tool"></i>{{ t('工具') }}</span>
         <span v-if="member_tone.size > 1">{{ t('颜色区分成员，深浅区分模型与工具') }}</span>
         <span v-if="axis.folds.length && !compact"><i class="wf-swatch is-fold" aria-hidden="true"></i>{{ t('已折叠 {value1} 段超过 {value2} 分钟的空闲', { value1: axis.folds.length, value2: FOLD_GAP_MS / 60000 }) }}</span>
-        <button v-if="can_replay && !show_player && !view.share" type="button" class="wf-text-button wf-replay-open" @click="show_player = true"><UIcon name="i-lucide-play" />{{ t('回放最近这次任务') }}</button>
       </footer>
       <div v-if="can_replay && show_player" class="wf-player">
         <button type="button" class="wf-player-button" :aria-label="replay.playing ? t('暂停回放') : t('回放最近这次任务')" @click="replay.playing ? pause() : play()">
@@ -1408,7 +1409,6 @@ const selected_notes = computed(() => {
 .wf-foot span { display: inline-flex; align-items: center; gap: 6px; }
 .wf-key .wf-swatch:not(:first-child) { margin-left: 8px; }
 .wf-key .wf-swatch.is-model, .wf-key .wf-swatch.is-tool { --tone: var(--wf-muted); }
-.wf-replay-open { margin-left: auto; }
 /* The share page's replay: the one thing a first-time reader should press, so it looks like a button. */
 .wf-share-replay { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; height: 30px; padding: 0 14px; border: 0; border-radius: 15px; background: var(--ui-primary); color: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; box-shadow: 0 2px 10px color-mix(in srgb, var(--ui-primary) 40%, transparent); transition: filter .15s; }
 .wf-share-replay:hover { filter: brightness(1.1); }

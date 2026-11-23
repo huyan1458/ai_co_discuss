@@ -79,7 +79,7 @@ export function access_label(level) { return level === 'own' ? '自行决定' : 
  * Subcommands an automatic task may run; service, run, api, setup and the rest of launch stay unapproved.
  * `launch workflow-adopt`, `launch workflow-join`, `launch workflow-leave` and `launch host-control` check themselves that the caller is the room's host (adopt and host-control also need the owner's grant).
  */
-export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image', 'repo'];
+export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image', 'repo', 'site'];
 
 /**
  * The limit on a quick answer given inline with --body: a run allowed only codiscuss commands refuses a command line

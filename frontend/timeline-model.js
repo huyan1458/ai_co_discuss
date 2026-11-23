@@ -674,11 +674,15 @@ export function state_at(events, index) {
  * as `{ member, count, keys }` in order of first appearance, `keys` the row keys of their executions then) and `total`. An execution counts from its delivery to its end, so
  * waiting in the queue is not work; a step with `total` 0 is the room standing idle, also listed in `idle`. `tasks` are
  * the segments' spans (`key`, `task`, `opened`, `start`, `end`), the owner's rows left out. `peak` is the most at once.
+ * What the view is opened for (#8279): how much of the span the room worked by itself (`busy_ms`, the span less its idle
+ * time) and how many executions started without the owner (`runs`, of which `self_started` were begun by the host's
+ * dispatch, a relay, a hand-back, a wake or a Goal run rather than a message the owner wrote).
  */
 export function realtime_model(segments) {
   const runs = segments.flatMap((segment) => segment.items).filter(({ item, stages }) => item.source !== "user" && stages.work)
-    .map(({ item, stages }) => ({ key: `${item.source}:${item.id}`, member: item.member, start: stages.queue[1], end: Math.max(stages.queue[1], stages.end) }));
-  if (!runs.length) return { start: 0, end: 0, steps: [], idle: [], tasks: [], peak: 0, members: [], idle_ms: 0 };
+    .map(({ item, stages }) => ({ key: `${item.source}:${item.id}`, member: item.member, start: stages.queue[1], end: Math.max(stages.queue[1], stages.end),
+      self_started: Boolean(item.task_author) && item.task_author !== USER_MEMBER }));
+  if (!runs.length) return { start: 0, end: 0, steps: [], idle: [], tasks: [], peak: 0, members: [], idle_ms: 0, busy_ms: 0, runs: 0, self_started: 0 };
   const members = [...new Set([...runs].sort((a, b) => a.start - b.start).map((run) => run.member))];
   const times = [...new Set(runs.flatMap((run) => [run.start, run.end]))].sort((a, b) => a - b);
   const steps = [];
@@ -698,6 +702,7 @@ export function realtime_model(segments) {
     return spans.length ? { key: segment.key, task: segment.opener.task || "", opened: segment.opened,
       start: Math.min(...spans.map((stages) => stages.queue[1] || stages.start)), end: Math.max(...spans.map((stages) => stages.end)) } : null;
   }).filter(Boolean);
+  const idle_ms = idle.reduce((sum, gap) => sum + gap.end - gap.start, 0);
   return { start: times[0], end: times.at(-1), steps, idle, tasks, members, peak: Math.max(...steps.map((step) => step.total)),
-    idle_ms: idle.reduce((sum, gap) => sum + gap.end - gap.start, 0) };
+    idle_ms, busy_ms: times.at(-1) - times[0] - idle_ms, runs: runs.length, self_started: runs.filter((run) => run.self_started).length };
 }

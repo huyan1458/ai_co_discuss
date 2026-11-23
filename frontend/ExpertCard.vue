@@ -16,6 +16,7 @@ import MemberTextDialog from "./MemberTextDialog.vue";
 import SessionBrowser from "./SessionBrowser.vue";
 import WorkflowExperts from "./WorkflowExperts.vue";
 import { LEND_DURATIONS, SCOPES, WAKES, scope_label } from "./external-members.js";
+import { MAX_LABEL } from "./member-actions.js";
 import { adapter_profile, same_session_family } from "../runner/adapters/profiles.mjs";
 import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
 
@@ -265,6 +266,40 @@ function save_description({ text, label, as_template }) {
   describing.value = false;
 }
 
+// Desktop only: double-clicking the name edits it in place. A single click on the name waits out the double-click
+// window before flipping, so the card does not turn first; touch screens keep the plain tap.
+const RENAME_CLICK_DELAY = 250;
+const can_rename = !props.joining && typeof window !== "undefined" && window.matchMedia?.("(hover: hover) and (pointer: fine)").matches;
+const renaming = ref(false), rename_draft = ref(""), rename_input = ref(null);
+let name_click_timer = 0;
+
+/** Hold a click on the name until it is known not to be the first half of a double-click. */
+function click_name(event) {
+  if (!can_rename) return;
+  event.stopPropagation();
+  clearTimeout(name_click_timer);
+  name_click_timer = setTimeout(() => { if (can_flip.value) flip(true); }, RENAME_CLICK_DELAY);
+}
+
+/** Open the in-place name editor. */
+function start_rename() {
+  if (!can_rename) return;
+  clearTimeout(name_click_timer);
+  rename_draft.value = member_label.value;
+  renaming.value = true;
+  nextTick(() => { rename_input.value?.focus(); rename_input.value?.select(); });
+}
+
+/** Keep the typed name; an empty one or the default shows the default again. */
+function finish_rename(save) {
+  if (!renaming.value) return;
+  renaming.value = false;
+  if (!save) return;
+  const text = rename_draft.value.trim();
+  if (preset.value) preset.value.label = text;
+  else bridge.write_label_draft(props.name, text === bridge.default_name(props.name) ? "" : text);
+}
+
 // A preset keeps this card's description, prompt, project access, model and effort under its name for later rooms.
 // A card added from a saved preset (built-in ones included) updates that preset; any other card saves a new one.
 const own_preset = computed(() => Boolean(view.value && bridge.preset_origin(props.name)) || view.value.launch.presets.some((preset) => preset.name === props.name));
@@ -464,8 +499,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span class="expert-card-identity">
             <UAvatar :src="bridge.identities[name]?.icon" :text="bridge.identities[name]?.initials" :alt="name" size="sm" class="channel-avatar expert-card-avatar" :class="bridge.identities[name]?.style" />
             <span class="expert-card-names">
-              <span v-if="manual"><strong>{{ t('{value1}（手动）', { value1: bridge.display_name(name) }) }}</strong><span v-if="host && !hostable" class="expert-card-badge">{{ t('主持') }}</span></span>
-              <span v-else><strong>{{ member_label }}</strong><span v-if="host && !hostable" class="expert-card-badge">{{ t('主持') }}</span></span>
+              <span :class="{ 'is-renaming': renaming }"><strong :title="can_rename ? t('双击改名') : undefined" @click="click_name" @dblclick.stop="start_rename">{{ manual ? t('{value1}（手动）', { value1: member_label }) : member_label }}</strong><span v-if="host && !hostable" class="expert-card-badge">{{ t('主持') }}</span></span>
               <small v-if="description && !preset" :title="description">{{ description }}</small>
             </span>
           </span>
@@ -486,6 +520,9 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <button v-for="option in mode_options" :key="option" type="button" :title="joining && option === 'manual' ? t('加入另一台电脑的房间时由本机服务唤醒，不能手动启动') : MODE_TITLES[option]"
             role="radio" :aria-checked="current_mode === option" :tabindex="current_mode === option ? 0 : -1" :data-mode="option" :disabled="joining && option === 'manual'" @click="choose_mode(option)">{{ ACCESS_LABELS[option] }}</button>
         </div>
+        <!-- Outside the front button, so typing in it neither flips the card nor presses the button. -->
+        <input v-if="renaming" ref="rename_input" v-model="rename_draft" class="expert-card-rename" :maxlength="MAX_LABEL" :placeholder="bridge.default_name(name)"
+          :aria-label="t('{value1} 的显示名称', { value1: name })" @keydown.enter.prevent="finish_rename(true)" @keydown.esc.stop.prevent="finish_rename(false)" @blur="finish_rename(true)" />
         <span class="expert-card-tools">
           <!-- A card with a back keeps the description beside the prompt there; one without a back has only the front. A manual card has none, as its settings live in the user's own session. -->
           <button v-if="!can_flip && !manual" type="button" :class="{ 'is-set': description }" :aria-label="t('编辑 {value1} 的名称与描述', { value1: name })" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
@@ -611,6 +648,10 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-avatar { flex-shrink: 0; width: 26px; height: 26px; font-size: 10px; }
 .expert-card-names { display: grid; min-width: 0; }
 .expert-card-names > span { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.expert-card-names > span.is-renaming > strong { visibility: hidden; }
+/* Laid over the name: past the padding and avatar on the left, clear of the corner tools on the right. */
+.expert-card-rename { position: absolute; top: 12px; left: 46px; right: 84px; z-index: 2; height: 26px; padding: 0 6px; border: 1px solid var(--channel-accent); border-radius: 5px;
+  background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; outline: none; }
 /* The description reads as the member's subtitle: one line here, the full text on hover and in the dialog. */
 .expert-card-names > small { overflow: hidden; color: var(--ui-text-muted); font-size: 11px; line-height: 16px; white-space: nowrap; text-overflow: ellipsis; }
 /* A workflow card's description: as many lines as fit between the name and the facts, the full text on hover. */

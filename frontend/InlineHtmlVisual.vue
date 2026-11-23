@@ -1,49 +1,55 @@
 <script setup>
-import { computed, inject, onBeforeUnmount, ref } from "vue";
-import { ATTACHMENT_TEXT_LIMIT, create_inline_html_preview } from "./file-preview.js";
-import { inline_visual_collapsed, inline_visual_document } from "./inline-visual.js";
+import { ref } from "vue";
+import { file_preview } from "./file-preview.js";
+import { inline_visual_collapsed, inline_visual_theme, open_html_preview_tab } from "./inline-visual.js";
 import InlineHtmlFrame from "./InlineHtmlFrame.vue";
 import { t } from "./i18n.js";
 
-const props = defineProps({ file: { type: Object, required: true } });
-const { bridge, act } = inject("discussion");
-const collapsed = ref(inline_visual_collapsed(props.file));
-const { preview, open, close } = create_inline_html_preview(bridge.attachment_url, (source) => inline_visual_document(source, true));
-const fallback = computed(() => {
-  if (props.file.size > ATTACHMENT_TEXT_LIMIT || preview.value?.status === "truncated") return t('HTML 附件超过 2 MiB，请在预览窗口查看源码。');
-  return preview.value?.status === "error" ? preview.value.error : "";
-});
+const props = defineProps({ visual: { type: Object, required: true } });
+const panel = ref(null);
+const collapsed = ref(inline_visual_collapsed(props.visual));
+const showing_source = ref(false);
 
-function load_visible() {
-  if (!preview.value) open(props.file);
+function set_collapsed(value) {
+  collapsed.value = value;
+  inline_visual_collapsed(props.visual, value);
 }
 
-function toggle() {
-  collapsed.value = !collapsed.value;
-  inline_visual_collapsed(props.file, collapsed.value);
-  if (collapsed.value && preview.value?.status === "loading") close();
+function toggle_source() {
+  if (collapsed.value) {
+    showing_source.value = true;
+    set_collapsed(false);
+  } else showing_source.value = !showing_source.value;
 }
 
-onBeforeUnmount(close);
+function open_tab() {
+  open_html_preview_tab(props.visual.name, props.visual.source, inline_visual_theme(panel.value), true);
+}
+
+function download() {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([props.visual.source], { type: "text/html;charset=utf-8" }));
+  link.download = props.visual.name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
 </script>
 
 <template>
-  <div class="channel-message-visual" :class="{ 'is-collapsed': collapsed }">
-    <template v-if="fallback">
-      <div v-html="bridge.attachment_markup([file])"></div>
-      <p class="channel-visual-fallback" role="status">{{ fallback }}</p>
-    </template>
-    <template v-else>
-      <InlineHtmlFrame v-if="!collapsed" :id="`channel-visual-${file.id}`" :file="file" :preview="preview" automatic @visible="load_visible" />
-      <div class="channel-visual-actions">
-        <bdi class="channel-visual-name">{{ file.file_name }}</bdi>
-        <UButton color="neutral" variant="ghost" size="xs" class="channel-inline-html-toggle"
-          :label="collapsed ? t('展开') : t('收起')" :aria-expanded="!collapsed"
-          :aria-controls="collapsed ? undefined : `channel-visual-${file.id}`" @click="toggle" />
-        <UButton color="neutral" variant="ghost" size="xs" :label="t('放大')" @click="act('preview_attachment', { ...file, source: false })" />
-        <UButton color="neutral" variant="ghost" size="xs" :label="t('源码')" @click="act('preview_attachment', { ...file, source: true })" />
-        <a class="channel-visual-download" v-bind="bridge.attachment_download_link(file)" download>{{ t('下载') }}</a>
-      </div>
-    </template>
+  <div ref="panel" class="channel-message-visual" :class="{ 'is-collapsed': collapsed }">
+    <div v-if="!collapsed" :id="`channel-visual-${visual.id}`" class="channel-visual-content">
+      <pre v-if="showing_source"><code v-text="visual.source"></code></pre>
+      <InlineHtmlFrame v-else :visual="visual" />
+    </div>
+    <div class="channel-visual-actions">
+      <span v-if="collapsed" class="channel-visual-name">{{ t('交互式可视化') }}</span>
+      <UButton color="neutral" variant="ghost" size="xs" class="channel-inline-html-toggle"
+        :label="collapsed ? t('展开') : t('收起')" :aria-expanded="!collapsed"
+        :aria-controls="collapsed ? undefined : `channel-visual-${visual.id}`" @click="set_collapsed(!collapsed)" />
+      <UButton color="neutral" variant="ghost" size="xs" :label="showing_source && !collapsed ? t('预览') : t('源码')" @click="toggle_source" />
+      <UButton color="neutral" variant="ghost" size="xs" :label="t('放大')" @click="file_preview.open_visual?.(visual)" />
+      <UButton color="neutral" variant="ghost" size="xs" :label="t('新标签页')" @click="open_tab" />
+      <UButton color="neutral" variant="ghost" size="xs" :label="t('下载')" @click="download" />
+    </div>
   </div>
 </template>

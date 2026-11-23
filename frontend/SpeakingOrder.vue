@@ -36,7 +36,8 @@ const drag = ref(null);
 const sent = ref(null);
 const announcement = ref("");
 watch(() => order.value.revision, () => { sent.value = null; });
-watch(() => room.value.id, () => { drag.value = null; sent.value = null; announcement.value = ""; document.removeEventListener("keydown", cancel, true); });
+const away_open = ref(false);
+watch(() => room.value.id, () => { drag.value = null; sent.value = null; announcement.value = ""; away_open.value = false; document.removeEventListener("keydown", cancel, true); });
 
 /** Move one entry of a name list to another index. */
 function moved(names, from, to) {
@@ -174,8 +175,13 @@ function step(event, index, direction) {
           </ol>
         </details>
       </li>
-      <li v-if="props.away.length" class="speaking-order-divider" aria-hidden="true"><span>{{ t('已离开') }}</span></li>
-      <li v-for="name in props.away" :key="`away-${name}`" class="pb-member speaking-order-row is-away"
+      <!-- Away members are rarely needed, so the group starts folded; opening it holds until the room changes. -->
+      <li v-if="props.away.length" class="speaking-order-divider">
+        <button type="button" class="speaking-order-away-toggle" :aria-expanded="away_open" @click="away_open = !away_open">
+          <UIcon :name="away_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t('已离开 {value1}', { value1: props.away.length }) }}
+        </button>
+      </li>
+      <li v-for="name in away_open ? props.away : []" :key="`away-${name}`" class="pb-member speaking-order-row is-away"
         @mouseenter="emit('enter', name, $event)" @mouseleave="emit('leave')" @pointerdown="emit('press')">
         <span class="speaking-order-place"></span>
         <slot :item="{ name, state: 'away' }" :place="0" />
@@ -214,6 +220,9 @@ function step(event, index, direction) {
 .speaking-order-divider { display: flex; align-items: center; gap: 8px; margin: 6px 8px 0; color: var(--ui-text-dimmed); font-size: 11px; }
 .speaking-order-divider::after { content: ""; flex: 1; height: 1px; background: var(--ui-border); }
 .speaking-order-relay { margin-top: 0; }
+.speaking-order-away-toggle { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.speaking-order-away-toggle:hover { color: var(--ui-text-highlighted); }
+.speaking-order-away-toggle > [class*="icon"] { width: 12px; height: 12px; }
 .speaking-order-later { margin: 6px 8px 0; color: var(--ui-text-muted); font-size: 12px; }
 .speaking-order-later summary { color: var(--ui-text-dimmed); font-size: 11px; cursor: pointer; }
 .speaking-order-later ol { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }

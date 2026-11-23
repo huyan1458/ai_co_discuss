@@ -1965,3 +1965,48 @@ CREATE TABLE IF NOT EXISTS interjection_authors (
     interjection_id INTEGER PRIMARY KEY REFERENCES execution_interjections(id) ON DELETE CASCADE,
     author TEXT NOT NULL
 );
+-- Staged local directories/files ready to deploy to the public sites host; written only by local runner commands.
+CREATE TABLE IF NOT EXISTS room_site_stages (
+    id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    execution_id INTEGER,
+    message_id INTEGER,
+    member TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    directory TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'directory' CHECK (kind IN ('directory', 'file')),
+    file_count INTEGER NOT NULL DEFAULT 0,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    files_json TEXT NOT NULL DEFAULT '[]',
+    spots_json TEXT NOT NULL DEFAULT '[]',
+    rejected_json TEXT NOT NULL DEFAULT '[]',
+    ready INTEGER NOT NULL DEFAULT 1 CHECK (ready IN (0, 1)),
+    site_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS room_site_stages_room ON room_site_stages(room_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS room_site_stages_exec ON room_site_stages(room_id, execution_id);
+-- Public metadata of deployed websites (never stores device_token or absolute local paths).
+CREATE TABLE IF NOT EXISTS room_sites (
+    site_id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id INTEGER,
+    execution_id INTEGER,
+    member TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL,
+    directory TEXT NOT NULL DEFAULT '',
+    current_version INTEGER NOT NULL DEFAULT 1,
+    previous_version INTEGER NOT NULL DEFAULT 0,
+    file_count INTEGER NOT NULL DEFAULT 0,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'expired', 'taken_down', 'revoked')),
+    versions_json TEXT NOT NULL DEFAULT '[]',
+    files_json TEXT NOT NULL DEFAULT '[]',
+    expires_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS room_sites_room ON room_sites(room_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS room_sites_status ON room_sites(status, expires_at);

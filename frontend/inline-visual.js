@@ -19,35 +19,8 @@ export function relay_frame_loaded(frame, html) {
 }
 const inline_visual_heights = new Map();
 const DEFAULT_VISUAL_HEIGHT = 220;
-// Load a visual this far before it scrolls into view, so it is already drawn when it appears.
-const VISUAL_PRELOAD_MARGIN = "800px 0px";
 const COLLAPSED_PREFIX = "ai-codiscuss-visual-collapsed:";
-const visual_bodies = new WeakMap();
-
-/** Whether a file is eligible for the HTML preview in a message. */
-export function is_inline_html(file) { return /\.html$/i.test(file.file_name); }
-
-/** Move each visible HTML reference into the answer once, leaving other attachments in their usual list. */
-export function inline_visual_body(html, attachments) {
-  const cached = visual_bodies.get(attachments);
-  if (cached?.source === html) return cached;
-  const available = new Map(attachments.filter(is_inline_html).map((file) => [file.id, file]));
-  const files = [];
-  const markup = html.replace(/<(pre|code|a)\b[^>]*>[\s\S]*?<\/\1>|<button type="button" class="attachment-placeholder" data-inline-visual data-preview-attachment="([^"]+)"[^>]*>[^<]*<\/button>/g,
-    (original, ignored, id) => {
-      const file = available.get(id);
-      if (!file) return original;
-      files.push(file);
-      available.delete(id);
-      return `<span class="channel-visual-slot" data-visual-slot="${id}"></span>`;
-    });
-  const ids = new Set(files.map((file) => file.id));
-  const result = { source: html, markup, files, remaining: attachments.filter((file) => !ids.has(file.id)) };
-  visual_bodies.set(attachments, result);
-  return result;
-}
-
-/** Read or write a reader's collapsed preference for this room and attachment. */
+/** Read or write a reader's collapsed preference for a visual in a message. */
 export function inline_visual_collapsed(file, collapsed) {
   const key = COLLAPSED_PREFIX + file.room_id + ":" + file.id;
   try {
@@ -69,7 +42,7 @@ export function remembered_visual_height(file) {
   return inline_visual_heights.get(file.id) ?? DEFAULT_VISUAL_HEIGHT;
 }
 
-/** Remember measured geometry for later mounts of the same attachment. */
+/** Remember measured geometry for later mounts of the same visual. */
 export function remember_visual_height(file, height) {
   inline_visual_heights.set(file.id, height);
 }
@@ -81,7 +54,7 @@ let visibility_observer;
 export function observe_inline_visual(element, callback) {
   visibility_observer ??= new IntersectionObserver((entries) => {
     for (const entry of entries) visual_visibility_callbacks.get(entry.target)?.(entry.isIntersecting && entry.intersectionRect.height > 0);
-  }, { rootMargin: VISUAL_PRELOAD_MARGIN });
+  });
   visual_visibility_callbacks.set(element, callback);
   visibility_observer.observe(element);
   return () => {
@@ -124,6 +97,7 @@ export function send_visual_theme(frame_window, theme) {
 
 const VISUAL_DEFAULTS = `<style>
   html, body { background: transparent !important; margin: 0 !important; }
+  :where(body) { display: flow-root; }
   :root, body { color-scheme: var(--codiscuss-color-scheme, normal) !important; }
   body { color: var(--codiscuss-text, CanvasText) !important; font-family: var(--codiscuss-font-family, system-ui) !important; font-size: var(--codiscuss-font-size, 14px) !important; }
   :where(button, select, input) { font: inherit; color: inherit; box-sizing: border-box; }
@@ -139,8 +113,15 @@ const VISUAL_DEFAULTS = `<style>
 const VISUAL_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob: data:; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; media-src data: blob:; base-uri 'none'; form-action 'none'">`;
 
 /** Runs inside the sandbox. Reports body height independently of the frame's current height. */
-function start_visual_frame(measure) {
+function start_visual_frame(measure, submit) {
   const root = document.documentElement;
+  // A panel hands the reader's choice to the room page, which shows it above the composer for the reader to send.
+  if (submit) Object.defineProperty(window, "codiscuss", { value: Object.freeze({
+    submit(text, fields) {
+      parent.postMessage({ codiscuss_visual_result: { format: 1, text: String(text ?? ""), fields: fields ?? null } }, "*");
+      return true;
+    },
+  }) });
   let scheduled = false;
   let last_height = 0;
   function request_height() {
@@ -163,6 +144,11 @@ function start_visual_frame(measure) {
     request_height();
   });
   if (measure) {
+    // Shown in a message the frame takes the content's full height, so the page never scrolls inside it.
+    root.style.overflow = "hidden";
+    for (const type of ["pointerenter", "pointerleave"]) {
+      root.addEventListener(type, () => parent.postMessage({ codiscuss_visual_hover: type === "pointerenter" }, "*"));
+    }
     addEventListener("DOMContentLoaded", () => {
       new ResizeObserver(request_height).observe(document.body);
       request_height();
@@ -172,9 +158,32 @@ function start_visual_frame(measure) {
 }
 
 /** Wrap a self-contained visual with the room's defaults and its isolated height bridge. */
-export function inline_visual_document(source, automatic, { extra = "", measure = true } = {}) {
-  const startup = `<script>(${start_visual_frame.toString()})(${measure});</script>`;
+export function inline_visual_document(source, automatic, { extra = "", measure = true, submit = false } = {}) {
+  const startup = `<script>(${start_visual_frame.toString()})(${measure}, ${Boolean(submit)});</script>`;
   return html_document(source, (automatic ? VISUAL_CSP : "") + VISUAL_DEFAULTS + startup + extra);
+}
+
+// A panel's result is a short reply the reader still reviews, not a document.
+export const VISUAL_RESULT_LIMIT = 2000;
+const VISUAL_FIELDS_LIMIT = 4000;
+
+/**
+ * Read a panel's result posted by the given frame: `{ text, fields }`, `{ error: "too_long" }` when the text is over the
+ * limit, or null when the message is not a result of that frame or has no text.
+ */
+export function visual_result(event, frame_window) {
+  if (!frame_window || event.source !== frame_window) return null;
+  const result = event.data?.codiscuss_visual_result;
+  if (!result || result.format !== 1 || typeof result.text !== "string") return null;
+  const text = result.text.replace(/\r\n?/g, "\n").trim();
+  if (!text) return null;
+  if (text.length > VISUAL_RESULT_LIMIT) return { error: "too_long" };
+  let fields = null;
+  try {
+    const serialized = result.fields && typeof result.fields === "object" ? JSON.stringify(result.fields) : "";
+    if (serialized && serialized.length <= VISUAL_FIELDS_LIMIT) fields = JSON.parse(serialized);
+  } catch { /* Fields are optional; the text alone is the reply. */ }
+  return { text, fields };
 }
 
 /** Run in the trusted new-tab wrapper. The attachment stays in its own sandbox. */
@@ -199,13 +208,20 @@ export function start_visual_tab(initial, read_theme, observe_theme, send_theme,
 }
 
 /** Build a new-tab wrapper for a file, with live room theming for HTML attachments. */
-export function visual_tab_document(title, source, theme) {
+export function visual_tab_document(title, source, theme, restricted = false) {
   const attribute = (value) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-  const preview = theme ? inline_visual_document(source, false, { measure: false }) : html_document(source);
+  const preview = theme ? inline_visual_document(source, restricted, { measure: false }) : html_document(source);
+  const sandbox = restricted ? INLINE_VISUAL_SANDBOX : HTML_SANDBOX;
   const shell = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${attribute(title)}</title>`
     + `<style>html,body{margin:0;height:100%}iframe{display:block;width:100%;height:100%;border:0}</style>`
-    + `<iframe sandbox="${HTML_SANDBOX}" referrerpolicy="no-referrer" srcdoc="${attribute(preview)}"></iframe>`;
+    + `<iframe sandbox="${sandbox}" referrerpolicy="no-referrer" srcdoc="${attribute(preview)}"></iframe>`;
   if (!theme) return shell;
   const initial = JSON.stringify(theme).replace(/</g, "\\u003c");
   return shell + `<script>(${start_visual_tab.toString()})(${initial},${inline_visual_theme.toString()},${observe_visual_theme.toString()},${send_visual_theme.toString()});</script>`;
+}
+
+/** Open a trusted wrapper whose only content runs in its own opaque-origin iframe. */
+export function open_html_preview_tab(title, source, theme, restricted = false) {
+  const url = URL.createObjectURL(new Blob([visual_tab_document(title, source, theme, restricted)], { type: "text/html" }));
+  window.open(url, "_blank");
 }

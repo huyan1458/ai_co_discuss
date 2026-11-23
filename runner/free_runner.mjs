@@ -1198,7 +1198,12 @@ export class FreeRoomRunner {
       const delivery = result.capabilities || capabilities_of(adapter.adapter).delivery;
       await this.report_delivery(execution.id, { ...delivery, steer: Boolean(result.steer),
         resume: Boolean(capabilities_of(adapter.adapter).resume && delivery.stoppable) }, member.name);
-      this.report_model(execution.id, chosen_settings(task.profile));
+      // A task posted into the member's own open window runs with that window's model, so the card's choice is not applied;
+      // a started process is, and the card's "applies next time" mark ends here.
+      if (!task.inbox) {
+        this.report_model(execution.id, chosen_settings(task.profile));
+        this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`settings-applied:${member.name}`, String(Date.now()));
+      }
     } catch (error) {
       if (review_request && error.delivery_status === 'not_sent') return this.reject_review(member, execution, error.message);
       if (adapter.project_access === 'own') return this.retry_or_fail(member.name, execution, `投递失败：${error.message}`);

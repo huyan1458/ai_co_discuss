@@ -285,7 +285,10 @@ const summary = computed(() => {
         <h3><span>1</span>{{ t("这次做什么") }}</h3>
         <UFormField class="create-title-field" :label="t('话题名称')" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" :placeholder="t('这次要一起做什么？')" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
         <UFormField class="create-project-field" :label="t('项目目录（可选）')" :description="view.launch.available ? t('本机唤醒的成员在此目录读写文件；不选则使用草稿空间，为这个房间单独建一个文件夹。') : relay ? t('由电脑「{computer}」唤醒的成员在所选项目中读写文件；不选则各用软件默认目录。', { computer: relay.name }) : t('连接本机服务后可指定：本机唤醒的成员将在此目录读写文件。')">
-          <ProjectDirectoryField :disabled="!launchable" />
+          <ProjectDirectoryField :disabled="!launchable">
+            <!-- Holds the place of the other rows' remove button, so their folder buttons line up. -->
+            <template v-if="view.launch.available && view.launch.workspace.extra_directories?.length" #actions><span class="create-project-spacer" aria-hidden="true" /></template>
+          </ProjectDirectoryField>
           <!-- Rarely needed, so only a link under the main directory until the first extra one is added. -->
           <ExtraDirectoriesField v-if="view.launch.available && view.launch.workspace.cwd" class="create-extra-directories" :model-value="view.launch.workspace.extra_directories || []"
             @update:model-value="bridge.write_launch('workspace', 'extra_directories', $event.length ? $event : undefined)" />
@@ -371,6 +374,7 @@ const summary = computed(() => {
 .create-scroll { flex: 1; min-height: 0; }
 .create-drive { display: flex; align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
 .create-drive > span { flex-shrink: 0; }
+.create-project-spacer { flex-shrink: 0; width: 24px; }
 .create-drive > .expert-card-modes { width: 300px; max-width: 100%; }
 .create-drive-hint { margin: -4px 0 0; }
 .create-scroll { overflow-y: auto; scrollbar-gutter: stable; padding: 20px 26px 24px; gap: 26px !important; }

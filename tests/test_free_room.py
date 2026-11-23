@@ -160,6 +160,20 @@ class SingleMemberTests(FreeRoomTests):
         page = self.request(f"{self.path}/messages?after=0&limit=1", token=self.owner)[1]
         self.assertEqual((len(page["messages"]), page["remaining"], page["has_more"]), (1, 1, True))
 
+    def test_message_lists_fold_visual_sources_only_on_request(self):
+        """A list asked to fold shows one line per visual fence; ordinary code and a single message keep the source."""
+        source = "<p>" + "x" * 40 + "</p>"
+        code = "\n".join(["```html", "<b>源码</b>", "```"])
+        text = "\n".join(["前文", "", "```visual", source, "```", "", code, "", "后文"])
+        message_id = self.say(text)[1]["message"]["id"]
+        folded = self.request(f"{self.path}/messages?after=0&fold_visuals=1", token=self.owner)[1]["messages"][0]["text"]
+        self.assertNotIn(source, folded)
+        self.assertIn(f"[交互式可视化 · {len(source)} 字符]", folded)
+        self.assertIn(code, folded)
+        self.assertTrue(folded.startswith("前文") and folded.endswith("后文"))
+        self.assertEqual(self.request(f"{self.path}/messages?after=0", token=self.owner)[1]["messages"][0]["text"], text)
+        self.assertEqual(self.request(f"{self.path}/messages/{message_id}", token=self.owner)[1]["text"], text)
+
     def test_long_message_reads_are_marked_and_resume_by_offset(self):
         """A page that cannot hold a long message gives an honest preview; the text is read whole in parts of one version."""
         text = "长文🙂" * 1500 + "末尾"
@@ -3375,6 +3389,53 @@ class InstanceTests(FreeRoomTests):
         self.assertEqual(self.request(f"{self.path}/messages", payload, self.member)[0], 403)
         status, saved = self.request(f"{self.path}/messages", payload, reviewer)
         self.assertEqual((status, saved["message"]["author"]), (201, "Claude-review"))
+
+    def test_room_sites_read_write_boundaries_and_expiry(self):
+        """Room sites and stages are written only by owner credentials, reject device_token, and reflect expiry on read."""
+        stage_payload = {
+            "action": "stage", "stage_id": "stage1234567", "execution_id": 12, "member": "Gemini",
+            "title": "Demo Site", "directory": "dist", "kind": "directory", "file_count": 2, "bytes": 1024,
+            "files": [{"path": "index.html", "bytes": 512, "content_type": "text/html; charset=utf-8"}],
+            "spots": [], "rejected_files": [], "ready": True,
+        }
+        status, _ = self.request(f"{self.path}/sites", stage_payload, self.member)
+        self.assertEqual(status, 403)
+
+        status, _ = self.request(f"{self.path}/sites", {**stage_payload, "device_token": "secret"}, self.owner)
+        self.assertEqual(status, 400)
+
+        status, staged = self.request(f"{self.path}/sites", stage_payload, self.owner)
+        self.assertEqual(status, 200, staged)
+        self.assertEqual(staged["stage"]["stage_id"], "stage1234567")
+
+        site_payload = {
+            "action": "upsert", "site_id": "abcdefgh23", "url": "https://abcdefgh23.bimcanvas.com",
+            "title": "Demo Site", "directory": "dist", "member": "Gemini", "current_version": 1,
+            "previous_version": 0, "file_count": 2, "bytes": 1024, "status": "active",
+            "expires_at": "2099-01-01T00:00:00.000Z", "stage_id": "stage1234567",
+            "versions": [{"version": 1, "file_count": 2, "bytes": 1024}],
+            "files": [{"path": "index.html", "bytes": 512, "content_type": "text/html; charset=utf-8"}],
+        }
+        status, saved = self.request(f"{self.path}/sites", site_payload, self.owner)
+        self.assertEqual(status, 200, saved)
+        self.assertEqual(saved["site"]["site_id"], "abcdefgh23")
+        self.assertNotIn("device_token", saved["site"])
+
+        status, room_sites = self.request(f"{self.path}/sites", token=self.owner)
+        self.assertEqual(status, 200, room_sites)
+        self.assertEqual(len(room_sites["sites"]), 1)
+        self.assertEqual(room_sites["stages"][0]["site_id"], "abcdefgh23")
+
+        status, all_sites = self.request("/api/sites", token=self.owner)
+        self.assertEqual(status, 200, all_sites)
+        self.assertEqual(all_sites["sites"][0]["room_title"], "自由单聊")
+
+        status, updated = self.request(f"{self.path}/sites", {
+            "action": "update_status", "site_id": "abcdefgh23", "status": "active",
+            "expires_at": "2020-01-01T00:00:00.000Z",
+        }, self.owner)
+        self.assertEqual(status, 200, updated)
+        self.assertEqual(updated["site"]["status"], "expired")
 
 class MigrationTests(unittest.TestCase):
     """Databases from earlier builds are upgraded in place."""

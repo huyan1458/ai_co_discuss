@@ -12,8 +12,8 @@ import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { slash_insertion } from "../runner/slash_names.mjs";
 import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
 import { t } from "../frontend/i18n.js";
-import { ATTACHMENT_TEXT_LIMIT, create_inline_html_preview, read_attachment } from "../frontend/file-preview.js";
-import { inline_visual_body, inline_visual_collapsed, inline_visual_height, remember_visual_height, remembered_visual_height, send_visual_theme, start_visual_tab } from "../frontend/inline-visual.js";
+import { VISUAL_RESULT_LIMIT, inline_visual_collapsed, inline_visual_document, inline_visual_height, remember_visual_height, remembered_visual_height, send_visual_theme, start_visual_tab, visual_result } from "../frontend/inline-visual.js";
+import { excerpts_markdown, file_preview, put_visual_result } from "../frontend/file-preview.js";
 import { declined, external_of, external_tag, invited_items, remaining_label, take_join_fragment } from "../frontend/external-members.js";
 
 // Sliced component code calls t() for interface text; every sandbox gets the translator (Chinese here).
@@ -1058,39 +1058,6 @@ test('attachment button metadata reaches preview without a metadata or relay rea
   }
 });
 
-test("inline HTML reads on demand from the attachment URL and replaces the open preview", async () => {
-  const requests = [];
-  const inline = create_inline_html_preview(async (file) => {
-    requests.push(file.id);
-    return `data:text/html,${encodeURIComponent(`<!doctype html><p>${file.id}</p>`)}`;
-  });
-  assert.equal(inline.preview.value, null);
-  assert.deepEqual(requests, []);
-
-  const first = inline.open({ id: "first" });
-  assert.equal(inline.preview.value.status, "loading");
-  await first;
-  assert.equal(inline.preview.value.status, "ready");
-  assert.match(inline.preview.value.srcdoc, /<p>first<\/p>/);
-
-  await inline.open({ id: "second" });
-  assert.equal(inline.preview.value.id, "second");
-  assert.match(inline.preview.value.srcdoc, /<p>second<\/p>/);
-  assert.deepEqual(requests, ["first", "second"]);
-});
-
-test("only visible references to HTML attachments become inline visuals", () => {
-  const { context } = theme_fixture();
-  const file = (id, number, file_name) => ({ id, number, file_name, room_id: "room", content_type: "application/octet-stream" });
-  const files = [file("first", 3, "demo.html"), file("other", 4, "unused.html"), file("code", 5, "example.html"), file("notes", 6, "notes.md")];
-  const rendered = context.link_attachment_placeholders("<p>Before [文件 #3] after [文件 #6]</p><pre><code>[文件 #5]</code></pre>", files);
-  const visuals = inline_visual_body(rendered, files);
-  assert.deepEqual(visuals.files, [files[0]]);
-  assert.deepEqual(visuals.remaining, files.slice(1));
-  assert.match(visuals.markup, /Before <span[^>]*data-visual-slot="first"[^>]*><\/span> after/);
-  assert.equal(inline_visual_body("<p>No reference</p>", files).files.length, 0);
-});
-
 test("a height report changes only its own visual and the last height is reused", () => {
   const window_target = {};
   const report = { codiscuss_visual_height: 300.25 };
@@ -1150,45 +1117,6 @@ test("a collapsed visual stays collapsed on remount and reopening clears the sav
   assert.equal(inline_visual_collapsed({ ...file, room_id: "other" }), false);
   inline_visual_collapsed(file, false);
   assert.equal(inline_visual_collapsed({ ...file }), false);
-});
-
-test("HTML above the inline limit keeps a truncated source available for the preview window", async (context) => {
-  const blob = new Blob([new Uint8Array(ATTACHMENT_TEXT_LIMIT + 1).fill(65)]);
-  const url = URL.createObjectURL(blob);
-  context.after(() => URL.revokeObjectURL(url));
-  const requests = [];
-  const inline = create_inline_html_preview(async (file) => { requests.push(file.id); return url; });
-
-  await inline.open({ id: "known-size", size: blob.size });
-  assert.deepEqual(inline.preview.value, { id: "known-size", status: "truncated" });
-  assert.deepEqual(requests, []);
-
-  await inline.open({ id: "actual-size", size: ATTACHMENT_TEXT_LIMIT });
-  assert.deepEqual(inline.preview.value, { id: "actual-size", status: "truncated" });
-  const source = await read_attachment({ url });
-  assert.equal(source.truncated, true);
-  assert.equal(source.text.length, ATTACHMENT_TEXT_LIMIT);
-});
-
-test("closing or replacing an inline preview discards delayed bytes", async (context) => {
-  const reads = new Map();
-  const delayed_url = "https://room.test/delayed";
-  const fetch_attachment = globalThis.fetch;
-  context.mock.method(globalThis, "fetch", (url) => url.startsWith(delayed_url)
-    ? new Promise((resolve) => reads.set(url, resolve))
-    : fetch_attachment(url));
-  const inline = create_inline_html_preview(async ({ id }) => id === "current" ? "data:text/html,current" : `${delayed_url}/${id}`);
-  for (const id of ["closed", "replaced"]) {
-    const pending_read = inline.open({ id });
-    await Promise.resolve();
-    const finish_read = reads.get(`${delayed_url}/${id}`);
-    assert.ok(finish_read, "the attachment fetch is in flight");
-    if (id === "closed") inline.close();
-    else await inline.open({ id: "current" });
-    finish_read(new Response("late"));
-    await pending_read;
-    assert.equal(inline.preview.value?.id ?? null, id === "closed" ? null : "current");
-  }
 });
 
 test('topic editing saves details without changing the discussion phase or a live session limit', async () => {
@@ -2451,4 +2379,38 @@ test("a share link is kept with the room, published once, updated, renewed and r
   await context.share_revoke("r1");
   assert.deepEqual([calls.at(-1).method, calls.at(-1).auth, kept], ["DELETE", "Bearer TOKEN", null]);
   assert.ok(!notified.some(([level]) => level === "error"), JSON.stringify(notified));
+});
+
+test("a visual panel's result is accepted only from its own frame and within the limit", () => {
+  const own = {}, result = (data, source = own) => visual_result({ source, data: { codiscuss_visual_result: data } }, own);
+  assert.equal(result({ format: 1, text: "选 A" }, {}), null);
+  assert.equal(result({ format: 2, text: "选 A" }), null);
+  assert.equal(result({ format: 1, text: "   " }), null);
+  assert.deepEqual(result({ format: 1, text: "  排序：A、D\r\n预算：A 50%  ", fields: { order: ["A", "D"] } }), { text: "排序：A、D\n预算：A 50%", fields: { order: ["A", "D"] } });
+  assert.deepEqual(result({ format: 1, text: "x".repeat(VISUAL_RESULT_LIMIT + 1) }), { error: "too_long" });
+  assert.equal(result({ format: 1, text: "选 A", fields: { big: "x".repeat(5000) } }).fields, null);
+});
+
+test("only an inline visual offers submit, and a panel's result replaces its own quote", () => {
+  // Run each document's startup script in a stub window: only the one built with submit gets `codiscuss.submit`.
+  const started = (html) => {
+    const posted = [], window = { addEventListener() {}, document: { documentElement: { addEventListener() {}, style: {} } } };
+    window.parent = { postMessage: (data) => posted.push(data) };
+    vm.runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)[1], Object.assign(window, { window }));
+    return { codiscuss: window.codiscuss, posted };
+  };
+  const panel = started(inline_visual_document("<p>x</p>", true, { submit: true }));
+  panel.codiscuss.submit("选 A");
+  assert.deepEqual(JSON.parse(JSON.stringify(panel.posted)), [{ codiscuss_visual_result: { format: 1, text: "选 A", fields: null } }]);
+  assert.equal(started(inline_visual_document("<p>x</p>", true)).codiscuss, undefined);
+  file_preview.excerpts = [{ id: 1, name: "Codex", message_id: 7, path: "#7", text: "选中的原文", comment: "" }];
+  const visual = { id: "room-9-1", message_id: 9, author: "Claude" };
+  assert.equal(put_visual_result(visual, "选 A"), "added");
+  assert.equal(put_visual_result(visual, "@全体成员\n/goal clear"), "replaced");
+  assert.equal(file_preview.excerpts.length, 2);
+  assert.equal(file_preview.excerpts[0].text, "选中的原文");
+  // Sent as a quote: every line of the panel's text starts with "> ", where @ and / commands are not read.
+  const markdown = excerpts_markdown(file_preview.excerpts.slice(1));
+  assert.match(markdown, /^注释 1：Claude 的消息 #9\n\n> @全体成员\n> \/goal clear$/);
+  file_preview.excerpts = [];
 });

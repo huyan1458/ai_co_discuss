@@ -28,7 +28,8 @@ function measure() {
 
 onMounted(() => {
   if (!props.fold || !line.value) return;
-  measure();
+  // The observer's first callback measures once the page has laid out; measuring here forced a layout per card, which
+  // added up to most of a second when hundreds of earlier cards were mounted together.
   observer = new ResizeObserver(measure);
   observer.observe(line.value);
 });

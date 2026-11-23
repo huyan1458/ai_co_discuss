@@ -2,23 +2,27 @@
 import { onMounted, ref, shallowRef, watch } from "vue";
 import InlineHtmlVisual from "./InlineHtmlVisual.vue";
 
-const props = defineProps({ visuals: { type: Object, required: true }, answer_id: { type: String, required: true } });
+const props = defineProps({ markup: String, blocks: Array, message: Object });
 const body = ref(null), placements = shallowRef([]);
 
-/** Move only the visual into the marker emitted at its Markdown reference. */
+/** Mount a visual at each slot emitted by the Markdown renderer. */
 function place_visuals() {
-  const files = new Map(props.visuals.files.map((file) => [file.id, file]));
-  placements.value = Array.from(body.value.querySelectorAll("[data-visual-slot]"), (target) => ({ file: files.get(target.dataset.visualSlot), target }))
-    .filter(({ file }) => file);
+  placements.value = Array.from(body.value.querySelectorAll("[data-visual-slot]"), (target) => {
+    const ordinal = Number(target.dataset.visualSlot) + 1;
+    const { id: message_id, room_id, created_at } = props.message;
+    const author = props.message.author_label || props.message.author;
+    return { target, visual: { id: `${room_id}-${message_id}-${ordinal}`, room_id, message_id, ordinal, created_at, author,
+      name: `visual-${message_id}-${ordinal}.html`, source: props.blocks[ordinal - 1] } };
+  });
 }
 
 onMounted(place_visuals);
-watch(() => props.visuals, place_visuals, { flush: "post" });
+watch(() => [props.markup, props.blocks], place_visuals, { flush: "post" });
 </script>
 
 <template>
-  <div :id="answer_id" ref="body" class="channel-message-text markdown-body" v-html="visuals.markup"></div>
-  <Teleport v-for="{ file, target } in placements" :key="file.id" :to="target">
-    <InlineHtmlVisual :file="file" />
+  <div :id="`channel-answer-${message.id}`" ref="body" class="channel-message-text markdown-body" v-html="markup"></div>
+  <Teleport v-for="{ visual, target } in placements" :key="visual.id" :to="target">
+    <InlineHtmlVisual :visual="visual" />
   </Teleport>
 </template>

@@ -62,6 +62,8 @@ Shutdown and sleep interrupt local execution. During an internet outage, the loc
 
 ## Settings index
 
+To see what changed in this version, click the version number after "AI CoDiscuss" at the top left to open "Changelog". It shows the current version; click "Show earlier versions" for older ones.
+
 | Section | Controls | Where to learn more |
 | --- | --- | --- |
 | Account | Set up admin account, Sign in, Sign out | [Python deployment](../deployment.md#python) |

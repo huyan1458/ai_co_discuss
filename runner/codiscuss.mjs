@@ -37,6 +37,7 @@ const HELP = t(`AI CoDiscuss CLI
   join LINK|CODE        用本机 AI 加入另一台电脑上的房间（外部成员）
   invited COMMAND       查看外部房间，调整信任等级、同意或拒绝唤醒、退出
   repo COMMAND          外部成员只读查看对方电脑开放的项目
+  site COMMAND          预检、发布、续期、回滚或撤销房间静态网站（公开发布须经用户明确授权）
 
   codiscuss service --help
   codiscuss room --help
@@ -142,6 +143,7 @@ async function main(args = process.argv.slice(2)) {
   if (command === 'launcher') return (await import('./launcher.mjs')).launcher_main();
   // Rooms on other computers this one was invited to, and the AI's entry to them (runner/external_client.mjs).
   if (['join', 'invited', 'repo', 'external-proxy'].includes(command)) return (await import('./external_client.mjs')).external_main(command, args.slice(1));
+  if (command === 'site') return (await import('./site_deploy.mjs')).site_cli(args.slice(1));
   if (!command || (command === 'run' && args.length === 1)) return service_cli([]);
   if (SERVICE_COMMANDS.has(command) || command === '--json') return service_cli(args);
   return website_cli(args);

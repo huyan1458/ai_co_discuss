@@ -2,7 +2,7 @@
  * What the file list, the floating file preview and the composer share within one room: the preview's entry points and
  * the excerpts quoted from project files for the next message.
  */
-import { reactive, shallowRef } from "vue";
+import { reactive } from "vue";
 import { locale, t } from './i18n.js';
 
 export const ATTACHMENT_TEXT_LIMIT = 2 * 1024 * 1024;
@@ -25,34 +25,6 @@ export async function read_attachment(attachment) {
   return { text, truncated, limit: ATTACHMENT_TEXT_LIMIT, size: blob.size, modified_at: attachment.created_at, encoding: "utf-8" };
 }
 
-/** Hold at most one in-message preview and ignore reads belonging to a closed or replaced preview. */
-export function create_inline_html_preview(attachment_url, wrap = html_document) {
-  const preview = shallowRef(null);
-  const close = () => { preview.value = null; };
-
-  async function open(file) {
-    if (file.size > ATTACHMENT_TEXT_LIMIT) {
-      preview.value = { id: file.id, status: "truncated" };
-      return;
-    }
-    const request = { id: file.id, status: "loading" };
-    preview.value = request;
-    try {
-      const url = await attachment_url(file);
-      if (preview.value !== request) return;
-      const result = await read_attachment({ ...file, url });
-      if (preview.value !== request) return;
-      preview.value = result.truncated
-        ? { id: file.id, status: "truncated" }
-        : { id: file.id, status: "ready", srcdoc: wrap(result.text) };
-    } catch (error) {
-      if (preview.value === request) preview.value = { id: file.id, status: "error", error: error.message };
-    }
-  }
-
-  return { preview, open, close };
-}
-
 /**
  * `open(path, directory, root)` is set by the preview while it is mounted (`root` is the index of the room's project
  * directory the path is in, 0 for the main one); `reveal_path` is a folder of directory `reveal_root` the file list should show next (it
@@ -61,7 +33,9 @@ export function create_inline_html_preview(attachment_url, wrap = html_document)
  * as a split pane, 0 while it is not docked.
  */
 // `reveal_root` is a room directory's index or an account folder's id (named by `reveal_name`).
-export const file_preview = reactive({ open: null, reveal_path: null, reveal_root: 0, reveal_name: "", excerpts: [], focus_composer: 0, dock_width: 0 });
+// `visual_results`: whether the shown room takes a visual panel's result into its composer (not on a share page or a
+// room being destroyed), set by the room view.
+export const file_preview = reactive({ open: null, open_visual: null, visual_results: false, reveal_path: null, reveal_root: 0, reveal_name: "", excerpts: [], focus_composer: 0, dock_width: 0 });
 /** Unsent file cards and excerpts of the rooms not open now, by room ID (ChannelDiscussion), kept until this page closes. */
 export const room_quotes = new Map();
 let excerpt_serial = 0;
@@ -76,6 +50,22 @@ const PENDING_HIGHLIGHT = "excerpt-pending";
 export function add_excerpt(excerpt) {
   file_preview.excerpts.push({ ...excerpt, id: ++excerpt_serial });
   file_preview.focus_composer++;
+}
+
+/**
+ * Put a visual panel's result above the composer as a quote of its message, replacing that panel's earlier result.
+ * Sent as a quote, its text can neither call members nor run a room command. The composer is not focused, so a phone
+ * keyboard does not open on its own. Returns "added" or "replaced".
+ */
+export function put_visual_result(visual, text) {
+  const excerpt = { name: visual.author, message_id: visual.message_id, path: `#${visual.message_id}`, text, comment: "", visual_key: visual.id };
+  const index = file_preview.excerpts.findIndex((item) => item.visual_key === visual.id);
+  if (index < 0) {
+    file_preview.excerpts = [...file_preview.excerpts, { ...excerpt, id: ++excerpt_serial }];
+    return "added";
+  }
+  file_preview.excerpts = file_preview.excerpts.map((item, position) => position === index ? { ...item, text } : item);
+  return "replaced";
 }
 
 /** Where an excerpt came from, as the composer's list shows it. */

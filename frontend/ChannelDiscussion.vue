@@ -32,11 +32,10 @@ import { use_broadcast } from "./broadcast.js";
 import { format_voice_time, use_voice_input, use_voice_press } from "./voice-input.js";
 import ExcerptEditCard from "./ExcerptEditCard.vue";
 import AnswerFiles from "./AnswerFiles.vue";
+import AnswerSites from "./AnswerSites.vue";
 import ExecutionChanges from "./ExecutionChanges.vue";
-import InlineHtmlFrame from "./InlineHtmlFrame.vue";
 import MessageVisualBody from "./MessageVisualBody.vue";
-import { add_excerpt, create_inline_html_preview, excerpt_mark_place, excerpt_range, inner_scroll_follower, excerpt_source, excerpts_markdown, file_preview, hold_selection, room_quotes, take_excerpts, text_offset } from "./file-preview.js";
-import { inline_visual_body, inline_visual_document, is_inline_html } from "./inline-visual.js";
+import { add_excerpt, excerpt_mark_place, excerpt_range, inner_scroll_follower, excerpt_source, excerpts_markdown, file_preview, hold_selection, room_quotes, take_excerpts, text_offset } from "./file-preview.js";
 import { keep_reading_position } from "./scroll-anchor.js";
 import { guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
 import { FILE_MENTION_PATTERN } from "./file-mention.mjs";
@@ -67,13 +66,13 @@ const RETRACT_ESCAPE_WINDOW_MS = 500;
 const near_length_limit = computed(() => text_length.value >= bridge.max_message_length * LENGTH_WARNING_RATIO);
 const search = field("search-input");
 const transcript = ref(null);
-let inline_html_tail_space = 0;
+let visual_tail_space = 0;
 
 /** Retain only the scroll range needed to keep a collapsed preview's control on screen. */
-function set_inline_html_tail_space(height) {
-  if (height === inline_html_tail_space) return;
-  inline_html_tail_space = height;
-  transcript.value?.style.setProperty("--inline-html-tail-space", `${height}px`);
+function set_visual_tail_space(height) {
+  if (height === visual_tail_space) return;
+  visual_tail_space = height;
+  transcript.value?.style.setProperty("--visual-tail-space", `${height}px`);
 }
 
 // Speech settings kept by the local service, read at most once a minute: whether a key is set, each platform's voice, following.
@@ -126,25 +125,7 @@ const listen_here = ref(null);
 const narrow_query = window.matchMedia("(max-width: 700px)");
 const narrow = ref(narrow_query.matches);
 const track_narrow = (event) => { narrow.value = event.matches; };
-const inline_html_mobile = window.matchMedia("(max-width: 700px), (pointer: coarse) and (max-height: 500px)");
-const inline_html_available = ref(!inline_html_mobile.matches);
-const track_inline_html_layout = (event) => { inline_html_available.value = !event.matches; };
-const { preview: inline_html_preview, open: open_inline_html, close: close_inline_html } = create_inline_html_preview(bridge.attachment_url, inline_visual_document);
-onMounted(() => inline_html_mobile.addEventListener("change", track_inline_html_layout));
-onBeforeUnmount(() => {
-  inline_html_mobile.removeEventListener("change", track_inline_html_layout);
-  close_inline_html();
-});
-watch([() => view.value.room?.id, inline_html_available], () => {
-  close_inline_html();
-  set_inline_html_tail_space(0);
-}, { flush: "sync" });
-
-/** Open the selected file inline, or close its current preview. */
-function toggle_inline_html(file) {
-  if (inline_html_preview.value?.id === file.id) close_inline_html();
-  else open_inline_html(file);
-}
+watch(() => view.value.room?.id, () => set_visual_tail_space(0), { flush: "sync" });
 // "Listen from here" waits until a selection has settled (pointer released, no change for a moment), and shows only when
 // speech is configured on this computer; most selections are for copying.
 const LISTEN_SETTLE_MS = 350;
@@ -286,7 +267,8 @@ const QUOTED_HIGHLIGHT = "excerpt-quoted";
 function place_marks() {
   const marks = new Map(), ranges = [];
   file_preview.excerpts.forEach((excerpt, index) => {
-    const body = excerpt.message_id && document.getElementById(`channel-answer-${excerpt.message_id}`);
+    // A visual's result is not text of its message, so it has no place to mark there.
+    const body = !excerpt.visual_key && excerpt.message_id && document.getElementById(`channel-answer-${excerpt.message_id}`);
     const place = body && excerpt_mark_place(body, body.parentElement, excerpt.to);
     if (!place) return;
     const range = excerpt_range(body, excerpt.from, excerpt.to);
@@ -537,6 +519,11 @@ const PRELOAD_FIRST_SLICE = 2;
 const PRELOAD_MAX_SLICE = 20;
 // Share of the cards already shown that one slice adds at least (see preload_slice).
 const PRELOAD_RENDERED_SHARE = 0.25;
+const PRELOAD_SHARE_CEILING = 40;
+// Cards rendered right after a room opens; earlier ones follow in background slices of PRELOAD_BACKGROUND_SLICE once the
+// room has settled (ROOM_SETTLE_MS), or at once when the reader nears them or jumps to one.
+const PRELOAD_IDLE_CARDS = 100;
+const PRELOAD_BACKGROUND_SLICE = 10;
 // Idle slices wait this long at most (ms) for an idle moment.
 const PRELOAD_IDLE_TIMEOUT_MS = 300;
 // The reader is still scrolling until this long (ms) after their last scroll event. iOS sends scroll events only for
@@ -891,10 +878,25 @@ const recipient_hint = computed(() => {
   if (free.value && named_group(ALL_ALIASES)) return t('发给 {value1}', { value1: free_members.value.map((member) => bridge.display_name(member.name)).join("、") });
   const found = bridge.mentioned_members(text.value, free_members.value.map((member) => member.name));
   const named = free_members.value.filter((member) => found.has(member.name));
-  if (named.length) return free.value ? t('{value1}发给 {value2}', { value1: named.length > 1 ? t('同时') : "", value2: named.map((member) => bridge.display_name(member.name)).join("、") })
-    : t('直接提问 {value1}，不计讨论轮次；同一成员完成当前执行后回答', { value1: named.map((member) => bridge.display_name(member.name)).join("、") });
+  // Who is at work right now decides what sending does (user 2026-11-23, #8182): say it before the owner sends.
+  const queue = room.value?.free?.queued_messages;
+  const busy = new Set(queue?.busy_members || []);
+  const names = (members) => members.map((member) => bridge.display_name(member.name)).join("、");
+  if (named.length && free.value) {
+    const waiting = named.filter((member) => busy.has(member.name));
+    const ready = named.filter((member) => !busy.has(member.name));
+    if (!ready.length) return t('{value1} 正忙，这条先排队；可在排队项上插话或打断', { value1: names(waiting) });
+    if (waiting.length) return t('立即发给 {value1}；{value2} 正在工作，那份先排队', { value1: names(ready), value2: names(waiting) });
+    if (busy.size) return t('立即发给 {value1}，与正在进行的工作并行（支线）', { value1: names(ready) });
+    return named.length > 1 ? t('同时发给 {value1}，各自回答，不经主持人', { value1: names(named) })
+      : t('直接发给 {value1}，不经主持人', { value1: names(named) });
+  }
+  if (named.length) return t('直接提问 {value1}，不计讨论轮次；同一成员完成当前执行后回答', { value1: names(named) });
   if (free_members.value.length === 1) return t('发给 {value1}', { value1: bridge.display_name(free_members.value[0].name) });
   if (relay_waits_owner.value && free_host.value) return t('接力在等你回答上方的问题卡；这条消息只发给主持人 {value1}', { value1: bridge.display_name(free_host.value.name) });
+  if (free_host.value && free.value && queue?.busy) return t('房间正忙，这条排队后交给主持人 {value1}；@ 空闲成员可立即并行开工', { value1: bridge.display_name(free_host.value.name) });
+  // An idle room: say what the plain message does and the other ways to send it (user 2026-11-23, #8189).
+  if (free_host.value && free.value) return t('发给主持人 {value1} 分派；@ 成员直接交给它，或用 @全体成员、@全体依次', { value1: bridge.display_name(free_host.value.name) });
   return free_host.value ? t('发给主持人 {value1}；@ 其他成员让它们发言', { value1: bridge.display_name(free_host.value.name) }) : t('未 @ 任何成员：只作留言，不会唤醒 AI');
 });
 /** Project files picked after @: their @path stays in the draft, and they also show as cards and go out as a trailing line of paths (code-quoted, so they never wake a member). */
@@ -920,6 +922,9 @@ const file_refs_line = () => file_refs.value.length
   ? t('引用文件：{value1}', { value1: file_refs.value.map((ref) => `\`${ref.path}${ref.kind === "directory" ? "/" : ""}\``).join("、") }) : "";
 // Passages quoted from the file preview ("添加到对话") wait as cards and go out after the text, each as a quote with its comment.
 const excerpts = computed(() => file_preview.excerpts);
+// Visual panels may hand their result to this composer only where the reader can send.
+watch(() => !view.value.share && !view.value.destroying.includes(view.value.room?.id), (writable) => { file_preview.visual_results = writable; }, { immediate: true });
+onBeforeUnmount(() => { file_preview.visual_results = false; });
 const has_draft = computed(() => Boolean(text.value.trim() || view.value.attachment_drafts.length || file_refs.value.length || excerpts.value.length));
 watch(() => file_preview.focus_composer, () => nextTick(() => prompt.value?.textareaRef?.focus()));
 // Editing a queued message takes it off the queue into the composer; the caret goes to its end so typing continues it.
@@ -1799,7 +1804,33 @@ async function locate(item) {
   const target = item.slot_card ? layout_anchors.get(item.id) : item.id;
   await act("filter", { query: "", mention: false, host: false, authors: [], kinds: [] });
   await nextTick();
-  if (target != null) jump_to(target);
+  // Marked where the jump lands, which may be after earlier cards render: near the end the transcript cannot scroll the
+  // card to the top, and without a mark the jump looked like it had only gone to the bottom.
+  located_id = target;
+  if (target == null) return;
+  locating.value = target;
+  clearTimeout(locating_timer);
+  locating_timer = setTimeout(() => { locating.value = null; }, LOCATE_GIVE_UP_MS);
+  jump_to(target);
+}
+let located_id = null;
+// The message a locate is still heading for, shown over the transcript until it lands; a jump that never lands stops covering it after a while.
+const locating = ref(null);
+const LOCATE_GIVE_UP_MS = 30000;
+let locating_timer = 0;
+onBeforeUnmount(() => clearTimeout(locating_timer));
+const LOCATE_FLASH_MS = 1600;
+/** Briefly outline the card a locate landed on; an attribute, so the card's memoized render does not reset it. */
+function flash_located(card) {
+  card.removeAttribute("data-located");
+  void card.offsetWidth;
+  card.setAttribute("data-located", "");
+  setTimeout(() => card.removeAttribute("data-located"), LOCATE_FLASH_MS);
+}
+/** Whether the message renders as an ordinary message card, which carries its own locate button. */
+function plain_card(message) {
+  return !message.arrangement && !["room_link", "notice"].includes(message.source) && !message.cancelled_turn && !message.cancelled_execution
+    && !(message.slot_card && !message.failure) && !message.withdrawn;
 }
 /** The header filter: a card shows when any checked speaker or card kind matches it. */
 function matches_filter(item) {
@@ -2075,7 +2106,7 @@ function release_reader() {
 let held_memo = null;
 function transcript_memo(memo) {
   if (reader_scrolling.value && held_memo) return held_memo;
-  return held_memo = [...memo, inline_html_available.value, inline_html_preview.value];
+  return held_memo = memo;
 }
 /**
  * Where the browser does not keep the reading position (WebKit), scroll by however far the content under the reading
@@ -2111,7 +2142,18 @@ function schedule_preload(urgent = false) {
   if (!render_start.value || (preload_timer && (preload_timer.urgent || !urgent))) return;
   preload_timer?.cancel();
   const run = () => { preload_timer = null; preload_slice(); };
-  if (urgent) {
+  // Rendering a whole long history right after the room opened held the page for seconds each time (653 cards: ~3.7s of
+  // long tasks after switching back to it, user 2026-11-23). A few screens render at once; the rest follows in small
+  // background slices once the room has settled, only while the page is idle, so a jump far back still lands at once.
+  const background = !urgent && transcript_messages.value.length - render_start.value >= PRELOAD_IDLE_CARDS;
+  const wait = background ? settle_until - performance.now() : 0;
+  if (wait > 0) {
+    const timer = setTimeout(() => { preload_timer = null; schedule_preload(); }, wait);
+    preload_timer = { urgent, cancel: () => clearTimeout(timer) };
+  } else if (background && window.requestIdleCallback) {
+    const idle = requestIdleCallback(run);
+    preload_timer = { urgent, cancel: () => cancelIdleCallback(idle) };
+  } else if (urgent) {
     const frame = requestAnimationFrame(run);
     preload_timer = { urgent, cancel: () => cancelAnimationFrame(frame) };
   } else if (window.requestIdleCallback) {
@@ -2130,8 +2172,11 @@ async function preload_slice() {
   if (preload_busy || !element?.clientHeight || !render_start.value) return;
   const urgent = preload_urgent(element);
   // Where the slice is offset by hand, the reader's scrolling holds every slice, even one they wait on near the top. Where
-  // the browser keeps the position, only touch scrolling holds those.
-  if (glide.isAnimating() || (reader_busy() && (!SCROLL_ANCHORING || !urgent || touch_scroll))) return schedule_preload();
+  // the browser keeps the position, only touch scrolling holds those. A transcript held as drawn while the reader scrolls
+  // (transcript_memo) holds them too: slices taken then rendered nothing and so sized themselves ever larger, and the whole
+  // backlog mounted at once when the scroll settled (~1.3–2s at the top of a 650-card room). A held slice keeps its urgency,
+  // so it resumes once the reader stops.
+  if (glide.isAnimating() || (reader_busy() && (!SCROLL_ANCHORING || !urgent || touch_scroll)) || (reader_scrolling.value && held_memo)) return schedule_preload(urgent);
   preload_busy = true;
   const started = performance.now();
   const top_before = element.scrollTop;
@@ -2142,7 +2187,9 @@ async function preload_slice() {
   const content_top = (node) => node.getBoundingClientRect().top - element.firstElementChild.getBoundingClientRect().top;
   const anchor_top = anchor && content_top(anchor);
   const anchor_screen = anchor?.getBoundingClientRect().top;
-  render_floor.value = floor_before(transcript_messages.value, render_start.value - preload_size);
+  // Background slices (schedule_preload) stay small, so a reader who starts scrolling waits at most one of them.
+  const background = !urgent && transcript_messages.value.length - render_start.value >= PRELOAD_IDLE_CARDS;
+  render_floor.value = floor_before(transcript_messages.value, render_start.value - (background ? PRELOAD_BACKGROUND_SLICE : preload_size));
   await nextTick();
   if (!SCROLL_ANCHORING && anchor?.isConnected) {
     // By hand, the first card shown before (right below the new ones; at the very top the topic card stays above them)
@@ -2161,6 +2208,9 @@ async function preload_slice() {
     element.style.setProperty("--preload-pad", `${pad}px`);
     written_top = Math.round(top_before + shift + pad - preload_pad);
     preload_pad = pad;
+    // The browser anchors on the first node in view; with the space above the first card in view (a locate landing on the
+    // first card shown) that node sits above the new cards and stays put, so the cards slid down while the page stayed.
+    if (Math.abs(element.scrollTop - written_top) >= 1) element.scrollTop = written_top;
   } else {
     written_top = element.scrollHeight - from_bottom;
     if (element.scrollTop !== written_top) element.scrollTop = written_top;
@@ -2168,9 +2218,11 @@ async function preload_slice() {
   const spent = performance.now() - started;
   const budget = not_rendered(pending_jump) ? PRELOAD_JUMP_BUDGET_MS : urgent ? PRELOAD_URGENT_BUDGET_MS : PRELOAD_BUDGET_MS;
   // A slice re-renders and measures every card already shown, so its time grows with those cards, not with the slice;
-  // shrinking it then only adds slices. It takes at least a share of them, so a long history fills in a few dozen slices.
+  // shrinking it then only adds slices. It takes at least a share of them, so a long history fills in a few dozen slices,
+  // but never more than PRELOAD_SHARE_CEILING cards: mounting is ~5ms a card, and a share of hundreds held the page ~0.6s.
   const fitted = Math.max(1, Math.min(PRELOAD_MAX_SLICE, Math.round(preload_size * budget / Math.max(spent, 1))));
-  preload_size = Math.max(fitted, Math.ceil((transcript_messages.value.length - render_start.value) * PRELOAD_RENDERED_SHARE));
+  const share = Math.min(PRELOAD_SHARE_CEILING, Math.ceil((transcript_messages.value.length - render_start.value) * PRELOAD_RENDERED_SHARE));
+  if (!background) preload_size = Math.max(fitted, share);
   preload_busy = false;
   if (pending_jump !== null && !not_rendered(pending_jump)) {
     const id = pending_jump;
@@ -2293,9 +2345,9 @@ function track_scroll() {
   // After a resize the cards have rewrapped; until the reading position is restored this scrollTop is not the reader's.
   if (reading_position?.stale()) return;
   schedule_preload(preload_urgent(element));
-  const distance = element.scrollHeight - element.scrollTop - element.clientHeight - inline_html_tail_space;
-  if (distance >= 0) set_inline_html_tail_space(0);
-  const near_end = !inline_html_tail_space && distance < FOLLOW_TAIL_THRESHOLD;
+  const distance = element.scrollHeight - element.scrollTop - element.clientHeight - visual_tail_space;
+  if (distance >= 0) set_visual_tail_space(0);
+  const near_end = !visual_tail_space && distance < FOLLOW_TAIL_THRESHOLD;
   if (!near_end && follow_tail.value && !moved_by_hand && !reader_busy() && performance.now() < settle_until && jump_target.value == null && !pending_jump) {
     write_scroll(element, element.scrollHeight - element.clientHeight);
     return;
@@ -2367,7 +2419,7 @@ async function follow_messages(smooth = false) {
   // of their own send goes at once.
   if (follow_tail.value && element && smooth !== true && reader_busy()) { follow_pending = true; arm_settle(); }
   else if (follow_tail.value && element) {
-    set_inline_html_tail_space(0);
+    set_visual_tail_space(0);
     const bottom = element.scrollHeight - element.clientHeight;
     // While a send is in flight every follow glides, whichever watcher sees the new card first.
     if ((smooth === true || glide.isAnimating() || view.value.sending_message) && document.documentElement.dataset.motion !== "off") {
@@ -2436,6 +2488,7 @@ watch(() => view.value.messages, (messages) => {
 watch([() => view.value.room?.id, () => view.value.query, () => view.value.source_filter, () => (view.value.authors || []).join(","), () => (view.value.card_kinds || []).join(",")], () => {
   jump_target.value = null;
   active_message.value = null;
+  locating.value = null;
   reset_preview();
   follow_tail.value = true;
   render_floor.value = null;
@@ -2492,13 +2545,17 @@ function jump_to(id) {
   pending_jump = null;
   const element = transcript.value;
   const message = element?.querySelector(`[data-message-id="${id}"]`);
+  if (locating.value === id) { locating.value = null; clearTimeout(locating_timer); }
   if (!message) return;
   close_preview();
   reader.state.following = false;
+  // Clearing a filter turns on following the end; left on, the next re-render pulled the transcript back to the bottom.
+  follow_tail.value = false;
   jump_target.value = id;
   active_message.value = id;
   write_scroll(element, element.scrollTop + message.getBoundingClientRect().top - reading_top(element) - READING_OFFSET);
   message.focus({ preventScroll: true });
+  if (located_id === id) { located_id = null; flash_located(message); }
   track_scroll();
 }
 
@@ -2537,7 +2594,7 @@ function resume_tracking(event) {
     if (toggle_hold && !toggle_hold.inline) toggle_hold = null;
     if (event.type !== "keydown" || !event.target.closest?.(".channel-inline-html-toggle")) {
       if (toggle_hold?.inline) toggle_hold = null;
-      set_inline_html_tail_space(0);
+      set_visual_tail_space(0);
     }
   }
   glide.stop();
@@ -3099,18 +3156,10 @@ function message_card(message) {
   const expanded = expanded_answers.value.has(message.id);
   const preview = answer_preview(message);
   const body_html = expanded ? message.rendered_text : preview?.html ?? message.rendered_text;
-  // A visual the answer refers to shows in place on every layout, the phone included; the in-message toggle for an
-  // unreferenced HTML attachment stays a desktop control, the phone opening that one full screen.
-  // A share page has the file only when its owner included attachments; otherwise the message lists none.
-  const inline_enabled = message.author !== "用户" && message.attachments?.some(is_inline_html);
-  const visuals = inline_enabled && !edited && message.kind !== 'receipt' ? inline_visual_body(body_html, message.attachments) : null;
-  const attachments = visuals?.remaining ?? message.attachments;
-  const inline_html = inline_enabled && inline_html_available.value && attachments.some(is_inline_html);
-  const inline_preview = inline_html && attachments.some((file) => file.id === inline_html_preview.value?.id)
-    ? inline_html_preview.value : null;
+  const visuals = expanded || !preview?.truncated ? message.visual_blocks : null;
   const card = {
     message, identity_version: view.value.admin?.identity_version, narrow: narrow.value, reading: reader.state.message_id === message.id,
-    attachments, body_html, visuals, inline_html, inline_preview,
+    attachments: message.attachments, body_html, visuals,
     can_branch: can_branch(message), can_take_back: can_take_back(message), can_retract: can_retract(message), retracting: retracting_id.value === message.id, private_chat: has_private_chat(message),
     editing: edited, editing_plan: edited && editing.value.plan, editing_error: edited && editing.value.error, editing_pending: edited && pending.value,
     round_label: message_round_labels.value.get(message.id), expanded, preview,
@@ -3120,7 +3169,7 @@ function message_card(message) {
     execution_id: execution?.id, execution_started_at: execution?.created_at, notes_count: execution?.notes, steps: execution?.steps,
     reports: reports || NO_ITEMS, allowing: reports ? allowing.value : 0, allow_errors: reports ? allow_errors.value : null,
     launch_available: reports ? view.value.launch?.available : null, report_messages: reports ? view.value.messages : null,
-    armed: armed_cards.has(message.id), menu_open: menu_open_id.value === message.id,
+    armed: armed_cards.has(message.id), menu_open: menu_open_id.value === message.id, locate: view_source_filter.value,
   };
   // Set after the dependencies are read: a fresh object each time would re-render every card; its text and edge stand in for it.
   const line = line_marks(message.author, execution, message.kind);
@@ -3130,6 +3179,21 @@ function message_card(message) {
   card.actions = message_actions(message);
   card.report_rows = card.reports.map((report) => ({ report, allowable: Boolean(denial_allowance(report)), failed: Boolean(failed_request_message(report)) }));
   return card;
+}
+/**
+ * Each message's card, kept until something it read changes: a computed tracks exactly what message_card reads. The
+ * transcript re-renders every shown card whenever earlier cards are mounted above (preload_slice); rebuilding all ~600
+ * cards there cost ~300ms a slice, while a kept card keeps its `deps`, so its MemoBlock is skipped outright.
+ */
+const card_cache = new Map();
+watch(() => room.value?.id, () => card_cache.clear());
+function cached_card(message) {
+  let entry = card_cache.get(message.id);
+  if (entry?.message !== message) {
+    entry = { message, card: computed(() => message_card(message)) };
+    card_cache.set(message.id, entry);
+  }
+  return entry.card.value;
 }
 /** Open the message for editing and read what sending the edit would take back. */
 async function start_edit(message) {
@@ -3188,7 +3252,7 @@ function keep_toggle_place(event) {
       const removed_height = panel.offsetHeight + parseFloat(getComputedStyle(panel).marginTop);
       const remaining = element.scrollHeight - element.clientHeight - element.scrollTop;
       const missing_space = Math.ceil(removed_height - remaining);
-      if (missing_space > 0) set_inline_html_tail_space(inline_html_tail_space + missing_space);
+      if (missing_space > 0) set_visual_tail_space(visual_tail_space + missing_space);
     }
   }
   const until = performance.now() + TOGGLE_HOLD_MS;
@@ -3201,7 +3265,7 @@ function keep_toggle_place(event) {
       const desired = element.scrollTop + drift;
       if (inline_toggle) {
         const missing_space = Math.ceil(desired - (element.scrollHeight - element.clientHeight));
-        if (missing_space > 0) set_inline_html_tail_space(inline_html_tail_space + missing_space);
+        if (missing_space > 0) set_visual_tail_space(visual_tail_space + missing_space);
       }
       write_scroll(element, desired);
     }
@@ -3330,6 +3394,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </div>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :removable="!mark_editing.touch" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? docked_sheet_style() : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
+    <!-- A locate far back waits for the earlier cards to render; the end of the room stays covered meanwhile so it is not taken for the result. -->
+    <div v-if="locating !== null" class="channel-locating" role="status"><UIcon name="i-lucide-loader" class="animate-spin" />{{ t('正在定位到 #{value1}…', { value1: locating }) }}</div>
     <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, message_groups,view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view_query && !view_source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
@@ -3509,7 +3575,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </div>
         <template v-else>
         <!-- Each card keeps its own render cache and reads only its card object; a room refresh re-renders only the cards whose inputs changed. -->
-        <template v-for="card in [message_card(message)]" :key="message.id">
+        <template v-for="card in [cached_card(message)]" :key="message.id">
         <MemoBlock :deps="card.deps">
         <UChatMessage :id="String(message.id)" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" @pointerenter="card.armed || arm_card(message.id, $event)" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="card.line.edge" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
@@ -3535,7 +3601,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               </div>
             </form>
             <div v-else class="channel-answer">
-              <MessageVisualBody v-if="card.visuals?.files.length" :answer_id="`channel-answer-${message.id}`" :visuals="card.visuals" />
+              <MessageVisualBody v-if="card.visuals?.length" :markup="card.body_html" :blocks="card.visuals" :message="message" />
               <div v-else :id="`channel-answer-${message.id}`" class="channel-message-text markdown-body" v-html="card.body_html"></div>
               <button v-for="mark in card.marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button>
               <UButton v-if="card.preview.truncated" :label="card.expanded ? t('收起') : t('展开全文')" :trailing-icon="card.expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" variant="link" color="neutral" size="xs" class="channel-answer-toggle" :aria-label="`${card.expanded ? t('收起回答') : t('展开完整回答')} #${message.id}`" :aria-expanded="card.expanded" :aria-controls="`channel-answer-${message.id}`" @click="toggle_answer(message, $event)" />
@@ -3543,35 +3609,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div v-if="message.summary" class="channel-answer-summary"><small>{{ t('回答摘要') }}<span v-if="message.summary_by && message.summary_by !== message.author"> {{ t('· {value1} 整理', { value1: bridge.display_name(message.summary_by) }) }}</span></small><div class="channel-message-text markdown-body" v-html="message.rendered_summary"></div></div>
             <!-- What the reader takes away (summary, attachments, delivered files), then the run's record as labelled rows:
                  notes and steps, changed files, what ended it, refused operations (user 2026-11-21, #6448). -->
-            <div v-if="card.inline_html" class="message-attachments channel-html-attachments">
-              <div v-for="file in card.attachments" :key="file.id" class="channel-attachment-item">
-                <div class="channel-attachment-heading">
-                  <div v-html="bridge.attachment_markup([file])"></div>
-                  <UButton v-if="is_inline_html(file)" color="neutral" variant="outline" size="xs" class="channel-inline-html-toggle"
-                    :label="card.inline_preview?.id === file.id ? t('收起') : t('在消息内展开')"
-                    :aria-label="card.inline_preview?.id === file.id ? t('收起 {name} 的预览', { name: file.file_name }) : t('在消息内展开 {name}', { name: file.file_name })"
-                    :aria-expanded="card.inline_preview?.id === file.id"
-                    :aria-controls="card.inline_preview?.id === file.id ? `channel-html-${file.id}` : undefined"
-                    @click="toggle_inline_html(file)" />
-                </div>
-                <template v-if="card.inline_preview?.id === file.id">
-                  <InlineHtmlFrame v-if="card.inline_preview.status === 'loading' || card.inline_preview.status === 'ready'"
-                    :id="`channel-html-${file.id}`" :file="file" :preview="card.inline_preview" />
-                  <div v-else :id="`channel-html-${file.id}`" class="channel-inline-html-status">
-                    <template v-if="card.inline_preview.status === 'truncated'">
-                      <p>{{ t('HTML 附件超过 2 MiB，请在预览窗口查看源码。') }}</p>
-                      <UButton :label="t('打开预览窗口')" color="neutral" variant="outline" size="sm" @click="act('preview_attachment', file)" />
-                    </template>
-                    <template v-else>
-                      <p role="alert">{{ card.inline_preview.error }}</p>
-                      <UButton :label="t('重试')" color="neutral" variant="outline" size="sm" @click="open_inline_html(file)" />
-                    </template>
-                  </div>
-                </template>
-              </div>
-            </div>
-            <div v-else-if="card.attachments?.length" v-html="bridge.attachment_markup(card.attachments)"></div>
+            <div v-if="card.attachments?.length" v-html="bridge.attachment_markup(card.attachments)"></div>
             <AnswerFiles v-if="card.execution_started_at" :message="message" :room-id="current_room_id" :started-at="card.execution_started_at" :attachments="card.attachments || []" />
+            <AnswerSites :message="message" :room-id="current_room_id" :execution-id="message.execution_id || 0" />
             <LiveClock v-if="card.notes_count || card.steps" v-slot="{ note_map }"><ExecutionNotes :count="card.notes_count || 0" :steps="card.steps || 0" :notes="note_map.get(card.execution_id)" :load="() => load_notes(card.execution_id)" :preload="(near) => preload_notes(card.execution_id, near)" /></LiveClock>
             <div v-for="{ report, allowable, failed } in card.report_rows" :key="report.id" class="channel-execution-report" role="group" :aria-label="t('执行报告 #{value1}', { value1: report.id })">
               <div v-if="report.changes?.length || report.tallying" class="channel-answer-summary channel-execution-files">
@@ -3607,6 +3647,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 </template>
               </template>
             </div>
+            <!-- Inside its own card: between two cards it read as belonging to the next one. -->
+            <div v-if="card.locate" class="channel-locate"><UButton :label="t('在原文中定位')" icon="i-lucide-locate" size="xs" color="neutral" variant="link" @click="locate(message)" /></div>
           </template>
           <template #header><div class="channel-message-actions"><div class="channel-message-stack"><div class="channel-message-toolbar">
             <!-- Private chat joins the toolbar group at the end opposite "…": the bottom of the column with a mouse, the left end on touch screens. -->
@@ -3621,12 +3663,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </UChatMessage>
         </MemoBlock>
         </template>
+        <!-- Cards without a body of their own carry it right below, ahead of the scheduler's cards. -->
+        <div v-if="view_source_filter && !plain_card(message)" class="channel-locate is-outside"><UButton :label="t('在原文中定位')" icon="i-lucide-locate" size="xs" color="neutral" variant="link" @click="locate(message)" /></div>
         <!-- A decision stands between the card that ended the round and the next speaker. -->
         <ScheduleCard v-if="routing_messages.has(message.id) && !scheduler_decisions.get(message.id)?.length" icon="i-lucide-zap" skipped :label="t('智能调度分析中')" :expandable="false">
           <template #text><WorkingText :text="t('智能调度：正在分析')" :seed="t('智能调度')" dots /></template>
         </ScheduleCard>
         <SchedulerDecision v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" :decision="decision" :free="free" />
-        <div v-if="view_source_filter" class="channel-locate"><UButton :label="t('在原文中定位')" icon="i-lucide-locate" size="xs" color="neutral" variant="link" @click="locate(message)" /></div>
         </template>
         </template>
       </div>
@@ -3768,7 +3811,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                   <li v-for="(excerpt, index) in excerpts" :key="excerpt.id">
                     <span class="excerpt-number">{{ index + 1 }}.</span>
                     <div class="excerpt-item">
-                      <small>{{ t('选中文字 · {value1}', { value1: excerpt_source(excerpt) }) }}</small>
+                      <small>{{ excerpt.visual_key ? t('交互式可视化 · {value1}', { value1: excerpt_source(excerpt) }) : t('选中文字 · {value1}', { value1: excerpt_source(excerpt) }) }}</small>
                       <p class="excerpt-text">{{ excerpt.text }}</p>
                       <ExcerptEditCard v-if="editing_excerpt === excerpt.id" inline :removable="false" :comment="excerpt.comment"
                         @save="(comment) => { excerpt.comment = comment; editing_excerpt = 0; }" @cancel="editing_excerpt = 0" />

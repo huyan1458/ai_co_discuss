@@ -9,7 +9,7 @@ const SHARE = window.CODISCUSS_SHARE || null;
 let share_recording = null;
 // Where a reader of a share page learns about the product.
 const SHARE_HOME = "https://codiscuss.com";
-// The official share site that hosts published links (backend/share_worker.mjs); changing the domain changes only this.
+// The official share site that hosts published links (operator repository codiscuss_site/services/share/); changing the domain changes only this.
 const SHARE_SITE = "https://share.codiscuss.com";
 // What a published link carries and how long it lives (the site enforces the same).
 const SHARE_FORMAT = 1;
@@ -20,10 +20,12 @@ const SHARE_MAX_BYTES = 5 * 1024 * 1024;
 const SHARE_FILE_MAX_BYTES = 100 * 1024 * 1024;
 // A published link's attachments in all (user 2026-11-23): sent as files after the page, not inside its 5 MB of text.
 const SHARE_SITE_FILES_MAX_BYTES = 100 * 1024 * 1024;
+// HTML demos up to this size are read as a share page opens (warm_share_demos); larger ones wait to be seen.
+const SHARE_DEMO_WARM_BYTES = 2 * 1024 * 1024;
 // The attachments the share site takes, by extension, each sent as this one type: every kind the page previews, since
 // showing them is part of what a share is for (user 2026-11-22). Left out are kinds it cannot show and that could carry
 // a program or macros (executables, old-format doc/xls/ppt): anyone may publish, and these would be handed out from the
-// share site's own address. Zip archives go too, the preview listing them like a folder (user 2026-11-23). The share site checks the same list (SHARE_FILE_TYPES in backend/share_worker.mjs).
+// share site's own address. Zip archives go too, the preview listing them like a folder (user 2026-11-23). The share site checks the same list (SHARE_FILE_TYPES in codiscuss_site/services/share/worker.mjs).
 // Scripts a desktop runs on a double click go as text under a name ending in .txt (SHARE_SITE_AS_TEXT).
 const SHARE_SITE_FILE_TYPES = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", bmp: "image/bmp", svg: "image/svg+xml", ico: "image/x-icon",
@@ -78,18 +80,18 @@ const ARCHIVE_UNDO_MS = 4000;
 // After this long still cleaning, a destroy says where to follow it.
 const DESTROY_SLOW_MS = 20_000;
 // The destroy effect: how long the eroding edge takes to cross, how wide its soft band is (percent of the element), how
-// long a grain of dust lives, dust per square CSS pixel swept, the share of bare background that sheds, the share of
+// long a grain of dust lives, dust per square CSS pixel swept (the same everywhere), the share of
 // larger grains, the most grains at once, the mask tile and its cell size, and how many elements and text lines feed colours.
 const DUST_WAVE_MS = 1100;
 const DUST_BAND_PERCENT = 12;
 const DUST_LIFE_MS = 1100;
-const DUST_DENSITY = 0.02;
-const DUST_BACKGROUND_SHARE = 0.04;
+const DUST_DENSITY = 0.012;
 const DUST_BIG_SHARE = 0.15;
 const DUST_PARTICLE_LIMIT = 14000;
 const DUST_GRAIN_PX = 96;
-// How far each grain's colour is lifted toward white.
-const DUST_GLOW = 0.35;
+// The one tone all dust shares, and how much of the colour it came from tints it.
+const DUST_TONE = [196, 202, 214];
+const DUST_TINT = 0.2;
 const DUST_GRAIN_CELL = 3;
 const DUST_ELEMENT_LIMIT = 1500;
 const DUST_TEXT_LIMIT = 800;
@@ -983,9 +985,12 @@ async function dissolve_room_now(id) {
     state.rooms = state.rooms.filter(item => item.id !== id);
     // Like archiving the open room: the page goes to the new-room welcome, not into another room.
     if (state.room?.id === id) await open_welcome();
+    // The page has moved on: the room's previews may close now, while the last dust still drifts.
+    state.dissolving.delete(id);
     render_rooms();
     publish_view();
-    for (const target of targets) target.style.visibility = "";
+    // What took the room's place shows again; its row and previews stay hidden until they are gone.
+    for (const target of targets) if (!previews.includes(target) && target !== row) target.style.visibility = "";
   });
 }
 
@@ -1130,10 +1135,14 @@ async function dust_away(elements, on_eroded = () => {}) {
   const span = { left: Math.min(...items.map(item => item.rect.left)), right: Math.max(...items.map(item => item.rect.right)) };
   span.width = span.right - span.left;
   const band = span.width * DUST_BAND_PERCENT / 100;
+  // Three mask layers: the solid part the edge has not reached, plus grains cut to the soft band at the edge. So only the
+  // band breaks into grains; what lies ahead stays whole, whatever its colour.
+  const mask = (from, to) => `linear-gradient(90deg, transparent ${to}%, #000 ${to}%), url(${grain}), linear-gradient(90deg, transparent ${from}%, #000 ${to}%, transparent ${to}%)`;
   for (const { element } of items) {
-    Object.assign(element.style, { maskImage: `url(${grain}), linear-gradient(90deg, transparent 0%, #000 0%)`, maskSize: `${DUST_GRAIN_PX}px ${DUST_GRAIN_PX}px, 100% 100%`,
-      maskRepeat: "repeat, no-repeat", maskComposite: "intersect", webkitMaskImage: `url(${grain}), linear-gradient(90deg, transparent 0%, #000 0%)`,
-      webkitMaskSize: `${DUST_GRAIN_PX}px ${DUST_GRAIN_PX}px, 100% 100%`, webkitMaskRepeat: "repeat, no-repeat", webkitMaskComposite: "source-in" });
+    Object.assign(element.style, { maskImage: mask(-1, 0), maskSize: `100% 100%, ${DUST_GRAIN_PX}px ${DUST_GRAIN_PX}px, 100% 100%`,
+      maskRepeat: "no-repeat, repeat, no-repeat", maskComposite: "add, intersect, add", webkitMaskImage: mask(-1, 0),
+      webkitMaskSize: `100% 100%, ${DUST_GRAIN_PX}px ${DUST_GRAIN_PX}px, 100% 100%`, webkitMaskRepeat: "no-repeat, repeat, no-repeat",
+      webkitMaskComposite: "source-over, source-in, source-over" });
   }
   const particles = [];
   const start = performance.now();
@@ -1158,7 +1167,7 @@ async function dust_away(elements, on_eroded = () => {}) {
         const { element, rect } = item;
         // One edge sweeps across all the elements together, so the row, the conversation and the panels go as one piece.
         const to = (sweep - rect.left) / rect.width * 100, from = to - band / rect.width * 100;
-        element.style.maskImage = element.style.webkitMaskImage = `url(${grain}), linear-gradient(90deg, transparent ${from}%, #000 ${to}%)`;
+        element.style.maskImage = element.style.webkitMaskImage = mask(from, to);
         // Dust in proportion to the area just swept, so every element sheds it equally densely.
         const edge = Math.min(rect.right, Math.max(rect.left, sweep));
         const left = rect.left + rect.width * item.from, swept = Math.max(0, edge - left);
@@ -1166,11 +1175,9 @@ async function dust_away(elements, on_eroded = () => {}) {
         for (let count = Math.round(swept * rect.height * DUST_DENSITY); count > 0 && particles.length < DUST_PARTICLE_LIMIT; count--) {
           const x = left + Math.random() * swept, y = rect.top + Math.random() * rect.height;
           const at = ((Math.min(height - 1, Math.max(0, y | 0))) * width + Math.min(width - 1, Math.max(0, x | 0))) * 4;
-          // Bare background sheds less than text and cards, so the content is what visibly flies apart.
-          if (colours[at + 3] < 40 && Math.random() > DUST_BACKGROUND_SHARE) continue;
-          // Lifted toward white so the dust glows against the dark page instead of melting into it.
-          const lift = channel => Math.round(channel + (255 - channel) * DUST_GLOW);
-          const colour = colours[at + 3] < 40 ? "190,196,208" : `${lift(colours[at])},${lift(colours[at + 1])},${lift(colours[at + 2])}`;
+          // One dust tone everywhere, only tinted by what was there, so a white page and a dark card shed the same dust.
+          const tint = (channel, index) => Math.round(DUST_TONE[index] + (channel - DUST_TONE[index]) * DUST_TINT);
+          const colour = colours[at + 3] < 40 ? DUST_TONE.join(",") : [0, 1, 2].map(index => tint(colours[at + index], index)).join(",");
           const big = Math.random() < DUST_BIG_SHARE;
           particles.push({ x, y, colour, vx: 40 + Math.random() * 140, vy: -30 - Math.random() * 120, lift: 40 + Math.random() * 80,
             size: big ? 3 + Math.random() * 2.5 : 1.4 + Math.random() * 1.8, born: elapsed, life: DUST_LIFE_MS * (0.6 + Math.random() * 0.8),
@@ -1531,10 +1538,12 @@ function message_provenance(message) {
  * so reading one changes nothing a view depends on.
  */
 function rendered_on_read(shown, message) {
-  let text = null, summary = null;
+  let body = null, summary = null;
+  const read_body = () => body ??= render_message_body(message);
   return Object.defineProperties(shown, {
-    rendered_text: { enumerable: true, configurable: true, get: () => text ??= link_attachment_placeholders(render_room_markdown(message.text), message.attachments) },
-    rendered_summary: { enumerable: true, configurable: true, get: () => summary ??= render_room_markdown(message.summary || "") },
+    rendered_text: { enumerable: true, configurable: true, get: () => read_body().rendered_text },
+    visual_blocks: { enumerable: true, configurable: true, get: () => read_body().visual_blocks },
+    rendered_summary: { enumerable: true, configurable: true, get: () => summary ??= render_room_markdown(message.summary || "", { visual_label: t('交互式可视化') }) },
   });
 }
 
@@ -1551,7 +1560,7 @@ function render_messages(result) {
     const kind = withdrawn.get(message.id) || message.withdrawn || "";
     let shown;
     // A message shown straight from its send response is replaced by the copy the transcript reads.
-    if (saved && !saved.just_sent) shown = (saved.withdrawn || "") === kind ? saved : { ...saved, withdrawn: kind };
+    if (saved && !saved.just_sent && saved.text === message.text && saved.summary === message.summary) shown = (saved.withdrawn || "") === kind ? saved : { ...saved, withdrawn: kind };
     else shown = rendered_on_read({ ...message, withdrawn: kind }, message);
     rendered_messages.set(message, shown);
     return shown;
@@ -2018,8 +2027,17 @@ function mention_highlights() {
 }
 
 /** Render room text with the open room's mentions marked and `#123` message references clickable. */
-function render_room_markdown(text) {
-  return window.discuss_markdown.render_markdown(text, mention_highlights(), { message_refs: true });
+function render_room_markdown(text, options = {}) {
+  return window.discuss_markdown.render_markdown(text, mention_highlights(), { message_refs: true, ...options });
+}
+
+/** Render a member's visual fences as numbered slots, keeping raw HTML out of the parent document. */
+function render_message_body(message) {
+  const visual_blocks = [];
+  const visual_label = message.author !== "用户" && message.kind !== "receipt" || SHARE ? t('交互式可视化') : "";
+  const rendered_text = link_attachment_placeholders(render_room_markdown(message.text,
+    { visual_label, visual_blocks: SHARE ? undefined : visual_blocks }), message.attachments);
+  return { rendered_text, visual_blocks };
 }
 
 /**
@@ -3340,14 +3358,16 @@ function link_attachment_placeholders(html, files = []) {
   // in the message, which shows as every placeholder fitting a place while not every one fits a number.
   const numbers = [...html.matchAll(/\[(?:图片|文件) #(\d{1,4})\]/g)].map(([, number]) => Number(number));
   const by_number = numbers.every(number => files.some(file => file.number === number)) || !numbers.every(number => number <= files.length);
-  return html.replace(/\[(图片|文件) #(\d{1,4})\]/g, (match, kind, number) => {
-    const file = by_number ? files.find(item => item.number === Number(number)) : files[Number(number) - 1];
-    if (!file) return SHARE ? omitted(kind, number) : match;
+  // A member may name a file by the attachment ID its upload returned; it shows as the file's number.
+  return html.replace(/\[(图片|文件) #(\d{1,4}|[0-9a-f]{32})\]/g, (match, kind, reference) => {
+    const by_id = reference.length === 32;
+    const file = by_id ? files.find(item => item.id === reference) : by_number ? files.find(item => item.number === Number(reference)) : files[Number(reference) - 1];
+    const number = by_id ? file?.number ?? (files.indexOf(file) + 1) : reference;
+    if (!file) return SHARE && !by_id ? omitted(kind, number) : match;
     const previewable = file.content_type.startsWith("image/") || file.content_type === "application/pdf" || is_text_attachment(file);
     // The stored `[图片 #n]` / `[文件 #n]` is protocol text; only the shown label follows the page language.
     const label = escape_html(kind === "图片" ? t("[图片 #{number}]", { number }) : t("[文件 #{number}]", { number }));
-    const visual = kind === "文件" && /\.html$/i.test(file.file_name) ? " data-inline-visual" : "";
-    return previewable ? `<button type="button" class="attachment-placeholder"${visual} ${attachment_preview_attributes(file)} title="${escape_html(file.file_name)}">${label}</button>`
+    return previewable ? `<button type="button" class="attachment-placeholder" ${attachment_preview_attributes(file)} title="${escape_html(file.file_name)}">${label}</button>`
       : `<a class="attachment-placeholder" ${attachment_download_attributes(file)} download title="${escape_html(t("下载 {name}", { name: file.file_name }))}">${label}</a>`;
   });
 }
@@ -3898,7 +3918,8 @@ async function local_launch_request(action, payload) {
   try { result = JSON.parse(raw); }
   catch { throw new Error(t('本机服务返回了无法识别的内容（HTTP {status}）：{excerpt}', { status: response.status, excerpt: raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) })); }
   // `code` names a refusal the page acts on (e.g. a workflow changed since it was loaded); the text alone is for people.
-  if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('本机启动请求失败')), { launch: result.launch, code: result.code });
+  // `files` and `spots` list what a website deploy refused (runner/site_deploy.mjs).
+  if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('本机启动请求失败')), { launch: result.launch, code: result.code, files: result.files, spots: result.spots });
   return result;
 }
 
@@ -4443,7 +4464,10 @@ function queue_relay_file(read, urgent) {
 /** Read one file of the computer's rooms through the relay once, and keep it as an object URL for this page. */
 function relay_file_url(path, { urgent = false } = {}) {
   if (!relay_files.has(path)) {
-    relay_files.set(path, queue_relay_file(() => relay_room_bytes(path), urgent).then(blob => URL.createObjectURL(blob))
+    // A share page reads its files from the page or the share site, not through the relay: nothing to wait in line for,
+    // so an HTML demo is not held behind the room's images and recordings (user 2026-11-23: five seconds of white).
+    const read = SHARE ? relay_room_bytes(path) : queue_relay_file(() => relay_room_bytes(path), urgent);
+    relay_files.set(path, read.then(blob => URL.createObjectURL(blob))
       .catch(error => { relay_files.delete(path); throw error; }));
   }
   return relay_files.get(path);
@@ -5153,6 +5177,13 @@ function participant_model(name, room, saved, brief = false) {
   const effort = (app ? profile.actual_effort : profile.actual_effort || profile.effort || default_effort) || t('默认');
   const shown = model === t('默认') && effort === t('默认') ? t('默认') : `${model} · ${effort}`;
   if (brief || app || !profile.actual_model) return shown;
+  // A change not yet started with is named with when it applies, whether or not it can be told from what last ran.
+  if (profile.model_pending) {
+    const setting = `${profile.model || (profile.default_model ? t('软件默认 · {value1}', { value1: profile.default_model }) : t('软件默认模型'))} · ${profile.effort || default_effort || t('默认')}`;
+    return profile.model_pending === "window"
+      ? t('{shown}（设置为 {model}，它自己的窗口关闭后生效）', { shown, model: setting })
+      : t('{shown}（设置为 {model}，下次生效）', { shown, model: setting });
+  }
   if (profile.model) return profile.model !== profile.actual_model ? t('{shown}（设置为 {model}）', { shown, model: profile.model }) : shown;
   // Left to the software's default: only a default read as a model ID (by asking the software) can be told from what last ran.
   const follows = window.discuss_backup?.adapter_profile(profile.adapter)?.defaults_by_query && profile.default_model;
@@ -7123,7 +7154,7 @@ function view_snapshot() {
     recipient_previews: [...recipient_previews.values()].filter(item => item.room_id === state.room?.id),
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
-    destroying: [...state.destroying.keys()], destructions: state.destructions,
+    destroying: [...state.destroying.keys()], dissolving: [...state.dissolving], destructions: state.destructions,
     connected: state.connected, reconnecting: state.reconnecting, rooms_loading: state.rooms_loading, observed_until: state.observed_until, resuming: state.resuming, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url, placeholder: item.placeholder || "" })),
     upload_status: state.upload_status, sending_message: send_queue.some(job => job.room_id === state.room?.id), sending_previews, sending_preview: sending_previews[0] || null, queueing_previews: room_queueing_previews(), queue_reading: state.queue_reading, queue_taking: [...state.queue_taking],
@@ -7247,10 +7278,23 @@ function watch_room_files() {
 }
 
 /** Open the one room a share page carries, with no administrator, launcher, relay or live updates behind it. */
+/**
+ * On the share site every request takes a round trip to the site: start the ones an HTML demo needs (its file and the
+ * frame it runs in, both small) as the page opens, so the demo is ready when the reader scrolls to it.
+ */
+function warm_share_demos() {
+  if (!/^https?:$/.test(location.protocol)) return;
+  const demos = Object.entries(SHARE.files || {}).filter(([, file]) => file.content_type === "text/html" && file.bytes <= SHARE_DEMO_WARM_BYTES);
+  if (!demos.length) return;
+  fetch("/frame").catch(() => {});
+  for (const [route] of demos) relay_file_url(route).catch(() => {});
+}
+
 async function initialize_share() {
   render_identities();
   bind_delegated_actions();
   watch_room_files();
+  warm_share_demos();
   document.addEventListener("click", preview_clicked_attachment);
   Object.assign(state.admin, { loaded: true, local: false, devices: false, logged_in: false, registered: true });
   try {
@@ -7711,8 +7755,11 @@ function share_payload(raw, room_id, folders = [], { attachments = false } = {})
   // Longer folders first, so a project inside another one keeps its own relative paths.
   const patterns = [...known].sort((a, b) => b.length - a.length).map(share_folder_pattern).filter(Boolean);
   const strip = (value) => {
-    if (typeof value === "string") return SHARE_HOME_FOLDERS.reduce((text, pattern) => text.replace(pattern, () => "~"),
-      patterns.reduce((text, pattern) => text.replace(pattern, (match, separator) => separator ? "" : t('项目目录')), value));
+    if (typeof value === "string") {
+      const prose = value.includes("visual") ? window.discuss_markdown.collapse_visual_fences(value, t('交互式可视化')) : value;
+      return SHARE_HOME_FOLDERS.reduce((text, pattern) => text.replace(pattern, () => "~"),
+        patterns.reduce((text, pattern) => text.replace(pattern, (match, separator) => separator ? "" : t('项目目录')), prose));
+    }
     if (Array.isArray(value)) return value.map(strip);
     if (!value || typeof value !== "object") return value;
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, strip(item)]));

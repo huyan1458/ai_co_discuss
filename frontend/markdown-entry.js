@@ -1,2 +1,2 @@
 import "./markdown.css";
-export { render_markdown } from "./markdown.mjs";
+export { collapse_visual_fences, render_markdown } from "./markdown.mjs";

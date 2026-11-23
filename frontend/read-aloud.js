@@ -151,7 +151,10 @@ function collect_text(root) {
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const block = BLOCK_TAGS.has(node.tagName);
     if (block) separate();
-    if (!node.matches(SKIP_SELECTOR)) for (const child of node.childNodes) visit(child);
+    if (node.classList?.contains("channel-visual-slot")) {
+      // An active visual exposes only its localized placeholder to speech, never its toolbar or source mode.
+      if (node.firstElementChild) visit(node.firstElementChild);
+    } else if (!node.matches(SKIP_SELECTOR)) for (const child of node.childNodes) visit(child);
     if (block) separate();
   };
   visit(root);
@@ -571,7 +574,7 @@ export function use_read_aloud({ bridge, container, prepare = async () => {}, me
     const speaker = await voice_for(message.author);
     const summary = summary_of(id), body = body_of(id);
     let sentences = summary ? split_sentences(collect_text(summary)) : body ? split_sentences(collect_text(body)) : [];
-    const length = readable_length(message.text || "");
+    const length = sentences.reduce((count, sentence) => count + readable_length(sentence.text), 0);
     if (!summary && length > BRIEF_FULL_LENGTH) {
       const first = [];
       for (const sentence of sentences) {

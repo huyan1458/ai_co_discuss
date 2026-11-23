@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
-import { render_markdown } from "../frontend/markdown.mjs";
+import { collapse_visual_fences, render_markdown } from "../frontend/markdown.mjs";
 
 test("renders headings, emphasis, nested lists, quotes, tables, and line breaks", () => {
   const html = render_markdown("### 事实与假设\n\n**已知事实**与*假设*\n第二行\n\n- 第一项\n  - 子项\n\n1. 复核\n2. 收束\n\n> 引用原话\n\n| 项目 | 结果 |\n| --- | --- |\n| 检索 | 通过 |\n\n---");
@@ -68,4 +68,26 @@ test("browser bundle exports the same renderer without a Node runtime", () => {
   const context = vm.createContext({});
   vm.runInContext(readFileSync(new URL("../web/markdown.js", import.meta.url), "utf8"), context);
   assert.equal(context.discuss_markdown.render_markdown("**浏览器**"), render_markdown("**浏览器**"));
+});
+
+test("only a visual fence in a member answer becomes a slot; other code stays code", () => {
+  const text = ["前文", "", "```visual", "<script>run()</script>", "```", "", "```html", "<b>源码</b>", "```"].join("\n");
+  const blocks = [];
+  const html = render_markdown(text, [], { visual_label: "交互式可视化", visual_blocks: blocks });
+  assert.deepEqual(blocks, ["<script>run()</script>\n"]);
+  assert.match(html, /<div class="channel-visual-slot" data-visual-slot="0"><span class="channel-visual-caption">交互式可视化<\/span><\/div>/);
+  assert.ok(!html.includes("<script>run()"));
+  assert.ok(html.includes("&lt;b&gt;源码&lt;/b&gt;"));
+  // Without a label (a user's own message) the fence is ordinary code.
+  const plain = render_markdown(text);
+  assert.ok(plain.includes("&lt;script&gt;run()&lt;/script&gt;") && !plain.includes("channel-visual-slot"));
+  // A page that cannot run visuals (the share page) shows only the label.
+  assert.ok(!render_markdown(text, [], { visual_label: "交互式可视化" }).includes("data-visual-slot"));
+});
+
+test("collapsing visual fences keeps the prose and ordinary code", () => {
+  const code = ["```html", "<b>x</b>", "```"].join("\n");
+  const collapsed = collapse_visual_fences(["前文", "```visual", "<p>页面</p>", "```", code, "后文"].join("\n"), "交互式可视化");
+  assert.ok(collapsed.includes("交互式可视化") && !collapsed.includes("<p>页面</p>"));
+  assert.ok(collapsed.includes(code) && collapsed.startsWith("前文") && collapsed.endsWith("后文"));
 });

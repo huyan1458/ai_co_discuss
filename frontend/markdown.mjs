@@ -77,7 +77,25 @@ for (const cell of ["th", "td"]) {
 // Code blocks carry a copy button; the page copies the adjacent <pre> text through a delegated click on [data-copy-code].
 const render_fence = markdown.renderer.rules.fence;
 const COPY_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>';
-markdown.renderer.rules.fence = (...args) => `<div class="markdown-code"><button type="button" class="markdown-copy" data-copy-code title="复制代码" aria-label="复制代码">${COPY_ICON}</button>${render_fence(...args)}</div>\n`;
+const is_visual_fence = (token) => token.type === "fence" && token.info.trim() === "visual";
+const code_block = (html) => `<div class="markdown-code"><button type="button" class="markdown-copy" data-copy-code title="复制代码" aria-label="复制代码">${COPY_ICON}</button>${html}</div>\n`;
+markdown.renderer.rules.fence = (tokens, index, options, environment, renderer) => {
+  const token = tokens[index];
+  const { visual_label, visual_blocks } = environment || {};
+  if (!visual_label || !is_visual_fence(token)) return code_block(render_fence(tokens, index, options, environment, renderer));
+  const slot = visual_blocks ? ` data-visual-slot="${visual_blocks.push(token.content) - 1}"` : "";
+  return `<div class="channel-visual-slot"${slot}><span class="channel-visual-caption">${markdown.utils.escapeHtml(visual_label)}</span></div>\n`;
+};
+
+/** Keep the surrounding Markdown intact while replacing each visual with a short non-executable line. */
+export function collapse_visual_fences(text, label) {
+  if (!String(text || "").includes("visual")) return text;
+  const fences = markdown.parse(text, {}).filter(is_visual_fence);
+  if (!fences.length) return text;
+  const lines = text.split(/\r\n?|\n/);
+  for (const { map: [start, end] } of fences.reverse()) lines.splice(start, end - start, `\n${label}\n`);
+  return lines.join("\n");
+}
 
 /**
  * Render stored Markdown as safe HTML; the source text remains unchanged.
@@ -86,9 +104,9 @@ markdown.renderer.rules.fence = (...args) => `<div class="markdown-code"><button
  * With `source_lines`, block elements get `data-source-lines="first-last"` (a file preview quotes selections by line).
  * With `message_refs`, `#123` outside code and links becomes a button carrying `data-message-ref="123"`.
  */
-export function render_markdown(text, mentions = [], { source_lines = false, message_refs = false } = {}) {
+export function render_markdown(text, mentions = [], { source_lines = false, message_refs = false, visual_label = "", visual_blocks } = {}) {
   const handles = [...new Set(mentions.filter(Boolean))].sort((left, right) => right.length - left.length)
     .map(handle => markdown.utils.escapeHtml(handle).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const mention = handles.length ? new RegExp(`(^|[\\s(（，,。；;：:、])(@(?:${handles.join("|")}))(?![\\w-])`, "gu") : null;
-  return markdown.render(text, { mention, source_lines, message_refs });
+  return markdown.render(text, { mention, source_lines, message_refs, visual_label, visual_blocks });
 }

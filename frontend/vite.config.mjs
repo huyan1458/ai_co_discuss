@@ -7,6 +7,26 @@ import ui from "@nuxt/ui/vite";
 
 const VIDEOJS_ELEMENTS = new Set(["video-player", "video-skin", "audio-player", "audio-skin"]);
 
+// The changelog shown from the version number: each language's file, its item prefixes mapped to one set of kinds.
+const CHANGELOG_FILES = { en: "../CHANGELOG.md", "zh-CN": "../CHANGELOG.zh-CN.md" };
+const CHANGELOG_KINDS = { "新增": "new", "调整": "change", "修复": "fix", New: "new", Changed: "change", Fixed: "fix" };
+
+/** Read the versions of each changelog, newest first: `{ version, date, items: [{ kind, text }] }`. */
+function read_changelog() {
+  const result = {};
+  for (const [language, path] of Object.entries(CHANGELOG_FILES)) {
+    const versions = [];
+    for (const line of readFileSync(new URL(path, import.meta.url), "utf8").split(/\r?\n/)) {
+      const heading = line.match(/^## (\d+\.\d+\.\d+)\s*[（(]([^）)]*)[）)]/);
+      if (heading) { versions.push({ version: heading[1], date: heading[2], items: [] }); continue; }
+      const item = line.match(/^- ([^：:]+)[：:]\s*(.+)$/);
+      if (item && versions.length) versions.at(-1).items.push({ kind: CHANGELOG_KINDS[item[1].trim()] || "change", text: item[2].trim() });
+    }
+    result[language] = versions;
+  }
+  return result;
+}
+
 /**
  * Video.js loads its 50-odd interface languages lazily, and a single-file build inlines every one of them; the page
  * registers the Chinese pack itself (MediaViewer.vue), so the loader is left with none.
@@ -161,7 +181,8 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
 } : {
   // The npm package version, shown under the brand; the release script publishes the site and the package together.
   define: { "process.env.NODE_ENV": JSON.stringify("production"),
-    __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version) },
+    __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version),
+    __CHANGELOG__: JSON.stringify(read_changelog()) },
   // The Video.js players are custom elements, which Vue leaves to the browser.
   plugins: [join_page(), videojs_single_locale(), vue({ template: { compilerOptions: { isCustomElement: (tag) => VIDEOJS_ELEMENTS.has(tag) } } }), ui({
     colorMode: false,
