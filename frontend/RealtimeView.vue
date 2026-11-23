@@ -45,7 +45,16 @@ const x = (time) => ((time - model.value.start) / span.value - zoom.value.from) 
 const shown_span = computed(() => span.value * zoom.value.span);
 const ticks = computed(() => axis_ticks({ total_ms: span.value, busy_ms: span.value, x: (time) => (time - model.value.start) / span.value,
   spans: [{ start: model.value.start, end: model.value.end, from: 0, width: 1 }] }, TICK_COUNT, zoom.value)
-  .map((tick) => ({ ...tick, x: (tick.x - zoom.value.from) / zoom.value.span })));
+  .map((tick) => ({ ...tick, x: (tick.x - zoom.value.from) / zoom.value.span }))
+  // The last tick's label sits left of its line, so on a narrow chart it can run into the one before (#8454): then it goes.
+  .filter((tick, index, list) => {
+    if (tick.x <= TICK_END_SHARE || !index || !chart_width.value) return true;
+    const label = (item) => (tick_label(item).length * TICK_CHAR_PX + TICK_PAD_PX) / chart_width.value;
+    return list[index - 1].x + label(list[index - 1]) <= tick.x - label(tick);
+  }));
+// Rough width of a tick label: per character and its padding, in pixels.
+const TICK_CHAR_PX = 7;
+const TICK_PAD_PX = 8;
 const tick_label = (tick) => new Date(tick.at).toLocaleString(locale, { hour: "2-digit", minute: "2-digit", ...(tick.seconds ? { second: "2-digit" } : {}),
   ...(shown_span.value >= DATED_SPAN_MS ? { month: "numeric", day: "numeric" } : {}), hour12: false });
 const when = (ms) => new Date(ms).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
@@ -186,6 +195,8 @@ function play() {
 function pause() { playing.value = false; cancelAnimationFrame(frame); }
 function stop_replay() { pause(); position.value = null; }
 function scrub(event) { position.value = model.value.start + Number(event.target.value); }
+const zoom_level = computed(() => (1 / zoom.value.span).toFixed(1));
+const play_label = computed(() => playing.value ? t('暂停回放') : position.value == null ? t('回放') : t('继续回放'));
 const speed_label = (value) => value ? t('{value1}×', { value1: value }) : t('自动');
 // Another room starts over: whole view, no replay.
 watch(() => props.segments[0]?.key, () => { zoom.value = WHOLE; stop_replay(); });
@@ -197,12 +208,17 @@ onBeforeUnmount(pause);
     <div class="rt-bar">
       <p class="rt-summary"><span v-for="part in summary" :key="part.text" :class="{ 'is-lead': part.lead }" :title="part.title">{{ part.text }}</span></p>
       <span class="rt-tools">
-        <button type="button" class="rt-tool" :title="t('缩小')" :aria-label="t('缩小')" :disabled="!zoomed" @click="zoom_by(1 / BUTTON_ZOOM)">−</button>
-        <button type="button" class="rt-tool" :title="t('放大')" :aria-label="t('放大')" @click="zoom_by(BUTTON_ZOOM)">+</button>
-        <button v-if="zoomed" type="button" class="rt-tool is-text" @click="zoom = WHOLE">{{ t('还原 {value1}×', { value1: (1 / zoom.span).toFixed(1) }) }}</button>
-        <button type="button" class="rt-tool is-text" @click="playing ? pause() : play()">{{ playing ? t('暂停回放') : position == null ? t('回放') : t('继续回放') }}</button>
-        <button v-if="position != null && zoomed" type="button" class="rt-tool is-text" :class="{ 'is-active': follow }" :aria-pressed="follow" :title="t('放大时让画面跟着回放线走')" @click="follow = !follow">{{ t('跟随') }}</button>
-        <button v-if="position != null" type="button" class="rt-tool is-text" @click="stop_replay">{{ t('结束回放') }}</button>
+        <!-- Icon and words on a wide page, the icon alone on a phone (#8456); the words stay as the title and label. -->
+        <button type="button" class="rt-tool" :title="t('缩小')" :aria-label="t('缩小')" :disabled="!zoomed" @click="zoom_by(1 / BUTTON_ZOOM)"><UIcon name="i-lucide-zoom-out" /></button>
+        <button type="button" class="rt-tool" :title="t('放大')" :aria-label="t('放大')" @click="zoom_by(BUTTON_ZOOM)"><UIcon name="i-lucide-zoom-in" /></button>
+        <button v-if="zoomed" type="button" class="rt-tool is-text" :title="t('还原 {value1}×', { value1: zoom_level })" :aria-label="t('还原 {value1}×', { value1: zoom_level })" @click="zoom = WHOLE">
+          <UIcon name="i-lucide-locate-fixed" /><span class="rt-label">{{ t('还原 {value1}×', { value1: zoom_level }) }}</span><span class="rt-short">{{ zoom_level }}×</span></button>
+        <button type="button" class="rt-tool is-text" :title="play_label" :aria-label="play_label" @click="playing ? pause() : play()">
+          <UIcon :name="playing ? 'i-lucide-pause' : 'i-lucide-play'" /><span class="rt-label">{{ play_label }}</span></button>
+        <button v-if="position != null && zoomed" type="button" class="rt-tool is-text" :class="{ 'is-active': follow }" :aria-pressed="follow" :title="t('放大时让画面跟着回放线走')" :aria-label="t('跟随')" @click="follow = !follow">
+          <UIcon name="i-lucide-crosshair" /><span class="rt-label">{{ t('跟随') }}</span></button>
+        <button v-if="position != null" type="button" class="rt-tool is-text" :title="t('结束回放')" :aria-label="t('结束回放')" @click="stop_replay">
+          <UIcon name="i-lucide-square" /><span class="rt-label">{{ t('结束回放') }}</span></button>
       </span>
     </div>
     <div class="rt-plot" :class="{ 'is-zoomed': zoomed, 'is-dragging': drag }" @wheel="on_wheel" @dblclick="zoom = WHOLE"
@@ -244,13 +260,17 @@ onBeforeUnmount(pause);
 </template>
 
 <style scoped>
-.rt { padding: 12px 16px 14px; }
+.rt { padding: 12px 16px 14px; container-type: inline-size; }
+.rt-short { display: none; }
+/* A phone-wide view keeps the icons; the zoom keeps its number so the level still shows. */
+@container (max-width: 640px) { .rt-label { display: none; } .rt-short { display: inline; } }
 .rt-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-bottom: 10px; }
 .rt-summary, .rt-key { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; color: var(--wf-muted); font-size: 12px; }
 .rt-summary { color: var(--wf-muted); font-variant-numeric: tabular-nums; }
 .rt-summary .is-lead { color: var(--wf-text); font-weight: 600; }
-.rt-tools, .rt-speeds { display: inline-flex; align-items: center; gap: 4px; }
-.rt-tool { min-width: 24px; height: 22px; padding: 0 6px; border: 1px solid var(--wf-border); border-radius: 5px; background: transparent; color: var(--wf-text);
+/* On a narrow screen whole buttons wrap to the next line; their words never break (#8454). */
+.rt-tools, .rt-speeds { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.rt-tool { display: inline-flex; align-items: center; justify-content: center; gap: 4px; flex: none; white-space: nowrap; min-width: 24px; height: 22px; padding: 0 6px; border: 1px solid var(--wf-border); border-radius: 5px; background: transparent; color: var(--wf-text);
   font: inherit; font-size: 12px; cursor: pointer; font-variant-numeric: tabular-nums; }
 .rt-tool:hover:not(:disabled) { border-color: var(--wf-accent); }
 .rt-tool:disabled { opacity: 0.4; cursor: default; }

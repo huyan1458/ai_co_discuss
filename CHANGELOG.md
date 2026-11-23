@@ -2,6 +2,12 @@
 
 Versions match the npm package. Recorded from 0.5.0 on, listing only the changes you will notice. The Chinese version is `CHANGELOG.zh-CN.md`; on the website, click the version number at the top left to read it.
 
+## 0.5.17 (2026-11-23)
+
+- Fixed: On phones, the replay toolbar buttons and time marks crowded into each other.
+- Changed: When a phone or tablet asks for a folder the computer has not opened to it, it now says why and how to allow it on the computer.
+- Changed: A small arrow after the version number at the top left shows it opens the changelog.
+
 ## 0.5.16 (2026-11-23)
 
 - Fixed: "Deploy as website" always failed when a member published, and was refused on computers with sign-in protection.

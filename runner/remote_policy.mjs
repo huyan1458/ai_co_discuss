@@ -56,7 +56,8 @@ export function remote_roots(projects) {
  * service's own directory. Returns the real path.
  */
 export function remote_directory(path, { roots, home }) {
-  const refused = new Error(`电脑未允许其他设备使用这个目录：${typeof path === 'string' ? path : ''}。请在电脑上把它（或它的上级目录）加入常用项目`);
+  // Say why and exactly how to allow it: the device asking cannot change the list itself (Design_远程访问安全.md).
+  const refused = new Error(t('出于安全考虑，手机、平板等其他设备只能使用这台电脑“常用项目”里的目录，「{path}」不在其中，所以没有执行。请回到这台电脑上打开共议网页：在“新建房间”的项目目录里填入这个路径，点路径右侧的“加入常用项目”，之后其他设备就能直接选它；也可以加入它的上级目录。', { path: typeof path === 'string' ? path : '' }));
   if (!plain_absolute(path)) throw refused;
   let real;
   try { real = realpathSync(path); } catch { throw refused; }

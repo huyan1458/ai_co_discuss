@@ -484,7 +484,7 @@ export function browse_sessions(raw, { accept = null, list = software_sessions, 
   if (!adapter_of(input.adapter)) throw new Error(`适配器只能为 ${ADAPTER_IDS.join('/')}`);
   if (input.action === 'preview') {
     const result = preview(input.adapter, input.session_id);
-    if (accept && !accept(result.cwd)) throw new Error('电脑未允许其他设备查看这个目录里的会话；请在电脑上把该目录加入常用项目');
+    if (accept && !accept(result.cwd)) throw new Error(t('出于安全考虑，其他设备只能查看这台电脑“常用项目”目录里的会话，「{path}」不在其中。请回到这台电脑上打开共议网页，在“新建房间”的项目目录里填入这个路径并点“加入常用项目”，之后再试。', { path: result.cwd || '' }));
     return { adapter: input.adapter, ...result };
   }
   if (input.action !== undefined && input.action !== 'list') throw new Error('action 只能为 list 或 preview');
