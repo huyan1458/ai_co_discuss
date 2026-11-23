@@ -12,7 +12,7 @@ import { t, locale } from './i18n.js';
  * On a phone a clock axis over hours has no resolution left, so each top-level row and the executions under it share
  * an axis of their own and still step down as a waterfall.
  */
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import { FOLD_GAP_MS, PHASE_KINDS, add_user_turns, has_phase_detail, is_user_row, PHASE_LABELS, STATE_LABELS, WAIT_WARN_MS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between,
   pan_window, row_breakdown, row_status, snapshot_at, task_digest, timeline_axis, timeline_rows, timeline_segments, recent_window, task_overview, requested_at, view_axis, zoom_window } from "./timeline-model.js";
 import RealtimeView from "./RealtimeView.vue";
@@ -142,14 +142,24 @@ async function read_phases() {
 // Rows within this distance of the screen ask for their phases.
 const PHASE_MARGIN = "600px 0px";
 let phase_observer = null;
-/** Watch the shown rows; those coming near the screen ask for their phases. */
+/**
+ * Rows that have come near the screen draw their bars, gridlines and notes; the rest show only their names and times
+ * (#8227: showing all 680 executions made ~10000 bar elements at once). A row keeps its bars once drawn, so scrolling
+ * back and forth does not redraw them. Without IntersectionObserver every row is near.
+ */
+const near_rows = shallowRef(new Set());
+const observing = typeof IntersectionObserver !== "undefined";
+const is_near = (row) => !observing || near_rows.value.has(row.key);
+/** Watch the shown rows; those coming near the screen draw their bars and ask for their phases. */
 function observe_rows() {
   phase_observer?.disconnect();
-  if (!wf_element.value || typeof IntersectionObserver === "undefined") return;
+  if (!wf_element.value || !observing) return;
   phase_observer = new IntersectionObserver((entries) => {
-    want_phases(entries.filter((entry) => entry.isIntersecting).map((entry) => Number(entry.target.dataset.row.split(":")[1])).filter(Boolean));
+    const keys = entries.filter((entry) => entry.isIntersecting).map((entry) => entry.target.dataset.row);
+    if (keys.some((key) => !near_rows.value.has(key))) near_rows.value = new Set([...near_rows.value, ...keys]);
+    want_phases(keys.filter((key) => key.startsWith("free:")).map((key) => Number(key.split(":")[1])).filter(Boolean));
   }, { rootMargin: PHASE_MARGIN });
-  for (const node of wf_element.value.querySelectorAll(".wf-label[data-row^='free:']")) phase_observer.observe(node);
+  for (const node of wf_element.value.querySelectorAll(".wf-label[data-row]")) phase_observer.observe(node);
 }
 onBeforeUnmount(() => { phase_observer?.disconnect(); clearTimeout(phase_timer); });
 
@@ -223,7 +233,7 @@ watch(running, (live) => {
 }, { immediate: true });
 watch(room_id, () => {
   executions.value = new Map(); limits.value = null; earlier.value = false; collapsed.value = new Set(); note_texts.value = new Map(); opened.value = "";
-  phase_cache.clear(); phase_wanted = new Set();
+  phase_cache.clear(); phase_wanted = new Set(); near_rows.value = new Set();
   last_read = 0;
   error.value = "";
   reload = "";
@@ -338,7 +348,12 @@ const shown = computed(() => {
 const shown_runs = computed(() => shown.value?.executions.filter((item) => item.source !== "user").length || 0);
 const earlier_count = computed(() => timeline.value && !overview.value
   ? timeline.value.executions.length - shown_runs.value : 0);
-const when = (ms) => new Date(ms).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+// One formatter each: toLocaleString makes a new one per call, and every progress note's label called it on each redraw
+// (430 rows: ~0.5s of a scroll, #8227).
+const WHEN_FORMAT = new Intl.DateTimeFormat(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+const CLOCK_FORMAT = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+const SHORT_CLOCK_FORMAT = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
+const when = (ms) => WHEN_FORMAT.format(ms);
 const tasks = computed(() => view_mode.value === "tasks" ? task_overview(segments.value) : []);
 // Older executions are read a page at a time, so until the last page the first task may have begun before them.
 const truncated = computed(() => earlier.value);
@@ -751,6 +766,34 @@ function role_marks(row) {
 }
 const role_label = (row) => is_user_row(row) ? (row.item.aside ? t('用户 · 插话') : t('用户')) : row.item.role === "host" ? t('协作 · 主持') : t('协作');
 const status = (row) => row_status(row, status_time.value);
+/**
+ * Everything one row's markup reads (v-memo, #8227). The page is one render function: without this, pointing at a row,
+ * a phase batch arriving or one more page of executions redrew every row and every bar (127 rows: ~250ms per hover, 430
+ * rows: ~1s per page). A value missing here leaves the row stale, so anything the row template reads goes in.
+ */
+// The axis, its ticks, task heads and hand-off lines are made afresh whenever any execution changes (a batch of phases
+// arriving, one more page); compared as objects, every row was redrawn each time. Rows compare what they draw from them.
+const axis_memo = computed(() => {
+  const axis = shown_axis.value;
+  return [axis.start, axis.end, axis.total_ms, ...axis.spans.flatMap((span) => [span.start, span.end, span.from, span.width]),
+    ...axis.folds.flatMap((fold) => [fold.start, fold.from, fold.width]), ...shown_ticks.value.map((tick) => tick.at)].join();
+});
+const head_memo = (head) => [head.key, segment_start(head), head.opener.task, head.opener.result, head.interjections.length, head.opened].join("|");
+const line_memo = (list) => (list || []).map((line) => `${line.part}:${line.x}:${member_tone.value.get(line.member)}`).join();
+function avatar_memo(member) {
+  const identity = bridge.identities[member];
+  return [identity?.icon, identity?.initials, identity?.style];
+}
+function row_memo(row) {
+  const head = segment_heads.value.get(row.key);
+  // A row object is made afresh whenever any execution changes; what it shows comes from its execution (kept as the same
+  // object while unchanged), its place in the tree and its times, which move with the clock only while it runs.
+  return [row.item, row.depth, row.has_children, row.ancestors.length, row.start, row.end, row.truncated, head && head_memo(head), head && shown_interjections.value.has(head.key), head && partial(head), opened.value === row.key, collapsed.value.has(row.key),
+    entering.value.has(row.key), compact.value, interjected.value.has(row.key), digest.value.slowest?.row === row.key,
+    row.item.state === "running" ? status_time.value : 0, axis_memo.value, line_memo(lines.value.get(row.key)), now_x.value,
+    // An identity is made afresh on every read, so it is compared by what the avatar shows.
+    member_tone.value.get(row.item.member), ...avatar_memo(row.item.member), name(row.item.member), is_near(row)];
+}
 
 function row_label(row) {
   const { wait } = row_breakdown(row);
@@ -770,9 +813,9 @@ async function note_texts_for(row) {
   } catch { /* The card says the notes could not be read. */ }
 }
 
-const clock = (ms) => new Date(ms).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-const short_clock = (ms) => new Date(ms).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
-const tick_label = (tick) => new Date(tick.at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", ...(tick.seconds ? { second: "2-digit" } : {}), hour12: false });
+const clock = (ms) => CLOCK_FORMAT.format(ms);
+const short_clock = (ms) => SHORT_CLOCK_FORMAT.format(ms);
+const tick_label = (tick) => (tick.seconds ? CLOCK_FORMAT : SHORT_CLOCK_FORMAT).format(tick.at);
 
 const piece_id = (row, piece) => `${row.key}:${piece.note ? "note" : piece.label}:${piece.start}`;
 const work_piece = (row) => ({ label: is_user_row(row) ? (row.work[1] > row.work[0] ? t('阅读与思考') : t('发出消息')) : has_phase_detail(row) ? t('执行') : t('执行 · 无阶段明细'), start: row.work[0], end: row.work[1], live: row.item.state === "running" });
@@ -906,7 +949,7 @@ const selected_notes = computed(() => {
             <span v-if="now_x !== null" class="wf-cursor-head" :style="{ left: `${now_x * 100}%` }"></span>
           </div>
           <span v-if="!compact" class="wf-axis-end">{{ t('用时') }}</span>
-        <template v-for="row in rows" :key="row.key">
+        <div v-for="row in rows" :key="row.key" v-memo="row_memo(row)" class="wf-row-group">
         <div v-for="segment in (segment_heads.has(row.key) ? [segment_heads.get(row.key)] : [])" :key="segment.key" class="wf-segment">
           <span class="wf-segment-line"><time>{{ when(segment_start(segment)) }}</time><strong>{{ task_title(segment.opener.task) }}</strong>
             <button v-if="segment.interjections.length" type="button" class="wf-text-button" :aria-expanded="shown_interjections.has(segment.key)"
@@ -935,9 +978,10 @@ const selected_notes = computed(() => {
           </div>
           <div class="wf-lane" :role="compact ? 'button' : 'img'" :tabindex="compact ? 0 : undefined" :aria-label="row_label(row)"
             @click="compact && open_row(row, $event)" @keydown.enter="compact && open_row(row, $event)"><div class="wf-track">
+            <i class="wf-well"></i>
+            <template v-if="is_near(row)">
             <i v-for="tick in shown_ticks" :key="tick.at" class="wf-gridline" :style="{ left: `${tick.x * 100}%` }"></i>
             <i v-for="fold in shown_axis.folds" :key="fold.start" class="wf-fold" :style="{ left: `${fold.from * 100}%`, width: `${fold.width * 100}%` }"></i>
-            <i class="wf-well"></i>
             <i v-for="(line, index) in lines.get(row.key) || []" :key="`link-${index}`" class="wf-link" :class="`is-${line.part}`"
               :data-tone="member_tone.get(line.member)" :style="{ left: `${line.x * 100}%` }"></i>
             <i v-if="now_x !== null" class="wf-cursor" :style="{ left: `${now_x * 100}%` }"></i>
@@ -954,11 +998,12 @@ const selected_notes = computed(() => {
             <button v-for="note in row.notes" :key="`note-${note.index}`" type="button" class="wf-note" :style="{ left: `${span_of(row, note.at, note.at)[0] * 100}%` }"
               :aria-label="t('{value1} 的第 {value2} 段过程说明，{value3}', { value1: name(row.item.member), value2: note.index + 1, value3: clock(note.at) })"
               @click="open_row(row, $event, note_piece(note))" @mouseenter="hover_open(row, $event, note_piece(note))" @mouseleave="hover_leave"></button>
+            </template>
           </div></div>
           <span v-if="!compact" class="wf-end">{{ format_duration(row.end - row.start) }}<small v-if="row.item.state !== 'done'" :class="`is-${row.item.state}`">{{ STATE_LABELS[row.item.state] }}</small><small v-if="row.truncated">{{ t('明细已截断') }}</small></span>
           <span v-else-if="row.item.state === 'running' || row.item.state === 'failed'" class="wf-row-status wf-status" :class="`is-${status(row).tone}`">{{ status(row).text }}</span>
         </div>
-        </template>
+        </div>
       </div>
 
       <Transition name="wf-pop">
@@ -1177,7 +1222,7 @@ const selected_notes = computed(() => {
 .wf-axis-end { display: flex; align-items: center; justify-content: flex-end; height: 30px; padding-right: 16px; border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; }
 
 /* Rows: a tint on hover and while opened; off the critical path a row steps back, and comes forward when pointed at. */
-.wf-row { display: contents; }
+.wf-row, .wf-row-group { display: contents; }
 .wf-row > :not(.wf-detail) { min-height: var(--wf-row-h); background: var(--wf-tint, transparent); transition: background-color 120ms ease, opacity 120ms ease; }
 /* Rows off screen skip layout and paint: with every execution shown (600+ rows, each with its phase bars) the page took
    seconds to lay out and to scroll (#8102). Each cell keeps its own size, and hand-off lines are drawn row by row, so
@@ -1436,7 +1481,7 @@ const selected_notes = computed(() => {
 .wf.is-compact .wf-gridline { opacity: .6; }
 .wf.is-compact .wf-row > :not(.wf-detail) { min-height: 0; }
 .wf.is-compact .wf-label { padding: 6px 12px 0 calc(12px + var(--depth) * var(--wf-depth-px)); border-top: 1px solid var(--wf-border); border-right: 0; }
-.wf.is-compact .wf-row:first-of-type .wf-label { border-top: 0; }
+.wf.is-compact .wf-grid > .wf-row:first-of-type .wf-label { border-top: 0; }
 .wf.is-compact .wf-guides { left: 14px; }
 .wf.is-compact .wf-names { padding: 0; }
 .wf.is-compact .wf-clock { flex: none; color: var(--wf-muted); font-family: var(--wf-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
