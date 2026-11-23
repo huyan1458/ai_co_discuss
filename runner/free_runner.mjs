@@ -922,9 +922,13 @@ export class FreeRoomRunner {
       this.routing.add(request.id);
       const decision = this.mark_routing(request.message_id, true)
         .then(() => this.recommend(request, room, everyone))
-        .catch(error => {
-          if (!this.saved_suggestion(request.id)) this.save_suggestion(request, { action: 'host', actual_action: 'host',
-            applied: false, model_judgment: false, reason: room_text("没有模型判断：{value1}", { value1: error.message }) });
+        .catch(async error => {
+          if (!this.saved_suggestion(request.id)) {
+            const reason = room_text("没有模型判断：{value1}", { value1: error.message.slice(0, 180) });
+            const record = await this.record_decision(request.message_id, {}, reason, false, { model_judgment: false });
+            this.save_suggestion(request, { action: 'host', actual_action: 'host', applied: false,
+              model_judgment: false, ...(record?.id ? { decision_id: record.id } : {}), reason });
+          }
           this.log(`智能调度 #${request.message_id} 未给出推荐：${error.message}`);
         })
         .finally(() => { this.routing.delete(request.id); return this.mark_routing(request.message_id, false); });

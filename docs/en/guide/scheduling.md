@@ -14,6 +14,7 @@ Connect a lightweight decision model to handle routine assignment and turn hando
   - Write long answers, judge whether code or a proposal is correct, change member order, or choose a different reviewer.
   - Reroute @all or @all in turn. Those always use their specified parallel or ordered behavior.
   - Make a low-confidence decision or proceed after oversized input or an API error. These cases go back to the host.
+    While a message without a mention awaits a decision, the transcript shows that smart scheduling is analyzing it. If the model call fails, the message shows “No model judgment” and the reason, and the host takes over.
 
 ## Providers, API keys, and pricing
 

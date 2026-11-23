@@ -72,15 +72,22 @@ const RESUME_LOADING_MAX_MS = 15000;
 const TOAST_DURATION_MS = 3500;
 // How long an archived room can be taken back before the archive is saved.
 const ARCHIVE_UNDO_MS = 4000;
-// The destroy effect: the wave across the element, each particle's random start and fade,
-// the grain size in CSS pixels, about how many grains it keeps at most, and how many elements and text lines it draws at most.
 // After this long still cleaning, a destroy says where to follow it.
 const DESTROY_SLOW_MS = 20_000;
-const DUST_WAVE_MS = 650;
-const DUST_JITTER_MS = 120;
-const DUST_FADE_MS = 900;
-const DUST_STEP = 2;
-const DUST_PARTICLE_LIMIT = 40000;
+// The destroy effect: how long the eroding edge takes to cross, how wide its soft band is (percent of the element), how
+// long a grain of dust lives, dust per square CSS pixel swept, the share of bare background that sheds, the share of
+// larger grains, the most grains at once, the mask tile and its cell size, and how many elements and text lines feed colours.
+const DUST_WAVE_MS = 1100;
+const DUST_BAND_PERCENT = 12;
+const DUST_LIFE_MS = 1100;
+const DUST_DENSITY = 0.02;
+const DUST_BACKGROUND_SHARE = 0.04;
+const DUST_BIG_SHARE = 0.15;
+const DUST_PARTICLE_LIMIT = 14000;
+const DUST_GRAIN_PX = 96;
+// How far each grain's colour is lifted toward white.
+const DUST_GLOW = 0.35;
+const DUST_GRAIN_CELL = 3;
 const DUST_ELEMENT_LIMIT = 1500;
 const DUST_TEXT_LIMIT = 800;
 const HOUR_MS = 3_600_000;
@@ -354,6 +361,8 @@ state.import_progress = null;
 state.directory_pending = new Map();
 // Rooms whose destruction this page started: listed, dimmed, until their receipt is complete; and the website's receipts.
 state.destroying = new Map();
+// Rooms whose destroy effect is playing right now.
+state.dissolving = new Set();
 state.destructions = [];
 // Rooms already warned in this page that they destroy themselves within a day.
 state.expiry_warned = new Set();
@@ -952,18 +961,29 @@ async function delete_channel(id) {
 
 /** Play the destroy effect on the room's row, and on the middle pane when it is open, then take it off the page. */
 async function dissolve_room(id) {
+  state.dissolving.add(id);
+  try { await dissolve_room_now(id); } finally { state.dissolving.delete(id); }
+}
+
+/** The effect itself and leaving the room; dissolve_room keeps a receipt from taking the room away meanwhile. */
+async function dissolve_room_now(id) {
   // Wait one frame so the confirmation has begun to close; the effect draws the page itself, not what covers it.
   await new Promise(resolve => requestAnimationFrame(resolve));
   const row = document.querySelector(`[data-drag-room="${CSS.escape(id)}"]`);
   // A preview of the room's files (docked, floating, or folded into its capsule) dissolves too, then closes with the room.
   const previews = [...document.querySelectorAll(`[data-preview-room="${CSS.escape(id)}"]`)];
-  const targets = [row, state.room?.id === id ? document.querySelector(".channel-main") : null, ...previews].filter(Boolean);
-  await Promise.all(targets.map(dust_away));
-  state.rooms = state.rooms.filter(item => item.id !== id);
-  if (state.room?.id === id) await select_room(visible_rooms()[0]?.id);
-  for (const target of targets) target.style.visibility = "";
-  render_rooms();
-  publish_view();
+  // An open room goes as one: its conversation and its right-hand progress panel dissolve together.
+  const open = state.room?.id === id;
+  const targets = [row, open ? document.querySelector(".channel-main") : null, open ? document.querySelector(".channel-member-rail") : null, ...previews].filter(Boolean);
+  // The page moves on the moment the room has eroded away, so the last dust drifts over what comes next.
+  await dust_away(targets, async () => {
+    state.rooms = state.rooms.filter(item => item.id !== id);
+    // Like archiving the open room: the page goes to the new-room welcome, not into another room.
+    if (state.room?.id === id) await open_welcome();
+    render_rooms();
+    publish_view();
+    for (const target of targets) target.style.visibility = "";
+  });
 }
 
 /** Set how many days without a message a room may stay before it destroys itself; 0 keeps it. */
@@ -1030,7 +1050,8 @@ async function retry_destruction(id) {
 function settle_destructions() {
   for (const [id, { room }] of state.destroying) {
     const record = state.destructions.find(item => item.room_id === id);
-    if (record?.status !== "done") continue;
+    // A receipt that arrives while the room is still dissolving waits for it, so nothing switches away mid-effect.
+    if (record?.status !== "done" || state.dissolving.has(id)) continue;
     state.destroying.delete(id);
     announce_receipt(room, record);
   }
@@ -1076,61 +1097,121 @@ function warn_expiring_rooms() {
 }
 
 /**
- * Dissolve an element into particles drifting away from left to right. Its visible boxes and text are drawn onto a
- * canvas laid over it, the element is hidden (the caller shows it again once it is replaced), and the particles fade.
- * Resolves at once when motion is off or nothing is visible.
+ * Dissolve elements into drifting dust, left to right. The page itself erodes under a moving grain mask, so whatever it
+ * shows (text, images, a document preview) breaks up as it is; dust rises from the eroding edge, coloured from what
+ * was there, at one density for every element. Once the edge has crossed, each element is hidden and `on_eroded` runs
+ * (the caller replaces the elements there) while the dust finishes drifting. With motion off or nothing visible,
+ * `on_eroded` runs at once. Resolves when the dust has settled.
  */
-function dust_away(element) {
-  const rect = element?.getBoundingClientRect();
-  if (!rect?.width || !rect.height || document.documentElement.dataset.motion === "off" || document.hidden) return Promise.resolve();
-  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+async function dust_away(elements, on_eroded = () => {}) {
+  const items = elements.map(element => ({ element, rect: element.getBoundingClientRect(), from: 0 })).filter(item => item.rect.width && item.rect.height);
+  if (!items.length || document.documentElement.dataset.motion === "off" || document.hidden) return on_eroded();
+  const width = window.innerWidth, height = window.innerHeight, ratio = Math.min(window.devicePixelRatio || 1, 2);
+  // Where each colour was, read from the page drawn once; the dust takes the colour of the spot it leaves.
+  const source = document.createElement("canvas");
+  source.width = width;
+  source.height = height;
+  const painter = source.getContext("2d", { willReadFrequently: true });
+  const view = { left: 0, top: 0, right: width, bottom: height, width, height };
+  for (const { element } of items) paint_element(painter, element, view);
+  const colours = painter.getImageData(0, 0, width, height).data;
   const canvas = document.createElement("canvas");
-  canvas.width = Math.ceil(rect.width * ratio);
-  canvas.height = Math.ceil(rect.height * ratio);
-  Object.assign(canvas.style, { position: "fixed", left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`,
-    height: `${rect.height}px`, pointerEvents: "none", zIndex: "60" });
-  const context = canvas.getContext("2d", { willReadFrequently: true });
+  canvas.width = Math.ceil(width * ratio);
+  canvas.height = Math.ceil(height * ratio);
+  Object.assign(canvas.style, { position: "fixed", inset: "0", width: `${width}px`, height: `${height}px`, pointerEvents: "none", zIndex: "60" });
+  const context = canvas.getContext("2d");
   context.scale(ratio, ratio);
-  paint_element(context, element, rect);
-  const image = context.getImageData(0, 0, canvas.width, canvas.height).data;
-  const step = Math.max(1, Math.round(DUST_STEP * ratio));
-  let particles = [];
-  for (let y = 0; y < canvas.height; y += step) for (let x = 0; x < canvas.width; x += step) {
-    const at = (y * canvas.width + x) * 4;
-    if (image[at + 3] < 40) continue;
-    particles.push({ x: x / ratio, y: y / ratio, color: `rgba(${image[at]},${image[at + 1]},${image[at + 2]},`,
-      delay: (x / canvas.width) * DUST_WAVE_MS + Math.random() * DUST_JITTER_MS,
-      dx: 20 + Math.random() * 60, dy: -30 - Math.random() * 60, phase: Math.random() * 6.28 });
-  }
-  // Fine grains, thinned at random so even a whole conversation stays near DUST_PARTICLE_LIMIT particles.
-  if (particles.length > DUST_PARTICLE_LIMIT) particles = particles.filter(() => Math.random() < DUST_PARTICLE_LIMIT / particles.length);
   document.body.append(canvas);
-  element.style.visibility = "hidden";
-  const size = step / ratio, start = performance.now(), total = DUST_WAVE_MS + DUST_JITTER_MS + DUST_FADE_MS;
+  const grain = dust_grain();
+  // The span every element lies in, which the one edge crosses, and the soft band behind that edge in CSS pixels.
+  const span = { left: Math.min(...items.map(item => item.rect.left)), right: Math.max(...items.map(item => item.rect.right)) };
+  span.width = span.right - span.left;
+  const band = span.width * DUST_BAND_PERCENT / 100;
+  for (const { element } of items) {
+    Object.assign(element.style, { maskImage: `url(${grain}), linear-gradient(90deg, transparent 0%, #000 0%)`, maskSize: `${DUST_GRAIN_PX}px ${DUST_GRAIN_PX}px, 100% 100%`,
+      maskRepeat: "repeat, no-repeat", maskComposite: "intersect", webkitMaskImage: `url(${grain}), linear-gradient(90deg, transparent 0%, #000 0%)`,
+      webkitMaskSize: `${DUST_GRAIN_PX}px ${DUST_GRAIN_PX}px, 100% 100%`, webkitMaskRepeat: "repeat, no-repeat", webkitMaskComposite: "source-in" });
+  }
+  const particles = [];
+  const start = performance.now();
+  let last = start, eroded = null;
+  // The elements leave together, once the edge has crossed them all; the dust keeps drifting over what replaces them.
+  const erode = () => {
+    for (const { element } of items) {
+      element.style.visibility = "hidden";
+      for (const name of ["maskImage", "maskSize", "maskRepeat", "maskComposite", "webkitMaskImage", "webkitMaskSize", "webkitMaskRepeat", "webkitMaskComposite"]) element.style[name] = "";
+    }
+    return Promise.resolve(on_eroded()).catch(error => notify("error", error.message));
+  };
   return new Promise(resolve => {
     const frame = now => {
-      const elapsed = now - start;
-      context.clearRect(0, 0, rect.width, rect.height);
-      for (const particle of particles) {
-        const progress = Math.max(0, elapsed - particle.delay) / DUST_FADE_MS;
-        if (progress >= 1) continue;
-        const ease = progress * progress;
-        context.fillStyle = `${particle.color}${(1 - progress).toFixed(3)})`;
-        context.fillRect(particle.x + particle.dx * ease + Math.sin(particle.phase + progress * 6) * 4 * progress, particle.y + particle.dy * ease, size, size);
+      const elapsed = now - start, seconds = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      // The edge eases in and out; a soft band behind it keeps a few grains before they go.
+      const wave = Math.min(1, elapsed / DUST_WAVE_MS), front = wave < 0.5 ? 2 * wave * wave : 1 - (-2 * wave + 2) ** 2 / 2;
+      const sweep = span.left + front * (span.width + band);
+      // Once eroded, the elements hold what replaced them: the mask and the shedding stop, the dust drifts on.
+      for (const item of eroded ? [] : items) {
+        const { element, rect } = item;
+        // One edge sweeps across all the elements together, so the row, the conversation and the panels go as one piece.
+        const to = (sweep - rect.left) / rect.width * 100, from = to - band / rect.width * 100;
+        element.style.maskImage = element.style.webkitMaskImage = `url(${grain}), linear-gradient(90deg, transparent ${from}%, #000 ${to}%)`;
+        // Dust in proportion to the area just swept, so every element sheds it equally densely.
+        const edge = Math.min(rect.right, Math.max(rect.left, sweep));
+        const left = rect.left + rect.width * item.from, swept = Math.max(0, edge - left);
+        item.from = Math.min(1, (edge - rect.left) / rect.width);
+        for (let count = Math.round(swept * rect.height * DUST_DENSITY); count > 0 && particles.length < DUST_PARTICLE_LIMIT; count--) {
+          const x = left + Math.random() * swept, y = rect.top + Math.random() * rect.height;
+          const at = ((Math.min(height - 1, Math.max(0, y | 0))) * width + Math.min(width - 1, Math.max(0, x | 0))) * 4;
+          // Bare background sheds less than text and cards, so the content is what visibly flies apart.
+          if (colours[at + 3] < 40 && Math.random() > DUST_BACKGROUND_SHARE) continue;
+          // Lifted toward white so the dust glows against the dark page instead of melting into it.
+          const lift = channel => Math.round(channel + (255 - channel) * DUST_GLOW);
+          const colour = colours[at + 3] < 40 ? "190,196,208" : `${lift(colours[at])},${lift(colours[at + 1])},${lift(colours[at + 2])}`;
+          const big = Math.random() < DUST_BIG_SHARE;
+          particles.push({ x, y, colour, vx: 40 + Math.random() * 140, vy: -30 - Math.random() * 120, lift: 40 + Math.random() * 80,
+            size: big ? 3 + Math.random() * 2.5 : 1.4 + Math.random() * 1.8, born: elapsed, life: DUST_LIFE_MS * (0.6 + Math.random() * 0.8),
+            wobble: Math.random() * 6.28 });
+        }
       }
+      context.clearRect(0, 0, width, height);
+      for (let index = particles.length - 1; index >= 0; index--) {
+        const particle = particles[index], age = (elapsed - particle.born) / particle.life;
+        if (age >= 1) { particles.splice(index, 1); continue; }
+        particle.vy -= particle.lift * seconds;
+        particle.x += (particle.vx + Math.sin(particle.wobble + age * 8) * 30) * seconds;
+        particle.y += particle.vy * seconds;
+        context.fillStyle = `rgba(${particle.colour},${((1 - age) ** 1.4).toFixed(3)})`;
+        context.fillRect(particle.x, particle.y, particle.size, particle.size);
+      }
+      if (wave >= 1 && !eroded) eroded = erode();
       // A page sent to the background ends the effect at once rather than stalling what follows.
-      if (elapsed < total && !document.hidden) requestAnimationFrame(frame);
-      else { canvas.remove(); resolve(); }
+      if ((wave < 1 || particles.length) && !document.hidden) return requestAnimationFrame(frame);
+      canvas.remove();
+      (eroded || erode()).then(resolve);
     };
     requestAnimationFrame(frame);
   });
+}
+
+/** A tile of random grains (as a data URL) whose transparency the eroding edge thresholds into dust. */
+function dust_grain() {
+  if (dust_grain.url) return dust_grain.url;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = DUST_GRAIN_PX;
+  const context = canvas.getContext("2d");
+  for (let y = 0; y < DUST_GRAIN_PX; y += DUST_GRAIN_CELL) for (let x = 0; x < DUST_GRAIN_PX; x += DUST_GRAIN_CELL) {
+    context.fillStyle = `rgba(0,0,0,${Math.random().toFixed(2)})`;
+    context.fillRect(x, y, DUST_GRAIN_CELL, DUST_GRAIN_CELL);
+  }
+  return (dust_grain.url = canvas.toDataURL());
 }
 
 /** Draw an element's visible backgrounds and text runs onto a canvas placed at `origin`, as the destroy effect's source. */
 function paint_element(context, element, origin) {
   const visible = box => box.width && box.height && box.bottom > origin.top && box.top < origin.bottom && box.right > origin.left && box.left < origin.right;
   const opaque = color => color && color !== "transparent" && !/,\s*0\)$/.test(color);
-  for (const node of [element, ...element.querySelectorAll("*")].slice(0, DUST_ELEMENT_LIMIT)) {
+  for (const node of [...element.querySelectorAll("*")].slice(0, DUST_ELEMENT_LIMIT)) {
     const box = node.getBoundingClientRect();
     if (!visible(box)) continue;
     const style = getComputedStyle(node);
@@ -1674,7 +1755,8 @@ async function refresh_room({ room: read_room = true } = {}) {
   render_rooms();
   publish_view();
   if (directory.last_room !== undefined && !state.room) state.last_room = directory.last_room;
-  if (state.room && !state.rooms.some((item) => item.id === state.room.id)) return select_room(visible_rooms()[0]?.id);
+  // A room being destroyed leaves on its own once it has dissolved; a refresh meanwhile does not switch away under it.
+  if (state.room && !state.rooms.some((item) => item.id === state.room.id) && !state.destroying.has(state.room.id)) return select_room(visible_rooms()[0]?.id);
   if (!state.room || !read_room) {
     if (!state.room && !state.welcome && visible_rooms().length) return select_room(opening_room());
     render_rooms();
@@ -2489,6 +2571,10 @@ async function finish_message(result, job) {
     url: `/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(item.uploaded)}/content` }));
   const sent_message = { ...result.message, text: job.payload.text || "", attachments, reply_to: job.payload.reply_to ?? result.message.reply_to ?? null,
     ...(job.payload.attachment_start ? { attachment_start: job.payload.attachment_start } : {}), source: "user", just_sent: true };
+  // The card draws `rendered_text`, which only render_messages prepares; a receipt shown before the transcript read
+  // needs it too, or the card shows its header with an empty body.
+  sent_message.rendered_text = link_attachment_placeholders(render_room_markdown(sent_message.text), attachments);
+  sent_message.rendered_summary = render_room_markdown(sent_message.summary || "");
   const members = predicted_recipients(job.payload, state.room, state.launch?.room_models);
   if (members.length) {
     job.saved_message = sent_message;
@@ -7476,6 +7562,9 @@ async function share_delivered_files(responses, room_id, folders) {
       for (const named of share_named_paths(message.text)) {
         const relative = named.replaceAll("\\", "/").replace(/^\.\//, "");
         if (/^([a-z]:)?\//i.test(relative) || relative.split("/").includes("..")) continue;
+        // An answer attaching a file of the same name shows only the attachment, as in the room (user 2026-11-22).
+        const name = relative.split("/").at(-1).toLowerCase();
+        if ((message.attachments || []).some(file => String(file.file_name).toLowerCase() === name)) continue;
         for (let root = 0; root < roots; root++) {
           const result = await read_room_files(room_id, relative, 0, "", root).catch(() => null);
           if (result?.kind !== "file" || Date.parse(result.modified_at) < started.get(message.execution_id) * 1000) continue;

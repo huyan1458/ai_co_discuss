@@ -2,11 +2,12 @@
 /**
  * The files an answer delivers, as cards under its text that open in the file preview. A file counts when the answer
  * names it (inline code or a link) and it changed on the computer after the answer's execution began, so a file made by
- * a script or in a folder outside Git shows too, and a file the answer only mentions does not.
+ * a script or in a folder outside Git shows too, and a file the answer only mentions does not. A file also attached to
+ * the answer under the same name shows only as the attachment (user 2026-11-22): the attachment is the delivered copy.
  */
 import { computed, inject, onBeforeUnmount, onMounted, ref } from "vue";
 import { t } from "./i18n.js";
-import { file_preview, file_size, file_type } from "./file-preview.js";
+import { file_preview } from "./file-preview.js";
 
 // What counts as a deliverable: documents, tables, slides, pages and media, not source code.
 const DELIVERABLE = /\.(docx?|xlsx?|ods|csv|tsv|pptx?|pdf|md|txt|html?|png|jpe?g|gif|webp|svg|mp3|wav|m4a|mp4|webm|mov|srt|vtt)$/i;
@@ -23,6 +24,8 @@ const props = defineProps({
   roomId: { type: String, required: true },
   /** When the answer's execution began, in seconds. */
   startedAt: { type: Number, required: true },
+  /** The answer's attachments; a file of the same name is not shown again. */
+  attachments: { type: Array, default: () => [] },
 });
 const { view, bridge } = inject("discussion");
 
@@ -32,6 +35,10 @@ const directories = computed(() => {
 });
 const cache_key = computed(() => `${props.roomId}\n${props.message.id}`);
 const files = ref(found_files.get(cache_key.value) || []);
+const shown_files = computed(() => {
+  const attached = new Set(props.attachments.map((file) => String(file.file_name).toLowerCase()));
+  return files.value.filter((file) => !attached.has(file.name.toLowerCase()));
+});
 const anchor = ref(null);
 let observer = null;
 
@@ -89,33 +96,29 @@ onBeforeUnmount(() => observer?.disconnect());
 
 <template>
   <div ref="anchor" class="answer-files">
-    <button v-for="file in files" :key="`${file.root}/${file.path}`" type="button" class="answer-file" :title="file.path" :aria-label="t('打开文件 {value1}', { value1: file.name })" @click="open_file(file)">
-      <span class="answer-file-icon" :class="file_type(file.name)[2]"><UIcon :name="file_type(file.name)[1]" /></span>
-      <span class="answer-file-text">
-        <span class="answer-file-name">{{ file.name }}</span>
-        <span class="answer-file-meta">{{ file_type(file.name)[0] }} · {{ file_size(file.size) }}</span>
-      </span>
-      <UIcon name="i-lucide-arrow-up-right" class="answer-file-open" />
-    </button>
+    <div v-for="file in shown_files" :key="`${file.root}/${file.path}`" class="attachment-file answer-file">
+      <button type="button" class="attachment-file-main" :title="file.path" :aria-label="t('打开文件 {value1}', { value1: file.name })" @click="open_file(file)">
+        <span class="answer-file-icon" v-html="bridge.attachment_file_icon(file.name)"></span>
+        <span class="attachment-name">
+          <span>{{ file.name }}</span>
+          <small>{{ t('项目文件 · {path}', { path: file.path }) }}</small>
+        </span>
+      </button>
+      <button type="button" class="attachment-download" :title="t('在文件预览中打开 {value1}', { value1: file.path })" :aria-label="t('打开文件 {value1}', { value1: file.name })" @click="open_file(file)">
+        <UIcon name="i-lucide-arrow-up-right" />
+      </button>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.answer-files { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; max-width: 680px; }
-.answer-files:not(:empty) { margin-top: 12px; }
-.answer-file { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 7px 10px 7px 7px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 60%, transparent); text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
-.answer-file:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-elevated); }
-.answer-file:focus-visible { outline: 2px solid var(--ui-primary); outline-offset: 1px; }
-.answer-file-icon { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 7px; background: color-mix(in srgb, currentColor 12%, transparent); font-size: 17px; color: var(--ui-text-muted); }
-.answer-file-icon.is-blue { color: #519aba; }
-.answer-file-icon.is-orange { color: #e37933; }
-.answer-file-icon.is-yellow { color: #cbcb41; }
-.answer-file-icon.is-green { color: #8dc149; }
-.answer-file-icon.is-purple { color: #a074c4; }
-.answer-file-icon.is-red { color: #cc3e44; }
-.answer-file-text { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }
-.answer-file-name { overflow: hidden; color: var(--ui-text-highlighted); font-size: 12.5px; font-weight: 500; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
-.answer-file-meta { color: var(--ui-text-dimmed); font-size: 11px; line-height: 15px; }
-.answer-file-open { flex-shrink: 0; width: 15px; height: 15px; color: var(--ui-text-dimmed); transition: color .15s, transform .15s; }
-.answer-file:hover .answer-file-open { color: var(--ui-text-highlighted); transform: translate(1px, -1px); }
+/* The attachment card's layout (markdown.css `.attachment-file`), drawn lighter: an attachment is a copy kept with the
+   message, this is a link to a file in the project, so no fill, a fainter border and the project path (user 2026-11-22). */
+.answer-files { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; max-width: 100%; }
+.answer-files:not(:empty) { margin-top: 10px; }
+.answer-file-icon { display: contents; }
+.answer-file { background: transparent; border-color: color-mix(in srgb, currentColor 14%, transparent); }
+.answer-file:hover { background: color-mix(in srgb, currentColor 4%, transparent); }
+.answer-file .attachment-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.answer-file .attachment-download { font-size: 18px; }
 </style>

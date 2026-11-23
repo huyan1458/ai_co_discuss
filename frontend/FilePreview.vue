@@ -511,39 +511,41 @@ const modal_content = {
   onEscapeKeyDown: (event) => { if (docked.value) event.preventDefault(); },
 };
 
-const float_place = ref({ left: 0, top: FLOAT_FALLBACK_TOP });
+const float_place = ref({ left: 0, right: 0, top: FLOAT_FALLBACK_TOP });
 const motion_disabled = () => document.documentElement.dataset.motion === "off";
 let pull = null, folding = false;
 
-// The floating button can be dragged anywhere (mouse or finger) and sticks to the nearer side when let go: the content
-// column's left edge or the screen's right edge. A press that moves less than this stays a tap.
+// The floating button can be dragged anywhere (mouse or finger) and sticks to the nearer side of the content column when
+// let go: its left edge or its right edge (the right rail's left edge, user 2026-11-22). A press that moves less than this stays a tap.
 const FLOAT_HEIGHT = 40;
 const FLOAT_WIDTH = 44;
 const FLOAT_DRAG_MIN = 6;
 const float_side = ref("right");
 // While dragged, the button follows the pointer at `{ left, top }`.
 const float_drag_place = ref(null);
-let float_top = null, float_drag = null, float_dragged = false;
+let float_top = null, float_drag = null, float_dragged = false, content_observer = null;
 
 /** Keep a dragged floating button fully on screen. */
 function clamp_float_top(top) {
   return Math.min(Math.max(top, 0), Math.max(0, window.innerHeight - FLOAT_HEIGHT));
 }
 
-/** Put the floating button on its side (left: the content column's edge), at the top or where it was dragged to. */
+/** Put the floating button on its side of the content column, at the top or where it was dragged to. */
 function place_float() {
   const content = document.querySelector(".channel-content")?.getBoundingClientRect();
+  const right = document.querySelector(".channel-main")?.getBoundingClientRect().right ?? window.innerWidth;
   // Measured with the page unscrolled: a phone's keyboard (open while commenting) scrolls the page up, and a top taken
   // then would leave the button above the screen once the keyboard closes.
-  float_place.value = content ? { left: content.left, top: clamp_float_top(content.top + window.scrollY + FLOAT_GAP) } : { left: 0, top: FLOAT_FALLBACK_TOP };
-  if (float_side.value === "right") float_place.value.left = window.innerWidth - FLOAT_WIDTH;
+  float_place.value = content ? { left: content.left, right, top: clamp_float_top(content.top + window.scrollY + FLOAT_GAP) }
+    : { left: 0, right, top: FLOAT_FALLBACK_TOP };
+  if (float_side.value === "right") float_place.value.left = float_place.value.right - FLOAT_WIDTH;
   if (float_top !== null) float_place.value.top = clamp_float_top(float_top);
 }
 
 const float_style = computed(() => {
   if (float_drag_place.value) return { left: `${float_drag_place.value.left}px`, top: `${float_drag_place.value.top}px` };
   const top = `${float_place.value.top}px`;
-  return float_side.value === "right" ? { right: "0px", top } : { left: `${float_place.value.left}px`, top };
+  return float_side.value === "right" ? { right: `${window.innerWidth - float_place.value.right}px`, top } : { left: `${float_place.value.left}px`, top };
 });
 
 /** Start following a press on the floating button; the pointer is captured only once it becomes a drag, so a tap still clicks. */
@@ -571,7 +573,8 @@ function float_release() {
   float_dragged = Boolean(float_drag?.moved);
   if (float_dragged && float_drag_place.value) {
     const { left, top } = float_drag_place.value;
-    float_side.value = left + float_drag.width / 2 < window.innerWidth / 2 ? "left" : "right";
+    const middle = (document.querySelector(".channel-content")?.getBoundingClientRect().left ?? 0) / 2 + float_place.value.right / 2;
+    float_side.value = left + float_drag.width / 2 < middle ? "left" : "right";
     float_top = top;
     place_float();
   }
@@ -1031,6 +1034,9 @@ onMounted(() => {
   measure_dock();
   window.addEventListener("resize", measure_dock);
   window.addEventListener("resize", place_float);
+  // The right rail opening, closing or being resized moves the middle column's right edge without resizing the window.
+  const main = document.querySelector(".channel-main");
+  if (main) { content_observer = new ResizeObserver(() => place_float()); content_observer.observe(main); }
   narrow_query.addEventListener("change", track_narrow);
   window.addEventListener("resize", place_file_marks);
   document.addEventListener("selectionchange", schedule_offer);
@@ -1047,6 +1053,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", measure_dock);
   publish_dock(0);
   window.removeEventListener("resize", place_float);
+  content_observer?.disconnect();
   narrow_query.removeEventListener("change", track_narrow);
   head_watcher.disconnect();
   window.removeEventListener("resize", place_file_marks);

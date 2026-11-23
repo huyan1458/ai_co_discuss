@@ -89,10 +89,10 @@ async function send_now(item) {
   try { await act("queue_send", item.id); } finally { sending.value = null; }
 }
 
-/** The send-now button says what it will do (user 2026-11-23): send, interject into a busy recipient's turn, or interrupt it first. */
+/** The send-now button, one icon (user 2026-11-23, #7960): its tooltip and accessible name say what it will do (send, interject into a busy recipient's turn, or interrupt it first). */
 function send_action(item) {
   if (item.failure) return { label: t('重试'), tip: t('再次尝试发送这条排队消息'), icon: "i-lucide-rotate-ccw" };
-  if (item.send_mode === "steer") return { label: t('插话'), tip: t('接收者正在执行：把这条插进它这一轮，不中断已做的工作'), icon: "i-lucide-message-square-plus" };
+  if (item.send_mode === "steer") return { label: t('插话'), tip: t('接收者正在执行：把这条插进它这一轮，不中断已做的工作'), icon: "i-lucide-corner-down-right" };
   if (item.send_mode === "interrupt") return { label: t('打断并发送'), tip: t('接收者正在执行且不支持插话：先打断它这一轮，再连同这条一起处理'), icon: "i-lucide-corner-down-right" };
   if (item.send_mode === "wait") return { label: t('立即发送'), tip: t('接收者正在执行，既不能插话也不能打断，这条会继续排队'), icon: "i-lucide-corner-down-right" };
   return { label: t('立即发送'), tip: t('立即发出'), icon: "i-lucide-corner-down-right" };
@@ -234,7 +234,7 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
         <span v-else-if="sending === item.id || item.failure" class="queued-sending-status">{{ sending === item.id ? t('投递中') : t('失败') }}</span>
         <span class="queued-actions">
           <UTooltip v-for="action in [send_action(item)]" :key="action.label" :text="action.tip" :ui="{ content: 'queued-tooltip' }">
-            <UButton :label="action.label" :aria-label="action.label" :icon="action.icon" size="xs" color="neutral" variant="ghost" class="queued-action queued-send-now"
+            <UButton :aria-label="action.label" :icon="action.icon" size="xs" color="neutral" variant="ghost" class="queued-action queued-send-now"
               :disabled="!!pending || sending !== null" @click.stop="send_now(item)" />
           </UTooltip>
           <UButton icon="i-lucide-trash-2" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('删除排队消息')" :disabled="sending === item.id || !!pending" @click.stop="act('queue_delete', item.id)" />

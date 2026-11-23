@@ -305,6 +305,9 @@ function attachment_fixture() {
     } });
   vm.runInContext(source.slice(source.indexOf("function message_payload("), source.indexOf("/** Render immutable file cards")), context);
   vm.runInContext(source.slice(source.indexOf("async function post_room_file("), source.indexOf("/** Read the bytes of a room file")), context);
+  // Markdown rendering lives in markdown.js; a stand-in keeps receipts drawable here.
+  context.render_room_markdown = text => text ? `<p>${text}</p>` : "";
+  context.link_attachment_placeholders = html => html;
   return { context, state, element, posts, uploads, revoked, notified, succeed() { fail = false; }, drop(times) { fail = times; } };
 }
 
@@ -452,6 +455,7 @@ test("a concurrent push lets the receipt read replace the member card before rea
   assert.equal(context.receipt_messages()[0].id, message.id);
   // The receipt has no text (only text_chars); the card that replaces the sending card keeps what was sent.
   assert.equal(context.receipt_messages()[0].text, "@Codex 请处理");
+  assert.equal(context.receipt_messages()[0].rendered_text, "<p>@Codex 请处理</p>", "the card draws rendered_text, so the receipt carries it too");
   assert.deepEqual(Array.from(cards(), card => [card.author, card.text]), [["Codex", "等待开始…"]]);
   room_read.resolve({ ...state.room, free: { members: [member], requests: [
     { id: 12, status: "pending", purpose: "ask", message_id: message.id, member_id: member.id }

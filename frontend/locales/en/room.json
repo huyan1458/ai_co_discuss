@@ -810,6 +810,8 @@
   "其他改动 {count} 个文件": "{count} other changed files",
   "这次执行运行过命令，这些文件在执行期间有变化，但无法确认是它改的，也可能来自其他窗口或成员。": "This run used commands and these files changed meanwhile, but it can't be confirmed that it changed them. They may come from another window or member.",
   "打开文件 {value1}": "Open file {value1}",
+  "项目文件 · {path}": "Project file · {path}",
+  "在文件预览中打开 {value1}": "Open {value1} in the file preview",
   "调整文件预览宽度": "Resize file preview",
   "拖动调整文件预览宽度，也可使用左右方向键": "Drag to resize the file preview, or use the left and right arrow keys",
   "二进制文件": "Binary file",

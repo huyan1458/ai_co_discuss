@@ -245,8 +245,9 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-conversation .channel-composer-column { pointer-events: none; }
 .channel-conversation .channel-composer-column > * { pointer-events: auto; }
 .channel-body-discussion :is(.channel-filter-summary, .channel-message-map) { margin-top: var(--channel-topbar-height, 0px); }
-/* A filter summary already sits below the bar, so the transcript under it needs no extra offset. */
-.channel-body-discussion .channel-conversation:has(.channel-filter-summary) .channel-transcript { --channel-topbar-height: 0px; }
+/* A filter summary already sits below the bar, so the transcript under it needs no extra offset. `is-filtered` shows the
+   summary (ChannelDiscussion): a `:has(.channel-filter-summary)` here restyled the whole transcript on every DOM change. */
+.channel-body-discussion .channel-conversation.is-filtered .channel-transcript { --channel-topbar-height: 0px; }
 .channel-host-brief { position: relative; flex-shrink: 0; padding: 6px 20px; }
 .channel-brief-inner { width: 100%; }
 .channel-brief-heading { display: flex; align-items: center; gap: 12px; min-height: 28px; font-size: 12px; color: var(--ui-text-muted); }
@@ -423,8 +424,10 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .progress-drawer .progress-board > .pb-status { margin-top: 8px; }
 .progress-drawer .pb-status-detail { margin-top: 2px; }
 .progress-drawer .pb-section h4 { margin-bottom: 2px; }
-/* An open drawer turns off pointer events on the page; the floating file button shown above it keeps working. */
-body:has(.progress-drawer) .file-float { pointer-events: auto; }
+/* An open drawer turns off pointer events on the page; the floating file button shown above it keeps working. The class is
+   set by ChannelWorkspace: never `body:has(...)` (or `:has` on any other large ancestor) with a descendant subject, which
+   makes every DOM change restyle the whole page. */
+body.progress-drawer-open .file-float { pointer-events: auto; }
 @media (max-width: 700px) {
   .progress-drawer { max-width: 310px; }
 }

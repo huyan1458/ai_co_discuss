@@ -396,6 +396,11 @@ function close_drawer_on_touch(event) {
 function keep_drawer_for_file_float(event) {
   if (event.detail.originalEvent.target?.closest?.(".file-float")) event.preventDefault();
 }
+// Marks the open drawer for channel.css, which lets the floating file button take pointer events through it. A
+// `body:has(.progress-drawer)` rule did this before, but it restyled the whole page on every DOM change (~170ms per change
+// in a 600-card room).
+watch(info_open, (open) => document.body.classList.toggle("progress-drawer-open", open), { immediate: true });
+onBeforeUnmount(() => document.body.classList.remove("progress-drawer-open"));
 
 /** Capture the divider so dragging continues outside its narrow hit area. */
 function start_rail_resize(event) {

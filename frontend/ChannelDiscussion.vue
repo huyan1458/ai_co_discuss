@@ -570,6 +570,13 @@ const stable_computed = (getter) => computed((previous) => {
   return previous !== undefined && same_value(previous, next) ? previous : next;
 });
 const can_manage = computed(() => Boolean(view.value.access?.can_manage));
+// Read inside the cards' slots instead of `view.*` and `room.*`: a slot's reads belong to the child component that renders
+// it (UChatMessage, a tooltip), so reading the snapshot there redrew every card on each publish, data changed or not. A
+// computed re-reads each snapshot but tells its readers only when its value changes.
+const is_share = computed(() => Boolean(view.value.share));
+const view_query = computed(() => view.value.query);
+const view_source_filter = computed(() => view.value.source_filter);
+const current_room_id = computed(() => room.value?.id);
 // Every view snapshot rebuilds these lists, empty ones included; the transcript's v-memo keys on them, so keep the old
 // reference while their content is the same.
 const sending_previews = stable_computed(() => view.value.sending_previews);
@@ -677,7 +684,10 @@ const free_queued = computed(() => {
   const requests = room.value.free?.requests || [];
   const cards = requests.filter((request) => request.status === "pending" && !request.execution_id
     && QUEUED_PURPOSES.has(request.purpose) && !request.discussion_session_id
-    && members.get(request.member_id)?.status === "active" && !members.get(request.member_id).adopt_error)
+    && members.get(request.member_id)?.status === "active" && !members.get(request.member_id).adopt_error
+    // While smart scheduling is still judging an unnamed message the host is not woken yet (user 2026-11-23, #7974):
+    // only the "analysing" card shows, and the host's card appears once the judgment says it takes the message.
+    && !(request.purpose === "route" && routing_messages.value.has(request.message_id) && !scheduler_decisions.value.get(request.message_id)?.length))
     .sort((left, right) => left.id - right.id)
     .map((request) => {
       const member = members.get(request.member_id);
@@ -1065,7 +1075,7 @@ const scheduler_decisions = stable_computed(() => {
   const rows = new Map();
   for (const item of all_decisions.value) {
     // A skip asked the model nothing (no confidence, nothing applied, no question), so there is no decision to show.
-    if (item.confidence === null && !item.applied && !item.detail?.length) continue;
+    if (item.confidence === null && !item.applied && !item.detail?.length && item.texts?.label?.template !== "没有模型判断：{value1}") continue;
     rows.set(item.after_message_id, [...(rows.get(item.after_message_id) || []),
       { ...item, provider_label: SCHEDULER_LABELS[item.provider] || item.provider, duration: format_ms(item.detail?.[0]?.duration_ms),
         title: `${SCHEDULER_LABELS[item.provider] || item.provider}${item.confidence === null ? "" : t('，置信度 {value1}', { value1: Number(item.confidence).toFixed(2) })}` }]);
@@ -1073,7 +1083,13 @@ const scheduler_decisions = stable_computed(() => {
   return rows;
 });
 /** Messages the local service is still analysing; the card gives way once the decision is recorded. */
-const routing_messages = stable_computed(() => new Set([...(room.value.scheduler_routing || []), ...pending_routing.value]));
+const routing_messages = stable_computed(() => {
+  const messages = new Set([...(room.value.scheduler_routing || []), ...pending_routing.value]);
+  for (const request of room.value.free?.requests || []) {
+    if (request.purpose === "route" && request.status !== "pending") messages.delete(request.message_id);
+  }
+  return messages;
+});
 // A message the room's scheduler will judge shows its "analysing" card the moment it is sent, under the sending card and
 // then under the saved one, instead of once the local service has picked it up; the decision then takes its place, and a
 // card nothing answers within ROUTING_PREVIEW_MS folds away. A queued message shows it once it is really sent.
@@ -3241,7 +3257,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 
 <template>
   <!-- One root element: the workspace hides this tab with v-show, which a fragment root would ignore. -->
-  <section class="channel-conversation" role="tabpanel" :aria-label="t('消息')">
+  <section class="channel-conversation" :class="{ 'is-filtered': view.query || view.source_filter }" role="tabpanel" :aria-label="t('消息')">
   <ExternalMemberDialog v-model:open="pending_seat_open" :member="pending_seat" />
     <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? t('正在筛选…') : t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
     <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
@@ -3284,12 +3300,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :removable="!mark_editing.touch" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? docked_sheet_style() : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
     <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, message_groups,view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
-      <div v-if="!view.query && !view.source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
+      <div v-if="!view_query && !view_source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
         <template v-for="message in group.messages" :key="(message.queued || message.working) && message.request_message_id ? `work-${message.request_message_id}-${message.member_id}` : message.id">
-        <DiscussionEndCard v-if="message.id === end_anchor && !view.query && !view.source_filter" />
-        <TopicCard v-if="message.id === topic_anchor && !view.query && !view.source_filter" :ref="(card) => topic_card = card" @edit="emit('edit')" />
+        <DiscussionEndCard v-if="message.id === end_anchor && !view_query && !view_source_filter" />
+        <TopicCard v-if="message.id === topic_anchor && !view_query && !view_source_filter" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <!-- A free-room working card holds the slot its answer will take. -->
         <ScheduleCard v-if="message.arrangement" icon="i-lucide-list-ordered" plain :title="t('主持人创建的发言安排')" :label="t('主持人安排')" :toggle-label="t('展开或收起各专家的任务')">
           <template #text>{{ t('主持人安排：{value1}', { value1: host_arrangements.get(message.arrangement.after_message_id)?.find((plan) => plan.id === message.arrangement.id)?.label }) }}<small v-if="message.arrangement.after_message_id">{{ t('耗时 {value1}', { value1: format_elapsed(arrangement_seconds(message.arrangement, view.messages.find((item) => item.id === message.arrangement.after_message_id))) }) }}</small></template>
@@ -3326,7 +3342,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <div class="channel-message-text channel-stop-reason" role="status"><span>{{ message.cancelled_turn ? t('本次发言已被跳过或取消，未回答。') : stop_reason_text(message.cancelled_execution.result) || t('本次执行已作废，未回答。') }}</span></div>
             <template v-if="run && stop_state(run).note">
               <p class="channel-message-text channel-stop-note">{{ stop_state(run).note }}</p>
-              <details v-if="run.late_answer && view.access?.can_manage" class="channel-receipt" @toggle="load_late_answer(run.id, $event)">
+              <details v-if="run.late_answer && can_manage" class="channel-receipt" @toggle="load_late_answer(run.id, $event)">
                 <summary :aria-label="t('查看 {value1} 未采纳的回答', { value1: bridge.display_name(run.member) })">{{ t('未采纳的回答') }}</summary>
                 <div class="channel-message-text channel-late-answer">{{ late_answers.get(run.id)?.text ?? t('正在读取…') }}</div>
               </details>
@@ -3347,11 +3363,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               </div>
               <div class="channel-message-provenance channel-message-facts"><time v-if="message.created_at" :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time><LiveClock v-slot="{ now }"><span class="channel-message-elapsed">{{ working_elapsed(message, now) }}</span></LiveClock></div>
             </div>
-            <UTooltip v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" :text="t('私聊：查看它正在做什么')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="t('私聊 {value1}：查看本次执行过程', { value1: bridge.display_name(message.author) })" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
+            <UTooltip v-if="can_manage && shows_progress(message) && message.execution_id" :text="t('私聊：查看它正在做什么')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="t('私聊 {value1}：查看本次执行过程', { value1: bridge.display_name(message.author) })" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
           </div>
           <!-- Private chat, as on the answered card: in the hover column outside the strip with a mouse; on touch screens the
                head-row key above takes the right end. The stop key sits at the status line's right end on every screen. -->
-          <template v-if="view.access?.can_manage && shows_progress(message) && message.execution_id">
+          <template v-if="can_manage && shows_progress(message) && message.execution_id">
             <div class="channel-message-actions"><div class="channel-message-stack"><div class="channel-message-toolbar channel-message-corner">
               <UTooltip :text="t('私聊：查看它正在做什么')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key" size="xs" variant="ghost" color="neutral" :aria-label="t('私聊 {value1}：查看本次执行过程', { value1: bridge.display_name(message.author) })" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
             </div></div></div>
@@ -3364,7 +3380,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </span>
             <!-- Phone only: the time used moves here from the head, so both sides of the strip are two lines (user 2026-11-22, #6945). -->
             <span class="channel-message-provenance channel-working-elapsed">{{ working_elapsed(message, now) }}</span></LiveClock>
-            <span v-if="view.access?.can_manage && !message.queued" class="channel-working-actions">
+            <span v-if="can_manage && !message.queued" class="channel-working-actions">
                 <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
                 <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
                   <UTooltip :text="t('暂停讨论')"><UButton icon="i-lucide-pause" size="xs" variant="ghost" color="neutral" :aria-label="t('暂停讨论，停止 {value1} 本次发言', { value1: bridge.display_name(message.author) })" :disabled="!!pending" :loading="pending === 'pause_discussion'" @click="act('pause_discussion')" /></UTooltip>
@@ -3407,7 +3423,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <p class="channel-message-text channel-failure-reason is-warning">{{ message.retry.reason }}</p>
               <div class="channel-failure-actions">
                 <LiveClock v-slot="{ now }"><span class="channel-message-provenance">{{ t('{value1}（第 {value2}/{value3} 次）', { value1: message.retry.retry_at > now ? t('{value1} 秒后自动重试', { value1: message.retry.retry_at - now }) : t('正在重试'), value2: message.retry.attempt, value3: MAX_DELIVERY_RETRIES }) }}</span></LiveClock>
-                <template v-if="view.access?.can_manage">
+                <template v-if="can_manage">
                   <UButton :label="t('立即重试')" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="t('立即重新投递给 {value1}', { value1: bridge.display_name(message.author) })" :disabled="!!pending"
                     @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_now' })" />
                   <UButton :label="t('停止')" icon="i-lucide-circle-stop" size="sm" variant="soft" color="error" :aria-label="t('停止自动重试 {value1} 的投递', { value1: bridge.display_name(message.author) })" :disabled="!!pending"
@@ -3524,13 +3540,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               </div>
             </div>
             <div v-else-if="card.attachments?.length" v-html="bridge.attachment_markup(card.attachments)"></div>
-            <AnswerFiles v-if="card.execution_started_at" :message="message" :room-id="room.id" :started-at="card.execution_started_at" />
+            <AnswerFiles v-if="card.execution_started_at" :message="message" :room-id="current_room_id" :started-at="card.execution_started_at" :attachments="card.attachments || []" />
             <LiveClock v-if="card.notes_count || card.steps" v-slot="{ note_map }"><ExecutionNotes :count="card.notes_count || 0" :steps="card.steps || 0" :notes="note_map.get(card.execution_id)" :load="() => load_notes(card.execution_id)" :preload="(near) => preload_notes(card.execution_id, near)" /></LiveClock>
             <div v-for="{ report, allowable, failed } in card.report_rows" :key="report.id" class="channel-execution-report" role="group" :aria-label="t('执行报告 #{value1}', { value1: report.id })">
               <div v-if="report.changes?.length || report.tallying" class="channel-answer-summary channel-execution-files">
                 <small>{{ t('文件改动') }}</small>
                 <div class="channel-message-text">
-                  <ExecutionChanges v-if="report.changes?.length" :report="report" :room-id="room.id" />
+                  <ExecutionChanges v-if="report.changes?.length" :report="report" :room-id="current_room_id" />
                   <p v-else class="channel-execution-tallying" role="status"><UIcon name="i-lucide-loader" class="animate-spin" />{{ t('正在统计文件改动…') }}</p>
                 </div>
               </div>
@@ -3564,10 +3580,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #header><div class="channel-message-actions"><div class="channel-message-stack"><div class="channel-message-toolbar">
             <!-- Private chat joins the toolbar group at the end opposite "…": the bottom of the column with a mouse, the left end on touch screens. -->
             <component v-if="card.private_chat" :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" :text="t('私聊：查看这次执行的过程')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key" size="xs" color="neutral" variant="ghost" :aria-label="t('查看 #{value1} 的执行过程', { value1: message.id })" @click="open_private_chat(act, message.author, card.execution_id)" /></component>
-            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.private_chat && !card.can_take_back && !view.share" :text="t('回复')"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="t('回复 #{value1}', { value1: message.id })" @click="reply_to(message)" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.private_chat && !card.can_take_back && !is_share" :text="t('回复')"><UButton icon="i-lucide-corner-up-left" size="xs" color="neutral" variant="ghost" :aria-label="t('回复 #{value1}', { value1: message.id })" @click="reply_to(message)" /></component>
             <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_retract && !card.editing" :text="t('撤回')"><UButton icon="i-lucide-undo-2" size="xs" color="neutral" variant="ghost" :aria-label="t('撤回 #{value1}', { value1: message.id })" @click="retract(message.id)" :loading="card.retracting" /></component>
             <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="card.can_take_back && !card.editing" :text="t('编辑')"><UButton icon="i-lucide-pencil" size="xs" color="neutral" variant="ghost" :aria-label="t('编辑 #{value1}，回退到它之前重新发送', { value1: message.id })" @click="start_edit(message)" /></component>
-            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.narrow && !view.share && message.kind !== 'receipt' && !card.editing" :text="card.reading ? t('停止朗读') : t('朗读')"><UButton :icon="card.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="card.reading ? t('停止朗读') : t('从 #{value1} 开始朗读', { value1: message.id })" @click="card.reading ? reader.stop() : reader.start(message.id)" /></component>
+            <component :is="card.armed ? UTooltip : BareSlot" disable-hoverable-content :ui="KEY_TIP_UI" v-if="!card.narrow && !is_share && message.kind !== 'receipt' && !card.editing" :text="card.reading ? t('停止朗读') : t('朗读')"><UButton :icon="card.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" size="xs" color="neutral" variant="ghost" :aria-label="card.reading ? t('停止朗读') : t('从 #{value1} 开始朗读', { value1: message.id })" @click="card.reading ? reader.stop() : reader.start(message.id)" /></component>
             <UDropdownMenu v-if="card.armed" :open="card.menu_open" :items="card.actions" :content="{ align: 'end', sideOffset: 5 }" :ui="{ content: 'channel-menu' }" @update:open="(open) => menu_open_id = open ? message.id : 0"><UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="t('消息 #{value1} 的更多操作', { value1: message.id })" /></UDropdownMenu>
             <UButton v-else icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :aria-label="t('消息 #{value1} 的更多操作', { value1: message.id })" aria-haspopup="menu" @click="open_card_menu(message.id)" />
           </div></div></div></template>
@@ -3579,7 +3595,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #text><WorkingText :text="t('智能调度：正在分析')" :seed="t('智能调度')" dots /></template>
         </ScheduleCard>
         <SchedulerDecision v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" :decision="decision" :free="free" />
-        <div v-if="view.source_filter" class="channel-locate"><UButton :label="t('在原文中定位')" icon="i-lucide-locate" size="xs" color="neutral" variant="link" @click="locate(message)" /></div>
+        <div v-if="view_source_filter" class="channel-locate"><UButton :label="t('在原文中定位')" icon="i-lucide-locate" size="xs" color="neutral" variant="link" @click="locate(message)" /></div>
         </template>
         </template>
       </div>
@@ -3633,13 +3649,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #text><WorkingText :text="t('智能调度：正在分析')" :seed="t('智能调度')" dots /></template>
         </ScheduleCard>
       </motion.div>
-      <div v-if="(topic_anchor === 'end' || end_anchor === 'end') && !view.query && !view.source_filter" class="channel-message-group">
+      <div v-if="(topic_anchor === 'end' || end_anchor === 'end') && !view_query && !view_source_filter" class="channel-message-group">
         <TopicCard v-if="topic_anchor === 'end'" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <DiscussionEndCard v-if="end_anchor === 'end'" />
       </div>
       <div v-if="view.messages_loading && !transcript_messages.length" class="channel-message-group channel-loading-skeleton grid gap-6 py-6" role="status" :aria-label="t('正在读取消息')"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div>
       <div v-else-if="view.messages_failure && !transcript_messages.length" class="channel-empty" role="status"><p>{{ view.messages_failure }}</p><UButton :label="t('重新读取消息')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="act('refresh')" /></div>
-      <div v-else-if="!transcript_messages.length && !free_working.length && !view.sending_preview && !view.failed_sends.length" class="channel-empty"><UIcon :name="view.query || view.source_filter ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view.query || view.source_filter ? t('没有找到消息') : room.title }}</h2><p>{{ view.query || view.source_filter ? t('试试其他关键词，或清除筛选。') : bridge.empty_discussion_message(room) }}</p></div>
+      <div v-else-if="!transcript_messages.length && !free_working.length && !view.sending_preview && !view.failed_sends.length" class="channel-empty"><UIcon :name="view_query || view_source_filter ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view_query || view_source_filter ? t('没有找到消息') : room.title }}</h2><p>{{ view_query || view_source_filter ? t('试试其他关键词，或清除筛选。') : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <!-- Back from the background: the opening load covers the old cards until the room is read again (state.resuming). -->
     <div v-if="view.resuming" class="channel-resume-loading" role="status" :aria-label="t('正在读取消息')"><div class="channel-message-group channel-loading-skeleton grid gap-6 py-6"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div></div>

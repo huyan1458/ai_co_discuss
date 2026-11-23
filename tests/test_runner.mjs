@@ -2995,6 +2995,25 @@ test('with smart scheduling configured, @全体成员 still answers at once with
   assert.equal(state.calls.some(call => call === 'POST /scheduler-routing'), false);
 });
 
+test('an unnamed route waits for model failure and records it before host delivery', async t => {
+  const { state, config, store } = await group_fixture(t);
+  state.pending = [{ id: 1, message_id: 11, purpose: 'route' }];
+  let fail;
+  const pending = new Promise((resolve, reject) => { fail = reject; });
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, () => pending);
+  await runner.tick();
+  await runner.tick();
+  assert.equal(state.executions.length, 0);
+  fail(new Error('offline'));
+  await Promise.all(runner.decisions);
+  assert.equal(state.decisions.length, 1);
+  assert.equal(state.decisions[0].label_text.template, '没有模型判断：{value1}');
+  assert.equal(state.decisions[0].after_message_id, 11);
+  assert.equal(runner.saved_suggestion(1).decision_id, 1);
+  await runner.tick();
+  assert.equal(state.executions.length, 1);
+});
+
 test('unnamed host handoffs survive restart without repeating a judgment and stay bound to their request', async t => {
   const { state, config, store } = await group_fixture(t);
   state.pending = [{ id: 1, message_id: 11, purpose: 'route' }];
