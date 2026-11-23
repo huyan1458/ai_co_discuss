@@ -13,8 +13,10 @@ import { t, locale } from './i18n.js';
  * an axis of their own and still step down as a waterfall.
  */
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { FOLD_GAP_MS, PHASE_KINDS, add_user_turns, is_user_row, PHASE_LABELS, STATE_LABELS, WAIT_WARN_MS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between,
+import { FOLD_GAP_MS, PHASE_KINDS, add_user_turns, has_phase_detail, is_user_row, PHASE_LABELS, STATE_LABELS, WAIT_WARN_MS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between,
   pan_window, row_breakdown, row_status, snapshot_at, task_digest, timeline_axis, timeline_rows, timeline_segments, recent_window, task_overview, requested_at, view_axis, zoom_window } from "./timeline-model.js";
+import RealtimeView from "./RealtimeView.vue";
+import { touch_zoom } from "./touch-zoom.js";
 
 const emit = defineEmits(["detail"]);
 const { view, bridge } = inject("discussion");
@@ -52,6 +54,8 @@ let size_observer = null;
 const room_id = computed(() => view.value.room?.id);
 const executions = ref(new Map());
 const limits = ref(null);
+// Whether the site has executions older than the oldest one read (`before` pages reach back to the first).
+const earlier = ref(false);
 const error = ref("");
 const now = ref(Date.now());
 // When the timeline was last read; while hidden or offline it stops, and silence is judged only up to here.
@@ -82,6 +86,73 @@ const replay = reactive({ position: null, playing: false, speed: 0 });
 const show_player = ref(false);
 let play_position = 0;
 
+/**
+ * Phases are read for the rows on show only (#8131): a whole read leaves them out (`segments=0`), 86% of its size, and
+ * rows near the screen ask for theirs in batches. A share page has every read recorded, so it reads them in full.
+ * Finished executions' phases never change and are kept by id.
+ */
+const phase_cache = new Map();
+const lite = () => (view.value.share ? "" : "segments=0");
+const timeline_path = (id, query = "") => `/api/rooms/${id}/timeline${[query, lite()].filter(Boolean).length ? `?${[query, lite()].filter(Boolean).join("&")}` : ""}`;
+/** An execution as read, its phases taken from the cache or marked as still to read. */
+function adopt(item) {
+  if (Array.isArray(item.segments)) {
+    if (item.state !== "running") phase_cache.set(item.id, item.segments);
+    return item;
+  }
+  const known = phase_cache.get(item.id);
+  return known ? { ...item, segments: known } : { ...item, segments: [], segments_pending: true };
+}
+let phase_wanted = new Set();
+let phase_timer = 0;
+// Phases are asked for in batches of at most this many executions, a moment after the rows that want them show.
+const PHASE_BATCH = 200;
+const PHASE_WAIT_MS = 40;
+/** Ask for the phases of these executions, once each, batched with others asked for meanwhile. */
+function want_phases(ids) {
+  for (const id of ids) {
+    const item = executions.value.get(`free:${id}`);
+    if (item?.segments_pending && !phase_cache.has(id)) phase_wanted.add(id);
+  }
+  if (!phase_wanted.size || phase_timer) return;
+  phase_timer = setTimeout(read_phases, PHASE_WAIT_MS);
+}
+async function read_phases() {
+  phase_timer = 0;
+  const room = room_id.value;
+  const ids = [...phase_wanted].slice(0, PHASE_BATCH);
+  for (const id of ids) phase_wanted.delete(id);
+  if (!room || !ids.length) return;
+  try {
+    const { segments } = await bridge.request(`/api/rooms/${room}/timeline/segments?ids=${ids.join(",")}`);
+    if (room !== room_id.value) return;
+    const next = new Map(executions.value);
+    for (const [id, list] of Object.entries(segments)) {
+      const phases = list.map(([phase, tool, start_ms, end_ms]) => ({ phase, tool, start_ms, end_ms }));
+      phase_cache.set(Number(id), phases);
+      const item = next.get(`free:${id}`);
+      if (item?.segments_pending) next.set(`free:${id}`, { ...item, segments: phases, segments_pending: false });
+    }
+    executions.value = next;
+  } catch {
+    // Rows without their phases keep their plain bars; showing them again asks once more.
+  }
+  if (phase_wanted.size && !phase_timer) phase_timer = setTimeout(read_phases, PHASE_WAIT_MS);
+}
+// Rows within this distance of the screen ask for their phases.
+const PHASE_MARGIN = "600px 0px";
+let phase_observer = null;
+/** Watch the shown rows; those coming near the screen ask for their phases. */
+function observe_rows() {
+  phase_observer?.disconnect();
+  if (!wf_element.value || typeof IntersectionObserver === "undefined") return;
+  phase_observer = new IntersectionObserver((entries) => {
+    want_phases(entries.filter((entry) => entry.isIntersecting).map((entry) => Number(entry.target.dataset.row.split(":")[1])).filter(Boolean));
+  }, { rootMargin: PHASE_MARGIN });
+  for (const node of wf_element.value.querySelectorAll(".wf-label[data-row^='free:']")) phase_observer.observe(node);
+}
+onBeforeUnmount(() => { phase_observer?.disconnect(); clearTimeout(phase_timer); });
+
 /** Read the timeline: in full when asked or due, else only executions still running or ended since the last read. */
 async function load(full = false) {
   const id = room_id.value;
@@ -93,10 +164,15 @@ async function load(full = false) {
   reading_room = id;
   const after = full || !last_read || Date.now() - last_full >= FULL_REFRESH_MS ? 0 : last_read - OVERLAP_SECONDS;
   try {
-    const result = await bridge.request(`/api/rooms/${id}/timeline${after ? `?after=${after}` : ""}`);
+    const result = await bridge.request(timeline_path(id, after ? `after=${after}` : ""));
     if (version !== read_version || id !== room_id.value) return;
     const next = after ? new Map(executions.value) : new Map();
-    for (const item of result.executions) next.set(`${item.source}:${item.id}`, item);
+    for (const item of result.executions) next.set(`${item.source}:${item.id}`, adopt(item));
+    // A full read rereads only the latest page; older pages already read stay, and so does what is known beyond them.
+    const oldest = Math.min(...result.executions.map((item) => item.id));
+    const kept = after ? [] : [...executions.value.values()].filter((item) => item.id < oldest);
+    for (const item of kept) next.set(`${item.source}:${item.id}`, item);
+    if (!after && !kept.length) earlier.value = Boolean(result.earlier);
     executions.value = next;
     limits.value = { execution_limit: result.execution_limit, segment_limit: result.segment_limit };
     last_read = result.now;
@@ -116,6 +192,27 @@ async function load(full = false) {
   }
 }
 
+/** Read the page of executions older than the oldest one read, then show that many more rows. */
+async function load_earlier() {
+  const id = room_id.value;
+  const oldest = Math.min(...[...executions.value.values()].map((item) => item.id));
+  if (!id || !Number.isFinite(oldest) || loading_earlier.value) return;
+  loading_earlier.value = true;
+  try {
+    const result = await bridge.request(timeline_path(id, `before=${oldest}`));
+    if (id !== room_id.value) return;
+    const next = new Map(executions.value);
+    for (const item of result.executions) next.set(`${item.source}:${item.id}`, adopt(item));
+    executions.value = next;
+    earlier.value = Boolean(result.earlier);
+  } catch (failure) {
+    bridge.notify("error", t('读取执行记录失败：{value1}', { value1: failure.message }));
+  } finally {
+    loading_earlier.value = false;
+  }
+}
+const loading_earlier = ref(false);
+
 const timeline = computed(() => limits.value && { ...limits.value, executions: [...executions.value.values()] });
 const running = computed(() => timeline.value?.executions.some((item) => item.state === "running"));
 // Only running work changes the timeline between room changes, and a hidden page need not follow it.
@@ -125,7 +222,8 @@ watch(running, (live) => {
   refresh_timer = setInterval(() => { if (!document.hidden) load(); }, LIVE_REFRESH_MS);
 }, { immediate: true });
 watch(room_id, () => {
-  executions.value = new Map(); limits.value = null; collapsed.value = new Set(); note_texts.value = new Map(); opened.value = "";
+  executions.value = new Map(); limits.value = null; earlier.value = false; collapsed.value = new Set(); note_texts.value = new Map(); opened.value = "";
+  phase_cache.clear(); phase_wanted = new Set();
   last_read = 0;
   error.value = "";
   reload = "";
@@ -151,8 +249,14 @@ function on_wheel(event) {
     zoom.value = pan_window(zoom.value, (event.shiftKey ? event.deltaY : event.deltaX) / pointer_share(event).width);
   }
 }
+// Fingers on the lanes or the axis: pinch zooms, a sideways drag pans (touch-zoom.js), on phones as on tablets.
+const gesture = touch_zoom({ share_at: (client_x) => pointer_share({ clientX: client_x }).share, width: () => pointer_share({ clientX: 0 }).width,
+  on_zoom: (anchor, factor) => { zoom.value = zoom_window(zoom.value, anchor, factor, axis.value.total_ms); },
+  on_pan: (share) => { zoom.value = pan_window(zoom.value, share); }, can_pan: () => zoomed.value });
+const on_lanes = (event) => Boolean(axis_element.value && event.target.closest?.(".wf-track, .wf-axis, .wf.is-compact .wf-row"));
 /** Middle-button drag anywhere on the lanes, or a left-button drag on the axis, pans a zoomed view. */
 function on_pan_start(event) {
+  if (event.pointerType === "touch") { if (on_lanes(event)) gesture.down(event); return; }
   const on_axis = event.target.closest?.(".wf-axis");
   if (!zoomed.value || !(event.button === 1 || (event.button === 0 && on_axis)) || !event.target.closest?.(".wf-track, .wf-axis")) return;
   event.preventDefault();
@@ -160,9 +264,13 @@ function on_pan_start(event) {
   event.currentTarget.setPointerCapture(event.pointerId);
 }
 function on_pan_move(event) {
+  if (event.pointerType === "touch") { gesture.move(event); return; }
   if (pan) zoom.value = pan_window({ from: pan.from, span: zoom.value.span }, -(event.clientX - pan.x) / pan.width);
 }
-function on_pan_end() { pan = null; }
+function on_pan_end(event) {
+  if (event.pointerType === "touch") gesture.up(event);
+  pan = null;
+}
 /** A double click on the axis or the lanes shows the whole run again, following live work. */
 function reset_on_dblclick(event) { if (event.target.closest?.(".wf-track, .wf-axis")) zoom.value = WHOLE; }
 // A middle press would start the browser's autoscroll over the lanes; the drag pans instead.
@@ -170,7 +278,7 @@ function stop_autoscroll(event) { if (event.button === 1 && event.target.closest
 
 /** The open detail closes on a click anywhere else, or on Esc. */
 function close_on_outside(event) {
-  if (opened.value && !event.target.closest?.(".wf-detail, .wf-names, .wf-bar, .wf-note, .wf.is-compact .wf-lane, .wf-now-card")) opened.value = "";
+  if (opened.value && !event.target.closest?.(".wf-detail, .wf-names, .wf-bar, .wf-note, .rt-block, .wf.is-compact .wf-lane, .wf-now-card")) opened.value = "";
 }
 function close_on_escape(event) { if (event.key === "Escape") opened.value = ""; }
 onMounted(() => {
@@ -203,7 +311,10 @@ onBeforeUnmount(() => {
 const WINDOW_STEP = 20;
 const window_count = ref(WINDOW_STEP);
 const view_mode = ref("timeline");
-const overview = computed(() => view_mode.value === "tasks");
+// Names say what each view answers (#8118): every run in detail, how busy the room was over the whole span, the tasks as a list.
+const VIEW_MODES = [{ value: "timeline", label: t('执行明细') }, { value: "realtime", label: t('全程忙闲') }, { value: "tasks", label: t('任务清单') }];
+// Both the task overview and the real-time view take every execution read, rather than the timeline's window.
+const overview = computed(() => view_mode.value !== "timeline");
 watch(room_id, () => { window_count.value = WINDOW_STEP; view_mode.value = "timeline"; });
 // Each task with the owner's own rows added (add_user_turns); `with_users` is every execution and owner row.
 const segments = computed(() => timeline.value ? add_user_turns(timeline_segments(timeline.value.executions, now.value), now.value) : []);
@@ -226,9 +337,41 @@ const shown_runs = computed(() => shown.value?.executions.filter((item) => item.
 const earlier_count = computed(() => timeline.value && !overview.value
   ? timeline.value.executions.length - shown_runs.value : 0);
 const when = (ms) => new Date(ms).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
-const tasks = computed(() => overview.value ? task_overview(segments.value) : []);
-// The site returns only the latest executions, so the first task may have begun before them.
-const truncated = computed(() => Boolean(timeline.value && timeline.value.executions.length >= timeline.value.execution_limit));
+const tasks = computed(() => view_mode.value === "tasks" ? task_overview(segments.value) : []);
+// Older executions are read a page at a time, so until the last page the first task may have begun before them.
+const truncated = computed(() => earlier.value);
+/** Show more of the timeline: rows already read first, then the next page from the site. */
+async function show_earlier() {
+  if (earlier_count.value < WINDOW_STEP && earlier.value) await load_earlier();
+  window_count.value += WINDOW_STEP;
+}
+/**
+ * Read every remaining page back to the room's first execution, then show them all (#8102). The pages are gathered first
+ * and put in at once: put in one by one, each redrew every row, and 600 executions took 18 seconds.
+ */
+async function show_all() {
+  const id = room_id.value;
+  if (!id || loading_earlier.value) return;
+  loading_earlier.value = true;
+  const gathered = new Map(executions.value);
+  let more = earlier.value;
+  try {
+    while (more) {
+      const oldest = Math.min(...[...gathered.values()].map((item) => item.id));
+      const result = await bridge.request(timeline_path(id, `before=${oldest}`));
+      if (id !== room_id.value) return;
+      for (const item of result.executions) gathered.set(`${item.source}:${item.id}`, adopt(item));
+      more = Boolean(result.earlier) && result.executions.length > 0;
+    }
+    executions.value = gathered;
+    earlier.value = false;
+    window_count.value = Infinity;
+  } catch (failure) {
+    bridge.notify("error", t('读取执行记录失败：{value1}', { value1: failure.message }));
+  } finally {
+    loading_earlier.value = false;
+  }
+}
 const partial = (task) => !task.opened && truncated.value;
 /** A task is named by the message that opened it; a short one ("全部同意", "继续") also shows the answer it got. */
 const SHORT_TASK_CHARS = 10;
@@ -284,6 +427,8 @@ const view_time = computed(() => replaying.value ? bounds.value.start + replay.p
 const all_rows = computed(() => replaying.value
   ? timeline_rows(snapshot_at(shown.value, view_time.value, note_texts.value), view_time.value) : base_rows.value);
 const rows = computed(() => all_rows.value.filter((row) => !row.ancestors.some((key) => collapsed.value.has(key))));
+// A different set of rows on show is watched afresh for the phases it needs.
+watch(() => rows.value.map((row) => row.key).join(), () => nextTick(observe_rows), { flush: "post" });
 const live_in_view = computed(() => all_rows.value.some((row) => row.item.state === "running"));
 const axis = computed(() => timeline_axis(all_rows.value, live_in_view.value));
 /** Zoom: the share of the axis in view, from Ctrl/⌘ + wheel around the pointer; middle-button drag, Shift + wheel, a
@@ -361,7 +506,7 @@ watch(() => rows.value.map((row) => row.key).join(), () => {
   setTimeout(() => { entering.value = new Set([...entering.value].filter((key) => !added.includes(key))); }, ENTER_MS);
 });
 // A replay from its start draws its rows in again; another room or view is a first drawing.
-watch([room_id, view_mode], () => { known_rows = null; });
+watch([room_id, view_mode], () => { known_rows = null; opened.value = ""; });
 watch(() => replay.position === 0, (at_start) => { if (at_start) known_rows = new Set(); });
 
 const lines = computed(() => compact.value ? new Map() : handoff_lines(rows.value, shown_axis.value));
@@ -393,11 +538,14 @@ const shown_ticks = computed(() => {
 const status_time = computed(() => replaying.value ? view_time.value : Math.min(view_time.value, read_at.value));
 const digest = computed(() => task_digest(all_rows.value, latest_keys.value, status_time.value));
 const parents = computed(() => all_rows.value.filter((row) => row.has_children).map((row) => row.key));
-const opened_row = computed(() => all_rows.value.find((row) => row.key === opened.value));
+// The real-time view opens the same detail card on any execution read, so it has rows for all of them.
+const realtime_rows = computed(() => view_mode.value === "realtime" && timeline.value ? timeline_rows(timeline.value, now.value) : []);
+const opened_row = computed(() => (view_mode.value === "realtime" ? realtime_rows.value : all_rows.value).find((row) => row.key === opened.value));
 // One detail card for every row, so moving from row to row moves and refills it instead of drawing a new one; it shows
 // only while its row is on the timeline (not folded away, not the overview).
 const detail_row = computed(() => {
   const row = opened_row.value;
+  if (row && view_mode.value === "realtime") return row;
   return row && !overview.value && !row.ancestors.some((key) => collapsed.value.has(key)) ? row : null;
 });
 const detail_element = ref(null);
@@ -407,6 +555,8 @@ const name = (member) => bridge.display_name(member);
 /** The sentence at the top: for live work, how the running execution is doing; for a finished round, what its time
  *  came down to. Each part carries a tone, so a stall or a failure stands out within the line. */
 const headline = computed(() => {
+  // The real-time view says its span, peak and idle itself.
+  if (view_mode.value === "realtime") return [];
   if (overview.value) {
     return [{ text: t('{value1} 个任务 · {value2} 次执行', { value1: tasks.value.length, value2: timeline.value?.executions.length || 0 }) }, { text: t('点开任务看要求、过程与结果') }];
   }
@@ -476,8 +626,12 @@ function hover_leave(event) {
   hover_timer = setTimeout(() => { opened.value = ""; }, HOVER_CLOSE_MS);
 }
 function hover_keep() { clearTimeout(hover_timer); }
+/** The real-time view names an execution by its row key; the card needs its row. */
+function realtime_row(key, then) { const row = realtime_rows.value.find((item) => item.key === key); if (row) then(row); }
 onBeforeUnmount(() => clearTimeout(hover_timer));
 function open_row(row, event, piece = null) {
+  // The tap that ends a pinch or a pan opens nothing.
+  if (gesture.moved()) return;
   const id = piece ? piece_id(row, piece) : "";
   if (hovering()) { clearTimeout(hover_timer); if (opened.value !== row.key || (selected.value?.id || "") !== id) show_detail(row, event.currentTarget, piece); return; }
   if (opened.value === row.key && (selected.value?.id || "") === id) { opened.value = ""; return; }
@@ -487,6 +641,7 @@ function open_row(row, event, piece = null) {
 const DETAIL_MARGIN_PX = 8;
 const DETAIL_MIN_HEIGHT_PX = 320;
 function show_detail(row, target, piece) {
+  if (row.item.segments_pending) want_phases([row.item.id]);
   const id = piece ? piece_id(row, piece) : "";
   opened.value = row.key;
   shown_at = performance.now();
@@ -594,7 +749,7 @@ const status = (row) => row_status(row, status_time.value);
 function row_label(row) {
   const { wait } = row_breakdown(row);
   const parts = [name(row.item.member), role_label(row), STATE_LABELS[row.item.state], t('用时 {value1}', { value1: format_duration(row.end - row.start) }), t('等待 {value1}', { value1: format_duration(wait) })];
-  if (!row.segments.length && row.work) parts.push(t('无阶段明细'));
+  if (!has_phase_detail(row) && row.work) parts.push(t('无阶段明细'));
   if (row.notes.length) parts.push(t('{value1} 段过程说明', { value1: row.notes.length }));
   return parts.join("，");
 }
@@ -614,7 +769,7 @@ const short_clock = (ms) => new Date(ms).toLocaleTimeString(locale, { hour: "2-d
 const tick_label = (tick) => new Date(tick.at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", ...(tick.seconds ? { second: "2-digit" } : {}), hour12: false });
 
 const piece_id = (row, piece) => `${row.key}:${piece.note ? "note" : piece.label}:${piece.start}`;
-const work_piece = (row) => ({ label: is_user_row(row) ? (row.work[1] > row.work[0] ? t('阅读与思考') : t('发出消息')) : row.segments.length ? t('执行') : t('执行 · 无阶段明细'), start: row.work[0], end: row.work[1], live: row.item.state === "running" });
+const work_piece = (row) => ({ label: is_user_row(row) ? (row.work[1] > row.work[0] ? t('阅读与思考') : t('发出消息')) : has_phase_detail(row) ? t('执行') : t('执行 · 无阶段明细'), start: row.work[0], end: row.work[1], live: row.item.state === "running" });
 
 const selected_title = computed(() => {
   const piece = selected.value?.piece;
@@ -633,7 +788,7 @@ const opened_parts = computed(() => {
   const parts = [
     ...(wait > 0 ? [{ key: "wait", kind: "wait", label: t('等待'), ms: wait }] : []),
     ...phases.map((part) => ({ key: part.phase, kind: PHASE_KINDS[part.phase], label: PHASE_LABELS[part.phase], ms: part.ms })),
-    ...(work - reported > 0 ? [{ key: "other", kind: "other", label: row.segments.length ? t('未上报') : t('执行'), ms: work - reported }] : []),
+    ...(work - reported > 0 ? [{ key: "other", kind: "other", label: has_phase_detail(row) ? t('未上报') : t('执行'), ms: work - reported }] : []),
   ];
   return parts.map((part) => ({ ...part, share: part.ms / total }));
 });
@@ -658,9 +813,10 @@ const selected_notes = computed(() => {
       <header class="wf-head">
         <div class="wf-head-line">
           <span class="wf-modes" role="tablist" :aria-label="t('查看方式')">
-            <button type="button" role="tab" :aria-selected="!overview" :class="{ 'is-active': !overview }" @click="view_mode = 'timeline'">{{ t('时间线') }}</button>
-            <button type="button" role="tab" :aria-selected="overview" :class="{ 'is-active': overview }" @click="view_mode = 'tasks'">{{ t('任务概览') }}</button>
+            <button v-for="mode in VIEW_MODES" :key="mode.value" type="button" role="tab" :aria-selected="view_mode === mode.value"
+              :class="{ 'is-active': view_mode === mode.value }" @click="view_mode = mode.value">{{ mode.label }}</button>
           </span>
+          <button v-if="compact && zoomed" type="button" class="wf-text-button" @click="zoom = WHOLE">{{ t('还原 {value1}×', { value1: (1 / zoom.span).toFixed(1) }) }}</button>
           <span v-if="replaying" class="wf-state is-replay">{{ t('回放中 · {value1}', { value1: clock(view_time) }) }}</span>
           <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? t('{value1} 个进行中', { value1: digest.running.length }) : t('均已结束') }}</span>
           <!-- On a share page the replay is the quickest way to see several AIs at work, so it starts from the top. -->
@@ -682,8 +838,10 @@ const selected_notes = computed(() => {
         </button>
       </section>
 
-      <p v-if="earlier_count" class="wf-earlier">{{ t('显示最近 {value1} 次执行', { value1: shown_runs }) }}<button type="button" class="wf-text-button" @click="window_count += WINDOW_STEP">{{ t('显示更早的 {value1} 次', { value1: Math.min(WINDOW_STEP, earlier_count) }) }}</button></p>
-      <ol v-if="overview" class="wf-runs" :aria-label="t('任务概览')">
+      <p v-if="earlier_count || earlier" class="wf-earlier">{{ t('显示最近 {value1} 次执行', { value1: shown_runs }) }}<button type="button" class="wf-text-button" :disabled="loading_earlier" @click="show_earlier">{{ earlier ? t('显示更早的执行') : t('显示更早的 {value1} 次', { value1: Math.min(WINDOW_STEP, earlier_count) }) }}</button><button v-if="!overview" type="button" class="wf-text-button" :disabled="loading_earlier" @click="show_all">{{ t('显示全部') }}</button></p>
+      <RealtimeView v-if="view_mode === 'realtime'" :segments="segments" :tones="member_tone" :name="name" @open="(key) => focus_row({ key })"
+        @hover="(key, event) => realtime_row(key, (row) => hover_open(row, event))" @leave="hover_leave" @pick="(key, event) => realtime_row(key, (row) => open_row(row, event))" />
+      <ol v-if="view_mode === 'tasks'" class="wf-runs" :aria-label="t('任务清单')">
         <li v-for="task in tasks" :key="task.key" :class="{ 'is-open': opened_tasks.has(task.key) }">
           <button type="button" class="wf-run" :aria-expanded="opened_tasks.has(task.key)" @click="toggle_task(task.key)">
             <span class="wf-run-line"><UIcon name="i-lucide-chevron-right" class="wf-run-caret" /><time>{{ when(task.start) }}</time><strong>{{ task_title(task.task) }}</strong>
@@ -711,19 +869,19 @@ const selected_notes = computed(() => {
                   <span v-if="step_note(task, step)" class="wf-run-step-note" :class="{ 'is-failed': step.state === 'failed' }">{{ step_note(task, step) }}</span>
                 </li>
               </ol>
-              <p v-if="task.steps.length > TASK_STEPS_SHOWN" class="wf-run-more">{{ t('另 {value1} 次执行，在时间线中查看', { value1: task.steps.length - TASK_STEPS_SHOWN }) }}</p>
+              <p v-if="task.steps.length > TASK_STEPS_SHOWN" class="wf-run-more">{{ t('另 {value1} 次执行，在执行明细中查看', { value1: task.steps.length - TASK_STEPS_SHOWN }) }}</p>
             </section>
             <section>
               <h4>{{ t('结果') }}<small v-if="task.changes">{{ t('改动 {value1} 个文件', { value1: task.changes }) }}</small></h4>
               <p v-if="task.outcome" class="wf-run-text"><strong>{{ name(task.outcome.member) }}：</strong>{{ task.outcome.text }}</p>
               <p v-else class="wf-run-text is-muted">{{ task.running ? t('仍在进行，还没有结果') : t('没有记录到回答') }}</p>
             </section>
-            <button type="button" class="wf-text-button wf-run-jump" @click="open_task(task)"><UIcon name="i-lucide-arrow-right" />{{ t('在时间线中查看') }}</button>
+            <button type="button" class="wf-text-button wf-run-jump" @click="open_task(task)"><UIcon name="i-lucide-arrow-right" />{{ t('在执行明细中查看') }}</button>
           </div>
         </li>
       </ol>
 
-      <div v-else class="wf-grid" :class="{ 'is-zoomed': zoomed, 'is-panning': pan }" role="list"
+      <div v-else-if="!overview" class="wf-grid" :class="{ 'is-zoomed': zoomed, 'is-panning': pan }" role="list"
         @wheel="on_wheel" @mousedown="stop_autoscroll" @pointerdown="on_pan_start" @pointermove="on_pan_move" @pointerup="on_pan_end" @pointercancel="on_pan_end" @dblclick="reset_on_dblclick">
         <div v-if="!compact" class="wf-axis-label" :title="t('Ctrl + 滚轮缩放；放大后按住中键或拖动时间轴平移，双击时间线还原')">
             <span class="wf-axis-count">{{ t('执行 · {value1}/{value2}', { value1: rows.length, value2: all_rows.length }) }}</span>
@@ -855,7 +1013,6 @@ const selected_notes = computed(() => {
         <span class="wf-key"><i class="wf-swatch is-queue"></i>{{ t('排队') }}<i class="wf-swatch is-wake"></i>{{ t('唤醒') }}<i class="wf-swatch is-model"></i>{{ t('模型') }}<i class="wf-swatch is-tool"></i>{{ t('工具') }}</span>
         <span v-if="member_tone.size > 1">{{ t('颜色区分成员，深浅区分模型与工具') }}</span>
         <span v-if="axis.folds.length && !compact"><i class="wf-swatch is-fold" aria-hidden="true"></i>{{ t('已折叠 {value1} 段超过 {value2} 分钟的空闲', { value1: axis.folds.length, value2: FOLD_GAP_MS / 60000 }) }}</span>
-        <span v-if="timeline.executions.length >= timeline.execution_limit">{{ t('只列出最近 {value1} 次讨论执行与 {value2} 次协作执行', { value1: timeline.execution_limit, value2: timeline.execution_limit }) }}</span>
         <button v-if="can_replay && !show_player && !view.share" type="button" class="wf-text-button wf-replay-open" @click="show_player = true"><UIcon name="i-lucide-play" />{{ t('回放最近这次任务') }}</button>
       </footer>
       <div v-if="can_replay && show_player" class="wf-player">
@@ -1011,6 +1168,10 @@ const selected_notes = computed(() => {
 /* Rows: a tint on hover and while opened; off the critical path a row steps back, and comes forward when pointed at. */
 .wf-row { display: contents; }
 .wf-row > :not(.wf-detail) { min-height: var(--wf-row-h); background: var(--wf-tint, transparent); transition: background-color 120ms ease, opacity 120ms ease; }
+/* Rows off screen skip layout and paint: with every execution shown (600+ rows, each with its phase bars) the page took
+   seconds to lay out and to scroll (#8102). Each cell keeps its own size, and hand-off lines are drawn row by row, so
+   nothing reaches across a cell. */
+.wf-row > :not(.wf-detail) { content-visibility: auto; contain-intrinsic-size: auto var(--wf-row-h); }
 .wf-row:hover > :not(.wf-detail), .wf-row.is-open > :not(.wf-detail) { --wf-tint: var(--wf-hover); }
 /* Where a task begins: a full-width line with when and the message that opened it. */
 .wf-segment { grid-column: 1 / -1; display: grid; gap: 2px; padding: 10px 16px 6px; border-top: 1px solid var(--wf-guide); background: color-mix(in oklab, var(--ui-text) 3%, var(--wf-surface)); }
@@ -1050,6 +1211,9 @@ const selected_notes = computed(() => {
 /* Lanes: gridlines and folded idle bands behind a well that runs the lane's width; bars sit on the well. */
 .wf-lane { display: flex; min-width: 0; }
 .wf-track { position: relative; flex: 1; min-width: 0; margin: 0 12px; }
+/* One finger up or down still scrolls the page; two fingers and sideways drags zoom and pan the axis (touch-zoom.js). */
+/* touch-action is not inherited, and what counts is the element the finger lands on, so every part of the strip says it. */
+.wf-track, .wf-track *, .wf-axis, .wf-axis *, .wf.is-compact .wf-row, .wf.is-compact .wf-row * { touch-action: pan-y; }
 /* Zoomed in, bars and lines past the edges of the view are cut off at the track. */
 .wf-grid.is-zoomed .wf-track { overflow: hidden; }
 .wf-grid.is-zoomed .wf-axis { cursor: grab; }

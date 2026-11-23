@@ -41,7 +41,8 @@ export function execution_stages(item, now_ms) {
     const seen = Math.min(dispatched + segment.end_ms, end);
     return { phase: segment.phase, tool: segment.tool, live, seen, start: Math.min(dispatched + segment.start_ms, end), end: live ? end : seen };
   }) : [];
-  const entered = item.started_at ? item.started_at * 1000 : segments[0]?.start ?? 0;
+  // Phases not read yet (`segments_pending`, see has_phase_detail) still say where the first began.
+  const entered = item.started_at ? item.started_at * 1000 : segments[0]?.start ?? (dispatched && item.first_ms != null ? Math.min(dispatched + item.first_ms, end) : 0);
   const work_start = dispatched ? Math.max(dispatched, Math.min(entered || dispatched, end)) : end;
   const notes = dispatched ? (item.notes || []).map((at, index) => ({ index, at: Math.min(Math.max(at * 1000, dispatched), end) })) : [];
   return {
@@ -65,10 +66,19 @@ export const WAIT_WARN_MS = 2 * 60_000;
  * recorded time (a live phase's assumed tail is left out) and the work with no phase detail. `phases` is sorted longest
  * first.
  */
+/**
+ * Whether an execution reported any phases. The timeline reads an execution's phases only for the rows it shows (#8131):
+ * until then its item has `segments_pending`, empty `segments`, and the site's `phases` (ms per phase), `first_ms` and
+ * `segment_count` stand in.
+ */
+export const has_phase_detail = (row) => (row.item.segments_pending ? row.item.segment_count : row.segments.length) > 0;
+
 export function row_breakdown(row) {
   const work_start = row.work ? row.work[0] : row.end;
   const totals = new Map();
   for (const segment of row.segments) totals.set(segment.phase, (totals.get(segment.phase) || 0) + Math.max(0, segment.seen - segment.start));
+  // Phases not read yet: the site's totals per phase stand in for them.
+  if (row.item.segments_pending) for (const [phase, ms] of Object.entries(row.item.phases || {})) totals.set(phase, ms);
   return {
     wait: Math.max(0, work_start - row.queue[0]),
     work: row.work ? row.work[1] - row.work[0] : 0,
@@ -105,7 +115,7 @@ export function row_status(row, now_ms) {
   if (item.state === "done") {
     const { wait, work, phases } = row_breakdown(row);
     const parts = phases.filter((part) => part.ms >= LINE_MIN_MS).slice(0, LINE_PHASES).map((part) => `${PHASE_LABELS[part.phase]} ${format_duration(part.ms)}`);
-    if (!parts.length) parts.push(t('执行 {value1}{value2}', { value1: format_duration(work), value2: row.segments.length ? "" : t('（无阶段明细）') }));
+    if (!parts.length) parts.push(t('执行 {value1}{value2}', { value1: format_duration(work), value2: has_phase_detail(row) ? "" : t('（无阶段明细）') }));
     if (wait >= LINE_MIN_WAIT_MS) parts.push(t('等待 {value1}', { value1: format_duration(wait) }));
     return { tone: "done", text: parts.join(" · ") };
   }
@@ -656,4 +666,38 @@ export function state_at(events, index) {
     else if (event.kind === "chain.released") chains.delete(data.chain_id);
   }
   return { requests: [...requests.values()], executions: [...executions.values()], queue: [...queue.values()], chains: [...chains.values()] };
+}
+
+/**
+ * The room in real time (2026-11-23 user's request, #8032): one linear axis from the first execution to the last end,
+ * nothing folded. `steps` cut that span wherever an execution starts or ends; each has `members` (who was working then,
+ * as `{ member, count, keys }` in order of first appearance, `keys` the row keys of their executions then) and `total`. An execution counts from its delivery to its end, so
+ * waiting in the queue is not work; a step with `total` 0 is the room standing idle, also listed in `idle`. `tasks` are
+ * the segments' spans (`key`, `task`, `opened`, `start`, `end`), the owner's rows left out. `peak` is the most at once.
+ */
+export function realtime_model(segments) {
+  const runs = segments.flatMap((segment) => segment.items).filter(({ item, stages }) => item.source !== "user" && stages.work)
+    .map(({ item, stages }) => ({ key: `${item.source}:${item.id}`, member: item.member, start: stages.queue[1], end: Math.max(stages.queue[1], stages.end) }));
+  if (!runs.length) return { start: 0, end: 0, steps: [], idle: [], tasks: [], peak: 0, members: [], idle_ms: 0 };
+  const members = [...new Set([...runs].sort((a, b) => a.start - b.start).map((run) => run.member))];
+  const times = [...new Set(runs.flatMap((run) => [run.start, run.end]))].sort((a, b) => a - b);
+  const steps = [];
+  for (let index = 0; index + 1 < times.length; index += 1) {
+    const [start, end] = [times[index], times[index + 1]];
+    const keys = new Map();
+    for (const run of runs) if (run.start <= start && run.end >= end) keys.set(run.member, [...(keys.get(run.member) || []), run.key]);
+    const list = members.filter((member) => keys.has(member)).map((member) => ({ member, count: keys.get(member).length, keys: keys.get(member) }));
+    const total = list.reduce((sum, entry) => sum + entry.count, 0);
+    const last = steps.at(-1);
+    if (last && last.total === total && last.members.length === list.length && last.members.every((entry, at) => entry.member === list[at].member && entry.keys.join() === list[at].keys.join())) last.end = end;
+    else steps.push({ start, end, members: list, total });
+  }
+  const idle = steps.filter((step) => !step.total).map(({ start, end }) => ({ start, end }));
+  const tasks = segments.map((segment) => {
+    const spans = segment.items.filter(({ item }) => item.source !== "user").map(({ stages }) => stages);
+    return spans.length ? { key: segment.key, task: segment.opener.task || "", opened: segment.opened,
+      start: Math.min(...spans.map((stages) => stages.queue[1] || stages.start)), end: Math.max(...spans.map((stages) => stages.end)) } : null;
+  }).filter(Boolean);
+  return { start: times[0], end: times.at(-1), steps, idle, tasks, members, peak: Math.max(...steps.map((step) => step.total)),
+    idle_ms: idle.reduce((sum, gap) => sum + gap.end - gap.start, 0) };
 }

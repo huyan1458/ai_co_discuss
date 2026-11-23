@@ -82,6 +82,7 @@
   "input 须为不超过 {value1} 字的对象": "input must be an object of at most {value1} characters",
   "发言职责无效": "Invalid speaking role",
   "after 需为非负消息编号，不能与翻页同时使用": "after must be a nonnegative message ID and cannot be combined with pagination",
+  "before 需为非负消息编号，不能与 after 或翻页同时使用": "before must be a nonnegative message ID and cannot be combined with after or pagination",
   "本机启动入口须绑定 127.0.0.1": "Local launch must bind to 127.0.0.1",
   "请求内容为空或过大": "Request body is empty or too large",
   "请求必须是 JSON 对象": "Request must be a JSON object",

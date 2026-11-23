@@ -58,6 +58,9 @@ const REFRESH_INTERVAL_MS = 60000;
 const FALLBACK_REFRESH_INTERVAL_MS = 12000;
 // The site caps one message batch at 200.
 const MESSAGE_HISTORY_BATCH = 200;
+// A room read for the first time shows its latest messages after one small read, then reads the rest back to the start
+// (#8131): a 600-message room waited for four 200-message batches, 2.6 MB, before its first card showed.
+const MESSAGE_FIRST_BATCH = 40;
 // A poll reads the room in full only when it changed or an AI is working in it; this full read still comes at least this often.
 const SAFETY_REFRESH_MS = 5 * 60 * 1000;
 const WORKING_STATUSES = ["dispatched", "started"];
@@ -1562,19 +1565,44 @@ function history_batch_path(room_id, query, after) {
   return `/api/rooms/${room_id}/messages?${params}`;
 }
 
-/** Join bounded cursor batches for the interactive transcript; refresh only new records. */
-async function load_message_history(room_id, version, start_trace) {
+/** The read of `limit` transcript messages before message `before` (0: the latest), newest end first. */
+function latest_batch_path(room_id, before, limit) {
+  return `/api/rooms/${room_id}/messages?${new URLSearchParams({ q: "", withdrawn: "include", limit, cards: "1", before })}`;
+}
+
+/** Join bounded cursor batches for the interactive transcript; refresh only new records. `on_latest` gets the latest
+ *  messages of a room read for the first time, before the earlier ones are read. */
+async function load_message_history(room_id, version, start_trace, on_latest) {
   const query = state.query;
-  const history = await read_message_history(room_id, query, () => version === state.refresh_version, start_trace);
+  const history = await read_message_history(room_id, query, () => version === state.refresh_version, start_trace, on_latest);
   if (history) state.message_history = { key: `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include" })}`, messages: history.messages };
   return history;
 }
 
-/** Read the messages after the cached ones into the cache; null once `wanted` says the answer is no longer needed. */
-async function read_message_history(room_id, query, wanted, start_trace) {
+/**
+ * Read the messages after the cached ones into the cache; null once `wanted` says the answer is no longer needed.
+ * A full transcript not read before is read from the newest end: the latest MESSAGE_FIRST_BATCH go to `on_latest` at
+ * once, then earlier batches back to the first message, so the page shows the room before its whole history arrives.
+ */
+async function read_message_history(room_id, query, wanted, start_trace, on_latest) {
   const key = `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include" })}`;
   const messages = [...message_histories.get(key) || []];
   let cards = history_cards.get(key) || null;
+  if (!messages.length && !query) {
+    let before = 0, limit = MESSAGE_FIRST_BATCH, earlier = true;
+    while (earlier) {
+      const trace = start_trace?.("messages");
+      const result = await request_json(latest_batch_path(room_id, before, limit), undefined, undefined, trace);
+      trace?.received();
+      if (!wanted()) return null;
+      messages.unshift(...result.messages);
+      if (result.cards) cards = merge_history_cards(cards, result.cards);
+      earlier = result.has_earlier && result.messages.length > 0;
+      if (earlier && !before) on_latest?.({ messages: [...messages], cards, total: messages.length, page: 1, pages: 1 });
+      before = messages[0]?.id || 0;
+      limit = MESSAGE_HISTORY_BATCH;
+    }
+  }
   let has_more = true;
   while (has_more) {
     const trace = start_trace?.("messages");
@@ -1688,7 +1716,14 @@ async function refresh_room_content(room_id, version, versions) {
     if (!history_read || !state.messages.length) { publish_view(); finish_traces("published", "room"); }
     load_room_models();
   });
-  const history_read = state.tab === "discussion" ? load_message_history(room_id, version, start_trace).then(async (result) => {
+  // A room read for the first time shows its latest messages while the earlier ones are read (#8131).
+  let history_done = false;
+  const show_latest = async (latest) => {
+    if (!state.room?.experts) await room_read;
+    if (current() && !history_done) { render_messages(latest); state.messages_loading = false; publish_view(); }
+  };
+  const history_read = state.tab === "discussion" ? load_message_history(room_id, version, start_trace, show_latest).then(async (result) => {
+    history_done = true;
     // A room opened for the first time has only its directory entry: the topic card and the transcript wait for each
     // other and show together, so neither pushes the other down when it arrives (user 2026-11-18, #4818).
     if (!state.room?.experts) await room_read;
@@ -4522,7 +4557,7 @@ async function show_computer_rooms(remote) {
     // The room list and the room likely to open are read beside the computer's address rather than after it.
     let guess = new URLSearchParams(location.search).get("room");
     try { guess ||= localStorage.getItem(LAST_ROOM_KEY); } catch { /* Storage may be unavailable. */ }
-    const paths = ["/api/rooms", ...guess ? [`/api/rooms/${guess}`, history_batch_path(guess, "", 0)] : []];
+    const paths = ["/api/rooms", ...guess ? [`/api/rooms/${guess}`, latest_batch_path(guess, 0, MESSAGE_FIRST_BATCH)] : []];
     paths.forEach(path => prefetch(path, async () => {
       const timing = ROOM_TIMING_ENABLED ? { start: performance.now(), log() {} } : null;
       const answer = await relay_room_request(path, undefined, undefined, timing);

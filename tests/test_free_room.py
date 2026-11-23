@@ -1862,6 +1862,41 @@ class HostTests(HostRoomTests):
         self.assertEqual(sorted((item["member"], item["task_author"]) for item in timeline),
                          sorted([("Claude", "用户"), ("Codex", "Claude"), ("Claude", "Claude")]))
 
+    def test_timeline_summary_leaves_phases_to_the_rows_that_ask(self):
+        """A summary read carries each execution's phase totals but no segments; the segments read returns them."""
+        FreeRoomTests.say(self, "写第一集")
+        execution = self.reserve_for("Claude")[1]
+        status, saved = self.request(f"{self.path}/executions/{execution['id']}", {"action": "segments", "segments": [
+            {"seq": 1, "phase": "thinking", "start_ms": 0, "end_ms": 900}, {"seq": 2, "phase": "command", "tool": "Bash", "start_ms": 900, "end_ms": 1000}]}, self.owner)
+        self.assertEqual(status, 200, saved)
+        self.assertNotIn("segments_pending", self.request(f"{self.path}/timeline?segments=0")[1]["executions"][0])
+        self.assertIn("segments", self.request(f"{self.path}/timeline?segments=0")[1]["executions"][0], "running work keeps its phases")
+        status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "完成", "source": "cli",
+                                                               "submission_id": uuid.uuid4().hex, "execution_id": execution["id"]}, self.tokens["Claude"])
+        self.assertEqual(status, 201, saved)
+        full = self.request(f"{self.path}/timeline")[1]["executions"][0]
+        lite = self.request(f"{self.path}/timeline?segments=0")[1]["executions"][0]
+        self.assertNotIn("segments", lite)
+        self.assertEqual(len(full["segments"]), 2)
+        self.assertEqual((lite["segment_count"], lite["first_ms"], lite["phases"]), (2, 0, {"thinking": 900, "command": 100}))
+        read = self.request(f"{self.path}/timeline/segments?ids={execution['id']},999999")[1]["segments"]
+        self.assertEqual(list(read), [str(execution["id"])])
+        self.assertEqual(len(read[str(execution["id"])]), len(full["segments"]))
+
+    def test_timeline_pages_back_to_the_first_execution(self):
+        """The latest page says older executions exist, and `before` pages reach the rest without overlap."""
+        from backend import free_room
+        FreeRoomTests.say(self, "写第一集")
+        self.host_dispatch(to=["Codex"])
+        self.work("Codex")
+        self.work("Claude")
+        with mock.patch.object(free_room, "TIMELINE_EXECUTIONS", 2):
+            latest = self.request(f"{self.path}/timeline")[1]
+            older = self.request(f"{self.path}/timeline?before={min(item['id'] for item in latest['executions'])}")[1]
+        self.assertEqual((len(latest["executions"]), latest["earlier"]), (2, True))
+        self.assertEqual((len(older["executions"]), older["earlier"]), (1, False))
+        self.assertLess(older["executions"][0]["id"], min(item["id"] for item in latest["executions"]))
+
     def test_withdrawing_a_host_relay_stops_its_running_step_and_nothing_follows_or_hands_back(self):
         """A loop between two members, as the host sent it, ends at once when the host withdraws that dispatch."""
         FreeRoomTests.say(self, "写到第 10 集")
@@ -2906,6 +2941,15 @@ class HostTests(HostRoomTests):
             self.assertEqual(cards.count(failed["id"]), 1, "each card comes with exactly one batch")
             self.assertNotIn("cards", read(""), "cards only on request")
             self.assertNotIn("cards", read("&cards=1&q=%E7%AC%AC%E4%B8%80"), "a search shows no cards")
+            # Read from the newest end (the page's first read of a room), batches back to the start cover the same.
+            ids, cards, batch, before = [], [], {"has_earlier": True}, 0
+            while batch["has_earlier"]:
+                batch = self.request(f"{self.path}/messages?before={before}&withdrawn=include&limit=1&cards=1")[1]
+                ids = [item["id"] for item in batch["messages"]] + ids
+                cards += [item["id"] for item in batch.get("cards", {}).get("executions", [])]
+                before = batch["messages"][0]["id"]
+            self.assertEqual(ids, [item["id"] for item in self.request(f"{self.path}/messages?after=0&withdrawn=include&limit=200")[1]["messages"]])
+            self.assertEqual(cards.count(failed["id"]), 1, "each card comes with exactly one batch read back")
 
     def test_handoff_needs_a_host_dispatch(self):
         """handoff is true only beside the host's to; a member or a host naming no one is refused."""

@@ -44,8 +44,9 @@ ADOPT_REASON_LIMIT = 500
 RECENT_EXECUTIONS = 100
 # Upper bound for an open-ended message id range.
 MAX_MESSAGE_ID = 2 ** 63 - 1
-# The timeline page reads this many recent executions of each kind; with `after` (?3) only those running or ended since.
-# Parameters: ?1 room, ?2 limit, ?3 after (0 reads all). Shared verbatim with the Worker.
+# The timeline page reads this many recent executions per call; with `after` (?3) only those running or ended since, with
+# `before` (?4) the page of executions older than that id, so the page can reach back to the room's first execution.
+# Parameters: ?1 room, ?2 limit, ?3 after (0 reads all), ?4 before (0 reads the latest).
 TIMELINE_EXECUTIONS = 100
 # The event log page reads at most this many room events per call, newest first when paging back.
 ROOM_EVENT_PAGE = 500
@@ -73,7 +74,8 @@ CHAIN_USED_SQL = """SELECT (SELECT COUNT(*) FROM free_batches f WHERE f.room_id=
         SELECT 1 FROM free_relay_steps s WHERE s.room_id=f.room_id AND s.batch_id=f.batch_id))
     + (SELECT COUNT(*) FROM free_host_wakes WHERE room_id=?1 AND chain_id=?2 AND key LIKE 'continue:%')"""
 TIMELINE_STATES = {"completed": "done", "failed": "failed", "cancelled": "cancelled"}
-TIMELINE_FREE_IDS = "SELECT id FROM member_executions WHERE room_id=?1 AND (?3=0 OR finished_at=0 OR finished_at>=?3) ORDER BY id DESC LIMIT ?2"
+TIMELINE_FREE_IDS = """SELECT id FROM member_executions WHERE room_id=?1 AND (?3=0 OR finished_at=0 OR finished_at>=?3)
+    AND (?4=0 OR id<?4) ORDER BY id DESC LIMIT ?2"""
 # Besides times: the task an execution took on (its request message), its result (the answer's summary, else the
 # answer's opening), its latest progress note, how many files it changed (NULL when unobserved) and its last output time.
 TIMELINE_SQL = f"""SELECT x.*,(SELECT COALESCE(NULLIF(s.text,''),substr(a.text,1,200)) FROM messages a
@@ -93,6 +95,12 @@ TIMELINE_SQL = f"""SELECT x.*,(SELECT COALESCE(NULLIF(s.text,''),substr(a.text,1
     FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.id IN ({TIMELINE_FREE_IDS})) x"""
 TIMELINE_SEGMENTS_SQL = f"""SELECT source,execution_id,phase,tool,start_ms,end_ms FROM execution_segments WHERE room_id=?1
     AND source='free' AND execution_id IN ({TIMELINE_FREE_IDS}) ORDER BY source,execution_id,seq"""
+# Each execution's time per phase, where its first phase began and how many phases it reported: enough for the timeline's
+# labels, waits and overviews while the phases themselves are read for the rows in view (#8131).
+TIMELINE_PHASES_SQL = f"""SELECT execution_id,phase,SUM(MAX(0,end_ms-start_ms)) AS ms,MIN(start_ms) AS first_ms,COUNT(*) AS count
+    FROM execution_segments WHERE room_id=?1 AND source='free' AND execution_id IN ({TIMELINE_FREE_IDS}) GROUP BY execution_id,phase"""
+# Phases asked for by execution, at most this many executions per read.
+TIMELINE_SEGMENT_IDS = 200
 # Only the times of progress notes: the texts are read when the reader hovers one.
 TIMELINE_NOTES_SQL = f"""SELECT execution_id,created_at FROM execution_notes
     WHERE room_id=?1 AND execution_id IN ({TIMELINE_FREE_IDS}) ORDER BY execution_id,seq"""
@@ -826,31 +834,70 @@ def execution_notes(connection, room_id, execution_id, token=""):
     return {"notes": notes}
 
 
-def execution_timeline(connection, room_id, after=0):
+def execution_timeline(connection, room_id, after=0, before=0, full=True):
     """Read the room's recent executions with their phase segments and note times, for the timeline page.
 
     Times are epoch seconds and segments are millisecond offsets from `dispatched_at`. An execution's parent is the
     execution that wrote the message it answers; `task_author` wrote the message that started it ("用户" for the owner),
     which the page needs to tell a new request from the room's own follow-ups. `state` is running, done, failed
     or cancelled, so the page never interprets execution statuses itself. A positive `after` reads only executions
-    still running or ended since then, so a page following live work rereads little.
+    still running or ended since then, so a page following live work rereads little; a positive `before` reads the
+    page of executions older than that id, and `earlier` says whether still older ones exist.
+
+    Every execution also carries `phases` (milliseconds per phase), `first_ms` (where its first phase began) and
+    `segment_count`. With `full` false a whole read leaves the phase segments out except for running executions, and
+    the page reads them for the rows it shows (`execution_segments`); 86% of a 100-execution read was segments (#8131).
+    An incremental read (`after`) always carries them, as it holds only live and just-ended work.
     """
     if not connection.execute("SELECT 1 FROM rooms WHERE id=?", (room_id,)).fetchone():
         raise LookupError(Text("房间不存在"))
-    params = (room_id, TIMELINE_EXECUTIONS, max(0, int(after)))
+    params = (room_id, TIMELINE_EXECUTIONS, max(0, int(after)), max(0, int(before)))
     rows = [dict(row) for row in connection.execute(TIMELINE_SQL, params)]
-    segments, notes = {}, {}
+    segments, notes, phases = {}, {}, {}
+    running = {row["id"] for row in rows if row["status"] not in TIMELINE_STATES}
+    with_segments = full or bool(params[2])
+    for row in connection.execute(TIMELINE_PHASES_SQL, params):
+        entry = phases.setdefault(row["execution_id"], {"phases": {}, "first_ms": None, "segment_count": 0})
+        entry["phases"][row["phase"]] = row["ms"]
+        entry["first_ms"] = row["first_ms"] if entry["first_ms"] is None else min(entry["first_ms"], row["first_ms"])
+        entry["segment_count"] += row["count"]
     for row in connection.execute(TIMELINE_SEGMENTS_SQL, params):
+        if not with_segments and row["execution_id"] not in running:
+            continue
         segments.setdefault((row["source"], row["execution_id"]), []).append(
             {key: row[key] for key in ("phase", "tool", "start_ms", "end_ms")})
     for row in connection.execute(TIMELINE_NOTES_SQL, params):
         notes.setdefault(row["execution_id"], []).append(row["created_at"])
     for row in rows:
         row["state"] = TIMELINE_STATES.get(row["status"], "running")
-        row["segments"] = segments.get((row["source"], row["id"]), [])
+        row.update(phases.get(row["id"], {"phases": {}, "first_ms": None, "segment_count": 0}))
+        if with_segments or row["id"] in running:
+            row["segments"] = segments.get((row["source"], row["id"]), [])
         row["notes"] = notes.get(row["id"], [])
+    oldest = min((row["id"] for row in rows), default=0)
+    earlier = bool(oldest) and not params[2] and connection.execute(
+        "SELECT 1 FROM member_executions WHERE room_id=? AND id<? LIMIT 1", (room_id, oldest)).fetchone() is not None
     return {"now": int(time.time()), "after": params[2], "executions": rows, "execution_limit": TIMELINE_EXECUTIONS,
-            "segment_limit": MAX_EXECUTION_SEGMENTS}
+            "segment_limit": MAX_EXECUTION_SEGMENTS, "earlier": earlier}
+
+
+def execution_segments(connection, room_id, ids):
+    """The phase segments of the room's executions named in `ids` (at most TIMELINE_SEGMENT_IDS), by execution id.
+
+    Each segment is `[phase, tool, start_ms, end_ms]`, offsets from the execution's delivery as in the timeline; the
+    page asks for the rows it shows (#8131). Ids of other rooms' executions are left out.
+    """
+    wanted = sorted({int(item) for item in ids if str(item).strip().isdigit()})[:TIMELINE_SEGMENT_IDS]
+    result = {str(execution_id): [] for execution_id in wanted}
+    if not wanted:
+        return {"segments": result}
+    marks = ",".join("?" * len(wanted))
+    owned = {row[0] for row in connection.execute(f"SELECT id FROM member_executions WHERE room_id=? AND id IN ({marks})", (room_id, *wanted))}
+    for row in connection.execute(f"""SELECT execution_id,phase,tool,start_ms,end_ms FROM execution_segments
+            WHERE source='free' AND execution_id IN ({marks}) ORDER BY execution_id,seq""", wanted):
+        if row["execution_id"] in owned:
+            result[str(row["execution_id"])].append([row["phase"], row["tool"], row["start_ms"], row["end_ms"]])
+    return {"segments": {key: value for key, value in result.items() if int(key) in owned}}
 
 
 def room_event_log(connection, room_id, token, after=0, before=0):

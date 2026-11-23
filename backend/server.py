@@ -42,7 +42,7 @@ from .free_room import adopt_recommendation, recommend_member, register_member, 
 from .private_chat import chat_action, member_chat
 from .external_members import external_api, guard_route as guard_external_route, is_external_path, owner_api as external_owner_api
 from .free_room import describe_members, execution_notes, label_members, check_relay, record_room_link, save_message_relay, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
-from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
+from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_segments, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         host_event, host_hidden_event, room_event_log, withdrawals)
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
 from .free_room import review_ready, advance_review, late_answer, execution_diffs
@@ -2365,6 +2365,33 @@ def message_filters(room_id, params):
     return " AND ".join(clauses), values
 
 
+def latest_messages(connection, room_id, params, where, values, size, bounded=False):
+    """Read the room's transcript from the newest end: the `size` messages before `before` (0: the latest), oldest first.
+
+    The page shows the latest messages first and reads the earlier ones after (#8131), so a long room opens without
+    waiting for its whole history. `has_earlier` says whether older messages remain; with `cards=1` the batch also takes
+    the cards placed after its messages, over a span that meets the next older batch's, so batches read back to the
+    start cover every card once: (the message before this batch, this batch's last] and, for the latest, to the end. A reader held to a reading boundary (`bounded`) gets no cards.
+    """
+    before = int(params["before"])
+    if before < 0 or "after" in params or int(params.get("page", 1)) != 1:
+        raise ValueError(Text('before 需为非负消息编号，不能与 after 或翻页同时使用'))
+    if before:
+        where += " AND messages.id<?"
+        values = [*values, before]
+    rows = connection.execute(f"{MESSAGE_QUERY} WHERE {where} ORDER BY messages.id DESC LIMIT ?", [*values, size + 1]).fetchall()
+    has_earlier = len(rows) > size
+    shown = member_display_names(connection, room_id)
+    messages = [{**message, "author_label": shown.get(message["author"], message["author"])}
+                for message in (message_with_attachments(connection, row) for row in reversed(rows[:size]))]
+    result = {"messages": messages, "has_earlier": has_earlier}
+    unfiltered = not any(params.get(name) for name in ("q", "author", "mention", "kind", "host", "submission_id"))
+    if params.get("cards") == "1" and not bounded and unfiltered and params.get("withdrawn") == INCLUDE_WITHDRAWN and messages:
+        low = rows[size]["id"] if has_earlier else 0
+        result["cards"] = history_cards(connection, room_id, (low, messages[-1]["id"] if before else None))
+    return result
+
+
 def query_messages(connection, room_id, params, token=""):
     """Read one bounded page; incremental cursors advance only through returned rows."""
     require_room(connection, room_id)
@@ -2378,6 +2405,8 @@ def query_messages(connection, room_id, params, token=""):
     if cutoff is not None:
         where += " AND messages.id<=?"
         values.append(cutoff)
+    if "before" in params:
+        return latest_messages(connection, room_id, params, where, values, size, bounded=cutoff is not None)
     total = connection.execute(f"SELECT COUNT(*) FROM ({MESSAGE_QUERY} WHERE {where})", values).fetchone()[0]
     rows = connection.execute(f"{MESSAGE_QUERY} WHERE {where} ORDER BY messages.id LIMIT ? OFFSET ?", [*values, size + 1, (page - 1) * size]).fetchall()
     shown = member_display_names(connection, room_id)
@@ -3630,8 +3659,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = continue_chain(connection, room_id, token, int(parts[4]), self.read_payload())
             connection.commit()
             return self.respond(result)
+        if parts[3:] == ["timeline", "segments"] and method == "GET":
+            return self.respond(execution_segments(connection, room_id, str(params.get("ids", "")).split(",")))
         if parts[3:] == ["timeline"] and method == "GET":
-            timeline = execution_timeline(connection, room_id, int(params.get("after", 0)))
+            timeline = execution_timeline(connection, room_id, int(params.get("after", 0)), int(params.get("before", 0)), params.get("segments") != "0")
             boundary = session_read_boundary(connection, room_id, token)
             if boundary is not None:
                 for execution in timeline["executions"]:
