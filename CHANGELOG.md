@@ -2,6 +2,12 @@
 
 Versions match the npm package. Recorded from 0.5.0 on, listing only the changes you will notice. The Chinese version is `CHANGELOG.zh-CN.md`; on the website, click the version number at the top left to read it.
 
+## 0.5.16 (2026-11-23)
+
+- Fixed: "Deploy as website" always failed when a member published, and was refused on computers with sign-in protection.
+- Fixed: Work you leave for after a discussion is now picked up by the host once the discussion ends.
+- Changed: Website cards under answers look like a small browser window, showing the address, version and expiry at a glance.
+
 ## 0.5.15 (2026-11-23)
 
 - New: Pages members make can go to a public address with "Deploy as website", live for 7 days and renewable.

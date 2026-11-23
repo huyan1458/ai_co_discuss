@@ -1590,10 +1590,30 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(room["mode"], "free")
         self.assertEqual(room["session"]["status"], "concluded")
         self.assertEqual(room["discussions"][-1]["stop_reason"], "goal_done")
-        self.assertEqual(next(item for item in room["free"]["executions"] if item["id"] == execution)["status"], "cancelled")
+        # The host's own turn ends as done, not as a user stop that would make the runner kill the software.
+        self.assertEqual(next(item for item in room["free"]["executions"] if item["id"] == execution)["status"], "completed")
         self.assertEqual(self.post("讨论结束后继续协作", "conclude-followup")[0], 201)
         self.assertEqual(self.request(base + "/limits", {"actor": "用户", "action": "reopen"})[0], 400)
         self.assertEqual(self.session_action("start", goal="再次讨论")["session"]["status"], "active")
+
+    def test_host_conclusion_continue_wakes_host_for_work_left_after_the_discussion(self):
+        """Work the user left for after the discussion reaches the host once the discussion has ended."""
+        self.configure_host()
+        base = f"/api/rooms/{self.room['id']}"
+        self.reserve_member("Codex")
+        self.assertEqual(self.request(base + "/state", {"actor": "Codex", "text": "最终共识"})[0], 200)
+        conclusion = self.request(base + "/conclusion")[1]
+        status, _ = self.request(base + "/limits", {"actor": "Codex", "action": "done", "conclusion": conclusion["revision"], "continue": " "})
+        self.assertEqual(status, 400)
+        status, result = self.request(base + "/limits", {"actor": "Codex", "action": "done", "conclusion": conclusion["revision"],
+                                                         "continue": "按用户要求派人做部署测试"})
+        self.assertEqual(status, 200, result)
+        room = self.request(base)[1]
+        self.assertEqual(room["session"]["status"], "concluded")
+        notice = next(item for item in room["free"]["requests"] if item["member"] == "Codex" and item["status"] == "pending")
+        self.assertEqual(notice["purpose"], "notice")
+        message = self.request(f"{base}/messages/{notice['message_id']}")[1]
+        self.assertIn("按用户要求派人做部署测试", message["text"])
 
     def test_session_request_answer_and_retry_lifecycle(self):
         """Reading never claims delivery; one bound answer completes its plan and exact retries remain safe."""

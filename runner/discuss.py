@@ -336,6 +336,8 @@ def room_commands(subcommands, registry):
     limits.add_argument("--check", action="store_true")
     limits.add_argument("--done", action="store_true", help="主持人宣告目标已完成：结束讨论，房间照常协作；须带 --conclusion")
     limits.add_argument("--conclusion", help="room conclusion 返回的 revision；--done 必填")
+    limits.add_argument("--continue", dest="continue_reason", metavar="REASON",
+                        help="与 --done 同用：讨论期间用户留下了收束后要做的事时，写明继续做什么（≤300 字）；讨论结束、房间空闲后再唤醒主持人一次")
     create = add_leaf(subcommands, registry, "room create", "创建话题；不自动启动讨论或监控")
     create.add_argument("--folder-id", help="直接在指定文件夹中创建；省略则未归类")
     add_topic(create, create=True)
@@ -803,7 +805,8 @@ def plan_room(args):
     if args.action == "limits":
         if args.done:
             return RequestPlan(base + "/limits", "POST", {"actor": require_actor(args), "action": "done",
-                                                          **({"conclusion": args.conclusion} if args.conclusion else {})}, "overview")
+                                                          **({"conclusion": args.conclusion} if args.conclusion else {}),
+                                                          **({"continue": args.continue_reason} if args.continue_reason else {})}, "overview")
         return RequestPlan(base + "/limits", "POST", {"actor": require_actor(args), "action": "check"}, "overview") if args.check else RequestPlan(base + "/limits")
     if args.action == "update":
         payload = topic_payload(args)

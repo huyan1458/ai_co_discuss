@@ -435,12 +435,15 @@ const open_task = (task) => focus_row({ key: task.key });
 // The run as it really is; its bounds are what a replay plays through.
 const base_rows = computed(() => shown.value && !overview.value ? timeline_rows(shown.value, now.value) : []);
 const base_live = computed(() => base_rows.value.some((row) => row.item.state === "running"));
-// The latest task is the last one; a replay plays it, not the whole window.
+// The latest task is the last one; the headline speaks of it.
 const latest_keys = computed(() => segments.value.at(-1)?.keys || new Set());
-const base_digest = computed(() => task_digest(base_rows.value, latest_keys.value, now.value));
+// A replay plays everything on show, from the first row's start, so the board fills from empty (#8326: it played only
+// the latest task, and with more shown every earlier task stood drawn in full from the first frame).
 const bounds = computed(() => {
-  const { start, end } = base_digest.value;
-  return start ? { start, end, duration: Math.max(0, end - start) } : { start: 0, end: 0, duration: 0 };
+  const rows = base_rows.value.filter((row) => row.end > row.start || !is_user_row(row));
+  if (!rows.length) return { start: 0, end: 0, duration: 0 };
+  const start = Math.min(...rows.map((row) => row.start)), end = Math.max(...rows.map((row) => row.end));
+  return { start, end, duration: Math.max(0, end - start) };
 });
 // A replay draws the run as it stood at the playback position, which stands in for now. Work still running replays up to
 // now and the board is live again when the replay ends (user 2026-11-23: the room's own page could not replay while a
@@ -1068,7 +1071,7 @@ const selected_notes = computed(() => {
         <span v-if="axis.folds.length && !compact"><i class="wf-swatch is-fold" aria-hidden="true"></i>{{ t('已折叠 {value1} 段超过 {value2} 分钟的空闲', { value1: axis.folds.length, value2: FOLD_GAP_MS / 60000 }) }}</span>
       </footer>
       <div v-if="can_replay && show_player" class="wf-player">
-        <button type="button" class="wf-player-button" :aria-label="replay.playing ? t('暂停回放') : t('回放最近这次任务')" @click="replay.playing ? pause() : play()">
+        <button type="button" class="wf-player-button" :aria-label="replay.playing ? t('暂停回放') : t('回放协作过程')" @click="replay.playing ? pause() : play()">
           <UIcon :name="replay.playing ? 'i-lucide-pause' : 'i-lucide-play'" />
         </button>
         <button type="button" class="wf-player-button" :aria-label="t('从头回放')" :disabled="!replaying" @click="restart"><UIcon name="i-lucide-rotate-ccw" /></button>

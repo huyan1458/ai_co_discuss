@@ -8,6 +8,7 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'node:pat
 import { parseArgs } from 'node:util';
 
 import { configuration_snapshot, read_registry, service_home } from './discussion_service.mjs';
+import { site_fetch } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
 import { t } from './i18n.mjs';
 
@@ -196,6 +197,11 @@ function find_room_config(home, room_id, site = '') {
   return null;
 }
 
+// Launch configs store the room's project directory as `cwd` (see adapters/common.mjs project_directory).
+function room_project_directory(config) {
+  return config?.cwd || config?.workdir || '';
+}
+
 function room_allowed_roots(config, home) {
   const roots = [];
   const add = (dir) => {
@@ -206,9 +212,9 @@ function room_allowed_roots(config, home) {
     } catch { /* ignore missing dir */ }
   };
   if (config) {
-    add(config.project_directory);
+    add(room_project_directory(config));
     for (const extra of config.extra_directories || []) add(extra);
-    if (config.directory) add(config.directory);
+    // Not `config.directory`: that is the launch's runtime folder, holding task files and member credentials.
   }
   // Draft directory for member-generated HTML files
   add(join(home, 'drafts'));
@@ -226,8 +232,8 @@ function resolve_target_path(home, config, input) {
     candidate = resolve(raw);
   } else if (config) {
     const root_index = Number.isInteger(input.root) ? input.root : 0;
-    const base_dir = (root_index === 0 ? config.project_directory : (config.extra_directories || [])[root_index - 1])
-      || config.project_directory;
+    const base_dir = (root_index === 0 ? room_project_directory(config) : (config.extra_directories || [])[root_index - 1])
+      || room_project_directory(config);
     if (!base_dir) {
       throw new SiteCommandError(t('房间未设置项目目录，无法解析相对路径'), { code: 'invalid_path', http_status: 400 });
     }
@@ -246,7 +252,9 @@ function resolve_target_path(home, config, input) {
   // Enforce room directory boundary when a room config is present (and verify member read permission).
   if (config) {
     if (input.member) {
-      const member_cfg = (config.participants || []).find((p) => p.name === input.member || p.label === input.member);
+      // `participants` is an object keyed by member name in launch configs.
+      const member_cfg = Object.entries(config.participants || {})
+        .find(([name, p]) => name === input.member || p?.label === input.member)?.[1];
       if (member_cfg && member_cfg.project_access === 'none') {
         throw new SiteCommandError(t('成员 {member} 无权读取该项目目录', { member: input.member }), { code: 'auth', http_status: 403 });
       }
@@ -259,9 +267,9 @@ function resolve_target_path(home, config, input) {
   const stat = statSync(real_target);
   const kind = stat.isDirectory() ? 'directory' : 'file';
   let display_dir = basename(real_target);
-  if (config?.project_directory) {
+  if (room_project_directory(config)) {
     try {
-      const real_project = realpathSync(config.project_directory);
+      const real_project = realpathSync(room_project_directory(config));
       if (inside_directory(real_project, real_target)) {
         display_dir = relative(real_project, real_target).replaceAll('\\', '/') || '.';
       }
@@ -416,7 +424,9 @@ async function room_api_request(site, path, { method = 'GET', token = '', body =
   const headers = { 'Accept-Language': 'zh-CN' };
   if (token) headers['X-Discussion-Token'] = token;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const res = await fetcher(`${site.replace(/\/+$/, '')}${path}`, {
+  // A protected local site only accepts requests that pass the entry handshake (entry_client.mjs).
+  const send = fetcher === fetch ? site_fetch : fetcher;
+  const res = await send(`${site.replace(/\/+$/, '')}${path}`, {
     method,
     headers,
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),

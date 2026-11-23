@@ -5,7 +5,8 @@ import json
 import re
 import time
 
-from .free_room import active_members, finish_execution, member_display_names, require_member, require_owner, wake_host
+from .free_room import (MAX_CONTINUE_REASON, active_members, finish_execution, member_display_names, remember_continue, require_member,
+                        require_owner, resume_host, wake_host)
 from .texts import Text, load_texts, save_text, text_payload
 from .runtime import begin_write, enforce_session_limits, limit_values, room_limits_view, token_hash
 
@@ -502,7 +503,24 @@ def conclude_session_by_host(connection, room_id, payload):
             ("pending_input", "state_outdated", "active_speakers"): Text("暂不能收束：有未处理的用户留言或设置变更；状态整理至 #{state_until}，未覆盖最新发言 #{last_answer}；先更新 state 与简报；仍有专家正在发言", state_until=state_until, last_answer=last_answer),
         }
         raise ValueError(errors[blockers])
-    return _conclude_session(connection, session, "goal_done")
+    reason = payload.get("continue")
+    if reason is not None and (not isinstance(reason, str) or not reason.strip() or len(reason) > MAX_CONTINUE_REASON):
+        raise ValueError(Text("continue 写明讨论结束后继续做什么，最多 {max_continue_reason} 字", max_continue_reason=MAX_CONTINUE_REASON))
+    host = connection.execute("SELECT * FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    turn = connection.execute("""SELECT r.message_id,r.chain_id FROM session_requests sr JOIN member_requests r ON r.id=sr.member_request_id
+        WHERE sr.session_id=? AND sr.purpose='discuss_host' AND sr.member_id=? AND sr.status='open' AND r.status='delivering'
+        ORDER BY r.id DESC LIMIT 1""", (session["id"], host["id"])).fetchone() if host else None
+    # The host ending the discussion is its own turn's result, not work the ending cancels: the turn completes, so the
+    # runner lets the software finish instead of stopping it as if the user had.
+    if host:
+        _complete_host_work(connection, session["id"], host["id"], Text("主持人已收束讨论"))
+    result = _conclude_session(connection, session, "goal_done")
+    if host and reason:
+        # Work the user left for after the discussion wakes the host once the room is idle, like a free-room `continue`.
+        message_id, chain_id = (turn["message_id"], turn["chain_id"]) if turn else (session["started_message_id"],) * 2
+        remember_continue(connection, room_id, host, message_id, chain_id, {"continue": reason})
+        resume_host(connection, room_id)
+    return result
 
 
 def _host_interjections(connection, session_id):

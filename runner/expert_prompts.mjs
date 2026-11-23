@@ -97,6 +97,15 @@ export const correctable_refusals = denials => (denials || []).filter(item => it
   .map(item => ({ command: String(item.detail || '').slice(0, REFUSED_COMMAND_SHOWN), hint: item.retry_hint }));
 
 /**
+ * What a member hears when the program resumes its session after this computer's room service restarted (an update,
+ * a crash) and ended its turn midway: the same execution goes on, checking the workspace before redoing anything.
+ */
+export function restart_resume_prompt(execution_id) {
+  return `你正在做的这次房间任务（执行 #${execution_id}，仍在进行）被本机服务重启打断，上一轮在中途结束，回答还没有提交。`
+    + '先核对工作区与上一轮最后在做的操作（中途被打断的命令可能只执行了一部分），已经做完的部分不必重做，接着完成原任务，最后照常提交这次执行的回答。';
+}
+
+/**
  * What a member hears when the program resumes its session after refused commands: every refusal so far in this
  * execution, oldest first, each with what to change, and how many corrections are left.
  */

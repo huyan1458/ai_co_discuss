@@ -93,6 +93,8 @@ const summary = computed(() => [
     title: t('有成员在执行的时长占整个跨度的比例；其余是房间空闲、等你回应的时间') },
   { text: t('无需介入 {value1}/{value2} 次（{value3}%）', { value1: model.value.self_started, value2: model.value.runs, value3: percent(model.value.self_started, model.value.runs) }), lead: true,
     title: t('不是由你的消息触发、而是由主持人派活、接力、交回或程序唤醒自动接上的执行') },
+  ...(model.value.unattended ? [{ text: t('最长无人值守 {value1}', { value1: format_duration(model.value.unattended.end - model.value.unattended.start) }), lead: true,
+    title: t('从你的一条消息起，到房间停下或你再次发消息为止，AI 连续自动推进最久的一段：{value1} – {value2}', { value1: when(model.value.unattended.start), value2: when(model.value.unattended.end) }) }] : []),
   { text: t('跨度 {value1}', { value1: format_duration(span.value) }) },
   { text: t('最多同时 {value1} 位', { value1: model.value.peak }) },
 ]);
@@ -114,6 +116,7 @@ function on_wheel(event) {
     zoom.value = zoom_window(zoom.value, pointer_share(event).share, Math.exp(event.deltaY * WHEEL_ZOOM_RATE), span.value);
   } else if (zoomed.value && (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY))) {
     event.preventDefault();
+    follow.value = false;
     zoom.value = pan_window(zoom.value, (event.shiftKey ? event.deltaY : event.deltaX) / pointer_share(event).width);
   }
 }
@@ -121,7 +124,7 @@ function zoom_by(factor) { zoom.value = zoom_window(zoom.value, 0.5, factor, spa
 // Fingers: pinch zooms, a sideways drag pans (touch-zoom.js); an upward or downward one scrolls the page.
 const gesture = touch_zoom({ share_at: (client_x) => pointer_share({ clientX: client_x }).share, width: () => pointer_share({ clientX: 0 }).width,
   on_zoom: (anchor, factor) => { zoom.value = zoom_window(zoom.value, anchor, factor, span.value); },
-  on_pan: (share) => { zoom.value = pan_window(zoom.value, share); }, can_pan: () => zoomed.value });
+  on_pan: (share) => { follow.value = false; zoom.value = pan_window(zoom.value, share); }, can_pan: () => zoomed.value });
 /**
  * A mouse press on a zoomed chart (left or middle button) pans once it has moved a few pixels, so a click on a block
  * still opens its detail.
@@ -137,6 +140,7 @@ function on_drag_move(event) {
   if (!drag.value) {
     if (Math.abs(event.clientX - press.x) < DRAG_START_PX) return;
     drag.value = true;
+    follow.value = false;
     event.currentTarget.setPointerCapture(event.pointerId);
   }
   zoom.value = pan_window({ from: press.from, span: zoom.value.span }, -(event.clientX - press.x) / press.width);
@@ -151,6 +155,19 @@ function on_drag_end(event) {
 function stop_autoscroll(event) { if (event.button === 1 && zoomed.value) event.preventDefault(); }
 function pick(block, event) { if (!drag.value && !gesture.moved()) emit('pick', block.row, event); }
 
+/**
+ * Following the replay (#8323): on a zoomed chart the view pans with the playback line, kept at FOLLOW_AT of the width,
+ * so it never runs off screen. It starts on with each replay; panning by hand turns it off, the button back on; zooming
+ * and the scrubber keep it.
+ */
+const follow = ref(true);
+const FOLLOW_AT = 0.8;
+function keep_in_view() {
+  if (!follow.value || !zoomed.value || position.value == null) return;
+  const share = (position.value - model.value.start) / span.value;
+  zoom.value = { from: Math.min(1 - zoom.value.span, Math.max(0, share - FOLLOW_AT * zoom.value.span)), span: zoom.value.span };
+}
+watch([position, () => zoom.value.span, follow], keep_in_view);
 /** Real milliseconds of the room per millisecond of playback. */
 const rate = computed(() => speed.value || span.value / REPLAY_TARGET_MS);
 function tick(timestamp) {
@@ -161,7 +178,7 @@ function tick(timestamp) {
   frame = requestAnimationFrame(tick);
 }
 function play() {
-  if (position.value == null || position.value >= model.value.end) position.value = model.value.start;
+  if (position.value == null || position.value >= model.value.end) { position.value = model.value.start; follow.value = true; }
   playing.value = true;
   last_frame = 0;
   frame = requestAnimationFrame(tick);
@@ -184,6 +201,7 @@ onBeforeUnmount(pause);
         <button type="button" class="rt-tool" :title="t('放大')" :aria-label="t('放大')" @click="zoom_by(BUTTON_ZOOM)">+</button>
         <button v-if="zoomed" type="button" class="rt-tool is-text" @click="zoom = WHOLE">{{ t('还原 {value1}×', { value1: (1 / zoom.span).toFixed(1) }) }}</button>
         <button type="button" class="rt-tool is-text" @click="playing ? pause() : play()">{{ playing ? t('暂停回放') : position == null ? t('回放') : t('继续回放') }}</button>
+        <button v-if="position != null && zoomed" type="button" class="rt-tool is-text" :class="{ 'is-active': follow }" :aria-pressed="follow" :title="t('放大时让画面跟着回放线走')" @click="follow = !follow">{{ t('跟随') }}</button>
         <button v-if="position != null" type="button" class="rt-tool is-text" @click="stop_replay">{{ t('结束回放') }}</button>
       </span>
     </div>

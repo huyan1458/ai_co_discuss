@@ -13,7 +13,8 @@
 .qwen { background: #322b36; color: #c2adc7; }
 .user { background: #30332d; color: #c4cbb3; }
 .message-prose { color: #bdc5ca; font-size: 14px; line-height: 1.9; white-space: pre-wrap; overflow-wrap: anywhere; }
-.content-page { flex: 1; min-height: 0; overflow-y: auto; padding: 38px clamp(24px, 5vw, 76px) 36px; }
+/* Reserve the scrollbar's room on both sides, so switching between short and long views never shifts the centered content. */
+.content-page { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; padding: 38px clamp(24px, 5vw, 76px) 36px; }
 .content-page > * { max-width: 900px; margin-left: auto; margin-right: auto; }
 /* The private chat fills the page and scrolls inside itself, so the page has no scrollbar of its own around it. */
 .content-page.private-page { display: flex; flex-direction: column; }

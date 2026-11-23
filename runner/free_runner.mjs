@@ -7,7 +7,7 @@ import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, chose
 import { api as raw_api, overlapping_directories, read_rule } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
 import { capture_base, file_diffs } from './file_diff.mjs';
-import { correctable_refusals, free_task_text, MAX_REFUSAL_RETRIES, refusal_retry_prompt, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
+import { correctable_refusals, free_task_text, MAX_REFUSAL_RETRIES, refusal_retry_prompt, restart_resume_prompt, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
 import { entry_access, site_fetch } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
 import { image_settings } from './image_service.mjs';
@@ -1551,7 +1551,10 @@ export class FreeRoomRunner {
     if (Number.isInteger(pid) && !pids.includes(pid)) pids.push(pid);
     this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(key, JSON.stringify({ instance: this.instance, pids }));
   }
-  forget_owner(execution_id) { this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`owner:${execution_id}`); }
+  /** Drop the records an ended execution leaves: its process owners and whether a restart already resumed it. */
+  forget_owner(execution_id) {
+    this.store.db.prepare('DELETE FROM metadata WHERE key IN (?,?)').run(`owner:${execution_id}`, `restart-resumed:${execution_id}`);
+  }
   /** Once a new task received the stop reminders, retire acknowledged unconfirmed reports for its old turns. */
   clear_stopped(name) {
     for (const id of this.stopped_executions(name)) {
@@ -1643,7 +1646,10 @@ export class FreeRoomRunner {
       catch (error) { if (!/HTTP (404|409)/.test(error.message)) throw error; }
     }
   }
-  /** Check the website before reading local evidence; recovery never invokes software or schedules a retry. */
+  /**
+   * Check the website before reading local evidence. Recovery never sends the task again or schedules a retry; a turn
+   * that did not end on its own may only go on in its session (resume_after_restart).
+   */
   async recover_orphan(member, row, execution) {
     const latest = await api(this.config, `/executions/${execution.id}`);
     if (!['dispatched', 'started'].includes(latest.status)) {
@@ -1667,7 +1673,23 @@ export class FreeRoomRunner {
       }
       return this.fail(member.name, execution.id, room_text("{value1} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容", { value1: member.name }));
     }
+    if (!row.error && result.status !== 'failed' && await this.resume_after_restart(member, latest)) return;
     return this.fail(member.name, execution.id, RESTART_REASON);
+  }
+  /**
+   * A turn a restart ended midway goes on once in its own session, told to check the workspace first, instead of
+   * failing (user 2026-11-23, #8366); the task is never sent again whole, since part of it may already have run.
+   * Only software that can resume a session, and only a member already bound to one.
+   */
+  async resume_after_restart(member, execution) {
+    const key = `restart-resumed:${execution.id}`;
+    if (!capabilities_of(this.config.participants[member.name]?.adapter).resume || !this.store.binding(member.name).session_id
+      || this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)) return false;
+    this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(key, '1');
+    this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`retry-reason:${execution.id}`);
+    this.save(member.name, { status: 'delivering', error: '' });
+    await this.invoke(member, execution, { resume: restart_resume_prompt(execution.id) });
+    return true;
   }
   /** Retry only deliveries known not to have started, or a manual member's refused delivery. */
   async retry_or_fail(name, execution, reason) {

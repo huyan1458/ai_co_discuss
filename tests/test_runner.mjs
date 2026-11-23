@@ -3755,6 +3755,52 @@ test('the wake-up opening says who asked: user, host, detached work, hand-back o
 });
 
 
+test('a turn a restart ended midway goes on once in its own session, never sent again whole', async t => {
+  const codex_start = { type: 'event_msg', payload: { type: 'task_started', turn_id: 'current-turn', root_turn_id: 'current-turn' } };
+  const codex_end = type => ({ type: 'event_msg', payload: { type, turn_id: 'current-turn', root_turn_id: 'current-turn' } });
+  // What each software left when the restart ended its turn; only its own failure is not resumed.
+  const scenarios = {
+    'codex-killed': [codex_start],
+    'codex-interrupted': [codex_start, codex_end('turn_aborted')],
+    'codex-failed': [codex_start, { ...codex_end('task_complete'), payload: { ...codex_end('task_complete').payload, error: { message: 'model error' } } }],
+    'claude-killed': [{ type: 'system', subtype: 'init', session_id: 'session-id' },
+      { type: 'assistant', session_id: 'session-id', message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] } }],
+  };
+  for (const [scenario, events] of Object.entries(scenarios)) {
+    const f = await free_fixture(t); const prompts = [];
+    const is_codex = scenario.startsWith('codex');
+    f.config.participants.Claude.adapter = is_codex ? 'codex_cli' : 'claude';
+    const path = join(f.config.directory, 'recovery.log');
+    writeFileSync(path, [...(is_codex ? [{ type: 'session_meta', payload: { id: 'thread-id', source: 'cli' } }] : []), ...events]
+      .map(JSON.stringify).join('\n') + '\n');
+    const record = is_codex ? { kind: 'codex_turn', thread_id: 'thread-id', turn_id: 'current-turn', rollout_path: path }
+      : { kind: 'claude_process', session_id: 'session-id', log_path: path, offset: 0 };
+    const deliver = async (adapter, binding, task) => {
+      prompts.push(task.prompt);
+      task.on_recovery(record);
+      task.on_binding(is_codex ? 'thread-id' : 'session-id');
+      task.on_process(Object.assign(new EventEmitter(), { kill() {} }));
+      return { status: 'accepted' };
+    };
+    await new FreeRoomRunner(f.config, f.store, deliver).tick();
+    const execution = f.state.executions[0];
+    await new FreeRoomRunner(f.config, f.store, deliver).tick();
+    if (scenario === 'codex-failed') {
+      assert.equal(prompts.length, 1, scenario);
+      assert.match(execution.result, /重启后无法确认上次执行结果/, scenario);
+      continue;
+    }
+    assert.equal(prompts.length, 2, scenario);
+    assert.match(prompts[1], new RegExp(`执行 #${execution.id}.*被本机服务重启打断`), scenario);
+    assert.notEqual(execution.status, 'failed', scenario);
+    // Ended midway again: it fails as before rather than resume without end, and leaves no record behind.
+    await new FreeRoomRunner(f.config, f.store, deliver).tick();
+    assert.equal(prompts.length, 2, scenario);
+    assert.match(execution.result, /重启后无法确认上次执行结果/, scenario);
+    assert.equal(f.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`restart-resumed:${execution.id}`), undefined, scenario);
+  }
+});
+
 test('restart recovery captures only the exact completed delivery and never redelivers', async t => {
   for (const scenario of ['codex', 'failed-turn', 'unknown-error', 'old-turn', 'child-turn', 'conflict', 'claude', 'wrong-session', 'denied', 'empty', 'answered', 'rejected', 'legacy-retry']) {
     const f = await free_fixture(t); let sent = 0;

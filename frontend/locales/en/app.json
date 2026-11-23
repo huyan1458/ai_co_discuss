@@ -574,5 +574,11 @@
   "排除后部署": "Deploy without them",
   "部署": "Deploy",
   "网站地址": "Website address",
-  "{time} 前有效，到期前可在左栏“已发布”或回答下方续期。": "Live until {time}; renew before then from “Published” in the sidebar or under the answer."
+  "{time} 前有效，到期前可在左栏“已发布”或回答下方续期。": "Live until {time}; renew before then from “Published” in the sidebar or under the answer.",
+  "已上线": "Live",
+  "尚未上线": "Not live yet",
+  "待部署": "Ready to deploy",
+  "{count} 个文件 · {size}": "{count} files · {size}",
+  "第 {version} 版 · {count} 个文件 · {size}": "Version {version} · {count} files · {size}",
+  "{time} 到期": "expires {time}"
 }

@@ -103,6 +103,6 @@ def finish_mode(connection, room_id, token, payload):
     if mode["mode"] == "discussion":
         if require_member(connection, room_id, token)["role"] != "host":
             raise PermissionError(Text("只有主持人能宣告讨论完成"))
-        conclude_session_by_host(connection, room_id, {"conclusion": payload.get("revision")})
+        conclude_session_by_host(connection, room_id, {"conclusion": payload.get("revision"), "continue": payload.get("continue")})
         return mode_view(connection, room_id)
     raise FileExistsError(Text("房间没有进行中的 Goal 或讨论"))

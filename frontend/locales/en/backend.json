@@ -552,6 +552,8 @@
   "用户暂停讨论": "The user paused the discussion.",
   "用户打断": "The user interrupted the execution.",
   "讨论已结束": "The discussion ended.",
+  "主持人已收束讨论": "The host concluded the discussion.",
+  "continue 写明讨论结束后继续做什么，最多 {max_continue_reason} 字": "continue must describe what to do after the discussion ends, in up to {max_continue_reason} characters",
   "用户取消讨论安排": "The user cancelled the discussion plan.",
   "评审未投递：{reason}": "Review was not delivered: {reason}",
   "专家 {name} 的讨论请求失败：{reason}。请决定跳过、重排或暂停。": "The discussion request for expert {name} failed: {reason}. Decide whether to skip, reorder, or pause.",
