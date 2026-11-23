@@ -370,6 +370,21 @@ export function scan_site_source(real_target, kind, exclude = []) {
   };
 }
 
+/** Annotate transport failures without exposing credentials or query parameters. */
+async function deployment_fetch(fetcher, url, init) {
+  try {
+    return await fetcher(url, init);
+  } catch (error) {
+    const target = new URL(url);
+    const address = target.origin + target.pathname;
+    const code = error.cause?.code || error.cause?.errors?.find(item => item.code)?.code || error.code;
+    if (!code && error.message !== 'fetch failed') throw error;
+    throw new SiteCommandError(t('请求 {address} 失败（{code}）', { address, code: code || 'NETWORK_ERROR' }), {
+      code: 'network_error', http_status: 503,
+    });
+  }
+}
+
 /** Keep private device_token exclusively inside `~/.codiscuss/site-devices.json` (mode 0600). */
 async function ensure_device_identity(home, origin, fetcher = fetch) {
   mkdirSync(home, { recursive: true, mode: 0o700 });
@@ -378,7 +393,7 @@ async function ensure_device_identity(home, origin, fetcher = fetch) {
   if (store[origin]?.device_id && store[origin]?.device_token) {
     return store[origin];
   }
-  const res = await fetcher(`${origin}/api/devices`, {
+  const res = await deployment_fetch(fetcher, `${origin}/api/devices`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Accept-Language': 'zh-CN' },
     body: '{}',
@@ -426,7 +441,7 @@ async function room_api_request(site, path, { method = 'GET', token = '', body =
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   // A protected local site only accepts requests that pass the entry handshake (entry_client.mjs).
   const send = fetcher === fetch ? site_fetch : fetcher;
-  const res = await send(`${site.replace(/\/+$/, '')}${path}`, {
+  const res = await deployment_fetch(send, `${site.replace(/\/+$/, '')}${path}`, {
     method,
     headers,
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -446,7 +461,7 @@ async function worker_api(origin, path, { method = 'GET', token = '', body = und
   } else if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
   }
-  const res = await fetcher(`${origin}${path}`, {
+  const res = await deployment_fetch(fetcher, `${origin}${path}`, {
     method,
     headers,
     ...(raw_body !== undefined ? { body: raw_body } : body !== undefined ? { body: JSON.stringify(body) } : {}),

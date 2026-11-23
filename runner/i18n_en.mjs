@@ -29,6 +29,7 @@ export default {
   "正在连接 {host}。": "Connecting to {host}.",
   "心跳超过 {seconds} 秒未回应": "no heartbeat response for {seconds} seconds",
   "连接已断开，关闭代码 {code}": "connection closed with code {code}",
+  "请求 {address} 失败（{code}）": "Request to {address} failed ({code})",
   "连接被重置，请检查本机网络或代理": "connection reset; check this computer’s network or proxy",
   "连接超时，请检查本机网络或代理": "connection timed out; check this computer’s network or proxy",
   "无法解析网站域名": "website hostname could not be resolved",

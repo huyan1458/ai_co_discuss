@@ -268,6 +268,14 @@ async function copy_share_link() {
   copied_link.value = true;
   setTimeout(() => { copied_link.value = false; }, COPIED_MS);
 }
+// Attachment kinds unfolded to their files in the share dialog; a new page starts folded.
+const open_kinds = ref(new Set());
+watch(() => share_draft.value?.room_id, () => { open_kinds.value = new Set(); });
+function toggle_kind_open(kind) {
+  const next = new Set(open_kinds.value);
+  next.has(kind) ? next.delete(kind) : next.add(kind);
+  open_kinds.value = next;
+}
 const share_spot_total = computed(() => share_spots.value.reduce((total, spot) => total + spot.count, 0));
 // How long a published link lives; the share site keeps it at most seven days.
 const share_days = ref(7);
@@ -457,6 +465,26 @@ function actions(room, index, folder_id, folder_room_count) {
         <section v-if="share_draft.files?.count" class="share-dialog-section">
           <UCheckbox :model-value="share_draft.files.included" :disabled="share_phase !== 'ready'"
             :label="t('包含附件（{count} 个，共 {size}）', { count: share_draft.files.count, size: bridge.attachment_size(share_draft.files.bytes) })" @update:model-value="act('share_include_files', $event)" />
+          <!-- Kinds of attachment the owner can leave out, as when a room's zips take it past what a link carries. -->
+          <div v-if="share_draft.files.included" class="share-dialog-kinds">
+            <div v-for="kind in share_draft.files.kinds" :key="kind.kind" class="share-dialog-kind">
+              <div class="share-dialog-kind-head">
+                <UCheckbox :model-value="kind.included" :disabled="share_phase !== 'ready'"
+                  :label="t('{kind} {count} 个 · {size}', { kind: kind.label, count: kind.count, size: bridge.attachment_size(kind.bytes) })"
+                  @update:model-value="act('share_toggle_kind', { kind: kind.kind, include: $event === true })" />
+                <UButton :icon="open_kinds.has(kind.kind) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" color="neutral" variant="ghost" size="xs"
+                  :label="open_kinds.has(kind.kind) ? t('收起') : t('逐个选择')" :aria-expanded="open_kinds.has(kind.kind)" @click="toggle_kind_open(kind.kind)" />
+              </div>
+              <ul v-if="open_kinds.has(kind.kind)" class="share-dialog-files">
+                <li v-for="file in kind.files" :key="file.route">
+                  <UCheckbox :model-value="file.included" :disabled="share_phase !== 'ready'" @update:model-value="act('share_toggle_file', { route: file.route, include: $event === true })">
+                    <template #label><span class="share-dialog-file-name" :title="file.name">{{ file.name }}</span><span class="share-dialog-file-meta">#{{ file.message_id }} · {{ bridge.attachment_size(file.size) }}</span></template>
+                  </UCheckbox>
+                </li>
+              </ul>
+            </div>
+            <p class="share-dialog-muted">{{ t("已选 {size}；发布链接最多带 300 MB 附件（单个 100 MB），网页文件最多 100 MB。", { size: bridge.attachment_size(share_draft.files.carried) }) }}</p>
+          </div>
           <p v-if="share_draft.files.included && share_draft.files.site_left_out.length" class="share-dialog-muted">{{ t("{names} 不能放到分享站：发布链接时不带，消息里显示“未包含在分享中”；下载网页文件仍会带上。", { names: share_draft.files.site_left_out.slice(0, 3).join("、") + (share_draft.files.site_left_out.length > 3 ? t(" 等 {count} 个", { count: share_draft.files.site_left_out.length }) : "") }) }}</p>
           <p v-if="share_phase === 'checking'" class="share-dialog-muted">{{ t("正在检查文本类附件…") }}</p>
           <p v-else class="share-dialog-muted">{{ share_draft.files.included ? t("附件原样公开。文本类附件已一并检查；图片、视频和其他文件的内容程序查不了，请自己核对。") : t("不包含时，消息里的附件标记显示为“未包含在分享中”。") }}</p>

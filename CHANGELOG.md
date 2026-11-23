@@ -4,6 +4,7 @@ Versions match the npm package. Recorded from 0.5.0 on, listing only the changes
 
 ## 0.5.17 (2026-11-23)
 
+- New: Pick attachments by type or with "Choose files" when sharing; share links now carry up to 300 MB (100 MB per file).
 - Fixed: On phones, the replay toolbar buttons and time marks crowded into each other.
 - Changed: When a phone or tablet asks for a folder the computer has not opened to it, it now says why and how to allow it on the computer.
 - Changed: A small arrow after the version number at the top left shows it opens the changelog.

@@ -285,6 +285,14 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-inline-html > iframe { display: block; width: 100%; height: 100%; border: 0; background: transparent; }
 /* Until its document is in, the frame keeps its place but is not seen; the placeholder covers it. */
 .channel-inline-html { position: relative; }
+.share-dialog-kinds { display: flex; flex-direction: column; gap: 2px; margin: 8px 0 2px 24px; }
+.share-dialog-kinds > p { margin: 4px 0 0; }
+.share-dialog-kind-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
+.share-dialog-files { max-height: 220px; margin: 2px 0 6px 24px; padding: 4px 8px; overflow-y: auto; border: 1px solid var(--ui-border-muted); border-radius: 8px; list-style: none; }
+.share-dialog-files li { padding: 3px 0; }
+.share-dialog-files [data-slot="label"] { display: flex; gap: 8px; min-width: 0; }
+.share-dialog-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-dialog-file-meta { flex-shrink: 0; color: var(--ui-text-dimmed); font-size: 12px; }
 .channel-inline-html > iframe.is-waiting { visibility: hidden; }
 .channel-inline-html > .channel-inline-html-loading { position: absolute; inset: 0; }
 .channel-visual-slot, .channel-message-visual { display: block; min-width: 0; }

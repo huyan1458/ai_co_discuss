@@ -18,8 +18,9 @@ const SHARE_DEFAULT_DAYS = 7;
 const SHARE_MAX_BYTES = 5 * 1024 * 1024;
 // A downloaded page holds its attachments in memory as one string; past this the browser cannot build it.
 const SHARE_FILE_MAX_BYTES = 100 * 1024 * 1024;
-// A published link's attachments in all (user 2026-11-23): sent as files after the page, not inside its 5 MB of text.
-const SHARE_SITE_FILES_MAX_BYTES = 100 * 1024 * 1024;
+// A published link's attachments (user 2026-11-23): sent as files after the page, not inside its 5 MB of text.
+const SHARE_SITE_FILE_MAX_BYTES = 100 * 1024 * 1024;
+const SHARE_SITE_FILES_MAX_BYTES = 300 * 1024 * 1024;
 // HTML demos up to this size are read as a share page opens (warm_share_demos); larger ones wait to be seen.
 const SHARE_DEMO_WARM_BYTES = 2 * 1024 * 1024;
 // The attachments the share site takes, by extension, each sent as this one type: every kind the page previews, since
@@ -7168,6 +7169,7 @@ function view_snapshot() {
     share_draft: share_draft ? { room_id: share_draft.room_id, title: share_draft.title, phase: share_draft.phase || "ready",
       spots: [...share_draft.spots || [], ...share_draft.include_files ? share_draft.file_spots || [] : []],
       files: { count: share_draft.files?.length || 0, bytes: (share_draft.files || []).reduce((total, file) => total + file.size, 0), included: Boolean(share_draft.include_files),
+        kinds: share_draft.files ? share_file_kinds(share_draft) : [], carried: share_carried_files(share_draft, false).reduce((total, file) => total + file.size, 0),
         site_left_out: (share_draft.files || []).filter(file => !file.site_type).map(file => file.file_name) },
       linked: Boolean(share_link(share_draft.room_id)), link: share_draft.link || null, upload: share_draft.upload || null } : null,
     share_links: SHARE ? {} : share_links(), share_days: SHARE_DAYS,
@@ -7602,7 +7604,59 @@ function share_site_file(file_name) {
 /** The attachments a page carries: none unless included; on the share site (`site`) only the kinds it takes. */
 function share_carried_files(draft, site) {
   if (!draft.include_files) return [];
-  return site ? draft.files.filter(file => file.site_type) : draft.files;
+  const chosen = draft.files.filter(file => !draft.left_files?.has(file.route));
+  return site ? chosen.filter(file => file.site_type) : chosen;
+}
+
+// The kinds the share dialog lets the owner leave out, in the order it lists them (user 2026-11-23: a room's zips, which
+// repackage its other files, took it past the 100 MB a link carries).
+const SHARE_FILE_KINDS = [
+  ["archive", /\.(zip|rar|7z|tar|gz|tgz)$/i], ["video", /\.(mp4|m4v|webm|mov|mkv|avi|wmv|ogv)$/i],
+  ["audio", /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|weba)$/i], ["image", /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i],
+  ["document", /\.(pdf|docx?|xlsx?|ods|pptx?|prproj)$/i], ["page", /\.html?$/i]];
+
+/** Which kind a file counts as in the share dialog: one of SHARE_FILE_KINDS, else "text". */
+function share_file_kind(file_name) {
+  return SHARE_FILE_KINDS.find(([, pattern]) => pattern.test(file_name || ""))?.[0] || "text";
+}
+
+/**
+ * The dialog's attachment kinds: how many of each and how large, whether they go in (true, false, or "indeterminate"
+ * when only some do), and the files themselves, largest first, to pick one by one (user 2026-11-23).
+ */
+function share_file_kinds(draft) {
+  const labels = { archive: t('压缩包'), video: t('视频'), audio: t('音频'), image: t('图片'), document: t('文档'), page: t('网页'), text: t('文本与代码') };
+  const kinds = new Map();
+  for (const file of draft.files || []) {
+    const kind = share_file_kind(file.file_name);
+    const entry = kinds.get(kind) || kinds.set(kind, { kind, label: labels[kind], count: 0, bytes: 0, files: [] }).get(kind);
+    entry.count++;
+    entry.bytes += file.size;
+    entry.files.push({ route: file.route, name: file.file_name, size: file.size, message_id: file.message_id, included: !draft.left_files?.has(file.route) });
+  }
+  return [...SHARE_FILE_KINDS.map(([kind]) => kind), "text"].filter(kind => kinds.has(kind)).map(kind => {
+    const entry = kinds.get(kind), taken = entry.files.filter(file => file.included).length;
+    entry.files.sort((a, b) => b.size - a.size);
+    return { ...entry, included: taken === entry.count ? true : taken ? "indeterminate" : false };
+  });
+}
+
+/** Put one kind of attachment in the page being prepared, or leave it out: every file of it at once. */
+function share_toggle_kind({ kind, include }) {
+  const draft = share_draft;
+  if (!draft || draft.phase !== "ready") return;
+  draft.left_files = new Set(draft.left_files || []);
+  for (const file of draft.files) if (share_file_kind(file.file_name) === kind) include ? draft.left_files.delete(file.route) : draft.left_files.add(file.route);
+  publish_view();
+}
+
+/** Put one attachment in the page being prepared, or leave it out. */
+function share_toggle_file({ route, include }) {
+  const draft = share_draft;
+  if (!draft || draft.phase !== "ready") return;
+  draft.left_files = new Set(draft.left_files || []);
+  if (include) draft.left_files.delete(route); else draft.left_files.add(route);
+  publish_view();
 }
 
 /**
@@ -7611,8 +7665,9 @@ function share_carried_files(draft, site) {
  */
 function share_responses(draft, site) {
   if (!draft.include_files) return draft.responses;
-  if (!site) return draft.responses_with_files;
-  const taken = new Map(draft.files.filter(file => file.site_type).map(file => [file.route, file]));
+  if (!site && !draft.left_files?.size) return draft.responses_with_files;
+  // A file left out is taken out of its message too, so its tag reads "not included in the share".
+  const taken = new Map(share_carried_files(draft, site).map(file => [file.route, site ? file : { ...file, site_name: file.file_name, site_type: file.content_type }]));
   const responses = structuredClone(draft.responses_with_files);
   for (const [path, body] of Object.entries(responses)) {
     if (!/\/messages\?/.test(path)) continue;
@@ -7857,9 +7912,9 @@ function share_cancel() {
 async function share_room() {
   const draft = share_draft;
   if (!draft || draft.phase !== "ready" || state.backup_pending) return;
-  const file_bytes = draft.include_files ? draft.files.reduce((total, file) => total + file.size, 0) : 0;
+  const file_bytes = share_carried_files(draft, false).reduce((total, file) => total + file.size, 0);
   if (file_bytes > SHARE_FILE_MAX_BYTES) {
-    notify("error", t('附件共 {size}，超过网页文件能带的 100 MB；请取消“包含附件”，附件另行发送。', { size: attachment_size(file_bytes) }));
+    notify("error", t('附件共 {size}，超过网页文件能带的 100 MB；请取消勾选部分附件，或改用“发布链接”。', { size: attachment_size(file_bytes) }));
     return;
   }
   draft.phase = "downloading";
@@ -7974,10 +8029,17 @@ async function share_publish(ttl_days = SHARE_DEFAULT_DAYS) {
   publish_view();
   try {
     // Estimated first, so a room with large attachments is told at once rather than after reading them all.
-    const file_bytes = share_carried_files(draft, true).reduce((total, file) => total + file.size, 0);
+    const carried = share_carried_files(draft, true);
+    const oversized = carried.find(file => file.size > SHARE_SITE_FILE_MAX_BYTES);
+    if (oversized) {
+      draft.phase = "ready";
+      notify("error", t('附件 {name} 有 {size}，超过分享链接单个附件 100 MB 的上限；请取消勾选它。', { name: oversized.site_name, size: attachment_size(oversized.size) }));
+      return;
+    }
+    const file_bytes = carried.reduce((total, file) => total + file.size, 0);
     if (file_bytes > SHARE_SITE_FILES_MAX_BYTES) {
       draft.phase = "ready";
-      notify("error", t('附件合计 {size}，超过分享链接 100 MB 的上限；请取消“包含附件”，或改用“下载网页文件”。', { size: attachment_size(file_bytes) }));
+      notify("error", t('附件合计 {size}，超过分享链接 300 MB 的上限；请取消勾选部分附件。', { size: attachment_size(file_bytes) }));
       return;
     }
     const estimate = share_estimated_bytes(draft, true);
@@ -8214,7 +8276,7 @@ async function execute_view_action(name, value) {
   if (!["refresh", "create"].includes(name)) state.navigation_version++;
   const event = { preventDefault() {} };
   const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
-    archives: toggle_archives, backup: backup_room, backup_rooms, share_prepare, share_room, share_cancel, share_publish, share_include_files, share_revoke, share_renew, share_copy, import_rooms, manage_channel, retry_destruction, destroy_all_rooms, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
+    archives: toggle_archives, backup: backup_room, backup_rooms, share_prepare, share_room, share_cancel, share_publish, share_include_files, share_toggle_kind, share_toggle_file, share_revoke, share_renew, share_copy, import_rooms, manage_channel, retry_destruction, destroy_all_rooms, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_from_composer(event), discard_sending, retry_sending, choose_attachments, remove_attachment, preview_attachment,
     create: ({ folder_id, accepted, rejected }) => submit_room(event, folder_id, { accepted, rejected }), quick_create: quick_create_room, welcome: open_welcome,
     save_context: () => save_context(event), save_topic: () => save_topic(event),
