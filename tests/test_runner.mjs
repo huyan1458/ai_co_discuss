@@ -829,11 +829,14 @@ const AGY_NOT_STARTED = {
     'Eligibility check failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist": EOF'],
 };
 // agy signed out: the 1.4.12 sign-in prompt timing out headless (room 27395c25b03d, #318), and after the account was
-// switched (room 9524f49e42b5, #3203). Signing in again is the only cure, so these are `auth`, never restarted or retried.
+// switched (room 9524f49e42b5, #3203). These are `auth`, never retried by the runner. agy also asks to sign in when it
+// failed to load a stored sign-in on a flaky network (#5258), so a sign-in prompt is stopped at once and restarted twice.
+// Each entry: [stderr, what the reported reason includes, agy runs, whether agy keeps waiting at the prompt].
+const AGY_SIGN_IN_PROMPT = 'Authentication required. Please visit the URL to log in:\n  https://accounts.google.com/o/oauth2/auth?x\n\nWaiting for authentication (timeout 60s)...\n';
 const AGY_SIGNED_OUT = {
-  sign_in: ['Authentication required. Please visit the URL to log in:\nWaiting for authentication (timeout 60s)...\nError: authentication timed out.',
-    'authentication failed or timed out'],
-  unauthenticated: ['', 'Eligibility check failed: UNAUTHENTICATED (401)'],
+  sign_in_prompt: [AGY_SIGN_IN_PROMPT, 'authentication required', 3, true],
+  sign_in_timed_out: ['Error: authentication timed out.', 'authentication failed or timed out', 3, false],
+  unauthenticated: ['', 'Eligibility check failed: UNAUTHENTICATED (401)', 1, false],
 };
 const agy_not_started = error => ({ event: 'result', result: { conversation_id: '', status: 'ERROR', response: '', error,
   duration_seconds: 0, num_turns: 0, finished_reason: 'error' } });
@@ -884,18 +887,19 @@ test("Claude's own error categories classify a usage limit as quota and a sign-i
   assert.deepEqual(claude_failure_class({ kind: 'server_error', text: 'Overloaded' }), {});
 });
 
-for (const [cause, [stderr, error]] of Object.entries(AGY_SIGNED_OUT)) {
-test(`agy that is signed out (${cause}) fails once as auth, without a restart or a retry`, async t => {
+for (const [cause, [stderr, error, runs, linger]] of Object.entries(AGY_SIGNED_OUT)) {
+test(`agy that is signed out (${cause}) fails once as auth after ${runs} run(s), without a runner retry`, async t => {
   const f = await fixture(t);
   f.config.participants.Codex = { adapter: 'antigravity_cli', executable: process.execPath };
-  const process_fixture = fake_cli([agy_not_started(error)], { stderr, exit_code: 1 });
+  // An agy waiting at the sign-in prompt prints no result; it is stopped instead of waited out.
+  const process_fixture = fake_cli(linger ? [] : [agy_not_started(error)], { stderr, exit_code: 1, linger });
   const reported = [];
   const deliver = (config, binding, task) => {
     const on_failure = task.on_failure;
     task.on_failure = (reason, details) => { reported.push(details); return on_failure(reason, details); };
     return deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user'));
   };
-  await agy_not_started_attempt(f, new FreeRoomRunner(f.config, f.store, deliver), process_fixture, 1);
+  await agy_not_started_attempt(f, new FreeRoomRunner(f.config, f.store, deliver), process_fixture, runs);
   assert.equal(f.current_execution().status, 'failed');
   assert.equal(f.current_execution().retry, null);
   assert.ok(f.current_execution().result.includes(error), f.current_execution().result);
@@ -958,12 +962,25 @@ test('agy whose eligibility check drops a connection is restarted at once and ru
   assert.equal(f.store.binding('Codex').session_id, 'actual-cli-session');
 });
 
+// agy that failed to load its stored sign-in on a flaky network asks to sign in, then works on the next start (#5258).
+test('agy that asks to sign in is stopped at once, restarted, and runs the turn when the sign-in loads', async t => {
+  const f = await fixture(t);
+  f.config.participants.Codex = { adapter: 'antigravity_cli', executable: process.execPath };
+  const process_fixture = fake_cli(cli_events('antigravity_cli'),
+    { earlier: [{ events: [], stderr: AGY_SIGN_IN_PROMPT, linger: true }] });
+  const deliver = (config, binding, task) => deliver_task(config, binding, task, process_fixture.spawn_process, join(f.config.directory, 'user'));
+  await agy_not_started_attempt(f, new FreeRoomRunner(f.config, f.store, deliver), process_fixture, 2);
+  assert.equal(f.current_execution().retry, null, 'no runner retry was needed');
+  assert.doesNotMatch(f.current_execution().result, /authentication/);
+  assert.equal(f.store.binding('Codex').session_id, 'actual-cli-session');
+});
+
 /** Emit real subprocess output in split UTF-8 chunks without invoking an AI account. */
 function fake_cli(events, options = {}) {
   const calls = [];
   const config_calls = [];
-  // `options.earlier`: runs the first calls emit instead, as { events, exit_code }, before `events` takes over.
-  const source_for = ({ events, exit_code }) => `
+  // `options.earlier`: runs the first calls emit instead, as { events, exit_code, stderr?, linger? }, before `events` takes over.
+  const source_for = ({ events, exit_code, stderr = options.stderr, linger = options.linger }) => `
     const fs = require('node:fs');
     (async () => {
       // The Codex bridge and Claude keep stdin open for interjections after their first line (the task, the first
@@ -974,13 +991,13 @@ function fake_cli(events, options = {}) {
         if (/^\\{"(prompt|type)"/.test(input) && input.includes('\\n')) break;
       }
       fs.writeFileSync('stdin.txt', input);
-      process.stderr.write(${JSON.stringify(options.stderr || 'diagnostic 中文')});
+      process.stderr.write(${JSON.stringify(stderr || 'diagnostic 中文')});
       const output = Buffer.from(${JSON.stringify(events.map(event => JSON.stringify(event)).join('\r\n') + '\r\n')});
       const split = Math.max(1, output.indexOf(Buffer.from('中文')) + 1);
       process.stdout.write(output.subarray(0, split));
       await new Promise(resolve => setTimeout(resolve, 5));
       process.stdout.write(output.subarray(split));
-      if (${Boolean(options.linger)}) setInterval(() => {}, 1000);
+      if (${Boolean(linger)}) setInterval(() => {}, 1000);
       process.exitCode = ${exit_code || 0};
     })();`;
   const runs = (options.earlier || []).map(source_for);

@@ -534,6 +534,5 @@
   "房间已建好，但自动销毁没有设置成功，可在“房间”页重新设置：{value1}": "The room was created, but auto-destroy could not be set; set it again in the “Room” tab: {value1}",
   "这个文件夹有 {count} 个文件、共 {size}，超过一次下载的上限（{files} 个文件、{limit}）；请下载其中的子文件夹。": "This folder has {count} files, {size} in all, more than one download takes ({files} files, {limit}); download its subfolders instead.",
   "已读取 {done} / {count} 个文件": "Read {done} of {count} files",
-  "正在销毁「{name}」：记录与附件已删除，其余各项核验完成后房间会消散。": "Destroying “{name}”: records and attachments are deleted; the room dissolves once the remaining items are checked.",
   "「{name}」还在清理，可在房间目录“…”里的“销毁记录”查看进度或重试。": "“{name}” is still being cleaned up; follow it or retry under “Destruction records” in the room list's “…” menu."
 }

@@ -712,15 +712,28 @@ export function sweep_legacy_agy_projects(service_home, user_home = homedir()) {
 // Signed out or the account switched (room #3203: "Eligibility check failed: UNAUTHENTICATED (401)"; the sign-in prompt
 // timing out headless, "authentication failed or timed out"): only signing agy in again on this computer helps.
 const AGY_SIGNED_OUT = /\bUNAUTHENTICATED\b|\bauthentication (?:failed|required|timed out)\b/i;
+// agy also asks to sign in when it failed to load a stored sign-in on a flaky network, while the account still works
+// (room 拾光咖啡App, execution #5258). No one signs in headless, so the prompt is not waited out (60 s): the process is
+// stopped at once and started again before it is reported as `auth`.
+const AGY_SIGN_IN_PROMPT = /\bAuthentication required\b/;
+const AGY_SIGN_IN_STOPPED = 'Antigravity CLI ERROR：authentication required (sign-in prompt in a headless run, not waited for)';
+const AGY_SIGN_IN_TIMED_OUT = /\bauthentication (?:required \(sign-in prompt|(?:failed or )?timed out\b)/i;
+
+/** Stop agy as soon as it asks to sign in; see AGY_SIGN_IN_PROMPT. */
+function abandon_sign_in(state, text) {
+  if (AGY_SIGN_IN_PROMPT.test(text)) state.abandon = AGY_SIGN_IN_STOPPED;
+}
 
 /**
  * How a failed agy turn is classified for the room (adapter contract `on_failure(reason, {failure_class, resets,
- * reset_at})`, as Claude's): a signed-out account is `auth`, an exhausted account quota `quota`. agy says when it resets as a duration from now
+ * reset_at})`, as Claude's): a signed-out account is `auth` (`restartable` when it may be a sign-in that failed to
+ * load, so the CLI framework starts it again at once first), an exhausted account quota `quota`. agy says when it resets as a duration from now
  * ("Individual quota reached. … Resets in 141h35m10s.", 1.5.x, room #3327): `reset_at` is now plus that duration in
  * Unix seconds, and `resets` the same moment as a local time, since the failure is shown long after. Anything else
  * stays unclassified.
  */
 export function agy_failure_class(reason, now = new Date()) {
+  if (AGY_SIGN_IN_TIMED_OUT.test(String(reason))) return { failure_class: 'auth', restartable: true };
   if (AGY_SIGNED_OUT.test(String(reason))) return { failure_class: 'auth' };
   if (!/\bquota reached\b/i.test(String(reason))) return {};
   const match = /\bResets in\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?/i.exec(reason);
@@ -744,7 +757,7 @@ export const antigravity_cli = {
   // A deleted room's session records and any legacy private agy projects are removed with it.
   cleanup: remove_agy_projects, sweep: sweep_legacy_agy_projects,
   deliver,
-  invocation, lifecycle, events, failure_class: reason => agy_failure_class(reason),
+  invocation, lifecycle, events, failure_class: reason => agy_failure_class(reason), on_stderr: abandon_sign_in,
   session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings,
     list: list_sessions, preview: preview_session,
     remove: (id, { home = homedir() } = {}) => remove_conversation(join(home, '.gemini', 'antigravity-cli'), id),

@@ -174,8 +174,6 @@
   "请至少添加一位成员。同一平台可添加多位，各自独立会话。": "Add at least one member. The same platform can be added several times, each with its own session.",
   "协作方式（可选）": "How to work (optional)",
   "创建后": "After creation",
-  "派活 {value}": "Assign {value}",
-  "API {value}": "API {value}",
   "{count} 次": "{count} requests",
   "建房后可在房间页修改。": "Can be changed on the room page later.",
   "还差：{reason}": "Still needed: {reason}",

@@ -76,7 +76,7 @@ function write_limit(value) {
 <template>
   <div class="host-permissions">
     <UCheckbox :model-value="all" :disabled="disabled" :label="t('主持人完整权限')" :aria-label="t('主持人完整权限')"
-      :description="t('主持人可自行处理问题、持续推进；可只勾选下面的一部分。成员项目权限最高可写。')"
+      :description="t('主持人自行处理问题、持续推进；给成员的项目权限最高可写。')"
       @update:model-value="send($event === true ? HOST_ITEMS : [])" />
     <span v-if="edits.has(roomId)" class="host-saving" role="status">{{ t('保存中…') }}</span>
     <details class="host-permission-items" :open="roomId ? open_rooms.has(roomId) : undefined" @toggle="roomId && ($event.target.open ? open_rooms.add(roomId) : open_rooms.delete(roomId))">

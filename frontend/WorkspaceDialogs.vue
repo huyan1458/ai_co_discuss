@@ -82,11 +82,6 @@ function announce_destroying(count) {
   bridge.notify("info", t('正在销毁 {count} 个房间：逐项删除并复查后，房间会逐个消散并给出回执；也可在“销毁记录”里查看。', { count }));
 }
 
-/** Resolve once none of these rooms is still being destroyed here, or after DESTROY_WAIT_MS. */
-async function destroyed(ids) {
-  const deadline = Date.now() + DESTROY_WAIT_MS;
-  while (ids.some((id) => view.value.destroying.includes(id)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, DESTROY_POLL_MS));
-}
 
 /** Delete every archived channel in the current list, one request at a time. */
 async function delete_all_archives() {
@@ -101,9 +96,6 @@ async function delete_all_archives() {
 }
 
 const management_title = ref("");
-// How long removing a folder with its rooms waits for them to finish dissolving, and how often it checks.
-const DESTROY_WAIT_MS = 120_000;
-const DESTROY_POLL_MS = 1000;
 const folder_name = ref("");
 // The folder's project paths, edited as the new-room form does: a main directory, then other directories.
 const folder_main = ref("");
@@ -215,8 +207,6 @@ async function remove_folder(with_rooms) {
   if (rooms.length) announce_destroying(rooms.length);
   let deleted = true;
   for (const room of rooms) deleted = await act("manage_channel", { id: room.id, action: "delete" }) && deleted;
-  // The rooms dissolve inside their folder first, so the folder goes only once they are gone.
-  await destroyed(rooms.map((room) => room.id));
   if (deleted) await act("delete_folder", id);
 }
 

@@ -59,7 +59,7 @@
   "主持人完整权限": "Full host control",
   "主持人权限": "Host permissions",
   "主持人部分权限": "Partial host control",
-  "主持人可自行处理问题、持续推进；可只勾选下面的一部分。成员项目权限最高可写。": "The host handles problems and keeps work moving by itself; you can tick only some of the items below. Members get write access to the project at most.",
+  "主持人自行处理问题、持续推进；给成员的项目权限最高可写。": "The host handles problems and keeps work moving; it can give members write access at most.",
   "具体权限（已选 {count} / {total}）": "Items ({count} of {total} selected)",
   "处理执行问题": "Handle execution problems",
   "停止、插话、重试成员，撤回自己派出的活": "Stop, steer or retry members, and withdraw work it dispatched",

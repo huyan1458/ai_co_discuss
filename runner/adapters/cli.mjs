@@ -1,7 +1,7 @@
 /**
  * One headless CLI turn, shared by the CLI adapters (Codex CLI, agy CLI). The adapter supplies what differs:
  * `invocation(config, binding, task, user_home)` → `{args, input?, check?, on_session?, executable?, steer?}`, `lifecycle(state, event, task, bind)`
- * for its documented events, `events` for progress (and optionally `events.edits(event)` for files edited with the agent's own tools), and optionally `on_stderr(state, text)` and `exit_error(state)`.
+ * for its documented events, `events` for progress (and optionally `events.edits(event)` for files edited with the agent's own tools), and optionally `on_stderr(state, text)` (setting `state.abandon` to a reason stops a CLI that waits before any turn, as not started) and `exit_error(state)`.
  * `executable` runs another program in place of the software (a bridge to it); `steer(text)` → the stdin line that passes
  * an interjection into the running turn, and with it stdin stays open after `input` and the delivery can be steered.
  */
@@ -56,8 +56,16 @@ function monitor_cli(adapter, child, binding, task, restart) {
   state.limit_timer = setTimeout(() => { state.error = cli_timeout_reason(max_run_ms); child.kill(); }, max_run_ms);
   child.stdout.on('data', chunk => task.on_output(log_path, chunk));
   child.stderr.setEncoding('utf8');
+  // Stops the process without marking it stopped by the runner, so a restart is still allowed.
+  const own_kill = child.kill.bind(child);
+  // Plain text output (stderr, and stdout lines that are not JSON) goes to the adapter's `on_stderr`.
+  const watch_text = text => {
+    adapter.on_stderr?.(state, text);
+    // `abandon`: the adapter saw the CLI wait before any turn for something no one does headless (a sign-in prompt).
+    if (state.abandon && !state.error) { state.error = state.abandon; state.not_started = true; own_kill(); }
+  };
   child.stderr.on('data', chunk => {
-    adapter.on_stderr?.(state, state.diagnostic + chunk);
+    watch_text(state.diagnostic + chunk);
     state.diagnostic = (state.diagnostic + chunk).slice(-CLI_DIAGNOSTIC_CHARS).trim();
     task.on_output(log_path, chunk);
   });
@@ -65,7 +73,7 @@ function monitor_cli(adapter, child, binding, task, restart) {
     if (!line.trim()) return;
     let event;
     try { event = JSON.parse(line); }
-    catch { state.diagnostic = 'CLI 输出中存在无效 JSON，详情见本机日志'; return; }
+    catch { state.diagnostic = 'CLI 输出中存在无效 JSON，详情见本机日志'; watch_text(line); return; }
     trace_cli_event(event, task);
     const phase = adapter.events.phase(event);
     if (phase) task.on_activity?.(phase, adapter.events.tool(event), adapter.events.call?.(event));
@@ -82,9 +90,10 @@ function monitor_cli(adapter, child, binding, task, restart) {
     if (!state.spawned) return;
     if (state.denials.length) task.on_denials?.(state.denials);
     const error = cli_exit_error(adapter, state, code, signal);
-    // The adapter's classification of the failure (`quota` with when it resets); a lasting one is never started again.
-    const failure = error ? adapter.failure_class?.(error, state) || {} : {};
-    if (error && state.not_started && !state.stopped && !failure.failure_class && restart?.()) return;
+    // The adapter's classification of the failure (`quota` with when it resets); a lasting one is never started again,
+    // unless the adapter marks it `restartable` (it may be passing), and is reported once the restarts are used up.
+    const { restartable, ...failure } = error ? adapter.failure_class?.(error, state) || {} : {};
+    if (error && state.not_started && !state.stopped && (!failure.failure_class || restartable) && restart?.()) return;
     // `not_started`: the adapter saw the CLI fail before any turn ran, so the runner may deliver the same task again.
     if (error) task.on_failure(error, { not_started: Boolean(state.not_started) && !failure.failure_class,
       ...(failure.failure_class ? { retryable: false, ...failure } : {}) });

@@ -293,7 +293,8 @@ function place_marks() {
     if (range) ranges.push(range);
     marks.set(excerpt.message_id, [...(marks.get(excerpt.message_id) || []), { id: excerpt.id, number: index + 1, ...place }]);
   });
-  excerpt_marks.value = marks;
+  // Runs after every transcript update; a new Map with the same marks would redraw the whole transcript once more.
+  if (!same_value(excerpt_marks.value, marks)) excerpt_marks.value = marks;
   if (!globalThis.CSS?.highlights || typeof Highlight !== "function") return;
   if (ranges.length) CSS.highlights.set(QUOTED_HIGHLIGHT, new Highlight(...ranges));
   else CSS.highlights.delete(QUOTED_HIGHLIGHT);
@@ -529,6 +530,8 @@ const PRELOAD_URGENT_BUDGET_MS = 14;
 const PRELOAD_JUMP_BUDGET_MS = 40;
 const PRELOAD_FIRST_SLICE = 2;
 const PRELOAD_MAX_SLICE = 20;
+// Share of the cards already shown that one slice adds at least (see preload_slice).
+const PRELOAD_RENDERED_SHARE = 0.25;
 // Idle slices wait this long at most (ms) for an idle moment.
 const PRELOAD_IDLE_TIMEOUT_MS = 300;
 // The reader is still scrolling until this long (ms) after their last scroll event. iOS sends scroll events only for
@@ -678,6 +681,11 @@ watch(() => free_busy.value.length > 0 || free_queued.value.length > 0, (busy, _
   const timer = setInterval(() => { free_now.value = Math.floor(Date.now() / 1000); }, 1000);
   cleanup(() => clearInterval(timer));
 }, { immediate: true });
+/**
+ * Reads the ticking clock for its slot only: the slot renders inside this component, so each second redraws just the
+ * elapsed texts instead of the whole transcript (a 580-message room spent most of every second redrawing it).
+ */
+const LiveClock = { setup: (_props, { slots }) => () => slots.default?.({ now: free_now.value }) };
 const free_working = computed(() => view.value.query ? [] : free_busy.value);
 /** Late text is owner-only and fetched only when its fold opens; never cache it across rooms or loss of access. */
 const late_answers = ref(new Map());
@@ -798,9 +806,9 @@ function dispatch_badges(message_id) {
   return badges;
 }
 /** How long the working card has run or waited, with the retry attempt when it is being redelivered. */
-function working_elapsed(message) {
+function working_elapsed(message, now) {
   if (message.provisional) return "";
-  const spent = format_elapsed(Math.max(0, free_now.value - message.created_at));
+  const spent = format_elapsed(Math.max(0, now - message.created_at));
   const text = message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: spent }) : '' })
     : message.queued ? t('已等 {value1}', { value1: spent }) : t('已用 {value1}', { value1: spent });
   return text + (message.attempt ? t(' · 第 {value1}/{value2} 次重试', { value1: message.attempt, value2: MAX_DELIVERY_RETRIES }) : '');
@@ -809,9 +817,9 @@ function working_elapsed(message) {
  * The working card's one status line: the phase while output keeps coming, a warning only after a long silence.
  * Silence while a command runs is expected, so it is named as such instead of a possible hang.
  */
-function working_status(message) {
+function working_status(message, now) {
   // Data shown after the page was hidden or offline may be old; silence counts only up to when it was last current.
-  const observed = view.value.observed_until ? Math.min(free_now.value, Math.floor(view.value.observed_until / 1000)) : free_now.value;
+  const observed = view.value.observed_until ? Math.min(now, Math.floor(view.value.observed_until / 1000)) : now;
   const silent = Math.max(0, observed - (message.activity_at || message.created_at));
   // Paused from the private chat: its software is stopped on purpose, so the silence is no hang.
   if (message.paused) return { text: message.text, live: false };
@@ -2088,7 +2096,10 @@ async function preload_slice() {
   }
   const spent = performance.now() - started;
   const budget = not_rendered(pending_jump) ? PRELOAD_JUMP_BUDGET_MS : urgent ? PRELOAD_URGENT_BUDGET_MS : PRELOAD_BUDGET_MS;
-  preload_size = Math.max(1, Math.min(PRELOAD_MAX_SLICE, Math.round(preload_size * budget / Math.max(spent, 1))));
+  // A slice re-renders and measures every card already shown, so its time grows with those cards, not with the slice;
+  // shrinking it then only adds slices. It takes at least a share of them, so a long history fills in a few dozen slices.
+  const fitted = Math.max(1, Math.min(PRELOAD_MAX_SLICE, Math.round(preload_size * budget / Math.max(spent, 1))));
+  preload_size = Math.max(fitted, Math.ceil((transcript_messages.value.length - render_start.value) * PRELOAD_RENDERED_SHARE));
   preload_busy = false;
   if (pending_jump !== null && !not_rendered(pending_jump)) {
     const id = pending_jump;
@@ -3199,15 +3210,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? t('正在筛选…') : t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
     <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
       <div class="channel-map-track">
-        <div v-for="section in navigation_sections" :key="section.entries[0].key"v-memo="[section, preview_open, active_round === section.number ? active_message : null, section_preview_position(section)]" class="channel-map-round" :style="{ '--round-message-count': section.count }">
+        <div v-for="section in navigation_sections" :key="section.entries[0].key"v-memo="[section, preview_open, active_round === section.number ? active_message : null, section_preview_position(section), section === navigation_sections.at(-1) ? navigation_working : null]" class="channel-map-round" :style="{ '--round-message-count': section.count + (section === navigation_sections.at(-1) ? navigation_working.length : 0) }">
           <!-- A free room is one long section, so each tick keeps its own memo: moving the reading position or the hover redraws only the ticks it reaches. -->
           <button v-for="item in section.entries" :key="item.key" v-memo="[item.message, item.label, item.index, active_message === item.message.id, item.message.id === (active_message || view.messages[0]?.id), preview_index < 0 ? -1 : Math.min(Math.abs(item.index - preview_index), NAV_HOVER_REACH), preview_open && preview_entry === item.key]" type="button" class="channel-navigation-entry" :class="item.round ? 'channel-round-range' : 'channel-message-jump'" :data-author="item.round ? undefined : bridge.identities[item.message.author]?.style" :data-jump-id="item.round ? undefined : item.message.id" :data-round-jump="item.round ? item.label : undefined" :aria-label="item.label" :tabindex="!item.round && item.message.id === (active_message || view.messages[0]?.id) ? 0 : -1" :aria-current="!item.round && active_message === item.message.id ? 'location' : undefined" :aria-describedby="preview_open && preview_entry === item.key ? 'channel-navigation-preview' : undefined" @pointerenter="hover_preview(item, $event)" @pointermove="hover_preview(item, $event)" @focus="focus_preview(item, $event)" @keydown="navigate_by_key($event, item.index)" @click="activate_navigation(item, $event)">
             <span v-if="item.round" class="channel-round-number" aria-hidden="true">{{ item.number || '' }}</span>
             <span v-else class="channel-jump-tick" aria-hidden="true" :style="tick_state(item, item.index)"></span>
           </button>
-        </div>
-        <div v-if="navigation_working.length" class="channel-map-working" :style="{ '--round-message-count': navigation_working.length }">
-          <button v-for="item in navigation_working" :key="`working-${item.id}`" type="button" tabindex="-1" class="channel-navigation-entry channel-message-jump channel-working-jump" :data-author="bridge.identities[item.author]?.style" :aria-label="t('{value1} 正在处理', { value1: bridge.display_name(item.author) })" :title="t('{value1} 正在处理', { value1: bridge.display_name(item.author) })" @click="jump_to_working(item)">
+          <button v-for="item in section === navigation_sections.at(-1) ? navigation_working : []" :key="`working-${item.id}`" type="button" tabindex="-1" class="channel-navigation-entry channel-message-jump channel-working-jump" :data-author="bridge.identities[item.author]?.style" :aria-label="t('{value1} 正在处理', { value1: bridge.display_name(item.author) })" :title="t('{value1} 正在处理', { value1: bridge.display_name(item.author) })" @click="jump_to_working(item)">
             <span class="channel-jump-tick" aria-hidden="true"></span>
           </button>
         </div>
@@ -3238,7 +3247,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </div>
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :removable="!mark_editing.touch" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? docked_sheet_style() : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
-    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, message_groups,view.messages_loading, view.messages_failure, view.sending_previews, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, free_now, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, message_groups,view.messages_loading, view.messages_failure, view.sending_previews, view.failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, pending, execution_notes, open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, room.free, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view.query && !view.source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -3300,7 +3309,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><UBadge v-for="badge in message.marks?.badges || []" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UTooltip v-if="message.background" :text="t('后台进行：主持人没有等它，接着在做别的')"><UIcon name="i-lucide-split" class="channel-working-background" role="img" :aria-label="t('后台进行：主持人没有等它')" /></UTooltip></div>
                 <span v-if="message.model || message.effort" class="channel-message-provenance channel-message-model" :title="[message.model, message.effort].filter(Boolean).join(' · ')"><bdi v-if="message.model" class="channel-model-id">{{ message.model }}</bdi><span v-if="message.effort" class="channel-model-effort">{{ message.model ? ` · ${message.effort}` : message.effort }}</span></span>
               </div>
-              <div class="channel-message-provenance channel-message-facts"><time v-if="message.created_at" :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time><span class="channel-message-elapsed">{{ working_elapsed(message) }}</span></div>
+              <div class="channel-message-provenance channel-message-facts"><time v-if="message.created_at" :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time><LiveClock v-slot="{ now }"><span class="channel-message-elapsed">{{ working_elapsed(message, now) }}</span></LiveClock></div>
             </div>
             <UTooltip v-if="view.access?.can_manage && shows_progress(message) && message.execution_id" :text="t('私聊：查看它正在做什么')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="t('私聊 {value1}：查看本次执行过程', { value1: bridge.display_name(message.author) })" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
           </div>
@@ -3312,13 +3321,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </div></div></div>
           </template>
           <div class="channel-working-main">
-            <span v-for="status in [working_status(message)]" :key="message.id" class="channel-working-status" :class="{ 'channel-working-warning': status.warning }" role="status" :title="shows_progress(message) ? (message.waiting ? message.text : status.text) : t('此接入方式看不到进度，可在原窗口查看')">
+            <LiveClock v-slot="{ now }"><span v-for="status in [working_status(message, now)]" :key="message.id" class="channel-working-status" :class="{ 'channel-working-warning': status.warning }" role="status" :title="shows_progress(message) ? (message.waiting ? message.text : status.text) : t('此接入方式看不到进度，可在原窗口查看')">
               <span v-if="message.waiting">{{ message.text }}</span>
-              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
+              <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
               <span v-else>{{ status.text }}</span>
             </span>
             <!-- Phone only: the time used moves here from the head, so both sides of the strip are two lines (user 2026-11-22, #6945). -->
-            <span class="channel-message-provenance channel-working-elapsed">{{ working_elapsed(message) }}</span>
+            <span class="channel-message-provenance channel-working-elapsed">{{ working_elapsed(message, now) }}</span></LiveClock>
             <span v-if="view.access?.can_manage && !message.queued" class="channel-working-actions">
                 <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
                 <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
@@ -3349,19 +3358,19 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <div class="channel-message-meta">
                 <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong></div>
               </div>
-              <div class="channel-message-provenance channel-message-facts"><time v-if="message.created_at" :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time><span class="channel-message-elapsed">{{ message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) : '' }) : t('已用 {value1}', { value1: format_elapsed(Math.max(0, free_now - message.created_at)) }) }}</span></div>
+              <div class="channel-message-provenance channel-message-facts"><time v-if="message.created_at" :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time><LiveClock v-slot="{ now }"><span class="channel-message-elapsed">{{ message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: format_elapsed(Math.max(0, now - message.created_at)) }) : '' }) : t('已用 {value1}', { value1: format_elapsed(Math.max(0, now - message.created_at)) }) }}</span></LiveClock></div>
             </div>
             <div class="channel-working-row">
-              <div v-for="status in [working_status(message)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="shows_progress(message) ? undefined : t('此接入方式看不到进度，可在原窗口查看')">
+              <LiveClock v-slot="{ now }"><div v-for="status in [working_status(message, now)]" :key="message.id" class="channel-message-text" :class="{ 'channel-working-warning': status.warning }" role="status" :aria-label="`${bridge.display_name(message.author)} ${status.text}`" :title="shows_progress(message) ? undefined : t('此接入方式看不到进度，可在原窗口查看')">
                 <span v-if="message.waiting">{{ message.text }}</span>
-                <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="free_now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
+                <WorkingText v-else-if="status.live" :text="status.text" :seed="message.author" :beat="message.activity_at" :silent="now - (message.activity_at || message.created_at)" dots :muted="!shows_progress(message)" />
                 <span v-else>{{ status.text }}</span>
-              </div>
+              </div></LiveClock>
             </div>
             <template v-if="message.retry">
               <p class="channel-message-text channel-failure-reason is-warning">{{ message.retry.reason }}</p>
               <div class="channel-failure-actions">
-                <span class="channel-message-provenance">{{ t('{value1}（第 {value2}/{value3} 次）', { value1: message.retry.retry_at > free_now ? t('{value1} 秒后自动重试', { value1: message.retry.retry_at - free_now }) : t('正在重试'), value2: message.retry.attempt, value3: MAX_DELIVERY_RETRIES }) }}</span>
+                <LiveClock v-slot="{ now }"><span class="channel-message-provenance">{{ t('{value1}（第 {value2}/{value3} 次）', { value1: message.retry.retry_at > now ? t('{value1} 秒后自动重试', { value1: message.retry.retry_at - now }) : t('正在重试'), value2: message.retry.attempt, value3: MAX_DELIVERY_RETRIES }) }}</span></LiveClock>
                 <template v-if="view.access?.can_manage">
                   <UButton :label="t('立即重试')" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="t('立即重新投递给 {value1}', { value1: bridge.display_name(message.author) })" :disabled="!!pending"
                     @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_now' })" />

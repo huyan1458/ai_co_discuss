@@ -72,9 +72,8 @@ const RESUME_LOADING_MAX_MS = 15000;
 const TOAST_DURATION_MS = 3500;
 // How long an archived room can be taken back before the archive is saved.
 const ARCHIVE_UNDO_MS = 4000;
-// The destroy effect: how long the confirmation takes to close, the wave across the element, each particle's random start and fade,
+// The destroy effect: the wave across the element, each particle's random start and fade,
 // the grain size in CSS pixels, about how many grains it keeps at most, and how many elements and text lines it draws at most.
-const DESTROY_DIALOG_CLOSE_MS = 250;
 // After this long still cleaning, a destroy says where to follow it.
 const DESTROY_SLOW_MS = 20_000;
 const DUST_WAVE_MS = 650;
@@ -926,27 +925,43 @@ async function reorder_channel(id, before_id) {
 async function delete_channel(id) {
   const room = state.rooms.find(item => item.id === id);
   if (!room || state.destroying.has(id)) return;
-  const key = `delete:${id}`;
-  state.directory_pending.set(key, {});
-  publish_view();
+  const index = state.rooms.indexOf(room);
+  // The room dissolves at once (UI first); its deletion and checks go on behind, and a refusal brings it back.
+  state.destroying.set(id, { room, index });
+  const dissolving = dissolve_room(id);
   try {
     if (share_link(id)) await take_down_share(id);
     const result = await request_json(`/api/rooms/${id}/delete`, { actor: "用户" });
-    state.destroying.set(id, { room, index: state.rooms.indexOf(room) });
     if (result.destruction) merge_destruction(result.destruction);
-    notify("info", t('正在销毁「{name}」：记录与附件已删除，其余各项核验完成后房间会消散。', { name: room.title }));
     // A cleanup that takes long says where to follow it, once.
     setTimeout(() => {
       if (state.destroying.has(id)) notify("warning", t('「{name}」还在清理，可在房间目录“…”里的“销毁记录”查看进度或重试。', { name: room.title }));
     }, DESTROY_SLOW_MS);
   } catch (error) {
+    await dissolving;
+    state.destroying.delete(id);
+    if (!state.rooms.some(item => item.id === id)) state.rooms.splice(Math.min(index, state.rooms.length), 0, room);
+    render_rooms();
+    publish_view();
     notify_failure(error, t('「{value1}」销毁失败，房间未改变：{value2}', { value1: room.title, value2: management_error_message(id, error) }));
     throw error;
-  } finally {
-    state.directory_pending.delete(key);
-    publish_view();
   }
+  await dissolving;
   settle_destructions();
+}
+
+/** Play the destroy effect on the room's row, and on the middle pane when it is open, then take it off the page. */
+async function dissolve_room(id) {
+  // Wait one frame so the confirmation has begun to close; the effect draws the page itself, not what covers it.
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  const row = document.querySelector(`[data-drag-room="${CSS.escape(id)}"]`);
+  const targets = [row, state.room?.id === id ? document.querySelector(".channel-main") : null].filter(Boolean);
+  await Promise.all(targets.map(dust_away));
+  state.rooms = state.rooms.filter(item => item.id !== id);
+  if (state.room?.id === id) await select_room(visible_rooms()[0]?.id);
+  for (const target of targets) target.style.visibility = "";
+  render_rooms();
+  publish_view();
 }
 
 /** Set how many days without a message a room may stay before it destroys itself; 0 keeps it. */
@@ -998,13 +1013,9 @@ function merge_destruction(record) {
   state.destructions = [record, ...state.destructions.filter(item => item.room_id !== record.room_id)];
 }
 
-/** Keep rooms still being destroyed in the list the website no longer has them in, where they were. */
+/** Leave out rooms being destroyed: they dissolved already, though a read begun before may still list them. */
 function with_destroying(rooms) {
-  const result = [...rooms];
-  for (const [id, { room, index }] of state.destroying) {
-    if (!result.some(item => item.id === id)) result.splice(Math.min(index, result.length), 0, room);
-  }
-  return result;
+  return rooms.filter(room => !state.destroying.has(room.id));
 }
 
 /** Retry the website's part of an unfinished destruction (a held attachment file, a busy log). */
@@ -1013,30 +1024,19 @@ async function retry_destruction(id) {
   settle_destructions();
 }
 
-/** Dissolve each room whose receipt is complete and tell what was removed. */
+/** Tell what was removed for each room whose receipt is complete. */
 function settle_destructions() {
   for (const [id, { room }] of state.destroying) {
     const record = state.destructions.find(item => item.room_id === id);
     if (record?.status !== "done") continue;
     state.destroying.delete(id);
-    finish_destroyed_room(id, room, record).catch(error => notify("error", error.message));
+    announce_receipt(room, record);
   }
   publish_view();
 }
 
-/** Play the destroy effect on what shows the room (its open conversation, else its list row), then drop it. */
-async function finish_destroyed_room(id, room, record) {
-  // Let the confirmation dialog close first, so the effect plays on the page itself.
-  await new Promise(resolve => setTimeout(resolve, DESTROY_DIALOG_CLOSE_MS));
-  // The room's row always dissolves; an open room's middle pane dissolves with it.
-  const row = document.querySelector(`[data-drag-room="${CSS.escape(id)}"]`);
-  const targets = [row, state.room?.id === id ? document.querySelector(".channel-main") : null].filter(Boolean);
-  await Promise.all(targets.map(dust_away));
-  state.rooms = state.rooms.filter(item => item.id !== id);
-  if (state.room?.id === id) await select_room(visible_rooms()[0]?.id);
-  for (const target of targets) target.style.visibility = "";
-  render_rooms();
-  publish_view();
+/** One notice of what a finished destruction removed and kept. */
+function announce_receipt(room, record) {
   const count = kind => record.items.filter(item => item.kind === kind).reduce((total, item) => total + (item.count || 0), 0);
   const removed = t('已销毁「{name}」：删除 {messages} 条消息、{files} 个附件、{sessions} 个 AI 会话记录。',
     { name: room.title, messages: count("messages"), files: count("attachments"), sessions: count("sessions") });
