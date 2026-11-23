@@ -219,5 +219,7 @@ function step(event, index, direction) {
 .speaking-order-later ol { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
 .speaking-order-later li { overflow-wrap: anywhere; line-height: 1.5; }
 .speaking-order-later li > span { margin-right: 6px; color: var(--ui-text-dimmed); }
+/* Anchors the hidden live region inside the panel's scroller; anchored to the page it sits below a long member list and lets the whole page scroll. */
+.speaking-order { position: relative; }
 .speaking-order-live { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>

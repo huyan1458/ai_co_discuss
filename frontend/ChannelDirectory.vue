@@ -478,7 +478,7 @@ function actions(room, index, folder_id, folder_room_count) {
           <div class="share-dialog-choice">
             <div class="share-dialog-publish">
               <USelect v-model="share_days" :items="share_day_items" class="share-dialog-days" :disabled="share_phase !== 'ready'" :aria-label="t('分享链接的有效期')" />
-              <UButton :label="share_phase === 'publishing' ? t('正在上传…') : share_draft?.linked ? t('更新链接') : t('发布链接')" icon="i-lucide-link-2" color="primary" class="share-dialog-publish-button"
+              <UButton :label="share_phase === 'publishing' ? (share_draft?.upload ? t('正在上传附件 {done}/{total}', share_draft.upload) : t('正在上传…')) : share_draft?.linked ? t('更新链接') : t('发布链接')" icon="i-lucide-link-2" color="primary" class="share-dialog-publish-button"
                 :loading="share_phase === 'publishing'" :disabled="share_phase !== 'ready'" @click="act('share_publish', share_days)" />
             </div>
             <p>{{ t("上传到 AI CoDiscuss 分享站，运营方与审核 AI 能读到全文；到期自动删除，可随时撤销，撤销后缓存副本留到原定到期时才清除。") }}</p>

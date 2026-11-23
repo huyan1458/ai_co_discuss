@@ -122,9 +122,9 @@ watch([key, () => props.blocked], () => { pick(null); expanded.value = new Set()
 </script>
 
 <template>
-  <section class="expert-skills" :aria-label="t('技能')">
+  <section class="expert-skills" :class="{ 'is-editing': file }" :aria-label="t('技能')">
     <header class="expert-skills-head">
-      <span>{{ t("技能") }}<small>{{ t("这位专家自己读写的知识；这里的修改直接写入，不需要保存工作流") }}</small></span>
+      <span>{{ t("这位专家自己读写的知识；这里的修改直接写入，不需要保存工作流") }}</span>
       <UButton v-if="!blocked" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="ghost" :loading="loading" :aria-label="t('重新载入技能')" :title="t('重新载入技能')" @click="load" />
       <UButton v-if="!blocked" :label="t('新建技能')" icon="i-lucide-plus" size="xs" color="neutral" variant="soft" @click="adding = !adding" />
     </header>
@@ -138,66 +138,91 @@ watch([key, () => props.blocked], () => { pick(null); expanded.value = new Set()
         <UInput v-model="new_description" size="sm" class="expert-skills-grow" :placeholder="t('一句描述：这条技能管什么')" :aria-label="t('技能描述')" />
         <UButton type="submit" :label="t('创建')" size="sm" />
       </form>
-      <p v-if="!loading && !failure && !skills.length" class="expert-skills-note">{{ t("还没有技能。") }}</p>
-      <ul class="expert-skills-list">
-        <li v-for="skill in skills" :key="skill.name">
-          <div class="expert-skills-skill">
-            <button type="button" class="expert-skills-toggle" :aria-expanded="expanded.has(skill.name)" @click="toggle(skill.name)">
-              <UIcon :name="expanded.has(skill.name) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />
-              <strong>{{ skill.name }}</strong><small>{{ skill.description }}</small>
-            </button>
-            <UButton :label="armed === `skill:${skill.name}` ? t('确认删除技能') : undefined" icon="i-lucide-trash-2" size="xs" :color="armed === `skill:${skill.name}` ? 'error' : 'neutral'" variant="ghost"
-              :aria-label="t('删除技能 {value1}', { value1: skill.name })" :title="t('删除整条技能；原来的文件夹会移到服务目录的 backups 下')" @click="remove_skill(skill.name)" />
-          </div>
-          <ul v-if="expanded.has(skill.name)" class="expert-skills-files">
-            <li v-for="item in skill.files" :key="item.path">
-              <button type="button" class="expert-skills-file" :aria-current="file?.path === item.path ? 'true' : undefined" @click="pick(item)">
-                <UIcon :name="item.text === null ? 'i-lucide-file-x' : 'i-lucide-file-text'" />{{ item.path.slice(skill.name.length + 1) }}
-              </button>
-              <UButton :label="armed === `file:${item.path}` ? t('确认删除') : undefined" icon="i-lucide-x" size="xs" :color="armed === `file:${item.path}` ? 'error' : 'neutral'" variant="ghost"
-                :aria-label="t('删除文件 {value1}', { value1: item.path })" @click="delete_file(item)" />
-            </li>
-            <li>
-              <form v-if="adding_file === skill.name" class="expert-skills-form" @submit.prevent="add_file(skill.name)">
-                <UInput v-model="new_file" size="xs" class="expert-skills-grow" :placeholder="t('references 下的文件名，如 fire.md')" :aria-label="t('资料文件名')" />
-                <UButton type="submit" :label="t('创建')" size="xs" />
-              </form>
-              <UButton v-else :label="t('新建资料文件')" icon="i-lucide-file-plus" size="xs" color="neutral" variant="ghost" @click="adding_file = skill.name; new_file = ''" />
+      <div class="expert-skills-body">
+        <div class="expert-skills-tree">
+          <p v-if="!loading && !failure && !skills.length" class="expert-skills-note">{{ t("还没有技能。") }}</p>
+          <ul class="expert-skills-list">
+            <li v-for="skill in skills" :key="skill.name">
+              <div class="expert-skills-skill">
+                <button type="button" class="expert-skills-toggle" :aria-expanded="expanded.has(skill.name)" :title="skill.description" @click="toggle(skill.name)">
+                  <UIcon :name="expanded.has(skill.name) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="expert-skills-icon" />
+                  <span><strong>{{ skill.name }}</strong><small>{{ skill.description }}</small></span>
+                </button>
+                <UButton :label="armed === `skill:${skill.name}` ? t('确认删除技能') : undefined" icon="i-lucide-trash-2" size="xs" :color="armed === `skill:${skill.name}` ? 'error' : 'neutral'" variant="ghost"
+                  :aria-label="t('删除技能 {value1}', { value1: skill.name })" :title="t('删除整条技能；原来的文件夹会移到服务目录的 backups 下')" @click="remove_skill(skill.name)" />
+              </div>
+              <ul v-if="expanded.has(skill.name)" class="expert-skills-files">
+                <li v-for="item in skill.files" :key="item.path">
+                  <button type="button" class="expert-skills-file" :aria-current="file?.path === item.path ? 'true' : undefined" :title="item.path" @click="pick(item)">
+                    <UIcon :name="item.text === null ? 'i-lucide-file-x' : 'i-lucide-file-text'" class="expert-skills-icon" /><span>{{ item.path.slice(skill.name.length + 1) }}</span>
+                  </button>
+                  <UButton :label="armed === `file:${item.path}` ? t('确认删除') : undefined" icon="i-lucide-x" size="xs" :color="armed === `file:${item.path}` ? 'error' : 'neutral'" variant="ghost"
+                    :aria-label="t('删除文件 {value1}', { value1: item.path })" @click="delete_file(item)" />
+                </li>
+                <li>
+                  <form v-if="adding_file === skill.name" class="expert-skills-form" @submit.prevent="add_file(skill.name)">
+                    <UInput v-model="new_file" size="xs" class="expert-skills-grow" :placeholder="t('references 下的文件名，如 fire.md')" :aria-label="t('资料文件名')" />
+                    <UButton type="submit" :label="t('创建')" size="xs" />
+                  </form>
+                  <UButton v-else :label="t('新建资料文件')" icon="i-lucide-file-plus" size="xs" color="neutral" variant="ghost" @click="adding_file = skill.name; new_file = ''" />
+                </li>
+              </ul>
             </li>
           </ul>
-        </li>
-      </ul>
-      <div v-if="file" class="expert-skills-editor">
-        <div class="expert-skills-editor-head"><code>{{ file.path }}</code>
-          <UButton v-if="file.text !== null" :label="t('保存')" icon="i-lucide-save" size="xs" :disabled="!edited" :loading="saving" @click="save" />
-          <UButton :label="t('关闭')" size="xs" color="neutral" variant="ghost" @click="pick(null)" /></div>
-        <p v-if="file.text === null" class="expert-skills-note">{{ t("不是文本或超过大小上限，不能在这里查看和修改。") }}</p>
-        <UTextarea v-else v-model="text" :rows="14" class="expert-skills-text" :aria-label="file.path" />
+        </div>
+        <div class="expert-skills-editor">
+          <template v-if="file">
+            <div class="expert-skills-editor-head">
+              <UButton icon="i-lucide-arrow-left" size="xs" color="neutral" variant="ghost" class="expert-skills-back" :aria-label="t('返回文件列表')" @click="pick(null)" />
+              <code :title="file.path">{{ file.path }}</code>
+              <UButton v-if="file.text !== null" :label="t('保存')" icon="i-lucide-save" size="xs" :disabled="!edited" :loading="saving" @click="save" />
+              <UButton :label="t('关闭')" size="xs" color="neutral" variant="ghost" class="expert-skills-close" @click="pick(null)" /></div>
+            <p v-if="file.text === null" class="expert-skills-note">{{ t("不是文本或超过大小上限，不能在这里查看和修改。") }}</p>
+            <UTextarea v-else v-model="text" class="expert-skills-text" :aria-label="file.path" />
+          </template>
+          <p v-else class="expert-skills-empty">{{ t("在左侧展开技能，选一个文件查看和修改。") }}</p>
+        </div>
       </div>
     </template>
   </section>
 </template>
 
 <style scoped>
-.expert-skills { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--ui-border-muted); }
+/* Fills its parent's height: the header and notes on top, then the file tree beside the editor, each scrolling on its own. */
+.expert-skills { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; container-type: inline-size; }
 .expert-skills-head { display: flex; align-items: center; gap: 6px; }
-.expert-skills-head > span { display: flex; flex: 1; align-items: baseline; gap: 8px; min-width: 0; font-size: 12px; color: var(--ui-text-muted); }
-.expert-skills-head small { color: var(--ui-text-dimmed); font-size: 11px; }
+.expert-skills-head > span { flex: 1; min-width: 0; font-size: 12px; color: var(--ui-text-dimmed); }
 .expert-skills-note { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--ui-text-muted); font-size: 12px; }
 .expert-skills-note.is-error { color: var(--ui-error, #e5484d); }
 .expert-skills-note.is-warning { color: var(--ui-warning, #e0a33a); }
 .expert-skills-form { display: flex; align-items: center; gap: 6px; }
 .expert-skills-grow { flex: 1; min-width: 0; }
+.expert-skills-body { display: grid; flex: 1; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 12px; min-height: 0; }
+.expert-skills-tree { min-height: 0; overflow-y: auto; padding-right: 8px; border-right: 1px solid var(--ui-border-muted); }
 .expert-skills-list, .expert-skills-files { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.expert-skills-files { padding-left: 22px; }
+.expert-skills-files { padding-left: 18px; }
 .expert-skills-files > li, .expert-skills-skill { display: flex; align-items: center; gap: 4px; }
-.expert-skills-toggle, .expert-skills-file { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; padding: 4px 6px; border-radius: 6px; text-align: left; cursor: pointer; font-size: 12px; }
+.expert-skills-toggle, .expert-skills-file { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; padding: 5px 6px; border-radius: 6px; text-align: left; cursor: pointer; font-size: 13px; }
 .expert-skills-toggle:hover, .expert-skills-file:hover { background: var(--ui-bg-elevated); }
 .expert-skills-file[aria-current] { background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 16%, transparent); }
-.expert-skills-toggle strong { font-weight: 500; }
-.expert-skills-toggle small { overflow: hidden; color: var(--ui-text-dimmed); text-overflow: ellipsis; white-space: nowrap; }
-.expert-skills-editor { display: flex; flex-direction: column; gap: 6px; }
+.expert-skills-icon { flex-shrink: 0; }
+.expert-skills-toggle > span { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.expert-skills-toggle strong { font-weight: 500; overflow-wrap: anywhere; }
+.expert-skills-toggle small, .expert-skills-file > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.expert-skills-toggle small { color: var(--ui-text-dimmed); font-size: 11px; }
+.expert-skills-editor { display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; }
 .expert-skills-editor-head { display: flex; align-items: center; gap: 6px; }
 .expert-skills-editor-head code { flex: 1; min-width: 0; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.expert-skills-text :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.6; }
+.expert-skills-back { display: none; }
+.expert-skills-text { display: flex; flex: 1; min-height: 240px; }
+.expert-skills-text :deep(textarea) { flex: 1; height: 100%; resize: none; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.6; }
+.expert-skills-empty { margin: auto; color: var(--ui-text-dimmed); font-size: 12px; }
+/* Too narrow for both side by side (a phone, an upright tablet beside the card list): the files, or the open file with a way back. */
+@container (max-width: 560px) {
+  .expert-skills-body { grid-template-columns: minmax(0, 1fr); }
+  .expert-skills-tree { padding-right: 0; border-right: 0; }
+  .expert-skills.is-editing .expert-skills-tree, .expert-skills:not(.is-editing) .expert-skills-editor { display: none; }
+  .expert-skills-back { display: inline-flex; }
+  .expert-skills-close { display: none; }
+}
 </style>

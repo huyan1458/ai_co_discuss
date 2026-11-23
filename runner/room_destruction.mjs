@@ -1,8 +1,42 @@
 /** What a destroyed room leaves on this computer: its members' AI sessions, removed through the adapters, and the report. */
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { account_space } from './account_space.mjs';
 import { remove_session, session_holder } from './adapters/index.mjs';
+
+/**
+ * The draft folder made for a room when it was created without a project (a folder directly in the account's draft
+ * space, named after the room), or '' when the room works in a project, which is the user's and stays.
+ */
+export function room_draft_space(home, config) {
+  const cwd = config?.cwd ? resolve(config.cwd) : '';
+  return cwd && dirname(cwd) === resolve(account_space(home).workspace) ? cwd : '';
+}
+
+/**
+ * Remove a destroyed room's own draft folder, with whatever of it waits in the recycle area, unless another room
+ * registered here still works in it. Returns receipt items (none when the room had no draft folder).
+ *
+ * @param {string} home The service home.
+ * @param {object} config The room's configuration (`cwd`).
+ * @param {Set<string>} used Folders (resolved) other registered rooms work in.
+ */
+export function destroy_draft_space(home, config, used) {
+  const folder = room_draft_space(home, config);
+  if (!folder || !existsSync(folder)) return [];
+  if (used.has(folder)) return [{ kind: 'draft_space', state: 'kept', detail: 'shared' }];
+  try { rmSync(folder, { recursive: true, force: true, maxRetries: 3 }); } catch { /* Checked below. */ }
+  // Files deleted from the folder earlier sit in the recycle area beside the draft space, noted with their folder.
+  const { projects_root, workspace } = account_space(home);
+  const trash = projects_root ? join(dirname(projects_root), 'trash') : `${workspace}-trash`;
+  for (const id of existsSync(trash) ? readdirSync(trash) : []) {
+    try {
+      if (resolve(JSON.parse(readFileSync(join(trash, id, 'meta.json'), 'utf8')).root) === folder) rmSync(join(trash, id), { recursive: true, force: true });
+    } catch { /* Not one of this folder's. */ }
+  }
+  return [{ kind: 'draft_space', state: existsSync(folder) ? 'failed' : 'deleted' }];
+}
 
 /** The session each member of a room was bound to, from the room's runtime records; empty when it never ran here. */
 export function room_bindings(directory) {

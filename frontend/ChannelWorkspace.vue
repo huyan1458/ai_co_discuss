@@ -118,7 +118,7 @@ const rail_toggles = computed(() => rail_inline.value && !file_preview.dock_widt
 const info_label = computed(() => rail_toggles.value && (invited_page.value || view.value.tab === "discussion") ? (rail_collapsed.value ? t("展开房间概览") : t("收起房间概览")) : t("讨论进度"));
 const LIVE_EXECUTION = ["dispatched", "started"];
 const STATUS_AVATARS = 4;
-/** Who is working right now, for the title bar whenever the rail is out of sight; same rule as the rail's 处理中. */
+/** Who is working right now, always shown in the title bar; same rule as the rail's 处理中. */
 const work_status = computed(() => {
   // A room shown from its directory entry until its full view arrives: the entry says only whether anyone is working.
   if (room.value && !room.value.free && room.value.running) return { tone: "primary", text: t("执行中"), members: [], title: t("执行中") };
@@ -169,7 +169,7 @@ onBeforeUnmount(() => narrow_query.removeEventListener("change", track_narrow));
 const source_filter_content = computed(() => (narrow.value
   ? { align: "end", sideOffset: 4, alignOffset: -1000, collisionPadding: 8 }
   : { align: "end", sideOffset: 4 }));
-const show_work_status = computed(() => !middle_page.value && Boolean(room.value) && !room.value.archived && !(rail_inline.value && show_rail.value));
+const show_work_status = computed(() => !middle_page.value && Boolean(room.value) && !room.value.archived);
 const brief_preview = computed(() => {
   const template = document.createElement("template");
   template.innerHTML = room.value?.rendered_brief || "";
@@ -491,7 +491,7 @@ function resize_nav_by_key(event) {
           <span v-if="room && !middle_page" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ t("{count} 条记录", { count: room.message_count }) }}<template v-if="created_label"><span>·</span><time :datetime="room.created_at" :title="new Date(room.created_at).toLocaleString(locale, { hour12: false })">{{ created_label }}</time></template></span>
           <span v-else-if="creating_preview && !middle_page" class="channel-header-context">{{ t("消息") }}<span>·</span>{{ t("正在创建") }}</span>
           <div class="channel-header-actions">
-            <button v-if="show_work_status" type="button" class="channel-work-status" :class="`is-${work_status.tone}`" :title="work_status.title" :aria-label="t('执行状态：{status}；打开房间概览', { status: work_status.title.replaceAll('\n', t('，')) })" @click="toggle_info">
+            <button v-if="show_work_status" type="button" class="channel-work-status" :class="`is-${work_status.tone}`" :title="work_status.title" :aria-label="t('执行状态：{status}；{action}', { status: work_status.title.replaceAll('\n', t('，')), action: info_label })" @click="toggle_info">
               <span v-if="work_status.members.length" class="channel-work-avatars"><UAvatar v-for="member in work_status.members" :key="member.id" :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="2xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" /></span>
               <span class="channel-work-text" role="status">{{ work_status.text }}</span><span class="pb-dot"></span>
             </button>

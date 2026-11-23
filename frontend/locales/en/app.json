@@ -445,6 +445,13 @@
   "附件原样公开。文本类附件已一并检查；图片、视频和其他文件的内容程序查不了，请自己核对。": "Attachments are published as they are. Text attachments were checked too; the contents of images, videos and other files cannot be checked, so look through them yourself.",
   "不包含时，消息里的附件标记显示为“未包含在分享中”。": "Without them, attachment tags in messages read “not included in the share”.",
   "正在检查文本类附件…": "Checking text attachments…",
+  "附件读取失败（{status}）": "Could not read the attachment ({status})",
+  "附件 {name} 在发布期间有变化，请重新打开“分享为网页…”再发布": "The attachment {name} changed while publishing; open “Share as web page…” again and publish",
+  "附件 {name} 上传失败：{value1}": "Uploading the attachment {name} failed: {value1}",
+  "附件合计 {size}，超过分享链接 100 MB 的上限；请取消“包含附件”，或改用“下载网页文件”。": "The attachments total {size}, more than the 100 MB a share link can carry; untick “Include attachments” or use “Download web page file”.",
+  "这个房间的文字整理后有 {size}，超过分享链接 5 MB 的上限；请改用“下载网页文件”。": "The room’s text comes to {size} after cleaning, more than the 5 MB a share link can carry; use “Download web page file” instead.",
+  "链接已发布，但附件没有传完，读者会看到“附件读取失败”；可再点“更新链接”重传。{value1}": "The link is published, but not all attachments were sent, so readers will see “Could not read the attachment”; click “Update link” to send them again. {value1}",
+  "正在上传附件 {done}/{total}": "Uploading attachments {done}/{total}",
   "{names} 不能放到分享站：发布链接时不带，消息里显示“未包含在分享中”；下载网页文件仍会带上。": "{names} cannot go on the share site: a published link leaves them out and their messages read “not included in the share”; a downloaded web page file still carries them.",
   " 等 {count} 个": " and others, {count} in all",
   "读取失败，没能检查，请自己核对": "Could not be read or checked; look through it yourself",
@@ -526,5 +533,7 @@
   "全部房间已销毁，各 AI 软件的会话记录与记忆已删除 {count} 处（登录信息保留）。": "All rooms are destroyed, and {count} places holding the AI software's conversations and memories are deleted (logins kept).",
   "房间已建好，但自动销毁没有设置成功，可在“房间”页重新设置：{value1}": "The room was created, but auto-destroy could not be set; set it again in the “Room” tab: {value1}",
   "这个文件夹有 {count} 个文件、共 {size}，超过一次下载的上限（{files} 个文件、{limit}）；请下载其中的子文件夹。": "This folder has {count} files, {size} in all, more than one download takes ({files} files, {limit}); download its subfolders instead.",
-  "已读取 {done} / {count} 个文件": "Read {done} of {count} files"
+  "已读取 {done} / {count} 个文件": "Read {done} of {count} files",
+  "正在销毁「{name}」：记录与附件已删除，其余各项核验完成后房间会消散。": "Destroying “{name}”: records and attachments are deleted; the room dissolves once the remaining items are checked.",
+  "「{name}」还在清理，可在房间目录“…”里的“销毁记录”查看进度或重试。": "“{name}” is still being cleaned up; follow it or retry under “Destruction records” in the room list's “…” menu."
 }

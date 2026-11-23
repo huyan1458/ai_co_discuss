@@ -135,7 +135,7 @@ async function save_password() {
         <UAvatar :src="bridge.identities['用户'].icon" :alt="t('{value1} 的头像', { value1: bridge.display_name('用户') })" size="lg" class="channel-avatar user account-avatar" />
         <div class="account-identity-fields">
           <form class="dialog-form account-form" :aria-label="t('显示名称')" @submit.prevent="save_name">
-            <UFormField :label="t('显示名称')" :hint="t('即用户名，对所有访客可见')"><div class="account-name-row"><UInput v-model="display_name" autocomplete="username" :maxlength="30" required class="w-full" :aria-label="t('显示名称')" /><UButton type="submit" class="account-icon-action" icon="i-lucide-check" :label="t('保存名称')" :aria-label="t('保存名称')" :title="t('保存名称')" color="neutral" variant="soft" :loading="busy === 'name'" :disabled="Boolean(busy) || !name_changed || !display_name.trim()" /></div></UFormField>
+            <UFormField :label="t('显示名称')"><div class="account-name-row"><UInput v-model="display_name" autocomplete="username" :maxlength="30" required class="w-full" :aria-label="t('显示名称')" /><UButton type="submit" class="account-icon-action" icon="i-lucide-check" :label="t('保存名称')" :aria-label="t('保存名称')" :title="t('保存名称')" color="neutral" variant="soft" :loading="busy === 'name'" :disabled="Boolean(busy) || !name_changed || !display_name.trim()" /></div></UFormField>
           </form>
           <div class="account-avatar-actions">
             <input ref="avatar_input" type="file" accept="image/*" class="account-file" tabindex="-1" aria-hidden="true" @change="choose_avatar">

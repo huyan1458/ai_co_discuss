@@ -35,7 +35,7 @@ import AnswerFiles from "./AnswerFiles.vue";
 import ExecutionChanges from "./ExecutionChanges.vue";
 import InlineHtmlFrame from "./InlineHtmlFrame.vue";
 import MessageVisualBody from "./MessageVisualBody.vue";
-import { add_excerpt, create_inline_html_preview, excerpt_mark_place, excerpt_range, inner_scroll_follower, excerpt_source, excerpts_markdown, file_preview, hold_selection, room_quotes, text_offset } from "./file-preview.js";
+import { add_excerpt, create_inline_html_preview, excerpt_mark_place, excerpt_range, inner_scroll_follower, excerpt_source, excerpts_markdown, file_preview, hold_selection, room_quotes, take_excerpts, text_offset } from "./file-preview.js";
 import { inline_visual_body, inline_visual_document, is_inline_html } from "./inline-visual.js";
 import { keep_reading_position } from "./scroll-anchor.js";
 import { guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
@@ -869,6 +869,15 @@ watch(() => view.value.queued_taken, (count) => count && nextTick(() => {
   area?.focus();
   area?.setSelectionRange(area.value.length, area.value.length);
 }));
+// A message taken back, or a queued message being edited, comes back with its excerpts written out after the text; they
+// become cards again, so the text stays the owner's own and the notes go out as notes once more.
+watch(() => view.value.composer_restored, (count) => {
+  if (!count) return;
+  const restored = take_excerpts(text.value);
+  if (!restored.excerpts.length) return;
+  text.value = restored.text;
+  file_preview.excerpts = [...file_preview.excerpts, ...restored.excerpts];
+});
 /** Drop one excerpt from the draft. */
 function remove_excerpt(excerpt) { file_preview.excerpts = file_preview.excerpts.filter((item) => item.id !== excerpt.id); }
 // The excerpt whose comment is being edited in the composer's excerpt list.
@@ -3606,7 +3615,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('发送')" disabled />
         </template>
       </UChatPrompt>
-    </div><div v-else class="channel-composer-column" @dragover="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event); step_over_token($event, view.attachment_drafts)" @beforeinput="guard_token_edit($event, view.attachment_drafts)" @input.capture="hold_transcript" @input="release_transcript(); update_mention($event); drop_unreferenced($event)" @click="update_mention($event); snap_caret($event, view.attachment_drafts)" @keyup="update_mention($event); snap_caret($event, view.attachment_drafts)" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
+    </div><div v-else class="channel-composer-column" @dragover="bridge.drop_attachments" @dragleave="bridge.drop_attachments" @drop="bridge.drop_attachments" @paste="bridge.paste_attachments" @keydown.capture="mention_keydown($event); attachment_shortcut($event); step_over_token($event, view.attachment_drafts)" @beforeinput="guard_token_edit($event, view.attachment_drafts)" @input.capture="hold_transcript" @input="release_transcript(); update_mention($event); drop_unreferenced($event)" @click="update_mention($event); snap_caret($event, view.attachment_drafts)" @keyup="update_mention($event); snap_caret($event, view.attachment_drafts)" @select="update_mention" @compositionstart="mention_composition" @compositionupdate="mention_composition" @compositionend="mention_composition" @scroll.capture="sync_mirror">
       <UPopover :open="mention_open" :reference="mention_anchor" :content="{ side: 'top', align: 'start', sideOffset: 8, onOpenAutoFocus: keep_mention_focus, onCloseAutoFocus: keep_mention_focus }" :ui="{ content: 'channel-select-menu channel-mention-menu' }" @update:open="!$event && (mention_context = null)">
         <template #content>
           <div class="channel-mention-heading"><span>{{ mention_heading }}</span><small>{{ t('↑↓ 选择 · Enter 确认') }}</small></div>

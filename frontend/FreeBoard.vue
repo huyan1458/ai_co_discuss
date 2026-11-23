@@ -156,16 +156,16 @@ function member_status(member, state) {
  * The quiet line beside a name: a woken CLI shows only its model and effort, since being woken here is the usual case;
  * API, manual and web members also say how they take part; one that can make images names its image model too. The crown already marks the host.
  */
-function member_tag(member) {
+function member_tag(member, brief = true) {
   // An external member's tag sits on its own line below (member_setup): beside a name like "DeepSeek-ext" it would be cut.
   if (external_of(member)) return "";
   if (member.access !== "runner") return ACCESS_LABELS[member.access];
-  return [member.adapter === "api" ? "API" : "", member_model(member)].filter(Boolean).join(" · ");
+  return [member.adapter === "api" ? "API" : "", member_model(member, brief)].filter(Boolean).join(" · ");
 }
 
-/** Only woken members have a model the site knows; others choose it in their own chat. */
-function member_model(member) {
-  return member.access === "runner" ? bridge.participant_model(member.name, room.value, view.value.launch.room_models) : "";
+/** Only woken members have a model the site knows; others choose it in their own chat. The one-line tag beside the name stays brief. */
+function member_model(member, brief = false) {
+  return member.access === "runner" ? bridge.participant_model(member.name, room.value, view.value.launch.room_models, brief) : "";
 }
 
 /** Session and project files of a woken member, e.g. "借用会话 · 可写"; web members only read. */
@@ -432,7 +432,7 @@ watch(() => room.value.id, () => { starting.value = false; });
           <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state)]">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body" :data-member="member.name">
-              <div class="pb-member-name"><MemberNameEdit :name="member.name" :editable="can_describe" /><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member) || undefined">{{ member_tag(member) }}</small></div>
+              <div class="pb-member-name"><MemberNameEdit :name="member.name" :editable="can_describe" /><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small :title="member_tag(member, false) || undefined">{{ member_tag(member) }}</small></div>
               <div v-if="member_setup(member) || in_workflow(member.name)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)"><small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>{{ member_setup(member) }}</div>
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
@@ -475,7 +475,7 @@ watch(() => room.value.id, () => { starting.value = false; });
           <UAvatar :src="bridge.identities[card.name]?.icon" :text="bridge.identities[card.name]?.initials" :alt="card.name" size="md" class="channel-avatar" :class="bridge.identities[card.name]?.style" />
           <div class="pb-card-title">
             <span class="pb-card-name"><strong>{{ bridge.display_name(card.name) }}</strong><em v-if="card_member.role === 'host'" class="is-host">{{ t('主持人') }}</em><em v-if="in_workflow(card.name)">{{ t('工作流') }}</em></span>
-            <small>{{ [member_tag(card_member), member_setup(card_member)].filter(Boolean).join(' · ') }}</small>
+            <small>{{ [member_tag(card_member, false), member_setup(card_member)].filter(Boolean).join(' · ') }}</small>
           </div>
         </header>
         <section class="pb-card-block">

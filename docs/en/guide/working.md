@@ -40,13 +40,17 @@ Room work can run on several lines in parallel. Labels at the top of a card show
 
 ### 3. Manage queued messages
 
-New messages wait above the composer while the intended member or room is busy. They are sent when the recipient or room becomes available.
+New messages wait above the composer while the intended member or room is busy. They are sent when the recipient or room becomes available. Your answers on an answer card work the same way: while the member who asked is still busy, the answer is recorded, but the share for that member waits in the queue, marked “#N is posted; it goes to … once free”.
 
-- **Send now.** Select “Send now” on a queued item. If its recipient is busy, the service first interrupts its current turn, then sends the new message along with the interruption. A member that cannot be interrupted stays in the queue.
+- **Not waiting.** The button on a queued item says what it will do:
+  - “Send now”: the recipient is free, so it goes at once.
+  - “Steer”: the recipient is working and its software takes interjections, so this joins its current turn; it sees it right away and the work done so far stays.
+  - “Interrupt and send”: the recipient is working and cannot take an interjection, so its turn is stopped first and it takes this together with the interrupted work.
+  - When the recipient can neither take an interjection nor be stopped, the button stays “Send now”; selecting it explains why and the message stays queued.
 - **Edit or delete.** In a queued, unsent item’s menu, select “Edit message” to return it to the composer for editing, or delete it.
 - **Reorder.** Drag queued items. On a phone, press and hold an item to move it.
 - **Pause and resume.** Selecting “Stop all” or stopping the service pauses the queue. It shows “Queue paused: you stopped the run”. Select “Continue” to resume. A failed message pauses the queue and shows the reason. Select “Retry”, edit, or delete the message to continue.
-- Queuing is always on and has no switch; to have a busy member take a message right away, use “Send now”.
+- Queuing is always on and has no switch; to have a busy member take a message right away, use “Steer” or “Interrupt and send” on the queued item.
 
 ### 4. Stop, retry, withdraw, edit, or rewind
 

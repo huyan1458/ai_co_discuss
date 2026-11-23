@@ -3,7 +3,7 @@
  * workflow, so the selection, the unsaved draft and the confirmations live here, one copy per page.
  */
 import { computed, effectScope, inject, nextTick, ref, watch } from "vue";
-import { workflow_files_from_folder, workflow_files_from_zip } from "./workflow-files.js";
+import { download_file, workflow_files_from_folder, workflow_files_from_zip, zip_store } from "./workflow-files.js";
 import { flow_in_use } from "../runner/workflow_flow.mjs";
 import { t } from './i18n.js';
 
@@ -343,7 +343,7 @@ function create_library({ view, bridge, act }) {
     return [[
       { label: t('重命名'), icon: "i-lucide-pencil", disabled: Boolean(item.error), onSelect: () => start_rename(item) },
       { label: item.disabled ? t('启用') : t('停用'), icon: item.disabled ? "i-lucide-circle-play" : "i-lucide-circle-pause", onSelect: () => set_disabled(item, !item.disabled) },
-      { label: t('复制文件夹路径'), icon: "i-lucide-folder", disabled: !item.directory, onSelect: () => act("copy", item.directory) },
+      { label: t('导出'), icon: "i-lucide-download", disabled: Boolean(item.error), onSelect: () => export_workflow(item) },
     ], [
       { label: t('删除'), icon: "i-lucide-trash-2", color: "error", onSelect: () => { deleting.value = item.id; } },
     ]];
@@ -375,6 +375,15 @@ function create_library({ view, bridge, act }) {
   }
 
   /** Switch a workflow off (no room may enable or keep using it) or back on. */
+  /** Download a saved workflow as `<id>.zip` holding its folder `<id>/`, which 导入 on this page reads back. */
+  async function export_workflow(item) {
+    try {
+      const { id, files, ignored } = await bridge.local_request("workflows", { action: "export", id: item.id });
+      download_file(`${id}.zip`, zip_store(files, id), "application/zip");
+      if (ignored?.length) bridge.notify("warning", t('已导出「{value1}」；以下文件不是文本或太大，没有放进压缩包：{value2}', { value1: item.label, value2: ignored.join("、") }));
+    } catch (error) { bridge.notify("error", error.message); }
+  }
+
   async function set_disabled(item, disabled) {
     if (pending_items.value.has(item.id)) return;
     pending_items.value.add(item.id);

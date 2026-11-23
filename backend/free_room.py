@@ -3933,25 +3933,37 @@ def interrupt_member(connection, room_id, member_id, token, by_host=""):
 
 
 def interrupt_for_message(connection, room_id, message_id):
-    """The owner's "send now" of a queued message: interrupt the busy members it was just given to, so they take it next.
+    """The owner's "send now" of a queued message to members still at work (user 2026-11-23, #7819): a member whose
+    software takes an interjection hears of it in its running turn, which then also answers it; any other is
+    interrupted and takes it, with the interrupted work, next.
 
-    Members whose software reported it cannot stop are not interrupted: voiding their turn would only discard its answer
-    while the next delivery still waits for it to end. Unlike the owner's stop, the rest of the queue is not paused.
+    The interjection only points at the message (red line 6); the request joins the running execution, so the answer
+    that ends the turn closes it. Members whose software can neither take an interjection nor stop are left alone:
+    voiding their turn would only discard its answer. Unlike the owner's stop, the rest of the queue is not paused.
 
     Raises:
-        FileExistsError: a recipient is busy and cannot be stopped; the caller keeps the message queued.
+        FileExistsError: a recipient is busy and can neither be interjected nor stopped; the caller keeps the message queued.
     """
-    busy = connection.execute("""SELECT DISTINCT r.member_id, m.name, c.stoppable FROM member_requests r
+    busy = connection.execute("""SELECT r.id AS request_id, r.member_id, m.name, c.stoppable, c.steer, c.resume, e.id AS execution_id,
+        (SELECT COUNT(*) FROM execution_interjections i WHERE i.execution_id=e.id) AS interjections FROM member_requests r
         JOIN room_members m ON m.id=r.member_id
         JOIN member_executions e ON e.member_id=r.member_id AND e.status IN ('dispatched','started')
         LEFT JOIN execution_capabilities c ON c.execution_id=e.id
         WHERE r.room_id=? AND r.message_id=? AND r.status='pending'""", (room_id, message_id)).fetchall()
-    blocked = [row["name"] for row in busy if row["stoppable"] == 0]
+    steerable = [row for row in busy if (row["steer"] or row["resume"]) and row["interjections"] < MAX_INTERJECTIONS]
+    stopped = [row for row in busy if row not in steerable]
+    blocked = [row["name"] for row in stopped if row["stoppable"] == 0]
     if blocked:
         raise FileExistsError(Text("{value1} 正在执行且无法打断，这条消息继续排队，等它答完后发送", value1='、'.join(blocked)))
-    for row in busy:
+    now = int(time.time())
+    for row in steerable:
+        execution = connection.execute("SELECT * FROM member_executions WHERE id=?", (row["execution_id"],)).fetchone()
+        add_interjection(connection, room_id, execution, {"text": str(Text("用户刚发来消息 #{message_id}，请先读原文，在这一轮的回答里一并处理。", message_id=message_id)),
+                                                          "submission_id": f"queue-{message_id}-{row['member_id']}"}, now)
+        connection.execute("UPDATE member_requests SET status='delivering',execution_id=? WHERE id=?", (row["execution_id"], row["request_id"]))
+    for row in stopped:
         stop_member_work(connection, row["member_id"], Text("已打断：你立即发送了新消息，它会连同这条一起处理"), "user_stop", keep_pending=True, requeue=True)
-    if busy:
+    if stopped:
         settle_batches(connection, room_id)
 
 

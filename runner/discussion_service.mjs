@@ -20,7 +20,7 @@ import { answer_by_weixin } from './question_weixin.mjs';
 import { OPERATOR_EVENTS_FILE, account_space } from './account_space.mjs';
 import { install_pi, pi_outdated } from './pi_runtime.mjs';
 import { site_fetch } from './entry_client.mjs';
-import { destroy_room_sessions, room_bindings } from './room_destruction.mjs';
+import { destroy_draft_space, destroy_room_sessions, room_bindings } from './room_destruction.mjs';
 
 // A destroyed room's cleanup result is reported a few times before giving up; the receipt then shows the room as still cleaning.
 const DESTRUCTION_REPORT_TRIES = 5;
@@ -602,6 +602,8 @@ export class DiscussionService {
     const record = config ? await api(config, '/destruction').catch(() => null) : null;
     let items = [];
     if (record?.sessions) items = await this.destroy_sessions(config, path, record.sessions);
+    // The draft folder made for the room goes with it; a project folder is the user's and stays.
+    if (record?.sessions) items.push(...destroy_draft_space(this.home, config, folders_in_use(this.home, path)));
     // Sessions still held are tried again later from this record, since the room's own folder goes below.
     if (items.some(item => item.kind === 'sessions' && item.state === 'failed')) {
       // Only what finding the sessions needs: each member's software and the session it was invited with.
@@ -696,6 +698,19 @@ function changed_rooms(frame) {
   const data = frame.match(/^data: (.*)$/m)?.[1];
   try { const rooms = JSON.parse(data).rooms; return Array.isArray(rooms) && rooms.length ? rooms : null; }
   catch { return null; }
+}
+
+/** The folders (resolved) the other rooms registered here work in, as main or extra directories. */
+export function folders_in_use(home, except) {
+  const used = new Set();
+  for (const path of read_registry(home)) {
+    if (resolve(path) === resolve(except)) continue;
+    try {
+      const config = JSON.parse(readFileSync(path, 'utf8'));
+      for (const folder of [config.cwd, ...(config.extra_directories || [])]) if (typeof folder === 'string' && folder) used.add(resolve(folder));
+    } catch { /* An unreadable room names no folder. */ }
+  }
+  return used;
 }
 
 /** Destroyed rooms whose sessions are still to be removed here. */

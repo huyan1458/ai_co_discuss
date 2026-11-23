@@ -208,4 +208,4 @@ npx wrangler secret put SOURCE_SALT --config deploy/wrangler.local.jsonc
 npx wrangler deploy --config deploy/wrangler.local.jsonc
 ```
 
-程序按原始快照字节限制单份 5 MiB、每个来源 20 份及 50 MiB、全站 5 GB。免费 D1 的单库物理上限是 500 MB，账号合计 5 GB；压缩后的数据、索引和其他记录都占用单库空间。部署使用一个库，先达到的平台限额会先影响写入。分享页面每次检查状态，撤销或下架后停止提供内容；已由读者保存的副本无法收回。[Cloudflare D1 限额](https://developers.cloudflare.com/d1/platform/limits/)
+程序按原始快照字节限制单份 5 MiB、每个来源 20 份及 50 MiB、全站 5 GB。勾选“包含附件”发布时，附件作为文件存进 R2 存储桶（绑定名 `FILES`）：单份合计 100 MiB，每个来源的有效分享合计 500 MB，全站 8 GB（R2 免费额度 10 GB）；撤销、更新或到期时一并删除。部署前先开通 R2 并执行 `npx wrangler r2 bucket create codiscuss-share-files --config deploy/wrangler.local.jsonc`，私有配置里保留 `r2_buckets` 绑定。免费 D1 的单库物理上限是 500 MB，账号合计 5 GB；压缩后的数据、索引和其他记录都占用单库空间。部署使用一个库，先达到的平台限额会先影响写入。分享页面每次检查状态，撤销或下架后停止提供内容；已由读者保存的副本无法收回。[Cloudflare D1 限额](https://developers.cloudflare.com/d1/platform/limits/)

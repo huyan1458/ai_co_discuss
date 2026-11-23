@@ -20,6 +20,7 @@ import json
 import re
 import time
 
+from .message_queue import enqueue_share, member_busy
 from .runtime import begin_write, require_owner
 from .texts import Text
 
@@ -622,12 +623,24 @@ def live_check(connection, row):
             raise QuestionClosed(Text("接力已停止或已离开这个检查点，迟到的回答不会重启它"))
 
 
+def hand_to(connection, room_id, member_id, message_id):
+    """Give the owner's answer message to a member: at once when it is free, else as a share in the owner's message queue
+    (user 2026-11-23, #7819), where the owner decides to wait, interject or interrupt, as for any message of theirs."""
+    if not member_busy(connection, member_id):
+        free().insert_request(connection, room_id, member_id, message_id, message_id, "ask", "user")
+        return
+    member = connection.execute("SELECT name FROM room_members WHERE id=?", (member_id,)).fetchone()
+    message = connection.execute("SELECT text,submission_id FROM messages WHERE id=?", (message_id,)).fetchone()
+    enqueue_share(connection, room_id, {"author": "用户", "text": message["text"], "submission_id": message["submission_id"]},
+                  message_id, [member["name"]])
+
+
 def to_host(connection, room_id, message_id):
     """Hand the owner's request for a recommendation or a decision to the present host, on the owner's message."""
     host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
     if not host:
         raise FileExistsError(Text("房间当前没有主持人，无法请主持人推荐或决定"))
-    free().insert_request(connection, room_id, host["id"], message_id, message_id, "ask", "user")
+    hand_to(connection, room_id, host["id"], message_id)
 
 
 def settle_answer(connection, row, record, message_id):
@@ -653,12 +666,12 @@ def settle_answer(connection, row, record, message_id):
         return
     asker = connection.execute("SELECT id,status FROM room_members WHERE id=?", (row["asker_id"],)).fetchone()
     if asker and asker["status"] == "active":
-        room.insert_request(connection, room_id, asker["id"], message_id, message_id, "ask", "user")
+        hand_to(connection, room_id, asker["id"], message_id)
         return
     # The asker left: the answer stays, and the host decides what follows.
     host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
     if host:
-        room.insert_request(connection, room_id, host["id"], message_id, message_id, "ask", "user")
+        hand_to(connection, room_id, host["id"], message_id)
 
 
 def event(connection, question_id, kind, detail):

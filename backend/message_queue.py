@@ -55,12 +55,34 @@ def queue_view(connection, room_id):
             item["to"] = payload["to"]
         if payload.get("message_id"):
             item.update(message_id=payload["message_id"], waiting_for=payload.get("to", []))
+        item["send_mode"] = send_mode(connection, room_id, payload)
         items.append(item)
     paused = connection.execute("SELECT 1 FROM queued_message_pauses WHERE room_id=?", (room_id,)).fetchone() is not None
     busy_members = [row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=? AND status='active'", (room_id,))
                     if member_busy(connection, row["id"])]
     return {"items": items, "paused": paused and bool(items), "busy": room_busy(connection, room_id),
             "host_busy": host_busy(connection, room_id), "busy_members": busy_members}
+
+
+def send_mode(connection, room_id, payload):
+    """What "send now" would do with a queued message, so its button says so before it is clicked (user 2026-11-23):
+    `send` (its recipients are free), `steer` (every busy recipient takes an interjection), `interrupt` (a busy one is
+    stopped first) or `wait` (a busy one can do neither; the message stays queued).
+
+    Recipients are the named members, or the host for a message the room as a whole waits for."""
+    named = named_members(connection, room_id, payload)
+    if named is None and payload.get("message_id"):
+        return "send"
+    ids = list(named.values()) if named else [row[0] for row in connection.execute(
+        "SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,))]
+    modes = set()
+    for member_id in ids:
+        live = connection.execute("""SELECT c.stoppable,c.steer,c.resume FROM member_executions e
+            LEFT JOIN execution_capabilities c ON c.execution_id=e.id
+            WHERE e.member_id=? AND e.status IN ('dispatched','started')""", (member_id,)).fetchone()
+        if live:
+            modes.add("steer" if live["steer"] or live["resume"] else "wait" if live["stoppable"] == 0 else "interrupt")
+    return "wait" if "wait" in modes else "interrupt" if "interrupt" in modes else "steer" if modes else "send"
 
 
 def named_members(connection, room_id, payload):

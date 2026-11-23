@@ -185,6 +185,7 @@
   "这条排队消息已发出或已删除": "This queued message was sent or deleted",
   "排队消息已变化，请刷新后再调整顺序": "Queued messages changed; refresh before reordering",
   "点名的成员已不在房间": "The members it names are no longer in the room",
+  "用户刚发来消息 #{message_id}，请先读原文，在这一轮的回答里一并处理。": "The owner just sent message #{message_id}; read it and handle it in this turn's answer as well.",
   "这条消息已发出，只是还在等忙碌的成员；可以删除后重新发送": "This message is already posted and only waits for busy members; delete it and send again instead",
   "action 须为 {value1} 之一": "action must be one of {value1}",
   "enabled 须为 true 或 false": "enabled must be true or false",
@@ -851,5 +852,7 @@
   "技能文件 {path} 在你读取之后变了（专家可能刚写过），请重新载入后再改": "The skill file {path} changed after you read it (the expert may have just written it); reload before changing it",
   "工作流「{id}」里已有卡片 {card}；不会替换它，要换请先删掉原卡片": "The workflow “{id}” already has the card {card}; it is not replaced: delete that card first to change it",
   "导入的内容须正好有一个专家定义 .md，现有 {count} 个": "The import must hold exactly one expert definition .md; it has {count}",
-  "{name} 的模型 {model} 不在本机这个软件的模型列表里，不能调用：请在专家配置或卡片背面把模型改成列表里的（或留空用软件默认），或在模型下拉旁刷新列表后再试": "The model {model} of {name} is not in this computer’s list for its software, so it cannot run: pick a listed model (or leave it empty for the software default) in Experts or on the card’s back, or refresh the list beside the model menu and try again"
+  "{name} 的模型 {model} 不在本机这个软件的模型列表里，不能调用：请在专家配置或卡片背面把模型改成列表里的（或留空用软件默认），或在模型下拉旁刷新列表后再试": "The model {model} of {name} is not in this computer’s list for its software, so it cannot run: pick a listed model (or leave it empty for the software default) in Experts or on the card’s back, or refresh the list beside the model menu and try again",
+  "请先填写生图 API Key": "Enter the image generation API key first",
+  "地址与密钥可用，但这个密钥的模型列表里没有 {model}，请核对模型 ID 或账号是否已开通": "The address and key work, but {model} is not in this key's model list; check the model ID or whether the account has access to it"
 }

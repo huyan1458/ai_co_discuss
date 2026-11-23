@@ -19,6 +19,8 @@ export function relay_frame_loaded(frame, html) {
 }
 const inline_visual_heights = new Map();
 const DEFAULT_VISUAL_HEIGHT = 220;
+// Load a visual this far before it scrolls into view, so it is already drawn when it appears.
+const VISUAL_PRELOAD_MARGIN = "800px 0px";
 const COLLAPSED_PREFIX = "ai-codiscuss-visual-collapsed:";
 const visual_bodies = new WeakMap();
 
@@ -79,7 +81,7 @@ let visibility_observer;
 export function observe_inline_visual(element, callback) {
   visibility_observer ??= new IntersectionObserver((entries) => {
     for (const entry of entries) visual_visibility_callbacks.get(entry.target)?.(entry.isIntersecting && entry.intersectionRect.height > 0);
-  });
+  }, { rootMargin: VISUAL_PRELOAD_MARGIN });
   visual_visibility_callbacks.set(element, callback);
   visibility_observer.observe(element);
   return () => {

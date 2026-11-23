@@ -39,9 +39,13 @@ onMounted(() => {
   transcript = panel.value.closest(".channel-transcript");
   transcript?.addEventListener("reader-settled", apply_height);
   window.addEventListener("message", receive_height);
+  // Once shown the frame stays mounted: a remounted frame paints blank until its document renders, which flickers while scrolling.
   if (props.automatic) stop_observing = observe_inline_visual(panel.value, (shown) => {
-    visible.value = shown;
-    if (shown) emit("visible");
+    if (!shown) return;
+    visible.value = true;
+    emit("visible");
+    stop_observing?.();
+    stop_observing = null;
   });
 });
 onBeforeUnmount(() => {

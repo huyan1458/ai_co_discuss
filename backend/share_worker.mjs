@@ -4,11 +4,16 @@ const CHUNK_BYTES = 512 * 1024;
 const DAY_MS = 86_400_000;
 const ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 const ATTACHMENT_ROUTE = /^\/attachments\/[A-Za-z0-9._~%-]{1,200}\/content$/;
+const FILE_ID = /^[A-Za-z0-9._~%-]{1,200}$/;
+// A share's attachments, kept as files in R2 (binding FILES) beside its text in D1: at most this much in all for one
+// share (user 2026-11-23); sources and the whole site have their own caps in share_schema.sql.
+const FILES_MAX_BYTES = 100 * 1024 * 1024;
+const FILES_MAX_COUNT = 500;
 const DATA_URL = /^data:[\w.+-]+\/[\w.+-]+;base64,[A-Za-z0-9+/]*={0,2}$/;
 // The attachments the share site takes, by extension, each as this one type: what the page previews (user 2026-11-22).
 // web/app.js SHARE_SITE_FILE_TYPES keeps the same list and leaves other files out of a published link. Anyone may publish,
-// so archives, executables and old Office formats that can carry macros are not handed out from this address; a declared
-// type cannot make an .exe pass as text.
+// so executables and old Office formats that can carry macros are not handed out from this address; a declared type
+// cannot make an .exe pass as text. Zip archives are taken (user 2026-11-23); review looks inside them.
 export const SHARE_FILE_TYPES = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", bmp: "image/bmp", svg: "image/svg+xml", ico: "image/x-icon",
   mp3: "audio/mpeg", wav: "audio/wav", m4a: "audio/mp4", aac: "audio/aac", ogg: "audio/ogg", oga: "audio/ogg", opus: "audio/opus", flac: "audio/flac", weba: "audio/webm",
@@ -16,7 +21,7 @@ export const SHARE_FILE_TYPES = {
   pdf: "application/pdf", html: "text/html", htm: "text/html",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", ods: "application/vnd.oasis.opendocument.spreadsheet",
-  prproj: "application/gzip",
+  prproj: "application/gzip", zip: "application/zip",
   txt: "text/plain", md: "text/markdown", markdown: "text/markdown", csv: "text/csv", tsv: "text/tab-separated-values", json: "application/json", jsonc: "text/plain", jsonl: "text/plain",
   xml: "text/xml", yaml: "text/yaml", yml: "text/yaml", toml: "text/plain", ini: "text/plain", log: "text/plain", css: "text/css",
   srt: "text/plain", vtt: "text/vtt", ass: "text/plain", ssa: "text/plain", lrc: "text/plain",
@@ -28,6 +33,7 @@ export const SHARE_FILE_TYPES = {
 const PUBLIC_ASSET = /^\/(?:i18n\.js|markdown\.js|backup\.js|app\.js|modern\.js|modern\.css|markdown\.css|icons\/[\w.-]+|katex\/(?:fonts\/)?[\w.-]+|office\/(?:assets\/|chunks\/)?[\w.-]+|pdfjs\/(?:(?:cmaps|iccs|standard_fonts|wasm)\/)?[\w.-]+)$/;
 const CODE = {
   invalid: [400, "分享数据无效", "Invalid share data"],
+  stale: [409, "分享已在别处更新，请重新发布", "The share was updated elsewhere; publish again"],
   file_type: [400, "分享站只接受页面能预览的附件（图片、音视频、PDF、Office 文档、文本和网页）", "The share site takes only attachments the page can preview (images, audio, video, PDF, Office documents, text and web pages)"],
   ttl: [400, "有效期须为 1、3 或 7 天", "Choose 1, 3 or 7 days"],
   auth: [403, "凭据无效", "Invalid credential"],
@@ -113,20 +119,51 @@ function snapshot(input) {
     if (path === "/api/rooms" || path === base || path === base+"/timeline") continue;
     if (!path.startsWith(base+"/") || !/^(?:\/messages\?[^#]*|\/executions\/\d+\/notes)$/.test(path.slice(base.length))) fail("invalid");
   }
-  // Attachments the owner chose to include: this room's attachment routes, each its file as a base64 data URL.
+  const listed = listed_files(input.responses, input.room_id);
+  // Its message names it, by an extension this site takes, with the very type the content is sent as.
+  const check_file = (path, type) => {
+    if (!path.startsWith(base+"/") || !ATTACHMENT_ROUTE.test(path.slice(base.length))) fail("invalid");
+    const file = listed.get(path);
+    const extension = /\.([^./\\]+)$/.exec(typeof file?.file_name === "string" ? file.file_name : "")?.[1].toLowerCase() || "";
+    if (!Object.hasOwn(SHARE_FILE_TYPES, extension) || SHARE_FILE_TYPES[extension] !== type || file.content_type !== type) fail("file_type");
+  };
+  // Attachments inlined as base64 data URLs, as pages published before 0.5.11 sent them; the 5 MB cap covers them.
   if (input.attachments !== undefined) {
     if (!record(input.attachments)) fail("invalid");
-    const listed = listed_files(input.responses, input.room_id);
     for (const [path, value] of Object.entries(input.attachments)) {
-      if (!path.startsWith(base+"/") || !ATTACHMENT_ROUTE.test(path.slice(base.length)) || typeof value !== "string" || !DATA_URL.test(value)) fail("invalid");
-      // Its message names it, by an extension this site takes, with the very type the content is sent as.
-      const file = listed.get(path), type = value.slice(5, value.indexOf(";"));
-      const extension = /\.([^./\\]+)$/.exec(typeof file?.file_name === "string" ? file.file_name : "")?.[1].toLowerCase() || "";
-      if (!Object.hasOwn(SHARE_FILE_TYPES, extension) || SHARE_FILE_TYPES[extension] !== type || file.content_type !== type) fail("file_type");
+      if (typeof value !== "string" || !DATA_URL.test(value)) fail("invalid");
+      check_file(path, value.slice(5, value.indexOf(";")));
     }
   }
-  const { format, room_id, title, description, exported_at, responses, attachments } = input;
-  return { format, room_id, title, description, exported_at, responses, ...(attachments ? { attachments } : {}) };
+  // Attachments sent as files after the page (upload_file): their list, each `{ content_type, bytes }`.
+  if (input.files !== undefined) {
+    if (!record(input.files) || Object.keys(input.files).length > FILES_MAX_COUNT) fail("invalid");
+    let total = 0;
+    for (const [path, file] of Object.entries(input.files)) {
+      if (!record(file) || typeof file.content_type !== "string" || !Number.isInteger(file.bytes) || file.bytes < 1) fail("invalid");
+      check_file(path, file.content_type);
+      total += file.bytes;
+    }
+    if (total > FILES_MAX_BYTES) fail("size");
+  }
+  const { format, room_id, title, description, exported_at, responses, attachments, files } = input;
+  return { format, room_id, title, description, exported_at, responses, ...(attachments ? { attachments } : {}),
+    ...(files ? { files:Object.fromEntries(Object.entries(files).map(([path, file]) => [path, { content_type:file.content_type, bytes:file.bytes }])) } : {}) };
+}
+/** The end of the route of attachment `file`, and its length: matched exactly (LIKE would ignore letter case). */
+function file_suffix(file) { const suffix = "/attachments/"+file+"/content"; return [suffix.length, suffix]; }
+/** The id an attachment route ends in, as it stands in the route. */
+function file_id(route) { return route.split("/").at(-2); }
+/** Where one attachment of one version of a share lies in R2. */
+function file_key(share_id, revision, route) { return share_id+"/"+revision+"/"+file_id(route); }
+/** Delete every R2 object under `prefix` (a share, or one version of it); without the binding there is nothing to delete. */
+async function remove_files(env, prefix) {
+  if (!env.FILES) return;
+  for (;;) {
+    const listed = await env.FILES.list({ prefix, limit:1000 });
+    if (listed.objects.length) await env.FILES.delete(listed.objects.map(object => object.key));
+    if (!listed.truncated) return;
+  }
 }
 /** The attachments the shared messages list, by the route that reads each. */
 function listed_files(responses, room_id) {
@@ -176,16 +213,18 @@ function editable(row, now) {
 }
 async function authorize(request, db, id) {
   const token = bearer(request);
-  const row = await db.prepare("SELECT token_hash,status,expires_at FROM shares WHERE id=?").bind(id).first();
+  const row = await db.prepare("SELECT token_hash,status,expires_at,revision FROM shares WHERE id=?").bind(id).first();
   if (!row) fail("missing");
   if (!token || row.token_hash !== await digest(token)) fail("auth");
   return row;
 }
-async function save_share(request, env, id) {
+async function save_share(request, env, ctx, id) {
   const db = env.DB;
-  if (id) editable(await authorize(request, db, id), new Date().toISOString());
+  const previous = id ? await authorize(request, db, id) : null;
+  if (id) editable(previous, new Date().toISOString());
   const input = await read_json(request);
   const data = snapshot(input);
+  if (data.files && Object.keys(data.files).length && !env.FILES) fail("busy");
   const days = input.ttl_days === undefined ? 7 : input.ttl_days;
   if (![1,3,7].includes(days)) fail("ttl");
   const { chunks, bytes } = await encode_snapshot(data);
@@ -202,10 +241,53 @@ async function save_share(request, env, id) {
   if (id) statements.push(db.prepare("DELETE FROM share_chunks WHERE share_id=? AND EXISTS(SELECT 1 FROM shares WHERE id=? AND revision=?)").bind(id,id,revision));
   chunks.forEach((chunk, index) => statements.push(db.prepare(
     "INSERT INTO share_chunks SELECT id,?,? FROM shares WHERE id=? AND revision=?").bind(index,chunk,share_id,revision)));
+  // The new version's attachments are listed now and sent one by one after (upload_file); the old version's go.
+  if (id) statements.push(db.prepare("DELETE FROM share_files WHERE share_id=? AND EXISTS(SELECT 1 FROM shares WHERE id=? AND revision=?)").bind(id,id,revision));
+  for (const [route, file] of Object.entries(data.files || {})) statements.push(db.prepare(
+    "INSERT INTO share_files(share_id,route,content_type,bytes) SELECT id,?,?,? FROM shares WHERE id=? AND revision=?").bind(route,file.content_type,file.bytes,share_id,revision));
   const [written] = await db.batch(statements);
   if (!written.meta.changes) { editable(await authorize(request,db,id), stamp); fail("busy"); }
+  if (previous) ctx.waitUntil(remove_files(env, id+"/"+previous.revision+"/").catch(() => {}));
   const url = new URL("/s/"+share_id, request.url).href;
-  return json({ id:share_id, url, expires_at:expires, ...(token ? { manage_token:token } : {}) }, id ? 200 : 201);
+  return json({ id:share_id, url, expires_at:expires, revision, ...(token ? { manage_token:token } : {}) }, id ? 200 : 201);
+}
+/**
+ * Receive one listed attachment of a share's current version, by its manage token: exactly the size and type listed,
+ * stored in R2. `?revision=` names the version it belongs to, so a file of an older publish is refused.
+ */
+async function upload_file(request, env, id, file) {
+  const db = env.DB, stamp = new Date().toISOString();
+  editable(await authorize(request, db, id), stamp);
+  if (!env.FILES) fail("busy");
+  const revision = new URL(request.url).searchParams.get("revision") || "";
+  const row = await db.prepare("SELECT f.route,f.content_type,f.bytes,s.revision FROM share_files f JOIN shares s ON s.id=f.share_id "+
+    "WHERE f.share_id=? AND substr(f.route,-?)=?").bind(id, ...file_suffix(file)).first();
+  if (!row) fail("missing");
+  if (row.revision !== revision) fail("stale");
+  if (request.headers.get("Content-Type")?.split(";")[0].trim() !== row.content_type) fail("file_type");
+  if (Number(request.headers.get("Content-Length")) !== row.bytes || !request.body) fail("size");
+  // Exactly the listed size: a body that runs longer or shorter fails the write.
+  const sized = new FixedLengthStream(row.bytes);
+  const [stored] = await Promise.all([env.FILES.put(file_key(id,revision,row.route), sized.readable, { httpMetadata:{ contentType:row.content_type } }),
+    request.body.pipeTo(sized.writable)]);
+  if (!stored) fail("busy");
+  const { meta } = await db.prepare("UPDATE share_files SET uploaded=1 WHERE share_id=? AND route=? AND EXISTS(SELECT 1 FROM shares WHERE id=? AND revision=?)")
+    .bind(id,row.route,id,revision).run();
+  if (!meta.changes) { await env.FILES.delete(file_key(id,revision,row.route)); fail("stale"); }
+  return json({ ok:true });
+}
+/** One attachment of a visible share, for its page to show; never run in place if opened by itself. */
+async function read_file(env, id, file) {
+  const stamp = new Date().toISOString();
+  const row = await env.DB.prepare("SELECT s.status,s.expires_at,s.revision,f.route,f.content_type,f.bytes,f.uploaded FROM shares s "+
+    "JOIN share_files f ON f.share_id=s.id WHERE s.id=? AND substr(f.route,-?)=?").bind(id, ...file_suffix(file)).first();
+  if (!row) fail("missing");
+  state_check(row, stamp);
+  const object = row.uploaded && env.FILES ? await env.FILES.get(file_key(id,row.revision,row.route)) : null;
+  if (!object) fail("missing");
+  return new Response(object.body, { headers:{ "Content-Type":row.content_type, "Content-Length":String(row.bytes), "Cache-Control":"private, no-store",
+    "Content-Disposition":"attachment", "X-Content-Type-Options":"nosniff", "Referrer-Policy":"no-referrer",
+    "Content-Security-Policy":"sandbox; default-src 'none'", "X-Robots-Tag":"noindex" } });
 }
 /** Give a share a new lifetime from now without sending its content again; moderated or expired shares cannot be renewed. */
 async function renew_share(request, env, id) {
@@ -221,9 +303,10 @@ async function renew_share(request, env, id) {
   if (!written.meta.changes) { editable(await authorize(request,db,id), stamp); fail("busy"); }
   return json({ id, url:new URL("/s/"+id, request.url).href, expires_at:expires });
 }
-async function delete_share(request, db, id) {
-  await authorize(request, db, id);
-  await db.prepare("DELETE FROM shares WHERE id=?").bind(id).run();
+async function delete_share(request, env, id) {
+  await authorize(request, env.DB, id);
+  await env.DB.prepare("DELETE FROM shares WHERE id=?").bind(id).run();
+  await remove_files(env, id+"/");
   return json({ ok:true });
 }
 async function report_share(request, env, id) {
@@ -334,20 +417,28 @@ async function admin_share(db, id) {
 /** A share for review: its attachments listed (route, type, bytes) rather than inlined, each readable on its own. */
 async function admin_detail(db, id) {
   const { share, data, reports } = await admin_share(db,id);
-  const attachments = Object.entries(data.attachments || {}).map(([route, value]) => {
+  const inlined = Object.entries(data.attachments || {}).map(([route, value]) => {
     const [, content_type, base64] = /^data:([^;]+);base64,(.*)$/s.exec(value);
     return { route, content_type, bytes:Math.floor(base64.length * 3 / 4) - (base64.match(/=*$/)[0].length) };
   });
-  return json({ share, data:{ ...data, attachments }, reports });
+  const { files, ...rest } = data;
+  const sent = Object.entries(files || {}).map(([route, file]) => ({ route, content_type:file.content_type, bytes:file.bytes }));
+  return json({ share, data:{ ...rest, attachments:[...inlined, ...sent] }, reports });
 }
 /** One included attachment's bytes, always as a download so a reviewer's browser never runs it on this origin. */
-async function admin_attachment(db, id, url) {
-  const { data } = await admin_share(db,id);
-  const value = data.attachments?.[url.searchParams.get("route") || ""];
-  if (!value) fail("missing");
-  const [, content_type, base64] = /^data:([^;]+);base64,(.*)$/s.exec(value);
-  return new Response(Uint8Array.from(atob(base64), char => char.charCodeAt(0)), { headers:{ "Content-Type":content_type,
-    "Content-Disposition":"attachment", "X-Content-Type-Options":"nosniff", "Cache-Control":"private, no-store" } });
+async function admin_attachment(env, id, url) {
+  const { share, data } = await admin_share(env.DB,id);
+  const route = url.searchParams.get("route") || "";
+  const headers = { "Content-Disposition":"attachment", "X-Content-Type-Options":"nosniff", "Cache-Control":"private, no-store" };
+  const value = data.attachments?.[route];
+  if (value) {
+    const [, content_type, base64] = /^data:([^;]+);base64,(.*)$/s.exec(value);
+    return new Response(Uint8Array.from(atob(base64), char => char.charCodeAt(0)), { headers:{ ...headers, "Content-Type":content_type } });
+  }
+  const file = data.files?.[route];
+  const object = file && env.FILES ? await env.FILES.get(file_key(id,share.revision,route)) : null;
+  if (!object) fail("missing");
+  return new Response(object.body, { headers:{ ...headers, "Content-Type":file.content_type } });
 }
 async function moderate(request, db, id, action) {
   const now = new Date().toISOString();
@@ -371,12 +462,13 @@ async function admin_route(request, env, url, parts) {
   if (!id && request.method === "GET") return admin_list(url,env.DB);
   if (!ID_PATTERN.test(id) || parts.length > 2) fail("missing");
   if (!action && request.method === "GET") return admin_detail(env.DB,id);
-  if (action === "attachment" && request.method === "GET") return admin_attachment(env.DB,id,url);
+  if (action === "attachment" && request.method === "GET") return admin_attachment(env,id,url);
   if (["takedown","restore"].includes(action) && request.method === "POST") return moderate(request,env.DB,id,action);
   fail("missing");
 }
 function write_method(path) {
   if (path === "/api/shares" || /^\/api\/shares\/[\w-]{22}\/(report|renew)$/.test(path)) return "POST";
+  if (/^\/api\/shares\/[\w-]{22}\/files\/[A-Za-z0-9._~%-]{1,200}$/.test(path)) return "PUT";
   return /^\/api\/shares\/[\w-]{22}$/.test(path) ? "PUT, DELETE" : "";
 }
 // Where an HTML attachment runs on a share page (frontend/inline-visual.js RELAY_FRAME). The page's frames would inherit
@@ -397,15 +489,17 @@ async function route(request, env, ctx, url) {
   const parts = url.pathname.slice(1).split("/"), method = request.method;
   if (parts[0] === "api" && parts[1] === "admin" && parts[2] === "shares") return admin_route(request,env,url,parts.slice(3));
   if (method === "GET" && parts.length === 2 && parts[0] === "s" && ID_PATTERN.test(parts[1])) return read_page(request,env,ctx,parts[1]);
+  if (method === "GET" && parts.length === 4 && parts[0] === "s" && ID_PATTERN.test(parts[1]) && parts[2] === "files" && FILE_ID.test(parts[3])) return read_file(env,parts[1],parts[3]);
   if ((method === "GET" || method === "HEAD") && url.pathname === "/frame") return frame_page();
   if ((method === "GET" || method === "HEAD") && PUBLIC_ASSET.test(url.pathname)) return env.ASSETS.fetch(request);
   if (!write_method(url.pathname)) fail("missing");
   if (method === "OPTIONS") return new Response(null, { status:204 });
-  if (method === "POST" && parts.length === 2) return save_share(request,env,null);
+  if (method === "POST" && parts.length === 2) return save_share(request,env,ctx,null);
   if (method === "POST" && parts[3] === "report") return report_share(request,env,parts[2]);
   if (method === "POST" && parts[3] === "renew") return renew_share(request,env,parts[2]);
-  if (method === "PUT" && parts.length === 3) return save_share(request,env,parts[2]);
-  if (method === "DELETE" && parts.length === 3) return delete_share(request,env.DB,parts[2]);
+  if (method === "PUT" && parts.length === 3) return save_share(request,env,ctx,parts[2]);
+  if (method === "PUT" && parts.length === 5 && parts[3] === "files") return upload_file(request,env,parts[2],parts[4]);
+  if (method === "DELETE" && parts.length === 3) return delete_share(request,env,parts[2]);
   fail("missing");
 }
 function error_response(error, request, path) {
@@ -436,10 +530,12 @@ async function fetch_share(request, env, ctx) {
   return response;
 }
 
-/** Remove expired shares (children cascade) and previous hourly rate counters. */
+/** Remove expired shares (children cascade) with their files in R2, and previous hourly rate counters. */
 async function scheduled(event, env) {
-  const now = event.scheduledTime ?? Date.now();
-  await env.DB.batch([env.DB.prepare("DELETE FROM shares WHERE expires_at<=?").bind(new Date(now).toISOString()),
+  const now = event.scheduledTime ?? Date.now(), stamp = new Date(now).toISOString();
+  const { results } = await env.DB.prepare("SELECT id FROM shares WHERE expires_at<=?").bind(stamp).all();
+  for (const { id } of results) await remove_files(env, id+"/");
+  await env.DB.batch([env.DB.prepare("DELETE FROM shares WHERE expires_at<=?").bind(stamp),
     env.DB.prepare("DELETE FROM share_rates WHERE hour<?").bind(Math.floor(now / 3600000))]);
 }
 export default { fetch: fetch_share, scheduled };

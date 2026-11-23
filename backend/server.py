@@ -1255,7 +1255,7 @@ ROOM_TEXT_OWNERS = (
 # Receipt item states: removed and checked gone, not on this computer, deliberately kept, failed (retried).
 DESTRUCTION_STATES = ("deleted", "elsewhere", "kept", "failed")
 # What a runner may report about its computer, beyond the website's own records and attachments.
-RUNNER_DESTRUCTION_KINDS = ("sessions", "runtime_files", "kept_sessions", "software_stores")
+RUNNER_DESTRUCTION_KINDS = ("sessions", "runtime_files", "kept_sessions", "software_stores", "draft_space")
 DESTRUCTION_LIST_LIMIT = 20
 
 
@@ -3165,7 +3165,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         site = self.local_request_site(method)
         route = parts[2:]
         if method == "OPTIONS" and route in (["settings"], ["launch"], ["wipe-histories"], ["room-models"], ["room-skills"], ["room-files"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["sessions"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]) or (method == "OPTIONS" and len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS):
+                                             ["scheduler-check"], ["image-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]) or (method == "OPTIONS" and len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
@@ -3185,7 +3185,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "api-check"
         elif route == ["scheduler-check"] and method == "POST":
             command = "scheduler-check"
-        elif route in (["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"]) and method == "POST":
+        elif route in (["image-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"]) and method == "POST":
             command = route[0]
         elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"]) and method == "POST":
             command = route[0]

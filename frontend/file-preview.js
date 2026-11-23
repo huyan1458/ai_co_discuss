@@ -372,6 +372,69 @@ export function excerpts_markdown(excerpts) {
   }).join("\n\n");
 }
 
+const EXCERPT_HEAD = /^注释 (\d+)：(.*)$/;
+const EXCERPT_LINES = / 第 (\d+)(?:–(\d+))? 行$/;
+const COMMENT_PREFIX = "批注：";
+
+/** An excerpt's source fields from its `excerpt_origin` (lines already cut off); null when it is not one. */
+function origin_fields(origin) {
+  let match = origin.match(/^(.*) 的消息 #(\d+)$/);
+  if (match) return { path: `#${match[2]}`, name: match[1], message_id: Number(match[2]) };
+  match = origin.match(/^(?:消息 #(\d+) 的附件|附件) `(.+)`（附件 ID ([^）]+)）$/);
+  if (match) return { path: match[2], name: match[2], attachment_id: /^\d+$/.test(match[3]) ? Number(match[3]) : match[3], attachment_message_id: Number(match[1]) || 0 };
+  match = origin.match(/^`(.+)`$/);
+  return match ? { path: match[1], name: match[1].split("/").pop() } : null;
+}
+
+/** Where a message excerpt's text lies in its message as shown, for its number mark; unchanged when it is not shown. */
+function locate_in_message(excerpt) {
+  const body = excerpt.message_id && document.getElementById(`channel-answer-${excerpt.message_id}`);
+  const from = body ? body.textContent.indexOf(excerpt.text) : -1;
+  return from < 0 ? excerpt : { ...excerpt, from, to: from + excerpt.text.length };
+}
+
+/** The excerpts of `lines` written by `excerpts_markdown`, numbered from 1; null unless all of them are excerpts. */
+function read_excerpt_blocks(lines) {
+  const excerpts = [];
+  let index = 0;
+  while (index < lines.length) {
+    const head = lines[index].match(EXCERPT_HEAD);
+    if (!head || Number(head[1]) !== excerpts.length + 1) return null;
+    const range = head[2].match(EXCERPT_LINES);
+    const fields = origin_fields(range ? head[2].slice(0, range.index) : head[2]);
+    if (!fields || lines[index + 1] !== "") return null;
+    index += 2;
+    const quote = [];
+    while (index < lines.length && lines[index].startsWith(">")) quote.push(lines[index++].replace(/^> ?/, ""));
+    if (!quote.length) return null;
+    const comment = [];
+    if (lines[index] === "" && lines[index + 1]?.startsWith(COMMENT_PREFIX)) {
+      comment.push(lines[index + 1].slice(COMMENT_PREFIX.length));
+      index += 2;
+      while (index < lines.length && !(lines[index] === "" && EXCERPT_HEAD.test(lines[index + 1] ?? ""))) comment.push(lines[index++]);
+    }
+    if (index < lines.length && lines[index++] !== "") return null;
+    const start = range ? Number(range[1]) : 0;
+    excerpts.push({ ...fields, start, end: range ? Number(range[2] || range[1]) : 0, text: quote.join("\n"), comment: comment.join("\n").trim() });
+  }
+  return excerpts;
+}
+
+/**
+ * Split the excerpts `excerpts_markdown` appended to a message off its text, as composer excerpts again: a message taken
+ * back or a queued message being edited returns to the composer with its notes as cards, not as plain text.
+ * @returns {{ text: string, excerpts: object[] }} the text without them, and the excerpts (none when it has none).
+ */
+export function take_excerpts(text) {
+  const lines = text.replace(/\r/g, "").split("\n");
+  for (let first = 0; first < lines.length; first++) {
+    if (!lines[first].startsWith("注释 1：") || (first && lines[first - 1] !== "")) continue;
+    const excerpts = read_excerpt_blocks(lines.slice(first));
+    if (excerpts) return { text: lines.slice(0, first).join("\n").trimEnd(), excerpts: excerpts.map((excerpt) => ({ ...locate_in_message(excerpt), id: ++excerpt_serial })) };
+  }
+  return { text, excerpts: [] };
+}
+
 // Subtitle cues shown in the timeline view; a longer file keeps its full text in the source view.
 const MAX_SUBTITLE_CUES = 5000;
 const SRT_TIME = /(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}|\d{1,2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}|\d{1,2}:\d{2}[,.]\d{1,3})/;

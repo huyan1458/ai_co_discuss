@@ -1,7 +1,7 @@
 /** Branch member sessions before taken-back executions, from each software's own session format; originals stay intact. */
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { branch_session, execution_marker, session_exists, session_preview, software_sessions, wipe_software_histories } from '../runner/adapters/index.mjs';
 import { browse_sessions, wipe_histories } from '../runner/discussion_launch.mjs';
-import { destroy_room_sessions } from '../runner/room_destruction.mjs';
+import { destroy_draft_space, destroy_room_sessions } from '../runner/room_destruction.mjs';
 
 const SESSION = '11111111-2222-3333-4444-555555555555';
 const prompt = id => `请先读取任务文件：D:/runs/${execution_marker(id)}，完成后提交。`;
@@ -280,4 +280,18 @@ test('destroying all rooms clears every conversation the software keeps and leav
 test('clearing the software conversations is refused outside an account running as its own Windows user', t => {
   const home = home_fixture(t);
   assert.throws(() => wipe_histories(home, { DISCUSS_ENTRY_KEY_FILE: join(home, 'key') }), /独立 Windows 用户/);
+});
+
+test('a destroyed room removes the draft folder made for it, with its recycled files, unless another room works there', t => {
+  const home = join(home_fixture(t), 'service'), workspace = `${home}-workspace`, trash = `${home}-workspace-trash`;
+  const own = join(workspace, '测试-0ec270'), shared = join(workspace, '共用-123456'), project = join(home, 'project');
+  for (const folder of [own, shared, project, join(trash, 'a-11111111', 'item')]) mkdirSync(folder, { recursive: true });
+  writeFileSync(join(own, 'test.txt'), 'x');
+  writeFileSync(join(trash, 'a-11111111', 'meta.json'), JSON.stringify({ root: own, path: 'old.txt', name: 'old.txt', kind: 'file' }));
+  assert.deepEqual(destroy_draft_space(home, { cwd: own }, new Set()), [{ kind: 'draft_space', state: 'deleted' }]);
+  assert.equal(existsSync(own) || existsSync(join(trash, 'a-11111111')), false);
+  assert.deepEqual(destroy_draft_space(home, { cwd: shared }, new Set([shared])), [{ kind: 'draft_space', state: 'kept', detail: 'shared' }]);
+  // A project the user chose is theirs: destroying the room leaves it alone.
+  assert.deepEqual(destroy_draft_space(home, { cwd: project }, new Set()), []);
+  assert.ok(existsSync(shared) && existsSync(project));
 });

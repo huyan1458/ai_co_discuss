@@ -228,7 +228,19 @@ class QuestionTests(base.HostRoomTests):
         self.assertIn(("Codex", "ask", "delivering"), self.requests())
         status, answered = self.answer_question(receipt["question_id"], 1, choices={"pick": ["A"]})
         self.assertEqual(status, 201, answered)
-        self.assertEqual(self.requests()[-1], ("Codex", "ask", "pending"), "queued behind the running execution")
+        # 2026-11-23 #7819: the asker is still at work, so the answer waits in the owner's message queue.
+        queue = self.request(self.path)[1]["free"]["queued_messages"]["items"]
+        self.assertEqual([(item["message_id"], item["waiting_for"], item["send_mode"]) for item in queue],
+                         [(answered["message_id"], ["Codex"], "interrupt")])
+        self.assertNotIn(("Codex", "ask", "pending"), self.requests())
+        # The owner sends it now; Codex's software takes interjections, so it joins the running turn instead of stopping it.
+        self.request(f"{self.path}/executions/{execution}", {"action": "delivery", "stoppable": True, "progress": True, "steer": True}, self.owner)
+        self.assertEqual(self.request(self.path)[1]["free"]["queued_messages"]["items"][0]["send_mode"], "steer")
+        self.assertEqual(self.request(f"{self.path}/queue", {"action": "send", "id": queue[0]["id"]}, self.owner)[0], 200)
+        detail = self.request(f"{self.path}/executions/{execution}", token=self.owner)[1]
+        self.assertEqual(detail["status"] in ("dispatched", "started"), True, "the running turn goes on")
+        self.assertIn(answered["message_id"], [item["message_id"] for item in detail["requests"]])
+        self.assertEqual(len(self.request(f"{self.path}/inbox", token=self.owner)[1]["executions"][0]["interjections"]), 1)
 
     def test_a_goal_waiting_only_on_a_question_does_not_idle_wake_the_host(self):
         receipt = self.ask_owner_question()

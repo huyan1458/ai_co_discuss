@@ -11,6 +11,7 @@ import { parseArgs } from 'node:util';
 
 import { account_projects, account_space, create_or_restore_account_project, draft_folder, hide_account_projects, listed_account_projects } from './account_space.mjs';
 import { atomic_json } from './files.mjs';
+import { room_draft_space } from './room_destruction.mjs';
 import { ISOLATED_ACCOUNT_VARIABLE } from './os_users.mjs';
 import { read_store } from './external_client.mjs';
 import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, project_root, read_only_enforced, read_project_files, read_project_folders, room_directories, search_project_roots } from './project_files.mjs';
@@ -26,7 +27,7 @@ import { save_tts_settings, tts_release, tts_settings, tts_speak } from './tts.m
 import { local_service_stop, local_services } from './tts_providers.mjs';
 import { weixin_command } from './weixin.mjs';
 import { stt_part } from './stt.mjs';
-import { image_settings, room_image, save_image_settings } from './image_service.mjs';
+import { image_check, image_settings, room_image, save_image_settings } from './image_service.mjs';
 import { open_project } from './adapters/api_files.mjs';
 import { run_image_tool } from './adapters/api_images.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
@@ -88,6 +89,7 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch api-check --file FILE
       codiscuss launch scheduler-check --file FILE
       codiscuss launch image-settings [--file FILE]
+      codiscuss launch image-check
       codiscuss launch image --file REQUEST [--access-file FILE]
       codiscuss launch tts-settings [--file FILE]
       codiscuss launch tts --file FILE
@@ -135,6 +137,7 @@ api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_r
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
 image-settings 读取这台电脑的生图服务（base_url、图片模型 model、api_key_ref，configured 表示已配置 Key）；内容非空时保存。
+image-check 检查这台电脑已保存的生图服务：用密钥读取地址的模型列表（不生成图片、不计费），核对地址、密钥与所选图片模型；无法确认账号能否实际出图（余额、组织验证）。
 image 成员按任务凭据生图（房间须添加了生图卡片）：REQUEST 为 JSON，必填 action（generate 生成 / edit 改图）与 prompt；可选 size（auto、1024x1024、1536x1024、1024x1536 或 16 倍数的 宽x高）、quality（auto/low/medium/high，2.5、2.6 系列另有 xhigh/max）、n（1–10 张）、output_format（png/jpeg/webp/gif，生成另可 svg）、background（auto/opaque/transparent）、file_name（附件名）、save_path（另存进可写项目）；edit 另需 images（1–16 个 {attachment_id} 或 {file_path}，第一张为主图），可加 mask 或 markup（同样格式，二选一）。图片存为成员的附件，返回附件 ID，再用 message post --attachment 附上。
 tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：local（本机，由 local-tts-setup 技能安装）/ volcengine / aliyun / azure / openai，语速 speech_rate，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，本机、火山引擎与 OpenAI 另有语气提示 context（各自默认不同），Azure 另有 region；语音输入服务 stt_provider：local / volcengine / openai）。
 tts 用朗读设置把 text（不超过 300 字）合成为音频（本机服务为 m4a，其余为 MP3），返回 base64。
@@ -920,8 +923,18 @@ export function expert_presets(home) {
   const hidden_builtins = saved.hidden_builtins || [];
   // A preset saved while members drew with their own image model keeps the rest; drawing is the room's switch now.
   const presets = (saved.presets || []).map(({ image_model, ...preset }) => preset);
-  return { presets: english_preset_ids(presets), description_templates: saved.description_templates || {}, hidden_builtins,
-    builtin_presets: BUILTIN_EXPERT_PRESETS.filter(preset => !hidden_builtins.includes(preset.name)) };
+  const builtin_presets = BUILTIN_EXPERT_PRESETS.filter(preset => !hidden_builtins.includes(preset.name));
+  const listed = english_preset_ids(presets);
+  return { presets: listed, description_templates: saved.description_templates || {}, hidden_builtins, builtin_presets,
+    skilled_presets: skilled_presets(home, [...listed, ...builtin_presets]) };
+}
+
+/** The presets that keep skills of their own in the service home (`experts/<编号>/skills/`): advisors, which the panel opens in 高级配置. */
+function skilled_presets(home, presets) {
+  return presets.filter(preset => {
+    const key = preset.name.slice(platform_of(preset.name).length + 1);
+    return CARD_ID_PATTERN.test(key) && expert_skills(join(experts_home(home), key)).length > 0;
+  }).map(preset => preset.name);
 }
 
 /** Check one expert preset; a workflow's agent card is a preset and obeys the same rule. */
@@ -1365,7 +1378,6 @@ export async function room_member_model(home, raw, headers = {}) {
     const config = configuration_snapshot(path).config;
     const profile = config.participants?.[name];
     if (!profile) throw new Error(`${name} 不由本机唤醒，模型由它自己的会话决定`);
-    if (profile.project_access === 'own') throw new Error(`${name} 是手动接入的成员，模型与强度沿用它自己会话的设置`);
     const facts = adapter_profile(profile.adapter);
     // An App chooses its model and effort in its own window; a CLI or API member's run is started with them.
     if (!facts || facts.kind === 'app') throw new Error(`${name} 的模型在 ${facts?.label || '它的软件'} 内设置`);
@@ -1529,6 +1541,9 @@ function room_drafts(home, config, path) {
     }
   };
   roots.forEach((root, index) => walk(root, roots.length > 1 ? `${index + 1}/` : ''));
+  // The room's own draft folder goes when it is destroyed, so it travels in its own folder of the package.
+  const space = room_draft_space(home, config);
+  if (space && existsSync(space)) walk(space, '草稿空间/');
   return { files, omitted };
 }
 
@@ -2036,6 +2051,7 @@ export function workflows_command(home, input = {}) {
   if (action === 'save-preset') return save_card_preset(home, { ...input, replace_knowledge: input.replace_knowledge === true });
   // The page's expert export and import (the command line has expert-export / expert-import), by files `{path: text}`.
   if (action === 'export-expert') return expert_export_files(home, input);
+  if (action === 'export') return export_workflow_files(home, input.id);
   if (action === 'import-expert') return import_expert(home, { files: input.files, overwrite_preset: input.overwrite_preset === true, replace_knowledge: input.replace_knowledge === true });
   if (action === 'import-expert-workflow') return import_expert_to_workflow(home, { files: input.files, workflow: input.workflow, sub: input.sub || '' });
   // An expert's skills, file by file, outside the workflow's save (see expert_skill_files).
@@ -2043,7 +2059,7 @@ export function workflows_command(home, input = {}) {
   if (action === 'skill-write') return write_skill_file(home, input);
   if (action === 'skill-delete') return delete_skill_file(home, input);
   if (action === 'skill-remove') return remove_skill(home, input);
-  throw new Error('action 须为 list、get、save、rename、disable、enable、delete、preview、room-cards、save-preset、export-expert、import-expert、import-expert-workflow、skills、skill-write、skill-delete 或 skill-remove');
+  throw new Error('action 须为 list、get、save、rename、disable、enable、delete、preview、room-cards、save-preset、export、export-expert、import-expert、import-expert-workflow、skills、skill-write、skill-delete 或 skill-remove');
 }
 
 // Exporting and importing an expert (user 2026-11-22): a definition `<id>.md` in the card format (front matter, prompt
@@ -2080,6 +2096,17 @@ function read_text_tree(directory, prefix = '', files = {}, ignored = []) {
     catch { ignored.push(path); }
   }
   return { files, ignored };
+}
+
+/**
+ * A saved workflow's folder as text files `{path: text}` for the page to download as a zip (user 2026-11-23, in place
+ * of copying its folder path); the page's import reads such a zip back. Symlinks, non-text and oversized files are left
+ * out and listed in `ignored`.
+ */
+function export_workflow_files(home, id) {
+  const directory = workflow_directory(home, id);
+  if (!existsSync(directory)) throw new Error(`没有工作流 ${id}`);
+  return { id, ...read_text_tree(directory) };
 }
 
 /**
@@ -3172,6 +3199,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, { base_url: input.base_url, api_key: input.api_key });
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);
+  else if (positionals[0] === 'image-check') result = await image_check(home);
   else if (positionals[0] === 'image-settings') result = input && Object.keys(input).length ? save_image_settings(home, input) : image_settings(home);
   else if (positionals[0] === 'tts-settings') result = input && Object.keys(input).length ? save_tts_settings(home, input) : tts_settings(home);
   else if (positionals[0] === 'tts' && input) result = await tts_speak(home, input);

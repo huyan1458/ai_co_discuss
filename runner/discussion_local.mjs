@@ -140,7 +140,8 @@ function website_process(home, settings, url) {
   const progress = { ready: false, error: null };
   let recent = '';
   const log = data => {
-    appendFileSync(join(home, 'local', 'website.log'), data);
+    // A locked log file (antivirus, indexer) must not take the website down with an uncaught throw.
+    try { appendFileSync(join(home, 'local', 'website.log'), data); } catch {}
     recent = (recent + data.toString()).slice(-4096);
     if (recent.includes(`AI CoDiscuss ready at ${url}`)) progress.ready = true;
   };

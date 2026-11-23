@@ -15,5 +15,7 @@
   },
   "triggers": { "crons": ["0 * * * *"] },
   // Set DB.database_id and the custom domain in deploy/wrangler.local.jsonc.
-  "d1_databases": [{ "binding": "DB", "database_name": "codiscuss-share" }]
+  "d1_databases": [{ "binding": "DB", "database_name": "codiscuss-share" }],
+  // Attachments of published links (user 2026-11-23), at most 100 MB per share.
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "codiscuss-share-files" }]
 }

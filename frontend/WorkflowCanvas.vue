@@ -59,6 +59,8 @@ const foldable = computed(() => props.compact && tight.value);
 const NODE_WIDTH = { card: 240, start: 96, host: 240, sub: 240 };
 const NODE_HEIGHT = { card: 96, start: 60, host: 96, sub: 96 };
 const COLUMN_GAP = 120, ROW_GAP = 28;
+// A step's frame: padding around its nodes, and the height of its title above them.
+const STAGE_PADDING = 20, STAGE_TITLE = 26;
 // An arrow's note sits on its middle: the gap it crosses leaves this much on each side of the note (ports, arrowhead).
 const NOTE_CHAR = 11, NOTE_PAD = 16, NOTE_MARGIN = 36;
 // A column an arrow skips over is lifted this far clear of the line the arrow runs along (room for its note too).
@@ -176,7 +178,6 @@ const known = new Set(cards.value);
 
 // The canvas's steps (`stages`): drawn as frames around their nodes; edited in flow.json, kept here as they were loaded.
 const stages = (flow.value?.stages || []).map((stage) => ({ id: stage.id, label: stage.label || "", nodes: [...(stage.nodes || [])] }));
-const STAGE_PADDING = 20, STAGE_TITLE = 26;
 /** Each step's frame around its nodes still on the canvas, with the sub-workflows that attach to it (`attach`). */
 const stage_frames = computed(() => stages.flatMap((stage) => {
   const members = nodes.value.filter((node) => stage.nodes.includes(node.id));
@@ -257,6 +258,9 @@ watch([cards, shared_cards, sub_ids], ([list]) => {
 
 // ── Adding: from the toolbar, or by dropping an arrow on empty canvas (the menu opens where it was dropped). ──
 const adding = ref(false);
+// The generic experts and presets in the add menu: folded unless the workflow has no cards to place yet.
+const general_open = ref(false);
+watch(adding, (open) => { if (open) general_open.value = !agents.value.length && !shared.value?.length; });
 const drop = ref(null);
 const add_anchor = ref(null);
 const platforms = Object.keys(bridge.identities).filter((name) => name !== "用户");
@@ -475,6 +479,14 @@ function column_gap(column, arrows, loops) {
   return Math.max(COLUMN_GAP, ...notes.map((length) => length * NOTE_CHAR + NOTE_PAD + 2 * NOTE_MARGIN));
 }
 
+/** The gap between two nodes stacked in a column: when they are in different steps, room for both steps' frames too. */
+function row_gap(upper, lower) {
+  const stage_of = (id) => (flow.value?.stages || []).find((stage) => (stage.nodes || []).includes(id))?.id;
+  const [above, below] = [stage_of(upper), stage_of(lower)];
+  if (above === below) return ROW_GAP;
+  return ROW_GAP + (above ? STAGE_PADDING : 0) + (below ? STAGE_PADDING + STAGE_TITLE : 0);
+}
+
 /**
  * Positions for nodes in columns by their layer (nodes the start does not reach go last): each column as wide as its
  * widest node, nodes centred in it, the column centred on its connection points, and gaps wide enough for arrow notes.
@@ -495,9 +507,10 @@ function layout(list, { layers, loops }, arrows) {
     if (!column) continue;
     column.sort((left, right) => left.position.y - right.position.y);
     const sizes = column.map(node_size);
-    const height = sizes.reduce((sum, size) => sum + size.height, 0) + ROW_GAP * (column.length - 1);
+    const gaps = column.map((node, row) => row ? row_gap(column[row - 1].id, node.id) : 0);
+    const height = sizes.reduce((sum, size, row) => sum + size.height + gaps[row], 0);
     let y = -height / 2;
-    const tops = sizes.map((size) => { const top = y; y += size.height + ROW_GAP; return top; });
+    const tops = sizes.map((size, row) => { y += gaps[row]; const top = y; y += size.height; return top; });
     // Shift the column so its connection points (each node's middle) centre on the line the other columns' do.
     const shift = sizes.reduce((sum, size, row) => sum + tops[row] + size.height / 2, 0) / column.length;
     const lift = skipped.has(index) ? Math.max(...sizes.map((size, row) => tops[row] - shift + size.height)) + BYPASS_CLEARANCE : 0;
@@ -972,10 +985,6 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <UTooltip :text="t('添加节点：成员、主持人或子工作流（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-plus" :label="icons_only ? undefined : t('添加节点')" :aria-label="t('添加节点')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
           <slot v-if="foldable" name="actions" :icons-only="icons_only" :arrange="arrange" />
         </div>
-        <div v-if="foldable" class="workflow-canvas-toolbar">
-          <UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" />
-          <UButton icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" />
-        </div>
         <template v-if="!foldable">
           <div class="workflow-canvas-toolbar">
             <UTooltip :text="t('撤销 (Ctrl+Z)')"><UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" /></UTooltip>
@@ -985,9 +994,21 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <div v-if="$slots.actions" class="workflow-canvas-toolbar"><slot name="actions" :icons-only="icons_only" /></div>
         </template>
       </Panel>
-      <!-- Top right: zoom, with the minimap below it on a desktop. -->
+      <!-- Top right: zoom, with the minimap below it on a desktop; a phone puts undo / redo here and folds zoom into one button. -->
       <Panel position="top-right" class="workflow-canvas-corner">
-        <div class="workflow-canvas-toolbar">
+        <div v-if="foldable" class="workflow-canvas-toolbar">
+          <UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" />
+          <UButton icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" />
+          <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 6 }" :ui="{ content: 'workflow-canvas-zoom' }">
+            <UButton icon="i-lucide-scan-search" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('缩放画布')" />
+            <template #content>
+              <UButton icon="i-lucide-zoom-in" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('放大画布')" @click="instance?.zoomIn({ duration: 150 })" />
+              <UButton icon="i-lucide-zoom-out" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('缩小画布')" @click="instance?.zoomOut({ duration: 150 })" />
+              <UButton icon="i-lucide-maximize" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('适应画布')" @click="fit" />
+            </template>
+          </UPopover>
+        </div>
+        <div v-else class="workflow-canvas-toolbar">
           <UTooltip :text="t('放大画布')"><UButton icon="i-lucide-zoom-in" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('放大画布')" @click="instance?.zoomIn({ duration: 150 })" /></UTooltip>
           <UTooltip :text="t('缩小画布')"><UButton icon="i-lucide-zoom-out" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('缩小画布')" @click="instance?.zoomOut({ duration: 150 })" /></UTooltip>
           <UTooltip :text="t('适应画布')"><UButton icon="i-lucide-maximize" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('适应画布')" @click="fit" /></UTooltip>
@@ -1005,15 +1026,16 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       :ui="{ content: 'workflow-canvas-add' }" @update:open="(value) => { adding = value; }">
       <template #content>
         <div class="workflow-canvas-add-body">
-          <RosterAdd :label="t('添加成员卡片')" :items="roster_items" @add="add_card" />
           <div v-if="agents.length" class="workflow-canvas-add-again">
             <span>{{ t('已有成员再放一次') }}</span>
             <UButton v-for="agent in agents" :key="agent.card" :label="label_of(agent.card)" icon="i-lucide-copy-plus" size="xs" color="neutral" variant="soft"
+              :trailing-icon="Array.isArray(agent.skills) ? 'i-lucide-book-open' : undefined"
               :title="t('在画布上再放一个「{value1}」：同一张卡片，示意它在流程里出场两次', { value1: label_of(agent.card) })" @click="place_again(agent.card)" />
           </div>
           <div v-if="shared?.length" class="workflow-canvas-add-again">
             <span>{{ t('主线的成员') }}</span>
             <UButton v-for="agent in shared" :key="agent.card" :label="label_of(agent.card)" icon="i-lucide-user-round-plus" size="xs" color="neutral" variant="soft"
+              :trailing-icon="Array.isArray(agent.skills) ? 'i-lucide-book-open' : undefined"
               :title="t('把主线的「{value1}」放进这个子工作流：同一张卡片，示意它在这里参与', { value1: label_of(agent.card) })" @click="place_again(agent.card)" />
           </div>
           <!-- A sub-workflow node shows where the flow turns to it; everything else about them is in the parts list. -->
@@ -1025,6 +1047,12 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <div class="workflow-canvas-add-more">
             <UButton icon="i-lucide-crown" :label="t('主持人')" size="xs" color="neutral" variant="soft" :title="t('主持人节点：示意交回主持人判断的地方')" @click="add_host" />
             <UButton v-if="view.room?.id && !drop" icon="i-lucide-users" :label="t('当前房间的成员')" size="xs" color="neutral" variant="soft" @click="cards_from_room" />
+          </div>
+          <!-- The workflow's own experts and advisors come first; the generic ones from the new-room panel stay folded (user 2026-11-23). -->
+          <div class="workflow-canvas-add-again">
+            <UButton :label="t('从新建面板添加通用专家与预设')" :icon="general_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" size="xs" color="neutral" variant="ghost"
+              :aria-expanded="general_open" @click="general_open = !general_open" />
+            <RosterAdd v-if="general_open" :label="t('添加成员卡片')" :items="roster_items" @add="add_card" />
           </div>
         </div>
       </template>
@@ -1180,6 +1208,8 @@ html[data-theme="channel-light"] .workflow-canvas .workflow-edge-note.is-loop { 
 
 /* The add menu renders outside the canvas. */
 .workflow-canvas-add { padding: 10px 12px; max-width: min(560px, 92vw); }
+/* Phone: zoom in, zoom out and fit, opened from the one zoom button in the top-right corner. */
+.workflow-canvas-zoom { display: flex; padding: 2px; border-radius: 9px; }
 .workflow-canvas-add-body { display: grid; gap: 10px; justify-items: start; }
 .workflow-canvas-add-more { display: flex; gap: 6px; }
 .workflow-canvas-add-more:empty { display: none; }

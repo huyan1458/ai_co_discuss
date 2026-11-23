@@ -127,8 +127,9 @@ async function save_management() {
 }
 
 // Every destroy is confirmed twice (2026-11-22 user decision): its own confirmation, then this one saying the data is lost.
+// The second confirmation takes the place of the dialog's content, in the same window, until answered or the dialog changes.
 const final_confirm = ref(null);
-const final_open = computed({ get: () => Boolean(final_confirm.value), set: (value) => { if (!value) final_confirm.value = null; } });
+watch(mode, () => { final_confirm.value = null; });
 
 /** Ask once more before destroying `count` rooms; `run` destroys them only after this second confirmation. */
 function ask_final(count, run) {
@@ -142,17 +143,13 @@ function confirm_final() {
   pending?.run();
 }
 
-// Destroying a room keeps its dialog open on the receipt's progress until every item is checked.
-const destroy_id = ref("");
 const export_started = ref(false);
-watch(() => [mode.value, props.targetRoom?.id], () => { if (mode.value !== "delete") { destroy_id.value = ""; export_started.value = false; } });
-const destruction = computed(() => view.value.destructions.find((item) => item.room_id === destroy_id.value) || null);
-watch(() => destruction.value?.status, (status) => { if (status === "done" && mode.value === "delete") mode.value = ""; });
+watch(() => [mode.value, props.targetRoom?.id], () => { if (mode.value !== "delete") export_started.value = false; });
 
 /** Start destroying the room; the dialog then shows what has been removed and checked. */
 async function destroy_room(request) {
-  destroy_id.value = request.id;
-  if (!await act("manage_channel", request)) destroy_id.value = "";
+  mode.value = "";
+  await act("manage_channel", request);
 }
 
 /** Download the room's records before destroying it; the browser, not this page, knows when the file is saved. */
@@ -172,18 +169,11 @@ function destruction_label(item) {
     runtime_files: () => t("运行文件与草稿"), kept_sessions: () => t("沿用你原有的会话，或与其他房间共用的会话 {count} 个", { count }),
     software_stores: () => t("{software} 自身共用的索引与数据库（未改动）", { software: software_label(item.adapter) }),
     feedback_cases: () => t("你评过的调度记录 {count} 条", { count }),
+    draft_space: () => item.state === "kept" ? t("草稿文件夹（其他房间还在用）") : t("草稿文件夹"),
     project_files: () => t("项目文件"), providers: () => t("已发给模型服务商的内容") };
   return (labels[item.kind] || (() => item.kind))();
 }
 
-/** The receipt's items, with the room's computer still to report while it has not. */
-const destruction_items = computed(() => {
-  const record = destruction.value;
-  if (!record) return [];
-  const local = record.items.some((item) => ["runtime_files", "sessions"].includes(item.kind));
-  return [...record.items, ...(record.status === "cleaning" && !local ? [{ kind: "runtime_files", state: "pending" }] : [])];
-});
-const destruction_failed = computed(() => destruction_items.value.some((item) => item.state === "failed"));
 const destroy_all_open = ref(false);
 const destroy_all_word = ref("");
 const DESTROY_ALL_WORD = t("销毁全部");
@@ -320,9 +310,13 @@ const keep_open = (event) => event.preventDefault();
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="titles[rendered_mode] || t('讨论')" :description="descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', ['rename', 'restore', 'delete'].includes(rendered_mode) && 'channel-folder-modal channel-manage-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'settings' && 'channel-settings-modal', rendered_mode === 'create' && 'channel-create-modal', rendered_mode === 'message' && 'channel-message-modal'], body: 'dialog-body' }" :content="{ onInteractOutside: keep_open }" @after:leave="after_dialog_leave">
+  <UModal v-model:open="open" :title="final_confirm ? t('再次确认销毁') : titles[rendered_mode] || t('讨论')" :description="final_confirm ? undefined : descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', ['rename', 'restore', 'delete'].includes(rendered_mode) && 'channel-folder-modal channel-manage-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'settings' && 'channel-settings-modal', rendered_mode === 'create' && 'channel-create-modal', rendered_mode === 'message' && 'channel-message-modal'], body: 'dialog-body' }" :content="{ onInteractOutside: keep_open }" @after:leave="after_dialog_leave">
     <template #body>
-      <section v-if="rendered_mode === 'archives'" class="channel-archive-manager">
+      <section v-if="final_confirm" class="dialog-form">
+        <p class="channel-destroy-final">{{ final_confirm.count === 1 ? t("销毁后，这个房间的消息、附件、成员的 AI 会话记录与草稿都会被删除，数据将永久丢失，无法恢复。确定要销毁吗？") : t("销毁后，这 {count} 个房间的消息、附件、成员的 AI 会话记录与草稿都会被删除，数据将永久丢失，无法恢复。确定要销毁吗？", { count: final_confirm.count }) }}</p>
+        <div class="dialog-actions"><UButton :label="t('返回')" color="neutral" variant="ghost" @click="final_confirm = null" /><UButton :label="t('确认销毁')" color="error" @click="confirm_final" /></div>
+      </section>
+      <section v-else-if="rendered_mode === 'archives'" class="channel-archive-manager">
         <div class="channel-archive-toolbar">
           <UInput v-model="archive_query" icon="i-lucide-search" :placeholder="t('搜索已存档房间')" :aria-label="t('搜索已存档房间')" class="channel-archive-search" />
           <USelect v-model="archive_content" :items="archive_content_options" icon="i-lucide-list-filter" :aria-label="t('筛选房间内容')" />
@@ -389,25 +383,18 @@ const keep_open = (event) => event.preventDefault();
       <form v-else-if="['rename', 'restore', 'delete'].includes(rendered_mode)" class="dialog-form" @submit.prevent="save_management">
         <p class="channel-management-target">{{ targetRoom?.title }} <span>· {{ t("{count} 条消息", { count: targetRoom?.message_count }) }}</span></p>
         <p v-if="rendered_mode === 'restore'" class="fine-print">{{ t("恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。") }}</p>
-        <template v-if="rendered_mode === 'delete' && !destroy_id">
+        <template v-if="rendered_mode === 'delete'">
           <ul class="channel-destroy-scope">
-            <li>{{ t("将删除：消息与私聊、附件、成员在本房间新建的 AI 会话记录、运行文件与草稿。") }}</li>
-            <li>{{ t("保留：项目文件、沿用你原有窗口的会话，以及各 AI 软件自身共用的索引与数据库。") }}</li>
+            <li>{{ t("将删除：消息与私聊、附件、成员在本房间新建的 AI 会话记录、运行文件与草稿，以及建房时自动创建的草稿文件夹（含其中的文件）。") }}</li>
+            <li>{{ t("保留：你选的项目文件夹、沿用你原有窗口的会话，以及各 AI 软件自身共用的索引与数据库。") }}</li>
             <li>{{ t("已发给模型服务商的内容按其政策保留，我们无法删除。") }}</li>
             <li v-if="view.share_links?.[targetRoom?.id]">{{ t("这个房间发布过分享网页，销毁前会先撤销。") }}</li>
           </ul>
           <p class="fine-print">{{ t("资料包含消息、私聊和附件，不含成员写在草稿目录里、没有发进房间的文件；需要的先让成员发进房间或存进项目目录。") }}</p>
           <div class="channel-destroy-export"><span>{{ export_started ? t("已开始下载，请确认浏览器已保存文件。") : t("销毁前带走一份？") }}</span><UButton :label="t('导出资料包')" icon="i-lucide-download" color="neutral" variant="soft" size="xs" :disabled="view.backup_pending" @click="export_before_destroy" /></div>
         </template>
-        <template v-if="rendered_mode === 'delete' && destroy_id">
-          <ul class="channel-destroy-progress" role="status">
-            <li v-for="item in destruction_items" :key="`${item.kind}-${item.adapter || ''}`" :data-state="item.state"><span>{{ destruction_label(item) }}</span><small>{{ DESTROY_STATES[item.state] }}</small></li>
-          </ul>
-          <p class="fine-print">{{ t("记录与附件已删除；其余各项逐一核验。可以关闭此窗口，全部完成后房间会自动消失。") }}</p>
-        </template>
         <UFormField v-if="rendered_mode === 'rename'" :label="t('房间名称')" required><UInput v-model="management_title" autofocus :maxlength="80" required class="w-full" autocomplete="off" /></UFormField>
-        <div v-if="rendered_mode === 'delete' && destroy_id" class="dialog-actions"><UButton v-if="destruction_failed" :label="t('重试')" color="neutral" variant="soft" @click="act('retry_destruction', destroy_id)" /><UButton :label="t('关闭')" color="neutral" variant="ghost" @click="mode = ''" /></div>
-        <div v-else class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? t('立即销毁') : rendered_mode === 'rename' ? t('保存名称') : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="pending === 'manage_channel' || view.directory_pending.includes(`delete:${targetRoom?.id}`)" :disabled="rendered_mode === 'rename' && !management_title.trim()" /></div>
+        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? t('立即销毁') : rendered_mode === 'rename' ? t('保存名称') : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="pending === 'manage_channel' || view.directory_pending.includes(`delete:${targetRoom?.id}`)" :disabled="rendered_mode === 'rename' && !management_title.trim()" /></div>
       </form>
       <div v-else-if="rendered_mode === 'settings'">
         <AccountSettings />
@@ -423,7 +410,6 @@ const keep_open = (event) => event.preventDefault();
           <section class="channel-setting-row">
             <h3 id="channel-effects-label">{{ t("视觉效果") }}</h3>
             <div class="channel-reading-options channel-effect-options" role="group" aria-labelledby="channel-effects-label"><UButton v-for="option in effectOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: effects === option.value }" :aria-pressed="effects === option.value" @click="effects = option.value" /></div>
-            <p class="fine-print">{{ t("精简模式关闭毛玻璃模糊与多层阴影，适合配置较低或需要更流畅滚动的设备。") }}</p>
           </section>
         </div>
         <h3 class="account-appearance-heading">{{ t("阅读") }}</h3>
@@ -439,20 +425,18 @@ const keep_open = (event) => event.preventDefault();
           <section class="channel-setting-row">
             <h3 id="channel-fold-label">{{ t("长回答折叠") }}</h3>
             <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-label"><UButton v-for="option in foldOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_level === option.value }" :aria-pressed="fold_level === option.value" @click="fold_level = option.value" /></div>
-            <p class="fine-print">{{ t("宽松：超过 1.2 屏才折叠；标准：超过 0.7 屏折叠；紧凑：超过半屏就折叠。按当前屏幕高度计算，只对本设备生效。") }}</p>
           </section>
           <section class="channel-setting-row">
             <h3 id="channel-fold-keep-label">{{ t("折叠后显示") }}</h3>
             <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-keep-label"><UButton v-for="option in foldKeepOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_keep === option.value }" :aria-pressed="fold_keep === option.value" @click="fold_keep = option.value" /></div>
-            <p class="fine-print">{{ t("折叠后的回答保留开头一段：少约 0.35 屏、中约 0.6 屏、多约 0.9 屏。按当前屏幕高度换算成行数，手机、平板、电脑各自不同，只对本设备生效。") }}</p>
           </section>
         </div>
         <h3 class="account-appearance-heading">{{ t("房间偏好") }}</h3>
         <div class="channel-settings-group">
           <section class="channel-setting-row channel-setting-wide">
-            <h3 id="channel-host-access-label">{{ t("主持人项目权限") }}</h3>
+            <h3 id="channel-host-access-label">{{ t("主持人默认权限") }}</h3>
             <div class="channel-reading-options channel-access-options" role="group" aria-labelledby="channel-host-access-label"><UButton v-for="option in HOST_ACCESS_OPTIONS" :key="option.value" :label="option.label" color="neutral" variant="ghost" :disabled="!view.launch.available" :class="{ chosen: host_access === option.value }" :aria-pressed="host_access === option.value" @click="bridge.write_create_preferences({ host_project_access: option.value })" /></div>
-            <p class="fine-print">{{ view.launch.available ? t("新建房间时，第一位加入的成员（默认主持人）使用的项目权限；该软件不支持所选档位时仍为只读。保存在这台电脑的本机服务里，升级后保留。") : t("连接本机服务后可设置。") }}</p>
+            <p class="fine-print">{{ view.launch.available ? t("新建房间时主持人的项目权限；软件不支持时为只读。") : t("连接本机服务后可设置。") }}</p>
           </section>
         </div>
         <SpeechSettings />
@@ -472,12 +456,6 @@ const keep_open = (event) => event.preventDefault();
         <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" class="channel-primary-button" :label="t('保存议题')" :loading="pending === 'create' || pending === 'save_topic'" /></div>
       </form>
       <div v-else-if="rendered_mode === 'message'" class="original-message"><p v-if="detail_error" role="alert">{{ detail_error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" @click="load_detail(detail_target)" /></p><template v-else-if="detail"><div class="original-meta"><strong>{{ bridge.display_name(detail.author) }}</strong><span>#{{ detail.id }}</span><UBadge color="neutral" variant="subtle">{{ bridge.sources[detail.source] }}</UBadge></div><p class="fine-print">{{ bridge.provenance(detail) }} · {{ new Date(detail.created_at).toLocaleString('zh-CN') }}</p><section v-if="detail.summary" class="channel-answer-summary"><small>{{ t("回答摘要 · {name}", { name: bridge.display_name(detail.summary_by) }) }}</small><p class="message-prose">{{ detail.summary }}</p></section><p class="message-prose">{{ detail.text }}</p><div v-if="detail.attachments?.length" @click="open_attachment" v-html="bridge.attachment_markup(detail.attachments)"></div><UButton v-if="detail.reply_to" :label="t('查看被回复的原文 #{id}', { id: detail.reply_to })" icon="i-lucide-corner-up-left" variant="outline" color="neutral" class="channel-surface-button" @click="follow_reply" /></template><div v-else class="grid gap-4 py-2" role="status" :aria-label="t('正在读取原文')"><USkeleton class="h-5 w-36" /><USkeleton v-for="line in 6" :key="line" class="h-4" :class="line % 3 ? 'w-full' : 'w-2/3'" /></div></div>
-    </template>
-  </UModal>
-  <UModal v-model:open="final_open" :title="t('再次确认销毁')" :ui="{ content: 'glass-panel studio-modal channel-folder-modal' }">
-    <template #body>
-      <p class="channel-destroy-final">{{ (final_confirm?.count || 0) === 1 ? t("销毁后，这个房间的消息、附件、成员的 AI 会话记录与草稿都会被删除，数据将永久丢失，无法恢复。确定要销毁吗？") : t("销毁后，这 {count} 个房间的消息、附件、成员的 AI 会话记录与草稿都会被删除，数据将永久丢失，无法恢复。确定要销毁吗？", { count: final_confirm?.count || 0 }) }}</p>
-      <div class="dialog-actions"><UButton :label="t('返回')" color="neutral" variant="ghost" @click="final_confirm = null" /><UButton :label="t('确认销毁')" color="error" @click="confirm_final" /></div>
     </template>
   </UModal>
 </template>

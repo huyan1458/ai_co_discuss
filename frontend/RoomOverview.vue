@@ -165,6 +165,11 @@ function access(member) {
     hint: !free.value ? t("讨论进行中不能切换") : idle ? t("切换后沿用原会话；切回 CLI 前须让 App 释放原聊天") : t("正在处理请求，完成后再切换") };
 }
 
+/** Whether this member continues a session taken over from this computer, which keeps its own context and permissions. */
+function adopted(member) {
+  return member.access === "runner" && saved.value?.participants?.[member.name]?.project_access === "own";
+}
+
 /** Free-room members carry their live execution and pending count; older rooms list members without them. */
 function live(member) {
   return (room.value.free?.members || []).find((item) => item.name === member.name) || member;
@@ -210,7 +215,7 @@ const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extr
 function model_editable(member) {
   const profile = saved.value?.participants?.[member.name];
   const kind = adapter_profile(profile?.adapter)?.kind;
-  return member.access === "runner" && Boolean(kind) && kind !== "app" && profile.project_access !== "own"
+  return member.access === "runner" && Boolean(kind) && kind !== "app"
     && !waiting(member.name) && view.value.access?.can_manage && view.value.launch.available;
 }
 
@@ -403,6 +408,7 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
                   :disabled="!access(live(member)).editable || switching.has(member.name)" @click="switch_adapter(member, option.value)">{{ option.label }}</button>
               </div>
               <span v-else>{{ access(member).text }}</span>
+              <span v-if="adopted(member)" class="overview-muted" :title="t('从这台电脑上已有的会话接入，续接时沿用该会话的上下文与软件权限')"> · {{ t("接管已有会话") }}</span>
             </dd></div>
             <div><dt>{{ t("模型") }}</dt><dd class="overview-model" :class="{ 'overview-muted': waiting(member.name) }" :title="bridge.participant_model(member.name, room, saved) || undefined"><span>{{ member.access === 'runner' ? bridge.participant_model(member.name, room, saved) || '—' : t('在它自己的会话里设置') }}</span>
               <UButton v-if="model_editable(member)" icon="i-lucide-pencil" size="xs" variant="ghost" color="neutral" :aria-label="t('更改 {name} 的模型与强度', { name: member.name })" :title="t('更改模型与思考强度')" @click="edit_model(member)" /></dd></div>

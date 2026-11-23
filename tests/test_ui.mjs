@@ -287,7 +287,7 @@ function attachment_fixture() {
   element("author-select").value = "用户";
   const state = { room: { id: "one", host: "Codex" }, attachment_drafts: [], failed_sends: [], messages: [], message_total: 0 };
   let identifier = 0, fail = true;
-  const context = vm.createContext({ state, element, SEND_RETRY_MS: [2000, 5000, 10000], setTimeout: (callback) => callback(), MAX_MESSAGE_LENGTH: 30000, MAX_SUMMARY_LENGTH: 1000,
+  const context = vm.createContext({ state, element, room_timing_mark() {}, SEND_RETRY_MS: [2000, 5000, 10000], setTimeout: (callback) => callback(), MAX_MESSAGE_LENGTH: 30000, MAX_SUMMARY_LENGTH: 1000,
     MAX_MESSAGE_ATTACHMENTS: 10, MAX_ATTACHMENT_BYTES: 20 * 1024 * 1024, URLSearchParams,
     new_submission_id: () => String(++identifier), escape_html: text => text, relay_files: new Map(), prefetched: new Map(),
     URL: { createObjectURL: () => "blob:test", revokeObjectURL: url => revoked.push(url) },
@@ -450,6 +450,8 @@ test("a concurrent push lets the receipt read replace the member card before rea
   const push = context.flush_live_refresh();
   assert.equal(reads, 1);
   assert.equal(context.receipt_messages()[0].id, message.id);
+  // The receipt has no text (only text_chars); the card that replaces the sending card keeps what was sent.
+  assert.equal(context.receipt_messages()[0].text, "@Codex 请处理");
   assert.deepEqual(Array.from(cards(), card => [card.author, card.text]), [["Codex", "等待开始…"]]);
   room_read.resolve({ ...state.room, free: { members: [member], requests: [
     { id: 12, status: "pending", purpose: "ask", message_id: message.id, member_id: member.id }
@@ -531,7 +533,7 @@ test("retracting the latest message members started on stops that work and rewin
   const refusal = Object.assign(new Error("已有成员开始处理这条消息，不能撤回；可以编辑这条消息回退到它之前"), { status: 409 });
   let plan, room;
   const state = { room: { id: "one" }, messages: [{ id: 5, text: "原问题" }], attachment_drafts: [] };
-  const context = vm.createContext({ state, element: () => input, notify: (level, text) => notified.push([level, text]),
+  const context = vm.createContext({ state, element: () => input, room_timing_mark() {}, notify: (level, text) => notified.push([level, text]),
     display_name: name => name, refresh_room: async () => {}, rewind_plan: async () => plan,
     fill_composer: (text) => { input.value = text; }, renumber_placeholders() {}, preupload_drafts() {}, publish_view() {},
     request_json: async (url, payload) => {

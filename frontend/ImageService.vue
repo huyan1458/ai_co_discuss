@@ -6,7 +6,7 @@
  * `compact` as a switch with a one-line summary whose settings open on demand).
  * The key goes only to the local private store and never comes back to the page.
  */
-import { computed, inject, nextTick, onMounted, reactive, ref } from "vue";
+import { computed, inject, nextTick, onMounted, reactive, ref, watch } from "vue";
 import RosterAdd from "./RosterAdd.vue";
 import { t } from './i18n.js';
 
@@ -75,6 +75,15 @@ async function save_key() {
   } catch (error) { bridge.notify("error", error.message); }
   finally { saving.value = false; }
 }
+const check = ref({ state: "" });
+// A changed address, model or key needs a fresh check.
+watch(() => [settings.base_url, settings.model, settings.api_key_ref], () => { check.value = { state: "" }; });
+/** Check the saved settings by listing the key's models (no image is drawn, nothing is billed). */
+async function check_config() {
+  check.value = { state: "loading" };
+  try { await bridge.local_request("image-check", {}); check.value = { state: "ok" }; bridge.notify("info", t('检查通过：地址与密钥可用，模型列表里有 {value1}', { value1: settings.model })); }
+  catch (failure) { check.value = { state: "error" }; bridge.notify("error", failure.message); }
+}
 function add() { if (!props.enabled) emit("update:enabled", true); }
 /** The compact row's switch: on opens the settings when this computer has no usable service yet, off closes them. */
 function toggle(enabled) {
@@ -125,7 +134,11 @@ function remove() {
           </template>
           <template v-else>
             <div class="image-back">
-              <div class="image-heading"><strong>{{ LABEL }}<span>{{ t('设置') }}</span></strong></div>
+              <div class="image-heading"><strong>{{ LABEL }}<span>{{ t('设置') }}</span></strong>
+                <UButton icon="i-lucide-zap" :aria-label="t('检查生图配置')" :title="t('检查配置：用密钥读取模型列表并查找所选模型，不生成图片、不计费；无法确认账号能否实际出图')" size="xs" variant="ghost"
+                  :color="check.state === 'ok' ? 'success' : check.state === 'error' ? 'error' : 'neutral'" :loading="check.state === 'loading'"
+                  :disabled="!settings.api_key_ref || !settings.model || saving" @click="check_config" />
+              </div>
               <div class="image-field"><span>{{ t('地址') }}</span><UInput v-model="address" :aria-label="t('图片接口 Base URL')" placeholder="https://api.openai.com/v1" size="xs" class="w-full" @change="set_address" /></div>
               <div class="image-field"><span>{{ t('密钥') }}</span>
                 <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
@@ -195,6 +208,7 @@ function remove() {
 .image-flip-actions { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 2px; }
 .image-flip-actions > .image-flip { position: static; }
 .image-back { display: flex; flex: 1; flex-direction: column; gap: 8px; min-height: 0; padding: 10px 12px 34px; overflow-y: auto; scrollbar-width: thin; }
+.image-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .image-heading strong { color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; }
 .image-heading strong > span { margin-left: 6px; color: var(--ui-text-muted); font-size: 10px; font-weight: 400; }
 .image-field { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }

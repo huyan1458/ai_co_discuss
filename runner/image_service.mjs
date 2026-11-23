@@ -6,7 +6,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { api_base_url, read_saved_api_key } from './discussion_api.mjs';
+import { api_base_url, api_models, read_saved_api_key } from './discussion_api.mjs';
 import { IMAGE_MODELS } from './adapters/profiles.mjs';
 import { atomic_json } from './files.mjs';
 
@@ -55,4 +55,21 @@ export function room_image(home, config) {
   const settings = image_settings(home);
   if (!settings.configured) return null;
   return { model: settings.model, base_url: api_base_url(settings.base_url), key: read_saved_api_key(home, settings.base_url, settings.api_key_ref) };
+}
+
+/** A refusal the page shows in its own language (`error_text`, see expert_failure in discussion_launch.mjs). */
+function check_failure(template, params = {}) {
+  return Object.assign(new Error(template.replace(/\{(\w+)\}/g, (match, name) => params[name] ?? match)), { error_text: { template, params } });
+}
+
+/**
+ * Check the saved address, key and image model without drawing (drawing is billed per image): list the models the key
+ * can see and look for the chosen one. It cannot tell whether the account may actually draw (balance, verification).
+ */
+export async function image_check(home) {
+  const settings = image_settings(home);
+  if (!settings.configured) throw check_failure('请先填写生图 API Key');
+  const { models } = await api_models(home, { base_url: settings.base_url, api_protocol: 'chat', model: settings.model, api_key_ref: settings.api_key_ref });
+  if (!models.some(item => item.id === settings.model)) throw check_failure('地址与密钥可用，但这个密钥的模型列表里没有 {model}，请核对模型 ID 或账号是否已开通', { model: settings.model });
+  return { ok: true };
 }

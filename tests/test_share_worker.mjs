@@ -22,6 +22,24 @@ function d1_statement(sql, values = []) {
   };
 }
 
+// Workers' FixedLengthStream: passes the bytes through and fails when they are not exactly `length`.
+globalThis.FixedLengthStream ??= class extends TransformStream {
+  constructor(length) {
+    let seen = 0;
+    super({ transform(chunk, controller) { seen += chunk.byteLength; if (seen > length) throw new Error("too long"); controller.enqueue(chunk); },
+      flush() { if (seen !== length) throw new Error("too short"); } });
+  }
+};
+/** An R2 bucket in memory: put, get, delete and list by prefix. */
+function memory_bucket() {
+  const objects = new Map();
+  return { objects,
+    async put(key, body, options) { objects.set(key, { bytes:new Uint8Array(await new Response(body).arrayBuffer()), type:options?.httpMetadata?.contentType }); return { key }; },
+    async get(key) { const object = objects.get(key); return object ? { body:new Blob([object.bytes]).stream() } : null; },
+    async delete(keys) { for (const key of [keys].flat()) objects.delete(key); },
+    async list({ prefix }) { return { objects:[...objects.keys()].filter(key => key.startsWith(prefix)).map(key => ({ key })), truncated:false }; } };
+}
+
 function fixture(t) {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(schema);
@@ -31,7 +49,7 @@ function fixture(t) {
     try { const results = items.map(item => item.execute()); sqlite.exec("COMMIT"); return results; }
     catch (error) { sqlite.exec("ROLLBACK"); throw error; }
   }};
-  const env = { DB, SOURCE_SALT:"fixture-salt", ADMIN_TOKEN:"fixture-admin", ASSETS:{ fetch:req =>
+  const env = { DB, FILES:memory_bucket(), SOURCE_SALT:"fixture-salt", ADMIN_TOKEN:"fixture-admin", ASSETS:{ fetch:req =>
     new Response(new URL(req.url).pathname === "/index.html" ? TEMPLATE : "asset") } };
   const pending = [];
   const call = (method,path,body,token,ip="192.0.2.1") => {
@@ -93,10 +111,10 @@ test("publishes a nonce-protected page and preserves literal text across chunk b
 });
 
 /** The payload with its message listing these attachments ({ id, file_name, content_type }). */
-function with_files(files, attachments) {
+function with_files(files, attachments, sent) {
   const data = payload();
   data.responses["/api/rooms/example/messages?after=0"].messages[0].attachments = files.map(file => ({ room_id: "example", ...file }));
-  return { ...data, attachments };
+  return { ...data, ...(attachments ? { attachments } : {}), ...(sent ? { files:sent } : {}) };
 }
 
 test("included attachments are kept as this room's data URLs; any other route or value is refused", async t => {
@@ -124,7 +142,7 @@ test("included attachments are kept as this room's data URLs; any other route or
   const text = "data:text/plain;base64,aGk=";
   for (const [files, attachments] of [
     [[{ id: "a1", file_name: "setup.exe", content_type: "text/plain" }], { [route]: text }],
-    [[{ id: "a1", file_name: "notes.zip", content_type: "application/zip" }], { [route]: "data:application/zip;base64,aGk=" }],
+    [[{ id: "a1", file_name: "notes.rar", content_type: "application/vnd.rar" }], { [route]: "data:application/vnd.rar;base64,aGk=" }],
     [[], { [route]: text }],
     [[{ id: "a1", file_name: "notes.txt", content_type: "text/plain" }], { [route]: file }],
     [[{ id: "a1", file_name: "notes.txt", content_type: "text/html" }], { [route]: text }]]) {
@@ -133,6 +151,47 @@ test("included attachments are kept as this room's data URLs; any other route or
     assert.match((await refused.json()).error, /share site takes only/);
   }
   assert.equal((await f.call("POST", "/api/shares", with_files([{ id: "a1", file_name: "notes.TXT", content_type: "text/plain" }], { [route]: text }))).status, 201);
+});
+
+test("attachments sent as files: listed with the page, uploaded exactly as listed, read by its page, gone with the version", async t => {
+  const f = fixture(t), route = "/api/rooms/example/attachments/a1/content";
+  const listed = [{ id:"a1", file_name:"clip.mp4", content_type:"video/mp4" }];
+  const share = await f.publish(with_files(listed, undefined, { [route]:{ content_type:"video/mp4", bytes:5 } }));
+  assert.ok(share.revision);
+  const upload = (body, { token = share.manage_token, revision = share.revision, type = "video/mp4", file = "a1", id = share.id } = {}) =>
+    worker.fetch(new Request(new URL("/api/shares/"+id+"/files/"+file+"?revision="+revision, ORIGIN), { method:"PUT", body,
+      headers:{ "CF-Connecting-IP":"192.0.2.1", "Content-Type":type, "Content-Length":String(body.length), Authorization:"Bearer "+token } }), f.env, { waitUntil:p=>f.pending.push(p) });
+  const read = () => f.call("GET", "/s/"+share.id+"/files/a1");
+  assert.equal((await read()).status, 404, "not readable before it is uploaded");
+  assert.equal((await upload(new Uint8Array(5), { token:"wrong" })).status, 403);
+  assert.equal((await upload(new Uint8Array(5), { revision:"old" })).status, 409);
+  assert.equal((await upload(new Uint8Array(5), { type:"text/html" })).status, 400);
+  assert.equal((await upload(new Uint8Array(6))).status, 413);
+  assert.equal((await upload(new Uint8Array(5), { file:"a2" })).status, 404);
+  assert.equal((await upload(new Uint8Array([1,2,3,4,5]))).status, 200);
+  const file = await read();
+  assert.equal(file.status, 200);
+  assert.deepEqual([...new Uint8Array(await file.arrayBuffer())], [1,2,3,4,5]);
+  assert.equal(file.headers.get("Content-Disposition"), "attachment");
+  assert.match(file.headers.get("Content-Security-Policy"), /^sandbox;/);
+  // Review lists it and hands it over as a download.
+  const detail = await (await f.call("GET", "/api/admin/shares/"+share.id, undefined, f.env.ADMIN_TOKEN)).json();
+  assert.deepEqual(detail.data.attachments, [{ route, content_type:"video/mp4", bytes:5 }]);
+  assert.equal((await f.call("GET", "/api/admin/shares/"+share.id+"/attachment?route="+encodeURIComponent(route), undefined, f.env.ADMIN_TOKEN)).status, 200);
+  // Publishing again lists the files anew and removes the old version's.
+  const again = await (await f.call("PUT", "/api/shares/"+share.id, with_files(listed, undefined, { [route]:{ content_type:"video/mp4", bytes:5 } }), share.manage_token)).json();
+  await Promise.all(f.pending);
+  assert.notEqual(again.revision, share.revision);
+  assert.equal(f.env.FILES.objects.size, 0);
+  assert.equal((await read()).status, 404);
+  // More than 100 MB in all, or a file no message lists, is refused with the page.
+  assert.equal((await f.call("POST", "/api/shares", with_files(listed, undefined, { [route]:{ content_type:"video/mp4", bytes:100 * 1024 * 1024 + 1 } }))).status, 413);
+  assert.equal((await f.call("POST", "/api/shares", with_files([], undefined, { [route]:{ content_type:"video/mp4", bytes:5 } }))).status, 400);
+  // Revoking removes the files too.
+  await upload(new Uint8Array(5), { revision:again.revision });
+  assert.equal(f.env.FILES.objects.size, 1);
+  await f.call("DELETE", "/api/shares/"+share.id, undefined, share.manage_token);
+  assert.equal(f.env.FILES.objects.size, 0);
 });
 
 test("the page and the share site take the same kinds of attachment", async () => {
