@@ -1,6 +1,6 @@
 {
   "name": "ai_co_discuss",
-  "version": "0.5.22",
+  "version": "0.5.23",
   "bin": {
     "codiscuss": "runner/codiscuss.mjs"
   },
@@ -87,6 +87,8 @@
     "gateway/*.mjs",
     "runner/adapters/*.mjs",
     "runner/*.py",
+    ".agents/skills/codiscuss-draft-cleanup/*.py",
+    ".agents/skills/codiscuss-draft-cleanup/SKILL.md",
     "backend/*.py",
     "backend/schema.sql",
     "backend/migrations/*.sql",
