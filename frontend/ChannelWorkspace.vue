@@ -273,10 +273,10 @@ async function save_consensus() {
 
 /** Open management for the exact sidebar item while leaving its draft untouched; archiving needs no dialog, it offers undo. */
 function manage_room({ room, action, job }) {
+  if (action === "archive") return act("manage_channel", { id: room.id, action, undo: true });
   nav_open.value = false;
   if (action === "share_job_action") return act(action, { op: "open", job });
   if (action === "share_prepare" || action === "share_open") return act(action, room.id);
-  if (action === "archive") return act("manage_channel", { id: room.id, action, undo: true });
   managed_room.value = room;
   modal.value = action;
 }

@@ -37,7 +37,7 @@ import ExecutionChanges from "./ExecutionChanges.vue";
 import MessageVisualBody from "./MessageVisualBody.vue";
 import { add_excerpt, excerpt_mark_place, excerpt_range, inner_scroll_follower, excerpt_source, excerpts_markdown, file_preview, hold_selection, room_quotes, take_excerpts, text_offset } from "./file-preview.js";
 import { keep_reading_position } from "./scroll-anchor.js";
-import { guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
+import { open_attachment_picker, guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
 import { FILE_MENTION_PATTERN } from "./file-mention.mjs";
 import { slash_insertion } from "../runner/slash_names.mjs";
 import MemoBlock from "./memo-block.js";
@@ -4270,7 +4270,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UTooltip :text="ENTER_SENDS ? t('完成，转成文字 · Enter') : t('完成，转成文字')"><UButton type="button" icon="i-lucide-check" color="neutral" size="sm" class="channel-primary-button channel-round-button" :aria-label="t('结束录音并转成文字')" :loading="voice.state.status !== 'recording'" @click="voice.toggle()" /></UTooltip>
           </template>
           <template v-else>
-            <label class="channel-attach-button"><UIcon name="i-lucide-paperclip" class="size-4" aria-hidden="true" /><input type="file" multiple class="channel-attach-input" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" @change="pick_attachments"></label>
+            <label class="channel-attach-button"><UIcon name="i-lucide-paperclip" class="size-4" aria-hidden="true" /><input type="file" multiple class="channel-attach-input" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" @click="open_attachment_picker" @change="pick_attachments"></label>
             <UTooltip v-if="speech_ready" :text="broadcast.on.value ? t('关闭语音播报') : t('语音播报：新回复自动朗读摘要')"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? t('关闭语音播报') : t('开启语音播报')" @click="broadcast.toggle()" /></UTooltip>
             <UTooltip :text="ENTER_SENDS ? t('语音输入 · 也可按住空格说话') : t('按住说话，或轻点开始')"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" :aria-label="t('语音输入')" @pointerdown="voice_press.pointerdown" @click="voice_press.click" @contextmenu.prevent /></UTooltip>
             <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('发送')" :title="t('发送 · Enter')" :disabled="!has_draft" @click="send" />

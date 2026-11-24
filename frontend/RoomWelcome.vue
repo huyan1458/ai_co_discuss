@@ -6,7 +6,7 @@
  */
 import { computed, inject, nextTick, onBeforeUnmount, ref } from "vue";
 import { ENTER_SENDS } from "./enter-sends.js";
-import { guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
+import { open_attachment_picker, guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
 import { format_voice_time, use_voice_input, use_voice_press } from "./voice-input.js";
 import UTooltip from "@nuxt/ui/components/Tooltip.vue";
 import { t } from "./i18n.js";
@@ -95,7 +95,7 @@ async function start() {
             <UTooltip :text="ENTER_SENDS ? t('完成，转成文字 · Enter') : t('完成，转成文字')"><UButton type="button" icon="i-lucide-check" color="neutral" size="sm" class="channel-primary-button channel-round-button" :aria-label="t('结束录音并转成文字')" :loading="voice.state.status !== 'recording'" @click="voice.toggle()" /></UTooltip>
           </template>
           <template v-else>
-            <label class="channel-attach-button" :class="{ 'is-disabled': creating }"><UIcon name="i-lucide-paperclip" class="size-4" aria-hidden="true" /><input type="file" multiple class="channel-attach-input" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" :disabled="creating" @change="pick_attachments"></label>
+            <label class="channel-attach-button" :class="{ 'is-disabled': creating }"><UIcon name="i-lucide-paperclip" class="size-4" aria-hidden="true" /><input type="file" multiple class="channel-attach-input" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 20 MiB')" :disabled="creating" @click="open_attachment_picker" @change="pick_attachments"></label>
             <UTooltip :text="ENTER_SENDS ? t('语音输入 · 也可按住空格说话') : t('按住说话，或轻点开始')"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" :aria-label="t('语音输入')" :disabled="creating" @pointerdown="voice_press.pointerdown" @click="voice_press.click" @contextmenu.prevent /></UTooltip>
             <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('新建房间并发送')" :title="t('发送 · Enter')" :loading="creating" :disabled="!has_draft || creating" @click="start" />
           </template>

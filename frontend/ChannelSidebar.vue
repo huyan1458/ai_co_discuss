@@ -18,15 +18,11 @@ const author = field("author-select");
 const library = use_workflow_library();
 const {
   workflows, global_workflows, project_workflows, project_roots,
-  available, draft, saved_id, saved_key, active_scope, active_project_name,
+  available, draft, saved_id, saved_key, active_scope,
   page_open, renaming, rename_text, pending_items,
 } = library;
 
 const has_project_section = computed(() => project_roots.value.length > 0 || project_workflows.value.length > 0);
-const project_section_label = computed(() => project_roots.value.length === 1
-  ? t("当前项目 · {name}", { name: project_roots.value[0].name })
-  : t("当前项目"));
-const multi_project_roots = computed(() => project_roots.value.length > 1);
 
 /** Show a workflow on the page and close the drawer. */
 function open_workflow(item) {
@@ -53,7 +49,6 @@ function row_status(item) {
   if (item.unavailable?.length) return t("{count} 张卡片不可用", { count: item.unavailable.length });
   if (item.needs_trust) return t("待信任");
   if (item.readonly) return t("只读");
-  if (multi_project_roots.value && item.scope === "project" && item.project_name) return item.project_name;
   return "";
 }
 
@@ -92,9 +87,9 @@ function row_icon(item) {
       <nav v-show="workflows_open" :aria-label="t('工作流列表')" class="channel-room-list channel-workflow-list">
         <template v-if="available">
           <template v-if="has_project_section">
-            <p class="channel-workflow-group" :title="project_section_label">{{ project_section_label }}</p>
+            <p class="channel-workflow-group">{{ t("当前项目") }}</p>
             <div v-if="draft && !saved_id && active_scope === 'project'" class="channel-room-row" :class="{ active: page_open }">
-              <button type="button" class="channel-room-select" :aria-current="page_open ? 'page' : undefined" @click="library.page_open.value = true; emit('workflows')"><UIcon name="i-lucide-file-plus-2" /><span>{{ draft.label || t('未命名工作流') }}</span><small class="channel-room-time">{{ active_project_name && multi_project_roots ? `${active_project_name} · ` : '' }}{{ t("未保存") }}</small></button>
+              <button type="button" class="channel-room-select" :aria-current="page_open ? 'page' : undefined" @click="library.page_open.value = true; emit('workflows')"><UIcon name="i-lucide-file-plus-2" /><span>{{ draft.label || t('未命名工作流') }}</span><small class="channel-room-time">{{ t("未保存") }}</small></button>
             </div>
             <div v-for="item in project_workflows" :key="workflow_key(item)" class="channel-room-row" :class="{ active: page_open && saved_key === workflow_key(item), 'is-disabled': item.disabled, 'is-broken': workflow_problem(item) }">
               <span v-if="renaming === workflow_key(item)" class="channel-workflow-rename"><UIcon name="i-lucide-network" />

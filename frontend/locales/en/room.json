@@ -914,7 +914,6 @@
   "确认后将记录在这台电脑的信任清单中；若工作流内容发生变更，会再次要求确认。": "Once confirmed, this computer remembers your trust choice. You will be asked again if the workflow changes.",
   "信任并继续": "Trust and continue",
   "信任并启用": "Trust and enable",
-  "当前项目 · {name}": "Current project · {name}",
   "当前项目": "Current project",
   "只读目录": "Read-only folder",
   "暂无项目工作流": "No project workflows yet",

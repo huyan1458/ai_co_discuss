@@ -1,0 +1,47 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "host_brief",
+      "type": "host",
+      "label": "下发验证清单",
+      "x": 220,
+      "y": -18
+    },
+    {
+      "id": "run_verify",
+      "type": "card",
+      "card": "verify_runner",
+      "x": 580,
+      "y": -18
+    },
+    {
+      "id": "host_review",
+      "type": "host",
+      "label": "核对证据并请离",
+      "x": 940,
+      "y": -18
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "host_brief"
+    },
+    {
+      "source": "host_brief",
+      "target": "run_verify",
+      "label": "请进集中验证"
+    },
+    {
+      "source": "run_verify",
+      "target": "host_review",
+      "label": "交回测试与截图"
+    }
+  ]
+}

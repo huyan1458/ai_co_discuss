@@ -28,55 +28,55 @@
         }
       ],
       "x": 576,
-      "y": -67
+      "y": -68
     },
     {
       "id": "user_facts",
       "type": "user",
       "label": "补充关键事实",
-      "x": 970,
+      "x": 936,
       "y": -140
     },
     {
       "id": "rewrite",
       "type": "host",
       "label": "改写中性陈述",
-      "x": 1353,
+      "x": 1296,
       "y": -48
     },
     {
       "id": "contrarian",
       "type": "card",
       "card": "contrarian",
-      "x": 1769,
+      "x": 1656,
       "y": -234
     },
     {
       "id": "outsider",
       "type": "card",
       "card": "outsider",
-      "x": 1769,
+      "x": 1656,
       "y": -110
     },
     {
       "id": "alternatives",
       "type": "card",
       "card": "alternatives",
-      "x": 1769,
+      "x": 1656,
       "y": 14
     },
     {
       "id": "executor",
       "type": "card",
       "card": "executor",
-      "x": 1769,
+      "x": 1656,
       "y": 138
     },
     {
       "id": "disputes",
       "type": "host",
       "label": "挑出关键分歧",
-      "x": 2129,
+      "x": 2016,
       "y": -48
     },
     {
@@ -93,49 +93,49 @@
           "label": "无关键分歧"
         }
       ],
-      "x": 2489,
-      "y": -67
+      "x": 2376,
+      "y": -68
     },
     {
       "id": "debate_contrarian",
       "type": "card",
       "card": "contrarian",
-      "x": 2849,
+      "x": 2736,
       "y": -512
     },
     {
       "id": "debate_outsider",
       "type": "card",
       "card": "outsider",
-      "x": 2849,
+      "x": 2736,
       "y": -388
     },
     {
       "id": "debate_alternatives",
       "type": "card",
       "card": "alternatives",
-      "x": 2849,
+      "x": 2736,
       "y": -264
     },
     {
       "id": "debate_executor",
       "type": "card",
       "card": "executor",
-      "x": 2849,
+      "x": 2736,
       "y": -140
     },
     {
       "id": "synthesis",
       "type": "host",
       "label": "综合建议与取舍",
-      "x": 3209,
+      "x": 3096,
       "y": -48
     },
     {
       "id": "user_decide",
       "type": "user",
       "label": "自行拍板与复盘",
-      "x": 3614,
+      "x": 3456,
       "y": -48
     }
   ],

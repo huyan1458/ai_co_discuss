@@ -4,6 +4,26 @@
  * mirror paints it as a tag. The text stays plain text, so sending, drafts and the classic page are unchanged.
  */
 
+/** Let the keyboard retract before the browser anchors its native menu to the file input. */
+export function open_attachment_picker(event) {
+  const input = event.currentTarget;
+  const root = document.documentElement;
+  if (!root.style.getPropertyValue("--keyboard-viewport-height") || !input.showPicker) return;
+  event.preventDefault();
+  document.activeElement?.blur();
+  const deadline = performance.now() + 600;
+  function open_when_ready() {
+    if (!input.isConnected || input.disabled) return;
+    if (root.style.getPropertyValue("--keyboard-viewport-height") && performance.now() < deadline) {
+      requestAnimationFrame(open_when_ready);
+      return;
+    }
+    input.getBoundingClientRect();
+    if (navigator.userActivation?.isActive !== false) input.showPicker();
+  }
+  requestAnimationFrame(open_when_ready);
+}
+
 /** `[start, end]` of every draft placeholder present in the text, in order. */
 export function token_ranges(text, drafts) {
   const ranges = [];

@@ -24,28 +24,28 @@
       "id": "dm",
       "type": "card",
       "card": "dm",
-      "x": 1003,
+      "x": 936,
       "y": -48
     },
     {
       "id": "fighter",
       "type": "card",
       "card": "fighter",
-      "x": 1386,
+      "x": 1296,
       "y": -48
     },
     {
       "id": "rogue",
       "type": "card",
       "card": "rogue",
-      "x": 1758,
+      "x": 1656,
       "y": -48
     },
     {
       "id": "wizard",
       "type": "card",
       "card": "wizard",
-      "x": 2130,
+      "x": 2016,
       "y": -48
     },
     {
@@ -62,21 +62,21 @@
           "label": "AI三人自跑"
         }
       ],
-      "x": 2490,
-      "y": -67
+      "x": 2376,
+      "y": -68
     },
     {
       "id": "user_cleric",
       "type": "user",
       "label": "扮演牧师声明行动",
-      "x": 2895,
+      "x": 2736,
       "y": -140
     },
     {
       "id": "check",
       "type": "host",
       "label": "每轮检查与答疑",
-      "x": 3300,
+      "x": 3096,
       "y": -48
     },
     {
@@ -97,28 +97,28 @@
           "label": "结束·叫停·轮尽"
         }
       ],
-      "x": 3660,
-      "y": -82
+      "x": 3456,
+      "y": -83
     },
     {
       "id": "dm_wrap",
       "type": "card",
       "card": "dm",
-      "x": 4043,
+      "x": 3816,
       "y": -48
     },
     {
       "id": "wrap",
       "type": "host",
       "label": "收团复盘",
-      "x": 4437,
+      "x": 4176,
       "y": -48
     },
     {
       "id": "user_wrap",
       "type": "user",
       "label": "交流体验与续跑",
-      "x": 4797,
+      "x": 4536,
       "y": -48
     }
   ],

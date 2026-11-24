@@ -1,11 +1,21 @@
 # Changelog
 
-Versions match the npm package, listing only changes you will notice (with key milestones recorded before 0.5.0). The Chinese version is `CHANGELOG.zh-CN.md`; on the website, click the version number at the top left to read it.
+This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
+
+## 0.5.24 (2026-11-24 09:41)
+
+- New: Bundled workflows add task-dispatch and update flowcharts across the other built-in workflows.
+- Changed: Uploaded attachments left unsent for over 24 hours are cleaned up automatically; sent and queued attachments are kept.
+- Fixed: On phones, tapping the attach button with the keyboard open misplaced the picker, and archiving a room now keeps the sidebar open.
+- Fixed: Editing and saving a workflow canvas from a paired phone or tablet preserves companion templates and scripts on the computer.
 
 ## 0.5.23 (2026-11-24 08:11)
 
-- New: Save workflows with a project and select them from rooms using that project.
-- New: Rooms pause assignments when storage limits are reached. After freeing space, retry the failed assignment.
+- Fixed: Member drafts could fill the C: drive. Dispatching now pauses when local data (excluding speech models) exceeds 10 GiB, drafts exceed 3 GiB, or the system drive runs low.
+- New: The "Storage" tab in the management panel shows usage and clears temporary files; if a room is blocked, clean up with `$codiscuss-draft-cleanup` outside the room, then click "Retry".
+- New: Speech models and hosted accounts' project data can live on another drive.
+- New: Save members as project presets, and click a member in "Speaking order" to jump to their latest message.
+
 
 ## 0.5.22 (2026-11-24 00:12)
 

@@ -1,0 +1,309 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "x": 0,
+      "y": -30
+    },
+    {
+      "id": "user_req",
+      "type": "user",
+      "label": "确定目标与模式",
+      "x": 216,
+      "y": -48
+    },
+    {
+      "id": "host_ledger",
+      "type": "host",
+      "label": "建立或恢复台账",
+      "x": 576,
+      "y": -48
+    },
+    {
+      "id": "branch_split",
+      "type": "branch",
+      "label": "拆分与派发判断",
+      "branches": [
+        {
+          "id": "in_room",
+          "label": "房内执行或并行"
+        },
+        {
+          "id": "sub_room",
+          "label": "拆独立子房间"
+        },
+        {
+          "id": "direct",
+          "label": "小活直接完成"
+        }
+      ],
+      "x": 936,
+      "y": -83
+    },
+    {
+      "id": "exec_work",
+      "type": "card",
+      "card": "executor",
+      "x": 1296,
+      "y": -172
+    },
+    {
+      "id": "host_subroom",
+      "type": "host",
+      "label": "建子房跨房交接",
+      "x": 1296,
+      "y": -48
+    },
+    {
+      "id": "host_direct",
+      "type": "host",
+      "label": "直接实施收口",
+      "x": 1296,
+      "y": 76
+    },
+    {
+      "id": "branch_sync",
+      "type": "branch",
+      "label": "推进中是否受阻",
+      "branches": [
+        {
+          "id": "deliver",
+          "label": "正常交付验收"
+        },
+        {
+          "id": "deliberate",
+          "label": "棘手决策推演"
+        },
+        {
+          "id": "escalate",
+          "label": "超授权升级用户"
+        }
+      ],
+      "x": 1656,
+      "y": -83
+    },
+    {
+      "id": "delib_review",
+      "type": "card",
+      "card": "verifier",
+      "x": 2016,
+      "y": -26
+    },
+    {
+      "id": "host_decide",
+      "type": "host",
+      "label": "联合推演定案",
+      "x": 2376,
+      "y": 57
+    },
+    {
+      "id": "user_decide",
+      "type": "user",
+      "label": "核心决策拍板",
+      "x": 2016,
+      "y": 98
+    },
+    {
+      "id": "todo_audit",
+      "type": "card",
+      "card": "verifier",
+      "x": 2016,
+      "y": -216
+    },
+    {
+      "id": "branch_env",
+      "type": "branch",
+      "label": "是否需集中验证",
+      "branches": [
+        {
+          "id": "central",
+          "label": "构建或浏览器实测"
+        },
+        {
+          "id": "skip",
+          "label": "无需共享环境"
+        }
+      ],
+      "x": 2376,
+      "y": -174
+    },
+    {
+      "id": "sub_verify",
+      "type": "sub",
+      "sub": "central-verify",
+      "x": 2736,
+      "y": -140
+    },
+    {
+      "id": "branch_accept",
+      "type": "branch",
+      "label": "TODO验收结论",
+      "branches": [
+        {
+          "id": "pass",
+          "label": "全部达标通过"
+        },
+        {
+          "id": "rework",
+          "label": "有缺口退回返工"
+        }
+      ],
+      "x": 3096,
+      "y": -68
+    },
+    {
+      "id": "host_close",
+      "type": "host",
+      "label": "更新台账并交付",
+      "x": 3456,
+      "y": -48
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "user_req"
+    },
+    {
+      "source": "user_req",
+      "target": "host_ledger"
+    },
+    {
+      "source": "host_ledger",
+      "target": "branch_split"
+    },
+    {
+      "source": "branch_split",
+      "branch": "in_room",
+      "target": "exec_work",
+      "label": "划写入范围"
+    },
+    {
+      "source": "branch_split",
+      "branch": "sub_room",
+      "target": "host_subroom",
+      "label": "长支线独立协作"
+    },
+    {
+      "source": "branch_split",
+      "branch": "direct",
+      "target": "host_direct"
+    },
+    {
+      "source": "exec_work",
+      "target": "branch_sync"
+    },
+    {
+      "source": "host_subroom",
+      "target": "branch_sync",
+      "label": "子房跨房回报"
+    },
+    {
+      "source": "branch_sync",
+      "branch": "deliver",
+      "target": "todo_audit"
+    },
+    {
+      "source": "branch_sync",
+      "branch": "deliberate",
+      "target": "delib_review",
+      "label": "带证据反例"
+    },
+    {
+      "source": "branch_sync",
+      "branch": "escalate",
+      "target": "user_decide"
+    },
+    {
+      "source": "delib_review",
+      "target": "host_decide"
+    },
+    {
+      "source": "host_decide",
+      "target": "exec_work",
+      "label": "按结论继续"
+    },
+    {
+      "source": "user_decide",
+      "target": "host_ledger",
+      "label": "更新共识继续"
+    },
+    {
+      "source": "todo_audit",
+      "target": "branch_env"
+    },
+    {
+      "source": "branch_env",
+      "branch": "central",
+      "target": "sub_verify"
+    },
+    {
+      "source": "branch_env",
+      "branch": "skip",
+      "target": "branch_accept"
+    },
+    {
+      "source": "sub_verify",
+      "target": "branch_accept"
+    },
+    {
+      "source": "branch_accept",
+      "branch": "rework",
+      "target": "exec_work",
+      "label": "补齐缺口"
+    },
+    {
+      "source": "branch_accept",
+      "branch": "pass",
+      "target": "host_close"
+    }
+  ],
+  "stages": [
+    {
+      "id": "intake",
+      "label": "立项与建账",
+      "nodes": [
+        "user_req",
+        "host_ledger"
+      ]
+    },
+    {
+      "id": "dispatch",
+      "label": "拆分与派发",
+      "nodes": [
+        "branch_split",
+        "exec_work",
+        "host_subroom",
+        "host_direct"
+      ]
+    },
+    {
+      "id": "execute",
+      "label": "推进与联合推演",
+      "nodes": [
+        "branch_sync",
+        "delib_review",
+        "host_decide",
+        "user_decide"
+      ]
+    },
+    {
+      "id": "verify",
+      "label": "集中验证与验收",
+      "nodes": [
+        "todo_audit",
+        "branch_env",
+        "sub_verify",
+        "branch_accept"
+      ]
+    },
+    {
+      "id": "close",
+      "label": "台账收口与交付",
+      "nodes": [
+        "host_close"
+      ]
+    }
+  ]
+}

@@ -375,10 +375,14 @@ test('a save that edits a saved workflow names the version it read, so a stale c
 test('every save entry states its intent: the page names its revision or chooses to overwrite, the command line likewise', t => {
   const home = home_fixture(t);
   // The page: a new workflow saves as it is; editing a saved one names the revision it loaded.
-  const created = workflows_command(home, { action: 'save', workflow: NOVEL });
+  const resources = { 'templates/example.md': '范例' };
+  const created = workflows_command(home, { action: 'save', workflow: { ...NOVEL, resources } }, true);
+  assert.equal(created.resources, undefined);
   const loaded = workflows_command(home, { action: 'get', id: NOVEL.id });
   assert.equal(loaded.revision, created.revision);
+  assert.equal(workflows_command(home, { action: 'get', id: NOVEL.id }, true).resources, undefined);
   const edited = workflows_command(home, { action: 'save', workflow: { ...NOVEL, skill: '页面改的' }, base_revision: loaded.revision });
+  assert.deepEqual(edited.resources, resources);
   assert.throws(() => workflows_command(home, { action: 'save', workflow: { ...NOVEL, skill: '旧页面' }, base_revision: loaded.revision }),
     error => error.code === 'workflow_changed' && error.error_text?.template.includes('已被修改'));
   // An import with a taken ID is refused until the user chooses to overwrite.

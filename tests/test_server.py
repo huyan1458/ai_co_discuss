@@ -23,7 +23,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from backend.server import DiscussionServer, connect_db, create_room, expired_rooms, image_size, init_database, require_room
+from backend.server import DiscussionServer, attachment_path, connect_db, create_room, expired_rooms, image_size, init_database, require_room, sweep_attachments
 from backend.texts import Text, incoming_text, load_texts, save_text
 
 
@@ -747,6 +747,9 @@ class DiscussionTests(unittest.TestCase):
         if not self.external:
             init_database(self.database, seed=False)
             self.assertEqual(self.attachment_request(file["url"])[2], data)
+            orphan = attachment_path(self.database, {"id": "old-orphan"})
+            orphan.touch()
+            os.utime(orphan, (1, 1))
         self.assertEqual(self.request(base + "/delete", {"actor": "用户", "confirm_title": self.room["title"]})[0], 200)
         self.assertEqual(self.attachment_request(file["url"])[0], 404)
         if not self.external:
@@ -856,6 +859,36 @@ class DiscussionTests(unittest.TestCase):
             upload("fresh")
             self.assertEqual(self.request(f"{base}/attachments/{stale}")[0], 404)
             self.assertEqual(self.request(f"{base}/attachments/{sent}")[0], 200)
+
+    def test_attachment_sweep_preserves_sent_queued_and_recent_files(self):
+        """Maintenance expires unclaimed uploads and old orphan files without a further upload."""
+        if self.external:
+            self.skipTest("Requires isolated SQLite and attachment storage")
+        base = f"/api/rooms/{self.room['id']}"
+        def upload(name):
+            query = urlencode({"actor": "用户", "file_name": name + ".png", "submission_id": "sweep-" + name})
+            result = self.attachment_request(base + "/attachments?" + query, b"\x89PNG\r\n\x1a\n" + name.encode())
+            self.assertEqual(result[0], 201, result[2])
+            return json.loads(result[2])["attachment"]["id"]
+
+        stale, queued, sent, fresh = map(upload, ("stale", "queued", "sent", "fresh"))
+        self.assertLess(self.request(base + "/messages", {"author": "用户", "text": "sent", "attachment_ids": [sent],
+                                                          "submission_id": "sweep-message"})[0], 300)
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.execute("UPDATE attachments SET created_at='2000-01-01T00:00:00+00:00' WHERE id<>?", (fresh,))
+            connection.execute("""INSERT INTO queued_messages(room_id,position,submission_id,payload,created_at)
+                               VALUES (?,1,'sweep-queued',?,1)""", (self.room['id'], json.dumps({"attachment_ids": [queued]})))
+        root = attachment_path(self.database, {"id": ""})
+        old, recent = root / "old-orphan", root / "recent-orphan"
+        old.touch()
+        recent.touch()
+        past = time.time() - 7200
+        for path in (old, root / queued, root / sent, root / fresh):
+            os.utime(path, (past, past))
+        sweep_attachments(self.database)
+        self.assertEqual({path.name for path in root.iterdir()}, {queued, sent, fresh, recent.name})
+        with closing(connect_db(self.database)) as connection:
+            self.assertEqual({row[0] for row in connection.execute("SELECT id FROM attachments")}, {queued, sent, fresh})
 
     def test_attachments_reject_cross_room_owner_path_and_size(self):
         """Untrusted MIME and filenames cannot create executable or cross-room file access."""

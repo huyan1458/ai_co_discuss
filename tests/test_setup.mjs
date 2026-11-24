@@ -149,7 +149,7 @@ test('shipped workflows install only when asked, replacing a different copy afte
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-workflows-'));
   try {
     // What ships passes the same check as any import, so the library can read it.
-    const shipped_ids = ['decision-council', 'story-serial', 'tri-model-dev', 'trpg-classic'];
+    const shipped_ids = ['decision-council', 'story-serial', 'task-dispatch', 'tri-model-dev', 'trpg-classic'];
     for (const id of shipped_ids) {
       const shipped = fileURLToPath(new URL(`../workflows/${id}`, import.meta.url));
       assert.equal(preview_workflow({ folder: shipped }, validate_preset, () => true).id, id);
@@ -206,7 +206,7 @@ test('setup configures native CLI, preserves existing profile and uses configure
     assert(!existsSync(join(env.DISCUSS_SERVICE_HOME, 'workflows', 'story-serial')));
     const asked = execute(['setup', ...options, '--workflows']);
     assert.deepEqual(JSON.parse(asked.stdout).workflows.map(item => [item.name, item.status]),
-      ['decision-council', 'story-serial', 'tri-model-dev', 'trpg-classic'].map(id => [id, 'installed']));
+      ['decision-council', 'story-serial', 'task-dispatch', 'tri-model-dev', 'trpg-classic'].map(id => [id, 'installed']));
     // Hosting (the management panel) is remembered once turned on, and stays until turned off.
     if (process.platform === 'win32') {
       const hosting = () => JSON.parse(readFileSync(join(env.DISCUSS_SERVICE_HOME, 'local-settings.json'), 'utf8')).hosting;

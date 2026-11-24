@@ -14,6 +14,7 @@ import re
 import secrets
 import socket
 import sqlite3
+import stat
 import struct
 import subprocess
 import threading
@@ -77,6 +78,8 @@ MAX_IMPORT_BYTES = 32 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 # Files uploaded while the message is still being written are dropped if never sent within this time.
 UNSENT_ATTACHMENT_TTL = timedelta(hours=24)
+ATTACHMENT_SWEEP_SECONDS = 6 * 60 * 60
+ORPHAN_ATTACHMENT_GRACE_SECONDS = 60 * 60
 MAX_MESSAGE_ATTACHMENTS = 10
 MAX_FILENAME_LENGTH = 255
 # A revision check names at most this many rooms; a runner or page asks only for the rooms it follows.
@@ -1809,6 +1812,7 @@ def finish_destruction_files(database, room_id):
                        {**files, "ids": left, "state": "failed" if left else "deleted"},
                        {"kind": "database", "state": "failed" if busy else "deleted"}]
             update_destruction(connection, room_id, updates)
+    sweep_attachments(database)
 
 
 def destroy_from(connection, room, directory):
@@ -1866,7 +1870,11 @@ def destroy_expired_rooms(server):
 
 def watch_expired_rooms(server):
     """Check for rooms to destroy automatically every few minutes, for as long as the website runs."""
+    next_sweep = 0
     while True:
+        if time.monotonic() >= next_sweep:
+            sweep_attachments(server.database)
+            next_sweep = time.monotonic() + ATTACHMENT_SWEEP_SECONDS
         try:
             destroy_expired_rooms(server)
         except Exception:
@@ -2436,9 +2444,47 @@ def remove_attachment_files(connection, database, rows):
 
 def prune_unsent_attachments(connection, database, room_id):
     """Drop files uploaded ahead of sending but never sent, once they are older than a draft could still be waiting."""
+    remove_attachment_files(connection, database, expired_unsent_attachments(connection, room_id))
+
+
+def expired_unsent_attachments(connection, room_id):
+    """Select expired uploads with no sent or queued message in the room."""
     cutoff = datetime.now(timezone.utc) - UNSENT_ATTACHMENT_TTL
-    remove_attachment_files(connection, database, [row for row in unsent_attachment_rows(connection, room_id)
-                                                   if datetime.fromisoformat(row["created_at"]) < cutoff])
+    return [row for row in unsent_attachment_rows(connection, room_id) if datetime.fromisoformat(row["created_at"]) < cutoff]
+
+
+def sweep_attachments(database):
+    """Expire unsent records, then remove their files and aged unregistered files in this database's attachment directory."""
+    expired = set()
+    try:
+        with closing(connect_db(database)) as connection:
+            with connection:
+                begin_write(connection)
+                rooms = connection.execute("SELECT DISTINCT room_id FROM attachments WHERE message_id IS NULL").fetchall()
+                for room in rooms:
+                    expired.update(row["id"] for row in expired_unsent_attachments(connection, room[0]))
+                connection.executemany("DELETE FROM attachments WHERE id=? AND message_id IS NULL", ((key,) for key in expired))
+            root = attachment_path(database, {"id": ""})
+            if not root.exists() or root.resolve() != root:
+                return
+            # Uploads acquire this same write lock before creating their file. Hold it from the ID snapshot through unlink.
+            with connection:
+                begin_write(connection)
+                registered = {os.path.normcase(row[0]) for row in connection.execute("SELECT id FROM attachments")}
+                cutoff = time.time() - ORPHAN_ATTACHMENT_GRACE_SECONDS
+                for path in root.iterdir():
+                    if os.path.normcase(path.name) in registered:
+                        continue
+                    try:
+                        info = path.lstat()
+                        if stat.S_ISREG(info.st_mode) and (path.name in expired or info.st_mtime < cutoff):
+                            path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        logging.warning("Could not remove attachment %s", path.name, exc_info=True)
+    except (OSError, sqlite3.Error, ValueError):
+        logging.exception("Attachment sweep failed for %s", database)
 
 
 def discard_attachment(connection, database, room_id, identifier, token):

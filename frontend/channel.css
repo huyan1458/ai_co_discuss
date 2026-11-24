@@ -230,6 +230,11 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-root-rooms:has(.channel-child-toggle) { padding-left: 20px; }
 /* A tablet lays out the PC page with a touch row's grip and "…", so the narrow sidebar gives the indent to the name. */
 @media (min-width: 701px) and (hover: none), (min-width: 701px) and (pointer: coarse) { .channel-folder-rooms { padding-left: 8px; } }
+/* Align the room toggle's center with the folder icon, 30px from the section edge. */
+.channel-folder-rooms:has(.channel-child-toggle) { padding-left: 39px; }
+@media (max-width: 700px), (hover: none), (pointer: coarse) {
+  .channel-folder-rooms:has(.channel-child-toggle) { padding-left: 41px; }
+}
 .channel-folder-heading { display: flex; width: 100%; min-width: 0; align-items: center; gap: 5px; padding: 7px 4px; color: var(--ui-text-muted); font-size: var(--channel-nav-text); text-align: left; user-select: none; }
 .channel-folder-heading[data-drag-handle] { cursor: grab; touch-action: pan-y; -webkit-user-select: none; -webkit-touch-callout: none; }
 .channel-folder-section.drop-before::before, .channel-folder-section.drop-after::after { content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--channel-accent); pointer-events: none; }

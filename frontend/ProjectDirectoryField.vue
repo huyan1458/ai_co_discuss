@@ -377,7 +377,7 @@ async function save_projects() {
 .project-prefix { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; width: 132px; padding: 0 8px 0 10px; border-right: 1px solid var(--ui-border-muted);
   border-radius: 5px 0 0 5px; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; transition: background-color .15s, color .15s; }
 .project-prefix:hover:not(:disabled) { background: var(--channel-ghost-hover, var(--ui-bg-elevated)); color: var(--ui-text-highlighted); }
-.project-prefix > span { flex: 1; min-width: 0; overflow: hidden; text-align: left; text-overflow: ellipsis; }
+.project-prefix > span:not([class*="icon"]) { flex: 1; min-width: 0; overflow: hidden; text-align: left; text-overflow: ellipsis; }
 .project-prefix > [class*="icon"] { flex-shrink: 0; width: 13px; height: 13px; }
 .project-prefix > .project-prefix-chevron { width: 12px; height: 12px; color: var(--ui-text-dimmed); }
 .project-prefix.is-chosen { color: var(--ui-text-highlighted); font-weight: 500; }
@@ -450,7 +450,7 @@ async function save_projects() {
 /* Phone: the picker and actions share the first line, so the path keeps a full line of its own. */
 @media (max-width: 600px) {
   .project-box { flex-wrap: wrap; align-items: center; }
-  .project-box .project-prefix { flex: 0 1 auto; width: auto; min-width: 0; min-height: 40px; margin-right: auto; border-right: 0; }
+  .project-box .project-prefix { flex: 1 1 0; width: auto; min-width: 0; min-height: 40px; border-right: 0; }
   .project-path { flex: 1 0 100%; order: 1; margin-right: -3px; border-top: 1px solid var(--ui-border-muted); }
 }
 </style>

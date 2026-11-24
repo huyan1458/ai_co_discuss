@@ -2163,8 +2163,11 @@ export function workflows_command(home, input = {}, restricted = false) {
   if (root?.readonly && !['get', 'export', 'preview', 'skills', 'export-expert', 'trust', 'copy'].includes(action)) throw new Error('项目目录只读');
   const fields = scope_fields(root);
   const present = workflow => {
-    if (root && restricted) { const { directory, ...rest } = workflow; return { ...rest, ...fields }; }
-    return { ...workflow, ...fields };
+    const result = { ...workflow, ...fields };
+    // Saved canvas edits keep resources on disk. Their contents travel only on import or export.
+    if (restricted) delete result.resources;
+    if (root && restricted) delete result.directory;
+    return result;
   };
   if (['move', 'copy'].includes(action)) {
     if (!['project', 'global'].includes(input.target_scope)) throw new Error('请选择目标作用域');
