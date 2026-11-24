@@ -28,3 +28,4 @@ const audio_skin_styles = customElements.get("audio-skin")?.styles;
 audio_skin_styles?.insertRule?.(AUDIO_BUFFERING_RULE, audio_skin_styles.cssRules.length);
 const video_skin_styles = customElements.get("video-skin")?.styles;
 video_skin_styles?.insertRule?.(ATTACHMENT_VIDEO_CONTROLS_RULE, video_skin_styles.cssRules.length);
+video_skin_styles?.insertRule?.(":host(.attachment-player) .media-container { background-color: var(--attachment-video-surface, var(--media-background)); }", video_skin_styles.cssRules.length);

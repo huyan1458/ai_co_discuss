@@ -1232,6 +1232,30 @@ class DiscussionTests(unittest.TestCase):
         self.session_action("resume")
         self.assertEqual(self.post("显式恢复后发言", "restored-new-001")[0], 201)
 
+    def test_child_directory_migration_and_deleted_parent(self):
+        """Legacy children inherit once and keep their own directory after a parent is deleted."""
+        if self.external:
+            self.skipTest("Requires a local migration")
+        parent = self.room["id"]
+        folder = self.request("/api/folders", {"name": "项目"})[1]["id"]
+        self.request(f"/api/rooms/{parent}/folder", {"actor": "用户", "folder_id": folder})
+        child = self.request("/api/rooms", {"title": "子房间"})[1]["id"]
+        base = f"/api/rooms/{child}"
+        self.request(base + "/room-link", {"relation": "parent", "room_id": parent, "host": "Codex"})
+        with closing(sqlite3.connect(self.database)) as db, db:
+            db.execute("DELETE FROM site_preferences WHERE key='child_folders_migrated'")
+        init_database(self.database)
+        self.assertEqual(self.request(base)[1]["folder_id"], folder)
+        self.assertEqual(self.request(base)[1]["parent_room_id"], parent)
+        directory = self.request("/api/rooms")[1]["rooms"]
+        self.assertEqual(next(room["parent_room_id"] for room in directory if room["id"] == child), parent)
+        self.request(base + "/folder", {"actor": "用户", "folder_id": None})
+        init_database(self.database)
+        self.assertIsNone(self.request(base)[1]["folder_id"])
+        self.request(f"/api/rooms/{parent}/delete", {"actor": "用户", "confirm_title": self.room["title"]})
+        self.assertIsNone(self.request(base)[1]["parent_room_id"])
+        self.assertIsNone(next(room["parent_room_id"] for room in self.request("/api/rooms")[1]["rooms"] if room["id"] == child))
+
     def test_topic_folder_assignment_persists_and_survives_archive_restore(self):
         """Folders categorize existing rooms without changing their archive state."""
         for invalid_name in (None, 42, ["标题"], {}, "   ", "😀" * 41):

@@ -16,7 +16,7 @@ import { atomic_json } from './files.mjs';
 import { room_draft_space } from './room_destruction.mjs';
 import { ISOLATED_ACCOUNT_VARIABLE } from './os_users.mjs';
 import { read_store } from './external_client.mjs';
-import { bundle_project_markdown, bundle_project_page, outside_directory, project_media, project_root, project_zip, read_only_enforced, read_project_files, read_project_folders, room_directories, search_project_roots } from './project_files.mjs';
+import { bundle_project_markdown, bundle_project_page, inside_room, outside_directory, project_media, project_root, project_zip, read_only_enforced, read_project_files, read_project_folders, room_directories, search_project_roots } from './project_files.mjs';
 import { delete_entry, make_folder, paste_entry, read_text, RecycleArea, rename_entry, save_text, upload_part } from './project_manage.mjs';
 import { guard_remote_request, list_remote_directories, remote_allows, remote_roots } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
@@ -34,7 +34,7 @@ import { open_project } from './adapters/api_files.mjs';
 import { run_image_tool } from './adapters/api_images.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, check_extra_directories, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
-import { FreeRoomRunner, free_task_files } from './free_runner.mjs';
+import { FreeRoomRunner, free_task_files, member_drafts, member_extra_directories } from './free_runner.mjs';
 import { assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, workflow_member_list, WORKFLOW_ID_PATTERN,
   card_folder, CARD_ID_PATTERN, expert_skills, experts_home, load_room_workflow as load_workflow_for_cards, parse_markdown, serialize_markdown, SKILL_FILE,
   SKILL_NAME_PATTERN, SKILLS_DIRECTORY } from './workflows.mjs';
@@ -181,10 +181,10 @@ host-control 主持人代房主控制房间，须房主已为本房间勾选对�
   推进：order 读取发言顺序，order --order 甲,乙 --revision REV 调整尚未发言的部分；
         discussion 读取讨论，discussion --do start --goal 目标 --revision REV 开启（上限用房间默认值），--do pause|resume|end --revision REV；
         goal 读取 Goal，goal --do start --goal 目标 --revision REV 开启（预算用房主默认值，默认不限时为 8 次续跑、90 分钟），--do pause|resume|end --revision REV。
-  房间：create-room --title 标题 [--goal 目标] [--members 甲,乙] [--host 平台] [--cwd 子目录] [--access read|write] [--text 首条消息] [--submission-id ID]
+  ${t("房间：create-room --title 标题 [--goal 目标] [--members 甲,乙] [--host 平台] [--host-model 模型] [--host-effort 档位] [--cwd 子目录] [--access read|write] [--text 首条消息 | --body-file FILE] [--submission-id ID]")}
         新建一个房间分担工作：成员用本机已配置的软件，项目权限默认只读、最高可写，目录只能是本房间项目目录或其子目录；不填 --host 时由与你同款的专家主持；
-        新房间的主持人权限取本机默认值但不能再新建房间，本房间可新建的数量有上限；两边各留一张链接卡片；重试沿用同一 --submission-id；
-        room-post --room 房间编号 --text 话 [--submission-id ID] 在关联房间（你新建的，或新建本房间的）发言，按房主消息唤醒该房间、标注来自本房间；自用户上次发言起两边互传的条数受本机“关联房间互传上限”限制（默认不限）；读它用平常的读取命令、房间编号写新房间的（跨房间只能读）。
+        新房间复制本房间的智能调度、生图、API 上限、连续派活上限与主持人权限（不含新建房间），本房间可新建的数量有上限；两边各留一张链接卡片；重试沿用同一 --submission-id；
+        ${t("room-post --room 房间编号 (--text 话 | --body-file FILE) [--interrupt] [--submission-id ID] 在关联房间（你新建的，或新建本房间的）发言，空闲时直达主持人，忙时排队；仅父房间可用 --interrupt 打断子房间；自用户上次发言起两边互传的条数受本机“关联房间互传上限”限制（默认不限）；读它用平常的读取命令、房间编号写新房间的（跨房间只能读）。")}
   不开放：批准超出上限的轮数、项目权限高于可写或放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己的其他操作。
 workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库，卡片按声明的项目权限保存；库里已有同 ID 的工作流时须表明来意：--revision 写读取时的修订号（库在那之后被改过就拒绝，什么都不写），或 --overwrite 明确整份覆盖，两样都没有就拒绝。写法见 workflow-creator 技能。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
@@ -2058,7 +2058,8 @@ async function perform_launch(home, context, options) {
   const { input, config, minutes, draft, request_signature, directory, previous } = context;
   // This is the creation input's start-discussion choice, not the persisted room model (always free).
   const discussion = previous?.discussion ?? (input.room ? input.room.mode !== 'free' : Boolean(context.room.session && context.room.session.status !== 'concluded'));
-  const record = previous || { token: config.token, signature: draft, request_signature, config, minutes, entry: input.entry, discussion };
+  const record = previous || { token: config.token, signature: draft, request_signature, config, minutes, entry: input.entry, discussion,
+    ...(options.inherited_folder ? { inherited_folder: options.inherited_folder } : {}) };
   record.discussion = discussion;
   const persist = () => atomic_json(join(directory, 'launch.json'), record);
   if (!previous) persist();
@@ -2067,6 +2068,7 @@ async function perform_launch(home, context, options) {
     let room = context.room;
     if (!input.room_id) room = await site_request(input.site, '/api/rooms', config.token, {
       ...input.room,
+      ...(record.inherited_folder ? { folder_id: record.inherited_folder } : {}),
       members: card_order(input.room.members, [...Object.keys(config.participants).map(name => ({ name, adapter: config.participants[name].adapter,
         token: config.members[name].token, access: 'runner', session_mode: config.participants[name].session_id ? 'borrowed' : 'new' })),
       // Manual members keep the credentials the browser generated; nothing local is configured for them.
@@ -2558,7 +2560,7 @@ async function host_room(home, access_file) {
   if (!host || !roster.some(member => member.name === host && member.role === 'host' && member.status === 'active')) throw new Error('只有本房间的主持人能运行此命令');
   // How the room shows each member (the owner's label, else its platform nickname), so the host names them as it sees them.
   const labels = { ...Object.fromEntries((room.members || []).map(member => [member.name, member.label])), ...room.labels };
-  return { path, config, roster, labels, host };
+  return { path, config, roster, labels, host, folder_id: room.folder_id, max_rounds: room.free?.max_rounds };
 }
 
 const IMAGE_ACTIONS = { generate: 'generate_image', edit: 'edit_image' };
@@ -2968,18 +2970,37 @@ async function host_create_room(ctx, o) {
   if (o.access && !HOST_CARD_ACCESS.includes(o.access)) throw new Error('新房间成员的项目权限只能是 read 或 write');
   const access = o.access || 'read';
   const host_name = o.host || platform_of(host);
-  const names = [...new Set([host_name, ...(o.members || '').split(',').map(name => name.trim()).filter(Boolean)])];
+  const listed = (o.members || '').split(',').map(name => name.trim()).filter(Boolean);
+  const names = [host_name];
+  let includes_host = false;
+  for (const name of listed) {
+    if (name === host_name && !includes_host) { includes_host = true; continue; }
+    names.push(names.includes(name) ? free_instance(name, new Set(names)) : name);
+  }
   const participants = Object.fromEntries(names.map(name => [name, host_invite_profile(home, name, { access })]));
   if (!o.host) {
     // The same expert as this host: its software, model and effort, in a new session and at the access asked for.
     const { session_id, cwd, project_access, ...own } = config.participants?.[host] || {};
+    const facts = adapter_profile(own.adapter);
+    const effort = own.effort || launch_settings(home).participants?.[host_name]?.effort;
+    if (effort && facts?.kind !== 'api' && !facts?.efforts?.includes(effort)) own.effort = '';
     participants[host_name] = { ...own, project_access: access };
   }
-  const preferences = launch_settings(home).create_preferences || {};
-  const permissions = without_host_item(normalize_host_permissions(preferences.host_permissions, preferences.host_workflows === true), 'create_rooms');
-  const receipt = await launch_discussion(home, { site: config.site, entry: 'web', cwd: spawned_directory(config.cwd, o.cwd), participants,
+  if (o.host_model) participants[host_name].model = o.host_model;
+  if (o.host_effort) participants[host_name].effort = o.host_effort;
+  const permissions = without_host_item(host_permissions(config), 'create_rooms');
+  const cwd = spawned_directory(config.cwd, o.cwd);
+  let extra_directories;
+  if (config.extra_directories?.length) {
+    try { check_extra_directories(cwd, config.extra_directories); extra_directories = config.extra_directories; } catch {}
+  }
+  const receipt = await launch_discussion(home, { site: config.site, entry: 'web', cwd, participants,
+    ...(config.scheduler ? { scheduler: config.scheduler } : {}),
+    ...(config.image_generation ? { image_generation: true } : {}),
+    ...(config.api_max_requests !== undefined ? { api_max_requests: config.api_max_requests } : {}),
+    ...(extra_directories ? { extra_directories } : {}),
     host_permissions: permissions, room: { title: o.title, goal: o.goal || '', mode: 'free', host: host_name, submission_id,
-      members: names.map(name => ({ name, access: 'runner' })) } }, ctx.launch_options);
+      members: names.map(name => ({ name, access: 'runner' })) } }, { ...ctx.launch_options, inherited_folder: ctx.folder_id });
   const room_id = receipt.room.id;
   const parent_path = registered_room_path(home, config.site, config.room);
   if (!retry) edit_room_config(parent_path, saved => ({ ...saved, spawned_rooms: [...(saved.spawned_rooms || []), { room: room_id, submission_id }] }));
@@ -2988,6 +3009,9 @@ async function host_create_room(ctx, o) {
   const registered = registered_room_config(home, config.site, room_id);
   if (registered.config.spawned_from !== config.room) edit_room_config(registered.path, saved => ({ ...saved, spawned_from: config.room }));
   const child = registered.config;
+  if (!retry && typeof ctx.max_rounds === 'number') {
+    await site_request(config.site, `/api/rooms/${room_id}/budget`, child.token, { max_rounds: ctx.max_rounds }, caller_only(ctx.headers));
+  }
   await site_request(config.site, `/api/rooms/${room_id}/room-link`, child.token, { relation: 'parent', room_id: config.room, host: label }, caller_only(ctx.headers));
   const first = o.text ? await host_room_post({ ...ctx, config: configuration_snapshot(parent_path).config }, { room: room_id, text: o.text, submission_id: `${submission_id}-first` }) : null;
   return { room_id, title: receipt.room.title, url: receipt.url, host: host_name, members: names, project_access: access,
@@ -3005,12 +3029,13 @@ async function host_room_post(ctx, o) {
   if (!o.room || (o.room !== config.spawned_from && !(config.spawned_rooms || []).some(item => item.room === o.room))) {
     throw new Error('只能在与本房间关联的房间里发言（本房间新建的房间，或新建本房间的房间）；用 --room 指定其房间编号');
   }
-  if (!o.text) throw new Error('须用 --text 写明要发的消息');
+  if (o.interrupt && !(config.spawned_rooms || []).some(item => item.room === o.room)) throw new Error(t('仅父房间主持人可以打断子房间'));
+  if (!o.text) throw new Error(t('须用 --text 或 --body-file 写明要发的消息'));
   const child = registered_room_config(home, config.site, o.room).config;
   const result = await site_request(config.site, `/api/rooms/${o.room}/messages`, child.token, { author: '用户', text: o.text,
-    submission_id: o.submission_id || randomUUID(), relay: { room_id: config.room, host: ctx.labels[host] || host,
+    submission_id: o.submission_id || randomUUID(), queue: true, ...(o.interrupt ? { interrupt: true } : {}), relay: { room_id: config.room, member: host, host: ctx.labels[host] || host,
       limit: launch_settings(home).create_preferences?.relay_rounds ?? 0 } }, caller_only(ctx.headers));
-  return { room_id: o.room, message_id: result.message?.id ?? null, queued: result.queued ?? null };
+  return { room_id: o.room, message_id: result.message?.id ?? null, queued: result.queued ?? null, interrupted: Boolean(result.interrupted), ...(result.reason ? { reason: result.reason } : {}) };
 }
 
 const HOST_CONTROLS = {
@@ -3069,15 +3094,25 @@ const HOST_CONTROLS = {
  */
 export async function host_control(home, action, options, launch_options = {}) {
   if (!Object.hasOwn(HOST_CONTROLS, action || '')) throw new Error(`操作须为 ${Object.keys(HOST_CONTROLS).join('、')} 之一`);
-  const { config, roster, labels, host } = await host_room(home, options.access_file);
+  const { config, roster, labels, host, folder_id, max_rounds } = await host_room(home, options.access_file);
   const needed = HOST_ACTION_ITEMS[action];
   if (needed && !host_allowed(config, needed)) throw new Error(host_refusal(needed));
+  if (options.body_file && ['create-room', 'room-post'].includes(action)) {
+    if (options.text !== undefined) throw new Error(t('--body-file 与 --text 只能选一项'));
+    const profile = config.participants[host];
+    const file = realpathSync(options.body_file);
+    const roots = [member_drafts(config, host), profile.cwd || config.cwd, ...member_extra_directories(config, profile).map(item => item.path)];
+    if (!inside_room({ extra_directories: roots.filter(root => root && existsSync(root)).map(root => realpathSync(root)) }, file)) {
+      throw new Error(t('正文文件须位于主持人的项目或草稿目录'));
+    }
+    options = { ...options, text: readFileSync(file, 'utf8').replace(/^\uFEFF/, '') };
+  }
   // The User-Agent names the caller in the event log; the host's own credential is what lets the site label what it
   // does as the host's (steer, stop) by its display name, since every write here carries the owner's credential.
   const headers = { 'User-Agent': `AI-CoDiscuss-host:${host}`, 'X-Acting-Member-Token': config.members[host].token };
   const owner = { site: config.site, room_id: config.room, token: config.token };
   const call = (path, body) => site_request(config.site, `/api/rooms/${config.room}${path}`, config.token, body, headers);
-  return HOST_CONTROLS[action]({ home, config, roster, labels, host, headers, owner, call, launch_options }, options);
+  return HOST_CONTROLS[action]({ home, config, roster, labels, host, headers, owner, call, launch_options, folder_id, max_rounds }, options);
 }
 
 /** Cards as the host may bring them: any access above writing is lowered to it. */
@@ -3189,6 +3224,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' }, card: { type: 'string' }, sub: { type: 'string' }, id: { type: 'string' },
     member: { type: 'string' }, order: { type: 'string' }, revision: { type: 'string' }, name: { type: 'string' }, access: { type: 'string' },
     model: { type: 'string' }, effort: { type: 'string' }, do: { type: 'string' }, execution: { type: 'string' }, text: { type: 'string' },
+    'host-model': { type: 'string' }, 'host-effort': { type: 'string' }, interrupt: { type: 'boolean' }, 'body-file': { type: 'string' },
     goal: { type: 'string' }, label: { type: 'string' }, description: { type: 'string' }, adapter: { type: 'string' }, 'submission-id': { type: 'string' },
     message: { type: 'string' }, minutes: { type: 'string' }, off: { type: 'boolean' }, list: { type: 'boolean' },
     title: { type: 'string' }, members: { type: 'string' }, host: { type: 'string' }, cwd: { type: 'string' }, room: { type: 'string' },
@@ -3203,7 +3239,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     const { member, order, revision, name, access, model, effort, execution, text, goal, label, description, adapter } = values;
     const result = await host_control(service_home(), positionals[1], { member, order, revision, name, access, model, effort, execution, text, goal,
       label, description, adapter, message: values.message, minutes: values.minutes, off: values.off, list: values.list, do: values.do, submission_id: values['submission-id'],
-      title: values.title, members: values.members, host: values.host, cwd: values.cwd, room: values.room, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+      title: values.title, members: values.members, host: values.host, cwd: values.cwd, room: values.room, interrupt: values.interrupt, body_file: values['body-file'], host_model: values['host-model'], host_effort: values['host-effort'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}
 `);
   }

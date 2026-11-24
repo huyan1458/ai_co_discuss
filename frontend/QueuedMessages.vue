@@ -101,7 +101,7 @@ function send_action(item) {
 function menu(item) {
   return [[
     // A share of a message already posted is not a draft: editing it would post it again to those who already have it.
-    ...item.message_id ? [] : [{ label: t('编辑消息'), icon: "i-lucide-pencil", onSelect: () => act("queue_edit", item) }],
+    ...item.message_id || item.relay_room ? [] : [{ label: t('编辑消息'), icon: "i-lucide-pencil", onSelect: () => act("queue_edit", item) }],
   ]];
 }
 
@@ -223,7 +223,7 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
           <span v-else class="queued-thumbnail queued-thumbnail-icon" :aria-label="t('图片附件')"><UIcon name="i-lucide-image" /></span>
         </template>
         <UTooltip :disabled="!!drag" :delay-duration="PREVIEW_DELAY_MS" :ui="{ content: 'queued-tooltip queued-preview' }">
-          <span class="queued-text" tabindex="0" :aria-label="t('排队消息 {value1}：{value2}', { value1: index + 1, value2: summary(item).slice(0, 80) })">{{ summary(item) }}</span>
+          <span class="queued-text" tabindex="0" :aria-label="t('排队消息 {value1}：{value2}', { value1: index + 1, value2: summary(item).slice(0, 80) })"><strong v-if="item.relay_room" class="queued-relay-source">{{ item.relay_relation === 'parent' ? t('父房间「{room}」主持 {host}', { room: item.relay_title ?? t('已删除的房间'), host: item.relay_host }) : t('子房间「{room}」主持 {host}', { room: item.relay_title ?? t('已删除的房间'), host: item.relay_host }) }} · </strong>{{ summary(item) }}</span>
           <template #content>
             <p v-if="item.failure" class="queued-failure">{{ t('未能发出：{value1}', { value1: item.failure }) }}<br><span class="queued-tooltip-remedy">{{ t('重试、编辑或删除后队列继续') }}</span></p>
             <div class="queued-preview-body">{{ item.text || summary(item) }}</div>
@@ -277,6 +277,9 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
 .queued-thumbnail { flex-shrink: 0; width: 22px; height: 22px; border: 1px solid var(--ui-border-accented); border-radius: 4px; object-fit: cover; }
 .queued-thumbnail-icon { display: grid; place-items: center; color: var(--ui-text-muted); background: var(--ui-bg-elevated); font-size: 14px; }
 .queued-text { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-toned); white-space: nowrap; text-overflow: ellipsis; outline: none; }
+@media (max-width: 700px) {
+  .queued-relay-source { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+}
 .queued-row.is-failed .queued-text { color: var(--ui-text-muted); }
 .queued-actions { display: flex; flex-shrink: 0; align-items: center; gap: 0; }
 .queued-action { color: var(--ui-text-dimmed); }

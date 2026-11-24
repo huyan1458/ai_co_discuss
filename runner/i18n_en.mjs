@@ -1,5 +1,11 @@
 /** English CLI strings. */
 export default {
+  "房间：create-room --title 标题 [--goal 目标] [--members 甲,乙] [--host 平台] [--host-model 模型] [--host-effort 档位] [--cwd 子目录] [--access read|write] [--text 首条消息 | --body-file FILE] [--submission-id ID]": "Rooms: create-room --title TITLE [--goal GOAL] [--members A,B] [--host PLATFORM] [--host-model MODEL] [--host-effort LEVEL] [--cwd SUBDIRECTORY] [--access read|write] [--text MESSAGE | --body-file FILE] [--submission-id ID]",
+  "room-post --room 房间编号 (--text 话 | --body-file FILE) [--interrupt] [--submission-id ID] 在关联房间（你新建的，或新建本房间的）发言，空闲时直达主持人，忙时排队；仅父房间可用 --interrupt 打断子房间；自用户上次发言起两边互传的条数受本机“关联房间互传上限”限制（默认不限）；读它用平常的读取命令、房间编号写新房间的（跨房间只能读）。": "room-post --room ROOM (--text MESSAGE | --body-file FILE) [--interrupt] [--submission-id ID] sends to the linked host, queuing when busy. Only a parent may interrupt its child. The linked-room message limit counts both directions since the last owner message and defaults to unlimited. Use regular read commands with the linked room ID to follow progress.",
+  "正文文件须位于主持人的项目或草稿目录": "The message file must be in the host’s project or drafts directory.",
+  "--body-file 与 --text 只能选一项": "Choose either --body-file or --text.",
+  "仅父房间主持人可以打断子房间": "Only the parent room’s host can interrupt a child room.",
+  "须用 --text 或 --body-file 写明要发的消息": "Provide the message with --text or --body-file.",
   "这个房间已有分享正在发布": "A share is already being published for this room.",
   "本机没有登记这个房间": "This room is not registered on this computer.",
   "分享请求失败（HTTP {status}）": "Share request failed (HTTP {status}).",

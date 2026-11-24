@@ -775,6 +775,38 @@ class SingleMemberTests(FreeRoomTests):
         queue = self.request(f"{self.path}/queue", {"action": "send", "id": fourth_id}, self.owner)[1]
         self.assertEqual((queue["items"], texts()), ([], ["一", "答一", "二", "三", "四"]))
 
+    def test_linked_host_queue_interrupt_and_identity(self):
+        """Both directions queue, but only the parent may steer or stop a running host."""
+        parent = self.request("/api/rooms", {"title": "父房间", "members": [
+            {"name": "Codex", "token": uuid.uuid4().hex}], "host": "Codex"}, self.owner)[1]["id"]
+        self.review_member_id()
+        for target, source, relation in [(self.room["id"], parent, "parent"), (parent, self.room["id"], "child")]:
+            self.request(f"/api/rooms/{target}/room-link", {"relation": relation, "room_id": source, "host": "Codex"}, self.owner)
+        relay = {"room_id": parent, "host": "父主持"}
+        first = self.say("交接", relay=relay, queue=True)[1]["message"]
+        self.assertEqual((first["relay_member"], first["relay_relation"]), ("Codex", "parent"))
+        running = self.reserve()[1]
+        self.assertEqual([r["purpose"] for r in running["requests"]], ["ask"])
+        url = f"{self.path}/executions/{running['id']}"
+        self.request(url, {"action": "delivery", "stoppable": False, "progress": True}, self.owner)
+        queued = self.say("跟进", relay={**relay, "member": "Codex"}, queue=True)[1]
+        self.assertEqual(queued["queue"]["items"][0]["relay_host"], "父主持")
+        blocked = self.say("变更", relay=relay, interrupt=True)[1]
+        self.assertTrue(blocked["queued"])
+        self.assertFalse(blocked["interrupted"])
+        self.request(url, {"action": "delivery", "stoppable": True, "progress": True, "steer": True}, self.owner)
+        self.assertTrue(self.say("插话", relay=relay, interrupt=True)[1]["interrupted"])
+        inbox = self.request(self.path + "/inbox", token=self.owner)[1]
+        self.assertIn("父房间", inbox["executions"][0]["interjections"][0]["text"])
+        self.request(url, {"action": "delivery", "stoppable": True, "progress": True, "steer": False}, self.owner)
+        self.assertTrue(self.say("重跑", relay=relay, interrupt=True)[1]["interrupted"])
+        self.assertEqual(self.answer(running["id"])[0], 409)
+        self.answer(self.reserve()[1]["id"])
+        self.assertIn("跟进", [text for _, text, _ in self.messages()])
+        status, _ = self.request(f"/api/rooms/{parent}/messages", {"author": "用户", "text": "反向打断",
+            "submission_id": uuid.uuid4().hex, "relay": {"room_id": self.room["id"], "host": "Claude"}, "interrupt": True}, self.owner)
+        self.assertEqual(status, 403)
+
     def test_send_now_interrupts_a_busy_recipient_unless_it_cannot_stop(self):
         """Send-now stops the recipient's turn so the message goes next; an unstoppable recipient keeps it queued."""
         self.say("一", queue=True)

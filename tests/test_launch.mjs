@@ -1380,23 +1380,42 @@ test('a host creates a room inside its project, linked both ways, that cannot cr
   save_launch_settings(f.home, { participants: f.input.participants });
   const project = join(f.directory, 'project');
   mkdirSync(join(project, 'sub'), { recursive: true });
+  const { api_key_ref } = save_api_key(f.home, { base_url: 'https://api.typesafe.ai/v1', api_key: 'test-key' });
+  const scheduler = { provider: 'jev', model: 'jev-latest', api_key_ref };
   const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token, cwd: project,
+    scheduler, image_generation: true, api_max_requests: 120,
     room: { title: '父房间', mode: 'free', host: 'Codex', members: ['Codex'], submission_id: randomUUID() } }, f.options);
   const config = load_config(launched.config_path);
+  await api(config, '/budget', { max_rounds: 0 });
   const host_access = join(f.directory, 'host.access.json');
   writeFileSync(host_access, JSON.stringify({ site: f.site, room: config.room, member: 'Codex', token: config.members.Codex.token }));
-  const create = (extra = {}) => host_control(f.home, 'create-room', { access_file: host_access, title: '子任务', members: 'Claude', cwd: 'sub',
-    text: '先列方案', submission_id: 'first-room', ...extra }, f.options);
+  const body_file = join(project, 'handoff.md');
+  writeFileSync(body_file, '先列方案\n再给验收结果', 'utf8');
+  const create = (extra = {}) => host_control(f.home, 'create-room', { access_file: host_access, title: '子任务', members: 'Codex,Codex,Codex,Claude', cwd: 'sub',
+    body_file, submission_id: 'first-room', ...extra }, f.options);
   await assert.rejects(create(), /新建房间/);
-  await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', permissions: { items: ['create_rooms'], room_limit: 1 } }, { 'X-CoDiscuss-Local': '1' });
+  await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', permissions: { items: ['execution', 'roster', 'create_rooms'], room_limit: 1 } }, { 'X-CoDiscuss-Local': '1' });
   await assert.rejects(create({ cwd: '..' }), /子目录/);
   await assert.rejects(create({ access: 'full' }), /read 或 write/);
+  const folder = (await request(f.site, '/api/folders', { name: '项目' })).body.id;
+  assert.ok(folder);
+  const stale_profile = load_config(launched.config_path);
+  stale_profile.participants.Codex.effort = 'unsupported';
+  writeFileSync(launched.config_path, JSON.stringify(stale_profile));
+  await api(config, '/folder', { actor: '用户', folder_id: folder });
   const created = await create();
-  assert.deepEqual([created.host, created.members, created.project_access, created.cwd], ['Codex', ['Codex', 'Claude'], 'read', join(project, 'sub')]);
-  // The new room's host is this host's own expert in a new session; the new room cannot create rooms.
+  assert.deepEqual([created.host, created.members, created.project_access, created.cwd], ['Codex', ['Codex', 'Codex-2', 'Codex-3', 'Claude'], 'read', join(project, 'sub')]);
+  // The new room's host is this host's own expert in a new session; it inherits room settings and host permissions minus creating rooms.
   const child = load_config(read_registry(f.home).find(path => load_config(path).room === created.room_id));
+  const child_view = await api(child, '');
+  assert.equal(child_view.folder_id, folder);
+  assert.equal(child_view.free.max_rounds, 0);
+  assert.deepEqual(child.scheduler, config.scheduler);
+  assert.equal(child.image_generation, true);
+  assert.equal(child.api_max_requests, 120);
+  await api(config, '/folder', { actor: '用户', folder_id: null });
   assert.deepEqual([child.participants.Codex.adapter, child.participants.Codex.project_access, child.participants.Codex.session_id], ['codex_cli', 'read', undefined]);
-  assert.ok(!host_permissions(child).items.includes('create_rooms'));
+  assert.deepEqual(host_permissions(child).items, ['execution', 'roster']);
   assert.deepEqual(load_config(launched.config_path).spawned_rooms, [{ room: created.room_id, submission_id: 'first-room' }]);
   const parent_card = (await api(config, '/messages?after=0')).messages.at(-1);
   assert.deepEqual([parent_card.source, parent_card.link_room, parent_card.link_relation], ['room_link', created.room_id, 'child']);
@@ -1408,18 +1427,29 @@ test('a host creates a room inside its project, linked both ways, that cannot cr
   assert.equal((await api(child, '/messages?after=0')).messages.length, 2);
   await assert.rejects(create({ submission_id: 'second-room' }), /上限 1/);
   await assert.rejects(host_control(f.home, 'room-post', { access_file: host_access, room: 'elsewhere', text: '你好' }), /关联的房间/);
-  const posted = await host_control(f.home, 'room-post', { access_file: host_access, room: created.room_id, text: '进展如何' });
+  assert.equal(child_messages.at(-1).text, '先列方案\n再给验收结果');
+  assert.equal(child_messages.at(-1).relay_member, 'Codex');
+  const queued = spawnSync(process.execPath, [join(ROOT, 'runner', 'codiscuss.mjs'), 'launch', 'host-control', 'room-post',
+    '--access-file', host_access, '--room', created.room_id, '--body-file', body_file], {
+    encoding: 'utf8', windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: f.home },
+  });
+  assert.equal(queued.status, 0, queued.stderr);
+  assert.ok(JSON.parse(queued.stdout).queued);
+  await assert.rejects(host_control(f.home, 'room-post', { access_file: host_access, room: created.room_id,
+    body_file: host_access }), /项目或草稿目录|project or drafts/);
+  const posted = await host_control(f.home, 'room-post', { access_file: host_access, room: created.room_id, interrupt: true, text: '进展如何' });
   assert.equal((await api(child, '/messages?after=0')).messages.at(-1).id, posted.message_id);
   // The new room's host answers back; with the owner's limit set, the two hosts pass at most that many until the owner speaks again.
   const child_access = join(f.directory, 'child.access.json');
   writeFileSync(child_access, JSON.stringify({ site: f.site, room: created.room_id, member: 'Codex', token: child.members.Codex.token }));
+  await assert.rejects(host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '调整', interrupt: true }), /仅父房间|Only the parent/);
   const back = await host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '方案已列好' });
   assert.equal((await api(config, '/messages?after=0')).messages.at(-1).relay_room, created.room_id);
   save_launch_settings(f.home, { create_preferences: { relay_rounds: 10 } });
-  for (let index = 0; index < 7; index += 1) await host_control(f.home, 'room-post', { access_file: host_access, room: created.room_id, text: `第 ${index} 次` });
+  for (let index = 0; index < 7; index += 1) await host_control(f.home, 'room-post', { access_file: host_access, room: created.room_id, interrupt: true, text: `第 ${index} 次` });
   await assert.rejects(host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '再来' }), /上限/);
   await api(config, '/messages', { author: '用户', text: '继续', submission_id: randomUUID() });
-  assert.ok((await host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '再来' })).message_id > back.message_id);
+  assert.ok((await host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '再来' })).queued);
 });
 
 test('a workflow bound at creation ends when its members are sent away, resumes with their sessions, and is replaced by another', async t => {

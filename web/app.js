@@ -727,6 +727,8 @@ const ROOM_CACHE_LIMIT = 12;
 const room_views = new Map();
 // Member settings read for a new room before it opens, used once by its first load_room_models.
 const preloaded_room_models = new Map();
+const recent_room_models = new Map();
+const ROOM_MODELS_FRESH_MS = 30000;
 // How long a new room's placeholder waits for the room's content before opening it anyway.
 const ROOM_PRELOAD_LIMIT_MS = 4000;
 const message_histories = new Map();
@@ -1900,12 +1902,18 @@ async function move_folder({ id, before_id, direction }) {
   } finally { state.folder_order_pending = false; publish_view(); }
 }
 
+function directory_parent(room, rooms) {
+  const parent = rooms.find(item => item.id === room?.parent_room_id && !item.archived);
+  return parent && (parent.folder_id || "") === (room.folder_id || "") ? parent.id : null;
+}
+
 /** Move a channel by one visible slot, also available without drag support. */
 async function move_channel({ id, direction, folder_id }) {
   if (state.directory_sort === "recent") return;
   const rooms = visible_rooms();
   const folder_scoped = folder_id !== undefined;
-  const group = folder_scoped ? rooms.filter((room) => (room.folder_id || null) === folder_id) : rooms;
+  const parent = directory_parent(rooms.find(room => room.id === id), rooms);
+  const group = rooms.filter(room => (!folder_scoped || (room.folder_id || null) === folder_id) && directory_parent(room, rooms) === parent);
   const index = group.findIndex((room) => room.id === id);
   if (index < 0 || (direction < 0 ? index === 0 : index === group.length - 1)) return;
   const without_room = rooms.filter((room) => room.id !== id);
@@ -1977,6 +1985,7 @@ function render_host_brief() {
 
 /** Describe roles separately from authors and the actual submitter. */
 function message_provenance(message) {
+  if (message.relay_room) return t('来自房间「{room}」的主持人 {host}', { room: message.relay_title ?? t('已删除的房间'), host: message.relay_host });
   const role = message.kind === "receipt" ? t('运行回执') : message.kind === "moderation" ? t('主持发言') : (message.author === "用户" ? t('用户发言') : t('专家观点'));
   const forwarding = message.submitted_by && message.submitted_by !== message.author ? t(' · {value1} 代发', { value1: display_name(message.submitted_by) }) : "";
   return `${role}${forwarding}`;
@@ -2139,6 +2148,12 @@ async function read_background_room(room_id, mark) {
     if (!history || !wanted()) return;
     cache_room_entry(room_views, room_id, room);
     background_reads.marks.set(room_id, mark);
+    if (state.launch.available && !recent_room_models.has(room_id) && !preloaded_room_models.has(room_id)) {
+      const models = await local_launch_request("room-models", { room_id, quick: true });
+      if (wanted() && models.room_id === room_id) {
+        cache_room_entry(recent_room_models, room_id, { ...room_models_fields(models), room_id, revision: "", loading: false });
+      }
+    }
   } catch (error) {
     // Nothing on screen depends on this read. A refused room waits for its next change; a network failure retries on the next directory read.
     if (error.preflight && wanted()) background_reads.marks.set(room_id, mark);
@@ -2355,6 +2370,11 @@ async function select_room(room_id) {
   const listed = state.rooms.find((room) => room.id === room_id);
   // A room opened before is shown as last read, with the directory's newer title, folder and archive state, until the site answers.
   const cached = listed && room_views.get(room_id);
+  const leaving = state.launch.room_models;
+  if (leaving?.participants && leaving.room_id === state.room?.id) {
+    const incomplete = leaving.loading || Object.values(leaving.participants).some(profile => profile.defaults_pending);
+    cache_room_entry(recent_room_models, leaving.room_id, { ...leaving, loading: false, revision: incomplete ? "" : leaving.revision });
+  }
   state.room = cached ? { ...cached, ...listed } : listed;
   state.upload_status = "";
   state.sending_preview = null;
@@ -2370,7 +2390,10 @@ async function select_room(room_id) {
   for (const stashed of state.stashed_drafts) release_files(stashed.drafts);
   state.stashed_drafts = [];
   state.launch.repair = null;
-  state.launch.room_models = null;
+  state.launch.room_models = listed && recent_room_models.get(room_id) || null;
+  if (state.launch.room_models && Date.now() - (state.launch.room_models.read_at || 0) >= ROOM_MODELS_FRESH_MS) {
+    state.launch.room_models.revision = "";
+  }
   state.messages = [];
   state.message_history = null;
   state.history_cards = null;
@@ -3335,6 +3358,7 @@ async function finish_taking_queued(item, room_id, taken) {
  * read leaves the message queued.
  */
 async function edit_queued(item) {
+  if (item.relay_room) return;
   const room_id = state.room.id;
   const files = item.attachments.length ? await read_queued_files(item, room_id) : [];
   if (state.room?.id !== room_id) return;
@@ -3977,7 +4001,9 @@ function attachment_markup(files = []) {
       const tag = file.content_type.startsWith("video/") ? "video" : "audio";
       // The Vue workspace registers the Video.js players (Chinese labels, speed, full screen); the classic page has none.
       const skinned = Boolean(customElements.get(`${tag}-player`));
-      const media = `<${tag} ${source} ${skinned ? "" : "controls "}preload="metadata" playsinline aria-label="${name}"></${tag}>`;
+      // A transparent poster lets the themed surface show before the browser decodes the first frame.
+      const poster = tag === "video" ? 'poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" ' : "";
+      const media = `<${tag} ${source} ${poster}${skinned ? "" : "controls "}preload="metadata" playsinline aria-label="${name}"></${tag}>`;
       return `<div class="attachment-media attachment-${tag}">${skinned ? `<${tag}-player><${tag}-skin class="attachment-player">${media}</${tag}-skin></${tag}-player>` : media}
         <span class="attachment-media-failed">${escape_html(t("浏览器无法播放这个文件的格式，请点下面的文件名下载后用本机软件打开。"))}</span>
         <a class="attachment-media-name" ${download} download title="${escape_html(t("下载 {name}", { name: file.file_name }))}">${name}<small>${attachment_size(file.size)}</small></a></div>`;
@@ -5217,6 +5243,9 @@ async function show_computer_rooms(remote) {
   state.remote_rooms = Boolean(remote);
   // The two lists share no rooms, so nothing read from one may be shown for the other.
   room_views.clear();
+  recent_room_models.clear();
+  preloaded_room_models.clear();
+  state.launch.room_models = null;
   message_histories.clear();
   history_cards.clear();
   reset_background_reads();
@@ -5413,6 +5442,8 @@ function discard_launch(id) {
  */
 async function load_launch_settings({ relay_known = () => {} } = {}) {
   const local = state.admin.local || ["127.0.0.1", "localhost"].includes(location.hostname);
+  recent_room_models.clear();
+  preloaded_room_models.clear();
   state.launch.room_models = null;
   state.launch.model_catalogs = {};
   state.launch.connect_command = local ? "codiscuss local open" : `codiscuss local connect "${location.origin}"`;
@@ -5550,8 +5581,15 @@ async function load_room_models(force = false) {
   // agy is run to name its default model, which takes seconds; everything else is shown first and agy follows.
   try {
     const result = preloaded || await local_launch_request("room-models", { room_id: room.id, quick: true });
-    if (live() && result.room_id === room.id) Object.assign(current, room_models_fields(result));
     if (live() && result.room_id === room.id) {
+      for (const [name, profile] of Object.entries(result.participants || {})) {
+        const prior = current.participants?.[name];
+        if (profile.defaults_pending && prior?.adapter === profile.adapter && prior.default_model) {
+          profile.default_model = prior.default_model;
+          profile.default_effort = prior.default_effort;
+        }
+      }
+      Object.assign(current, room_models_fields(result), { read_at: Date.now() });
       // Compared with the last answer for this room, which a reload clears from the state but not from here.
       if (members_seen?.room_id === room.id) warn_outside_members(members_seen.participants, result.participants);
       members_seen = { room_id: room.id, participants: result.participants };
@@ -5777,7 +5815,7 @@ function participant_model(name, room, saved, brief = false) {
   const profile = saved?.room_id === room.id ? saved.participants?.[name] : null;
   if (!profile) return "";
   // Only an agy member without a chosen model depends on the default that is read later.
-  if (!profile.model && !profile.actual_model && profile.defaults_pending) return t('读取中…');
+  if (!profile.model && !profile.actual_model && !profile.default_model && profile.defaults_pending) return t('读取中…');
   // App members choose in their own chat, so only their session log knows.
   const app = ["codex", "antigravity"].includes(profile.adapter);
   // What the session last actually ran with comes first, so a member that says or is set to another model cannot mislead;
@@ -6926,7 +6964,7 @@ async function retract_latest() {
     try { await last.done; } catch { return; }
     if (state.room?.id !== room_id) return;
   }
-  const message = state.messages.findLast(item => item.author === "用户" && !item.withdrawn);
+  const message = state.messages.findLast(item => item.author === "用户" && !item.relay_room && !item.withdrawn);
   if (message) await retract_message(message.id);
 }
 
@@ -7391,6 +7429,8 @@ function update_directory_drag(event) {
   if (state.directory_sort === "recent") return;
   const target = hit.closest("[data-drag-room]");
   if (!target || target.dataset.dragRoom === drag.id) return;
+  const rooms = visible_rooms();
+  if (directory_parent(rooms.find(room => room.id === drag.id), rooms) !== directory_parent(rooms.find(room => room.id === target.dataset.dragRoom), rooms)) return;
   const rect = target.getBoundingClientRect();
   const after = event.clientY > rect.top + rect.height / 2;
   drag.target = { action: "move", id: target.dataset.dragRoom, after };
@@ -7897,6 +7937,9 @@ function preview_clicked_attachment(event) {
 function watch_room_files() {
   document.addEventListener("click", download_relay_file, true);
   document.addEventListener("error", mark_failed_media, true);
+  document.addEventListener("loadeddata", event => {
+    if (event.target.matches?.(".attachment-video video")) event.target.removeAttribute("poster");
+  }, true);
   new MutationObserver((records) => { if (files_by_blob()) show_relay_images(records); }).observe(document.body, { childList: true, subtree: true });
 }
 

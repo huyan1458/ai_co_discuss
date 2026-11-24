@@ -4,6 +4,9 @@ import { ref as module_ref } from "vue";
 // it opens, and keeping them inside it forgot them on every close (user 2026-11-16). A reload starts afresh with only
 // the shown room's folder open (user 2026-11-15).
 const open_folders = module_ref(new Set());
+const open_parents = module_ref(new Set());
+const folded_parents = new Set();
+let known_children = null;
 const rooms_open = module_ref(true);
 // The room whose folder was last opened for it, so mounting the drawer again is not taken for opening that room.
 let revealed_for = "";
@@ -31,6 +34,47 @@ const { page_open: invited_open } = use_invited_rooms();
 const middle_page = computed(() => workflow_library_open.value || invited_open.value);
 const rooms = computed(() => view.value.rooms.filter((room) => !room.archived));
 const archived_count = computed(() => view.value.rooms.filter((room) => room.archived).length);
+const children = computed(() => {
+  const by_id = new Map(rooms.value.map(room => [room.id, room]));
+  const groups = new Map();
+  for (const room of rooms.value) {
+    const parent = by_id.get(room.parent_room_id);
+    if (!parent || parent.id === room.id || (parent.folder_id || "") !== (room.folder_id || "")) continue;
+    if (!groups.has(parent.id)) groups.set(parent.id, []);
+    groups.get(parent.id).push(room);
+  }
+  return groups;
+});
+const mounted = computed(() => new Set([...children.value.values()].flat().map(room => room.id)));
+const open_room_running = computed(() => (view.value.room?.free?.members || [])
+  .some((member) => ["dispatched", "started"].includes(member.execution?.status)));
+const branches = computed(() => {
+  const result = new Map();
+  function visit(room) {
+    const group = children.value.get(room.id) || [];
+    const descendants = group.map(visit);
+    const branch = { running: room_running(room) || descendants.some(item => item.running),
+      selected: room.id === view.value.room?.id || descendants.some(item => item.selected),
+      time: Math.max(Date.parse(room_speech_at(room) || room.created_at) || 0, ...descendants.map(item => item.time)) };
+    result.set(room.id, branch);
+    return branch;
+  }
+  rooms.value.filter(room => !mounted.value.has(room.id)).forEach(visit);
+  return result;
+});
+watch([children, branches], () => {
+  if (!rooms.value.length && view.value.rooms_loading) return;
+  for (const [parent, group] of children.value) {
+    if (folded_parents.has(parent)) continue;
+    if (group.some(room => branches.value.get(room.id)?.running || branches.value.get(room.id)?.selected
+      || (known_children && !known_children.has(room.id)))) open_parents.value.add(parent);
+  }
+  if (rooms.value.length || known_children) known_children = mounted.value;
+}, { immediate: true });
+function toggle_parent(id) {
+  if (open_parents.value.delete(id)) folded_parents.add(id);
+  else { folded_parents.delete(id); open_parents.value.add(id); }
+}
 const folders = computed(() => (view.value.folder_groups || []).map((folder) => ({ ...folder,
   rooms: rooms.value.filter((room) => (room.folder_id || "") === folder.id) })));
 const manual_order = computed(() => view.value.directory_sort !== "recent");
@@ -102,9 +146,6 @@ function room_time_title(room) {
 // time label changes rather than on every view publish.
 const row_state = computed(() => JSON.stringify([view.value.directory_pending, view.value.archive_pending, view.value.destroying, view.value.backup_pending,
   view.value.folders, view.value.room_site, manual_order.value, view.value.room?.id, middle_page.value, open_room_running.value]));
-/** The open room's own live state is fresher than the directory's, so its light follows that. */
-const open_room_running = computed(() => (view.value.room?.free?.members || [])
-  .some((member) => ["dispatched", "started"].includes(member.execution?.status)));
 /**
  * Plain values for one room row. They are read here, in the row's own render, because the menu and tooltip slots are run
  * by those components, which would otherwise track the view and re-render every row on each publish.
@@ -141,20 +182,42 @@ function listed_count(id) {
 }
 /** The rooms a folder lists now: all of them in manual order, else the latest ones opened so far plus any at work or open. */
 function visible_rooms(folder) {
-  if (manual_order.value) return folder.rooms;
-  return folder.rooms.filter((room, index) => index < listed_count(folder.id) || room_running(room) || room.id === view.value.room?.id);
+  const roots = top_rooms(folder);
+  if (manual_order.value) return roots;
+  return roots.filter((room, index) => index < listed_count(folder.id) || branches.value.get(room.id).running || branches.value.get(room.id).selected);
+}
+function top_rooms(folder) {
+  const roots = folder.rooms.filter(room => !mounted.value.has(room.id));
+  return manual_order.value ? roots : roots.sort((a,b) => branches.value.get(b.id).time - branches.value.get(a.id).time);
+}
+function directory_rows(folder) {
+  const rows = [];
+  function append(group, depth) {
+    group.forEach((room, index) => {
+      const kids = children.value.get(room.id) || [];
+      const expanded = open_parents.value.has(room.id);
+      const label = kids.length && (expanded ? t("收起子房间") : t("展开 {count} 个子房间", { count: kids.length }));
+      const folded = kids.length && !expanded;
+      rows.push({ room, index, count: group.length, depth, expanded, label,
+        highlight: folded && !middle_page.value && branches.value.get(room.id).selected,
+        running: folded && branches.value.get(room.id).running });
+      if (expanded) append(kids, depth + 1);
+    });
+  }
+  append(visible_rooms(folder), 0);
+  return rows;
 }
 /** The label of a folder's show-more control, empty when the folder has nothing to fold. */
 function list_toggle_label(folder) {
-  if (manual_order.value || folder.rooms.length <= ROOM_BATCH_COUNT) return "";
-  if (folder.rooms.length > visible_rooms(folder).length) return t("显示更多");
+  if (manual_order.value || top_rooms(folder).length <= ROOM_BATCH_COUNT) return "";
+  if (top_rooms(folder).length > visible_rooms(folder).length) return t("显示更多");
   return listed_count(folder.id) > ROOM_BATCH_COUNT ? t("收起") : "";
 }
 /** Reveal the next batch of hidden rooms, or fold back to the first batch once none are hidden. */
 function toggle_room_list(folder) {
   const next = new Map(listed_counts.value);
   const visible = new Set(visible_rooms(folder));
-  const hidden = folder.rooms.flatMap((room, index) => (visible.has(room) ? [] : [index]));
+  const hidden = top_rooms(folder).flatMap((room, index) => (visible.has(room) ? [] : [index]));
   if (hidden.length) next.set(folder.id, hidden[Math.min(ROOM_BATCH_COUNT, hidden.length) - 1] + 1);
   else next.delete(folder.id);
   listed_counts.value = next;
@@ -269,6 +332,16 @@ const revoking = ref(null);
 /** A room's published link, if this browser published one: { url, expires_at }. */
 const share_link = (room) => view.value.share_links?.[room.id] || null;
 
+/** A second desktop mouse click opens the same rename dialog as the room menu. */
+function select_room(event, room) {
+  if (event.detail === 2 && window.matchMedia("(hover: hover) and (pointer: fine)").matches &&
+      (!event.pointerType || event.pointerType === "mouse") && !event.sourceCapabilities?.firesTouchEvents) {
+    if (!view.value.directory_pending.includes(`rename:${room.id}`)) emit("manage", { room, action: "rename" });
+    return;
+  }
+  emit("select", room.id);
+}
+
 /** Keep actions targeted to the clicked channel without changing the open draft. */
 function actions(room, index, folder_id, folder_room_count) {
   const ordering = view.value.directory_pending.includes("room-order");
@@ -328,12 +401,13 @@ function actions(room, index, folder_id, folder_room_count) {
        </MemoBlock>
        </template>
        <div v-if="folder_open(folder.id)" :class="folder.id ? 'channel-folder-rooms' : 'channel-root-rooms'" :data-drop-folder="folder.id ? undefined : ''">
-      <MemoBlock v-for="(room, index) in visible_rooms(folder)" :key="room.id" :deps="[JSON.stringify(room), index, folder.rooms.length, row_state, room_time(room), Boolean(share_link(room))]">
-      <template v-for="row in [room_row(room, index, folder.rooms.length)]" :key="room.id">
+      <MemoBlock v-for="{ room, index, count, depth, expanded, label, highlight, running } in directory_rows(folder)" :key="room.id" :deps="[JSON.stringify(room), index, count, depth, expanded, label, highlight, running, row_state, room_time(room), Boolean(share_link(room))]">
+      <template v-for="row in [room_row(room, index, count)]" :key="room.id">
       <UContextMenu :items="row.items" :ui="{ content: 'channel-menu channel-topic-menu' }">
-        <div class="channel-room-row" :class="{ active: row.active, 'is-destroying': row.destroying }" :data-drag-room="room.id" :inert="row.destroying || undefined">
+        <div class="channel-room-row" :class="{ active: row.active || highlight, 'is-destroying': row.destroying }" :style="{ marginInlineStart: depth ? `calc(${depth} * clamp(10px, 1vw, 16px))` : undefined }" :data-drag-room="room.id" :inert="row.destroying || undefined">
           <button class="channel-room-grip" data-drag-handle :aria-label="t('拖动 {name}', { name: room.title })" :title="t('拖动排序；上下方向键移动')"  @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
-          <button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="bridge.start_drag($event)" @click="emit('select', room.id)"><span>{{ room.title }}</span><i v-if="row.running" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button>
+          <div class="channel-room-content"><button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="bridge.start_drag($event)" @click="select_room($event, room)"><span>{{ room.title }}</span><i v-if="row.running || running" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button>
+          <UTooltip v-if="label" :text="label" :ui="{ content: 'channel-topic-tooltip' }"><button class="channel-child-toggle" type="button" :aria-expanded="expanded" :aria-label="label" @click.stop="toggle_parent(room.id)"><UIcon :name="expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" /></button></UTooltip></div>
           <div class="channel-room-actions">
             <UTooltip :text="room.archived ? t('恢复房间') : t('存档房间')" :ui="{ content: 'channel-topic-tooltip' }">
               <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="room.archived ? t('恢复 {name}', { name: room.title }) : t('存档 {name}', { name: room.title })" class="channel-room-archive" size="xs" color="neutral" variant="ghost" :disabled="row.archiving" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />

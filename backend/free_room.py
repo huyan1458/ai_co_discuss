@@ -1373,6 +1373,10 @@ def recipients(connection, room_id, payload):
     # Rooms created while the user could host get their AI host on the next message.
     sync_participants(connection, room_id)
     active = active_members(connection, room_id)
+    if payload.get("relay"):
+        host = next((row for row in active.values() if row["role"] == "host"), None)
+        target = host or (next(iter(active.values())) if len(active) == 1 else None)
+        return [(target["id"], "ask")] if target else []
     if payload.get("to") is not None:
         named = named_members(active, payload["to"])
         host = next((row for row in active.values() if row["role"] == "host"), None)
@@ -2825,6 +2829,10 @@ def after_free_message(connection, room_id, message_id, actor, payload):
         # host was waiting on: the goal is back to being worked on and a later pending gets its fallback again.
         # A message the host takes also replaces whatever it meant to continue with. One naming other members only
         # starts their own lines: it answers nothing the host asked, so the host's plan and goal state stay (user 2026-11-20).
+        if payload.get("relay"):
+            for member_id, purpose in recipients(connection, room_id, payload):
+                insert_request(connection, room_id, member_id, message_id, message_id, purpose, "user")
+            return
         if reaches_host(connection, room_id, payload):
             connection.execute("""UPDATE room_goals SET armed=1,phase='doing',phase_note='',phase_until=0,pending_fallback=0
                 WHERE room_id=? AND status='active'""", (room_id,))
@@ -3163,6 +3171,7 @@ def inbox(connection, room_id, token):
 def pending_requests(connection, member_id):
     """A member's pending requests with the context its software needs: discussion turn, review, relay, hand-back, question."""
     pending = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.purpose,r.batch_id,
+        (SELECT source_room_id FROM message_relays WHERE message_id=r.message_id) AS relay_room,
         sr.id AS session_request_id,sr.session_id,sr.round,sr.position,sr.read_until,sr.question AS source_question,
         t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id,
         (SELECT action FROM group_routes WHERE message_id=r.message_id) AS group_action
@@ -4096,15 +4105,20 @@ def interrupt_for_message(connection, room_id, message_id):
     if blocked:
         raise FileExistsError(Text("{value1} 正在执行且无法打断，这条消息继续排队，等它答完后发送", value1='、'.join(blocked)))
     now = int(time.time())
+    source = connection.execute("""SELECT r.title FROM message_relays m JOIN rooms r ON r.id=m.source_room_id
+        WHERE m.message_id=?""", (message_id,)).fetchone()
+    notice = (Text("关联房间「{room}」的主持人刚发来消息 #{message_id}，请先读原文。", room=source[0], message_id=message_id)
+              if source else Text("用户刚发来消息 #{message_id}，请先读原文，在这一轮的回答里一并处理。", message_id=message_id))
     for row in steerable:
         execution = connection.execute("SELECT * FROM member_executions WHERE id=?", (row["execution_id"],)).fetchone()
-        add_interjection(connection, room_id, execution, {"text": str(Text("用户刚发来消息 #{message_id}，请先读原文，在这一轮的回答里一并处理。", message_id=message_id)),
+        add_interjection(connection, room_id, execution, {"text": str(notice),
                                                           "submission_id": f"queue-{message_id}-{row['member_id']}"}, now)
         connection.execute("UPDATE member_requests SET status='delivering',execution_id=? WHERE id=?", (row["execution_id"], row["request_id"]))
     for row in stopped:
-        stop_member_work(connection, row["member_id"], Text("已打断：你立即发送了新消息，它会连同这条一起处理"), "user_stop", keep_pending=True, requeue=True)
+        stop_member_work(connection, row["member_id"], notice if source else Text("已打断：你立即发送了新消息，它会连同这条一起处理"), "user_stop", keep_pending=True, requeue=True)
     if stopped:
         settle_batches(connection, room_id)
+    return bool(busy)
 
 
 def withdrawals(connection, room_id):
@@ -4118,7 +4132,7 @@ def owner_message(connection, room_id, message_id):
     row = connection.execute("SELECT * FROM messages WHERE room_id=? AND id=?", (room_id, message_id)).fetchone()
     if not row:
         raise LookupError(Text("消息不存在"))
-    if row["author"] != "用户":
+    if row["author"] != "用户" or connection.execute("SELECT 1 FROM message_relays WHERE message_id=?", (message_id,)).fetchone():
         raise ValueError(Text("只能撤回或编辑用户自己的消息"))
     if connection.execute("SELECT 1 FROM room_directory WHERE room_id=? AND archived=1", (room_id,)).fetchone():
         raise ValueError(Text("房间已存档；恢复后才能撤回或编辑"))
@@ -4367,6 +4381,8 @@ def check_relay(connection, room_id, relay):
     if not isinstance(relay, dict):
         raise ValueError(Text("relay 须为含 room_id 与 host 的对象"))
     host = linked_room_values(connection, room_id, relay.get("room_id"), relay.get("host"))
+    if not isinstance(relay.get("member", ""), str):
+        raise ValueError(Text("relay.member 须为成员名称"))
     source, limit = relay["room_id"], relay.get("limit", 0)
     if type(limit) is not int or not 0 <= limit <= MAX_RELAY_LIMIT:
         raise ValueError(Text("relay.limit 须为 0–100 的整数，0 表示不限"))
@@ -4386,7 +4402,7 @@ def check_relay(connection, room_id, relay):
 def save_message_relay(connection, room_id, message_id, relay):
     """Label an owner-credential message the host of another room sent: `relay = {room_id, host}`."""
     host = check_relay(connection, room_id, relay)
-    connection.execute("INSERT INTO message_relays (message_id,source_room_id,host) VALUES (?,?,?)", (message_id, relay["room_id"], host))
+    connection.execute("INSERT INTO message_relays (message_id,source_room_id,host,member) VALUES (?,?,?,?)", (message_id, relay["room_id"], host, relay.get("member", "")))
 
 
 def record_model_change(connection, room_id, member, payload):

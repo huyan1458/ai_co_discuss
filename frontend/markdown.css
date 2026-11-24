@@ -85,6 +85,8 @@ html[data-theme="channel-light"] .markdown-body {
 /* Audio and video attachments play in place; the name below links the original for a download. */
 .attachment-media { display: grid; gap: 4px; width: min(400px, 100%); }
 .attachment-media video { display: block; width: 100%; background: #000; }
+.attachment-video video[poster] { background: var(--ui-bg-elevated, Canvas); }
+.attachment-player:has(video[poster]) { --attachment-video-surface: var(--ui-bg-elevated, Canvas); }
 /* Only the bare video is capped: inside the player the cap would survive full screen and pin the picture to the top. */
 .attachment-media > video { max-height: 320px; border-radius: 8px; }
 .attachment-media audio { display: block; width: 100%; }

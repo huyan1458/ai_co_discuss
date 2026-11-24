@@ -123,7 +123,8 @@ CREATE TABLE IF NOT EXISTS room_links (
 CREATE TABLE IF NOT EXISTS message_relays (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
     source_room_id TEXT NOT NULL,
-    host TEXT NOT NULL
+    host TEXT NOT NULL,
+    member TEXT NOT NULL DEFAULT ''
 );
 -- Site administrator account (single user) and its login sessions. Raw tokens and passwords are never stored.
 CREATE TABLE IF NOT EXISTS site_admin (

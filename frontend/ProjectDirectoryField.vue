@@ -132,6 +132,32 @@ const saving = ref(false);
 const browsing = ref("");
 const error = ref("");
 const add_name = ref(null);
+const drag_target = ref(-1);
+/** Move a project within the unsaved list and keep keyboard focus on its grip. */
+function move_project(from, to) {
+  if (from === to || to < 0 || to >= draft.value.length) return;
+  draft.value.splice(to, 0, ...draft.value.splice(from, 1));
+  nextTick(() => project_rows.value?.children[to]?.querySelector(".project-grip")?.focus());
+}
+const project_rows = ref(null);
+function start_drag(event, index) {
+  if (event.button !== 0 || !event.isPrimary) return;
+  event.currentTarget.setPointerCapture(event.pointerId);
+  drag_target.value = index;
+}
+function track_drag(event) {
+  if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+  const rows = [...project_rows.value.children];
+  const index = rows.findIndex(row => event.clientY < row.getBoundingClientRect().bottom);
+  drag_target.value = index < 0 ? rows.length - 1 : index;
+  rows[drag_target.value].scrollIntoView({ block: "nearest" });
+}
+function finish_drag(event, index) {
+  if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+  track_drag(event);
+  move_project(index, drag_target.value);
+  drag_target.value = -1;
+}
 
 function open_manager() {
   draft.value = projects.value.map((project) => ({ ...project }));
@@ -252,9 +278,13 @@ async function save_projects() {
     :ui="{ content: 'glass-panel studio-modal project-modal', body: 'dialog-body' }">
     <template #body>
       <form class="project-manager dialog-form" @submit.prevent="save_projects">
-        <ul v-if="draft.length" class="project-rows" :aria-label="t('常用项目')">
-          <li v-for="(project, index) in draft" :key="index" class="project-row" :class="{ 'is-editing': editing === index }">
-            <span class="project-tile"><UIcon name="i-lucide-folder" /></span>
+        <ul v-if="draft.length" ref="project_rows" class="project-rows" :aria-label="t('常用项目')">
+          <li v-for="(project, index) in draft" :key="index" class="project-row" :class="{ 'is-editing': editing === index, 'is-target': drag_target === index }">
+            <button v-if="!restricted && draft.length > 1 && editing < 0" type="button" class="project-tile project-grip"
+              :aria-label="t('拖动 {name}', { name: project.name })" :title="t('拖动排序；上下方向键移动')" :disabled="saving"
+              @pointerdown="start_drag($event, index)" @pointermove="track_drag" @pointerup="finish_drag($event, index)" @lostpointercapture="drag_target = -1"
+              @keydown.up.prevent="move_project(index, index - 1)" @keydown.down.prevent="move_project(index, index + 1)"><UIcon name="i-lucide-grip-vertical" /></button>
+            <span v-else class="project-tile"><UIcon name="i-lucide-folder" /></span>
             <template v-if="editing === index">
               <div class="project-edit">
                 <UInput v-model="project.name" :placeholder="t('项目名称')" :aria-label="t('项目名称')" size="sm" class="w-full" />
@@ -380,6 +410,9 @@ async function save_projects() {
   background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); transition: border-color .15s, background-color .15s; }
 .project-row:hover, .project-row.is-editing { border-color: var(--ui-border); background: var(--channel-ghost-hover, var(--ui-bg-elevated)); }
 .project-row.is-editing { align-items: flex-start; }
+.project-row.is-target { border-color: var(--channel-accent); }
+.project-grip { touch-action: none; cursor: grab; }
+.project-grip:active { cursor: grabbing; }
 .project-tile { display: grid; flex-shrink: 0; place-items: center; width: 32px; height: 32px; border-radius: 8px;
   background: color-mix(in srgb, var(--channel-accent) 16%, transparent); color: var(--channel-accent); }
 .project-tile > [class*="icon"] { width: 15px; height: 15px; }

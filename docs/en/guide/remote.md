@@ -47,7 +47,7 @@ While your computer is on and its local service is running, paired phones and ta
 
 - View rooms and live updates, send messages, upload attachments, use voice input and read-aloud, and export backups.
 - Create rooms; invite or recall members; change models and permissions; add API keys; and create external-member invitations.
-- **Project folders remain scoped by the computer:** Remote devices can choose folders inside **Saved projects** on the computer. Use the folder button at the end of the project path field to browse. To allow a wider scope, add the parent folder to Saved projects on the computer.
+- **Project folders remain scoped by the computer:** Remote devices can choose folders inside **Saved projects** on the computer. Use the folder button at the end of the project path field to browse. To allow a wider scope, add the parent folder to Saved projects on the computer. In “Manage projects…”, drag a project by its left handle and select “Save” to update the order in the picker.
 
 ## Things to keep in mind
 

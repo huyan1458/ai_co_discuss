@@ -21,12 +21,68 @@ const card_canvas = ref(null);
 const card = computed(() => share_draft.value?.link?.card);
 const upload_input = ref(null);
 const crop_image = ref(null);
+const crop_source_id = ref(null);
 const crop_offset = ref(0.5);
 const cover_preview = ref(null);
 const drawn = ref(false);
 const preview_render = ref(null);
+const cover_panel = ref("auto");
+const gallery_el = ref(null);
+const thumb_urls = ref({});
+const thumb_failed = ref({});
+const selected_cover_id = ref(null);
+const loading_cover_id = ref(null);
+const thumb_requested = new Set();
 let image_choice = 0;
-watch(() => share_draft.value?.link?.url, () => { image_choice++; crop_image.value = null; });
+watch(() => share_draft.value?.room_id, () => {
+  thumb_requested.clear();
+  thumb_urls.value = {};
+  thumb_failed.value = {};
+  selected_cover_id.value = null;
+  loading_cover_id.value = null;
+});
+watch(() => share_draft.value?.link?.url, (url) => {
+  image_choice++;
+  crop_image.value = null;
+  crop_source_id.value = null;
+  cover_preview.value = null;
+  drawn.value = false;
+  selected_cover_id.value = null;
+  loading_cover_id.value = null;
+  if (!url) return;
+  cover_panel.value = card.value?.cover && share_draft.value?.cover_images?.length ? "room" : "auto";
+}, { immediate: true });
+/** Load one room image thumbnail on demand, once per open room. */
+function load_thumb(file) {
+  if (!file || thumb_requested.has(file.id)) return;
+  thumb_requested.add(file.id);
+  const room_id = share_draft.value?.room_id;
+  Promise.resolve(bridge.attachment_url(file)).then((url) => {
+    if (share_draft.value?.room_id !== room_id) return;
+    thumb_urls.value = { ...thumb_urls.value, [file.id]: url };
+  }).catch(() => {
+    if (share_draft.value?.room_id !== room_id) return;
+    thumb_failed.value = { ...thumb_failed.value, [file.id]: true };
+  });
+}
+watch([gallery_el, () => share_draft.value?.cover_images], ([container, images], _, cleanup) => {
+  if (!container || !images?.length) return;
+  const by_id = new Map(images.map(file => [file.id, file]));
+  if (typeof IntersectionObserver !== "function") {
+    images.forEach(load_thumb);
+    return;
+  }
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const id = entry.target.dataset.coverId;
+      observer.unobserve(entry.target);
+      load_thumb(by_id.get(id));
+    }
+  }, { root: container, rootMargin: "120px" });
+  container.querySelectorAll("[data-cover-id]").forEach(node => observer.observe(node));
+  cleanup(() => observer.disconnect());
+}, { flush: "post" });
 /** Decode a selected or stored raster image before painting it. */
 async function load_image(url) {
   const image = new Image();
@@ -37,25 +93,25 @@ async function load_image(url) {
 watch(() => card.value?.cover, async (url, _, cleanup) => {
   let current = true;
   cleanup(() => { current = false; });
-  cover_preview.value = null;
-  if (!url) return;
+  if (!url) { cover_preview.value = null; return; }
   try {
     const image = await load_image(url);
     if (current) cover_preview.value = { url, image };
   } catch {
     if (current) {
       cover_preview.value = { url, failed: true };
+      drawn.value = false;
       bridge.notify("error", t("图片读取失败"));
     }
   }
 }, { immediate: true });
 watch([card, card_canvas, cover_preview, share_expiry], ([value, canvas, cover]) => {
-  drawn.value = false;
-  preview_render.value = value ? { stage: "waiting-canvas" } : null;
-  if (!canvas || !value) return;
+  if (!value) { drawn.value = false; preview_render.value = null; return; }
+  if (!canvas) { preview_render.value = { stage: "waiting-canvas" }; return; }
   const decoded = value.cover && cover?.url === value.cover ? cover : null;
   if (value.cover && !decoded?.image) {
     preview_render.value = { stage: decoded?.failed ? "decode-failed" : "decoding-cover" };
+    if (decoded?.failed) drawn.value = false;
     return;
   }
   try {
@@ -64,6 +120,7 @@ watch([card, card_canvas, cover_preview, share_expiry], ([value, canvas, cover])
     drawn.value = true;
     preview_render.value = { stage: "drawn", rendered: decoded ? "custom" : "default", width: canvas.width, height: canvas.height };
   } catch {
+    drawn.value = false;
     preview_render.value = { stage: "draw-failed" };
   }
 }, { deep: true, flush: "post" });
@@ -79,19 +136,56 @@ async function select_cover(file, attachment = false) {
   if (!file) return;
   const choice = ++image_choice;
   crop_image.value = null;
+  crop_source_id.value = null;
+  if (attachment) loading_cover_id.value = file.id;
   let local_url;
   try {
     if (!attachment && !["image/png", "image/jpeg", "image/webp"].includes(file.type)) throw new Error(t("请选择 PNG、JPG 或 WebP 图片"));
     const url = attachment ? await bridge.attachment_url(file) : (local_url = URL.createObjectURL(file));
     const image = await load_image(url);
     if (choice !== image_choice) return;
-    if (image.height > image.width * 2) { crop_offset.value = 0.5; crop_image.value = image; }
-    else await edit_card("cover", encode_cover(image));
+    if (image.height > image.width * 2) {
+      crop_offset.value = 0.5;
+      crop_source_id.value = attachment ? file.id : null;
+      crop_image.value = image;
+    } else {
+      selected_cover_id.value = attachment ? file.id : null;
+      cover_panel.value = attachment || share_draft.value?.cover_images?.length ? "room" : "custom";
+      await edit_card("cover", encode_cover(image));
+    }
   } catch (error) { if (choice === image_choice) bridge.notify("error", error.message || t("图片读取失败")); }
-  finally { if (local_url) URL.revokeObjectURL(local_url); }
+  finally {
+    if (attachment && loading_cover_id.value === file.id) loading_cover_id.value = null;
+    if (local_url) URL.revokeObjectURL(local_url);
+  }
 }
 const cropped_cover = computed(() => crop_image.value ? encode_cover(crop_image.value, crop_offset.value) : "");
-function auto_cover() { image_choice++; crop_image.value = null; edit_card("cover", ""); }
+function apply_crop() {
+  selected_cover_id.value = crop_source_id.value;
+  cover_panel.value = crop_source_id.value || share_draft.value?.cover_images?.length ? "room" : "custom";
+  const next = cropped_cover.value;
+  crop_image.value = null;
+  crop_source_id.value = null;
+  edit_card("cover", next);
+}
+function cancel_crop() {
+  crop_image.value = null;
+  crop_source_id.value = null;
+}
+function open_room_images() {
+  crop_image.value = null;
+  crop_source_id.value = null;
+  cover_panel.value = "room";
+}
+function auto_cover() {
+  image_choice++;
+  crop_image.value = null;
+  crop_source_id.value = null;
+  selected_cover_id.value = null;
+  loading_cover_id.value = null;
+  cover_panel.value = "auto";
+  if (card.value?.cover) edit_card("cover", "");
+}
 /** Save the card as a PNG named after the room. */
 async function save_card() {
   const link = document.createElement("a");
@@ -175,22 +269,42 @@ function close_share(open) {
             <div class="share-done-side">
               <h3>{{ t('分享卡') }}</h3>
               <div class="share-cover-controls">
-                <UButton :label="t('自动封面')" :variant="card?.cover ? 'outline' : 'soft'" @click="auto_cover" />
-                <UButton :label="t('上传封面')" color="neutral" variant="outline" @click="upload_input.click()" />
+                <UButton size="sm" :label="t('自动封面')" :color="cover_panel === 'auto' && !card?.cover ? 'primary' : 'neutral'" :variant="cover_panel === 'auto' && !card?.cover ? 'soft' : 'outline'" @click="auto_cover" />
+                <UButton v-if="share_draft.cover_images?.length" size="sm" :label="t('选择房间图片')" :color="cover_panel === 'room' ? 'primary' : 'neutral'" :variant="cover_panel === 'room' ? 'soft' : 'outline'" @click="open_room_images" />
+                <UButton size="sm" :label="t('上传封面')" icon="i-lucide-upload" color="neutral" variant="outline" @click="upload_input.click()" />
                 <input ref="upload_input" type="file" hidden accept="image/png,image/jpeg,image/webp" @change="select_cover($event.target.files[0]); $event.target.value = ''">
-                <USelect v-if="share_draft.cover_images?.length" :model-value="null" :placeholder="t('选择房间图片')" :aria-label="t('选择房间图片')"
-                  :items="share_draft.cover_images.map(file => ({ label: '#' + file.message_id + ' · ' + file.file_name, value: file.id }))"
-                  @update:model-value="id => select_cover(share_draft.cover_images.find(file => file.id === id), true)" />
               </div>
-              <div v-if="crop_image" class="share-cover-crop">
-                <img :src="cropped_cover" :alt="t('裁剪预览')">
-                <label>{{ t('选择保留的画面') }}<input v-model.number="crop_offset" type="range" min="0" max="1" step="0.01"></label>
-                <UButton :label="t('使用此封面')" @click="edit_card('cover', cropped_cover); crop_image = null" />
+              <div class="share-done-body">
+                <div v-if="crop_image" class="share-cover-crop">
+                  <div class="share-cover-crop-stage"><img :src="cropped_cover" :alt="t('裁剪预览')"></div>
+                  <label class="share-cover-slider"><span>{{ t('选择保留的画面') }}</span><input v-model.number="crop_offset" type="range" min="0" max="1" step="0.01"></label>
+                  <div class="share-cover-crop-actions">
+                    <UButton size="sm" :label="t('使用此封面')" @click="apply_crop" />
+                    <UButton size="sm" :label="t('取消')" color="neutral" variant="outline" @click="cancel_crop" />
+                  </div>
+                </div>
+                <div v-else-if="cover_panel === 'room' && share_draft.cover_images?.length" ref="gallery_el" class="share-cover-gallery" role="listbox" :aria-label="t('选择房间图片')">
+                  <button v-for="file in share_draft.cover_images" :key="file.id" type="button"
+                    class="share-cover-item" :class="{ active: selected_cover_id === file.id, loading: loading_cover_id === file.id }"
+                    :data-cover-id="file.id" :title="`#${file.message_id} · ${file.file_name}`" :aria-selected="selected_cover_id === file.id"
+                    @click="select_cover(file, true)">
+                    <span class="share-cover-thumb">
+                      <img v-if="thumb_urls[file.id]" :src="thumb_urls[file.id]" :alt="file.file_name" loading="lazy" decoding="async">
+                      <UIcon v-else-if="thumb_failed[file.id]" name="i-lucide-image-off" class="share-cover-thumb-icon" />
+                      <UIcon v-else name="i-lucide-loader-circle" class="share-cover-thumb-icon animate-spin" />
+                      <span v-if="loading_cover_id === file.id" class="share-cover-thumb-busy"><UIcon name="i-lucide-loader-circle" class="animate-spin" /></span>
+                    </span>
+                    <span class="share-cover-caption">#{{ file.message_id }} · {{ file.file_name }}</span>
+                  </button>
+                </div>
+                <div v-else-if="!card?.cover" class="share-cover-fields">
+                  <label class="share-dialog-field"><span>{{ t('卡片上的问题') }}</span>
+                    <UTextarea :model-value="card?.question" :maxlength="2000" @update:model-value="edit_card('question', $event)" :rows="3" variant="soft" :placeholder="t('可留空')" :aria-label="t('分享卡上的问题')" /></label>
+                  <label class="share-dialog-field"><span>{{ t('卡片上的成果') }}</span>
+                    <UTextarea :model-value="card?.outcome" :maxlength="2000" @update:model-value="edit_card('outcome', $event)" :rows="4" variant="soft" :placeholder="t('可留空')" :aria-label="t('分享卡上的成果')" /></label>
+                </div>
+                <p v-else class="share-cover-empty">{{ t('已使用上传的封面，可重新上传或切回自动封面。') }}</p>
               </div>
-              <label v-if="!card?.cover" class="share-dialog-field"><span>{{ t('卡片上的问题') }}</span>
-                <UTextarea :model-value="card?.question" :maxlength="2000" @update:model-value="edit_card('question', $event)" :rows="2" autoresize :maxrows="4" variant="soft" :placeholder="t('可留空')" :aria-label="t('分享卡上的问题')" /></label>
-              <label v-if="!card?.cover" class="share-dialog-field"><span>{{ t('卡片上的成果') }}</span>
-                <UTextarea :model-value="card?.outcome" :maxlength="2000" @update:model-value="edit_card('outcome', $event)" :rows="3" autoresize :maxrows="5" variant="soft" :placeholder="t('可留空')" :aria-label="t('分享卡上的成果')" /></label>
               <div class="share-done-card-actions">
                 <UButton :disabled="!drawn" :label="t('保存图片')" icon="i-lucide-image-down" color="neutral" variant="subtle" @click="save_card" />
                 <UButton v-if="can_copy_image" :disabled="!drawn" :label="card_copied ? t('已复制') : t('复制图片')" :icon="card_copied ? 'i-lucide-check' : 'i-lucide-clipboard-copy'" color="neutral" variant="subtle" @click="copy_card" />
@@ -292,26 +406,43 @@ function close_share(open) {
 .share-done-copy { flex-shrink: 0; min-width: 92px; justify-content: center; }
 .share-done-meta { display: flex; align-items: center; gap: 6px; margin: 8px 2px 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.5; }
 .share-done-meta .iconify { flex-shrink: 0; width: 13px; height: 13px; }
-.share-done-card { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: 20px; align-items: stretch; margin-top: 18px; }
-.share-done-stage { display: flex; align-items: center; justify-content: center; margin: 0; padding: 18px; border: 1px solid var(--ui-border-muted); border-radius: 14px;
+.share-done-card { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: 20px; align-items: stretch; height: 420px; margin-top: 18px; }
+.share-done-stage { display: flex; align-items: center; justify-content: center; height: 100%; min-height: 0; margin: 0; padding: 16px; overflow: hidden; border: 1px solid var(--ui-border-muted); border-radius: 14px;
   background: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 14%, transparent), transparent 70%), color-mix(in srgb, var(--ui-text) 3%, transparent); }
-.share-done-stage canvas { display: block; width: 100%; max-width: 228px; height: auto; border-radius: 10px; box-shadow: 0 1px 0 #ffffff14 inset, 0 14px 32px -10px #000000b3, 0 2px 6px #0000004d; }
-.share-done-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.share-done-side h3 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.share-done-stage canvas { display: block; width: auto; height: auto; max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: 0 1px 0 #ffffff14 inset, 0 14px 32px -10px #000000b3, 0 2px 6px #0000004d; }
+.share-done-side { display: flex; flex-direction: column; gap: 12px; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.share-done-side h3 { flex-shrink: 0; margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
+.share-done-body { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .share-dialog-field { display: grid; gap: 5px; }
-.share-cover-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.share-cover-controls { display: flex; flex-wrap: wrap; align-items: center; flex-shrink: 0; gap: 6px; }
 .share-cover-controls > * { max-width: 100%; }
-.share-cover-crop { display: grid; justify-items: start; gap: 6px; }
-.share-cover-crop img { max-height: 160px; }
+.share-cover-fields { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto; padding-inline-end: 2px; scrollbar-width: thin; scrollbar-color: var(--ui-border-accented) transparent; }
+.share-cover-gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: start; gap: 8px; flex: 1; min-height: 0; overflow-y: auto; padding: 2px 4px 2px 2px; scrollbar-width: thin; scrollbar-color: var(--ui-border-accented) transparent; }
+.share-cover-item { display: flex; flex-direction: column; gap: 5px; min-width: 0; padding: 4px; border: 1.5px solid var(--ui-border-muted); border-radius: 9px; background: var(--ui-bg-elevated); color: var(--ui-text-toned); text-align: left; cursor: pointer; transition: border-color .15s, background-color .15s, box-shadow .15s; }
+.share-cover-item:hover { border-color: var(--ui-border-accented); background: var(--ui-bg-accented); }
+.share-cover-item.active { border-color: var(--channel-accent, var(--ui-primary)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 22%, transparent); }
+.share-cover-thumb { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 4 / 3; overflow: hidden; border-radius: 6px; background: color-mix(in srgb, var(--ui-text) 5%, transparent); }
+.share-cover-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.share-cover-thumb-icon { width: 18px; height: 18px; color: var(--ui-text-dimmed); }
+.share-cover-thumb-busy { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #00000066; color: #ffffff; }
+.share-cover-caption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 1.3; color: var(--ui-text-muted); }
+.share-cover-crop { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
+.share-cover-crop-stage { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 0; overflow: hidden; padding: 8px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: var(--ui-bg-elevated); }
+.share-cover-crop-stage img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; border-radius: 6px; }
+.share-cover-slider { display: grid; gap: 4px; flex-shrink: 0; font-size: 12px; color: var(--ui-text-muted); }
+.share-cover-slider input { width: 100%; accent-color: var(--channel-accent, var(--ui-primary)); }
+.share-cover-crop-actions { display: flex; flex-wrap: wrap; flex-shrink: 0; gap: 8px; }
+.share-cover-empty { margin: 0; padding: 14px; border: 1px dashed var(--ui-border-muted); border-radius: 10px; color: var(--ui-text-muted); font-size: 12px; line-height: 1.6; }
 .share-dialog-field > span { color: var(--ui-text-muted); font-size: 12px; }
-.share-dialog-field :deep(textarea) { font-size: 13px; line-height: 1.6; }
-.share-done-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.share-dialog-field :deep(textarea) { font-size: 13px; line-height: 1.6; resize: none; }
+.share-done-card-actions { display: flex; flex-wrap: wrap; flex-shrink: 0; gap: 8px; margin-top: auto; }
 .share-done-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
 .share-done-foot p { margin: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.5; }
 .share-done-foot button { flex-shrink: 0; }
 @media (max-width: 640px) {
-  .share-done-card { grid-template-columns: 1fr; }
-  .share-done-stage canvas { max-width: 240px; }
+  .share-done-card { grid-template-columns: 1fr; height: auto; }
+  .share-done-stage { height: 280px; }
+  .share-done-side { height: 300px; }
   .share-done-copy { min-width: 0; }
 }
 .share-dialog-section { display: grid; gap: 4px; margin-bottom: 16px; font-size: 13px; line-height: 1.6; color: var(--ui-text-toned); }

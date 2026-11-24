@@ -137,6 +137,9 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-room-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; padding-right: 8px; border-radius: 8px; position: relative; color: #a8afbc; margin-bottom: 2px; }
 @media (hover: hover) { .channel-room-row:hover { background: var(--channel-ghost-hover); } }
 .channel-room-row.active, .channel-folder-row.active { color: #f1f2f5; background: var(--channel-ghost-active); }
+.channel-room-content { display: flex; min-width: 0; align-items: center; }
+.channel-room-content > .channel-room-select { flex: 1; min-width: 0; }
+.channel-child-toggle { display: grid; place-items: center; width: 26px; min-height: 30px; flex: none; color: var(--ui-text-muted); cursor: pointer; }
 .channel-room-row.drag-source, .channel-folder-section.drag-source { opacity: .45; }
 .channel-room-row.is-destroying { opacity: .45; pointer-events: none; }
 .channel-destroy-final { margin: 0 0 12px; font-size: 14px; line-height: 1.6; }
@@ -174,7 +177,7 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button { display: grid; place-items: center; width: 24px; height: 26px; padding: 5px; border-radius: 4px; color: color-mix(in srgb, var(--ui-text-muted) 75%, transparent); background: transparent; box-shadow: none; }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button:hover, :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button[data-state="open"] { color: var(--ui-text-toned); background: color-mix(in srgb, var(--ui-text) 7%, transparent); }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button [class*="icon"] { width: 13px; height: 13px; }
-.channel-room-row:is(:hover, :focus-within, [data-state="open"]) .channel-room-actions, .channel-room-row:has([aria-expanded="true"]) .channel-room-actions { opacity: 1; pointer-events: auto; }
+.channel-room-row:is(:hover, :focus-within, [data-state="open"]) .channel-room-actions, .channel-room-row:has(.channel-room-actions [aria-expanded="true"]) .channel-room-actions { opacity: 1; pointer-events: auto; }
 .channel-directory-empty { padding: 12px 8px; color: #929ba9; font-size: var(--channel-nav-text); }
 /* Workflow rows reuse the room rows, without the drag grip. */
 .channel-workflow-list .channel-room-row { grid-template-columns: minmax(0, 1fr) auto; padding-left: 8px; }
@@ -192,10 +195,10 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 /* Desktop: the right edge shows count/time at rest and the row's actions on hover. */
 @media (min-width: 701px) and (hover: hover) and (pointer: fine) {
   .channel-room-actions, .channel-folder-actions { display: none; min-width: 0; }
-  .channel-room-row:is(:hover, :has(:focus-visible), [data-state="open"]) .channel-room-actions, .channel-room-row:has([aria-expanded="true"]) .channel-room-actions,
+  .channel-room-row:is(:hover, :has(:focus-visible), [data-state="open"]) .channel-room-actions, .channel-room-row:has(.channel-room-actions [aria-expanded="true"]) .channel-room-actions,
   .channel-folder-row:is(:hover, :has(:focus-visible)) .channel-folder-actions, .channel-folder-row:has([data-state="open"]) .channel-folder-actions { display: flex; }
   /* The working dot stands in the time's place, so it gives way to the actions the same way. */
-  .channel-room-row:is(:hover, :has(:focus-visible), [data-state="open"]) :is(.channel-room-time, .channel-room-running), .channel-room-row:has([aria-expanded="true"]) :is(.channel-room-time, .channel-room-running),
+  .channel-room-row:is(:hover, :has(:focus-visible), [data-state="open"]) :is(.channel-room-time, .channel-room-running), .channel-room-row:has(.channel-room-actions [aria-expanded="true"]) :is(.channel-room-time, .channel-room-running),
   .channel-folder-row:is(:hover, :has(:focus-visible)) :is(.channel-directory-count, .channel-room-running), .channel-folder-row:has([data-state="open"]) :is(.channel-directory-count, .channel-room-running) { display: none; }
 }
 /* Touch and narrow screens keep the name wide: archiving moves into the row's "…" menu, and what stays is big enough to tap. */
@@ -1499,8 +1502,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 
   @media (min-width: 701px) and (hover: hover) and (pointer: fine) {
     .channel-room-actions { display: none; }
-    .channel-room-row:is(:hover, :focus-within, [data-state="open"]) .channel-room-actions,
-    .channel-room-row:has([aria-expanded="true"]) .channel-room-actions { display: flex; }
+    .channel-room-row:is(:hover, :has(:focus-visible), [data-state="open"]) .channel-room-actions,
+    .channel-room-row:has(.channel-room-actions [aria-expanded="true"]) .channel-room-actions { display: flex; }
   }
   @media (min-width: 701px) {
     .channel-workspace-heading, .channel-header { height: 60px; }
@@ -1595,6 +1598,15 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 :root[data-theme^="channel"] .pb-action[data-tone]:disabled { box-shadow: none; }
 :root[data-theme^="channel"] :is(.channel-message:not(:hover), .channel-composer, .turn-panel, .summary-form) { border-color: var(--channel-edge-panel); }
 :root[data-theme^="channel"] :is(.channel-message, .turn-panel, .summary-form) { box-shadow: var(--channel-shadow-panel); }
+:root[data-theme^="channel"] .channel-message.channel-relay-message[data-author="relay"] {
+  border: 1px solid color-mix(in srgb, #9074c6 45%, transparent);
+  border-inline-start: 3px solid #9074c6;
+  background: color-mix(in srgb, #9074c6 10%, var(--ui-bg));
+}
+.channel-relay-message .channel-relay-source:not(:disabled) { color: var(--ui-primary) !important; cursor: pointer; }
+.channel-relay-message .channel-relay-source:hover:not(:disabled) { text-decoration: underline; }
+.channel-relay-message .channel-relay-source:disabled { opacity: .6; }
+.channel-message-jump[data-author="relay"] { --navigation-tick-fill: #9074c6; }
 :root[data-theme^="channel"] .channel-message.channel-topic-card { box-shadow: inset 3px 0 0 var(--channel-accent), var(--channel-shadow-panel); }
 :root[data-theme^="channel"] .channel-composer { box-shadow: var(--channel-shadow-panel) !important; }
 :root[data-theme^="channel"] :is(.channel-menu, .channel-select-menu, .channel-topic-menu, .channel-nav-preview, .channel-message-toolbar, .channel-latest-button, .channel-listen-pill, .channel-navigation-drawer, .progress-drawer, .glass-panel) { border-color: var(--channel-edge-float); box-shadow: var(--channel-shadow-float); }

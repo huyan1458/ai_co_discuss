@@ -95,11 +95,6 @@ function remove_provider() {
   write({ enabled: false });
   nextTick(() => add_row.value?.focus_first());
 }
-/** The compact row's switch: on opens the settings when something is still missing, off closes them. */
-async function toggle(enabled) {
-  await write({ enabled });
-  if (enabled && status.value.tone !== "ready") open_settings();
-}
 // The compact row's one line: provider and model, or what is still missing; off, the providers to pick from.
 const summary = computed(() => !active.value ? [t('未开启'), providers.value.map((item) => item.label).join("、")].filter(Boolean).join(t(' · 可用 '))
   : status.value.tone !== "ready" ? `${provider_label.value} · ${status.value.text}`
@@ -142,7 +137,7 @@ async function save_key() {
 <template>
   <div class="scheduler-settings" :class="{ 'is-compact': compact }">
     <div v-if="compact" class="scheduler-row">
-      <UCheckbox :model-value="active" :disabled="disabled || Boolean(blocker)" :label="t('开启')" :aria-label="t('本房间开启智能调度')" @update:model-value="toggle" />
+      <UCheckbox :model-value="active" :disabled="disabled || Boolean(blocker)" :label="t('开启')" :aria-label="t('本房间开启智能调度')" @update:model-value="write({ enabled: $event })" />
       <span class="scheduler-summary" :class="active && `is-${status.tone}`" :title="summary"><i v-if="active" aria-hidden="true" />{{ summary }}</span>
       <UButton v-if="active && !disabled" :icon="editing ? 'i-lucide-chevron-up' : 'i-lucide-settings-2'" :label="editing ? t('收起') : t('设置')" size="xs" color="neutral" variant="ghost"
         :aria-expanded="editing" :aria-label="t('设置本房间的决策模型')" @click="editing ? close_settings() : open_settings()" />
@@ -201,10 +196,8 @@ async function save_key() {
 .scheduler-settings { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
 /* In the room's settings the row sits in its own cell, so it needs no top rule. */
 .scheduler-settings.is-compact { padding-top: 0; border-top: 0; }
-.scheduler-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-/* Switch and 设置 on top, the summary below as the row's help line, like the other room settings. */
-.scheduler-row { flex-wrap: wrap; justify-content: space-between; row-gap: 4px; min-height: 28px; }
-.scheduler-summary { order: 1; flex: 1 0 100%; min-width: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.6; }
+.scheduler-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 28px 20px; align-items: center; gap: 4px 10px; min-width: 0; }
+.scheduler-summary { grid-area: 2 / 1 / 3 / -1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ui-text-muted); font-size: 12px; line-height: 20px; }
 .scheduler-summary > i { display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px 0; vertical-align: middle; border-radius: 50%; background: var(--ui-text-dimmed); }
 .scheduler-summary.is-ready { color: var(--ui-text-toned); }
 .scheduler-summary.is-ready > i { background: var(--ui-success, #3fb27f); }

@@ -51,6 +51,13 @@ def queue_view(connection, room_id):
             (room_id, json.dumps(payload.get("attachment_ids", []))))]
         item = {"id": row["id"], "text": payload.get("text", ""), "attachments": files, "failure": row["failure"],
                 "texts": load_texts(connection, "queued_message", row["id"]), "created_at": row["created_at"]}
+        if relay := payload.get("relay"):
+            source = relay["room_id"]
+            details = connection.execute("""SELECT (SELECT title FROM rooms WHERE id=?) AS relay_title,
+                (SELECT relation FROM room_links WHERE room_id=? AND other_room_id=?) AS relay_relation,
+                COALESCE(NULLIF(?,''),(SELECT name FROM room_members WHERE room_id=? AND role='host' AND status='active')) AS relay_member""",
+                (source, room_id, source, relay.get("member", ""), source)).fetchone()
+            item.update(relay_room=source, relay_host=relay["host"], **dict(details))
         if named_members(connection, room_id, payload) is not None:
             item["to"] = payload["to"]
         if payload.get("message_id"):
@@ -309,6 +316,8 @@ def queued_row(connection, room_id, item_id):
 def edit_item(connection, row, text, check):
     """Replace a queued message's text; `check` validates the edited payload as a message would be."""
     payload = json.loads(row["payload"])
+    if payload.get("relay"):
+        raise PermissionError(Text("只能编辑用户自己的消息"))
     if payload.get("message_id"):
         raise FileExistsError(Text('这条消息已发出，只是还在等忙碌的成员；可以删除后重新发送'))
     payload["text"] = str(text if text is not None else "").strip()

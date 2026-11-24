@@ -284,6 +284,10 @@ test("the host's occasional pages are listed only when the task carries what the
   assert.ok(listed(host(1, { purpose: 'route' }), 'members.md'), 'every room request brings the member guide');
   assert.ok(listed(host(2, { purpose: 'handoff', sequence: { id: 3, phase: 'checkpoint' } }), 'relay.md'));
   assert.ok(listed(host(3, { purpose: 'route', question: { id: 5, task: 'decide' } }), 'relay.md'));
+  const linked_rooms = { parent: { room_id: 'parent' }, children: [] };
+  assert.ok(listed(host(11, { purpose: 'ask' }, { linked_rooms }), 'control.md'));
+  assert.deepEqual(JSON.parse(readFileSync(free_task_files(config, { name: 'Host', role: 'host' },
+    { id: 11, read_until: 0, requests: [] }, {}, { linked_rooms }).task_path, 'utf8')).linked_rooms, linked_rooms);
   assert.ok(listed(host(4, { purpose: 'notice' }), 'control.md'));
   assert.ok(listed(host(5, { purpose: 'route' }, { reviews: [{ batch_id: 1 }] }), 'dev-flow.md'));
   assert.ok(pages.every(page => !listed(host(6, { purpose: 'route' }), page)));

@@ -238,6 +238,8 @@ CASE WHEN messages.author='用户' THEN (
 ) END AS interjection_parent_id,
 EXISTS(SELECT 1 FROM proactive_messages p WHERE p.message_id=messages.id) AS proactive,
 relay.source_room_id AS relay_room, relay.host AS relay_host,
+COALESCE(NULLIF(relay.member,''),(SELECT name FROM room_members WHERE room_id=relay.source_room_id AND role='host' AND status='active')) AS relay_member,
+(SELECT relation FROM room_links WHERE room_id=messages.room_id AND other_room_id=relay.source_room_id) AS relay_relation,
 (SELECT l.other_room_id FROM room_links l WHERE l.message_id=messages.id) AS link_room,
 (SELECT l.relation FROM room_links l WHERE l.message_id=messages.id) AS link_relation,
 (SELECT r.title FROM room_links l JOIN rooms r ON r.id=l.other_room_id WHERE l.message_id=messages.id) AS link_title,
@@ -520,6 +522,8 @@ def init_database(database, seed=True):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE room_goals ADD COLUMN {name} {kind}")
         connection.executescript(SCHEMA)
+        if 'member' not in {row[1] for row in connection.execute('PRAGMA table_info(message_relays)')}:
+            connection.execute("ALTER TABLE message_relays ADD COLUMN member TEXT NOT NULL DEFAULT ''")
         share_columns = {row[1] for row in connection.execute("PRAGMA table_info(room_share_links)")}
         for name in ("card_json", "card_edits"):
             if name not in share_columns:
@@ -536,6 +540,11 @@ def init_database(database, seed=True):
         for name in ("width", "height"):
             if name not in attachment_columns:
                 connection.execute(f"ALTER TABLE attachments ADD COLUMN {name} INTEGER")
+        if connection.execute("INSERT OR IGNORE INTO site_preferences (key,value) VALUES ('child_folders_migrated','1')").rowcount:
+            connection.execute("""UPDATE room_folder_assignments AS child SET folder_id=parent.folder_id
+                FROM room_links l JOIN room_folder_assignments parent ON parent.room_id=l.other_room_id
+                WHERE l.relation='parent' AND child.room_id=l.room_id
+                AND child.folder_id IS NULL AND parent.folder_id IS NOT NULL""")
         migrate_free_tables(connection)
         if seed and is_new:
             seed_demo(connection)
@@ -547,16 +556,20 @@ def room_display_texts(connection, room):
             if field in room and str(Text(payload["template"], **payload["params"])) == room[field]}
 
 
+PARENT_ROOM = """SELECT p.id FROM room_links l JOIN rooms p ON p.id=l.other_room_id
+    WHERE l.relation='parent' AND l.room_id=rooms.id ORDER BY l.message_id LIMIT 1"""
+
+
 def require_room(connection, room_id):
     """Return a room and its current message count, or raise a lookup error."""
-    row = connection.execute("""SELECT rooms.*,
+    row = connection.execute(f"""SELECT rooms.*, ({PARENT_ROOM}) AS parent_room_id,
         COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id
         FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id WHERE rooms.id=? GROUP BY rooms.id""", (room_id,)).fetchone()
     if row is None:
         raise LookupError(Text('房间不存在'))
     if enforce_session_limits(connection, room_id):
         connection.commit()
-        row = connection.execute("""SELECT rooms.*,
+        row = connection.execute(f"""SELECT rooms.*, ({PARENT_ROOM}) AS parent_room_id,
             COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id
             FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id WHERE rooms.id=? GROUP BY rooms.id""", (room_id,)).fetchone()
     room = dict(row)
@@ -946,7 +959,7 @@ def list_rooms(connection, params=None):
     params = params or {}
     identifier = submission_value(params["submission_id"]) if "submission_id" in params else None
     where = "WHERE EXISTS (SELECT 1 FROM room_creations WHERE room_id=rooms.id AND submission_id=?)" if identifier else ""
-    rows = connection.execute(f"""SELECT rooms.*,
+    rows = connection.execute(f"""SELECT rooms.*, ({PARENT_ROOM}) AS parent_room_id,
         COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id,
         (SELECT created_at FROM messages WHERE id=stats.latest_id) AS latest_at,
         (SELECT m.created_at FROM messages m WHERE m.room_id=rooms.id AND m.source<>'system'
@@ -2310,6 +2323,8 @@ def append_free_message(connection, room, payload, actor):
     room_id = room["id"]
     if actor == "用户" and (author != "用户" or payload.get("submitted_by", "用户") != "用户"):
         raise PermissionError(Text('房间控制凭据只能以用户身份发言'))
+    if payload.get("relay") is not None and not isinstance(payload["relay"], dict):
+        raise ValueError(Text("relay 须为含 room_id 与 host 的对象"))
     if payload.get("relay") is not None and actor != "用户":
         # Another room's host speaks here through `host-control room-post`, only with the owner credential.
         raise PermissionError(Text('只有房间控制凭据能代其他房间的主持人发言'))
@@ -2324,7 +2339,8 @@ def append_free_message(connection, room, payload, actor):
     previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
     if previous:
         previous = message_with_attachments(connection, previous)
-        if (any(previous[key] != renumbered_expected(expected, payload, previous)[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by"))
+        if ((previous.get("relay_room") or None) != (payload.get("relay") or {}).get("room_id")
+                or any(previous[key] != renumbered_expected(expected, payload, previous)[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by"))
                 or [item["id"] for item in previous["attachments"]] != identifiers):
             raise FileExistsError(Text('这个提交编号已被另一条内容使用，请为新发言生成新编号'))
         check_review_retry(connection, room_id, previous["id"], payload)
@@ -2336,7 +2352,7 @@ def append_free_message(connection, room, payload, actor):
     check_message_references(connection, room_id, expected)
     check_message_attachments(connection, room_id, submitted_by, identifiers)
     # `/goal` and `/discuss` are commands: checked before saving, never queued, and not routed to members.
-    mode_command = check_mode_command(connection, room_id, payload) if actor == "用户" else None
+    mode_command = check_mode_command(connection, room_id, payload) if actor == "用户" and not payload.get("relay") else None
     waiting = queue_split(connection, room_id, payload) if actor == "用户" and not mode_command else None
     if waiting == "all":
         return {**enqueue(connection, room_id, payload), "queue": queue_view(connection, room_id)}
@@ -2483,7 +2499,29 @@ def append_message(connection, room_id, payload, actor):
     """Atomically append an attributed message for the owner or one member, as authorized by `actor`."""
     message_values(payload)
     begin_write(connection)
-    return append_free_message(connection, require_room(connection, room_id), payload, actor)
+    room = require_room(connection, room_id)
+    if not payload.get("relay"):
+        return append_free_message(connection, room, payload, actor)
+    if payload.get("interrupt") is not True:
+        return append_free_message(connection, room, {**payload, "queue": True}, actor)
+    relay = payload["relay"]
+    if actor != "用户" or not isinstance(relay, dict) or not connection.execute(
+            "SELECT 1 FROM room_links WHERE room_id=? AND other_room_id=? AND relation='parent'",
+            (room_id, relay.get("room_id"))).fetchone():
+        raise PermissionError(Text("仅父房间主持人可以打断子房间"))
+    if connection.execute("SELECT 1 FROM queued_messages WHERE room_id=? AND submission_id=?",
+                          (room_id, payload["submission_id"])).fetchone():
+        return {**enqueue(connection, room_id, payload), "interrupted": False}
+    connection.execute("SAVEPOINT relay_send")
+    result = append_free_message(connection, room, {**payload, "queue": False}, actor)
+    try:
+        interrupted = not result.get("duplicate") and interrupt_for_message(connection, room_id, result["message"]["id"])
+    except FileExistsError as error:
+        connection.execute("ROLLBACK TO relay_send")
+        result = {**enqueue(connection, room_id, payload), "reason": str(error)}
+        interrupted = False
+    connection.execute("RELEASE relay_send")
+    return {**result, "interrupted": interrupted}
 
 
 def post_queued(connection, room_id, payload, actor):

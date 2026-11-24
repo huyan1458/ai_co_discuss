@@ -197,7 +197,12 @@ export async function user_request_texts(config, execution) {
   for (const message_id of message_ids) {
     try {
       const message = await api(config, `/messages/${message_id}`);
-      if (message.author === '用户' && message.text) texts.push(message.text);
+      if (message.relay_room) {
+        for (const request of execution.requests.filter(item => item.message_id === message_id)) {
+          request.relay = { from_room: message.relay_room, title: message.relay_title, host: message.relay_host,
+            relation: message.relay_relation, note: '来自关联房间主持人的跨房消息，不代表用户本人新授权' };
+        }
+      } else if (message.author === '用户' && message.text) texts.push(message.text);
     } catch { /* The host still reads the message itself. */ }
   }
   return texts;
@@ -284,8 +289,23 @@ export function room_goal(room) {
     note: '这是整个房间的任务；一次 Goal 或讨论结束不等于它完成。Goal 完成后对照这里判断还剩什么，没有目标文字时读首条用户消息。' };
 }
 
+async function linked_room_summaries(config) {
+  const describe = async room_id => {
+    try {
+      const room = await api({ ...config, room: room_id }, '');
+      return { room_id, title: room.title, latest_id: room.latest_id,
+        running: (room.free?.members || []).some(member => ['started', 'dispatched'].includes(member.execution?.status)) };
+    } catch { return { room_id }; }
+  };
+  const [parent, children] = await Promise.all([
+    config.spawned_from ? describe(config.spawned_from) : null,
+    Promise.all((config.spawned_rooms || []).map(item => describe(item.room))),
+  ]);
+  return { parent, children };
+}
+
 export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true,
-  workflow = null, room_members = [], goal = null, attachments = [], room = null, model_change = null, request_texts = [] } = {}) {
+  workflow = null, room_members = [], goal = null, attachments = [], room = null, model_change = null, request_texts = [], linked_rooms = null } = {}) {
   const id = `free-${execution.id}`;
   const draft_directory = member_drafts(config, member.name);
   mkdirSync(draft_directory, { recursive: true });
@@ -359,14 +379,14 @@ export function free_task_files(config, member, execution, binding, { session = 
   if (member.role === 'host') {
     if (requests.some(item => item.sequence || item.question?.task || item.question_needed)) skills.push('discuss-host/references/relay.md');
     // A notice, or a hand-back where someone failed or was cancelled, is what calls for diagnosing and recovering.
-    if (requests.some(item => item.purpose === 'notice' || (item.outcome || []).some(entry => ['failed', 'cancelled'].includes(entry.status)))) {
+    if (linked_rooms || requests.some(item => item.purpose === 'notice' || (item.outcome || []).some(entry => ['failed', 'cancelled'].includes(entry.status)))) {
       skills.push('discuss-host/references/control.md');
     }
     if (workflow_field || named?.workflows) skills.push('discuss-host/references/workflow.md');
     if (reviews.length) skills.push('discuss-host/references/dev-flow.md');
   }
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
-    execution_id: execution.id, requests, request_messages: execution.requests.map(item => item.message_id),
+    execution_id: execution.id, requests, ...(linked_rooms ? { linked_rooms } : {}), request_messages: execution.requests.map(item => item.message_id),
     ...(attachments.length ? { attachments } : {}),
     request_purposes: execution.requests.map(item => item.purpose || 'ask'),
     ...(discussion_request ? { discussion_request } : {}),
@@ -917,7 +937,7 @@ export class FreeRoomRunner {
     // Manual members are listed apart; they are never delivered to but may host or be recommended.
     const everyone = [...inbox.members, ...(inbox.observers || [])];
     const host = everyone.find(member => member.role === 'host');
-    const waiting = host?.pending.filter(request => request.purpose === 'route' && !request.group_action
+    const waiting = host?.pending.filter(request => request.purpose === 'route' && !request.relay_room && !request.group_action
       && !this.routed.has(request.id) && !this.saved_suggestion(request.id)) || [];
     for (const request of waiting) {
       this.routed.add(request.id);
@@ -1122,9 +1142,11 @@ export class FreeRoomRunner {
       const attachments = await request_attachments(this.config, execution, member_runtime(this.config, member.name));
       const request_texts = member.role === 'host' ? await user_request_texts(this.config, execution) : [];
       const model_change = this.model_change(member.name);
+      const linked_rooms = member.role === 'host' && (this.config.spawned_from || this.config.spawned_rooms?.length)
+        ? await linked_room_summaries(this.config) : null;
       const task = free_task_files(this.config, member, execution, binding, {
         session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped, workflow, room_members: this.room?.members,
-        goal: this.room?.goal_state?.goal || null, attachments, room: this.room, model_change, request_texts,
+        goal: this.room?.goal_state?.goal || null, attachments, room: this.room, model_change, request_texts, linked_rooms,
       });
       this.store.db.prepare('DELETE FROM metadata WHERE key IN (?,?)').run(`recovery:${execution.id}`, `recovery-denied:${execution.id}`);
       invoked = true;
