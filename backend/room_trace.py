@@ -3,7 +3,7 @@
 import json
 from collections import defaultdict
 
-from .free_room import LAYOUT_AFTER_SQL, layout_at_sql, member_events, require_member, require_owner_or_host
+from .free_room import LAYOUT_AFTER_SQL, member_events, require_member, require_owner_or_host
 
 
 TRACE_PAGE = 50
@@ -138,8 +138,7 @@ def trace_executions(connection, room_id, reader, execution_ids, messages):
         row = connection.execute(f"""SELECT e.id AS execution_id,e.member_id,e.status,e.created_at,
             (SELECT MAX({LAYOUT_AFTER_SQL}) FROM member_requests r WHERE r.execution_id=e.id
                 OR r.id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id)) AS layout_after,
-            (SELECT MIN({layout_at_sql("e.id")}) FROM member_requests r WHERE r.execution_id=e.id
-                OR r.id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id)) AS layout_at,
+            e.created_at AS layout_at,
             t.attempt,t.retry_at,t.stopped,f.failure_class
             FROM member_executions e LEFT JOIN execution_retries t ON t.execution_id=e.id
             LEFT JOIN execution_failures f ON f.execution_id=e.id

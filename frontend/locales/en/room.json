@@ -849,6 +849,7 @@
   "额度已用尽，预计 {value1} 恢复；给它发新消息会立即再试": "Out of quota, expected back at {value1}; a new message to it is tried at once",
   "保存（Enter）": "Save (Enter)",
   "已重试，新的执行接在下方": "Retried; the new run follows below",
+  "已自动唤醒处理，新的执行接在下方": "Host woken automatically; the new run follows below",
   "已修改 {count} 个文件": "Edited {count} files",
   "其他改动 {count} 个文件": "{count} other changed files",
   "这次执行运行过命令，这些文件在执行期间有变化，但无法确认是它改的，也可能来自其他窗口或成员。": "This run used commands and these files changed meanwhile, but it can't be confirmed that it changed them. They may come from another window or member.",

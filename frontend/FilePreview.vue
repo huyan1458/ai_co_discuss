@@ -27,11 +27,8 @@ const wrap = ref(narrow_query.matches);
 // Narrow screens move the file's own actions down to the breadcrumb row, leaving the tab strip to the tabs.
 // A touch screen with a shorter side than this is a phone (web/index.html tells tablets apart the same way).
 const TABLET_MIN_SIDE = 600;
-// A phone keeps the phone head on its side too: wider than 640px there, it took the tablet head, whose file actions left
-// the tabs a third of the row (user 2026-11-20, #6128).
-const IS_PHONE = matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) < TABLET_MIN_SIDE;
-const narrow = ref(IS_PHONE || narrow_query.matches);
-const track_narrow = (event) => { narrow.value = IS_PHONE || event.matches; };
+const narrow = ref(narrow_query.matches);
+const track_narrow = (event) => { narrow.value = event.matches; };
 // Below this width the head's one row leaves the tabs no room (a tablet's split pane; user 2026-11-20, #6125): the file's
 // actions move down beside the breadcrumbs, still in sight, and the tabs take the top row up to the window buttons.
 const TIGHT_HEAD_PX = 760;
@@ -1439,11 +1436,9 @@ onBeforeUnmount(() => {
   .file-float-close { display: none; }
   .file-float { padding-right: 10px; }
 }
-/* A phone on its side is wide but short: the window fills the screen as in portrait instead of floating with margins
-   around it (user 2026-11-16: "横屏区域本来就很小"); the sides keep clear of the notch. */
-/* Phone tabs, either way up: one open file shows its whole name; of several, the open one gets most of the row and the
+/* Phone tabs: one open file shows its whole name; of several, the open one gets most of the row and the
    others a short name each. Only the open tab has a close button (a phone has no hover): tap a tab, then its ×. */
-@media (max-width: 640px), (pointer: coarse) and (max-height: 500px) {
+@media (max-width: 640px) {
   .project-editor-tab { max-width: 60%; }
   .project-editor-tab:only-child { max-width: 100%; }
   .project-editor-tab:not(.is-active) { max-width: 100px; }
@@ -1451,14 +1446,7 @@ onBeforeUnmount(() => {
   .project-editor-tab:not(.is-active) .project-editor-tab-name { padding-right: 12px; }
   .project-editor-tab.is-active .project-editor-tab-close { width: 32px; height: 32px; margin-right: 4px; opacity: 1; }
 }
-@media (pointer: coarse) and (max-height: 500px) {
-  :global(.project-editor) { width: 100vw; height: 100dvh; }
-  .project-editor-frame { border: 0; border-radius: 0; box-shadow: none; padding-inline: env(safe-area-inset-left) env(safe-area-inset-right); }
-  /* One 40px row of tabs and window buttons, then a slim breadcrumb row: the height is the text's. */
-  .project-editor-head { grid-template-rows: 40px 28px; }
-  .project-editor-head .project-editor-window-actions > button { justify-content: center; width: 40px; height: 40px; padding: 0; }
-}
-/* Tablets keep the one-row head, with touch-sized buttons (a phone on its side, as wide but short, has its own rules above). */
+/* Tablet toolbar uses touch-sized buttons. */
 @media (min-width: 641px) and (min-height: 501px) and (pointer: coarse) {
   .project-editor-head { grid-template-rows: 44px 30px; }
   .project-editor-head.is-tight { grid-template-rows: 44px 44px; }

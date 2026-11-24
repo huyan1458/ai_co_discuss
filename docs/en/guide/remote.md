@@ -51,6 +51,8 @@ While your computer is on and its local service is running, paired phones and ta
 
 ## Things to keep in mind
 
+Phones support portrait layout only. Tablets support both portrait and landscape.
+
 - **Rooms are unavailable when the computer is offline:** If the computer is off, asleep, or its local service is stopped, the room list shows **Rooms (computer offline)** or **Rooms (computer not connected)**. It reconnects when the computer comes back online.
 - **Timed-out requests are not resent automatically:** If the computer does not respond in time, the page says “Result unconfirmed.”. Check the room to see whether the action took effect before trying again.
 - **Some changes require the computer:** Changing software executable paths, browsing outside Saved projects, and adding a new device must be done at the computer.

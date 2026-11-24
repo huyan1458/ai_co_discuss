@@ -141,8 +141,8 @@ function start_resize(event) {
           <UDropdownMenu v-if="!saved_id && writable_roots.length" :items="target_scope_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
             <UButton :icon="active_scope === 'project' ? 'i-lucide-folder' : 'i-lucide-globe'" trailing-icon="i-lucide-chevron-down" :label="iconsOnly ? undefined : scope_badge_label" :aria-label="t('保存归属：{scope}', { scope: scope_badge_label })" :title="t('选择保存位置：当前项目或全局')" :size="stacked ? 'xs' : 'sm'" color="neutral" variant="soft" class="workflow-scope-picker" />
           </UDropdownMenu>
-          <span v-else class="workflow-scope-badges">
-            <span class="workflow-scope-badge" :class="active_scope === 'project' ? 'is-project' : 'is-global'" :title="active_scope === 'project' ? t('项目工作流：{name}', { name: active_project_name || t('当前项目') }) : t('全局工作流：所有房间可用')">
+          <span v-else-if="!stacked || draft_readonly" class="workflow-scope-badges">
+            <span v-if="!stacked" class="workflow-scope-badge" :class="active_scope === 'project' ? 'is-project' : 'is-global'" :title="active_scope === 'project' ? t('项目工作流：{name}', { name: active_project_name || t('当前项目') }) : t('全局工作流：所有房间可用')">
               <UIcon :name="active_scope === 'project' ? 'i-lucide-folder' : 'i-lucide-globe'" />
               <span>{{ scope_badge_label }}</span>
             </span>

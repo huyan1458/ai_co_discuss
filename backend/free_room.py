@@ -52,8 +52,8 @@ TIMELINE_EXECUTIONS = 100
 # The event log page reads at most this many room events per call, newest first when paging back.
 ROOM_EVENT_PAGE = 500
 # Where the cards of a request (aliased `r`) sit: the room's latest message when it was made (`request_layout`). The
-# notice telling the host its own execution failed (`host_failed:<execution>`) takes over that failed card's place and
-# start, so the page shows the wake-up there instead of a new card.
+# notice telling the host its own execution failed (`host_failed:<execution>`) stays under the same anchor message as
+# the failed execution, while ordering chronologically below it by its own start time.
 HOST_FAILED_SQL = """(SELECT CAST(substr(w.key,13) AS INTEGER) FROM free_host_wakes w WHERE r.purpose='notice'
     AND w.room_id=r.room_id AND w.message_id=r.message_id AND w.key LIKE 'host_failed:%' LIMIT 1)"""
 LAYOUT_AFTER_SQL = f"""COALESCE((SELECT MAX(l.after_message_id) FROM member_requests f JOIN request_layout l ON l.request_id=f.id
@@ -61,20 +61,9 @@ LAYOUT_AFTER_SQL = f"""COALESCE((SELECT MAX(l.after_message_id) FROM member_requ
     (SELECT after_message_id FROM request_layout WHERE request_id=r.id),r.message_id)"""
 
 
-def layout_at_sql(execution_id_sql):
-    """When the work behind request `r` started for execution `execution_id_sql`.
-
-    Only the first execution on a `host_failed:<id>` wake-up takes over the failed host execution's start time; a retry
-    of that wake-up starts at its own `created_at` so the new card follows the failed card chronologically.
-    """
-    return f"""COALESCE(
-        CASE WHEN NOT EXISTS(SELECT 1 FROM retried_requests rr WHERE rr.request_id=r.id AND rr.execution_id<{execution_id_sql})
-            THEN (SELECT created_at FROM member_executions WHERE id={HOST_FAILED_SQL}) END,
-        (SELECT created_at FROM member_executions WHERE id={execution_id_sql}))"""
-
-
-# When the work behind a request (aliased `r`) started, ordering cards under the same message: its execution's start.
-LAYOUT_AT_SQL = layout_at_sql("r.execution_id")
+# When the work behind a request (aliased `r`) started, ordering cards under the same message: its execution's own start
+# time (including `host_failed:<id>` wake-ups, so the failed card stays visible and the wake-up follows below it).
+LAYOUT_AT_SQL = "(SELECT created_at FROM member_executions WHERE id=r.execution_id)"
 # Rounds used and the owner's additions in the room's recent chains, for "第 2/3 轮"; parameter: the room.
 # A round is a host dispatch (a batch) or a continue the host asked for (`free_host_wakes` with a `continue:` key); a
 # relay's later steps in the same pass (`free_relay_steps`) ride on its first, so a whole pass is one round.
@@ -1045,8 +1034,7 @@ def recent_executions(connection, room_id, span=None):
             AND w.message_id IN (SELECT message_id FROM member_requests WHERE execution_id=e.id
                 UNION SELECT r.message_id FROM retried_requests rr JOIN member_requests r ON r.id=rr.request_id WHERE rr.execution_id=e.id)
             LIMIT 1) AS replaces_execution_id,
-        (SELECT MIN({layout_at_sql("e.id")}) FROM member_requests r WHERE r.execution_id=e.id
-            OR r.id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id)) AS layout_at,
+        e.created_at AS layout_at,
         (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
         (SELECT COUNT(*) FROM execution_segments WHERE source='free' AND execution_id=e.id
             AND phase IN ('command','tool','editing')) AS step_count,

@@ -2448,9 +2448,9 @@ class HostTests(HostRoomTests):
         notice = self.reserve_for("Claude")[1]
         free = self.request(self.path)[1]["free"]
         reports = {item["id"]: item for item in free["executions"]}
-        # The wake-up sits where the failed execution was, so the page shows it in that card's place.
-        self.assertEqual([reports[notice["id"]][key] for key in ("layout_after", "layout_at")],
-                         [reports[first["id"]][key] for key in ("layout_after", "layout_at")])
+        # The wake-up stays under the failed execution's anchor and orders chronologically by its own start time.
+        self.assertEqual(reports[notice["id"]]["layout_after"], reports[first["id"]]["layout_after"])
+        self.assertEqual(reports[notice["id"]]["layout_at"], reports[notice["id"]]["created_at"])
         self.assertIn({"message_id": reports[notice["id"]]["request_message_id"], "execution_id": first["id"]}, free["failure_wakes"])
         status, refused = self.request(f"{self.path}/messages", {"author": "Claude", "text": "补交", "source": "cli",
                                                                   "submission_id": uuid.uuid4().hex, "execution_id": first["id"]}, self.member)
@@ -2478,7 +2478,7 @@ class HostTests(HostRoomTests):
         reports = {item["id"]: item for item in self.request(self.path)[1]["free"]["executions"]}
         self.assertEqual(reports[notice["id"]]["layout_after"], reports[first["id"]]["layout_after"])
         self.assertEqual(reports[retried["id"]]["layout_after"], reports[first["id"]]["layout_after"])
-        self.assertEqual(reports[notice["id"]]["layout_at"], 1000, "the first wake-up keeps the original failed card's slot")
+        self.assertEqual(reports[notice["id"]]["layout_at"], 1200, "the first wake-up orders after the original failed card by its own start time")
         self.assertEqual(reports[retried["id"]]["layout_at"], 1500, "a retry of the wake-up orders by its own start time")
         status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "重试成功", "source": "cli",
                                                                "submission_id": uuid.uuid4().hex, "execution_id": retried["id"]}, self.member)

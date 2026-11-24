@@ -1926,7 +1926,7 @@ test("an interrupted requeued request hides its ghost waking card only behind a 
   assert.equal(f_route.state.layout.value.find(item => item.id === "queued-6230").text, "正在唤醒");
 });
 
-test("undeliverable requests share next_batch dedupe and layout_at ordering, quiet checkins require their notice, and merged wakes hide their replaced failure", async () => {
+test("undeliverable requests share next_batch dedupe and layout_at ordering, quiet checkins require their notice, and host failure wakes keep the failed card visible", async () => {
   const blocked = { id: 9, name: "Gemini", access: "runner", status: "active", adapter: "antigravity_cli", adopt_error: "无法接管", pending: 2, execution: null };
   const failed = { id: 10, member_id: 9, member: "Gemini", status: "failed", request_message_id: 1, layout_after: 1, layout_at: 1005,
     created_at: 1005, finished_at: 1005, result: "fail", retried: true, requests: [] };
@@ -1947,22 +1947,25 @@ test("undeliverable requests share next_batch dedupe and layout_at ordering, qui
   await nextTick();
   assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "failed-10", "undeliverable-20", 2, 30],
     "single retried undeliverable request sits below its failed execution even in the same second");
-  // Merged working execution aligns work_message_id with the latest request and hides its replaced failure via replaces_execution_id.
+  // Host failure wake-up keeps the failed card visible (preserving duration & notes) while marking it followed and ordering the wake-up below it.
   const active = execution_member(9, "Gemini", "dispatched", { id: 77, created_at: 1020 });
   const replaced = { id: 70, member_id: 9, member: "Gemini", status: "failed", request_message_id: 1, layout_after: 1, layout_at: 1000, created_at: 1000, finished_at: 1005, result: "timeout", requests: [] };
-  const merged = { id: 77, member_id: 9, member: "Gemini", status: "dispatched", request_message_id: 1, replaces_execution_id: 70, layout_after: 2, layout_at: 1000,
+  const merged = { id: 77, member_id: 9, member: "Gemini", status: "dispatched", request_message_id: 1, replaces_execution_id: 70, layout_after: 2, layout_at: 1020,
     created_at: 1020, requests: [{ id: 20, message_id: 1 }, { id: 21, message_id: 2 }] };
   const f2 = free_card_fixture({ messages: [{ id: 1, author: "用户", created_at: 1000 }, { id: 2, author: "用户", created_at: 1010 }],
     members: [active], executions: [merged, replaced] });
   assert.equal(f2.cards.working.value[0].work_message_id, 2);
   assert.equal(f2.cards.working.value[0].replaced?.id, 70);
   assert.equal(f2.cards.working.value[0].replaced?.result, "timeout");
-  assert.equal(f2.state.failures.value.some(item => item.execution_id === 70), false);
-  // A host wake-up matched only via failure_wakes also carries its replaced execution for the header slot.
-  const wake_only = { ...merged, replaces_execution_id: null, request_message_id: 99 };
+  assert.equal(f2.state.failures.value.find(item => item.execution_id === 70)?.failure.followed, true);
+  assert.deepEqual([...f2.state.layout.value].map(item => item.id), [1, "failed-70", 2, "free-77"]);
+  // A host wake-up matched only via failure_wakes keeps the failed card above it under the same anchor message.
+  const wake_only = { ...merged, replaces_execution_id: null, request_message_id: 99, layout_after: 1, layout_at: 1020 };
   const f3 = free_card_fixture({ messages: [{ id: 1, author: "用户", created_at: 1000 }],
     members: [active], executions: [wake_only, replaced], failure_wakes: [{ message_id: 99, execution_id: 70 }] });
   assert.equal(f3.cards.working.value[0].replaced?.id, 70);
+  assert.equal(f3.state.failures.value.find(item => item.execution_id === 70)?.failure.followed, true);
+  assert.deepEqual([...f3.state.layout.value].map(item => item.id), [1, "failed-70", "free-77"]);
 });
 
 test("send_queued avoids duplicate sending previews both for visible messages and during refresh handoff", async () => {

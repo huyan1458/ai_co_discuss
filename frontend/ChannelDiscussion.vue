@@ -679,7 +679,7 @@ const free_host = computed(() => free_members.value.find((member) => member.role
 /** All room work uses member executions; queued requests stay in the side panel. */
 const free_busy = computed(() => {
   if (room.value.archived) return [];
-  const reports = new Map((room.value.free?.executions || []).map((execution) => [execution.id, execution]));
+  const reports = new Map(all_executions.value.map((execution) => [execution.id, execution]));
   const wake_replaces = new Map(all_failure_wakes.value.map((wake) => [wake.message_id, wake.execution_id]));
   return (room.value.free?.members || []).flatMap((member) => {
     const execution = member.execution;
@@ -2108,7 +2108,7 @@ const end_anchor = stable_computed(() => {
   const index = messages.findIndex((message) => !message.slot_card && Number(message.id) > session.ended_message_id);
   return index < 0 ? "end" : messages[index].id;
 });
-/** Notices waking the host after its own failure, by message id: the wake-up takes the failed card's place, not a new card. */
+/** Notices waking the host after its own failure, by message id: the notice itself stays hidden while the failed card remains and the wake-up follows below it. */
 const failure_wakes = computed(() => new Map(all_failure_wakes.value.map((wake) => [wake.message_id, wake.execution_id])));
 /** Timed checks the host answered without dispatching, by notice id → answer: the answer folds into the check's line. */
 const quiet_checkins = computed(() => {
@@ -2123,15 +2123,15 @@ const folded_checkin_answers = computed(() => new Set([...quiet_checkins.value.v
 const free_failures = computed(() => {
   if (view.value.query) return [];
   const names = new Map((room.value.free?.members || []).map((member) => [member.id, member.name]));
-  // A host failure whose wake-up has started is shown by that wake-up's card in the same place.
+  // A host failure whose wake-up has started keeps its own card (duration, reason, process notes); the wake-up follows below.
   const followed = new Set(all_executions.value.map((execution) =>
     execution.replaces_execution_id || failure_wakes.value.get(execution.request_message_id)).filter(Boolean));
-  return all_executions.value.filter((execution) => execution.status === "failed" && !followed.has(execution.id))
+  return all_executions.value.filter((execution) => execution.status === "failed")
     .map((execution) => ({ id: `failed-${execution.id}`, author: execution.member || names.get(execution.member_id) || t('成员'), slot_card: true, created_at: execution.created_at,
       execution_id: execution.id, request_message_id: execution.request_message_id, layout_after: execution.layout_after,
       layout_at: execution.layout_at, discussion_request: execution.requests?.find((request) => request.discussion_session_id),
       marks: line_marks(execution.member || names.get(execution.member_id), execution),
-      failure: { ...execution, elapsed_seconds: execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null } }))
+      failure: { ...execution, followed: followed.has(execution.id), elapsed_seconds: execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null } }))
     .concat(undeliverable_requests());
 });
 /** Pending requests the local service cannot deliver, because it could not take over the member's session; the reason sits under the message. */
@@ -3423,7 +3423,7 @@ function failed_request_message(report) {
 }
 /** A failed execution still holding its requests can be sent again as is; discussion turns are rearranged by the host instead. */
 function can_retry(report) {
-  return Boolean(view.value.access?.can_manage && report.requests?.length && !report.requests.some((request) => request.discussion_session_id));
+  return Boolean(view.value.access?.can_manage && !report.followed && report.requests?.length && !report.requests.some((request) => request.discussion_session_id));
 }
 /** Explain the next action for classified failures; the original reason remains visible. */
 function failure_advice(report) {
@@ -3957,9 +3957,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 :loading="is_running('retry_delivery')" @click="act('retry_delivery', { execution_id: message.failure.id, action: 'retry' })" /></UTooltip>
             </div>
           </div>
-          <!-- A retried failure stays in place; the retry's own card follows it under the same message. The note sits under
+          <!-- A retried or auto-woken failure stays in place; the new run's own card follows it under the same message. The note sits under
                the reason, full width, so a long reason is not squeezed into half the card beside it. -->
-          <p v-if="message.failure.retried" class="channel-message-provenance channel-retried-note"><UIcon name="i-lucide-corner-down-right" />{{ t('已重试，新的执行接在下方') }}</p>
+          <p v-if="message.failure.retried || message.failure.followed" class="channel-message-provenance channel-retried-note"><UIcon name="i-lucide-corner-down-right" />{{ message.failure.retried ? t('已重试，新的执行接在下方') : t('已自动唤醒处理，新的执行接在下方') }}</p>
           <p v-if="failure_advice(message.failure)" class="channel-message-text">{{ failure_advice(message.failure) }}</p>
           <LiveClock v-if="message.failure.notes || message.failure.steps" v-slot="{ note_map }"><ExecutionNotes :count="message.failure.notes || 0" :steps="message.failure.steps || 0" :notes="note_map.get(message.failure.id)" :load="() => load_notes(message.failure.id)" :preload="(near) => preload_notes(message.failure.id, near)" /></LiveClock>
           <ExecutionDenials v-if="message.failure.denials?.length" :denials="message.failure.denials" :allowable="Boolean(denial_allowance(message.failure))"

@@ -2,6 +2,11 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.25 (2026-11-24 10:58)
+
+- Changed: When the host is woken automatically after a failed run, the failed card stays visible with the new run right below it.
+- Changed: Simplified the workflow editor header on narrow screens and mobile file preview layout, standardizing phones on portrait.
+
 ## 0.5.24 (2026-11-24 09:41)
 
 - New: Bundled workflows add task-dispatch and update flowcharts across the other built-in workflows.
