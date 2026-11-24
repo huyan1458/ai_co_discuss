@@ -1,0 +1,136 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "x": 0,
+      "y": -30
+    },
+    {
+      "id": "checklist",
+      "type": "host",
+      "label": "下发验收清单",
+      "x": 216,
+      "y": -48
+    },
+    {
+      "id": "browser_ops",
+      "type": "card",
+      "card": "browser_ops",
+      "x": 599,
+      "y": -48
+    },
+    {
+      "id": "branch_auth",
+      "type": "branch",
+      "label": "遇登录或验证",
+      "branches": [
+        {
+          "id": "need_user",
+          "label": "需本人确认"
+        },
+        {
+          "id": "done",
+          "label": "正常完成取证"
+        }
+      ],
+      "x": 959,
+      "y": -67
+    },
+    {
+      "id": "user_auth",
+      "type": "user",
+      "label": "本人完成验证",
+      "x": 1342,
+      "y": -110
+    },
+    {
+      "id": "closeout",
+      "type": "host",
+      "label": "核对截图与异常",
+      "x": 1342,
+      "y": 14
+    },
+    {
+      "id": "branch_pass",
+      "type": "branch",
+      "label": "验收是否通过",
+      "branches": [
+        {
+          "id": "fail",
+          "label": "发现缺陷"
+        },
+        {
+          "id": "pass",
+          "label": "全部通过"
+        }
+      ],
+      "x": 1702,
+      "y": -67
+    },
+    {
+      "id": "fix_bug",
+      "type": "host",
+      "label": "定位并修复",
+      "x": 2062,
+      "y": -110
+    },
+    {
+      "id": "leave_ops",
+      "type": "host",
+      "label": "请离并交付",
+      "x": 2062,
+      "y": 14
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "checklist"
+    },
+    {
+      "source": "checklist",
+      "target": "browser_ops",
+      "label": "路径与视口"
+    },
+    {
+      "source": "browser_ops",
+      "target": "branch_auth"
+    },
+    {
+      "source": "branch_auth",
+      "branch": "need_user",
+      "target": "user_auth"
+    },
+    {
+      "source": "user_auth",
+      "target": "browser_ops",
+      "label": "验证后继续"
+    },
+    {
+      "source": "branch_auth",
+      "branch": "done",
+      "target": "closeout",
+      "label": "截图与日志"
+    },
+    {
+      "source": "closeout",
+      "target": "branch_pass"
+    },
+    {
+      "source": "branch_pass",
+      "branch": "fail",
+      "target": "fix_bug"
+    },
+    {
+      "source": "fix_bug",
+      "target": "browser_ops",
+      "label": "修复后复测"
+    },
+    {
+      "source": "branch_pass",
+      "branch": "pass",
+      "target": "leave_ops"
+    }
+  ]
+}

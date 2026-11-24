@@ -4,59 +4,103 @@
       "id": "start",
       "type": "start",
       "x": 0,
-      "y": -30
+      "y": 0
+    },
+    {
+      "id": "scene",
+      "type": "branch",
+      "label": "触发场景(README已声明)",
+      "branches": [
+        {
+          "id": "plan",
+          "label": "阶段构思"
+        },
+        {
+          "id": "review",
+          "label": "验收前·点名核实"
+        }
+      ],
+      "x": 0,
+      "y": 0
     },
     {
       "id": "plan_dispatch",
       "type": "host",
-      "label": "阶段构思·派活",
-      "x": 216,
-      "y": -140
+      "label": "给阶段处境",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "jack_sparrow_plan",
+      "type": "card",
+      "card": "jack_sparrow",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "ruling_plan",
+      "type": "host",
+      "label": "裁定·写入处境",
+      "x": 0,
+      "y": 0
     },
     {
       "id": "review_dispatch",
       "type": "host",
-      "label": "加审·点名派活",
-      "x": 216,
-      "y": 60
+      "label": "指定核实段落",
+      "x": 0,
+      "y": 0
     },
     {
-      "id": "jack_sparrow",
+      "id": "jack_sparrow_review",
       "type": "card",
       "card": "jack_sparrow",
-      "x": 576,
-      "y": -48
+      "x": 0,
+      "y": 0
     },
     {
-      "id": "ruling",
+      "id": "ruling_review",
       "type": "host",
-      "label": "逐条裁定",
-      "x": 936,
-      "y": -68
+      "label": "裁定·不进循环",
+      "x": 0,
+      "y": 0
     }
   ],
   "edges": [
     {
       "source": "start",
-      "target": "plan_dispatch"
+      "target": "scene"
     },
     {
-      "source": "start",
-      "target": "review_dispatch"
+      "source": "scene",
+      "branch": "plan",
+      "target": "plan_dispatch",
+      "label": "与编剧设定同派"
+    },
+    {
+      "source": "scene",
+      "branch": "review",
+      "target": "review_dispatch",
+      "label": "点名或待核航海段落"
     },
     {
       "source": "plan_dispatch",
-      "target": "jack_sparrow",
-      "label": "交约束与失败方式"
+      "target": "jack_sparrow_plan",
+      "label": "交约束换算失败方式"
+    },
+    {
+      "source": "jack_sparrow_plan",
+      "target": "ruling_plan",
+      "label": "不是返工结论"
     },
     {
       "source": "review_dispatch",
-      "target": "jack_sparrow",
-      "label": "只报硬错误"
+      "target": "jack_sparrow_review",
+      "label": "只报硬错误与改法"
     },
     {
-      "source": "jack_sparrow",
-      "target": "ruling",
+      "source": "jack_sparrow_review",
+      "target": "ruling_review",
       "label": "不是返工结论"
     }
   ]

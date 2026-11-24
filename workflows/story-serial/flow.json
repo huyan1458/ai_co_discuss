@@ -7,171 +7,411 @@
       "y": -30
     },
     {
+      "id": "route",
+      "type": "branch",
+      "label": "先分流",
+      "branches": [
+        {
+          "id": "new_stage",
+          "label": "开书/新阶段"
+        },
+        {
+          "id": "new_episode",
+          "label": "续写下一集"
+        },
+        {
+          "id": "revise",
+          "label": "改已写的集"
+        },
+        {
+          "id": "aigc",
+          "label": "查降AI率"
+        },
+        {
+          "id": "tidy",
+          "label": "整理文档"
+        }
+      ],
+      "x": 216,
+      "y": -113
+    },
+    {
+      "id": "sub_revise",
+      "type": "sub",
+      "sub": "revise-episodes",
+      "x": 576,
+      "y": -388
+    },
+    {
+      "id": "sub_aigc",
+      "type": "sub",
+      "sub": "aigc-reduce",
+      "x": 576,
+      "y": -264
+    },
+    {
+      "id": "sub_tidy",
+      "type": "sub",
+      "sub": "tidy-docs",
+      "x": 576,
+      "y": -140
+    },
+    {
       "id": "stage_plan",
       "type": "host",
       "label": "阶段构思",
-      "x": 216,
-      "y": -48
+      "x": 576,
+      "y": -532
     },
     {
       "id": "stage_screenwriter",
       "type": "card",
       "card": "screenwriter",
-      "x": 576,
-      "y": -110
+      "x": 936,
+      "y": -429
     },
     {
       "id": "stage_critic",
       "type": "card",
       "card": "critic",
-      "x": 576,
-      "y": 14
+      "x": 936,
+      "y": -305
+    },
+    {
+      "id": "plan_advisors",
+      "type": "branch",
+      "label": "按README请顾问",
+      "branches": [
+        {
+          "id": "luke",
+          "label": "寒区生存顾问"
+        },
+        {
+          "id": "jack",
+          "label": "近岸航海顾问"
+        }
+      ],
+      "x": 936,
+      "y": -181
+    },
+    {
+      "id": "luke_plan",
+      "type": "sub",
+      "sub": "luke-nichols",
+      "x": 1296,
+      "y": -264
+    },
+    {
+      "id": "jack_plan",
+      "type": "sub",
+      "sub": "jack-sparrow",
+      "x": 1296,
+      "y": -140
+    },
+    {
+      "id": "plan_confirm",
+      "type": "user",
+      "label": "确认走向与选项",
+      "x": 1656,
+      "y": -140
     },
     {
       "id": "draft_brief",
       "type": "host",
-      "label": "出任务书",
-      "x": 936,
+      "label": "填排线·出任务书",
+      "x": 2016,
       "y": -48
     },
     {
-      "id": "screenwriter",
-      "type": "card",
-      "card": "screenwriter",
-      "x": 1296,
-      "y": -250
+      "id": "brief_route",
+      "type": "branch",
+      "label": "是否关键集",
+      "branches": [
+        {
+          "id": "normal",
+          "label": "日常集"
+        },
+        {
+          "id": "key",
+          "label": "关键集·并行"
+        }
+      ],
+      "x": 2376,
+      "y": -68
     },
     {
       "id": "character_plan",
       "type": "sub",
       "sub": "character-play",
-      "x": 1296,
-      "y": 14
+      "x": 2736,
+      "y": 47
+    },
+    {
+      "id": "screenwriter",
+      "type": "card",
+      "card": "screenwriter",
+      "x": 2736,
+      "y": -143
     },
     {
       "id": "brief",
       "type": "host",
-      "label": "改任务书",
-      "x": 1656,
+      "label": "核账·改任务书",
+      "x": 3096,
       "y": -48
     },
     {
       "id": "writer",
       "type": "card",
       "card": "writer",
-      "x": 2016,
+      "x": 3456,
       "y": -48
     },
     {
       "id": "critic_people",
       "type": "card",
       "card": "critic_people",
-      "x": 2376,
+      "x": 3816,
       "y": -110
     },
     {
       "id": "critic",
       "type": "card",
       "card": "critic",
-      "x": 2376,
+      "x": 3816,
       "y": 14
     },
     {
-      "id": "pre_accept",
+      "id": "review_gate",
+      "type": "branch",
+      "label": "双审结论",
+      "branches": [
+        {
+          "id": "rework",
+          "label": "任一需返工"
+        },
+        {
+          "id": "ruling",
+          "label": "任一需裁定"
+        },
+        {
+          "id": "pass",
+          "label": "两位均可采用"
+        }
+      ],
+      "x": 4176,
+      "y": -83
+    },
+    {
+      "id": "review_ruling",
       "type": "host",
-      "label": "判断是否加审",
-      "x": 2736,
-      "y": -48
+      "label": "主持人裁定",
+      "x": 4536,
+      "y": -176
+    },
+    {
+      "id": "pre_accept",
+      "type": "branch",
+      "label": "验收前加审",
+      "branches": [
+        {
+          "id": "direct",
+          "label": "日常集直接验收"
+        },
+        {
+          "id": "key_ep",
+          "label": "关键集"
+        },
+        {
+          "id": "reader",
+          "label": "动对白或情绪"
+        },
+        {
+          "id": "luke",
+          "label": "核寒区段落"
+        },
+        {
+          "id": "jack",
+          "label": "核航海段落"
+        }
+      ],
+      "x": 4536,
+      "y": 14
     },
     {
       "id": "character_review",
       "type": "sub",
       "sub": "character-play",
-      "x": 3096,
-      "y": -388
+      "x": 4896,
+      "y": -512
     },
     {
       "id": "reader_check",
       "type": "card",
       "card": "reader",
-      "x": 3096,
-      "y": -264
-    },
-    {
-      "id": "accept",
-      "type": "host",
-      "label": "验收",
-      "x": 3456,
-      "y": -48
-    },
-    {
-      "id": "recorder",
-      "type": "card",
-      "card": "recorder",
-      "x": 3816,
-      "y": -330
-    },
-    {
-      "id": "read_through",
-      "type": "card",
-      "card": "critic_people",
-      "x": 3816,
-      "y": -110
-    },
-    {
-      "id": "read_through_facts",
-      "type": "card",
-      "card": "critic",
-      "x": 3816,
-      "y": 14
-    },
-    {
-      "id": "read_through_reader",
-      "type": "card",
-      "card": "reader",
-      "x": 3816,
-      "y": 138
-    },
-    {
-      "id": "ruling",
-      "type": "host",
-      "label": "逐条裁定",
-      "x": 4176,
-      "y": -48
-    },
-    {
-      "id": "luke_plan",
-      "type": "sub",
-      "sub": "luke-nichols",
-      "x": 576,
-      "y": 138
-    },
-    {
-      "id": "jack_plan",
-      "type": "sub",
-      "sub": "jack-sparrow",
-      "x": 576,
-      "y": 298
+      "x": 4896,
+      "y": -388
     },
     {
       "id": "luke_review",
       "type": "sub",
       "sub": "luke-nichols",
-      "x": 3096,
-      "y": 60
+      "x": 4896,
+      "y": -264
     },
     {
       "id": "jack_review",
       "type": "sub",
       "sub": "jack-sparrow",
-      "x": 3096,
-      "y": 220
+      "x": 4896,
+      "y": -140
+    },
+    {
+      "id": "accept",
+      "type": "host",
+      "label": "验收·更新文档",
+      "x": 5256,
+      "y": -48
+    },
+    {
+      "id": "accept_gate",
+      "type": "branch",
+      "label": "验收结果",
+      "branches": [
+        {
+          "id": "reject",
+          "label": "不通过"
+        },
+        {
+          "id": "next_ep",
+          "label": "通过·下一集"
+        },
+        {
+          "id": "stage_end",
+          "label": "通过·阶段末"
+        }
+      ],
+      "x": 5616,
+      "y": -83
+    },
+    {
+      "id": "recorder",
+      "type": "card",
+      "card": "recorder",
+      "x": 5976,
+      "y": -283
+    },
+    {
+      "id": "read_through",
+      "type": "card",
+      "card": "critic_people",
+      "x": 5976,
+      "y": -93
+    },
+    {
+      "id": "read_through_facts",
+      "type": "card",
+      "card": "critic",
+      "x": 5976,
+      "y": 31
+    },
+    {
+      "id": "read_through_reader",
+      "type": "card",
+      "card": "reader",
+      "x": 5976,
+      "y": 155
+    },
+    {
+      "id": "ruling",
+      "type": "host",
+      "label": "通读裁定",
+      "x": 6336,
+      "y": -48
+    },
+    {
+      "id": "ruling_gate",
+      "type": "branch",
+      "label": "阶段收尾",
+      "branches": [
+        {
+          "id": "local_fix",
+          "label": "只动本阶段"
+        },
+        {
+          "id": "major_fix",
+          "label": "动前集或设定"
+        },
+        {
+          "id": "propose_tidy",
+          "label": "有整理信号"
+        },
+        {
+          "id": "next_stage",
+          "label": "进入下一阶段"
+        }
+      ],
+      "x": 6696,
+      "y": -98
+    },
+    {
+      "id": "stage_user",
+      "type": "user",
+      "label": "用户拍板改稿",
+      "x": 7056,
+      "y": -264
+    },
+    {
+      "id": "tidy_confirm",
+      "type": "user",
+      "label": "用户同意整理",
+      "x": 7056,
+      "y": -140
+    },
+    {
+      "id": "sub_revise_end",
+      "type": "sub",
+      "sub": "revise-episodes",
+      "x": 7416,
+      "y": -110
+    },
+    {
+      "id": "sub_tidy_end",
+      "type": "sub",
+      "sub": "tidy-docs",
+      "x": 7416,
+      "y": 14
     }
   ],
   "edges": [
     {
       "source": "start",
+      "target": "route"
+    },
+    {
+      "source": "route",
+      "branch": "new_stage",
       "target": "stage_plan"
+    },
+    {
+      "source": "route",
+      "branch": "new_episode",
+      "target": "draft_brief"
+    },
+    {
+      "source": "route",
+      "branch": "revise",
+      "target": "sub_revise"
+    },
+    {
+      "source": "route",
+      "branch": "aigc",
+      "target": "sub_aigc"
+    },
+    {
+      "source": "route",
+      "branch": "tidy",
+      "target": "sub_tidy"
     },
     {
       "source": "stage_plan",
@@ -184,22 +424,64 @@
       "label": "会撑不住的地方"
     },
     {
+      "source": "stage_plan",
+      "target": "plan_advisors",
+      "label": "按需并行"
+    },
+    {
+      "source": "plan_advisors",
+      "branch": "luke",
+      "target": "luke_plan",
+      "label": "硬约束与换算"
+    },
+    {
+      "source": "plan_advisors",
+      "branch": "jack",
+      "target": "jack_plan",
+      "label": "硬约束与换算"
+    },
+    {
       "source": "stage_screenwriter",
-      "target": "draft_brief"
+      "target": "plan_confirm"
     },
     {
       "source": "stage_critic",
-      "target": "draft_brief"
+      "target": "plan_confirm"
+    },
+    {
+      "source": "luke_plan",
+      "target": "plan_confirm"
+    },
+    {
+      "source": "jack_plan",
+      "target": "plan_confirm"
+    },
+    {
+      "source": "plan_confirm",
+      "target": "draft_brief",
+      "label": "定排线与伏笔"
     },
     {
       "source": "draft_brief",
+      "target": "brief_route"
+    },
+    {
+      "source": "brief_route",
+      "branch": "normal",
       "target": "screenwriter",
       "label": "任务书"
     },
     {
-      "source": "draft_brief",
+      "source": "brief_route",
+      "branch": "key",
+      "target": "screenwriter",
+      "label": "任务书"
+    },
+    {
+      "source": "brief_route",
+      "branch": "key",
       "target": "character_plan",
-      "label": "关键集·同时推演"
+      "label": "同时推演"
     },
     {
       "source": "screenwriter",
@@ -218,44 +500,69 @@
     {
       "source": "writer",
       "target": "critic_people",
-      "label": "同时审"
+      "label": "同一棒同时审"
     },
     {
       "source": "writer",
-      "target": "critic"
+      "target": "critic",
+      "label": "同一棒同时审"
     },
     {
       "source": "critic_people",
+      "target": "review_gate"
+    },
+    {
+      "source": "critic",
+      "target": "review_gate"
+    },
+    {
+      "source": "review_gate",
+      "branch": "rework",
       "target": "writer",
       "label": "返工·不经主持人"
     },
     {
-      "source": "critic",
-      "target": "writer"
+      "source": "review_gate",
+      "branch": "ruling",
+      "target": "review_ruling"
     },
     {
-      "source": "critic_people",
-      "target": "pre_accept",
-      "label": "通过或需裁定"
+      "source": "review_ruling",
+      "target": "writer",
+      "label": "带裁定重派循环"
     },
     {
-      "source": "critic",
+      "source": "review_gate",
+      "branch": "pass",
       "target": "pre_accept"
     },
     {
       "source": "pre_accept",
-      "target": "accept",
-      "label": "日常集直接验收"
+      "branch": "direct",
+      "target": "accept"
     },
     {
       "source": "pre_accept",
-      "target": "character_review",
-      "label": "关键集"
+      "branch": "key_ep",
+      "target": "character_review"
     },
     {
       "source": "pre_accept",
+      "branch": "reader",
       "target": "reader_check",
-      "label": "按需·读感受"
+      "label": "单独读感受"
+    },
+    {
+      "source": "pre_accept",
+      "branch": "luke",
+      "target": "luke_review",
+      "label": "点名或待核实"
+    },
+    {
+      "source": "pre_accept",
+      "branch": "jack",
+      "target": "jack_review",
+      "label": "点名或待核实"
     },
     {
       "source": "character_review",
@@ -267,90 +574,107 @@
       "target": "accept"
     },
     {
-      "source": "accept",
-      "target": "writer",
-      "label": "验收不通过"
-    },
-    {
-      "source": "accept",
-      "target": "draft_brief",
-      "label": "下一集"
-    },
-    {
-      "source": "accept",
-      "target": "recorder",
-      "label": "不等交回"
-    },
-    {
-      "source": "accept",
-      "target": "read_through",
-      "label": "阶段末通读"
-    },
-    {
-      "source": "accept",
-      "target": "read_through_facts"
-    },
-    {
-      "source": "accept",
-      "target": "read_through_reader"
-    },
-    {
-      "source": "read_through",
-      "target": "ruling",
-      "label": "他为什么不清单"
-    },
-    {
-      "source": "read_through_facts",
-      "target": "ruling",
-      "label": "对不上的事实"
-    },
-    {
-      "source": "read_through_reader",
-      "target": "ruling",
-      "label": "连读感受"
-    },
-    {
-      "source": "ruling",
-      "target": "stage_plan",
-      "label": "下一阶段"
-    },
-    {
-      "source": "stage_plan",
-      "target": "luke_plan",
-      "label": "硬约束与换算"
-    },
-    {
-      "source": "luke_plan",
-      "target": "draft_brief"
-    },
-    {
-      "source": "stage_plan",
-      "target": "jack_plan",
-      "label": "硬约束与换算"
-    },
-    {
-      "source": "jack_plan",
-      "target": "draft_brief"
-    },
-    {
-      "source": "pre_accept",
-      "target": "luke_review",
-      "label": "点名或待核实"
-    },
-    {
       "source": "luke_review",
       "target": "accept",
       "label": "逐条裁定"
     },
     {
-      "source": "pre_accept",
-      "target": "jack_review",
-      "label": "点名或待核实"
-    },
-    {
       "source": "jack_review",
       "target": "accept",
       "label": "逐条裁定"
+    },
+    {
+      "source": "accept",
+      "target": "accept_gate"
+    },
+    {
+      "source": "accept_gate",
+      "branch": "reject",
+      "target": "writer",
+      "label": "重走写审"
+    },
+    {
+      "source": "accept_gate",
+      "branch": "next_ep",
+      "target": "draft_brief",
+      "label": "下一集任务书"
+    },
+    {
+      "source": "accept_gate",
+      "branch": "next_ep",
+      "target": "recorder",
+      "label": "记账·不等交回"
+    },
+    {
+      "source": "accept_gate",
+      "branch": "stage_end",
+      "target": "recorder",
+      "label": "记账·不等交回"
+    },
+    {
+      "source": "accept_gate",
+      "branch": "stage_end",
+      "target": "read_through",
+      "label": "他为什么不清单"
+    },
+    {
+      "source": "accept_gate",
+      "branch": "stage_end",
+      "target": "read_through_facts",
+      "label": "跨集事实核对"
+    },
+    {
+      "source": "accept_gate",
+      "branch": "stage_end",
+      "target": "read_through_reader",
+      "label": "连读感受"
+    },
+    {
+      "source": "read_through",
+      "target": "ruling"
+    },
+    {
+      "source": "read_through_facts",
+      "target": "ruling"
+    },
+    {
+      "source": "read_through_reader",
+      "target": "ruling"
+    },
+    {
+      "source": "ruling",
+      "target": "ruling_gate"
+    },
+    {
+      "source": "ruling_gate",
+      "branch": "local_fix",
+      "target": "sub_revise_end",
+      "label": "攒批修改"
+    },
+    {
+      "source": "ruling_gate",
+      "branch": "major_fix",
+      "target": "stage_user"
+    },
+    {
+      "source": "stage_user",
+      "target": "sub_revise_end",
+      "label": "按拍板改稿"
+    },
+    {
+      "source": "ruling_gate",
+      "branch": "propose_tidy",
+      "target": "tidy_confirm"
+    },
+    {
+      "source": "tidy_confirm",
+      "target": "sub_tidy_end"
+    },
+    {
+      "source": "ruling_gate",
+      "branch": "next_stage",
+      "target": "stage_plan",
+      "label": "下一阶段"
     }
   ],
   "stages": [
@@ -361,8 +685,10 @@
         "stage_plan",
         "stage_screenwriter",
         "stage_critic",
+        "plan_advisors",
         "luke_plan",
-        "jack_plan"
+        "jack_plan",
+        "plan_confirm"
       ]
     },
     {
@@ -370,6 +696,7 @@
       "label": "出任务书",
       "nodes": [
         "draft_brief",
+        "brief_route",
         "character_plan"
       ]
     },
@@ -393,7 +720,9 @@
       "nodes": [
         "writer",
         "critic_people",
-        "critic"
+        "critic",
+        "review_gate",
+        "review_ruling"
       ]
     },
     {
@@ -411,7 +740,8 @@
       "id": "accept",
       "label": "验收",
       "nodes": [
-        "accept"
+        "accept",
+        "accept_gate"
       ]
     },
     {
@@ -428,7 +758,10 @@
         "read_through",
         "read_through_facts",
         "read_through_reader",
-        "ruling"
+        "ruling",
+        "ruling_gate",
+        "stage_user",
+        "tidy_confirm"
       ]
     }
   ]

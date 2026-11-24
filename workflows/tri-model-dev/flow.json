@@ -1,0 +1,397 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "x": 0,
+      "y": -30
+    },
+    {
+      "id": "user_req",
+      "type": "user",
+      "label": "提出需求",
+      "x": 216,
+      "y": -48
+    },
+    {
+      "id": "branch_scale",
+      "type": "branch",
+      "label": "按规模分流",
+      "branches": [
+        {
+          "id": "big",
+          "label": "中大型/协同开发"
+        },
+        {
+          "id": "small",
+          "label": "几十行小改/纯问答"
+        }
+      ],
+      "x": 576,
+      "y": -69
+    },
+    {
+      "id": "plan_host",
+      "type": "host",
+      "label": "拆解与主方案",
+      "x": 936,
+      "y": -179
+    },
+    {
+      "id": "plan_advisor",
+      "type": "card",
+      "card": "advisor",
+      "x": 936,
+      "y": -55
+    },
+    {
+      "id": "host_quick",
+      "type": "host",
+      "label": "直接处理交付",
+      "x": 936,
+      "y": 89
+    },
+    {
+      "id": "plan_merge",
+      "type": "host",
+      "label": "核实事实并合并",
+      "x": 1296,
+      "y": -48
+    },
+    {
+      "id": "user_approve",
+      "type": "user",
+      "label": "方案拍板",
+      "x": 1656,
+      "y": -48
+    },
+    {
+      "id": "branch_fe",
+      "type": "branch",
+      "label": "是否含界面",
+      "branches": [
+        {
+          "id": "yes",
+          "label": "含前端界面"
+        },
+        {
+          "id": "no",
+          "label": "纯后端跳过"
+        }
+      ],
+      "x": 2016,
+      "y": -69
+    },
+    {
+      "id": "fe_build",
+      "type": "host",
+      "label": "前端与文案初稿",
+      "x": 2376,
+      "y": -140
+    },
+    {
+      "id": "fe_advisor",
+      "type": "card",
+      "card": "advisor",
+      "x": 2736,
+      "y": -140
+    },
+    {
+      "id": "branch_be",
+      "type": "branch",
+      "label": "后端如何实现",
+      "branches": [
+        {
+          "id": "module",
+          "label": "接口定死独立模块"
+        },
+        {
+          "id": "inline",
+          "label": "无独立后端或自做"
+        }
+      ],
+      "x": 3096,
+      "y": -182
+    },
+    {
+      "id": "be_worker",
+      "type": "card",
+      "card": "backend",
+      "x": 3456,
+      "y": -140
+    },
+    {
+      "id": "be_integrate",
+      "type": "host",
+      "label": "读diff并跑测试",
+      "x": 3816,
+      "y": -140
+    },
+    {
+      "id": "code_review",
+      "type": "card",
+      "card": "reviewer",
+      "x": 4176,
+      "y": -48
+    },
+    {
+      "id": "branch_review",
+      "type": "branch",
+      "label": "审查分级结论",
+      "branches": [
+        {
+          "id": "rework",
+          "label": "有阻断(≤2轮)"
+        },
+        {
+          "id": "escalate",
+          "label": "满2轮仍未过"
+        },
+        {
+          "id": "pass",
+          "label": "无阻断通过"
+        }
+      ],
+      "x": 4536,
+      "y": -84
+    },
+    {
+      "id": "review_fix",
+      "type": "host",
+      "label": "修复阻断项",
+      "x": 4896,
+      "y": -264
+    },
+    {
+      "id": "user_decide",
+      "type": "user",
+      "label": "满2轮分歧拍板",
+      "x": 4896,
+      "y": -140
+    },
+    {
+      "id": "harden_guard",
+      "type": "host",
+      "label": "纠偏沉淀硬检查",
+      "x": 5256,
+      "y": -48
+    },
+    {
+      "id": "branch_verify",
+      "type": "branch",
+      "label": "是否需浏览器实测",
+      "branches": [
+        {
+          "id": "browser",
+          "label": "需页面实测/截图"
+        },
+        {
+          "id": "direct",
+          "label": "无界面直接终验"
+        }
+      ],
+      "x": 5616,
+      "y": -69
+    },
+    {
+      "id": "sub_browser",
+      "type": "sub",
+      "sub": "browser-verify",
+      "x": 5976,
+      "y": -140
+    },
+    {
+      "id": "final_verify",
+      "type": "host",
+      "label": "测试构建并交付",
+      "x": 6336,
+      "y": -48
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "user_req"
+    },
+    {
+      "source": "user_req",
+      "target": "branch_scale"
+    },
+    {
+      "source": "branch_scale",
+      "branch": "big",
+      "target": "plan_host",
+      "label": "主控方案"
+    },
+    {
+      "source": "branch_scale",
+      "branch": "big",
+      "target": "plan_advisor",
+      "label": "仅原话独立出"
+    },
+    {
+      "source": "branch_scale",
+      "branch": "small",
+      "target": "host_quick"
+    },
+    {
+      "source": "plan_host",
+      "target": "plan_merge"
+    },
+    {
+      "source": "plan_advisor",
+      "target": "plan_merge",
+      "label": "独立视角"
+    },
+    {
+      "source": "plan_merge",
+      "target": "user_approve",
+      "label": "标明取舍"
+    },
+    {
+      "source": "user_approve",
+      "target": "branch_fe"
+    },
+    {
+      "source": "branch_fe",
+      "branch": "yes",
+      "target": "fe_build"
+    },
+    {
+      "source": "branch_fe",
+      "branch": "no",
+      "target": "be_worker",
+      "label": "定接口与验收"
+    },
+    {
+      "source": "fe_build",
+      "target": "fe_advisor",
+      "label": "审文案交互"
+    },
+    {
+      "source": "fe_advisor",
+      "target": "branch_be",
+      "label": "核实采纳"
+    },
+    {
+      "source": "branch_be",
+      "branch": "module",
+      "target": "be_worker",
+      "label": "定接口与验收"
+    },
+    {
+      "source": "branch_be",
+      "branch": "inline",
+      "target": "code_review"
+    },
+    {
+      "source": "be_worker",
+      "target": "be_integrate"
+    },
+    {
+      "source": "be_integrate",
+      "target": "code_review"
+    },
+    {
+      "source": "code_review",
+      "target": "branch_review"
+    },
+    {
+      "source": "branch_review",
+      "branch": "rework",
+      "target": "review_fix"
+    },
+    {
+      "source": "branch_review",
+      "branch": "escalate",
+      "target": "user_decide"
+    },
+    {
+      "source": "branch_review",
+      "branch": "pass",
+      "target": "harden_guard"
+    },
+    {
+      "source": "review_fix",
+      "target": "code_review",
+      "label": "复审·最多2轮"
+    },
+    {
+      "source": "user_decide",
+      "target": "harden_guard",
+      "label": "拍板放行"
+    },
+    {
+      "source": "harden_guard",
+      "target": "branch_verify"
+    },
+    {
+      "source": "branch_verify",
+      "branch": "browser",
+      "target": "sub_browser"
+    },
+    {
+      "source": "branch_verify",
+      "branch": "direct",
+      "target": "final_verify"
+    },
+    {
+      "source": "sub_browser",
+      "target": "final_verify"
+    }
+  ],
+  "stages": [
+    {
+      "id": "plan",
+      "label": "方案规划",
+      "nodes": [
+        "plan_host",
+        "plan_advisor",
+        "plan_merge",
+        "user_approve"
+      ]
+    },
+    {
+      "id": "frontend",
+      "label": "前端与文案",
+      "nodes": [
+        "fe_build",
+        "fe_advisor"
+      ]
+    },
+    {
+      "id": "backend",
+      "label": "后端实现",
+      "nodes": [
+        "be_worker",
+        "be_integrate"
+      ]
+    },
+    {
+      "id": "review",
+      "label": "代码审查",
+      "nodes": [
+        "code_review",
+        "branch_review",
+        "review_fix",
+        "user_decide"
+      ]
+    },
+    {
+      "id": "harden",
+      "label": "防复发沉淀",
+      "nodes": [
+        "harden_guard"
+      ]
+    },
+    {
+      "id": "verify",
+      "label": "验收交付",
+      "nodes": [
+        "branch_verify",
+        "sub_browser",
+        "final_verify"
+      ]
+    }
+  ]
+}

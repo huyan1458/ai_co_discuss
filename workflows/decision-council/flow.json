@@ -4,56 +4,56 @@
       "id": "start",
       "type": "start",
       "x": 0,
-      "y": 0
+      "y": -30
     },
     {
       "id": "contrarian",
       "type": "card",
       "card": "contrarian",
-      "x": 0,
-      "y": 0
+      "x": 216,
+      "y": -234
     },
     {
       "id": "outsider",
       "type": "card",
       "card": "outsider",
-      "x": 0,
-      "y": 0
+      "x": 216,
+      "y": -110
     },
     {
       "id": "alternatives",
       "type": "card",
       "card": "alternatives",
-      "x": 0,
-      "y": 0
+      "x": 216,
+      "y": 14
     },
     {
       "id": "executor",
       "type": "card",
       "card": "executor",
-      "x": 0,
-      "y": 0
+      "x": 216,
+      "y": 138
     },
     {
       "id": "disputes",
       "type": "host",
       "label": "找分歧",
-      "x": 0,
-      "y": 0
+      "x": 576,
+      "y": -48
     },
     {
       "id": "debate",
       "type": "host",
       "label": "当事人交锋",
-      "x": 0,
-      "y": 0
+      "x": 936,
+      "y": -140
     },
     {
       "id": "synthesis",
       "type": "host",
       "label": "综合建议",
-      "x": 0,
-      "y": 0
+      "x": 1296,
+      "y": -48
     }
   ],
   "edges": [

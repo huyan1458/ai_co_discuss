@@ -9,44 +9,141 @@
     {
       "id": "sort",
       "type": "host",
-      "label": "分拣·查排线表·用户确认",
-      "x": 300,
-      "y": -40
+      "label": "分拣·查排线表",
+      "x": 0,
+      "y": 0
     },
     {
-      "id": "writer",
+      "id": "sort_gate",
+      "type": "branch",
+      "label": "改动影响",
+      "branches": [
+        {
+          "id": "minor",
+          "label": "小毛病直接定"
+        },
+        {
+          "id": "major",
+          "label": "动设定或牵多集"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "user_confirm",
+      "type": "user",
+      "label": "确认影响清单选项",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "dispatch_mode",
+      "type": "branch",
+      "label": "派写方式",
+      "branches": [
+        {
+          "id": "parallel",
+          "label": "多文件·并行(默认)"
+        },
+        {
+          "id": "serial",
+          "label": "少文件或有依赖"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "writer_1",
       "type": "card",
       "card": "writer",
-      "x": 680,
-      "y": -40
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "writer_2",
+      "type": "card",
+      "card": "writer",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "review_route",
+      "type": "branch",
+      "label": "单圈审稿范围",
+      "branches": [
+        {
+          "id": "both",
+          "label": "默认·同棒双审"
+        },
+        {
+          "id": "people_only",
+          "label": "仅人物问题"
+        },
+        {
+          "id": "setting_only",
+          "label": "仅设定或多集"
+        }
+      ],
+      "x": 0,
+      "y": 0
     },
     {
       "id": "critic_people",
       "type": "card",
       "card": "critic_people",
-      "x": 1060,
-      "y": -200
+      "x": 0,
+      "y": 0
     },
     {
       "id": "critic",
       "type": "card",
       "card": "critic",
-      "x": 1060,
-      "y": 120
+      "x": 0,
+      "y": 0
     },
     {
       "id": "accept",
       "type": "host",
-      "label": "验收·校正排线表",
-      "x": 1440,
-      "y": -40
+      "label": "验收·校排线清台",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "accept_gate",
+      "type": "branch",
+      "label": "验收结论",
+      "branches": [
+        {
+          "id": "rework",
+          "label": "动情节需回修"
+        },
+        {
+          "id": "record",
+          "label": "通过·账目有变"
+        },
+        {
+          "id": "done",
+          "label": "通过·无账变动"
+        }
+      ],
+      "x": 0,
+      "y": 0
     },
     {
       "id": "recorder",
       "type": "card",
       "card": "recorder",
-      "x": 1820,
-      "y": -40
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "finish",
+      "type": "host",
+      "label": "直接收尾",
+      "x": 0,
+      "y": 0
     }
   ],
   "edges": [
@@ -56,18 +153,71 @@
     },
     {
       "source": "sort",
-      "target": "writer",
-      "label": "按文件分给多位写手并行（默认）"
+      "target": "sort_gate"
     },
     {
-      "source": "writer",
+      "source": "sort_gate",
+      "branch": "minor",
+      "target": "dispatch_mode"
+    },
+    {
+      "source": "sort_gate",
+      "branch": "major",
+      "target": "user_confirm"
+    },
+    {
+      "source": "user_confirm",
+      "target": "dispatch_mode",
+      "label": "填好排线再动手"
+    },
+    {
+      "source": "dispatch_mode",
+      "branch": "parallel",
+      "target": "writer_1",
+      "label": "写手1·按文件分"
+    },
+    {
+      "source": "dispatch_mode",
+      "branch": "parallel",
+      "target": "writer_2",
+      "label": "写手2…并行改"
+    },
+    {
+      "source": "dispatch_mode",
+      "branch": "serial",
+      "target": "writer_1",
+      "label": "单写手改一次"
+    },
+    {
+      "source": "writer_1",
+      "target": "review_route"
+    },
+    {
+      "source": "writer_2",
+      "target": "review_route"
+    },
+    {
+      "source": "review_route",
+      "branch": "both",
       "target": "critic_people",
       "label": "同一棒同时审"
     },
     {
-      "source": "writer",
+      "source": "review_route",
+      "branch": "both",
       "target": "critic",
       "label": "同一棒同时审"
+    },
+    {
+      "source": "review_route",
+      "branch": "people_only",
+      "target": "critic_people"
+    },
+    {
+      "source": "review_route",
+      "branch": "setting_only",
+      "target": "critic",
+      "label": "核对排线牵连"
     },
     {
       "source": "critic_people",
@@ -81,13 +231,24 @@
     },
     {
       "source": "accept",
-      "target": "writer",
-      "label": "回修按原分工派回"
+      "target": "accept_gate"
     },
     {
-      "source": "accept",
+      "source": "accept_gate",
+      "branch": "rework",
+      "target": "dispatch_mode",
+      "label": "按原分工回修"
+    },
+    {
+      "source": "accept_gate",
+      "branch": "record",
       "target": "recorder",
-      "label": "有账目变化才记"
+      "label": "挂派·不等交回"
+    },
+    {
+      "source": "accept_gate",
+      "branch": "done",
+      "target": "finish"
     }
   ]
 }

@@ -9,7 +9,31 @@
     {
       "id": "check",
       "type": "host",
-      "label": "查分定位",
+      "label": "查分与定位",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "check_gate",
+      "type": "branch",
+      "label": "查分结论",
+      "branches": [
+        {
+          "id": "pass_or_only",
+          "label": "达标或仅查分"
+        },
+        {
+          "id": "need_rewrite",
+          "label": "有高分块需改"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "report_user",
+      "type": "user",
+      "label": "查看查分报告",
       "x": 0,
       "y": 0
     },
@@ -23,7 +47,39 @@
     {
       "id": "retest",
       "type": "host",
-      "label": "复测",
+      "label": "复测与全篇重查",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "retest_gate",
+      "type": "branch",
+      "label": "复测结论",
+      "branches": [
+        {
+          "id": "retry",
+          "label": "未过·未满3次"
+        },
+        {
+          "id": "stuck",
+          "label": "同块3次仍≥0.5"
+        },
+        {
+          "id": "changed_fact",
+          "label": "过关·动对白事实"
+        },
+        {
+          "id": "tone_only",
+          "label": "过关·只动口气"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "stuck_user",
+      "type": "user",
+      "label": "看三版结果拍板",
       "x": 0,
       "y": 0
     },
@@ -44,7 +100,24 @@
     {
       "id": "note",
       "type": "host",
-      "label": "记知识库",
+      "label": "通读·记知识库",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "deliver_gate",
+      "type": "branch",
+      "label": "收尾与交付",
+      "branches": [
+        {
+          "id": "with_record",
+          "label": "已记账集改事实"
+        },
+        {
+          "id": "no_record",
+          "label": "无账目变动"
+        }
+      ],
       "x": 0,
       "y": 0
     },
@@ -52,6 +125,13 @@
       "id": "recorder",
       "type": "card",
       "card": "recorder",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "deliver_user",
+      "type": "user",
+      "label": "确认删改与文风",
       "x": 0,
       "y": 0
     }
@@ -63,6 +143,17 @@
     },
     {
       "source": "check",
+      "target": "check_gate"
+    },
+    {
+      "source": "check_gate",
+      "branch": "pass_or_only",
+      "target": "report_user",
+      "label": "不动原文"
+    },
+    {
+      "source": "check_gate",
+      "branch": "need_rewrite",
       "target": "writer",
       "label": "按定位整块重写"
     },
@@ -72,18 +163,36 @@
     },
     {
       "source": "retest",
+      "target": "retest_gate"
+    },
+    {
+      "source": "retest_gate",
+      "branch": "retry",
       "target": "writer",
-      "label": "没过·同块至多三次"
+      "label": "再定位重写"
     },
     {
-      "source": "retest",
+      "source": "retest_gate",
+      "branch": "stuck",
+      "target": "stuck_user",
+      "label": "停止硬改"
+    },
+    {
+      "source": "retest_gate",
+      "branch": "changed_fact",
       "target": "critic_people",
-      "label": "动了对白或事实"
+      "label": "双审一圈"
     },
     {
-      "source": "retest",
+      "source": "retest_gate",
+      "branch": "changed_fact",
       "target": "critic",
-      "label": "动了对白或事实"
+      "label": "双审一圈"
+    },
+    {
+      "source": "retest_gate",
+      "branch": "tone_only",
+      "target": "note"
     },
     {
       "source": "critic_people",
@@ -94,14 +203,26 @@
       "target": "note"
     },
     {
-      "source": "retest",
-      "target": "note",
-      "label": "只动叙述口气"
+      "source": "note",
+      "target": "deliver_gate"
     },
     {
-      "source": "note",
+      "source": "deliver_gate",
+      "branch": "with_record",
       "target": "recorder",
-      "label": "已记账的集改了事实"
+      "label": "更新状态账"
+    },
+    {
+      "source": "deliver_gate",
+      "branch": "with_record",
+      "target": "deliver_user",
+      "label": "附删改与文风建议"
+    },
+    {
+      "source": "deliver_gate",
+      "branch": "no_record",
+      "target": "deliver_user",
+      "label": "附删改与文风建议"
     }
   ]
 }

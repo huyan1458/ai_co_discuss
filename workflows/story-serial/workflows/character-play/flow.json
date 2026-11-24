@@ -7,9 +7,37 @@
       "y": 0
     },
     {
-      "id": "dispatch",
+      "id": "entry",
+      "type": "branch",
+      "label": "触发时机",
+      "branches": [
+        {
+          "id": "before_write",
+          "label": "开写前·联合推演"
+        },
+        {
+          "id": "before_accept",
+          "label": "定稿前·角色审稿"
+        },
+        {
+          "id": "standalone",
+          "label": "单审已写定的集"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "dispatch_plan",
       "type": "host",
-      "label": "判定关键集·派人物",
+      "label": "请角色·同时派活",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "plan_chars",
+      "type": "host",
+      "label": "派相关人物推演",
       "x": 0,
       "y": 0
     },
@@ -21,30 +49,117 @@
       "y": 0
     },
     {
-      "id": "plan_character",
+      "id": "plan_char_a",
       "type": "card",
       "card": "character",
       "x": 0,
       "y": 0
     },
     {
-      "id": "brief",
-      "type": "host",
-      "label": "裁定·改任务书",
-      "x": 0,
-      "y": 0
-    },
-    {
-      "id": "review_character",
+      "id": "plan_char_b",
       "type": "card",
       "card": "character",
       "x": 0,
       "y": 0
     },
     {
-      "id": "ruling",
+      "id": "plan_ruling",
       "type": "host",
-      "label": "逐条裁定",
+      "label": "裁定·写进处境",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "plan_gate",
+      "type": "branch",
+      "label": "推演结果",
+      "branches": [
+        {
+          "id": "clash",
+          "label": "正面交锋再一轮"
+        },
+        {
+          "id": "user_ask",
+          "label": "牵涉用户已定"
+        },
+        {
+          "id": "ok",
+          "label": "直接改任务书"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "plan_user",
+      "type": "user",
+      "label": "用户确认取舍",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "brief_done",
+      "type": "host",
+      "label": "定任务书·回主线",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "dispatch_review",
+      "type": "host",
+      "label": "派角色各审一次",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "review_char_a",
+      "type": "card",
+      "card": "character",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "review_char_b",
+      "type": "card",
+      "card": "character",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "review_ruling",
+      "type": "host",
+      "label": "逐条裁定·请离",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "review_gate",
+      "type": "branch",
+      "label": "审稿去向",
+      "branches": [
+        {
+          "id": "modify",
+          "label": "需改正文"
+        },
+        {
+          "id": "accept",
+          "label": "直接交回验收"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "next_fix",
+      "type": "host",
+      "label": "交写审或改集",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "review_done",
+      "type": "host",
+      "label": "交回主线验收",
       "x": 0,
       "y": 0
     }
@@ -52,39 +167,111 @@
   "edges": [
     {
       "source": "start",
-      "target": "dispatch"
+      "target": "entry"
     },
     {
-      "source": "dispatch",
+      "source": "entry",
+      "branch": "before_write",
+      "target": "dispatch_plan"
+    },
+    {
+      "source": "entry",
+      "branch": "before_accept",
+      "target": "dispatch_review"
+    },
+    {
+      "source": "entry",
+      "branch": "standalone",
+      "target": "dispatch_review"
+    },
+    {
+      "source": "dispatch_plan",
+      "target": "plan_chars",
+      "label": "按人物名逐位请进"
+    },
+    {
+      "source": "dispatch_plan",
       "target": "screenwriter",
-      "label": "同时派出"
+      "label": "每集只调这一次"
     },
     {
-      "source": "dispatch",
-      "target": "plan_character",
-      "label": "同时推演·每人一位"
+      "source": "plan_chars",
+      "target": "plan_char_a",
+      "label": "角色甲·同时推演"
+    },
+    {
+      "source": "plan_chars",
+      "target": "plan_char_b",
+      "label": "角色乙…至多3位"
     },
     {
       "source": "screenwriter",
-      "target": "brief"
+      "target": "plan_ruling"
     },
     {
-      "source": "plan_character",
-      "target": "brief"
+      "source": "plan_char_a",
+      "target": "plan_ruling"
     },
     {
-      "source": "brief",
-      "target": "plan_character",
-      "label": "正面交锋·最多再一轮"
+      "source": "plan_char_b",
+      "target": "plan_ruling"
     },
     {
-      "source": "brief",
-      "target": "review_character",
-      "label": "写审通过后各审一次"
+      "source": "plan_ruling",
+      "target": "plan_gate"
     },
     {
-      "source": "review_character",
-      "target": "ruling"
+      "source": "plan_gate",
+      "branch": "clash",
+      "target": "plan_chars",
+      "label": "只派相关人物·至多两轮"
+    },
+    {
+      "source": "plan_gate",
+      "branch": "user_ask",
+      "target": "plan_user"
+    },
+    {
+      "source": "plan_user",
+      "target": "brief_done"
+    },
+    {
+      "source": "plan_gate",
+      "branch": "ok",
+      "target": "brief_done"
+    },
+    {
+      "source": "dispatch_review",
+      "target": "review_char_a",
+      "label": "角色甲·只审一次"
+    },
+    {
+      "source": "dispatch_review",
+      "target": "review_char_b",
+      "label": "角色乙…不进循环"
+    },
+    {
+      "source": "review_char_a",
+      "target": "review_ruling"
+    },
+    {
+      "source": "review_char_b",
+      "target": "review_ruling"
+    },
+    {
+      "source": "review_ruling",
+      "target": "review_gate"
+    },
+    {
+      "source": "review_gate",
+      "branch": "modify",
+      "target": "next_fix",
+      "label": "不再请人物复审"
+    },
+    {
+      "source": "review_gate",
+      "branch": "accept",
+      "target": "review_done"
     }
   ]
 }

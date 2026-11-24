@@ -9,36 +9,174 @@
     {
       "id": "scope",
       "type": "host",
-      "label": "留原文·体检文档",
-      "x": 300,
+      "label": "定范围·查未提交",
+      "x": 0,
       "y": 0
     },
     {
-      "id": "recorder",
+      "id": "git_gate",
+      "type": "branch",
+      "label": "留原文检查",
+      "branches": [
+        {
+          "id": "uncommitted",
+          "label": "有未提交改动"
+        },
+        {
+          "id": "clean",
+          "label": "工作区干净"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "user_backup",
+      "type": "user",
+      "label": "选提交或备份原文",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "checkup",
+      "type": "host",
+      "label": "体检四类文档",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "recorder_check",
       "type": "card",
       "card": "recorder",
-      "x": 680,
+      "x": 0,
       "y": 0
     },
     {
-      "id": "list",
+      "id": "opt_check",
+      "type": "branch",
+      "label": "按需加查",
+      "branches": [
+        {
+          "id": "long_gap",
+          "label": "排线有长空档"
+        },
+        {
+          "id": "style_signal",
+          "label": "文风触发信号"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "screenwriter",
+      "type": "card",
+      "card": "screenwriter",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "writer_check",
+      "type": "card",
+      "card": "writer",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "make_list",
       "type": "host",
-      "label": "出清单·确认·执行",
-      "x": 1060,
+      "label": "汇总瘦身清单",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "user_confirm",
+      "type": "user",
+      "label": "确认清单与待定项",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "exec_host",
+      "type": "host",
+      "label": "改四类·派执行",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "exec_gate",
+      "type": "branch",
+      "label": "按清单执行核对",
+      "branches": [
+        {
+          "id": "base",
+          "label": "账本+核对四类"
+        },
+        {
+          "id": "with_style",
+          "label": "含文风一并执行"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "recorder_exec",
+      "type": "card",
+      "card": "recorder",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "writer_exec",
+      "type": "card",
+      "card": "writer",
+      "x": 0,
       "y": 0
     },
     {
       "id": "critic",
       "type": "card",
       "card": "critic",
-      "x": 1440,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "verify",
+      "type": "host",
+      "label": "抽查账本·量上限",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "verify_gate",
+      "type": "branch",
+      "label": "核对结论",
+      "branches": [
+        {
+          "id": "fail",
+          "label": "核对不通过"
+        },
+        {
+          "id": "pass",
+          "label": "全部通过"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "report_fail",
+      "type": "user",
+      "label": "停下报告待处理",
+      "x": 0,
       "y": 0
     },
     {
       "id": "wrap",
       "type": "host",
-      "label": "抽查·收尾",
-      "x": 1820,
+      "label": "补落实·记进展",
+      "x": 0,
       "y": 0
     }
   ],
@@ -49,25 +187,124 @@
     },
     {
       "source": "scope",
-      "target": "recorder",
-      "label": "体检账本，分堆报数"
+      "target": "git_gate"
     },
     {
-      "source": "recorder",
-      "target": "list"
+      "source": "git_gate",
+      "branch": "uncommitted",
+      "target": "user_backup"
     },
     {
-      "source": "list",
-      "target": "recorder",
-      "label": "按清单改账本"
+      "source": "user_backup",
+      "target": "checkup"
     },
     {
-      "source": "list",
+      "source": "git_gate",
+      "branch": "clean",
+      "target": "checkup"
+    },
+    {
+      "source": "checkup",
+      "target": "recorder_check",
+      "label": "体检账本分堆报数"
+    },
+    {
+      "source": "checkup",
+      "target": "opt_check",
+      "label": "按需并行"
+    },
+    {
+      "source": "opt_check",
+      "branch": "long_gap",
+      "target": "screenwriter",
+      "label": "查长空档列"
+    },
+    {
+      "source": "opt_check",
+      "branch": "style_signal",
+      "target": "writer_check",
+      "label": "体检文风"
+    },
+    {
+      "source": "recorder_check",
+      "target": "make_list"
+    },
+    {
+      "source": "screenwriter",
+      "target": "make_list"
+    },
+    {
+      "source": "writer_check",
+      "target": "make_list"
+    },
+    {
+      "source": "make_list",
+      "target": "user_confirm",
+      "label": "确认前不执行"
+    },
+    {
+      "source": "user_confirm",
+      "target": "exec_host"
+    },
+    {
+      "source": "exec_host",
+      "target": "exec_gate"
+    },
+    {
+      "source": "exec_gate",
+      "branch": "base",
+      "target": "recorder_exec",
+      "label": "改账并跑状态检查"
+    },
+    {
+      "source": "exec_gate",
+      "branch": "base",
       "target": "critic",
-      "label": "核对主持人改过的文件"
+      "label": "核对主持人改稿"
+    },
+    {
+      "source": "exec_gate",
+      "branch": "with_style",
+      "target": "recorder_exec",
+      "label": "改账并跑状态检查"
+    },
+    {
+      "source": "exec_gate",
+      "branch": "with_style",
+      "target": "writer_exec",
+      "label": "按清单改文风"
+    },
+    {
+      "source": "exec_gate",
+      "branch": "with_style",
+      "target": "critic",
+      "label": "核对主持人改稿"
+    },
+    {
+      "source": "recorder_exec",
+      "target": "verify"
+    },
+    {
+      "source": "writer_exec",
+      "target": "verify"
     },
     {
       "source": "critic",
+      "target": "verify"
+    },
+    {
+      "source": "verify",
+      "target": "verify_gate"
+    },
+    {
+      "source": "verify_gate",
+      "branch": "fail",
+      "target": "report_fail",
+      "label": "不边改边扩范围"
+    },
+    {
+      "source": "verify_gate",
+      "branch": "pass",
       "target": "wrap"
     }
   ]
