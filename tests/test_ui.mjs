@@ -11,8 +11,9 @@ import { member_actions } from "../frontend/member-actions.js";
 import { access_label, access_options, EXPERT_PROMPT_PRESETS } from "../runner/expert_prompts.mjs";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { slash_insertion } from "../runner/slash_names.mjs";
-import { format_duration, snapshot_at, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
+import { format_duration, replay_follow_window, snapshot_at, step_follow_window, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
 import { t } from "../frontend/i18n.js";
+import { encode_cover, share_card_diagnostic } from "../frontend/share-card.js";
 import { VISUAL_RESULT_LIMIT, inline_visual_collapsed, inline_visual_document, inline_visual_height, remember_visual_height, remembered_visual_height, send_visual_theme, start_visual_tab, visual_result } from "../frontend/inline-visual.js";
 import { excerpts_markdown, file_preview, put_visual_result } from "../frontend/file-preview.js";
 import { declined, external_of, external_tag, invited_items, remaining_label, take_join_fragment } from "../frontend/external-members.js";
@@ -26,6 +27,62 @@ vm.createContext = (sandbox = {}, ...rest) => {
 
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
+
+function send_scroll_fixture() {
+  const view = { value: { sending_preview: { id: "send" }, messages: [] } };
+  const context = vm.createContext({
+    view, sent_position: { id: "send" }, CSS: { escape: String }, rising_id: 7,
+    send_y: { get: () => 24 }, reading_top: () => 80, READING_OFFSET: 20,
+    close_preview() {}, toggle_hold: null, reader: { state: {} }, follow_tail: {},
+    jump_target: {}, pending_jump: null, awaiting_jump: null, send_clipped: {},
+    follow_messages() { element.scrollTop = context.follow_destination(element); },
+  });
+  for (const name of ["follow_destination", "return_to_latest"]) {
+    const start = discussion_source.indexOf(`function ${name}(`);
+    vm.runInContext(discussion_source.slice(start, discussion_source.indexOf("\n}", start) + 2), context);
+  }
+  const element = {
+    clientHeight: 800, scrollHeight: 1800, scrollTop: 1000,
+    querySelector(selector) {
+      const expected = view.value.sending_preview ? '[data-sending-id="send"]' : '[data-message-id="7"]';
+      if (selector === expected) return { getBoundingClientRect: () => ({ top: 1724 - this.scrollTop }) };
+    },
+  };
+  return { context, element, save() { view.value = { messages: [{ id: 7, submission_id: "send" }] }; } };
+}
+
+test("short send follows the new bottom after its execution mounts", () => {
+  const { context, element, save } = send_scroll_fixture();
+  assert.equal(context.follow_destination(element), 1000);
+  save();
+  element.scrollHeight += 150;
+  assert.equal(context.follow_destination(element), 1150);
+});
+
+test("tall send keeps its heading until the reader returns to latest", () => {
+  const { context, element, save } = send_scroll_fixture();
+  element.scrollHeight = 3000;
+  assert.equal(context.follow_destination(element), 1600);
+  save();
+  assert.equal(context.follow_destination(element), 1600);
+  context.return_to_latest();
+  assert.equal(element.scrollTop, 2200);
+});
+
+test("annotation diagnostics record composition and geometry without collecting draft text", () => {
+  const records = [];
+  const context = vm.createContext({ debug_log: (event, data) => records.push({ event, ...data }) });
+  const start = discussion_source.indexOf("function record_annotation(");
+  vm.runInContext(discussion_source.slice(start, discussion_source.indexOf("\n}", start) + 2), context);
+  const form = { classList: new Set(["file-comment", "excerpt-edit", "is-docked"]),
+    getBoundingClientRect: () => ({ width: 320, height: 80 }) };
+  form.classList.contains = name => form.classList.has(name);
+  const target = { value: "private annotation text", closest: () => form };
+  context.record_annotation({ type: "keydown", key: "x", target });
+  context.record_annotation({ type: "keydown", key: "Enter", isComposing: true, target });
+  assert.deepEqual(records, [{ event: "annotation", phase: "keydown", action: "Enter", composing: true,
+    source: "file", entry: "mark", docked: true, width: 320, height: 80 }]);
+});
 
 test('all providers expose API without installed software and keys never enter drafts or storage', async () => {
   const f = theme_fixture(), state = f.context.test_state, calls = [];
@@ -281,6 +338,7 @@ test("unavailable or broken push retains polling and reconnect fetches missed ch
 /** Exercise shared attachment submission and draft lifetime without a live service. */
 function attachment_fixture() {
   const nodes = new Map(), posts = [], uploads = [], revoked = [], notified = [];
+  const diagnostics = [];
   const element = id => {
     if (!nodes.has(id)) nodes.set(id, { value: "", setAttribute() {} });
     return nodes.get(id);
@@ -289,6 +347,7 @@ function attachment_fixture() {
   const state = { room: { id: "one", host: "Codex" }, attachment_drafts: [], failed_sends: [], messages: [], message_total: 0 };
   let identifier = 0, fail = true;
   const context = vm.createContext({ state, element, room_timing_mark() {}, SEND_RETRY_MS: [2000, 5000, 10000], setTimeout: (callback) => callback(), MAX_MESSAGE_LENGTH: 30000, MAX_SUMMARY_LENGTH: 1000,
+    CustomEvent, document: { getElementById: () => null, dispatchEvent: event => diagnostics.push(event.detail) },
     MAX_MESSAGE_ATTACHMENTS: 10, MAX_ATTACHMENT_BYTES: 20 * 1024 * 1024, URLSearchParams,
     new_submission_id: () => String(++identifier), escape_html: text => text, relay_files: new Map(), prefetched: new Map(),
     URL: { createObjectURL: () => "blob:test", revokeObjectURL: url => revoked.push(url) },
@@ -305,12 +364,33 @@ function attachment_fixture() {
       return { message: { id: 1 } };
     } });
   vm.runInContext(source.slice(source.indexOf("function message_payload("), source.indexOf("/** Render immutable file cards")), context);
+  vm.runInContext(source.slice(source.indexOf("function browser_debug("), source.indexOf("/** Read current form drafts")), context);
   vm.runInContext(source.slice(source.indexOf("async function post_room_file("), source.indexOf("/** Read the bytes of a room file")), context);
   // Markdown rendering lives in markdown.js; a stand-in keeps receipts drawable here.
   context.render_room_markdown = text => text ? `<p>${text}</p>` : "";
   context.link_attachment_placeholders = html => html;
-  return { context, state, element, posts, uploads, revoked, notified, succeed() { fail = false; }, drop(times) { fail = times; } };
+  return { context, state, element, posts, uploads, revoked, notified, diagnostics, succeed() { fail = false; }, drop(times) { fail = times; } };
 }
+
+test("browser diagnostics link an optimistic send to its receipt without capturing message text", async () => {
+  const fixture = attachment_fixture();
+  fixture.succeed();
+  const send = async () => {
+    fixture.element("message-input").value = "private message text";
+    await fixture.context.send_message({ preventDefault() {} });
+  };
+  await send();
+  assert.equal(fixture.diagnostics.length, 0);
+  fixture.context.document.getElementById = id => id === "scrolldebug" ? {} : null;
+  await send();
+  const [preview, receipt] = fixture.diagnostics.map(entry => entry.data);
+  assert.equal(preview.phase, "optimistic");
+  assert.equal(receipt.phase, "receipt");
+  assert.equal(preview.operation, receipt.operation);
+  assert.equal(receipt.send, fixture.posts.at(-1)[1].submission_id);
+  assert.equal(receipt.message, 1);
+  assert.doesNotMatch(JSON.stringify(fixture.diagnostics), /private message text/);
+});
 
 test("attachment retries retain files and reuse both upload and message receipts", async () => {
   const fixture = attachment_fixture(), { context, state, uploads, posts } = fixture;
@@ -1750,14 +1830,15 @@ test("model discovery shares executable catalogs without leaking a late response
 });
 
 /** Evaluate the unified execution card and transcript slot calculations with reactive room snapshots. */
-function free_card_fixture({ messages = [], members = [], executions = [], query = "", source_filter = false, now = 1000 } = {}) {
+function free_card_fixture({ messages = [], members = [], executions = [], requests = [], failure_wakes = [], routing_messages = new Set(), scheduler_decisions = new Map(), query = "", source_filter = false, now = 1000 } = {}) {
   const timers = new Map();
   let timer_id = 0, current_time = now;
   class TestDate extends Date { static now() { return current_time * 1000; } }
   const view = reactive({ value: { query, source_filter, authors: [], messages, access: { can_manage: true }, room: {
-    id: "room", mode: "free", archived: false, members: [], free: { members, executions, requests: [] }, session: null,
+    id: "room", mode: "free", archived: false, members: [], free: { members, executions, requests, failure_wakes }, session: null,
   } } });
   const context = vm.createContext({ computed, stable_computed: computed, ref, watch, view,  room: computed(() => view.value.room), Date: TestDate,
+    routing_messages: ref(routing_messages), scheduler_decisions: ref(scheduler_decisions),
     setInterval: callback => { timers.set(++timer_id, callback); return timer_id; }, clearInterval: id => timers.delete(id),
     bridge: { request: async () => ({ notes: [] }) }, line_marks: () => ({ badges: [], edge: "" }) });
   const busy_start = discussion_source.indexOf("const free = computed(");
@@ -1778,8 +1859,12 @@ function execution_member(id, name = "Codex", status = "dispatched", extra = {})
 test("free execution cards show live member work and hide inactive executions", async () => {
   const member = execution_member(9), execution = { id: 9, member_id: 9, member: "Codex", status: "dispatched", request_message_id: 1, layout_after: 1, created_at: 1000 };
   const f = free_card_fixture({ messages: [{ id: 1, author: "用户", created_at: 1000 }], members: [member], executions: [execution] });
+  const diagnostics = [];
+  f.context.debug_log = (event, data) => diagnostics.push([event, data]);
   assert.deepEqual(f.cards.working.value.map(item => [item.id, item.author, item.text, item.working]), [["free-9", "Codex", "正在处理", true]]);
   assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "free-9"]);
+  assert.deepEqual(diagnostics.map(([event, data]) => [event, data.execution, data.after, data.anchor, data.reason]),
+    [["card-layout", 9, 1, 1, "attached"]]);
   for (const status of ["pending", "completed", "cancelled"]) {
     f.room.free.members[0].execution.status = status;
     await nextTick();
@@ -1790,6 +1875,118 @@ test("free execution cards show live member work and hide inactive executions", 
   await nextTick();
   assert.equal(f.cards.busy.value.length, 0, "a failed attempt leaves the working-card state");
   assert.equal(f.state.failures.value.length, 1, "a failed execution remains as its own failure card");
+});
+
+test("retried pending and active cards stay below the failed execution card", async () => {
+  const member = { id: 9, name: "Gemini", access: "runner", status: "active", adapter: "antigravity_cli", pending: 1, execution: null };
+  const failed = { id: 5721, member_id: 9, member: "Gemini", status: "failed", request_message_id: 1, layout_after: 1, layout_at: 1003,
+    created_at: 1003, finished_at: 1200, result: "network error", retried: true, requests: [] };
+  const pending = { id: 6206, member_id: 9, message_id: 1, status: "pending", execution_id: null, purpose: "ask",
+    created_at: 1000, layout_after: 1, layout_at: 1003 };
+  const f = free_card_fixture({ messages: [{ id: 1, author: "用户", created_at: 1000 }], members: [member], executions: [failed], requests: [pending] });
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "failed-5721", "queued-6206"],
+    "pending retry card sits below the failed card even when retried in the same second");
+  f.room.free.requests = [];
+  f.room.free.members[0].execution = { id: 5722, status: "dispatched", stale: false, created_at: 1500, activity_at: 1500 };
+  f.room.free.executions = [{ id: 5722, member_id: 9, member: "Gemini", status: "dispatched", request_message_id: 1, layout_after: 1, layout_at: 1500, created_at: 1500 }, failed];
+  await nextTick();
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "failed-5721", "free-5722"],
+    "active retry card stays below the failed card");
+});
+
+test("an interrupted requeued request hides its ghost waking card only behind a newer visible card in the same next batch", async () => {
+  const member = { id: 9, name: "Gemini", access: "runner", status: "active", adapter: "antigravity_cli", pending: 2, execution: null };
+  const stopped = { id: 5746, member_id: 9, member: "Gemini", status: "cancelled", request_message_id: 1, layout_after: 1, layout_at: 1000,
+    created_at: 1000, finished_at: 1200, result: "已打断：你立即发送了新消息，它会连同这条一起处理", capabilities: { stoppable: true }, requests: [] };
+  const requeued = { id: 6230, member_id: 9, message_id: 1, status: "pending", execution_id: null, purpose: "ask",
+    created_at: 1000, layout_after: 1, layout_at: 1200, retried: true, next_batch: true };
+  const interrupting = { id: 6231, member_id: 9, message_id: 2, status: "pending", execution_id: null, purpose: "ask",
+    created_at: 1200, layout_after: 2, layout_at: 1200, retried: false, next_batch: true };
+  const f = free_card_fixture({
+    messages: [{ id: 1, author: "用户", created_at: 1000 }, { id: 2, author: "用户", created_at: 1200 }],
+    members: [member], executions: [stopped], requests: [requeued, interrupting],
+  });
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "stopped-5746", 2, "queued-6231"],
+    "only the interrupting message gets a waking card when both are in the same next_batch");
+  assert.equal(f.state.layout.value.find(item => item.id === "queued-6231").text, "正在唤醒");
+  // Separate delivery lane (`next_batch: false`): both cards show, and the second says waiting for previous turn, not bundled.
+  f.room.free.requests = [requeued, { ...interrupting, next_batch: false }];
+  await nextTick();
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "stopped-5746", "queued-6230", 2, "queued-6231"]);
+  assert.equal(f.state.layout.value.find(item => item.id === "queued-6230").text, "正在唤醒");
+  assert.equal(f.state.layout.value.find(item => item.id === "queued-6231").text, "排队中：等上一轮结束");
+  // While smart scheduling is still analysing a newer route message, the older retried card stays visible instead of vanishing.
+  const f_route = free_card_fixture({
+    messages: [{ id: 1, author: "用户", created_at: 1000 }, { id: 2, author: "用户", created_at: 1200 }],
+    members: [member], executions: [stopped], routing_messages: new Set([2]),
+    requests: [requeued, { id: 6232, member_id: 9, message_id: 2, status: "pending", execution_id: null, purpose: "route",
+      created_at: 1200, layout_after: 2, layout_at: 1200, retried: false, next_batch: true }],
+  });
+  assert.deepEqual([...f_route.state.layout.value].map(item => item.id), [1, "stopped-5746", "queued-6230", 2]);
+  assert.equal(f_route.state.layout.value.find(item => item.id === "queued-6230").text, "正在唤醒");
+});
+
+test("undeliverable requests share next_batch dedupe and layout_at ordering, quiet checkins require their notice, and merged wakes hide their replaced failure", async () => {
+  const blocked = { id: 9, name: "Gemini", access: "runner", status: "active", adapter: "antigravity_cli", adopt_error: "无法接管", pending: 2, execution: null };
+  const failed = { id: 10, member_id: 9, member: "Gemini", status: "failed", request_message_id: 1, layout_after: 1, layout_at: 1005,
+    created_at: 1005, finished_at: 1005, result: "fail", retried: true, requests: [] };
+  const retried_req = { id: 20, member_id: 9, message_id: 1, status: "pending", execution_id: null, purpose: "ask",
+    created_at: 1000, layout_after: 1, layout_at: 1005, retried: true, next_batch: true };
+  const newer_req = { id: 21, member_id: 9, message_id: 2, status: "pending", execution_id: null, purpose: "ask",
+    created_at: 1010, layout_after: 2, layout_at: 1010, retried: false, next_batch: true };
+  const f = free_card_fixture({
+    messages: [{ id: 1, author: "用户", created_at: 1000 }, { id: 2, author: "用户", created_at: 1010 },
+      { id: 30, author: "Gemini", source: "cli", text: "一切正常", created_at: 1020 }],
+    members: [blocked], executions: [failed], requests: [retried_req, newer_req],
+  });
+  f.room.free.quiet_checkins = [{ message_id: 29, answer_id: 30 }];
+  await nextTick();
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "failed-10", 2, "undeliverable-21", 30],
+    "bundled retried undeliverable request is hidden behind newer pending request, and checkin answer stays visible when its notice is not loaded");
+  f.room.free.requests = [retried_req];
+  await nextTick();
+  assert.deepEqual([...f.state.layout.value].map(item => item.id), [1, "failed-10", "undeliverable-20", 2, 30],
+    "single retried undeliverable request sits below its failed execution even in the same second");
+  // Merged working execution aligns work_message_id with the latest request and hides its replaced failure via replaces_execution_id.
+  const active = execution_member(9, "Gemini", "dispatched", { id: 77, created_at: 1020 });
+  const replaced = { id: 70, member_id: 9, member: "Gemini", status: "failed", request_message_id: 1, layout_after: 1, layout_at: 1000, created_at: 1000, finished_at: 1005, result: "timeout", requests: [] };
+  const merged = { id: 77, member_id: 9, member: "Gemini", status: "dispatched", request_message_id: 1, replaces_execution_id: 70, layout_after: 2, layout_at: 1000,
+    created_at: 1020, requests: [{ id: 20, message_id: 1 }, { id: 21, message_id: 2 }] };
+  const f2 = free_card_fixture({ messages: [{ id: 1, author: "用户", created_at: 1000 }, { id: 2, author: "用户", created_at: 1010 }],
+    members: [active], executions: [merged, replaced] });
+  assert.equal(f2.cards.working.value[0].work_message_id, 2);
+  assert.equal(f2.cards.working.value[0].replaced?.id, 70);
+  assert.equal(f2.cards.working.value[0].replaced?.result, "timeout");
+  assert.equal(f2.state.failures.value.some(item => item.execution_id === 70), false);
+  // A host wake-up matched only via failure_wakes also carries its replaced execution for the header slot.
+  const wake_only = { ...merged, replaces_execution_id: null, request_message_id: 99 };
+  const f3 = free_card_fixture({ messages: [{ id: 1, author: "用户", created_at: 1000 }],
+    members: [active], executions: [wake_only, replaced], failure_wakes: [{ message_id: 99, execution_id: 70 }] });
+  assert.equal(f3.cards.working.value[0].replaced?.id, 70);
+});
+
+test("send_queued avoids duplicate sending previews both for visible messages and during refresh handoff", async () => {
+  const f = theme_fixture();
+  let preview_during_send = "unset";
+  f.context.test_state.room = { id: "r1", free: { queued_messages: { items: [{ id: 5, message_id: 101, text: "已发出", attachments: [] }] } } };
+  f.context.test_state.messages = [{ id: 101, author: "用户", text: "已发出" }];
+  f.context.queue_request = async () => { preview_during_send = f.context.test_state.sending_preview; };
+  f.context.publish_view = () => {};
+  await f.context.send_queued(5);
+  assert.equal(preview_during_send, null);
+  // Unpublished queued row gets its new message_id from the queue response so the preview drops as soon as messages include it.
+  const f2 = theme_fixture();
+  let previews_after_refresh = null;
+  f2.context.test_state.room = { id: "r1", free: { queued_messages: { items: [{ id: 6, text: "刚发出", attachments: [] }] } } };
+  f2.context.test_state.messages = [];
+  f2.context.publish_view = () => {};
+  f2.context.request_json = async () => ({ items: [], paused: false, busy: false, host_busy: false, busy_members: [], message_id: 202 });
+  f2.context.refresh_room = async () => {
+    f2.context.test_state.messages = [{ id: 202, author: "用户", text: "刚发出" }];
+    previews_after_refresh = f2.context.room_sending_previews();
+  };
+  await f2.context.send_queued(6);
+  assert.deepEqual([...previews_after_refresh], []);
 });
 
 test("a reloaded browser explicitly resumes the original submitted launch and retains ownership", async () => {
@@ -2165,6 +2362,29 @@ test("a replay snapshot shows the run as it stood: later work gone, unfinished w
   assert.equal(snapshot_at({ execution_limit: 100, segment_limit: 400, executions: [item] }, 140_000).executions[0], item, "finished work is shown as it was");
 });
 
+test("replay auto-follow dynamically zooms to elapsed active work, widens with progress or idle gaps and eases smoothly", () => {
+  const min = 60_000;
+  const spans = [
+    { start: 0, end: 2 * min },            // short 2m run
+    { start: 10 * min, end: 32 * min },    // long 22m run
+    { start: 82 * min, end: 85 * min },    // 3m run after a 50m idle gap
+    { start: 100 * min, end: 110 * min },  // later run so 83m is well inside the axis
+  ];
+  const total = 110 * min;
+  const x = (time) => time / total;
+  const on_long_early = replay_follow_window(spans, x, 11 * min, total);
+  const on_long_late = replay_follow_window(spans, x, 31 * min, total);
+  const on_idle = replay_follow_window(spans, x, 72 * min, total);
+  const after_idle = replay_follow_window(spans, x, 83 * min, total);
+  assert.ok(on_long_early.span < on_long_late.span, "the same long run starts tightly framed and widens as it progresses");
+  assert.ok(on_long_early.span < 0.05, "1 minute into a 22-minute run stays focused instead of jumping to the full run width");
+  assert.ok(on_long_late.span < on_idle.span, "a long idle stretch widens beyond the preceding run");
+  assert.ok(after_idle.span < on_idle.span, "resuming work after an idle gap zooms back in");
+  assert.ok(Math.abs((x(83 * min) - after_idle.from) / after_idle.span - 0.8) < 1e-6, "playback line stays at 80% of view");
+  const stepped = step_follow_window(on_long_early, on_long_late, x(20 * min), 100);
+  assert.ok(stepped.span > on_long_early.span && stepped.span < on_long_late.span, "step eases smoothly toward target span");
+});
+
 test('late reply text is fetched only for the owner and discarded when access or room changes', async () => {
   let finish;
   const calls = [], room = ref({ id: 'one' }), view = ref({ access: { can_manage: false } });
@@ -2462,6 +2682,158 @@ test("a share page carries none of what only this computer and its owner should 
   for (const mark of ["WITHDRAWN-FILE-MARK", "FILE-SUBMISSION-MARK", "SUBMISSION-MARK"]) assert.ok(!with_files.includes(mark), mark);
 });
 
+test("share job actions update immediately, serialize per job, and survive older polls", async () => {
+  const { context, notified } = theme_fixture();
+  context.test_state.launch.available = true;
+  const initial = { id: "j", room_id: "r", room_title: "Room", phase: "ready", adjustable: true, progress: { step: "preparing" }, updated_at: "1" };
+  const calls = [];
+  context.share_job_request = op => {
+    const gate = Promise.withResolvers();
+    calls.push({ op, ...gate });
+    return gate.promise;
+  };
+  context.remember_share_job(initial, false);
+  vm.runInContext('share_draft = {room_id:"r",managed_id:"j",phase:"ready"}; share_tasks.set("r",share_draft)', context);
+  const draft = () => vm.runInContext("share_draft", context);
+  const shown = () => context.shown_share_jobs()[0];
+  const act = op => context.share_job_action({ op, job: shown() });
+  const poll = context.share_job_refresh();
+  const cancel = act("cancel");
+  assert.equal(shown().phase, "cancelled");
+  assert.equal(draft(), null);
+  calls[0].resolve({ enabled: true, jobs: [initial] });
+  await poll;
+  assert.equal(shown().phase, "cancelled");
+  calls[1].reject(new Error("cancel refused"));
+  await cancel;
+  assert.equal(shown().phase, "ready");
+  assert.equal(draft().managed_id, "j");
+  const failed = { ...initial, phase: "failed", error: "upload failed", progress: { step: "upload" }, updated_at: "2" };
+  context.remember_share_job(failed, false);
+  const retry = act("retry");
+  assert.equal(shown().phase, "publishing");
+  assert.equal(shown().error, "");
+  calls[2].reject(new Error("retry refused"));
+  await retry;
+  assert.equal(shown().error, "upload failed");
+  const again = act("retry"), stop = act("cancel");
+  assert.equal(shown().phase, "cancelled");
+  assert.equal(calls.at(-1).op, "retry");
+  calls[3].resolve({ job: { ...failed, phase: "publishing", updated_at: "3" } });
+  await again;
+  assert.equal(calls[4].op, "cancel");
+  calls[4].resolve({ job: { ...failed, phase: "cancelled", updated_at: "4" } });
+  await stop;
+  const refused = act("dismiss");
+  assert.equal(shown(), undefined);
+  calls[5].reject(new Error("dismiss refused"));
+  await refused;
+  assert.equal(shown().phase, "cancelled");
+  const old = context.share_job_refresh(), dismiss = act("dismiss");
+  calls[7].resolve({ id: "j" });
+  await dismiss;
+  calls[6].resolve({ enabled: true, jobs: [failed] });
+  await old;
+  assert.equal(shown(), undefined);
+  assert.equal(notified.filter(([level, message]) => level === "error" && message.includes("refused")).length, 3);
+});
+
+test("opening a share job shows its title before reads finish and leaves a closed dialog closed", async () => {
+  const { context, notified } = theme_fixture();
+  const job = { id: "j", room_id: "r", room_title: "Room", phase: "ready", summary: { title: "Prepared room" },
+    selection: { days: 3, include_files: false, left_files: [] } };
+  const draft = () => vm.runInContext("share_draft", context);
+  const reads = [];
+  context.share_job_request = () => { const read = Promise.withResolvers(); reads.push(read); return read.promise; };
+  const open = () => context.share_job_action({ op: "open", job });
+  const opening = open();
+  assert.equal(draft().title, "Room");
+  assert.equal(draft().phase, "preparing");
+  await new Promise(resolve => setImmediate(resolve));
+  reads[0].resolve({ job });
+  await opening;
+  assert.equal(draft().phase, "ready");
+  assert.equal(draft().title, "Prepared room");
+  const closed = open();
+  await new Promise(resolve => setImmediate(resolve));
+  context.share_cancel();
+  reads[1].resolve({ job });
+  await closed;
+  assert.equal(draft(), null);
+  const lost = open();
+  await new Promise(resolve => setImmediate(resolve));
+  reads[2].reject(new Error("read refused"));
+  await lost;
+  assert.equal(draft(), null);
+  assert.ok(notified.some(([level, message]) => level === "error" && message === "read refused"));
+});
+
+test("two delayed revocations hide both links during a directory refresh and roll back only the refused room", async () => {
+  const { context, notified } = theme_fixture();
+  const state = context.test_state;
+  const rooms = ["a", "b"].map(id => ({ id, share_link: { url: "https://share.example/" + id, expires_at: "2099-01-01T00:00:00Z" } }));
+  state.rooms = rooms;
+  state.backup_pending = true;
+  const gates = new Map();
+  context.share_link_record = async id => ({ ...rooms.find(room => room.id === id).share_link, share_id: id, manage_token: "test" });
+  context.share_site_request = (method, path) => {
+    const gate = Promise.withResolvers();
+    gates.set(path, gate);
+    return gate.promise;
+  };
+  context.request_json = async (path, payload) => ({ link: payload.link });
+  const first = context.share_revoke("a"), second = context.share_revoke("b");
+  assert.deepEqual(Object.keys(context.share_links()), []);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(gates.size, 2);
+  state.rooms = structuredClone(rooms);
+  assert.equal(context.share_link("a"), null);
+  gates.get("/api/shares/a").resolve({});
+  gates.get("/api/shares/b").reject(new Error("offline"));
+  await Promise.all([first, second]);
+  state.rooms = structuredClone(rooms);
+  assert.deepEqual(Object.keys(context.share_links()), ["b"]);
+  assert.equal(context.share_link("b").url, rooms[1].share_link.url);
+  assert.ok(notified.some(([level, text]) => level === "error" && text.includes("offline")));
+  assert.equal(state.backup_pending, true);
+});
+
+test("renewal previews expiry, keeps the server expiry across a stale directory, and queues a revocation behind it", async () => {
+  const { context } = theme_fixture();
+  const state = context.test_state;
+  const old = { url: "https://share.example/a", expires_at: "2099-01-01T00:00:00Z" };
+  const room = { id: "a", share_link: old };
+  state.rooms = [room];
+  context.share_link_record = async () => ({ ...old, share_id: "a", manage_token: "test" });
+  context.request_json = async (path, payload) => ({ link: payload.link });
+  const calls = [];
+  context.share_site_request = method => {
+    const gate = Promise.withResolvers();
+    calls.push({ method, ...gate });
+    return gate.promise;
+  };
+  const writing = context.share_renew({ room_id: "a", days: 3 });
+  assert.ok(Math.abs(Date.parse(context.share_link("a").expires_at) - Date.now() - 3 * 86400000) < 2000);
+  await new Promise(resolve => setImmediate(resolve));
+  const expires_at = "2098-12-31T00:00:00Z";
+  calls[0].resolve({ expires_at });
+  await writing;
+  state.rooms = [room];
+  assert.equal(context.share_link("a").expires_at, expires_at);
+  const renewal = context.share_renew({ room_id: "a", days: 1 });
+  const revoke = context.share_revoke("a");
+  assert.equal(context.share_link("a"), null);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls.map(item => item.method), ["POST", "POST"]);
+  calls[1].reject(new Error("renewal refused"));
+  await renewal;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.share_link("a"), null);
+  assert.equal(calls[2].method, "DELETE");
+  calls[2].resolve({});
+  await revoke;
+});
+
 test("a share link is kept with the room, published once, updated, renewed and revoked with its own manage token only", async () => {
   const { context, storage, notified } = theme_fixture();
   const calls = [];
@@ -2616,6 +2988,85 @@ test("sharing without a connected computer uses six browser uploads and reports 
   assert.match(notices.at(-1).message, /offline/);
   notices.at(-1).options.actions[0].onClick();
   assert.equal(vm.runInContext('share_draft.phase', context), "ready");
+});
+
+test("a share card cover encoded by a PNG-only canvas fits a signed paired-device relay write", async () => {
+  const canvas = { getContext: () => ({ drawImage() {} }), toDataURL() {
+    return "data:image/png;base64," + "A".repeat(this.width * 1024);
+  } };
+  const previous = globalThis.document;
+  let cover;
+  try {
+    globalThis.document = { createElement: () => canvas };
+    cover = encode_cover({ width: 450, height: 700 });
+  } finally {
+    if (previous === undefined) delete globalThis.document;
+    else globalThis.document = previous;
+  }
+  const { context } = theme_fixture();
+  const machine = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  const device = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  Object.assign(context, { TextEncoder, btoa, device_identity: () => ({ id: "device", private_key: device.privateKey }) });
+  const payload = { method: "POST", path: "/api/rooms/example/share-card", body: { share_id: "live", edits: { cover } } };
+  const id = crypto.randomUUID();
+  const { envelope } = await context.seal_relay_request({ id: "machine", public_key: await crypto.subtle.exportKey("jwk", machine.publicKey) },
+    id, { action: "room-api", target: "computer", payload });
+  assert.match(cover, /^data:image\/png;base64,/);
+  assert.ok(Buffer.byteLength(JSON.stringify({ id, envelope })) <= 512 * 1024);
+});
+
+test("share card text previews immediately and closing saves the latest edit once", async () => {
+  const { context } = theme_fixture();
+  vm.runInContext('share_draft = { room_id: "r", phase: "published", link: { share_id: "s", card: { question: "" } } }', context);
+  const saved = [], writes = [];
+  context.request_json = async (_path, payload) => { saved.push(payload.edits.question); };
+  for (const value of ["a", "ab", "abc"]) {
+    writes.push(context.edit_share_card({ room_id: "r", share_id: "s", field: "question", value }));
+    await new Promise(setImmediate);
+    assert.equal(vm.runInContext("share_draft.link.card.question", context), value);
+  }
+  assert.deepEqual(saved, []);
+  context.share_cancel();
+  await Promise.all(writes);
+  assert.deepEqual(saved, ["abc"]);
+});
+
+test("the share card skips question receipts when choosing the owner's question", () => {
+  const { context } = theme_fixture();
+  const texts = ["回答问题 #9：A", "请主持人先讨论并给推荐（问题 #10）\n\n说明", "交给主持人决定（问题 #11）",
+    "Answer to question #12", "Leaving it to the host to decide (question #13)", "要解决的问题是什么？"];
+  const draft = { room_id: "r", responses: { "/api/rooms/r/messages?after=0": {
+    messages: texts.map((text, id) => ({ id, author: "用户", text })) } } };
+  assert.equal(context.share_card(draft, { expires_at: "2030-01-01" }).question, texts.at(-1));
+});
+
+test("share card diagnostics distinguish eligible materials, preview source and incomplete uploads", () => {
+  const { context } = theme_fixture();
+  const draft = { room_id: "r", phase: "published", responses: {
+    "/api/rooms/r/messages?after=0": { messages: [{ id: 1, author: "用户", text: "private question" },
+      { id: 5, author: "AI", text: "private answer" }, { id: 7, kind: "system", text: "private event" }] },
+  } };
+  const card = context.share_card(draft, { url: "https://secret.test", expires_at: "2029-01-01" });
+  draft.link = { card, manage_token: "secret-token" };
+  const preview = { stage: "drawn", rendered: "default", width: 1000, height: 850, extra: "private render data" };
+  const initial = share_card_diagnostic(draft, preview);
+  assert.equal(initial.materials.count, 2);
+  assert.equal(initial.materials.through, 5);
+  assert.equal(initial.preview.selected, "default");
+  assert.equal(initial.preview.width, 1000);
+  assert.equal(initial.attachments, undefined);
+  card.cover = "private image";
+  card.publication = { revision: "r".repeat(22), done: 1, total: 3 };
+  draft.phase = "publishing";
+  draft.upload = { done: 1, total: 3 };
+  const uploading = share_card_diagnostic(draft, { stage: "decoding-cover" });
+  assert.deepEqual(uploading.preview, { selected: "custom", stage: "decoding-cover" });
+  assert.deepEqual(uploading.attachments, { total: 3, done: 1, state: "uploading" });
+  draft.phase = "published";
+  const failed = share_card_diagnostic(draft, { stage: "drawn", rendered: "custom", width: 1000, height: 900 });
+  assert.deepEqual(failed.attachments, { total: 3, done: 1, state: "incomplete" });
+  assert.equal(failed.publication.revision, "r".repeat(22));
+  assert.doesNotMatch(JSON.stringify([initial, uploading, failed]), /private|secret/);
 });
 
 test("publishing checks the exact snapshot and attachment limits before closing the dialog or sending anything", async () => {

@@ -24,6 +24,8 @@ const DEVICES_FILE = 'site-devices.json';
 const STAGES_FILE = 'site-stages.json';
 const MAX_LOCAL_STAGES = 200;
 const SITE_ID_PATTERN = /^[a-z2-7]{10}$/;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const DIAGNOSTIC_TIMEOUT_MS = 10_000;
 const SKIP_DIRECTORIES = new Set(['.git', '.svn', '.hg', 'node_modules', '__pycache__', '.wrangler']);
 const SKIP_FILES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
 
@@ -434,7 +436,7 @@ function load_local_stage(home, stage_id) {
   return store[stage_id] || null;
 }
 
-async function room_api_request(site, path, { method = 'GET', token = '', body = undefined, fetcher = fetch } = {}) {
+async function room_api_request(site, path, { method = 'GET', token = '', body = undefined, fetcher = fetch, signal } = {}) {
   if (!site) return null;
   const headers = { 'Accept-Language': 'zh-CN' };
   if (token) headers['X-Discussion-Token'] = token;
@@ -444,6 +446,7 @@ async function room_api_request(site, path, { method = 'GET', token = '', body =
   const res = await deployment_fetch(send, `${site.replace(/\/+$/, '')}${path}`, {
     method,
     headers,
+    signal,
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const parsed = await res.json().catch(() => ({}));
@@ -453,7 +456,7 @@ async function room_api_request(site, path, { method = 'GET', token = '', body =
   return parsed;
 }
 
-async function worker_api(origin, path, { method = 'GET', token = '', body = undefined, raw_body = undefined, content_type = '', fetcher = fetch } = {}) {
+async function worker_api(origin, path, { method = 'GET', token = '', body = undefined, raw_body = undefined, content_type = '', fetcher = fetch, signal } = {}) {
   const headers = { 'Accept-Language': 'zh-CN' };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (raw_body !== undefined) {
@@ -464,6 +467,7 @@ async function worker_api(origin, path, { method = 'GET', token = '', body = und
   const res = await deployment_fetch(fetcher, `${origin}${path}`, {
     method,
     headers,
+    signal,
     ...(raw_body !== undefined ? { body: raw_body } : body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const parsed = await res.json().catch(() => ({}));
@@ -524,7 +528,114 @@ async function write_stage_record(home, { room_id, site, write_token }, { real_t
   };
 }
 
-/** Execute one of the six local site commands: site-stage, site-publish, site-list, site-renew, site-rollback, site-revoke. */
+/** Query the owned-site endpoint, with version-only evidence from older Workers. */
+async function remote_diagnostics(origin, site_id, token, fetcher) {
+  const options = () => ({ token, fetcher, signal: AbortSignal.timeout(DIAGNOSTIC_TIMEOUT_MS) });
+  try {
+    const remote = await worker_api(origin, `/api/sites/${site_id}/diagnostics`, options());
+    return { ...remote, details_available: true };
+  } catch (error) {
+    if (error.http_status !== 404) throw error;
+    const { sites } = await worker_api(origin, '/api/sites', options());
+    const site = sites?.find(item => item.id === site_id);
+    if (!site) throw error;
+    return { status: site.status, url: site.url, source_room: site.source?.room,
+      active_version: site.status === 'active' ? site.current_version || null : null,
+      manifest: null, samples: null, details_available: false };
+  }
+}
+
+/** Read the room's own version and linked stage without the synchronization performed by site-list. */
+async function read_registration(conn, site_id, fetcher) {
+  if (!conn.site) return { state: 'unavailable' };
+  const path = conn.room_id ? `/api/rooms/${encodeURIComponent(conn.room_id)}/sites` : '/api/sites';
+  try {
+    const data = await room_api_request(conn.site, path, { fetcher, signal: AbortSignal.timeout(DIAGNOSTIC_TIMEOUT_MS) });
+    const record = data?.sites?.find(item => item.site_id === site_id);
+    const linked = data?.stages?.find(item => item.site_id === site_id);
+    const stage = linked ? { stage_id: linked.stage_id, ready: linked.ready, file_count: linked.file_count, bytes: linked.bytes } : null;
+    return { state: record ? 'observed' : 'missing', room_id: record?.room_id || conn.room_id || null,
+      version: record?.current_version ?? null, status: record?.status ?? null, stage };
+  } catch {
+    return { state: 'unavailable' };
+  }
+}
+
+/** Only use the public hostname corresponding to this ID and hosting service. */
+function public_site_origin(origin, site_id, url) {
+  try {
+    const public_url = new URL(url);
+    if (public_url.protocol === 'https:' && !public_url.port && !public_url.username && !public_url.password
+        && public_url.hostname === `${site_id}.${new URL(origin).hostname}`) return public_url.origin;
+  } catch { /* the address could not be verified */ }
+  return '';
+}
+
+/** Hash the anonymous response in a bounded stream and discard the body. */
+async function check_public_file(origin, path, digest, fetcher) {
+  const checked = { path, expected_sha256: SHA256_PATTERN.test(digest || '') ? digest : null,
+    actual_sha256: null, http_status: null, status: 'unavailable' };
+  if (!origin) return checked;
+  try {
+    const response = await fetcher(origin + path, { method: 'GET', redirect: 'manual', cache: 'no-store',
+      signal: AbortSignal.timeout(DIAGNOSTIC_TIMEOUT_MS) });
+    checked.http_status = response.status;
+    if (response.status !== 200) {
+      await response.body?.cancel();
+      return { ...checked, status: 'http_error' };
+    }
+    const hash = createHash('sha256');
+    let bytes = 0;
+    for await (const chunk of response.body || []) {
+      bytes += chunk.byteLength;
+      if (bytes > LOCAL_SITE_LIMITS.max_site_bytes) return { ...checked, status: 'too_large' };
+      hash.update(chunk);
+    }
+    checked.actual_sha256 = hash.digest('hex');
+    checked.status = !checked.expected_sha256 ? 'unverified'
+      : checked.expected_sha256 === checked.actual_sha256 ? 'match' : 'mismatch';
+  } catch { /* no result if the request or response stream failed */ }
+  return checked;
+}
+
+/** Determine the furthest confirmed step for the pending manifest or the active version. */
+function confirmed_stage(remote, registration_matches, probes) {
+  const manifest = remote.manifest;
+  if (manifest?.status === 'uploading' && manifest.version > (remote.active_version || 0)) {
+    if (manifest.uploaded === manifest.file_count) return 'upload_complete';
+    return manifest.uploaded ? 'upload_partial' : 'manifest_registered';
+  }
+  if (!remote.active_version) return 'inactive';
+  if (!registration_matches) return 'remote_activated';
+  if (probes.entry?.status === 'match' && (!probes.asset || probes.asset.status === 'match')) return 'public_samples_verified';
+  return 'room_registered';
+}
+
+/** Compare independently observed deployment records and anonymous public responses. */
+async function diagnose_site(home, conn, site_id, { origin, token, fetcher }) {
+  const remote = await remote_diagnostics(origin, site_id, token, fetcher);
+  const target = conn.room_id ? conn : resolve_room_connection(home, { room_id: remote.source_room, site: conn.site });
+  const registration = await read_registration(target, site_id, fetcher);
+  if (conn.room_id && remote.source_room !== conn.room_id && registration.state !== 'observed') {
+    throw new SiteCommandError(t('站点不属于当前房间'), { code: 'auth', http_status: 403 });
+  }
+  const public_origin = public_site_origin(origin, site_id, remote.url);
+  const asset_path = remote.samples?.asset?.path;
+  const [entry, asset] = remote.active_version ? await Promise.all([
+    check_public_file(public_origin, '/', remote.samples?.entry?.sha256, fetcher),
+    typeof asset_path === 'string' && inspect_local_path(asset_path).ok
+      ? check_public_file(public_origin, '/' + asset_path.split('/').map(encodeURIComponent).join('/'),
+        remote.samples.asset.sha256, fetcher) : null,
+  ]) : [null, null];
+  const probes = { entry, asset };
+  const registration_matches_active = remote.active_version && registration.state === 'observed'
+    ? registration.version === remote.active_version && registration.status === 'active' : null;
+  return { site_id, url: public_origin || null, registration, remote: { status: remote.status, active_version: remote.active_version,
+    manifest: remote.manifest, details_available: remote.details_available }, registration_matches_active, probes,
+    last_confirmed_stage: confirmed_stage(remote, registration_matches_active, probes) };
+}
+
+/** Execute a local site command. */
 export async function site_command(home, command, input = {}, { fetcher = fetch, sites_origin: origin_override = '' } = {}) {
   const origin = sites_origin(origin_override || input.sites_origin || '');
   const conn = resolve_room_connection(home, input);
@@ -746,6 +857,10 @@ export async function site_command(home, command, input = {}, { fetcher = fetch,
     throw new SiteCommandError(t('本机尚未注册发布身份，无法操作该站点'), { code: 'auth', http_status: 403 });
   }
 
+  if (command === 'site-diagnose') {
+    return diagnose_site(home, conn, site_id, { origin, token: identity.device_token, fetcher });
+  }
+
   if (command === 'site-renew') {
     const res = await worker_api(origin, `/api/sites/${site_id}/renew`, {
       method: 'POST', token: identity.device_token, body: {}, fetcher,
@@ -814,6 +929,7 @@ const SITE_CLI_HELP = () => t(`AI CoDiscuss 网站部署
   codiscuss site stage (--dir 目录 | --file 文件.html) [--room 房间] [--title 标题] [--exclude 路径]
   codiscuss site publish (--dir 目录 | --file 文件.html | --stage 编号) [--site 站点编号] [--room 房间] [--title 标题] [--exclude 路径]
   codiscuss site list [--room 房间]
+  codiscuss site diagnose <站点编号> [--room 房间]
   codiscuss site renew <站点编号> [--room 房间]
   codiscuss site rollback <站点编号> [--version 版本号] [--room 房间]
   codiscuss site revoke <站点编号> [--room 房间]
@@ -873,6 +989,7 @@ export async function site_cli(args, { home = service_home(), fetcher = fetch } 
     stage: 'site-stage',
     publish: 'site-publish',
     list: 'site-list',
+    diagnose: 'site-diagnose',
     renew: 'site-renew',
     rollback: 'site-rollback',
     revoke: 'site-revoke',
@@ -891,13 +1008,17 @@ export async function site_cli(args, { home = service_home(), fetcher = fetch } 
     dir: values.dir || undefined,
     file: values.file || undefined,
     stage_id: values.stage || undefined,
-    site_id: values.site || (['renew', 'rollback', 'revoke'].includes(sub) ? positionals[1] : undefined),
+    site_id: values.site || (['diagnose', 'renew', 'rollback', 'revoke'].includes(sub) ? positionals[1] : undefined),
     title: values.title || undefined,
     exclude: values.exclude || undefined,
     version: values.version !== undefined ? Number(values.version) : undefined,
     sites_origin: values['sites-origin'] || undefined,
   };
   try {
+    if (sub === 'diagnose' && access.room && (input.room_id !== access.room
+        || (values.url && values.url.replace(/\/+$/, '') !== access.site?.replace(/\/+$/, '')))) {
+      throw new SiteCommandError(t('站点诊断须使用凭据绑定的房间和网站'), { code: 'auth', http_status: 403 });
+    }
     const result = await site_command(home, command, input, { fetcher });
     process.stdout.write(`${JSON.stringify({ ok: true, data: result }, null, 2)}\n`);
   } catch (error) {

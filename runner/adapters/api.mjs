@@ -74,9 +74,24 @@ function tool(name, description, properties = {}, required = []) {
   return { name, description, parameters: { type: 'object', properties, required, additionalProperties: false } };
 }
 
+const CROSS_ROOM_TOOLS = new Set(['read_room', 'read_messages', 'read_message', 'read_events', 'read_attachment']);
+
+function can_read_other_rooms(context) {
+  return !context.external_access && !context.tool_lockdown && process.env.CODISCUSS_TOOL_LOCKDOWN !== '1';
+}
+
+function room_headers(context) {
+  return context.cross_room_read ? { 'X-Discussion-Read-Only': '1' } : { 'X-Discussion-Token': context.token };
+}
+
 /** Expose only tools belonging to this task's role; an external task gets only what its relay passes. */
 export function participant_tools(context) {
   const tools = role_tools(context);
+  if (can_read_other_rooms(context)) {
+    for (const item of tools.filter(item => CROSS_ROOM_TOOLS.has(item.name))) {
+      item.parameters.properties.room = { type: 'string', pattern: '^[A-Za-z0-9_-]+$', description: '同站点目标房间编号，省略时读取本房间' };
+    }
+  }
   return context.external_access ? tools.filter(item => EXTERNAL_TOOLS.has(item.name)) : tools;
 }
 
@@ -208,7 +223,7 @@ async function room_request(context, path, body) {
   }
   const response = await entry_fetch(`${context.site}/api/rooms/${context.room}${path}`, {
     method: body === undefined ? 'GET' : 'POST', redirect: 'error',
-    headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': context.token },
+    headers: { 'Content-Type': 'application/json', ...room_headers(context) },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.any([context.signal, AbortSignal.timeout(SITE_TIMEOUT_MS)]),
   });
@@ -267,7 +282,7 @@ async function read_events(context, args) {
 async function room_bytes(context, path, limit) {
   context.signal.throwIfAborted();
   const response = await entry_fetch(`${context.site}/api/rooms/${context.room}${path}`, {
-    redirect: 'error', headers: { 'X-Discussion-Token': context.token },
+    redirect: 'error', headers: room_headers(context),
     signal: AbortSignal.any([context.signal, AbortSignal.timeout(SITE_TIMEOUT_MS)]),
   });
   if (!response.ok) {
@@ -400,6 +415,15 @@ async function run_tool(context, call) {
   try { args = typeof call.arguments === 'string' ? JSON.parse(call.arguments) : call.arguments || {}; }
   catch { return { result: { error: '工具参数必须为 JSON 对象' } }; }
   if (!args || typeof args !== 'object' || Array.isArray(args)) return { result: { error: '工具参数必须为 JSON 对象' } };
+  if (args.room !== undefined) {
+    if (!CROSS_ROOM_TOOLS.has(call.name) || !can_read_other_rooms(context)
+        || typeof args.room !== 'string' || !/^[A-Za-z0-9_-]+$/.test(args.room)) {
+      return { result: { error: '此工具无法读取指定房间' } };
+    }
+    if (args.room !== context.room) {
+      context = { ...context, room: args.room, token: undefined, execution_id: undefined, cross_room_read: true };
+    }
+  }
   if (is_file_tool(call.name)) {
     const result = run_file_tool(context.project, call.name, args);
     if (WRITE_TOOLS.includes(call.name) && typeof args.file_path === 'string') context.on_edits?.([resolve(context.project.root, args.file_path)]);
@@ -810,7 +834,7 @@ async function api_chat(profile, binding, task) {
 export function api_lockdown(task) {
   if (!task.tool_lockdown) return task;
   const { cwd, workdir, extra_directories, commands, image_generation, ...room } = task.api_context || {};
-  return { ...task, api_context: { ...room, project_access: 'read', no_web: true } };
+  return { ...task, api_context: { ...room, tool_lockdown: true, project_access: 'read', no_web: true } };
 }
 
 /** The model API's behaviour; its static facts are in profiles.mjs. */

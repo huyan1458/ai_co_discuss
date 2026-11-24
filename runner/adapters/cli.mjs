@@ -53,9 +53,17 @@ function monitor_cli(adapter, child, binding, task, restart) {
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const max_run_ms = cli_max_run_ms();
   track_edits(adapter, task);
-  state.limit_timer = setTimeout(() => { state.error = cli_timeout_reason(max_run_ms); child.kill(); }, max_run_ms);
+  task.on_diagnostic?.({ timeout_limits: { total_ms: max_run_ms } });
+  state.limit_timer = setTimeout(() => {
+    task.on_diagnostic?.({ timeout_kind: 'total' });
+    state.error = cli_timeout_reason(max_run_ms);
+    child.kill();
+  }, max_run_ms);
   child.stdout.on('data', chunk => task.on_output(log_path, chunk));
   child.stderr.setEncoding('utf8');
+  if (adapter.stderr_line) {
+    createInterface({ input: child.stderr, crlfDelay: Infinity }).on('line', line => adapter.stderr_line(state, line));
+  }
   // Stops the process without marking it stopped by the runner, so a restart is still allowed.
   const own_kill = child.kill.bind(child);
   // Plain text output (stderr, and stdout lines that are not JSON) goes to the adapter's `on_stderr`.
@@ -73,7 +81,7 @@ function monitor_cli(adapter, child, binding, task, restart) {
     if (!line.trim()) return;
     let event;
     try { event = JSON.parse(line); }
-    catch { state.diagnostic = 'CLI 输出中存在无效 JSON，详情见本机日志'; watch_text(line); return; }
+    catch { state.diagnostic = 'CLI 输出中存在无效 JSON，详情见本机日志'; adapter.stderr_line?.(state, line); watch_text(line); return; }
     trace_cli_event(event, task);
     const phase = adapter.events.phase(event);
     if (phase) task.on_activity?.(phase, adapter.events.tool(event), adapter.events.call?.(event));
@@ -96,7 +104,7 @@ function monitor_cli(adapter, child, binding, task, restart) {
     if (error && state.not_started && !state.stopped && (!failure.failure_class || restartable) && restart?.()) return;
     // `not_started`: the adapter saw the CLI fail before any turn ran, so the runner may deliver the same task again.
     if (error) task.on_failure(error, { not_started: Boolean(state.not_started) && !failure.failure_class,
-      ...(failure.failure_class ? { retryable: false, ...failure } : {}) });
+      ...(failure.failure_class ? { retryable: false } : {}), ...failure });
     else task.on_exit?.(state.denial);
   });
   return state;
@@ -133,6 +141,7 @@ export async function cli_delivery(adapter, config, binding, task, spawn_process
     if (restarts >= CLI_START_RETRIES) return false;
     restarts += 1;
     task.on_trace?.('cli_restart', { attempt: restarts });
+    task.on_diagnostic?.({ retry: { layer: 'adapter', state: 'started', attempt: restarts } });
     let launched;
     try { launched = launch(); }
     catch (error) { task.on_failure(error.message, { not_started: true }); return true; }
@@ -169,7 +178,7 @@ export async function cli_delivery(adapter, config, binding, task, spawn_process
     child.once('error', error => state.spawned ? task.on_failure(error.message) : reject(not_sent(error)));
   });
   first.send();
-  const steer = invocation.steer && (text => steer_cli(current, invocation, task, text));
+  const steer = invocation.steer && ((text, id) => steer_cli(current, invocation, task, text, id));
   return { session_id: state.session_id, status: 'accepted', capabilities: adapter_capabilities(adapter.id).delivery, ...(steer ? { steer } : {}) };
 }
 
@@ -177,9 +186,9 @@ export async function cli_delivery(adapter, config, binding, task, spawn_process
  * Pass one interjection into a running CLI turn as the adapter's stdin line, and mark it in the log so the execution's
  * details show it where it happened. False when the turn already ended or the process is gone.
  */
-function steer_cli({ child, state }, invocation, task, text) {
+function steer_cli({ child, state }, invocation, task, text, id) {
   if (state.completed || state.stopped || state.error || child.exitCode !== null || child.stdin.destroyed || child.stdin.writableEnded) return false;
-  child.stdin.write(invocation.steer(text));
+  child.stdin.write(invocation.steer(text, id));
   task.on_output(state.log_path, `${JSON.stringify({ type: 'codiscuss.interjection', text })}\n`);
   return true;
 }

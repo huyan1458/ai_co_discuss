@@ -15,6 +15,7 @@ import re
 import time
 import uuid
 
+from .execution_diagnostics import diagnostic_detail, record_diagnostics
 from .identity import MAX_ROOM_AGENTS, default_label, is_ai
 from .message_queue import pause as pause_queue, queue_view
 from .texts import Text, incoming_text, load_texts, save_text, text_payload
@@ -55,11 +56,25 @@ ROOM_EVENT_PAGE = 500
 # start, so the page shows the wake-up there instead of a new card.
 HOST_FAILED_SQL = """(SELECT CAST(substr(w.key,13) AS INTEGER) FROM free_host_wakes w WHERE r.purpose='notice'
     AND w.room_id=r.room_id AND w.message_id=r.message_id AND w.key LIKE 'host_failed:%' LIMIT 1)"""
-LAYOUT_AFTER_SQL = f"""COALESCE((SELECT MIN(l.after_message_id) FROM member_requests f JOIN request_layout l ON l.request_id=f.id
-    WHERE f.execution_id={HOST_FAILED_SQL}),(SELECT after_message_id FROM request_layout WHERE request_id=r.id),r.message_id)"""
+LAYOUT_AFTER_SQL = f"""COALESCE((SELECT MAX(l.after_message_id) FROM member_requests f JOIN request_layout l ON l.request_id=f.id
+    WHERE f.execution_id={HOST_FAILED_SQL} OR f.id IN (SELECT request_id FROM retried_requests WHERE execution_id={HOST_FAILED_SQL})),
+    (SELECT after_message_id FROM request_layout WHERE request_id=r.id),r.message_id)"""
+
+
+def layout_at_sql(execution_id_sql):
+    """When the work behind request `r` started for execution `execution_id_sql`.
+
+    Only the first execution on a `host_failed:<id>` wake-up takes over the failed host execution's start time; a retry
+    of that wake-up starts at its own `created_at` so the new card follows the failed card chronologically.
+    """
+    return f"""COALESCE(
+        CASE WHEN NOT EXISTS(SELECT 1 FROM retried_requests rr WHERE rr.request_id=r.id AND rr.execution_id<{execution_id_sql})
+            THEN (SELECT created_at FROM member_executions WHERE id={HOST_FAILED_SQL}) END,
+        (SELECT created_at FROM member_executions WHERE id={execution_id_sql}))"""
+
+
 # When the work behind a request (aliased `r`) started, ordering cards under the same message: its execution's start.
-LAYOUT_AT_SQL = f"""COALESCE((SELECT created_at FROM member_executions WHERE id={HOST_FAILED_SQL}),
-    (SELECT created_at FROM member_executions WHERE id=r.execution_id))"""
+LAYOUT_AT_SQL = layout_at_sql("r.execution_id")
 # Rounds used and the owner's additions in the room's recent chains, for "第 2/3 轮"; parameter: the room.
 # A round is a host dispatch (a batch) or a continue the host asked for (`free_host_wakes` with a `continue:` key); a
 # relay's later steps in the same pass (`free_relay_steps`) ride on its first, so a whole pass is one round.
@@ -211,7 +226,8 @@ LATER_COLUMNS = {"room_members": {"access": "TEXT NOT NULL DEFAULT 'runner'", "s
                  "execution_capabilities": {"steer": "INTEGER", "resume": "INTEGER"},
                  "member_capabilities": {"image_model": "TEXT NOT NULL DEFAULT ''"},
                  "execution_failures": {"reset_at": "INTEGER NOT NULL DEFAULT 0"},
-                 "free_host_checkins": {"idle_notice": "INTEGER NOT NULL DEFAULT 0"}}
+                 "free_host_checkins": {"idle_notice": "INTEGER NOT NULL DEFAULT 0"},
+                 "retried_requests": {"retried_at": "INTEGER NOT NULL DEFAULT 0"}}
 
 
 def migrate_free_tables(connection):
@@ -1024,7 +1040,13 @@ def recent_executions(connection, room_id, span=None):
         (SELECT MAX({LAYOUT_AFTER_SQL}) FROM member_requests r WHERE r.execution_id=e.id
             OR r.id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id)) AS layout_after,
         EXISTS(SELECT 1 FROM retried_requests WHERE execution_id=e.id) AS retried,
-        (SELECT MIN({LAYOUT_AT_SQL}) FROM member_requests r WHERE r.execution_id=e.id) AS layout_at,
+        (SELECT CAST(substr(w.key,13) AS INTEGER) FROM free_host_wakes w
+            WHERE w.room_id=e.room_id AND w.key LIKE 'host_failed:%'
+            AND w.message_id IN (SELECT message_id FROM member_requests WHERE execution_id=e.id
+                UNION SELECT r.message_id FROM retried_requests rr JOIN member_requests r ON r.id=rr.request_id WHERE rr.execution_id=e.id)
+            LIMIT 1) AS replaces_execution_id,
+        (SELECT MIN({layout_at_sql("e.id")}) FROM member_requests r WHERE r.execution_id=e.id
+            OR r.id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id)) AS layout_at,
         (SELECT COUNT(*) FROM execution_notes WHERE execution_id=e.id) AS note_count,
         (SELECT COUNT(*) FROM execution_segments WHERE source='free' AND execution_id=e.id
             AND phase IN ('command','tool','editing')) AS step_count,
@@ -1039,7 +1061,10 @@ def recent_executions(connection, room_id, span=None):
         rows = connection.execute(f"SELECT * FROM ({query}) WHERE layout_after>? AND layout_after<=? ORDER BY id DESC",
                                   (room_id, span[0], MAX_MESSAGE_ID if span[1] is None else span[1]))
     else:
-        rows = connection.execute(f"{query} ORDER BY e.id DESC LIMIT ?", (room_id, RECENT_EXECUTIONS))
+        rows = connection.execute(
+            f"""{query} AND (e.status IN ('dispatched','started')
+                OR e.id IN (SELECT id FROM member_executions WHERE room_id=? ORDER BY id DESC LIMIT ?))
+                ORDER BY e.id DESC""", (room_id, room_id, RECENT_EXECUTIONS))
     executions = []
     positions = relay_positions(connection, room_id)
     for row in rows:
@@ -1057,7 +1082,7 @@ def recent_executions(connection, room_id, span=None):
             "notes": row["note_count"], "steps": row["step_count"], "commands": row["command_count"], "edits": row["edit_count"], "denials": json.loads(row["denials"] or "[]"), "failure_class": row["failure_class"] or "",
             "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None, "background": bool(row["background"]),
-            "retried": bool(row["retried"]), "line": line,
+            "retried": bool(row["retried"]), "replaces_execution_id": row["replaces_execution_id"], "line": line,
             "interjections": execution_interjections(connection, row["id"], row["status"]),
             "retry": execution_retry(connection, row["id"])})
     return executions
@@ -1139,6 +1164,34 @@ GROUP_STATE_SQL = f"""SELECT json_object(
     FROM rooms WHERE id=?"""
 
 
+def room_failure_wakes(connection, room_id, span=None):
+    """Map host-failure wake-up notice messages to the failed execution they replaced; `span` (low, high] pages history."""
+    if span:
+        rows = connection.execute(
+            "SELECT key,message_id FROM free_host_wakes WHERE room_id=? AND key LIKE 'host_failed:%' AND message_id>? AND message_id<=? ORDER BY message_id DESC",
+            (room_id, span[0], MAX_MESSAGE_ID if span[1] is None else span[1]))
+    else:
+        rows = connection.execute(
+            "SELECT key,message_id FROM free_host_wakes WHERE room_id=? AND key LIKE 'host_failed:%' ORDER BY message_id DESC LIMIT ?",
+            (room_id, RECENT_EXECUTIONS))
+    return [{"message_id": row["message_id"], "execution_id": int(row["key"][len("host_failed:"):])} for row in rows]
+
+
+def room_quiet_checkins(connection, room_id, span=None):
+    """Timed checks the host answered without dispatching; `span` (low, high] returns pairs touching that history page."""
+    base = """SELECT w.message_id,r.answer_id FROM free_host_wakes w
+        JOIN member_requests r ON r.message_id=w.message_id AND r.purpose='notice' AND r.status='completed' AND r.answer_id IS NOT NULL
+        WHERE w.room_id=? AND w.key LIKE 'checkin:%' AND NOT EXISTS (SELECT 1 FROM member_requests d WHERE d.message_id=r.answer_id)"""
+    if span:
+        high = MAX_MESSAGE_ID if span[1] is None else span[1]
+        rows = connection.execute(
+            f"{base} AND ((w.message_id>? AND w.message_id<=?) OR (r.answer_id>? AND r.answer_id<=?)) ORDER BY w.message_id DESC",
+            (room_id, span[0], high, span[0], high))
+    else:
+        rows = connection.execute(f"{base} ORDER BY w.message_id DESC LIMIT ?", (room_id, RECENT_EXECUTIONS))
+    return [dict(row) for row in rows]
+
+
 def free_view(connection, room_id):
     """Summarize members, their live execution, recent requests and possible file conflicts."""
     now = int(time.time())
@@ -1171,14 +1224,22 @@ def free_view(connection, room_id):
             member["external"] = external_members.room_view_field(connection, row["id"])
         members.append(member)
     names = {row["id"]: row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=?", (room_id,))}
-    requests = [{**dict(row), "member": names.get(row["member_id"], ""),
+    next_batch = next_batch_request_ids(connection, members)
+    requests = [{**dict(row), "member": names.get(row["member_id"], ""), "retried": bool(row["retried"]),
+                 "next_batch": row["id"] in next_batch,
                  **session_request_source(connection, row["id"], row["message_id"]),
                  } for row in connection.execute(
         """SELECT id,member_id,message_id,status,execution_id,answer_id,chain_id,batch_id,purpose,created_by,created_at,
         (SELECT reason FROM request_cancel_reasons c WHERE c.request_id=member_requests.id) AS cancel_reason,
         (SELECT outcome FROM external_declines x WHERE x.request_id=member_requests.id) AS external_outcome,
-        (SELECT after_message_id FROM request_layout l WHERE l.request_id=member_requests.id) AS layout_after FROM member_requests
-        WHERE room_id=? ORDER BY id DESC LIMIT ?""", (room_id, RECENT_REQUESTS))]
+        (SELECT after_message_id FROM request_layout l WHERE l.request_id=member_requests.id) AS layout_after,
+        COALESCE((SELECT MAX(MAX(rr.retried_at, e.finished_at, e.created_at)) FROM retried_requests rr
+            JOIN member_executions e ON e.id=rr.execution_id WHERE rr.request_id=member_requests.id),
+            created_at) AS layout_at,
+        EXISTS(SELECT 1 FROM retried_requests rr WHERE rr.request_id=member_requests.id) AS retried FROM member_requests
+        WHERE room_id=? AND (status IN ('pending','delivering')
+            OR id IN (SELECT id FROM member_requests WHERE room_id=? ORDER BY id DESC LIMIT ?))
+        ORDER BY id DESC""", (room_id, room_id, RECENT_REQUESTS))]
     chains = [dict(row) for row in connection.execute(
         "SELECT chain_id,reason FROM free_chains WHERE room_id=? ORDER BY chain_id DESC LIMIT 10", (room_id,))]
     max_rounds = chain_rounds(connection, room_id)
@@ -1189,14 +1250,9 @@ def free_view(connection, room_id):
         "SELECT chain_id,asked_rounds,asked_reason FROM free_chain_holds WHERE room_id=? AND asked_rounds>0", (room_id,))}
     chains = [{**chain, **asks.get(chain["chain_id"], {})} for chain in chains]
     checkin = connection.execute("SELECT interval_seconds,due_at FROM free_host_checkins WHERE room_id=?", (room_id,)).fetchone()
-    failure_wakes = [{"message_id": row["message_id"], "execution_id": int(row["key"][len("host_failed:"):])} for row in connection.execute(
-        "SELECT key,message_id FROM free_host_wakes WHERE room_id=? AND key LIKE 'host_failed:%' ORDER BY message_id DESC LIMIT ?",
-        (room_id, RECENT_EXECUTIONS))]
+    failure_wakes = room_failure_wakes(connection, room_id)
     # A timed check the host answered without dispatching folds its answer into the check's own line.
-    quiet_checkins = [dict(row) for row in connection.execute("""SELECT w.message_id,r.answer_id FROM free_host_wakes w
-        JOIN member_requests r ON r.message_id=w.message_id AND r.purpose='notice' AND r.status='completed' AND r.answer_id IS NOT NULL
-        WHERE w.room_id=? AND w.key LIKE 'checkin:%' AND NOT EXISTS (SELECT 1 FROM member_requests d WHERE d.message_id=r.answer_id)
-        ORDER BY w.message_id DESC LIMIT ?""", (room_id, RECENT_EXECUTIONS))]
+    quiet_checkins = room_quiet_checkins(connection, room_id)
     return {"failure_wakes": failure_wakes, "quiet_checkins": quiet_checkins, "host_checkin": {"minutes": checkin["interval_seconds"] // 60, "due_at": checkin["due_at"]} if checkin else None,
             "members": members, "ended_externals": external_members.ended_view(connection, room_id),
             "requests": requests[::-1], "executions": recent_executions(connection, room_id),
@@ -2924,8 +2980,8 @@ def stop_member_work(connection, member_id, reason, cancel_reason, keep_pending=
                                   (member_id,)).fetchall():
         # The interrupted turn's card stays under the message it was answering, marked stopped, after its requests move on.
         if requeue:
-            connection.execute("INSERT OR IGNORE INTO retried_requests (execution_id,request_id) SELECT ?,id FROM member_requests WHERE execution_id=?",
-                               (row["id"], row["id"]))
+            connection.execute("INSERT OR IGNORE INTO retried_requests (execution_id,request_id,retried_at) SELECT ?,id,? FROM member_requests WHERE execution_id=?",
+                               (row["id"], int(time.time()), row["id"]))
         finish_execution(connection, row["id"], "cancelled", reason, "pending" if requeue else "cancelled", "" if requeue else cancel_reason)
     if not keep_pending:
         record_cancel_reasons(connection, "member_id=? AND status='pending'", (member_id,), cancel_reason)
@@ -3380,6 +3436,54 @@ def one_line(connection, member_id, request_filter, request_values):
     return (f"{request_filter} AND NOT {MAIN_LINE} AND NOT (purpose='ask' AND created_by<>?)", (*request_values, branch[0]))
 
 
+def next_batch_filter(connection, member_id, request_ids=None):
+    """Return `(where_sql, values)` selecting the pending requests `open_execution` will bundle next, or `None` if none."""
+    # A group request waits for the runner to choose how everyone answers; it is never delivered itself.
+    pending = connection.execute("""SELECT id,purpose,EXISTS(SELECT 1 FROM review_plans WHERE review_batch_id=member_requests.message_id AND reviewer_id=member_requests.member_id) AS review FROM member_requests
+        WHERE member_id=? AND status='pending' AND purpose<>'group' ORDER BY id""", (member_id,)).fetchall()
+    if request_ids is not None:
+        # An external member's computer agreed to these requests only; the others stay pending for its owner to decide.
+        missing = sorted(set(request_ids) - {row["id"] for row in pending})
+        if missing:
+            raise FileExistsError(Text("请求 {request_id} 不属于本成员或已处理", request_id=missing[0]))
+        pending = [row for row in pending if row["id"] in request_ids]
+    session_purpose = next((row["purpose"] for row in pending if row["purpose"] == "discuss"), None)
+    if not pending:
+        return None
+    if session_purpose:
+        request_filter, request_values = "purpose=?", (session_purpose,)
+    elif pending[0]["review"]:
+        request_filter, request_values = "id=?", (pending[0]["id"],)
+    else:
+        request_filter = "purpose<>'group' AND NOT EXISTS(SELECT 1 FROM review_plans WHERE review_batch_id=member_requests.message_id AND reviewer_id=member_requests.member_id)"
+        request_values = ()
+    if request_ids is not None:
+        request_filter += f" AND id IN ({','.join('?' * len(request_ids))})"
+        request_values = (*request_values, *request_ids)
+    if not session_purpose and not pending[0]["review"]:
+        request_filter, request_values = one_line(connection, member_id, request_filter, request_values)
+    return request_filter, request_values
+
+
+def next_batch_request_ids(connection, members):
+    """Pending request ids that each non-external member's next execution will claim together.
+
+    External members claim chosen requests one by one, so their pending requests are never assumed to bundle.
+    """
+    next_batch = set()
+    for member in members:
+        if member["status"] != "active" or member["access"] == "external" or not member["pending"]:
+            continue
+        batch = next_batch_filter(connection, member["id"])
+        if not batch:
+            continue
+        request_filter, request_values = batch
+        rows = connection.execute(f"SELECT id FROM member_requests WHERE member_id=? AND status='pending' AND {request_filter}",
+                                  (member["id"], *request_values)).fetchall()
+        next_batch.update(row["id"] for row in rows)
+    return next_batch
+
+
 def open_execution(connection, room_id, member, payload, request_ids=None):
     """Open one execution over a checked member's pending requests, or only over `request_ids` among them."""
     client_id = str(payload.get("client_id", ""))
@@ -3390,31 +3494,10 @@ def open_execution(connection, room_id, member, payload, request_ids=None):
         raise FileExistsError(Text("该成员额度已用尽，暂停投递；等额度重置后重试它失败的执行，或改派其他成员"))
     if held_until(connection, member["id"]):
         raise FileExistsError(Text("该成员上一轮已作废但本机无法停止，可能仍在处理；等它结束或等待时限到后再投递"))
-    # A group request waits for the runner to choose how everyone answers; it is never delivered itself.
-    pending = connection.execute("""SELECT id,purpose,EXISTS(SELECT 1 FROM review_plans WHERE review_batch_id=member_requests.message_id AND reviewer_id=member_requests.member_id) AS review FROM member_requests
-        WHERE member_id=? AND status='pending' AND purpose<>'group' ORDER BY id""", (member["id"],)).fetchall()
-    if request_ids is not None:
-        # An external member's computer agreed to these requests only; the others stay pending for its owner to decide.
-        missing = sorted(set(request_ids) - {row["id"] for row in pending})
-        if missing:
-            raise FileExistsError(Text("请求 {request_id} 不属于本成员或已处理", request_id=missing[0]))
-        pending = [row for row in pending if row["id"] in request_ids]
-    session_purpose = next((row["purpose"] for row in pending if row["purpose"] == "discuss"), None)
-    if not pending:
+    batch = next_batch_filter(connection, member["id"], request_ids)
+    if not batch:
         raise FileExistsError(Text("该成员没有待投递的请求"))
-    if session_purpose:
-        request_filter = "purpose=?"
-        request_values = (session_purpose,)
-    elif pending[0]["review"]:
-        request_filter, request_values = "id=?", (pending[0]["id"],)
-    else:
-        request_filter = "purpose<>'group' AND NOT EXISTS(SELECT 1 FROM review_plans WHERE review_batch_id=member_requests.message_id AND reviewer_id=member_requests.member_id)"
-        request_values = ()
-    if request_ids is not None:
-        request_filter += f" AND id IN ({','.join('?' * len(request_ids))})"
-        request_values = (*request_values, *request_ids)
-    if not session_purpose and not pending[0]["review"]:
-        request_filter, request_values = one_line(connection, member["id"], request_filter, request_values)
+    request_filter, request_values = batch
     if not connection.execute(f"SELECT 1 FROM member_requests WHERE member_id=? AND status='pending' AND {request_filter}",
                               (member["id"], *request_values)).fetchone():
         raise FileExistsError(Text("该成员没有待投递的请求"))
@@ -3487,11 +3570,14 @@ def view_execution(connection, room_id, execution_id, token):
         raise LookupError(Text("执行不存在"))
     try:
         require_owner(connection, room_id, token)
+        owner = True
     except PermissionError:
+        owner = False
         member = require_member(connection, room_id, token)
         if member["id"] != row["member_id"] and member["role"] != "host":
             raise
-    return {**execution_detail(connection, row), "delivery": {"last_submission": execution_delivery(connection, room_id, row)}}
+    return {**execution_detail(connection, row), "delivery": {"last_submission": execution_delivery(connection, room_id, row)},
+            "diagnostics": diagnostic_detail(connection, row, owner)}
 
 
 def changed_files(payload):
@@ -3852,6 +3938,8 @@ def execution_action(connection, room_id, execution_id, token, payload, member=N
         finish_execution(connection, execution_id, "cancelled", reason, "pending")
     else:
         raise ValueError(Text("action 须为 renew、fail、release、report、segments、interject、interjection、retry_wait、retry_start、retry_now、retry_stop 或 retry"))
+    if action != "fail" or not member:
+        record_diagnostics(connection, execution_id, payload, time.time_ns() // 1_000_000)
     detail = execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
     if action == "retry" and quota:
         # Retrying a usage-limit failure is allowed (the owner may know the quota is back) but likely fails again before the reset.
@@ -3892,13 +3980,15 @@ def retry_failed(connection, room_id, execution):
     if execution["status"] != "failed":
         raise FileExistsError(Text("只有失败的执行可以重试"))
     requests = connection.execute("""SELECT id,batch_id,chain_id FROM member_requests r WHERE execution_id=? AND status='failed'
+        AND NOT EXISTS(SELECT 1 FROM message_withdrawals w WHERE w.message_id=r.message_id)
         AND NOT EXISTS(SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id)""", (execution["id"],)).fetchall()
     if not requests:
         raise FileExistsError(Text("这次执行没有可重试的请求：已重试过，或是讨论发言（由主持人重新安排）"))
     if not connection.execute("SELECT 1 FROM room_members WHERE id=? AND status='active'", (execution["member_id"],)).fetchone():
         raise FileExistsError(Text("该成员已离开或暂离，无法重试"))
-    connection.executemany("INSERT OR IGNORE INTO retried_requests (execution_id,request_id) VALUES (?,?)",
-                           [(execution["id"], request["id"]) for request in requests])
+    now = int(time.time())
+    connection.executemany("INSERT OR IGNORE INTO retried_requests (execution_id,request_id,retried_at) VALUES (?,?,?)",
+                           [(execution["id"], request["id"], now) for request in requests])
     connection.execute(f"UPDATE member_requests SET status='pending',execution_id=NULL WHERE id IN ({','.join('?' * len(requests))})",
                        [request["id"] for request in requests])
     reopen_batches(connection, room_id, requests)
@@ -3922,6 +4012,9 @@ def revive_failed(connection, room_id, execution):
         return None
     if connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND id<>? AND status IN ('dispatched','started')",
                           (execution["member_id"], execution["id"])).fetchone():
+        return None
+    if connection.execute("""SELECT 1 FROM member_requests r JOIN message_withdrawals w ON w.message_id=r.message_id
+        WHERE r.execution_id=?""", (execution["id"],)).fetchone():
         return None
     requests = connection.execute("""SELECT id,batch_id,chain_id FROM member_requests r WHERE execution_id=? AND status='failed'
         AND NOT EXISTS(SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id)""", (execution["id"],)).fetchall()
@@ -4112,8 +4205,8 @@ def rewind_room(connection, room_id, token, payload):
     now = int(time.time())
     for row in connection.execute("SELECT id FROM member_executions WHERE room_id=? AND status IN ('dispatched','started')", (room_id,)).fetchall():
         finish_execution(connection, row["id"], "cancelled", Text("用户回退了对话"), "cancelled", "user_stop")
-    record_cancel_reasons(connection, "room_id=? AND message_id>=? AND status='pending'", (room_id, message_id), "user_stop")
-    connection.execute("UPDATE member_requests SET status='cancelled' WHERE room_id=? AND message_id>=? AND status='pending'", (room_id, message_id))
+    record_cancel_reasons(connection, "room_id=? AND message_id>=? AND status IN ('pending','failed')", (room_id, message_id), "user_stop")
+    connection.execute("UPDATE member_requests SET status='cancelled' WHERE room_id=? AND message_id>=? AND status IN ('pending','failed')", (room_id, message_id))
     connection.execute("DELETE FROM free_queue WHERE room_id=? AND message_id>=?", (room_id, message_id))
     # Batches of taken-back dispatches never hand back, and a dispatch the round limit held from them is never sent.
     connection.execute("UPDATE free_batches SET settled=1 WHERE room_id=? AND batch_id>=?", (room_id, message_id))

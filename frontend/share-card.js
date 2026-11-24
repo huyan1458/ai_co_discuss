@@ -7,14 +7,15 @@ import { t } from "./i18n.js";
 
 // Layout in CSS pixels; the canvas is drawn at SCALE for sharp text on phones.
 const WIDTH = 750;
+// A data URL is already base64. The signed, encrypted relay request encodes it once more.
+const MAX_COVER_DATA_URL_LENGTH = 360 * 1024;
 const SCALE = 2;
 const PAD = 60;
 const INNER = WIDTH - PAD * 2;
 // Chinese fonts first: a canvas picks one font per run, and a Latin font first left some characters (量) as boxes.
 const FONT = '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", -apple-system, "Segoe UI", sans-serif';
-const COLORS = { top: "#12141c", bottom: "#1b1f2e", text: "#f1f3f8", body: "#d5d9e3", muted: "#949cad", faint: "#6a7283", accent: "#8791ff",
-  glow: "#8791ff", warm: "#d97757", line: "#ffffff14", chip: "#ffffff10", panel: "#8791ff17", panel_edge: "#8791ff3d" };
-const MEMBER_COLORS = ["#d97757", "#8791ff", "#4fb286", "#e0a83b", "#c46fd1", "#4aa3d8"];
+const COLORS = { paper: "#fbf5e9", ink: "#162f30", green: "#206052", bottom: "#183c38", text: "#fff7e7",
+  muted: "#c6d8ce", faint: "#bdd0c7", line: "#52736a" };
 const QR_SIZE = 152;
 const MAX_MEMBERS = 6;
 const CLOSING_PUNCTUATION = "，。、；：！？）》」』”’,.;:!?)";
@@ -48,18 +49,9 @@ function round_rect(context, x, y, width, height, radius) {
   context.roundRect(x, y, width, height, radius);
 }
 
-/** A soft round light centred at (x, y), fading out at `radius`. */
-function glow(context, x, y, radius, color, strength) {
-  const light = context.createRadialGradient(x, y, 0, x, y, radius);
-  light.addColorStop(0, `${color}${strength}`);
-  light.addColorStop(1, `${color}00`);
-  context.fillStyle = light;
-  context.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-}
-
 /** Draw the QR code of `url` as dark modules on a white tile at (x, y). */
 function draw_qr(context, url, x, y, size) {
-  const { data, size: count } = encode(url, { border: 1 });
+  const { data, size: count } = encode(url, { border: 4 });
   context.fillStyle = "#ffffff";
   round_rect(context, x, y, size, size, 14);
   context.fill();
@@ -72,125 +64,136 @@ function draw_qr(context, url, x, y, size) {
 function paint(context, card, height) {
   context.textBaseline = "top";
   context.textAlign = "left";
-  const background = context.createLinearGradient(0, 0, WIDTH * 0.4, height);
-  background.addColorStop(0, COLORS.top);
-  background.addColorStop(1, COLORS.bottom);
-  context.fillStyle = background;
+  context.fillStyle = COLORS.paper;
   context.fillRect(0, 0, WIDTH, height);
-  glow(context, WIDTH - 40, 20, 460, COLORS.glow, "3d");
-  glow(context, 0, height, 380, COLORS.warm, "1c");
-
   let y = PAD;
-  // Brand: the three bars and the name, the tagline at the right.
-  [16, 28, 22].forEach((bar, index) => { context.fillStyle = COLORS.accent; round_rect(context, PAD + index * 10, y + 28 - bar, 6, bar, 3); context.fill(); });
-  context.fillStyle = COLORS.text;
+  context.fillStyle = COLORS.green;
+  [16, 28, 22].forEach((bar, index) => {
+    round_rect(context, PAD + index * 10, y + 28 - bar, 6, bar, 3);
+    context.fill();
+  });
   context.font = `600 24px ${FONT}`;
   context.fillText(t("共议 AI CoDiscuss"), PAD + 42, y + 2);
-  context.fillStyle = COLORS.muted;
-  context.font = `400 19px ${FONT}`;
-  context.textAlign = "right";
-  context.fillText(t("多个 AI 在同一个房间协作"), WIDTH - PAD, y + 6);
-  context.textAlign = "left";
-  y += 30 + 56;
-
-  context.fillStyle = COLORS.text;
-  context.font = `700 46px ${FONT}`;
-  y = draw_lines(context, wrap(context, card.title, INNER, 2), PAD, y, 62) + 18;
-
-  // Members as chips, each with its own colour.
-  context.font = `500 21px ${FONT}`;
-  let x = PAD;
-  for (const [index, name] of card.members.slice(0, MAX_MEMBERS).entries()) {
-    const width = Math.min(context.measureText(name).width, 180) + 44;
-    if (x + width > WIDTH - PAD) break;
-    context.fillStyle = COLORS.chip;
-    round_rect(context, x, y, width, 40, 20);
-    context.fill();
-    context.fillStyle = MEMBER_COLORS[index % MEMBER_COLORS.length];
-    context.beginPath();
-    context.arc(x + 19, y + 20, 5, 0, Math.PI * 2);
-    context.fill();
-    context.fillStyle = COLORS.body;
-    context.fillText(wrap(context, name, 180, 1)[0] || "", x + 32, y + 9);
-    x += width + 10;
+  y += 76;
+  context.fillStyle = COLORS.ink;
+  context.font = `700 54px ${FONT}`;
+  y = draw_lines(context, wrap(context, card.title, INNER, 3), PAD, y, 68) + 18;
+  if (card.members.length) {
+    context.font = `500 21px ${FONT}`;
+    context.fillStyle = COLORS.green;
+    y = draw_lines(context, wrap(context, card.members.slice(0, MAX_MEMBERS).join("  ·  "), INNER, 1), PAD, y, 32) + 16;
   }
-  y += 40 + 44;
-
-  /** A small label over a block of text. */
-  const label = (text) => {
-    context.fillStyle = COLORS.accent;
-    context.font = `600 19px ${FONT}`;
-    context.fillText(text, PAD, y);
+  context.fillStyle = COLORS.green;
+  context.fillRect(PAD, y, INNER, 2);
+  y += 36;
+  if (card.question) {
+    context.font = `400 26px ${FONT}`;
+    context.fillStyle = "#475a54";
+    y = draw_lines(context, wrap(context, card.question, INNER, 3), PAD, y, 38) + 30;
+  }
+  if (card.outcome) {
+    context.font = `600 21px ${FONT}`;
+    context.fillStyle = COLORS.green;
+    context.fillText(t("成果"), PAD, y);
     y += 36;
-  };
-  // The question reads as a quote: an accent rule at its left, no box.
-  context.font = `400 27px ${FONT}`;
-  const question = card.question ? wrap(context, card.question, INNER - 26, 3) : [];
-  if (question.length) {
-    label(t("问题"));
-    context.fillStyle = COLORS.accent;
-    round_rect(context, PAD, y + 4, 4, question.length * 42 - 12, 2);
-    context.fill();
-    context.fillStyle = COLORS.body;
-    context.font = `400 27px ${FONT}`;
-    y = draw_lines(context, question, PAD + 26, y, 42) + 34;
+    context.font = `600 34px ${FONT}`;
+    context.fillStyle = COLORS.ink;
+    y = draw_lines(context, wrap(context, card.outcome, INNER, 6), PAD, y, 49) + 30;
   }
-  // The outcome is what the card is for: the one tinted panel on it.
-  context.font = `500 27px ${FONT}`;
-  const outcome = card.outcome ? wrap(context, card.outcome, INNER - 56, 5) : [];
-  if (outcome.length) {
-    label(t("成果"));
-    const box = outcome.length * 42 + 44;
-    context.fillStyle = COLORS.panel;
-    round_rect(context, PAD, y, INNER, box, 18);
-    context.fill();
-    context.strokeStyle = COLORS.panel_edge;
-    context.lineWidth = 1;
-    round_rect(context, PAD + 0.5, y + 0.5, INNER - 1, box - 1, 18);
-    context.stroke();
-    context.fillStyle = COLORS.text;
-    context.font = `500 27px ${FONT}`;
-    draw_lines(context, outcome, PAD + 28, y + 24, 42);
-    y += box + 30;
+  if (card.stats) {
+    context.font = `400 22px ${FONT}`;
+    context.fillStyle = COLORS.green;
+    context.fillText(card.stats, PAD, y);
+    y += 32;
   }
+  y += 20;
+  return y;
+}
 
-  context.fillStyle = COLORS.muted;
-  context.font = `400 20px ${FONT}`;
-  context.fillText(card.stats, PAD, y);
-  y += 28 + 30;
-
-  // The way in: a rule, then the code with the link beside it.
+/** The live link and expiry belong to the share even when the owner supplies the entire cover. */
+function paint_footer(context, card, y) {
+  context.textBaseline = "top";
+  context.fillStyle = COLORS.bottom;
+  context.fillRect(0, y, WIDTH, 36 + QR_SIZE + PAD);
   context.fillStyle = COLORS.line;
   context.fillRect(PAD, y, INNER, 1);
   y += 36;
   draw_qr(context, card.url, PAD, y, QR_SIZE);
-  const text_x = PAD + QR_SIZE + 30, text_width = WIDTH - PAD - text_x;
+  const text_x = PAD + QR_SIZE + 30;
   context.fillStyle = COLORS.text;
   context.font = `600 26px ${FONT}`;
   context.fillText(t("扫码阅读完整协作记录"), text_x, y + 16);
   context.fillStyle = COLORS.muted;
   context.font = `400 19px ${FONT}`;
-  const link_y = draw_lines(context, wrap(context, card.url.replace(/^https?:\/\//, ""), text_width, 2), text_x, y + 62, 27);
+  context.fillText(new URL(card.url).host, text_x, y + 62);
   context.fillStyle = COLORS.faint;
-  context.fillText(card.expires, text_x, link_y + 10);
+  context.fillText(card.expires, text_x, y + 96);
   return y + QR_SIZE + PAD;
 }
 
 /**
  * Draw `card` ({ title, members: [names], question, outcome, stats, url, expires }) onto `canvas`, sizing it to fit.
  */
-export function draw_share_card(canvas, card) {
+export function draw_share_card(canvas, card, cover) {
   // The first pass only measures: sizing the canvas afterwards clears what it drew.
-  const height = paint(canvas.getContext("2d"), card, 0);
+  const cover_height = cover ? Math.round(WIDTH * cover.height / cover.width) : paint(canvas.getContext("2d"), card, 0);
+  const height = cover_height + 36 + QR_SIZE + PAD;
   canvas.width = WIDTH * SCALE;
   canvas.height = height * SCALE;
   const context = canvas.getContext("2d");
   context.scale(SCALE, SCALE);
-  paint(context, card, height);
+  if (cover) context.drawImage(cover, 0, 0, WIDTH, cover_height);
+  else paint(context, card, cover_height);
+  paint_footer(context, card, cover_height);
   return canvas;
+}
+
+/** Make a self-contained cover that also fits a paired device's 512 KiB relay request. */
+export function encode_cover(image, offset = 0) {
+  const source_height = Math.min(image.height, image.width * 2);
+  const source_top = Math.round((image.height - source_height) * offset);
+  const canvas = document.createElement("canvas");
+  for (let width = Math.min(WIDTH * SCALE, image.width); width >= 1; width = Math.floor(width * 0.8)) {
+    canvas.width = width;
+    canvas.height = Math.max(1, Math.round(width * source_height / image.width));
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(image, 0, source_top, image.width, source_height, 0, 0, width, canvas.height);
+    const data = canvas.toDataURL("image/webp", 0.9);
+    if (data.startsWith("data:image/") && data.length <= MAX_COVER_DATA_URL_LENGTH) return data;
+  }
+  throw new Error(t("生成分享卡图片失败"));
 }
 
 /** The card as a PNG blob. */
 export function share_card_blob(canvas) {
   return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error(t("生成分享卡图片失败")))), "image/png"));
+}
+
+/** Build a copyable diagnostic using only allowlisted counters and rendering states. */
+export function share_card_diagnostic(draft, render) {
+  const card = draft.link?.card;
+  const materials = card?.materials ?? draft.materials;
+  const publication = card?.publication ?? draft.publication ?? (draft.upload?.revision ? draft.upload : null);
+  const summary = { phase: draft.phase };
+  if (Number.isInteger(materials?.count)) {
+    summary.materials = { count: materials.count, through: Number.isInteger(materials.through) ? materials.through : null };
+  }
+  if (card && render) {
+    summary.preview = { selected: card.cover ? "custom" : "default", stage: render.stage };
+    if (render.stage === "drawn") Object.assign(summary.preview, { rendered: render.rendered, width: render.width, height: render.height });
+  }
+  if (publication || draft.phase === "published") {
+    summary.publication = { state: "published" };
+    if (/^[\w-]{22}$/.test(publication?.revision ?? "")) summary.publication.revision = publication.revision;
+  }
+  const total = publication?.total ?? draft.upload?.total;
+  const done = publication?.done ?? draft.upload?.done;
+  if (Number.isInteger(total)) {
+    summary.attachments = { total };
+    if (Number.isInteger(done)) summary.attachments.done = done;
+    if (draft.phase === "publishing" && (!draft.upload?.step || draft.upload.step === "uploading") && draft.upload) {
+      summary.attachments.state = "uploading";
+    } else if (Number.isInteger(done) && publication) summary.attachments.state = done === total ? "complete" : "incomplete";
+  }
+  return summary;
 }

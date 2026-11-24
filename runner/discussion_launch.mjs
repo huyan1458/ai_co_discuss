@@ -3324,7 +3324,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-config' && input) result = await room_configuration(home, input, { local_guard: values['configuration-locked'] });
   // Rooms on other computers this one was invited to (runner/external_client.mjs, CONTRACT of 子Task4).
   else if (positionals[0].startsWith('invited-')) result = await (await import('./external_client.mjs')).invited_command(home, positionals[0], input || {});
-  else if (['site-stage', 'site-publish', 'site-list', 'site-renew', 'site-rollback', 'site-revoke'].includes(positionals[0])) {
+  else if (['site-stage', 'site-publish', 'site-list', 'site-diagnose', 'site-renew', 'site-rollback', 'site-revoke'].includes(positionals[0])) {
     result = await (await import('./site_deploy.mjs')).site_command(home, positionals[0], input || {});
   }
   else throw new Error(HELP);

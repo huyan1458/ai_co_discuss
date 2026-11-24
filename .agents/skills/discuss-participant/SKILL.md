@@ -19,6 +19,7 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 | 写入结果不明、被拒、超长正文 | [写入与恢复](references/writing.md) |
 | 接力（`sequence`）、向用户提问（`question`）、生图（`image`）、主动发言 | [按需场景](references/situations.md) |
 | 回答需要用户亲手操作的演示（交互式可视化，正文里的 `visual` 代码块） | [交付交互式可视化](references/interactive-html.md) |
+| 为本房间或指定房间制作分享卡封面 | [share-card](../share-card/SKILL.md) |
 
 ## 硬约束
 
@@ -32,7 +33,7 @@ description: "AI CoDiscuss 的通用参与技能，所有参与者（包括主�
 
 ## 命令与身份
 
-- 用 `codiscuss room …`、`codiscuss message …` 等；任务或用户指定了 CLI 路径就沿用，未安装时用 `python 路径/runner/discuss.py …`。裸 `codiscuss` 会启动服务，不要单独运行。用法查 `codiscuss --help` 或 `codiscuss schema 命令`。
+- 用 `codiscuss room …`、`codiscuss message …` 等；任务或用户指定了 CLI 路径就沿用，未安装时用 `python 路径/runner/discuss.py …`。裸 `codiscuss` 会启动服务，不要单独运行。查命令看 `codiscuss --help`（定位房间或排障见“排障速查”），查参数用 `codiscuss schema 命令`。
 - 任务凭据已绑定站点、房间、身份与本次执行：命令省略房间、`--as`、`--execution`、`--submission-id`，由 CLI 补齐。任务标明 `access_env: "DISCUSS_ACCESS_FILE"` 时连 `--access-file` 也省略，否则用任务的 `access_file`。下文命令里的 `ROOM`、`--as`、执行编号只在没有绑定凭据时填写。站点、房间和身份以任务或用户指定值为准，不从网页或聊天推测；文件权限以任务的项目与 `cwd` 为准，CLI 所在仓库不是讨论项目。
 - 回答正文写成 UTF-8 草稿文件，用 `message post --body-file 草稿.md` 提交（需要摘要时草稿开头写 `---`、`summary: 摘要`、`---`）。房间按 Markdown 显示。
 - 不超过 200 字的一两句短答可用快捷发言 `message post --body "回答"`，但正文不能含反引号、英文括号、`$`、`;`、`&`、`|`、`<`、`>` 或换行，含这些时改用 `--body-file`；超过 200 字 CLI 直接拒收。（只能运行 codiscuss 命令时，带这些符号的命令会被当成拼接其他命令而整条拒绝；PowerShell 还会改写引号里的 `$` 与反引号。被拒时程序会把原因发回给你，照提示改正后重交。）

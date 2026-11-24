@@ -38,7 +38,7 @@ from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_mac
                             submit_remote_launch)
 from .free_room import (add_member, after_free_message, after_proactive, authorize_free_write, check_answer, execution_action, free_view,
                         inbox, interrupt_for_message, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
-                        save_room_access, view_execution, recent_executions, MAX_MESSAGE_ID)
+                        room_failure_wakes, room_quiet_checkins, save_room_access, view_execution, recent_executions, MAX_MESSAGE_ID)
 from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
 from .private_chat import chat_action, member_chat
@@ -46,6 +46,7 @@ from .external_members import external_api, guard_route as guard_external_route,
 from .free_room import describe_members, execution_notes, label_members, check_relay, record_room_link, save_message_relay, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
 from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_segments, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         host_event, host_hidden_event, room_event_log, withdrawals)
+from .room_trace import message_trace
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
 from .free_room import review_ready, advance_review, late_answer, execution_diffs
 from .free_room import checked_sequence, continue_sequence, sequence_view
@@ -89,7 +90,7 @@ DIRECTORY_OPERATIONS = ("move", "folder")
 INVITE_COMMANDS = ("room-invite", "room-invites", "room-invite-revoke")
 INVITED_COMMANDS = ("invited-list", "invited-join", "invited-trust", "invited-ai", "invited-pause", "invited-approve", "invited-refuse",
                     "invited-lend", "invited-leave", "invited-remove", "invited-room")
-SITE_COMMANDS = ("site-stage", "site-publish", "site-list", "site-renew", "site-rollback", "site-revoke")
+SITE_COMMANDS = ("site-stage", "site-publish", "site-list", "site-diagnose", "site-renew", "site-rollback", "site-revoke")
 ADMIN_OPERATIONS = ("rename", "archive", "restore", "delete", "auto-destroy")
 # A room may destroy itself after this many days without a message; 0 keeps it. How often the website checks.
 AUTO_DESTROY_DAYS = (0, 1, 7, 30)
@@ -223,6 +224,18 @@ COALESCE(details.submitted_by, CASE WHEN messages.source IN ('cli','api','url','
 THEN messages.author ELSE '用户' END) AS submitted_by,
 COALESCE(summaries.text,'') AS summary, COALESCE(summaries.author,'') AS summary_by, timing.elapsed_seconds,
 answered.execution_id, answered.request_message_id, answered.layout_after, answered.layout_at, COALESCE(withdrawn.kind,'') AS withdrawn,
+CASE WHEN messages.author='用户' THEN (
+  SELECT CASE WHEN COUNT(parent_id)=COUNT(*) AND MIN(parent_id)=MAX(parent_id) THEN MIN(parent_id) END
+  FROM (SELECT (SELECT MIN(original.message_id) FROM member_requests original
+      JOIN messages parent ON parent.id=original.message_id AND parent.author='用户'
+      WHERE (original.execution_id=i.execution_id OR original.id IN
+        (SELECT request_id FROM retried_requests WHERE execution_id=i.execution_id))
+        AND original.message_id<messages.id AND c.steer=1 AND i.status!='failed') AS parent_id
+    FROM member_requests target LEFT JOIN execution_interjections i ON i.room_id=messages.room_id
+      AND i.submission_id='queue-' || messages.id || '-' || target.member_id
+    LEFT JOIN execution_capabilities c ON c.execution_id=i.execution_id
+    WHERE target.message_id=messages.id)
+) END AS interjection_parent_id,
 EXISTS(SELECT 1 FROM proactive_messages p WHERE p.message_id=messages.id) AS proactive,
 relay.source_room_id AS relay_room, relay.host AS relay_host,
 (SELECT l.other_room_id FROM room_links l WHERE l.message_id=messages.id) AS link_room,
@@ -507,6 +520,10 @@ def init_database(database, seed=True):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE room_goals ADD COLUMN {name} {kind}")
         connection.executescript(SCHEMA)
+        share_columns = {row[1] for row in connection.execute("PRAGMA table_info(room_share_links)")}
+        for name in ("card_json", "card_edits"):
+            if name not in share_columns:
+                connection.execute(f"ALTER TABLE room_share_links ADD COLUMN {name} TEXT NOT NULL DEFAULT '{{}}'")
         directory_columns = {row[1] for row in connection.execute("PRAGMA table_info(room_directory)")}
         if "destroy_after_days" not in directory_columns:
             connection.execute("ALTER TABLE room_directory ADD COLUMN destroy_after_days INTEGER NOT NULL DEFAULT 0")
@@ -670,7 +687,9 @@ def history_cards(connection, room_id, span):
     decisions = scheduler_decisions(connection, room_id, span)
     return {"executions": recent_executions(connection, room_id, span), "scheduler_decisions": decisions,
             "host_arrangements": host_arrangements(connection, room_id, decisions, span),
-            "cancelled_turns": cancelled_turns(connection, room_id, span)}
+            "cancelled_turns": cancelled_turns(connection, room_id, span),
+            "failure_wakes": room_failure_wakes(connection, room_id, span),
+            "quiet_checkins": room_quiet_checkins(connection, room_id, span)}
 
 
 def host_arrangements(connection, room_id, decisions, span=None):
@@ -987,10 +1006,70 @@ def save_share_link(connection, room_id, payload):
              and isinstance(expires, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z", expires))
     if not valid:
         raise ValueError(Text('分享链接格式不正确'))
-    connection.execute("""INSERT INTO room_share_links (room_id,share_id,url,manage_token,expires_at,updated_at) VALUES (?,?,?,?,?,?)
+    card = link.get("card")
+    if card is not None and not isinstance(card, dict):
+        raise ValueError(Text('分享链接格式不正确'))
+    connection.execute("""INSERT INTO room_share_links (room_id,share_id,url,manage_token,expires_at,updated_at,card_json) VALUES (?,?,?,?,?,?,?)
         ON CONFLICT(room_id) DO UPDATE SET share_id=excluded.share_id,url=excluded.url,manage_token=excluded.manage_token,
-        expires_at=excluded.expires_at,updated_at=excluded.updated_at""", (room_id, share_id, url, token, expires, utc_iso_now()))
+        expires_at=excluded.expires_at,updated_at=excluded.updated_at,
+        card_edits=CASE WHEN share_id=excluded.share_id THEN card_edits ELSE '{}' END,
+        card_json=CASE WHEN share_id=excluded.share_id AND excluded.card_json='{}' THEN card_json ELSE excluded.card_json END""",
+                       (room_id, share_id, url, token, expires, utc_iso_now(), json.dumps(card or {})))
     return share_link_record(connection, room_id)
+
+
+def read_share_card(connection, room_id):
+    """Read the live link's cover and the room images the owner can choose."""
+    row = connection.execute("""SELECT share_id,url,expires_at,card_json,card_edits FROM room_share_links
+        WHERE room_id=? AND expires_at>?""", (room_id, utc_iso_now())).fetchone()
+    if not row:
+        raise LookupError(Text("分享链接已失效"))
+    images = connection.execute("""SELECT a.id,a.file_name,a.message_id,a.room_id FROM attachments a
+        WHERE a.room_id=? AND a.message_id IS NOT NULL AND a.content_type IN ('image/png','image/jpeg','image/webp')
+        AND NOT EXISTS (SELECT 1 FROM message_withdrawals w WHERE w.message_id=a.message_id)
+        ORDER BY a.message_id DESC,a.position""", (room_id,))
+    return {"share_id": row["share_id"], "url": row["url"], "expires_at": row["expires_at"],
+            "card": {**json.loads(row["card_json"]), **json.loads(row["card_edits"])},
+            "images": [dict(image) for image in images]}
+
+
+def edit_share_card(connection, room_id, payload):
+    """Patch only the edited fields of this share, including across concurrent owner devices."""
+    if "publication" in payload:
+        return finish_share_card_upload(connection, room_id, payload)
+    edits = payload.get("edits")
+    if not isinstance(edits, dict) or not edits or edits.keys() - {"question", "outcome", "cover"}:
+        raise ValueError(Text("分享卡格式不正确"))
+    for key, value in edits.items():
+        if not isinstance(value, str) or (key != "cover" and len(value) > 2000):
+            raise ValueError(Text("分享卡格式不正确"))
+        if key == "cover" and value and not re.fullmatch(r"data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+=*",
+                                                         value):
+            raise ValueError(Text("分享卡格式不正确"))
+    updated = connection.execute("""UPDATE room_share_links SET card_edits=json_patch(card_edits,?)
+        WHERE room_id=? AND share_id=? AND expires_at>?""",
+                                 (json.dumps(edits, ensure_ascii=False), room_id, payload.get("share_id"), utc_iso_now()))
+    if not updated.rowcount:
+        raise FileExistsError(Text("分享链接已失效"))
+    return {"ok": True}
+
+
+def finish_share_card_upload(connection, room_id, payload):
+    """Attach confirmed upload counts to the exact publication that started the work."""
+    progress = payload["publication"]
+    if not isinstance(progress, dict):
+        raise ValueError(Text("分享卡格式不正确"))
+    revision, done = progress.get("revision"), progress.get("done")
+    if not isinstance(revision, str) or not SHARE_ID.fullmatch(revision) or type(done) is not int or done < 0:
+        raise ValueError(Text("分享卡格式不正确"))
+    updated = connection.execute("""UPDATE room_share_links
+        SET card_json=json_set(card_json,'$.publication.done', ?)
+        WHERE room_id=? AND share_id=? AND expires_at>?
+          AND json_extract(card_json,'$.publication.revision')=?
+          AND json_extract(card_json,'$.publication.total')>=?
+          AND COALESCE(json_extract(card_json,'$.publication.done'), -1)<=?""",
+        (done, room_id, payload.get("share_id"), utc_iso_now(), revision, done, done))
+    return {"ok": True, "recorded": bool(updated.rowcount)}
 
 
 SITE_ID_PATTERN = re.compile(r"[a-z2-7]{10}")
@@ -1615,7 +1694,7 @@ def redact_payload(value, texts=None, path="payload"):
         result = {}
         for key, item in value.items():
             field = f"{path}.{key}"
-            if API_LOG_SECRET.search(str(key)):
+            if API_LOG_SECRET.search(str(key)) or field in ("payload.edits.cover", "payload.link.card"):
                 hidden = Text("[已隐去]")
                 result[key] = str(hidden)
                 texts[field] = hidden
@@ -1662,7 +1741,10 @@ def record_api_event(database, record):
             if type(execution_id) is int:
                 data["execution_id"] = execution_id
             redacted_texts = {}
-            redacted_payload = redact_payload(record["payload"], redacted_texts)
+            payload_to_log = record["payload"]
+            if record["path"].startswith("/executions/") and isinstance(payload_to_log, dict):
+                payload_to_log = {key: value for key, value in payload_to_log.items() if key != "diagnostics"}
+            redacted_payload = redact_payload(payload_to_log, redacted_texts)
             data.setdefault("texts", {}).update({field: text_payload(value) for field, value in redacted_texts.items()})
             payload = json.dumps(redacted_payload, ensure_ascii=False)
             if len(payload) <= API_LOG_PAYLOAD:
@@ -2757,6 +2839,21 @@ def get_message(connection, room_id, message_id, params=None, token=""):
     if row is None:
         raise ReadError(Text('消息不存在'), code="not_available", requested_message_id=message_id)
     return message_with_attachments(connection, row)
+
+
+def trace_message(connection, room_id, params, token):
+    """Resolve a trace anchor under ordinary message permissions before reading its diagnostic history."""
+    message_id, page = int(params.get("message_id", 0)), int(params.get("page", 1))
+    if not 1 <= message_id <= MAX_MESSAGE_ID:
+        raise ValueError(Text("{field} 须为正整数", field="message_id"))
+    if page < 1:
+        raise ValueError(Text("{field} 须为正整数", field="page"))
+    if not connection.in_transaction:
+        connection.execute("BEGIN")
+    context = {field: params[field] for field in ("execution_id", "request_id") if field in params}
+    read_until = session_message_access(connection, room_id, context, token)
+    anchor = get_message(connection, room_id, message_id, context, token)
+    return message_trace(connection, room_id, token, anchor, {"read_until": read_until, "page": page})
 
 
 def own_task_anchor(connection, room_id, message_id, params):
@@ -3912,6 +4009,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if self.read_only_request():
                 log["events"] = [host_event(event) for event in log["events"] if not host_hidden_event(event)]
             return self.respond(log)
+        if parts[3:] == ["trace"] and method == "GET":
+            return self.respond(trace_message(connection, room_id, params, token))
         if parts[3:] == ["register"] and method == "POST":
             result = register_member(connection, room_id, token, utc_now())
             connection.commit()
@@ -3972,13 +4071,19 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.handle_attachments(connection, parts, params, method)
         if parts[3:4] in (["scheduler-decisions"], ["scheduler-routing"]):
             return self.handle_scheduler_api(connection, parts, method)
-        if parts[3:] == ["share-link"] and method in ("GET", "POST"):
+        if parts[3:] in (["share-link"], ["share-card"]) and method in ("GET", "POST"):
             # The manage token can renew, revoke or replace a public page: owner only. A request carrying a credential must
             # carry the owner's, so a member AI using its own command line cannot read or rewrite it even on a local site.
             if token:
                 require_owner(connection, room_id, token)
             else:
                 self.require_entry_owner(connection, room_id, token)
+            if parts[3] == "share-card":
+                if method == "GET":
+                    return self.respond(read_share_card(connection, room_id))
+                result = edit_share_card(connection, room_id, self.read_payload())
+                connection.commit()
+                return self.respond(result)
             if method == "GET":
                 return self.respond(share_link_record(connection, room_id))
             result = save_share_link(connection, room_id, self.read_payload())

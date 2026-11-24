@@ -11,7 +11,7 @@ import { t, locale } from './i18n.js';
  * execution it stands for and the event, so the timeline's own detail card opens on it.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { axis_ticks, format_duration, pan_window, realtime_model, zoom_window } from "./timeline-model.js";
+import { FOLLOW_AT, axis_ticks, format_duration, pan_window, realtime_model, replay_follow_window, step_follow_window, zoom_window } from "./timeline-model.js";
 import { touch_zoom } from "./touch-zoom.js";
 
 const props = defineProps({ segments: { type: Array, required: true }, tones: { type: Map, required: true }, name: { type: Function, required: true } });
@@ -119,21 +119,33 @@ function pointer_share(event) {
   const rect = chart.value.getBoundingClientRect();
   return { share: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)), width: rect.width };
 }
+function manual_zoom(next) {
+  auto_zoom.value = false;
+  zoom.value = next;
+  if (!zoomed.value) follow.value = false;
+  else sync_follow(0);
+}
+function reset_zoom() {
+  auto_zoom.value = false;
+  follow.value = false;
+  zoom.value = WHOLE;
+}
 function on_wheel(event) {
   if (event.ctrlKey || event.metaKey) {
     event.preventDefault();
-    zoom.value = zoom_window(zoom.value, pointer_share(event).share, Math.exp(event.deltaY * WHEEL_ZOOM_RATE), span.value);
+    manual_zoom(zoom_window(zoom.value, pointer_share(event).share, Math.exp(event.deltaY * WHEEL_ZOOM_RATE), span.value));
   } else if (zoomed.value && (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY))) {
     event.preventDefault();
     follow.value = false;
+    auto_zoom.value = false;
     zoom.value = pan_window(zoom.value, (event.shiftKey ? event.deltaY : event.deltaX) / pointer_share(event).width);
   }
 }
-function zoom_by(factor) { zoom.value = zoom_window(zoom.value, 0.5, factor, span.value); }
+function zoom_by(factor) { manual_zoom(zoom_window(zoom.value, 0.5, factor, span.value)); }
 // Fingers: pinch zooms, a sideways drag pans (touch-zoom.js); an upward or downward one scrolls the page.
 const gesture = touch_zoom({ share_at: (client_x) => pointer_share({ clientX: client_x }).share, width: () => pointer_share({ clientX: 0 }).width,
-  on_zoom: (anchor, factor) => { zoom.value = zoom_window(zoom.value, anchor, factor, span.value); },
-  on_pan: (share) => { follow.value = false; zoom.value = pan_window(zoom.value, share); }, can_pan: () => zoomed.value });
+  on_zoom: (anchor, factor) => { manual_zoom(zoom_window(zoom.value, anchor, factor, span.value)); },
+  on_pan: (share) => { follow.value = false; auto_zoom.value = false; zoom.value = pan_window(zoom.value, share); }, can_pan: () => zoomed.value });
 /**
  * A mouse press on a zoomed chart (left or middle button) pans once it has moved a few pixels, so a click on a block
  * still opens its detail.
@@ -150,6 +162,7 @@ function on_drag_move(event) {
     if (Math.abs(event.clientX - press.x) < DRAG_START_PX) return;
     drag.value = true;
     follow.value = false;
+    auto_zoom.value = false;
     event.currentTarget.setPointerCapture(event.pointerId);
   }
   zoom.value = pan_window({ from: press.from, span: zoom.value.span }, -(event.clientX - press.x) / press.width);
@@ -165,36 +178,69 @@ function stop_autoscroll(event) { if (event.button === 1 && zoomed.value) event.
 function pick(block, event) { if (!drag.value && !gesture.moved()) emit('pick', block.row, event); }
 
 /**
- * Following the replay (#8323): on a zoomed chart the view pans with the playback line, kept at FOLLOW_AT of the width,
- * so it never runs off screen. It starts on with each replay; panning by hand turns it off, the button back on; zooming
- * and the scrubber keep it.
+ * Following the replay (#8323, #8678, #8701): keeps the playback line at FOLLOW_AT and dynamically adjusts zoom to
+ * frame the active execution(s). Clicking 跟随 enters auto-zoom; manual zoom locks the user's scale while keeping
+ * follow; manual pan or 还原 turns both off.
  */
 const follow = ref(true);
-const FOLLOW_AT = 0.8;
-function keep_in_view() {
-  if (!follow.value || !zoomed.value || position.value == null) return;
-  const share = (position.value - model.value.start) / span.value;
-  zoom.value = { from: Math.min(1 - zoom.value.span, Math.max(0, share - FOLLOW_AT * zoom.value.span)), span: zoom.value.span };
+const auto_zoom = ref(false);
+// Highlighted only when auto-zoom follow is active, so after a manual zoom one click on 跟随 re-enters auto-zoom (#8717).
+const follow_active = computed(() => follow.value && auto_zoom.value);
+const raw_x = (time) => (time - model.value.start) / span.value;
+const replay_spans = computed(() => props.segments.flatMap((segment) =>
+  segment.items.filter(({ item }) => item.source !== "user").map(({ stages }) => ({ start: stages.start, end: stages.end }))));
+function sync_follow(elapsed_ms = 0) {
+  if (!follow.value || position.value == null) return;
+  const share = raw_x(position.value);
+  if (auto_zoom.value) {
+    const target = replay_follow_window(replay_spans.value, raw_x, position.value, span.value, FOLLOW_AT);
+    zoom.value = elapsed_ms > 0 ? step_follow_window(zoom.value, target, share, elapsed_ms, FOLLOW_AT) : target;
+  } else if (zoomed.value) {
+    zoom.value = { from: Math.min(1 - zoom.value.span, Math.max(0, share - FOLLOW_AT * zoom.value.span)), span: zoom.value.span };
+  }
 }
-watch([position, () => zoom.value.span, follow], keep_in_view);
+function toggle_follow() {
+  if (follow_active.value) {
+    follow.value = false;
+    auto_zoom.value = false;
+  } else {
+    follow.value = true;
+    auto_zoom.value = true;
+    sync_follow(0);
+  }
+}
 /** Real milliseconds of the room per millisecond of playback. */
 const rate = computed(() => speed.value || span.value / REPLAY_TARGET_MS);
 function tick(timestamp) {
-  const elapsed = last_frame ? timestamp - last_frame : 0;
+  const elapsed = last_frame ? Math.min(timestamp - last_frame, 250) : 0;
   last_frame = timestamp;
   position.value = Math.min(model.value.end, position.value + elapsed * rate.value);
+  sync_follow(elapsed);
   if (position.value >= model.value.end) { pause(); return; }
   frame = requestAnimationFrame(tick);
 }
 function play() {
-  if (position.value == null || position.value >= model.value.end) { position.value = model.value.start; follow.value = true; }
+  if (position.value == null || position.value >= model.value.end) {
+    position.value = model.value.start;
+    follow.value = true;
+    auto_zoom.value = !zoomed.value;
+  }
+  sync_follow(0);
   playing.value = true;
   last_frame = 0;
   frame = requestAnimationFrame(tick);
 }
 function pause() { playing.value = false; cancelAnimationFrame(frame); }
-function stop_replay() { pause(); position.value = null; }
-function scrub(event) { position.value = model.value.start + Number(event.target.value); }
+function stop_replay() {
+  pause();
+  if (auto_zoom.value) zoom.value = WHOLE;
+  auto_zoom.value = false;
+  position.value = null;
+}
+function scrub(event) {
+  position.value = model.value.start + Number(event.target.value);
+  sync_follow(0);
+}
 const zoom_level = computed(() => (1 / zoom.value.span).toFixed(1));
 const play_label = computed(() => playing.value ? t('暂停回放') : position.value == null ? t('回放') : t('继续回放'));
 const speed_label = (value) => value ? t('{value1}×', { value1: value }) : t('自动');
@@ -211,17 +257,17 @@ onBeforeUnmount(pause);
         <!-- Icon and words on a wide page, the icon alone on a phone (#8456); the words stay as the title and label. -->
         <button type="button" class="rt-tool" :title="t('缩小')" :aria-label="t('缩小')" :disabled="!zoomed" @click="zoom_by(1 / BUTTON_ZOOM)"><UIcon name="i-lucide-zoom-out" /></button>
         <button type="button" class="rt-tool" :title="t('放大')" :aria-label="t('放大')" @click="zoom_by(BUTTON_ZOOM)"><UIcon name="i-lucide-zoom-in" /></button>
-        <button v-if="zoomed" type="button" class="rt-tool is-text" :title="t('还原 {value1}×', { value1: zoom_level })" :aria-label="t('还原 {value1}×', { value1: zoom_level })" @click="zoom = WHOLE">
+        <button v-if="zoomed" type="button" class="rt-tool is-text" :title="t('还原 {value1}×', { value1: zoom_level })" :aria-label="t('还原 {value1}×', { value1: zoom_level })" @click="reset_zoom">
           <UIcon name="i-lucide-locate-fixed" /><span class="rt-label">{{ t('还原 {value1}×', { value1: zoom_level }) }}</span><span class="rt-short">{{ zoom_level }}×</span></button>
         <button type="button" class="rt-tool is-text" :title="play_label" :aria-label="play_label" @click="playing ? pause() : play()">
           <UIcon :name="playing ? 'i-lucide-pause' : 'i-lucide-play'" /><span class="rt-label">{{ play_label }}</span></button>
-        <button v-if="position != null && zoomed" type="button" class="rt-tool is-text" :class="{ 'is-active': follow }" :aria-pressed="follow" :title="t('放大时让画面跟着回放线走')" :aria-label="t('跟随')" @click="follow = !follow">
+        <button v-if="position != null" type="button" class="rt-tool is-text" :class="{ 'is-active': follow_active }" :aria-pressed="follow_active" :title="t('回放时自动缩放并跟着回放线走')" :aria-label="t('跟随')" @click="toggle_follow">
           <UIcon name="i-lucide-crosshair" /><span class="rt-label">{{ t('跟随') }}</span></button>
         <button v-if="position != null" type="button" class="rt-tool is-text" :title="t('结束回放')" :aria-label="t('结束回放')" @click="stop_replay">
           <UIcon name="i-lucide-square" /><span class="rt-label">{{ t('结束回放') }}</span></button>
       </span>
     </div>
-    <div class="rt-plot" :class="{ 'is-zoomed': zoomed, 'is-dragging': drag }" @wheel="on_wheel" @dblclick="zoom = WHOLE"
+    <div class="rt-plot" :class="{ 'is-zoomed': zoomed, 'is-dragging': drag }" @wheel="on_wheel" @dblclick="reset_zoom"
       @mousedown="stop_autoscroll" @pointerdown="on_drag_start" @pointermove="on_drag_move" @pointerup="on_drag_end" @pointercancel="on_drag_end">
       <span class="rt-scale">{{ model.peak }}</span>
       <div ref="chart" class="rt-chart">

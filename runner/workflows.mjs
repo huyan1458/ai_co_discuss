@@ -947,13 +947,24 @@ export function load_room_workflow(config) {
     const stages = (workflow.flow?.stages || []).map(stage => ({ id: stage.id, label: stage.label || stage.id }));
     return { id: binding.id, label: workflow.label || binding.id, description: workflow.description || '', directory, skill_path: join(directory, 'SKILL.md'), skill: workflow.skill,
       revision: revision_of(workflow.skill), members: binding.members || {}, extra_members: binding.extra_members || {}, cards, sub_workflows, stages,
-      commands: workflow.commands };
+      commands: workflow.commands, content_revision: workflow.revision };
   } catch (error) { return { id: binding.id, error: error.message }; }
 }
 
 /** The card a member plays in the room's workflow: its card's first member, or one more member of a card (`extra_members`). */
 export function card_of_member(workflow, member_name) {
   return Object.entries(workflow?.members || {}).find(([, name]) => name === member_name)?.[0] || workflow?.extra_members?.[member_name] || '';
+}
+
+/** Capture the workflow actually supplied to a delivery, without prompts, descriptions or local paths. */
+export function workflow_execution_binding(workflow, member, host_has_workflow) {
+  if (!workflow || workflow.error) return null;
+  const card = card_of_member(workflow, member.name);
+  const source = workflow.cards[card];
+  if (!source && !host_has_workflow) return null;
+  const sub = workflow.sub_workflows.find(item => item.id === source?.sub_workflow);
+  return { id: workflow.id, revision: workflow.content_revision || workflow.revision, card: source ? card : null,
+    sub_workflow: sub?.id ?? null, sub_revision: sub?.revision ?? null, skills: (source?.skills || []).slice(0, 50) };
 }
 
 /** Every member a workflow brought, with its card: each card's first member, then the further members of a card. */

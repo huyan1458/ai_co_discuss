@@ -337,15 +337,16 @@ def queue_action(connection, room_id, token, payload, post, check, interrupt):
     action = payload.get("action")
     if action not in QUEUE_ACTIONS:
         raise ValueError(Text('action 须为 {value1} 之一', value1='、'.join(QUEUE_ACTIONS)))
+    sent_message_id = None
     if action == "send":
         row = queued_row(connection, room_id, payload.get("id"))
         connection.execute("UPDATE queued_messages SET failure='' WHERE id=?", (row["id"],))
         result = post_item(connection, room_id, row, post)
         if not result:
             raise ValueError(connection.execute("SELECT failure FROM queued_messages WHERE id=?", (row["id"],)).fetchone()[0])
-        message_id = result["message"]["id"] if result.get("message") else result.get("message_id")
-        if message_id:
-            interrupt(connection, room_id, message_id)
+        sent_message_id = result["message"]["id"] if result.get("message") else result.get("message_id")
+        if sent_message_id:
+            interrupt(connection, room_id, sent_message_id)
     elif action == "edit":
         edit_item(connection, queued_row(connection, room_id, payload.get("id")), payload.get("text"), check)
     elif action == "delete":
@@ -355,4 +356,5 @@ def queue_action(connection, room_id, token, payload, post, check, interrupt):
     else:
         connection.execute("DELETE FROM queued_message_pauses WHERE room_id=?", (room_id,))
     drain(connection, room_id, post)
-    return queue_view(connection, room_id)
+    view = queue_view(connection, room_id)
+    return {**view, "message_id": sent_message_id} if sent_message_id else view

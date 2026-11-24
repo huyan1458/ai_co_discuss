@@ -72,6 +72,13 @@ const SHARE_HOME_FOLDERS = [/(?<![\w./-])[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s"'`<>|
 const ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\/)/;
 // A folder named by fewer parts ("C:", "/home") is too broad to rewrite in text.
 const SHARE_FOLDER_MIN_PARTS = 2;
+/** Identify the receipt headings produced by answering, recommending or delegating a room question. */
+function is_share_question_receipt(text) {
+  const heading = String(text || "").trimStart().split("\n", 1)[0].trimEnd();
+  return /^(?:回答问题\s*#?\d+|Answer to question #\d+)(?:[：:]|$)/iu.test(heading)
+    || /^(?:请主持人先讨论并给推荐|交给主持人决定)（问题 #\d+）$/u.test(heading)
+    || /^(?:Host, please discuss and recommend first|Leaving it to the host to decide) \(question #\d+\)$/iu.test(heading);
+}
 // Attachments whose text is scanned for keys and folders before sharing: plain text up to this size, not packed office files.
 const TEXT_ATTACHMENT = /\.(md|markdown|txt|log|csv|tsv|json|jsonc|ya?ml|toml|ini|xml|html?|css|vue|[cm]?js|jsx|tsx?|py|sql|sh|ps1|bat|srt|vtt|ass|ssa|lrc|fcpxml|kdenlive|mlt|otio|edl|docx|xlsx|xls|ods|pptx|prproj|zip)$/i;
 const SHARE_SCAN_BYTES = 2 * 1024 * 1024;
@@ -358,20 +365,34 @@ function create_share_core({ t, display_name, collapse_visual_fences, is_text_at
     return String(text || "").replace(/```[\s\S]*?```/g, " ").replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[`*_>#|~-]+/g, " ").replace(/\s+/g, " ").trim();
   }
 
+  function share_card_messages(responses) {
+    return Object.entries(responses).filter(([path]) => /\/messages\?/.test(path)).flatMap(([, body]) => body.messages || [])
+      .filter(message => message.kind !== "system" && message.text).sort((a, b) => a.id - b.id);
+  }
+
+  function share_card_materials_info(responses) {
+    const messages = share_card_messages(responses);
+    return { through: messages.at(-1)?.id ?? null, count: messages.length };
+  }
+
   /** What the share card shows of a prepared page: members, the first question, the latest outcome and the counts. */
   function share_card(draft, link) {
     const room = draft.responses[`/api/rooms/${draft.room_id}`] || {};
     const members = (room.members || []).filter(member => member.status !== "removed").map(member => member.label || display_name(member.name));
-    const messages = Object.entries(draft.responses).filter(([path]) => /\/messages\?/.test(path)).flatMap(([, body]) => body.messages || [])
-      .filter(message => message.kind !== "system" && message.text).sort((a, b) => a.id - b.id);
-    // The latest question and what came of it, so the two belong together even in a room used for months.
-    const question = messages.findLast(message => message.author === "用户");
-    const answers = messages.filter(message => message.author !== "用户" && message.id > (question?.id ?? 0));
+    const messages = share_card_messages(draft.responses);
+    const question = messages.find(message => message.author === "用户" && !is_share_question_receipt(message.text)
+      && !/^\/?(?:继续|好的?|同意|continue|ok)[。.!！\s]*$/iu.test(message.text.trim()));
+    const answers = messages.filter(message => message.author !== "用户" && message.author !== "系统" && message.id > (question?.id ?? 0));
     const outcome = answers.findLast(message => message.summary) || answers.at(-1);
     // Text the owner was asked to check stays off the card, which cannot be taken back once posted; it can be typed in.
     const flagged = new Set((draft.spots || []).map(spot => spot.where));
     const text = (message, value) => message && !flagged.has(`#${message.id}`) ? share_plain(value) : "";
-    return { title: draft.title, members, question: text(question, question?.text), outcome: text(outcome, outcome?.summary || outcome?.text),
+    const result = text(outcome, outcome?.summary || outcome?.text);
+    const sentences = result.match(/[^。！？.!?]+(?:[。！？]|[.!?](?=\s|$)|$)/gu) || [];
+    const complete = sentences[0]?.trim();
+    return { title: draft.title, members, materials: { through: messages.at(-1)?.id ?? null, count: messages.length },
+      question: text(question, question?.text).slice(0, 600),
+      outcome: (complete && result.startsWith(complete) ? complete : result).slice(0, 600),
       stats: t('{members} 位 AI · {messages} 条消息 · {runs} 次执行', { members: members.length, messages: room.message_count ?? messages.length, runs: draft.runs ?? 0 }),
       url: link.url, expires: t('{time} 前有效', { time: new Date(link.expires_at).toLocaleString(undefined, { hour12: false }) }) };
   }
@@ -451,10 +472,10 @@ function create_share_core({ t, display_name, collapse_visual_fences, is_text_at
     const extra = scanned.filter(item => item.texts), unread = scanned.filter(item => !item.texts);
     return [...share_sensitive_spots({}, extra), ...unread];
   }
-  return { share_path, share_clean, share_parallel, share_batch, share_strings, share_sensitive_spots, share_files, share_file_route, share_site_file, share_carried_files, share_file_kind, share_file_kinds, share_responses, share_named_paths, share_folder_pattern, share_payload, share_plain, share_card, share_collect_reads, share_find_delivered, share_scan_files };
+  return { share_path, share_clean, share_parallel, share_batch, share_strings, share_sensitive_spots, share_files, share_file_route, share_site_file, share_carried_files, share_file_kind, share_file_kinds, share_responses, share_named_paths, share_folder_pattern, share_payload, share_plain, share_card, share_card_materials_info, share_collect_reads, share_find_delivered, share_scan_files };
 }
 // END generated share core
-var { share_path, share_clean, share_parallel, share_batch, share_strings, share_sensitive_spots, share_files, share_file_route, share_site_file, share_carried_files, share_file_kind, share_file_kinds, share_responses, share_named_paths, share_folder_pattern, share_payload, share_plain, share_card, share_collect_reads, share_find_delivered, share_scan_files } = create_share_core({ t, display_name: name => display_name(name),
+var { share_path, share_clean, share_parallel, share_batch, share_strings, share_sensitive_spots, share_files, share_file_route, share_site_file, share_carried_files, share_file_kind, share_file_kinds, share_responses, share_named_paths, share_folder_pattern, share_payload, share_plain, share_card, share_card_materials_info, share_collect_reads, share_find_delivered, share_scan_files } = create_share_core({ t, display_name: name => display_name(name),
   collapse_visual_fences: (text, label) => window.discuss_markdown.collapse_visual_fences(text, label), is_text_attachment: file => is_text_attachment(file) });
 // Where an earlier version kept a room's published link in this browser; it moves to the room when first read.
 const SHARE_LINK_PREFIX = "codiscuss-share:";
@@ -746,9 +767,10 @@ function announce_idle_rooms(rooms) {
 /** Cards of a later transcript batch replace the same ones read before; each kind is keyed by its id. */
 function merge_history_cards(base, batch) {
   const merged = {};
-  for (const kind of ["executions", "scheduler_decisions", "host_arrangements", "cancelled_turns"]) {
-    const items = new Map((base?.[kind] || []).map((item) => [item.key || item.id, item]));
-    for (const item of batch?.[kind] || []) items.set(item.key || item.id, item);
+  const key_of = (item) => item.key || item.id || item.message_id;
+  for (const kind of ["executions", "scheduler_decisions", "host_arrangements", "cancelled_turns", "failure_wakes", "quiet_checkins"]) {
+    const items = new Map((base?.[kind] || []).map((item) => [key_of(item), item]));
+    for (const item of batch?.[kind] || []) items.set(key_of(item), item);
     merged[kind] = [...items.values()];
   }
   return merged;
@@ -1359,7 +1381,7 @@ async function delete_channel(id) {
   state.destroying.set(id, entry);
   const dissolving = dissolve_room(id);
   try {
-    if (share_link(id)) await take_down_share(id);
+    if (share_changes.has(id) || share_link(id)) await queue_share_change(id, null, () => take_down_share(id));
     const result = await request_json(`/api/rooms/${id}/delete`, { actor: "用户" });
     if (result.destruction) merge_destruction(result.destruction);
     // A cleanup that takes long says where to follow it, once.
@@ -2159,6 +2181,7 @@ async function refresh_room_content(room_id, version, versions) {
     cache_room_entry(room_views, room_id, room);
     for (const item of confirmed_members) {
       const still_present = ["remove", "revoke"].includes(item.action) && room.members?.some(member => member.id === item.member_id);
+      item.debug?.(still_present ? "overlay-retained" : "snapshot-confirmed");
       if (!still_present) member_changes.delete(item);
     }
     state.room = merge_room_folder(room, versions.folder, versions.archive, versions.directory);
@@ -2221,6 +2244,7 @@ async function refresh_room({ room: read_room = true } = {}) {
   const directory_version = state.directory_version;
   const room_id = state.room?.id;
   // The room and its transcript are read beside the directory rather than after it, saving a round trip on every open.
+  const links_at_read = new Map(saved_share_links);
   const directory_read = request_json("/api/rooms");
   // A room being destroyed is gone from the website; its open conversation stays as it was until it dissolves.
   const reading = state.room && read_room && !state.destroying.has(room_id) ? room_id : null;
@@ -2235,6 +2259,7 @@ async function refresh_room({ room: read_room = true } = {}) {
   if (!state.directory_pending.size && directory_version === state.directory_version) {
     const previous = state.rooms;
     state.rooms = with_destroying(directory.rooms.map((room) => merge_room_folder(room, folder_version, archive_version, directory_version)));
+    confirm_share_directory(directory.rooms, links_at_read);
     if (directory.destructions) announce_auto_destroyed(previous, state.rooms, directory.destructions);
     set_folder_directory(directory);
   }
@@ -2986,7 +3011,9 @@ async function change_member(input) {
   const active = [...member_changes].filter(item => item.room_id === room_id && !item.done);
   for (const item of active) item.overlapped = true;
   const change = { ...input, room_id, previous_host_name, access, overlapped: active.length > 0 };
+  change.debug = browser_debug("member-change", { room: room_id, member: input.member_id, action: input.action });
   member_changes.add(change);
+  change.debug?.("optimistic", { queuedBehind: previous.length });
   publish_view();
   change.write = (async () => {
     if (previous.length) await Promise.allSettled(previous.map(item => item.write));
@@ -2994,6 +3021,7 @@ async function change_member(input) {
     const free = result?.free || result;
     change.member = free?.members?.find(member => member.id === input.member_id);
     change.done = true;
+    change.debug?.("receipt", { overlapping: change.overlapped, returnedMember: Boolean(change.member) });
     // Only apply this member's acknowledgement. Another member may already have a newer response.
     if (state.room?.id === room_id && free?.members && state.room.free && !change.overlapped) {
       state.room = { ...state.room, free };
@@ -3007,7 +3035,7 @@ async function change_member(input) {
     }
   })();
   try { await change.write; }
-  catch (error) { member_changes.delete(change); throw error; }
+  catch (error) { member_changes.delete(change); change.debug?.("rollback", { status: error.status }); throw error; }
   finally { publish_view(); }
 }
 
@@ -3190,18 +3218,26 @@ async function finish_queued(result, room_id) {
 }
 
 /** Act on the room's queued owner messages; the site posts what may go and returns the queue. */
-async function queue_request(payload) {
+async function queue_request(payload, on_queue = null) {
   const room_id = state.room.id;
+  const debug = browser_debug("queue-change", { room: room_id, action: payload.action, item: payload.id, order: payload.ids });
+  debug?.("submitted");
   let queue;
   try { queue = await request_json(`/api/rooms/${room_id}/queue`, payload); }
   catch (error) {
+    debug?.("rejected", { status: error.status });
     // A refused action usually means the queue moved on (a message went out meanwhile); show what is queued now.
     if (state.room?.id === room_id) await refresh_room().catch(() => {});
     throw error;
   }
+  debug?.("receipt", { order: queue?.items?.map(item => item.id), message: queue?.message_id });
+  on_queue?.(queue);
   if (state.room?.id === room_id && state.room.free) state.room = { ...state.room, free: { ...state.room.free, queued_messages: queue } };
   publish_view();
-  if (state.room?.id === room_id) await refresh_room();
+  if (state.room?.id === room_id) {
+    await refresh_room();
+    if (state.room?.id === room_id) debug?.("refreshed", { order: state.room.free?.queued_messages?.items?.map(item => item.id) });
+  }
 }
 
 /** Answer or cancel one question (`operation`: answer | cancel) with the version the card shows; the room refreshes either way. */
@@ -3333,10 +3369,12 @@ async function delete_queued(id) {
  */
 async function send_queued(id) {
   const item = state.room?.free?.queued_messages?.items?.find(entry => entry.id === id);
-  const preview = item && !state.sending_preview
-    ? { author: "用户", text: item.text, created_at: new Date().toISOString(), files: item.attachments.map(file => ({ name: file.file_name })) } : null;
+  const visible = item?.message_id && state.messages.some(message => message.id === item.message_id);
+  const preview = item && !visible && !state.sending_preview
+    ? { author: "用户", text: item.text, created_at: new Date().toISOString(), saved_id: item.message_id || null,
+      files: item.attachments.map(file => ({ name: file.file_name })) } : null;
   if (preview) { state.sending_preview = preview; publish_view(); }
-  try { await queue_request({ action: "send", id }); }
+  try { await queue_request({ action: "send", id }, (queue) => { if (preview && queue?.message_id) preview.saved_id = queue.message_id; }); }
   finally { if (preview && state.sending_preview === preview) { state.sending_preview = null; publish_view(); } }
 }
 
@@ -3386,7 +3424,9 @@ function room_sending_previews() {
   const cards = send_queue.filter(job => job.room_id === state.room?.id && !job.saved_message && !job.queueing && !job.queued && !job.preview.failed
     && !(job.preview.saved_id && state.messages.some(message => message.id === job.preview.saved_id)))
     .map(job => job.preview);
-  if (state.sending_preview) cards.push(state.sending_preview);
+  if (state.sending_preview && !(state.sending_preview.saved_id && state.messages.some(message => message.id === state.sending_preview.saved_id))) {
+    cards.push(state.sending_preview);
+  }
   return cards;
 }
 
@@ -3433,6 +3473,8 @@ function enqueue_send(job) {
   job.queueing = predicted_queue(job.payload, state.room.free?.queued_messages);
   job.preview = { ...job.preview, waiting: true };
   send_queue.push(job);
+  job.debug = browser_debug("send", { room: job.room_id, send: job.id });
+  job.debug?.("optimistic", { display: job.queueing ? "queue" : "transcript" });
   job.done = previous.then(() => deliver_send(job)).finally(() => {
     job.finish_submission();
     send_queue.splice(send_queue.indexOf(job), 1);
@@ -3475,6 +3517,7 @@ async function deliver_send(job) {
       }
     }
     saved = true;
+    job.debug?.("receipt", { message: result.message?.id ?? result.message_id, queued: Boolean(result.queued) });
     job.finish_submission();
     // The sender's room rises as soon as the message is saved, without waiting for the next directory read.
     if (result.message?.created_at) patch_directory_room(room_id, { latest_speech_at: result.message.created_at });
@@ -3484,6 +3527,7 @@ async function deliver_send(job) {
     }
     else await finish_message(result, job);
   } catch (error) {
+    job.debug?.(saved ? "refresh-failed" : "rejected", { status: error.status, unconfirmed: Boolean(error.unconfirmed) });
     if (saved) notify_failure(error, t('留言已保存，但页面刷新失败：{value1}', { value1: error.message }));
     else {
       job.preview = { ...job.preview, failed: error.message };
@@ -4259,6 +4303,12 @@ async function submit_room(event, folder_id = null, { accepted = null, rejected 
   const launching = Object.values(payload.experts).includes("cli") || (launchable && Boolean(creation_launch_options().scheduler || state.launch.workspace.cwd || state.launch.workspace.local_project));
   if (launching && !launchable) throw new Error(t('本机唤醒的成员需要连接本机服务；也可改为手动接入'));
   const launch_draft = launching ? creation_launch_options() : null;
+  const max_rounds = state.create_chain_rounds;
+  const launch_summary = launch_draft && { scheduler: Boolean(launch_draft.scheduler), image_generation: launch_draft.image_generation,
+    host_workflows: launch_draft.host_workflows, host_permissions: launch_draft.host_permissions,
+    api_max_requests: launch_draft.api_max_requests ?? DEFAULT_API_MAX_REQUESTS,
+    participants: Object.fromEntries(Object.entries(payload.experts).filter(([, mode]) => mode === "cli")
+      .map(([name]) => [name, { adapter: launch_draft.participants[name]?.adapter }])) };
   // A discussion is only a way to push the room forward: the room is created as a free room, then opened with these limits.
   const discussion = state.create_discussion ? { goal: payload.goal.trim(), named_followup: state.named_followup,
     limits: read_limits("new-room") } : null;
@@ -4290,14 +4340,14 @@ async function submit_room(event, folder_id = null, { accepted = null, rejected 
   try {
     room = await update_directory({ key: "create-room", label: t('「{value1}」创建', { value1: payload.title }),
       error_message: launching ? error => `「${payload.title}」${error.message}` : null,
-      apply: () => { state.creating_room = { ...payload, opened: Boolean(accepted), submission_id: pending.id }; },
+      apply: () => { state.creating_room = { ...payload, launch_summary, free: { max_rounds }, opened: Boolean(accepted), submission_id: pending.id }; },
       rollback: () => {
         state.creating_room = null;
         // Someone who moved on to another room stays there.
         if (accepted && !state.room && previous_room) run_action(() => select_room(previous_room));
       },
       save: async () => {
-        const created = (await submit_local_launch(input, payload.title, !launching, signature)).room;
+        const created = (await submit_local_launch(input, payload.title, !launching, signature, max_rounds)).room;
         // Only a placeholder still on screen waits: someone who moved on to another room is not opened into this one.
         return accepted && !state.room ? { ...created, ...await preload_room(created.id) } : created;
       },
@@ -5286,7 +5336,7 @@ function refresh_launch_recoveries() {
 }
 
 /** Persist the complete submitted input before any request can create or start a room. */
-async function submit_local_launch(input, title, direct = false, signature) {
+async function submit_local_launch(input, title, direct = false, signature, max_rounds = state.create_chain_rounds) {
   const id = input.room?.submission_id || `room-${input.room_id}`;
   const key = LAUNCH_PENDING_PREFIX + id;
   const previous = localStorage.getItem(key);
@@ -5307,7 +5357,7 @@ async function submit_local_launch(input, title, direct = false, signature) {
     await send_descriptions(result.room?.id, record.input.token, Object.fromEntries(names.map(name => [name, description_draft(name)])));
     await send_labels(result.room?.id, record.input.token, Object.fromEntries(names.map(name => [name, label_drafts[name]])));
     for (const name of names) { delete description_drafts[name]; delete label_drafts[name]; }
-    await send_chain_rounds(result.room?.id, record.input.token, state.create_chain_rounds);
+    await send_chain_rounds(result.room?.id, record.input.token, max_rounds);
     return result;
   } catch (error) {
     const stage = error.launch?.stage || (record.direct && error.preflight ? "not_started" : undefined);
@@ -7698,6 +7748,16 @@ function publish_view() {
   document.dispatchEvent(new CustomEvent("discuss:view"));
 }
 
+/** Start a browser-only diagnostic sequence. Callers provide only IDs, flags and protocol status. */
+function browser_debug(event, data) {
+  if (!document.getElementById?.("scrolldebug")) return null;
+  const operation = ++browser_debug_operation;
+  return (phase, details) => document.dispatchEvent(new CustomEvent("discuss:browser-debug", {
+    detail: { event, data: { ...data, operation, phase, ...details } },
+  }));
+}
+let browser_debug_operation = 0;
+
 /** Read current form drafts without transferring ownership to either renderer. */
 function view_snapshot() {
   // Searched inside their containers: a whole-document selector walks every transcript node on each publish.
@@ -7723,15 +7783,16 @@ function view_snapshot() {
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
     share: SHARE ? { exported_at: SHARE.exported_at, home: SHARE_HOME } : null,
-    managed_share_jobs: [...managed_share_jobs.values()].sort((a,b) => b.created_at.localeCompare(a.created_at)),
+    managed_share_jobs: shown_share_jobs().sort((a,b) => b.created_at.localeCompare(a.created_at)),
     share_tasks: Object.fromEntries([...share_tasks].filter(([, draft]) => !draft.managed_id).map(([id, draft]) => [id, { phase: draft.phase, upload: draft.upload ? { ...draft.upload } : null }])),
     share_draft: share_draft ? { room_id: share_draft.room_id, title: share_draft.title, phase: share_draft.phase || "ready",
+      materials: share_draft.materials, publication: share_draft.publication,
       spots: [...share_draft.spots || [], ...share_draft.include_files ? share_draft.file_spots || [] : []],
       files: { count: share_draft.files?.length || 0, bytes: (share_draft.files || []).reduce((total, file) => total + file.size, 0), included: Boolean(share_draft.include_files),
         kinds: share_draft.files ? share_file_kinds(share_draft) : [], carried: share_carried_files(share_draft, false).reduce((total, file) => total + file.size, 0),
         carried_count: share_carried_files(share_draft, false).length,
         site_left_out: (share_draft.files || []).filter(file => !file.site_type).map(file => file.file_name) },
-      days: share_draft.days || SHARE_DEFAULT_DAYS, linked: Boolean(share_draft.linked || share_link(share_draft.room_id)), link: share_draft.link || null, upload: share_draft.upload ? { ...share_draft.upload } : null } : null,
+      days: share_draft.days || SHARE_DEFAULT_DAYS, linked: Boolean(share_draft.linked || share_link(share_draft.room_id)), link: share_draft.link || null, cover_images: share_draft.cover_images || [], upload: share_draft.upload ? { ...share_draft.upload } : null } : null,
     share_links: SHARE ? {} : share_links(), share_days: SHARE_DAYS,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: shown_launch(), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_host_permissions: state.create_host_permissions, create_api_max_requests: state.create_api_max_requests, create_auto_destroy: state.create_auto_destroy || 0, create_relay_rounds: state.create_relay_rounds ?? 0, create_image_generation: state.create_image_generation };
@@ -8076,6 +8137,18 @@ async function share_include_files(include) {
 const share_tasks = new Map();
 let share_draft = null;
 const managed_share_jobs = new Map();
+const share_job_changes = new Map();
+const dismissed_share_jobs = new Set();
+
+/** Show the latest requested state of each job while its writes finish in order. */
+function shown_share_jobs() {
+  const jobs = new Map(managed_share_jobs);
+  for (const [id, change] of share_job_changes) {
+    if (change.job) jobs.set(id, change.job);
+    else jobs.delete(id);
+  }
+  return [...jobs.values()];
+}
 let share_job_timer, share_job_read, selection_write = Promise.resolve();
 function can_manage_shares() {
   return !SHARE && Boolean(state.launch.available || state.remote_rooms || relay_machine || state.admin?.local);
@@ -8086,14 +8159,14 @@ function share_job_request(op, job, fields = {}) {
 }
 function schedule_share_jobs() {
   clearTimeout(share_job_timer);
-  if (!document.hidden && [...managed_share_jobs.values()].some(job => ["preparing","publishing"].includes(job.phase)))
+  if (!document.hidden && shown_share_jobs().some(job => ["preparing","publishing"].includes(job.phase)))
     share_job_timer = setTimeout(share_job_refresh, 1500);
 }
 function remember_share_job(job, announce) {
   const prior = managed_share_jobs.get(job.id);
   if (prior && prior.updated_at > job.updated_at) return;
   managed_share_jobs.set(job.id, job);
-  if (job.result && job.phase === "published") show_share_link(job.room_id, job.result);
+  if (job.result && job.phase === "published" && prior && prior.phase !== "published") show_share_link(job.room_id, job.result);
   const draft = share_tasks.get(job.room_id);
   if (draft?.managed_id === job.id) {
     if (["failed", "cancelled"].includes(job.phase)) share_tasks.delete(job.room_id);
@@ -8110,38 +8183,87 @@ function remember_share_job(job, announce) {
 async function share_job_refresh() {
   if (!can_manage_shares() || share_job_read) return;
   const before = new Map(managed_share_jobs);
+  const dismissed = new Set(dismissed_share_jobs);
   share_job_read = share_job_request("list");
   try {
     const { enabled, jobs } = await share_job_read;
     if (!enabled) return;
-    for (const job of jobs) remember_share_job(job, before.has(job.id));
-    for (const [id, job] of before) if (managed_share_jobs.get(id) === job && !jobs.some(item => item.id === id)) managed_share_jobs.delete(id);
+    for (const job of jobs) {
+      if (!share_job_changes.has(job.id) && !dismissed_share_jobs.has(job.id) && before.get(job.id) === managed_share_jobs.get(job.id)) {
+        remember_share_job(job, before.has(job.id));
+      }
+    }
+    const listed = new Set(jobs.map(job => job.id));
+    for (const id of dismissed) if (!listed.has(id)) dismissed_share_jobs.delete(id);
+    for (const [id, job] of before) if (!share_job_changes.has(id) && managed_share_jobs.get(id) === job && !listed.has(id)) managed_share_jobs.delete(id);
     publish_view();
   } catch { /* A disconnected device resumes on focus or during the next active poll. */ }
   finally { share_job_read = null; schedule_share_jobs(); }
 }
-async function share_job_action({ op, job }) {
-  try {
-    if (op === "copy") return copy_text(job.result.url);
-    if (op === "open") {
-      await selection_write;
-      const { job: fresh } = await share_job_request("get", job);
-      remember_share_job(fresh, false);
-      if (!fresh.summary && fresh.phase !== "published") return;
-      const draft = { ...fresh.summary, room_id: fresh.room_id, managed_id: fresh.id, phase: fresh.phase === "published" ? "published" : "ready",
-        link: fresh.result, days: fresh.selection.days, include_files: fresh.selection.include_files, left_files: new Set(fresh.selection.left_files) };
-      share_tasks.set(fresh.room_id, draft); share_draft = draft;
-    } else {
-      const reply = await share_job_request(op, job);
-      if (reply.job) remember_share_job(reply.job, true); else managed_share_jobs.delete(job.id);
-      if (op === "dismiss" || op === "cancel") {
-        if (share_tasks.get(job.room_id)?.managed_id === job.id) share_tasks.delete(job.room_id);
-        if (share_draft?.managed_id === job.id) share_draft = null;
-      }
-      schedule_share_jobs();
-    }
-  } catch (error) { notify("error", error.message); }
+async function open_share_job(job) {
+  if (job.phase === "published") return open_share_card(job.room_id, job.result);
+  const loading = { room_id: job.room_id, managed_id: job.id, title: job.room_title, phase: "preparing" };
+  share_draft = loading;
   publish_view();
+  try {
+    await Promise.all([selection_write, share_job_changes.get(job.id)?.write]);
+    if (share_draft !== loading) return;
+    const { job: fresh } = await share_job_request("get", job);
+    if (share_draft !== loading) return;
+    remember_share_job(fresh, false);
+    if (fresh.phase === "published") return open_share_card(fresh.room_id, fresh.result);
+    if (!fresh.summary && fresh.phase !== "published") { share_draft = null; return; }
+    share_draft = { ...fresh.summary, title: fresh.summary?.title || fresh.room_title, room_id: fresh.room_id, managed_id: fresh.id,
+      phase: fresh.phase === "publishing" ? "publishing" : "ready",
+      upload: fresh.phase === "publishing" || (fresh.phase === "failed" && fresh.progress?.revision) ? fresh.progress : null,
+      link: fresh.result, days: fresh.selection.days,
+      include_files: fresh.selection.include_files, left_files: new Set(fresh.selection.left_files) };
+    share_tasks.set(fresh.room_id, share_draft);
+  } catch (error) {
+    if (share_draft === loading) { share_draft = null; notify("error", error.message); }
+  } finally { publish_view(); }
+}
+
+async function share_job_action({ op, job }) {
+  if (op === "copy") return copy_text(job.result.url);
+  if (op === "open") return open_share_job(job);
+  const previous = share_job_changes.get(job.id);
+  const retry_phase = !job.adjustable ? "preparing" : job.progress?.step === "preparing" ? "ready" : "publishing";
+  const preview = op === "retry" ? { ...job, phase: retry_phase, error: "", progress: { step: retry_phase, done: 0, total: 0 } }
+    : op === "cancel" ? { ...job, phase: "cancelled" } : null;
+  const change = { job: preview };
+  const cached = share_tasks.get(job.room_id);
+  const opened = share_draft;
+  if (op !== "retry") {
+    if (cached?.managed_id === job.id) share_tasks.delete(job.room_id);
+    if (opened?.managed_id === job.id) share_draft = null;
+  }
+  share_job_changes.set(job.id, change);
+  change.write = (async () => {
+    if (previous) await previous.write.catch(() => {});
+    const reply = await share_job_request(op, job);
+    if (reply.job) remember_share_job(reply.job, true);
+    else { managed_share_jobs.delete(job.id); dismissed_share_jobs.add(job.id); }
+    if (op !== "retry") {
+      // An earlier queued change may have restored its draft after this click.
+      const restored = share_tasks.get(job.room_id);
+      if (restored?.managed_id === job.id) {
+        share_tasks.delete(job.room_id);
+        if (share_draft === restored) share_draft = null;
+      }
+    }
+  })();
+  publish_view();
+  try { await change.write; }
+  catch (error) {
+    if (cached?.managed_id === job.id && !share_tasks.has(job.room_id)) share_tasks.set(job.room_id, cached);
+    if (opened && opened === cached && !share_draft) share_draft = opened;
+    notify("error", error.message);
+  } finally {
+    if (share_job_changes.get(job.id) === change) share_job_changes.delete(job.id);
+    schedule_share_jobs();
+    publish_view();
+  }
 }
 function managed_selection(draft) {
   return { include_files: Boolean(draft.include_files), left_files: [...draft.left_files || []], days: draft.days || SHARE_DEFAULT_DAYS };
@@ -8159,7 +8281,71 @@ function share_select_days(days) {
 
 function share_open(room_id) {
   share_draft = share_tasks.get(room_id) || null;
+  if (share_draft?.phase === "published") return open_share_card(room_id, share_draft.link);
   publish_view();
+}
+
+const share_card_writes = new Map();
+const SHARE_CARD_TEXT_SAVE_MS = 400;
+
+/** Wake the preceding edit so only the latest value of a field is sent after typing stops. */
+function share_card_text_delay(draft, field) {
+  const delays = draft.card_delays ||= new Map();
+  delays.get(field)?.();
+  return new Promise(resolve => {
+    const flush = () => { clearTimeout(timer); delays.delete(field); resolve(); };
+    const timer = setTimeout(flush, SHARE_CARD_TEXT_SAVE_MS);
+    delays.set(field, flush);
+  });
+}
+
+/** Both the directory and a publication notification open the same saved card. */
+async function open_share_card(room_id, fallback) {
+  const title = state.rooms.find(room => room.id === room_id)?.title || fallback?.card?.title || "";
+  const loading = { room_id, title, phase: "preparing" };
+  share_draft = loading;
+  publish_view();
+  try {
+    await Promise.allSettled(["question", "outcome", "cover"].map(field => share_card_writes.get(room_id + "/" + field)));
+    const saved = await request_json(`/api/rooms/${encodeURIComponent(room_id)}/share-card`);
+    if (share_draft !== loading) return;
+    const job = shown_share_jobs().find(item => item.result?.url === saved.url);
+    const previous = fallback?.url === saved.url ? fallback : job?.result;
+    const card = { title, members: [], stats: "", question: "", outcome: "", ...previous?.card, ...saved.card };
+    const link = { ...previous, url: saved.url, expires_at: saved.expires_at, share_id: saved.share_id, card };
+    share_draft = { room_id, title: card.title, phase: "published", link, cover_images: saved.images };
+  } catch (error) {
+    if (share_draft === loading) { share_draft = null; notify("error", error.message); }
+  } finally { publish_view(); }
+}
+
+/** Preview immediately, then save each field in order. Delayed edits stay bound to the original link. */
+async function edit_share_card({ field, value, room_id, share_id }) {
+  const draft = share_draft;
+  if (draft?.room_id !== room_id || draft.link?.share_id !== share_id) return;
+  const card = draft.link.card;
+  const key = room_id + "/" + field;
+  const prior = share_card_writes.get(key);
+  draft.saved_card ||= { ...card };
+  draft.link = { ...draft.link, card: { ...card, [field]: value } };
+  const versions = draft.card_versions ||= {};
+  const version = versions[field] = (versions[field] || 0) + 1;
+  publish_view();
+  const delay = field === "cover" ? undefined : share_card_text_delay(draft, field);
+  const write = Promise.allSettled([prior, delay]).then(async () => {
+    if (versions[field] !== version) return;
+    await request_json(`/api/rooms/${encodeURIComponent(room_id)}/share-card`, { share_id, edits: { [field]: value } });
+    draft.saved_card[field] = value;
+  });
+  share_card_writes.set(key, write);
+  try { await write; }
+  catch (error) {
+    if (versions[field] === version) draft.link = { ...draft.link, card: { ...draft.link.card, [field]: draft.saved_card[field] } };
+    throw error;
+  } finally {
+    if (share_card_writes.get(key) === write) share_card_writes.delete(key);
+    if (share_draft === draft && versions[field] === version) publish_view();
+  }
 }
 
 function share_actions(draft, actions) {
@@ -8183,6 +8369,7 @@ async function browser_share_data(room_id, models) {
   const members = (room.members || []).filter(member => member.status !== "removed").map(member => member.label || display_name(member.name));
   const description = t('{members} 在同一个房间协作 · {messages} 条消息 · {runs} 次执行', { members: members.join("、"), messages: room.message_count, runs: recorded.runs });
   return { title: room.title, description, responses, responses_with_files, files, file_spots: null, include_files: false,
+    materials: share_card_materials_info(responses),
     exported_at, runs: recorded.runs, spots: share_sensitive_spots(responses), phase: "ready" };
 }
 
@@ -8190,7 +8377,7 @@ async function browser_share_data(room_id, models) {
 async function share_prepare(room_id = state.room?.id) {
   if (!room_id) return;
   const previous = share_tasks.get(room_id);
-  const active = [...managed_share_jobs.values()].find(job => job.room_id === room_id && ["preparing","publishing","ready"].includes(job.phase));
+  const active = shown_share_jobs().find(job => job.room_id === room_id && ["preparing","publishing","ready"].includes(job.phase));
   if (active) {
     if (active.phase === "ready") return share_job_action({ op: "open", job: active });
     notify("info", t("可在左侧“已分享”查看进度")); return;
@@ -8226,6 +8413,7 @@ async function share_prepare(room_id = state.room?.id) {
 
 /** Dismiss the dialog. Release a reviewed draft while keeping background tasks and published cards available. */
 function share_cancel() {
+  for (const flush of share_draft?.card_delays?.values() || []) flush();
   if (share_draft?.phase === "ready" && !share_draft.managed_id) share_tasks.delete(share_draft.room_id);
   share_draft = null;
   publish_view();
@@ -8272,9 +8460,13 @@ async function share_room() {
   }
 }
 
-/** A room's live share link as the directory lists it ({ url, expires_at }, no manage token), or null. */
+const share_changes = new Map();
+const saved_share_links = new Map();
+
+/** Project the latest intent, then the saved result, onto the public directory link. */
 function share_link(room_id) {
-  const link = state.rooms.find(room => room.id === room_id)?.share_link;
+  const entry = share_changes.get(room_id) || saved_share_links.get(room_id);
+  const link = entry ? entry.link : state.rooms.find(room => room.id === room_id)?.share_link;
   return link && Date.parse(link.expires_at) > Date.now() ? link : null;
 }
 
@@ -8285,7 +8477,21 @@ function share_links() {
 
 /** Show a room's link as changed at once, before the next directory read carries it. */
 function show_share_link(room_id, link) {
-  state.rooms = state.rooms.map(room => room.id === room_id ? { ...room, share_link: link ? { url: link.url, expires_at: link.expires_at } : null } : room);
+  const visible = link ? { url: link.url, expires_at: link.expires_at } : null;
+  saved_share_links.set(room_id, { link: visible });
+  state.rooms = state.rooms.map(room => room.id === room_id ? { ...room, share_link: visible } : room);
+}
+
+/** Retire a saved projection only after a fresh directory read confirms the same link and expiry. */
+function confirm_share_directory(rooms, versions) {
+  for (const room of rooms) {
+    const entry = versions.get(room.id);
+    if (!entry || saved_share_links.get(room.id) !== entry) continue;
+    const link = room.share_link;
+    if (link?.url === entry.link?.url && (!link || Date.parse(link.expires_at) === Date.parse(entry.link.expires_at))) {
+      saved_share_links.delete(room.id);
+    }
+  }
 }
 
 /**
@@ -8389,6 +8595,7 @@ async function share_publish(ttl_days = SHARE_DEFAULT_DAYS) {
       return;
     }
     draft.upload = null;
+    draft.publication = null;
     if (share_draft === draft) share_draft = null;
     publish_view();
     notify("info", t('正在后台发布「{name}」', { name: draft.title }));
@@ -8408,14 +8615,25 @@ async function share_publish(ttl_days = SHARE_DEFAULT_DAYS) {
       revision = result.revision;
     }
     // The link is out; keeping it with the room is what lets the owner renew or revoke it later, so a failure here is said.
-    await save_share_link(draft.room_id, link).catch(error => notify("warning", t('链接已发布，但没能保存到房间，之后无法在这里续期或撤销：{value1}', { value1: error.message })));
+    const card = share_card(draft, link);
+    const publication = card.publication = draft.publication = { revision, total: carried.length, ...(carried.length ? {} : { done: 0 }) };
+    await save_share_link(draft.room_id, { ...link, card }).catch(error => notify("warning", t('链接已发布，但没能保存到房间，之后无法在这里续期或撤销：{value1}', { value1: error.message })));
     // The page is up; its attachments follow. A failed one leaves the link without it, and publishing again sends all anew.
-    if (body.files) await share_upload_files(draft, link, revision).catch(error => {
-      throw new Error(t('链接已发布，但附件没有传完，读者会看到“附件读取失败”；可再点“更新链接”重传。{value1}', { value1: error.message }));
-    });
+    if (body.files) {
+      try { await share_upload_files(draft, link, revision); }
+      catch (error) {
+        throw new Error(t('链接已发布，但附件没有传完，读者会看到“附件读取失败”；可再点“更新链接”重传。{value1}', { value1: error.message }));
+      } finally {
+        publication.done = draft.upload?.done;
+        const route = `/api/rooms/${encodeURIComponent(draft.room_id)}/share-card`;
+        if (revision && Number.isInteger(publication.done)) {
+          await request_json(route, { share_id: link.share_id, publication: { revision, done: publication.done } }).catch(() => {});
+        }
+      }
+    }
     const copied = await navigator.clipboard?.writeText(link.url).then(() => true, () => false);
     // The dialog turns into the published link itself, to copy or open; the room's own data is no longer needed.
-    Object.assign(draft, { phase: "published", link: { url: link.url, expires_at: link.expires_at, copied: Boolean(copied), updated: Boolean(existing), card: share_card(draft, link) }, responses: null, responses_with_files: null });
+    Object.assign(draft, { phase: "published", link: { url: link.url, share_id: link.share_id, expires_at: link.expires_at, copied: Boolean(copied), updated: Boolean(existing), card }, responses: null, responses_with_files: null });
     notify("info", t('「{name}」的分享链接已发布', { name: draft.title }), share_actions(draft, [
       [t('查看分享卡'), () => share_open(draft.room_id)], [t('复制链接'), () => copy_text(link.url)] ]));
   } catch (error) {
@@ -8426,45 +8644,49 @@ async function share_publish(ttl_days = SHARE_DEFAULT_DAYS) {
   }
 }
 
-/** Give a room's published link a new lifetime from now, its content unchanged. */
-async function share_renew({ room_id, days = SHARE_DEFAULT_DAYS }) {
-  if (state.backup_pending) return;
-  state.backup_pending = true;
+/** Display the latest intent immediately; send writes for each room in click order. */
+async function queue_share_change(room_id, link, write) {
+  const previous = share_changes.get(room_id);
+  const entry = { link };
+  share_changes.set(room_id, entry);
+  entry.write = previous ? previous.write.then(write, write) : Promise.resolve().then(write);
   publish_view();
-  try {
+  try { await entry.write; }
+  finally {
+    if (share_changes.get(room_id) === entry) share_changes.delete(room_id);
+    publish_view();
+  }
+}
+
+async function share_renew({ room_id, days = SHARE_DEFAULT_DAYS }) {
+  const ttl_days = SHARE_DAYS.includes(Number(days)) ? Number(days) : SHARE_DEFAULT_DAYS;
+  const current = share_link(room_id);
+  const preview = current && { ...current, expires_at: new Date(Date.now() + ttl_days * DAY_MS).toISOString() };
+  const write = async () => {
     const link = await share_link_record(room_id);
     if (!link) throw new Error(t('这个房间没有可续期的分享链接'));
-    const result = await share_site_request("POST", `/api/shares/${encodeURIComponent(link.share_id)}/renew`, { ttl_days: SHARE_DAYS.includes(Number(days)) ? Number(days) : SHARE_DEFAULT_DAYS }, link.manage_token);
+    let result;
+    try { result = await share_site_request("POST", `/api/shares/${encodeURIComponent(link.share_id)}/renew`, { ttl_days }, link.manage_token); }
+    catch (error) {
+      if ([404, 410].includes(error.status)) await save_share_link(room_id, null).catch(() => {});
+      throw error;
+    }
     await save_share_link(room_id, { ...link, expires_at: result.expires_at });
     notify("info", t('已续期，{time} 前有效。', { time: new Date(result.expires_at).toLocaleString(undefined, { hour12: false }) }));
-  } catch (error) {
-    // Gone from the site already: nothing to renew, so it leaves the list.
-    if ([404, 410].includes(error.status)) await save_share_link(room_id, null).catch(() => {});
+  };
+  try { await queue_share_change(room_id, preview, write); }
+  catch (error) {
     notify("error", t('续期失败：{value1}', { value1: error.message }));
-  } finally {
-    state.backup_pending = false;
-    publish_view();
   }
 }
 
 /** Take a room's published link down now; the share site deletes its copy. */
 async function share_revoke(room_id) {
-  if (state.backup_pending) return;
-  state.backup_pending = true;
-  publish_view();
   try {
-    const link = await share_link_record(room_id);
-    if (link) {
-      try { await share_site_request("DELETE", `/api/shares/${encodeURIComponent(link.share_id)}`, null, link.manage_token); }
-      catch (error) { if (![404, 410].includes(error.status)) throw error; }
-    }
-    await save_share_link(room_id, null);
+    await queue_share_change(room_id, null, () => take_down_share(room_id));
     notify("info", t('分享链接已撤销，打开它的人会看到“分享不存在”。'));
   } catch (error) {
     notify("error", t('撤销分享链接失败：{value1}', { value1: error.message }));
-  } finally {
-    state.backup_pending = false;
-    publish_view();
   }
 }
 
@@ -8618,7 +8840,7 @@ async function import_rooms({ files, folder_id = null }) {
 async function execute_view_action(name, value) {
   if (!["refresh", "create"].includes(name)) state.navigation_version++;
   const event = { preventDefault() {} };
-  const actions = { refresh: refresh_room, room: select_room, tab: select_tab,
+  const actions = { open_share_card, edit_share_card, refresh: refresh_room, room: select_room, tab: select_tab,
     archives: toggle_archives, backup: backup_room, backup_rooms, share_job_refresh, share_job_action, share_select_days, share_open, share_prepare, share_room, share_cancel, share_publish, share_include_files, share_toggle_kind, share_toggle_file, share_revoke, share_renew, share_copy, import_rooms, manage_channel, retry_destruction, destroy_all_rooms, move_channel, create_folder, move_folder, rename_folder, delete_folder, sort_directory,
     send: () => send_from_composer(event), discard_sending, retry_sending, choose_attachments, remove_attachment, preview_attachment,
     create: ({ folder_id, accepted, rejected }) => submit_room(event, folder_id, { accepted, rejected }), quick_create: quick_create_room, welcome: open_welcome,

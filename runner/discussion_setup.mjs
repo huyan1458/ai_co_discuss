@@ -550,7 +550,7 @@ function report_styled(result, options) {
   for (const permission of result.permissions) {
     if (permission.status === 'removed') rows.push([permission.client, t('已移除旧版全局放行规则'), short_path(permission.path)]);
   }
-  if (result.skills.length) rows.push([t('技能'), result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), 'discuss-host · discuss-participant · discuss-goal · discuss-session · discuss-report · workflow-creator · local-tts-setup · local-stt-setup']);
+  if (result.skills.length) rows.push([t('技能'), result.skills.map(group => `${group.client} ${group.results.filter(skill => skill.status !== 'conflict').length}/${group.results.length}`).join(' · '), SKILLS.join(' · ')]);
   if (result.workflows.length) rows.push([t('工作流'), workflow_summary(result.workflows), '']);
   if (result.launcher) rows.push([t('快捷方式'), t('双击“共议”启动'), short_path(result.launcher)]);
   if (result.hosting) rows.push([t('托管管理'), t('已打开'), t('在管理面板中可用')]);

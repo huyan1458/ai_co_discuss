@@ -53,6 +53,7 @@ Shutdown and sleep interrupt local execution. During an internet outage, the loc
 
 - **A member does not respond or keeps waiting.** Run `codiscuss local status`. If other work is in progress, look for the new message in the queue above the composer. For a stuck room, run `codiscuss room events <ROOM_ID>` to see what happened.
 - **Delivery failed.** Read the original cause on the failure card. If sign-in has expired, sign in again in the AI tool or under **Account → CLI sign-ins** in the admin panel, then choose **Retry now**. Delivery can retry automatically up to three times.
+- **Gemini loses its connection mid-task.** When Antigravity CLI marks the network error as retryable, the execution card counts down for 10, 30, then 60 seconds before successive attempts to resume the same conversation. Each execution allows up to three automatic retries. Choose **Retry now** to skip the wait or **Stop** to cancel. If retries run out, the card shows the last error.
 - **Quota exhausted.** Wait for the quota to reset, switch the member's model under **Room → Members and settings** in the tabs at the top of the room, or reassign the work.
 - **Output limit or context compression failure.** For an output limit, ask for a shorter answer or split the task. For a compression failure, shorten the input. The next run starts a fresh session.
 - **Provider policy refusal.** Review the content and the provider's requirements before trying again. Policy refusals and compression failures do not trigger automatic retries.

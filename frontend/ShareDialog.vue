@@ -2,7 +2,7 @@
 import { computed, inject, ref, watch } from "vue";
 import { SHARE_DAYS, SHARE_DEFAULT_DAYS, SHARE_SITE_FILES_MAX_BYTES } from "../runner/share_shared.mjs";
 import { locale, t } from "./i18n.js";
-import { draw_share_card, share_card_blob } from "./share-card.js";
+import { draw_share_card, encode_cover, share_card_blob, share_card_diagnostic } from "./share-card.js";
 import { file_preview } from "./file-preview.js";
 
 const { view, bridge, act } = inject("discussion");
@@ -18,9 +18,80 @@ const share_expiry = computed(() => share_draft.value?.link ? new Date(share_dra
 // The share card of a published link, drawn once the dialog shows it.
 const card_canvas = ref(null);
 // The two texts on the card are the owner's to adjust before the picture is saved or copied.
-const card_text = ref({ question: "", outcome: "" });
-watch(() => share_draft.value?.link?.card, (card) => { if (card) card_text.value = { question: card.question, outcome: card.outcome }; });
-watch([() => share_draft.value?.link?.card, card_canvas, card_text], ([card, canvas, text]) => { if (card && canvas) draw_share_card(canvas, { ...card, ...text }); }, { deep: true });
+const card = computed(() => share_draft.value?.link?.card);
+const upload_input = ref(null);
+const crop_image = ref(null);
+const crop_offset = ref(0.5);
+const cover_preview = ref(null);
+const drawn = ref(false);
+const preview_render = ref(null);
+let image_choice = 0;
+watch(() => share_draft.value?.link?.url, () => { image_choice++; crop_image.value = null; });
+/** Decode a selected or stored raster image before painting it. */
+async function load_image(url) {
+  const image = new Image();
+  image.src = url;
+  await image.decode();
+  return image;
+}
+watch(() => card.value?.cover, async (url, _, cleanup) => {
+  let current = true;
+  cleanup(() => { current = false; });
+  cover_preview.value = null;
+  if (!url) return;
+  try {
+    const image = await load_image(url);
+    if (current) cover_preview.value = { url, image };
+  } catch {
+    if (current) {
+      cover_preview.value = { url, failed: true };
+      bridge.notify("error", t("图片读取失败"));
+    }
+  }
+}, { immediate: true });
+watch([card, card_canvas, cover_preview, share_expiry], ([value, canvas, cover]) => {
+  drawn.value = false;
+  preview_render.value = value ? { stage: "waiting-canvas" } : null;
+  if (!canvas || !value) return;
+  const decoded = value.cover && cover?.url === value.cover ? cover : null;
+  if (value.cover && !decoded?.image) {
+    preview_render.value = { stage: decoded?.failed ? "decode-failed" : "decoding-cover" };
+    return;
+  }
+  try {
+    draw_share_card(canvas, { ...value, url: share_draft.value.link.url,
+      expires: t("{time} 前有效", { time: share_expiry.value }) }, decoded?.image);
+    drawn.value = true;
+    preview_render.value = { stage: "drawn", rendered: decoded ? "custom" : "default", width: canvas.width, height: canvas.height };
+  } catch {
+    preview_render.value = { stage: "draw-failed" };
+  }
+}, { deep: true, flush: "post" });
+function copy_diagnostic() {
+  const summary = share_card_diagnostic(share_draft.value, preview_render.value);
+  return act("copy", JSON.stringify(summary, null, 2));
+}
+function edit_card(field, value) {
+  const draft = share_draft.value;
+  return act("edit_share_card", { room_id: draft.room_id, share_id: draft.link.share_id, field, value });
+}
+async function select_cover(file, attachment = false) {
+  if (!file) return;
+  const choice = ++image_choice;
+  crop_image.value = null;
+  let local_url;
+  try {
+    if (!attachment && !["image/png", "image/jpeg", "image/webp"].includes(file.type)) throw new Error(t("请选择 PNG、JPG 或 WebP 图片"));
+    const url = attachment ? await bridge.attachment_url(file) : (local_url = URL.createObjectURL(file));
+    const image = await load_image(url);
+    if (choice !== image_choice) return;
+    if (image.height > image.width * 2) { crop_offset.value = 0.5; crop_image.value = image; }
+    else await edit_card("cover", encode_cover(image));
+  } catch (error) { if (choice === image_choice) bridge.notify("error", error.message || t("图片读取失败")); }
+  finally { if (local_url) URL.revokeObjectURL(local_url); }
+}
+const cropped_cover = computed(() => crop_image.value ? encode_cover(crop_image.value, crop_offset.value) : "");
+function auto_cover() { image_choice++; crop_image.value = null; edit_card("cover", ""); }
 /** Save the card as a PNG named after the room. */
 async function save_card() {
   const link = document.createElement("a");
@@ -100,16 +171,29 @@ function close_share(open) {
           </div>
           <p class="share-done-meta"><UIcon name="i-lucide-clock" />{{ share_draft.link.updated ? t("已更新原链接的内容，{time} 前有效。", { time: share_expiry }) : t("{time} 前有效，到期自动删除。", { time: share_expiry }) }}</p>
           <div class="share-done-card">
-            <figure class="share-done-stage"><canvas ref="card_canvas" :aria-label="t('分享卡：{name}', { name: share_title })"></canvas></figure>
+            <figure class="share-done-stage"><canvas ref="card_canvas" :style="{ visibility: drawn ? 'visible' : 'hidden' }" :aria-label="t('分享卡：{name}', { name: share_title })"></canvas></figure>
             <div class="share-done-side">
               <h3>{{ t('分享卡') }}</h3>
-              <label class="share-dialog-field"><span>{{ t('卡片上的问题') }}</span>
-                <UTextarea v-model="card_text.question" :rows="2" autoresize :maxrows="4" variant="soft" :placeholder="t('可留空')" :aria-label="t('分享卡上的问题')" /></label>
-              <label class="share-dialog-field"><span>{{ t('卡片上的成果') }}</span>
-                <UTextarea v-model="card_text.outcome" :rows="3" autoresize :maxrows="5" variant="soft" :placeholder="t('可留空')" :aria-label="t('分享卡上的成果')" /></label>
+              <div class="share-cover-controls">
+                <UButton :label="t('自动封面')" :variant="card?.cover ? 'outline' : 'soft'" @click="auto_cover" />
+                <UButton :label="t('上传封面')" color="neutral" variant="outline" @click="upload_input.click()" />
+                <input ref="upload_input" type="file" hidden accept="image/png,image/jpeg,image/webp" @change="select_cover($event.target.files[0]); $event.target.value = ''">
+                <USelect v-if="share_draft.cover_images?.length" :model-value="null" :placeholder="t('选择房间图片')" :aria-label="t('选择房间图片')"
+                  :items="share_draft.cover_images.map(file => ({ label: '#' + file.message_id + ' · ' + file.file_name, value: file.id }))"
+                  @update:model-value="id => select_cover(share_draft.cover_images.find(file => file.id === id), true)" />
+              </div>
+              <div v-if="crop_image" class="share-cover-crop">
+                <img :src="cropped_cover" :alt="t('裁剪预览')">
+                <label>{{ t('选择保留的画面') }}<input v-model.number="crop_offset" type="range" min="0" max="1" step="0.01"></label>
+                <UButton :label="t('使用此封面')" @click="edit_card('cover', cropped_cover); crop_image = null" />
+              </div>
+              <label v-if="!card?.cover" class="share-dialog-field"><span>{{ t('卡片上的问题') }}</span>
+                <UTextarea :model-value="card?.question" :maxlength="2000" @update:model-value="edit_card('question', $event)" :rows="2" autoresize :maxrows="4" variant="soft" :placeholder="t('可留空')" :aria-label="t('分享卡上的问题')" /></label>
+              <label v-if="!card?.cover" class="share-dialog-field"><span>{{ t('卡片上的成果') }}</span>
+                <UTextarea :model-value="card?.outcome" :maxlength="2000" @update:model-value="edit_card('outcome', $event)" :rows="3" autoresize :maxrows="5" variant="soft" :placeholder="t('可留空')" :aria-label="t('分享卡上的成果')" /></label>
               <div class="share-done-card-actions">
-                <UButton :label="t('保存图片')" icon="i-lucide-image-down" color="neutral" variant="subtle" @click="save_card" />
-                <UButton v-if="can_copy_image" :label="card_copied ? t('已复制') : t('复制图片')" :icon="card_copied ? 'i-lucide-check' : 'i-lucide-clipboard-copy'" color="neutral" variant="subtle" @click="copy_card" />
+                <UButton :disabled="!drawn" :label="t('保存图片')" icon="i-lucide-image-down" color="neutral" variant="subtle" @click="save_card" />
+                <UButton v-if="can_copy_image" :disabled="!drawn" :label="card_copied ? t('已复制') : t('复制图片')" :icon="card_copied ? 'i-lucide-check' : 'i-lucide-clipboard-copy'" color="neutral" variant="subtle" @click="copy_card" />
               </div>
             </div>
           </div>
@@ -191,6 +275,7 @@ function close_share(open) {
           </div>
         </div>
         </template>
+        <UButton v-if="share_draft" :label="t('复制分享卡诊断')" icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" @click="copy_diagnostic" />
       </template>
     </UModal>
 </template>
@@ -214,6 +299,10 @@ function close_share(open) {
 .share-done-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .share-done-side h3 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .share-dialog-field { display: grid; gap: 5px; }
+.share-cover-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.share-cover-controls > * { max-width: 100%; }
+.share-cover-crop { display: grid; justify-items: start; gap: 6px; }
+.share-cover-crop img { max-height: 160px; }
 .share-dialog-field > span { color: var(--ui-text-muted); font-size: 12px; }
 .share-dialog-field :deep(textarea) { font-size: 13px; line-height: 1.6; }
 .share-done-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }

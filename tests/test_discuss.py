@@ -304,12 +304,20 @@ class CliTests(unittest.TestCase):
                          "--submission-id", str(uuid.uuid4()))["id"]
         posted = self.cli("message", "post", other, "--as", "用户", "--body", "跨房间原文", "--submission-id", str(uuid.uuid4()))
         message_id = posted["message"]["id"]
-        environment = {"DISCUSS_ACCESS_FILE": str(self.room_access[self.room]["用户"])}
+        access = json.loads(Path(self.room_access[self.room]["用户"]).read_text(encoding="utf-8"))
+        path = Path(self.directory.name) / "cross-room-task.json"
+        path.write_text(json.dumps({**access, "execution_id": 123456}), encoding="utf-8")
+        environment = {"DISCUSS_ACCESS_FILE": str(path)}
         read = lambda *arguments, **extra: self.invoke(arguments, environment={**environment, **extra})
 
         self.assertEqual(json.loads(read("room", "view", other).stdout)["data"]["id"], other)
         self.assertEqual(json.loads(read("message", "list", other).stdout)["data"]["messages"][-1]["text"], "跨房间原文")
         self.assertEqual(json.loads(read("message", "view", other, message_id).stdout)["data"]["text"], "跨房间原文")
+        trace = read("room", "trace", other, "--message", message_id)
+        self.assertEqual(trace.returncode, 0, trace.stderr)
+        self.assertEqual(json.loads(trace.stdout)["data"]["message"]["id"], message_id)
+        self.assertNotIn("跨房间原文", trace.stdout)
+        self.assertNotEqual(read("message", "view", other, message_id, "--request", "123456").returncode, 0)
 
         events = read("room", "events", other)
         self.assertEqual(events.returncode, 0, events.stderr)

@@ -179,7 +179,7 @@ function invocation(config, binding, task) {
     model: config.model || '', effort: config.effort || '', full, ...(developer_instructions ? { developer_instructions } : {}),
     ...(task.images?.length ? { images: task.images.map(image => image.path) } : {}) })}\n`;
   return { executable: process.execPath, args: [CODEX_BRIDGE, config.executable, ...(full ? [] : permissions.args)], input,
-    steer: text => `${JSON.stringify({ steer: text })}\n`,
+    steer: (text, interjection_id) => `${JSON.stringify({ steer: text, interjection_id })}\n`,
     ...(permissions.name ? { check: spawn_process => check_codex_permissions(config, task, permissions, spawn_process) } : {}) };
 }
 
@@ -190,6 +190,7 @@ function remember_writer_conflict(state, diagnostic) {
 
 /** Consume only documented lifecycle events, not text produced by agent tools. */
 function lifecycle(state, event, task, bind) {
+  if (event.type === 'codiscuss.interjection_confirmed') task.on_diagnostic?.({ interjection_confirmed: event.interjection_id });
   if (event.type === 'thread.started') bind(event.thread_id);
   if (event.type === 'codiscuss.turn') task.on_recovery?.({ kind: 'codex_turn',
     thread_id: event.thread_id, turn_id: event.turn_id, rollout_path: event.rollout_path });

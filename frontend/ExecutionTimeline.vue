@@ -13,10 +13,11 @@ import { t, locale } from './i18n.js';
  * an axis of their own and still step down as a waterfall.
  */
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
-import { FOLD_GAP_MS, PHASE_KINDS, add_user_turns, has_phase_detail, is_user_row, PHASE_LABELS, STATE_LABELS, WAIT_WARN_MS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between,
-  pan_window, row_breakdown, row_status, snapshot_at, task_digest, timeline_axis, timeline_rows, timeline_segments, recent_window, task_overview, requested_at, view_axis, zoom_window } from "./timeline-model.js";
+import { FOLD_GAP_MS, FOLLOW_AT, PHASE_KINDS, add_user_turns, has_phase_detail, is_user_row, PHASE_LABELS, STATE_LABELS, WAIT_WARN_MS, axis_ticks, execution_log, format_duration, handoff_lines, notes_between,
+  pan_window, replay_follow_window, row_breakdown, row_status, snapshot_at, step_follow_window, task_digest, timeline_axis, timeline_rows, timeline_segments, recent_window, task_overview, requested_at, view_axis, zoom_window } from "./timeline-model.js";
 import RealtimeView from "./RealtimeView.vue";
 import { touch_zoom } from "./touch-zoom.js";
+import ExecutionDiagnostics from "./ExecutionDiagnostics.vue";
 
 const emit = defineEmits(["detail"]);
 const { view, bridge } = inject("discussion");
@@ -32,7 +33,12 @@ const SMOOTH_ROWS = 60;
 const ENTER_MS = 520;
 // A replay at "auto" speed lasts about this long, whatever the run's length; manual speeds are these multiples.
 const REPLAY_TARGET_MS = 20_000;
-const REPLAY_SPEEDS = [1, 2, 4, 8, 16, 32];
+const REPLAY_SPEEDS = [0, 1, 4, 16, 60];
+const BUTTON_ZOOM = 0.5;
+// A pointer press on the lanes must move this far before it pans, so clicks still open details.
+const DRAG_START_PX = 5;
+// An axis over this long crosses days, so the replay clock includes the date.
+const DATED_SPAN_MS = 20 * 3600_000;
 // An incremental read also takes executions that ended this long before the previous read, so none slips between reads.
 const OVERLAP_SECONDS = 5;
 // Each depth level indents a row's label by this much.
@@ -81,9 +87,9 @@ let refresh_timer = 0;
 let frame = 0;
 let last_frame = 0;
 let last_paint = 0;
+let last_live = 0;
 // Replay: `position` is milliseconds into the run (null: not replaying), `speed` 0 means auto.
 const replay = reactive({ position: null, playing: false, speed: 0 });
-const show_player = ref(false);
 let play_position = 0;
 
 /**
@@ -243,46 +249,73 @@ watch(room_id, () => {
 watch(() => view.value.room, (room, previous) => { if (room?.id && room.id === previous?.id) load(); });
 // One wheel notch (about 100 px of delta) zooms by roughly 16%.
 const WHEEL_ZOOM_RATE = 0.0015;
-let pan = null;
+const panning = ref(false);
+let press = null;
+let pan_moved = false;
 /** Where on the axis the pointer is, as a share of the view (0 left, 1 right). */
 function pointer_share(event) {
   const rect = axis_element.value.getBoundingClientRect();
   return { share: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)), width: rect.width };
 }
+function manual_zoom(next) {
+  auto_zoom.value = false;
+  zoom.value = next;
+  if (!zoomed.value) follow.value = false;
+  else sync_follow(0);
+}
+function reset_zoom() {
+  auto_zoom.value = false;
+  follow.value = false;
+  zoom.value = WHOLE;
+}
+function zoom_by(factor) { manual_zoom(zoom_window(zoom.value, 0.5, factor, axis.value.total_ms)); }
 function on_wheel(event) {
   if (compact.value || !axis_element.value || !event.target.closest?.(".wf-track, .wf-axis")) return;
   if (event.ctrlKey || event.metaKey) {
     event.preventDefault();
-    zoom.value = zoom_window(zoom.value, pointer_share(event).share, Math.exp(event.deltaY * WHEEL_ZOOM_RATE), axis.value.total_ms);
+    manual_zoom(zoom_window(zoom.value, pointer_share(event).share, Math.exp(event.deltaY * WHEEL_ZOOM_RATE), axis.value.total_ms));
   } else if (zoomed.value && (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY))) {
     event.preventDefault();
+    follow.value = false;
+    auto_zoom.value = false;
     zoom.value = pan_window(zoom.value, (event.shiftKey ? event.deltaY : event.deltaX) / pointer_share(event).width);
   }
 }
 // Fingers on the lanes or the axis: pinch zooms, a sideways drag pans (touch-zoom.js), on phones as on tablets.
 const gesture = touch_zoom({ share_at: (client_x) => pointer_share({ clientX: client_x }).share, width: () => pointer_share({ clientX: 0 }).width,
-  on_zoom: (anchor, factor) => { zoom.value = zoom_window(zoom.value, anchor, factor, axis.value.total_ms); },
-  on_pan: (share) => { zoom.value = pan_window(zoom.value, share); }, can_pan: () => zoomed.value });
+  on_zoom: (anchor, factor) => { manual_zoom(zoom_window(zoom.value, anchor, factor, axis.value.total_ms)); },
+  on_pan: (share) => { follow.value = false; auto_zoom.value = false; zoom.value = pan_window(zoom.value, share); }, can_pan: () => zoomed.value });
 const on_lanes = (event) => Boolean(axis_element.value && event.target.closest?.(".wf-track, .wf-axis, .wf.is-compact .wf-row"));
-/** Middle-button drag anywhere on the lanes, or a left-button drag on the axis, pans a zoomed view. */
+/** Left- or middle-button drag on the lanes or the axis pans a zoomed view once moved a few pixels. */
 function on_pan_start(event) {
   if (event.pointerType === "touch") { if (on_lanes(event)) gesture.down(event); return; }
-  const on_axis = event.target.closest?.(".wf-axis");
-  if (!zoomed.value || !(event.button === 1 || (event.button === 0 && on_axis)) || !event.target.closest?.(".wf-track, .wf-axis")) return;
-  event.preventDefault();
-  pan = { x: event.clientX, from: zoom.value.from, width: pointer_share(event).width };
-  event.currentTarget.setPointerCapture(event.pointerId);
+  if (!zoomed.value || event.button > 1 || !event.target.closest?.(".wf-track, .wf-axis")) return;
+  if (event.button === 1 || event.target.closest?.(".wf-axis")) event.preventDefault();
+  press = { x: event.clientX, from: zoom.value.from, width: pointer_share(event).width, id: event.pointerId };
 }
 function on_pan_move(event) {
   if (event.pointerType === "touch") { gesture.move(event); return; }
-  if (pan) zoom.value = pan_window({ from: pan.from, span: zoom.value.span }, -(event.clientX - pan.x) / pan.width);
+  if (!press || event.pointerId !== press.id) return;
+  if (!panning.value) {
+    if (Math.abs(event.clientX - press.x) < DRAG_START_PX) return;
+    panning.value = true;
+    follow.value = false;
+    auto_zoom.value = false;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+  zoom.value = pan_window({ from: press.from, span: zoom.value.span }, -(event.clientX - press.x) / press.width);
 }
 function on_pan_end(event) {
   if (event.pointerType === "touch") gesture.up(event);
-  pan = null;
+  if (panning.value) {
+    pan_moved = true;
+    panning.value = false;
+    setTimeout(() => { pan_moved = false; });
+  }
+  press = null;
 }
 /** A double click on the axis or the lanes shows the whole run again, following live work. */
-function reset_on_dblclick(event) { if (event.target.closest?.(".wf-track, .wf-axis")) zoom.value = WHOLE; }
+function reset_on_dblclick(event) { if (event.target.closest?.(".wf-track, .wf-axis")) reset_zoom(); }
 // A middle press would start the browser's autoscroll over the lanes; the drag pans instead.
 function stop_autoscroll(event) { if (event.button === 1 && event.target.closest?.(".wf-track, .wf-axis")) event.preventDefault(); }
 
@@ -322,8 +355,11 @@ const WINDOW_STEP = 20;
 const window_count = ref(WINDOW_STEP);
 const view_mode = ref("timeline");
 // Names say what each view answers (#8118, #8272): each run traced, how many ran at once over the whole span, the tasks as a list.
-// The concurrency view shows the whole room, so it reads every execution as it opens (#8162); the lists stay as they were.
-watch(view_mode, (mode) => { if (mode === "realtime") read_all(); });
+// The concurrency view shows the whole room, so it reads every execution as it opens (#8162); leaving the trace pauses replay.
+watch(view_mode, (mode) => {
+  if (mode === "realtime") read_all();
+  if (mode !== "timeline" && replay.playing) pause();
+});
 const VIEW_MODES = [{ value: "timeline", label: t('执行轨迹') }, { value: "realtime", label: t('并发全景') }, { value: "tasks", label: t('任务清单') }];
 // Both the task overview and the real-time view take every execution read, rather than the timeline's window.
 const overview = computed(() => view_mode.value !== "timeline");
@@ -456,36 +492,83 @@ const rows = computed(() => all_rows.value.filter((row) => !row.ancestors.some((
 // A different set of rows on show is watched afresh for the phases it needs.
 watch(() => rows.value.map((row) => row.key).join(), () => nextTick(observe_rows), { flush: "post" });
 const live_in_view = computed(() => all_rows.value.some((row) => row.item.state === "running"));
-const axis = computed(() => timeline_axis(all_rows.value, live_in_view.value));
-/** Zoom: the share of the axis in view, from Ctrl/⌘ + wheel around the pointer; middle-button drag, Shift + wheel, a
- *  sideways swipe or dragging the axis pans it; a double click on the axis or lanes, or 重置, shows it whole again. */
+// Keep the full axis steady during replay (as RealtimeView does), so the playback line moves smoothly and zoomed follow never jumps.
+const axis = computed(() => timeline_axis(base_rows.value, base_live.value));
+/** Zoom: the share of the axis in view, from Ctrl/⌘ + wheel around the pointer or the toolbar buttons; dragging, Shift + wheel
+ *  or a sideways swipe pans it; a double click on the axis or lanes, or 还原, shows it whole again. */
 const WHOLE = { from: 0, span: 1 };
 const zoom = ref(WHOLE);
 const zoomed = computed(() => zoom.value.span < 1);
+const zoom_level = computed(() => (1 / zoom.value.span).toFixed(1));
 watch(room_id, () => { zoom.value = WHOLE; });
 const shown_axis = computed(() => view_axis(axis.value, zoom.value));
 const now_x = computed(() => {
-  const x = live_in_view.value ? shown_axis.value.x(view_time.value) : null;
+  const x = replaying.value || live_in_view.value ? shown_axis.value.x(view_time.value) : null;
   return x === null || x < 0 || x > 1 ? null : x;
 });
 const auto_speed = computed(() => Math.max(1, bounds.value.duration / REPLAY_TARGET_MS));
-const speed_items = computed(() => [{ label: t('自动 · {value1}×', { value1: Math.round(auto_speed.value) }), value: 0 }, ...REPLAY_SPEEDS.map((speed) => ({ label: `${speed}×`, value: speed }))]);
 const replay_speed = computed(() => replay.speed || auto_speed.value);
 const can_replay = computed(() => !overview.value && bounds.value.duration > 0);
+const play_label = computed(() => replay.playing ? t('暂停回放') : !replaying.value || replay.position >= bounds.value.duration ? t('回放') : t('继续回放'));
+const speed_label = (value) => value ? t('{value1}×', { value1: value }) : t('自动');
+const player_time = computed(() => bounds.value.duration >= DATED_SPAN_MS ? when(view_time.value) : clock(view_time.value));
+
+/**
+ * Following the replay (same as RealtimeView): keeps the playback line at FOLLOW_AT and dynamically adjusts zoom to
+ * frame the active execution(s) (#8678, #8701). Clicking 跟随 enters auto-zoom; manual zoom locks the user's scale
+ * while keeping follow; manual pan or 还原 turns both off.
+ */
+const follow = ref(true);
+const auto_zoom = ref(false);
+// Highlighted only when auto-zoom follow is active, so after a manual zoom one click on 跟随 re-enters auto-zoom (#8717).
+const follow_active = computed(() => follow.value && auto_zoom.value);
+const replay_spans = computed(() => base_rows.value.filter((row) => !is_user_row(row)).map((row) => ({ start: row.start, end: row.end })));
+function sync_follow(elapsed_ms = 0) {
+  if (!follow.value || !replaying.value) return;
+  const share = axis.value.x(view_time.value);
+  if (auto_zoom.value) {
+    const target = replay_follow_window(replay_spans.value, axis.value.x, view_time.value, axis.value.total_ms, FOLLOW_AT);
+    zoom.value = elapsed_ms > 0 ? step_follow_window(zoom.value, target, share, elapsed_ms, FOLLOW_AT) : target;
+  } else if (zoomed.value) {
+    zoom.value = { from: Math.min(1 - zoom.value.span, Math.max(0, share - FOLLOW_AT * zoom.value.span)), span: zoom.value.span };
+  }
+}
+function toggle_follow() {
+  if (follow_active.value) {
+    follow.value = false;
+    auto_zoom.value = false;
+  } else {
+    follow.value = true;
+    auto_zoom.value = true;
+    sync_follow(0);
+  }
+}
+watch(axis, () => { if (replaying.value && follow.value) sync_follow(0); });
 
 /** One clock for live growth and replay: a replay every frame (at most ten times a second with many rows), live work
  *  every LIVE_CLOCK_MS; a hidden page skips the frames (the browser pauses them). */
 function step(timestamp) {
   const elapsed = last_frame ? Math.min(timestamp - last_frame, 250) : 0;
   last_frame = timestamp;
-  const due = timestamp - last_paint >= (running.value ? LIVE_CLOCK_MS : all_rows.value.length <= SMOOTH_ROWS ? 0 : CLOCK_MS);
+  const paint_elapsed = last_paint ? Math.min(timestamp - last_paint, 250) : elapsed;
+  const replay_due = timestamp - last_paint >= (all_rows.value.length <= SMOOTH_ROWS ? 0 : CLOCK_MS);
+  const live_due = timestamp - last_live >= LIVE_CLOCK_MS;
   if (replay.playing) {
     play_position += elapsed * replay_speed.value;
-    if (play_position >= bounds.value.duration) Object.assign(replay, { position: null, playing: false });
-    else if (due) replay.position = play_position;
+    if (play_position >= bounds.value.duration) {
+      if (base_live.value) stop_replay();
+      else {
+        play_position = bounds.value.duration;
+        Object.assign(replay, { position: bounds.value.duration, playing: false });
+        sync_follow(paint_elapsed);
+      }
+    } else if (replay_due) {
+      replay.position = play_position;
+      sync_follow(paint_elapsed);
+      last_paint = timestamp;
+    }
   }
-  if (running.value && due) now.value = Date.now();
-  if (due) last_paint = timestamp;
+  if (running.value && live_due) { now.value = Date.now(); last_live = timestamp; }
   frame = running.value || replay.playing ? requestAnimationFrame(step) : 0;
   if (!frame) last_frame = 0;
 }
@@ -493,31 +576,35 @@ watch([running, () => replay.playing], () => { if (!frame && (running.value || r
 
 /** Replay from the start, or go on from where it was paused; the run's note texts are read first, to surface as they were written. */
 function play() {
-  play_position = replay.position === null ? 0 : replay.position;
+  if (replay.position === null || replay.position >= bounds.value.duration) {
+    play_position = 0;
+    follow.value = true;
+    auto_zoom.value = !zoomed.value;
+  } else {
+    play_position = replay.position;
+  }
   Object.assign(replay, { position: play_position, playing: true });
+  sync_follow(0);
   load_run_notes();
 }
 /** A replay shows what each execution was saying at the time, so it needs the run's note texts, read once each. */
 function load_run_notes() { for (const item of shown.value?.executions || []) note_texts_for({ item, notes: item.notes || [] }); }
 function pause() { replay.playing = false; }
-function restart() { play_position = 0; Object.assign(replay, { position: 0, playing: true }); }
-function scrub(event) { play_position = Number(event.target.value); Object.assign(replay, { position: play_position, playing: false }); load_run_notes(); }
-function close_player() { show_player.value = false; Object.assign(replay, { position: null, playing: false }); }
-/** The replay button: start the replay, or end it and show the room as it is (share page 2026-11-22, the room 2026-11-23). */
-function toggle_replay() {
-  if (replaying.value) close_player();
-  else { show_player.value = true; play(); }
+function scrub(event) { play_position = Number(event.target.value); replay.position = play_position; sync_follow(0); load_run_notes(); }
+function stop_replay() {
+  if (auto_zoom.value) zoom.value = WHOLE;
+  auto_zoom.value = false;
+  Object.assign(replay, { position: null, playing: false });
 }
 // A share page's 执行 tab replays from the start each time it is opened (the tab mounts this anew).
 watch(can_replay, (ready) => {
   // Not held back for "reduce motion": Windows reports it whenever its animations are off, and the replay is the content
   // a reader opened the tab for (it was left still on such computers before, user 2026-11-22).
   if (!ready || !view.value.share) return;
-  show_player.value = true;
   play();
 }, { immediate: true });
 // Another room starts from its real, final state.
-watch(room_id, close_player);
+watch(room_id, stop_replay);
 
 /** Rows that appear while watching (a new execution starting, or one a replay reaches) slide in; the first drawing does not. */
 const entering = ref(new Set());
@@ -656,8 +743,8 @@ function hover_keep() { clearTimeout(hover_timer); }
 function realtime_row(key, then) { const row = realtime_rows.value.find((item) => item.key === key); if (row) then(row); }
 onBeforeUnmount(() => clearTimeout(hover_timer));
 function open_row(row, event, piece = null) {
-  // The tap that ends a pinch or a pan opens nothing.
-  if (gesture.moved()) return;
+  // The click or tap that ends a pinch or a pan opens nothing.
+  if (pan_moved || gesture.moved()) return;
   const id = piece ? piece_id(row, piece) : "";
   if (hovering()) { clearTimeout(hover_timer); if (opened.value !== row.key || (selected.value?.id || "") !== id) show_detail(row, event.currentTarget, piece); return; }
   if (opened.value === row.key && (selected.value?.id || "") === id) { opened.value = ""; return; }
@@ -682,12 +769,16 @@ function show_detail(row, target, piece) {
   const names_end = (wf_element.value.querySelector(".wf-label")?.getBoundingClientRect().right ?? card.left) - card.left + 4;
   const width = Math.min(DETAIL_WIDTH_PX, card.width - names_end - 8);
   const beside = target.classList.contains("wf-names");
-  // It follows the pointer: its top level with the name (or just under the piece), as tall as the window leaves below,
-  // scrolling within; only where too little is left does it move up.
-  const top = beside ? box.top : box.bottom + 4;
-  detail_anchor.value = { width, top: top - card.top, left: Math.max(names_end, Math.min(box.left - card.left, card.width - width - 8)),
-    max_height: Math.max(DETAIL_MIN_HEIGHT_PX, window.innerHeight - DETAIL_MARGIN_PX - top) };
-  nextTick(() => keep_in_window(box, beside));
+  const right_limit = card.width - DETAIL_MARGIN_PX;
+  const start = box.left - card.left;
+  const left = start + width <= right_limit ? start : box.right - card.left - width;
+  const below = window.innerHeight - DETAIL_MARGIN_PX - box.bottom - 4;
+  const above = box.top - 4 - DETAIL_MARGIN_PX;
+  const flip = !beside && below < Math.min(window.innerHeight * 0.7, 600) && above > below;
+  const top = beside ? box.top : flip ? box.top - 4 : box.bottom + 4;
+  detail_anchor.value = { width, top: top - card.top, left: Math.max(names_end, Math.min(left, right_limit - width)),
+    flip, max_height: beside ? Math.max(DETAIL_MIN_HEIGHT_PX, window.innerHeight - DETAIL_MARGIN_PX - top) : Math.max(0, flip ? above : below) };
+  if (beside) nextTick(() => keep_in_window(box, beside));
 }
 /** Once drawn, a card that runs past the window's bottom moves up, never above the window's top, and beside a name never
  *  so far that the name is no longer level with it. */
@@ -870,15 +961,37 @@ const selected_notes = computed(() => {
             <button v-for="mode in VIEW_MODES" :key="mode.value" type="button" role="tab" :aria-selected="view_mode === mode.value"
               :class="{ 'is-active': view_mode === mode.value }" @click="view_mode = mode.value">{{ mode.label }}</button>
           </span>
-          <button v-if="compact && zoomed" type="button" class="wf-text-button" @click="zoom = WHOLE">{{ t('还原 {value1}×', { value1: (1 / zoom.span).toFixed(1) }) }}</button>
-          <span v-if="replaying" class="wf-state is-replay">{{ t('回放中 · {value1}', { value1: clock(view_time) }) }}</span>
+          <span v-if="!overview && replaying" class="wf-state is-replay">{{ t('回放中 · {value1}', { value1: clock(view_time) }) }}</span>
           <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? t('{value1} 个进行中', { value1: digest.running.length }) : t('均已结束') }}</span>
-          <!-- The same button in the room and on a share page; only a share page starts the replay by itself. -->
-          <button v-if="can_replay || replaying" type="button" class="wf-share-replay" :class="{ 'is-playing': replaying }" @click="toggle_replay">
-            <UIcon :name="replaying ? 'i-lucide-square' : 'i-lucide-play'" />{{ replaying ? t('结束回放') : t('回放协作过程') }}</button>
         </div>
-        <p v-if="headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
+        <p v-if="view_mode === 'tasks' && headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
       </header>
+
+      <div v-if="!overview" class="wf-controls">
+        <div class="wf-toolbar">
+          <p v-if="headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
+          <span class="wf-tools">
+            <!-- Icon and words on a wide page, the icon alone on a phone (matching RealtimeView); the words stay as title and label. -->
+            <button type="button" class="wf-tool" :title="t('缩小')" :aria-label="t('缩小')" :disabled="!zoomed" @click="zoom_by(1 / BUTTON_ZOOM)"><UIcon name="i-lucide-zoom-out" /></button>
+            <button type="button" class="wf-tool" :title="t('放大')" :aria-label="t('放大')" @click="zoom_by(BUTTON_ZOOM)"><UIcon name="i-lucide-zoom-in" /></button>
+            <button v-if="zoomed" type="button" class="wf-tool is-text" :title="t('还原 {value1}×', { value1: zoom_level })" :aria-label="t('还原 {value1}×', { value1: zoom_level })" @click="reset_zoom">
+              <UIcon name="i-lucide-locate-fixed" /><span class="wf-tool-label">{{ t('还原 {value1}×', { value1: zoom_level }) }}</span><span class="wf-tool-short">{{ zoom_level }}×</span></button>
+            <button v-if="can_replay || replaying" type="button" class="wf-tool is-text" :title="play_label" :aria-label="play_label" @click="replay.playing ? pause() : play()">
+              <UIcon :name="replay.playing ? 'i-lucide-pause' : 'i-lucide-play'" /><span class="wf-tool-label">{{ play_label }}</span></button>
+            <button v-if="replaying" type="button" class="wf-tool is-text" :class="{ 'is-active': follow_active }" :aria-pressed="follow_active" :title="t('回放时自动缩放并跟着回放线走')" :aria-label="t('跟随')" @click="toggle_follow">
+              <UIcon name="i-lucide-crosshair" /><span class="wf-tool-label">{{ t('跟随') }}</span></button>
+            <button v-if="replaying" type="button" class="wf-tool is-text" :title="t('结束回放')" :aria-label="t('结束回放')" @click="stop_replay">
+              <UIcon name="i-lucide-square" /><span class="wf-tool-label">{{ t('结束回放') }}</span></button>
+          </span>
+        </div>
+        <div v-if="replaying" class="wf-player">
+          <span class="wf-player-time">{{ player_time }}</span>
+          <input type="range" class="wf-scrub" min="0" :max="bounds.duration" step="100" :value="replay.position" :aria-label="t('回放位置')" @input="scrub" />
+          <span class="wf-speeds" role="group" :aria-label="t('回放速度')">
+            <button v-for="value in REPLAY_SPEEDS" :key="value" type="button" class="wf-tool is-text" :class="{ 'is-active': replay.speed === value }" @click="replay.speed = value">{{ speed_label(value) }}</button>
+          </span>
+        </div>
+      </div>
 
       <section v-if="attention.length" class="wf-now" :aria-label="t('需要关注')">
         <button v-for="row in attention" :key="row.key" type="button" class="wf-now-card"
@@ -935,13 +1048,10 @@ const selected_notes = computed(() => {
         </li>
       </ol>
 
-      <div v-else-if="!overview" class="wf-grid" :class="{ 'is-zoomed': zoomed, 'is-panning': pan }" role="list"
+      <div v-else-if="!overview" class="wf-grid" :class="{ 'is-zoomed': zoomed, 'is-panning': panning }" role="list"
         @wheel="on_wheel" @mousedown="stop_autoscroll" @pointerdown="on_pan_start" @pointermove="on_pan_move" @pointerup="on_pan_end" @pointercancel="on_pan_end" @dblclick="reset_on_dblclick">
-        <div v-if="!compact" class="wf-axis-label" :title="t('Ctrl + 滚轮缩放；放大后按住中键或拖动时间轴平移，双击时间线还原')">
+        <div v-if="!compact" class="wf-axis-label" :title="t('Ctrl + 滚轮缩放，放大后左键或中键拖动、Shift + 滚轮平移，双击还原')">
             <span class="wf-axis-count">{{ t('执行 · {value1}/{value2}', { value1: rows.length, value2: all_rows.length }) }}</span>
-            <span v-if="zoomed" class="wf-zoom" :title="t('当前放大倍数')">{{ (1 / zoom.span).toFixed(1) }}×<button type="button" class="wf-zoom-reset"
-              :title="t('{value1}（双击时间线也可还原）', { value1: base_live ? t('重置跟随') : t('重置') })" :aria-label="base_live ? t('重置跟随') : t('重置')" @click="zoom = WHOLE">
-              <UIcon name="i-lucide-locate-fixed" /></button></span>
             <span v-if="parents.length" class="wf-branch">
               <button type="button" class="wf-text-button" @click="collapsed = new Set()">{{ t('展开') }}</button>
               <button type="button" class="wf-text-button" @click="collapsed = new Set(parents)">{{ t('收起') }}</button>
@@ -1013,7 +1123,7 @@ const selected_notes = computed(() => {
 
       <Transition name="wf-pop">
         <div v-if="detail_row && (compact || detail_anchor)" ref="detail_element" class="wf-detail" role="dialog" @mouseenter="hover_keep" @mouseleave="hover_leave" :aria-label="is_user_row(detail_row) ? t('{value1} 的这条消息', { value1: name(detail_row.item.member) }) : t('{value1} 的这次执行', { value1: name(detail_row.item.member) })"
-          :style="compact ? undefined : { top: `${detail_anchor.top}px`, left: `${detail_anchor.left}px`, width: `${detail_anchor.width}px`, maxHeight: `min(70vh, 600px, ${detail_anchor.max_height}px)` }">
+          :style="compact ? undefined : { top: `${detail_anchor.top}px`, left: `${detail_anchor.left}px`, width: `${detail_anchor.width}px`, transform: detail_anchor.flip ? 'translateY(-100%)' : undefined, maxHeight: `min(70vh, 600px, ${detail_anchor.max_height}px)` }">
           <header class="wf-detail-head">
             <UAvatar :src="bridge.identities[detail_row.item.member]?.icon" :text="bridge.identities[detail_row.item.member]?.initials" :alt="detail_row.item.member" size="sm" class="channel-avatar wf-avatar" :class="bridge.identities[detail_row.item.member]?.style" />
             <div class="wf-detail-title">
@@ -1048,6 +1158,7 @@ const selected_notes = computed(() => {
             <button v-if="detail_row.item.answer_id" type="button" class="wf-detail-chip is-link" @click="emit('detail', detail_row.item.answer_id)"><UIcon name="i-lucide-message-square-text" />{{ t('查看回答 #{value1}', { value1: detail_row.item.answer_id }) }}</button>
             <span v-if="detail_row.item.changes" class="wf-detail-chip"><UIcon name="i-lucide-file-diff" />{{ t('改动 {value1} 个文件', { value1: detail_row.item.changes }) }}</span>
           </div>
+          <ExecutionDiagnostics v-if="!view.share && !is_user_row(detail_row) && Number.isSafeInteger(detail_row.item.id)" :room="room_id" :execution="detail_row.item.id" />
           <section v-if="!is_user_row(detail_row)" class="wf-detail-block">
             <h4>{{ t('过程') }}<small v-if="opened_log.length">{{ t('{value1} 条', { value1: opened_log.length }) }}</small></h4>
             <ol v-if="opened_log.length" class="wf-log" :aria-label="t('过程')" :data-tone="member_tone.get(detail_row.item.member)">
@@ -1070,18 +1181,6 @@ const selected_notes = computed(() => {
         <span v-if="member_tone.size > 1">{{ t('颜色区分成员，深浅区分模型与工具') }}</span>
         <span v-if="axis.folds.length && !compact"><i class="wf-swatch is-fold" aria-hidden="true"></i>{{ t('已折叠 {value1} 段超过 {value2} 分钟的空闲', { value1: axis.folds.length, value2: FOLD_GAP_MS / 60000 }) }}</span>
       </footer>
-      <div v-if="can_replay && show_player" class="wf-player">
-        <button type="button" class="wf-player-button" :aria-label="replay.playing ? t('暂停回放') : t('回放协作过程')" @click="replay.playing ? pause() : play()">
-          <UIcon :name="replay.playing ? 'i-lucide-pause' : 'i-lucide-play'" />
-        </button>
-        <button type="button" class="wf-player-button" :aria-label="t('从头回放')" :disabled="!replaying" @click="restart"><UIcon name="i-lucide-rotate-ccw" /></button>
-        <USelect v-model="replay.speed" :items="speed_items" variant="none" :aria-label="t('回放速度')" class="wf-speed"
-          :content="{ side: 'top', align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-select-menu wf-speed-menu', trailing: 'static shrink-0 p-0', trailingIcon: 'wf-select-icon' }" />
-        <input type="range" class="wf-scrub" min="0" :max="bounds.duration" step="100" :value="replaying ? replay.position : bounds.duration"
-          :aria-label="t('回放位置')" @input="scrub" />
-        <span class="wf-player-time">{{ format_duration(replaying ? replay.position : bounds.duration) }} / {{ format_duration(bounds.duration) }}</span>
-        <button type="button" class="wf-player-button" :aria-label="t('关闭回放')" @click="close_player"><UIcon name="i-lucide-x" /></button>
-      </div>
     </div>
   </section>
 </template>
@@ -1158,10 +1257,17 @@ const selected_notes = computed(() => {
 .wf-modes button:hover { color: var(--wf-text); }
 .wf-modes button.is-active { background: var(--wf-surface); color: var(--wf-text); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .2); }
 .wf-modes button:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
-.wf-player :deep(.wf-speed:hover) { border-color: var(--wf-guide); }
-.wf-player :deep(.wf-speed:focus-visible) { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
-:deep(.wf-select-icon) { width: 12px; height: 12px; color: var(--wf-muted); }
-:global(.wf-speed-menu) { min-width: 120px !important; }
+/* Zoom and replay bar: same position, button style and narrow-screen icon-only behaviour as RealtimeView. */
+.wf-controls { display: grid; gap: 8px; padding: 12px 16px 10px; border-bottom: 1px solid var(--wf-border); }
+.wf-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.wf-tools, .wf-speeds { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.wf-tool-short { display: none; }
+.wf-tool { display: inline-flex; align-items: center; justify-content: center; gap: 4px; flex: none; white-space: nowrap; min-width: 24px; height: 22px; padding: 0 6px; border: 1px solid var(--wf-border); border-radius: 5px; background: transparent; color: var(--wf-text);
+  font: inherit; font-size: 12px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.wf-tool:hover:not(:disabled) { border-color: var(--wf-accent); }
+.wf-tool:disabled { opacity: 0.4; cursor: default; }
+.wf-tool.is-active { border-color: var(--wf-accent); color: var(--wf-accent); }
+.wf-tool:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
 
 /* The timeline shows the latest executions; one line says how many and reaches further back. */
 .wf-earlier { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; padding: 6px 16px; border-bottom: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; }
@@ -1275,14 +1381,9 @@ const selected_notes = computed(() => {
 /* touch-action is not inherited, and what counts is the element the finger lands on, so every part of the strip says it. */
 .wf-track, .wf-track *, .wf-axis, .wf-axis *, .wf.is-compact .wf-row, .wf.is-compact .wf-row * { touch-action: pan-y; }
 /* Zoomed in, bars and lines past the edges of the view are cut off at the track. */
-.wf-grid.is-zoomed .wf-track { overflow: hidden; }
+.wf-grid.is-zoomed .wf-track { overflow: hidden; cursor: grab; }
 .wf-grid.is-zoomed .wf-axis { cursor: grab; }
 .wf-grid.is-panning, .wf-grid.is-panning * { cursor: grabbing !important; user-select: none; }
-.wf-zoom { display: inline-flex; align-items: center; gap: 2px; color: var(--wf-accent); font-family: var(--wf-mono); font-size: 11px; white-space: nowrap; }
-.wf-zoom-reset { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: 4px; padding: 0; border: 1px solid color-mix(in oklab, var(--wf-accent) 45%, transparent); border-radius: 999px;
-  background: color-mix(in oklab, var(--wf-accent) 12%, transparent); color: var(--wf-accent); font: inherit; font-family: var(--ui-font-sans, inherit); font-size: 11px; font-weight: 600; cursor: pointer; }
-.wf-zoom-reset:hover { background: color-mix(in oklab, var(--wf-accent) 22%, transparent); }
-.wf-zoom-reset :deep(svg) { width: 12px; height: 12px; }
 .wf-track > i, .wf-track > .wf-note { position: absolute; display: block; font-style: normal; }
 .wf-gridline { top: 0; bottom: 0; width: 1px; background: var(--wf-grid); }
 .wf-cursor { top: 0; bottom: 0; width: 1px; background: color-mix(in oklab, var(--wf-text) 70%, transparent); z-index: 2; pointer-events: none; }
@@ -1412,20 +1513,10 @@ const selected_notes = computed(() => {
 .wf-foot span { display: inline-flex; align-items: center; gap: 6px; }
 .wf-key .wf-swatch:not(:first-child) { margin-left: 8px; }
 .wf-key .wf-swatch.is-model, .wf-key .wf-swatch.is-tool { --tone: var(--wf-muted); }
-/* The share page's replay: the one thing a first-time reader should press, so it looks like a button. */
-.wf-share-replay { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; height: 30px; padding: 0 14px; border: 0; border-radius: 15px; background: var(--ui-primary); color: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; box-shadow: 0 2px 10px color-mix(in srgb, var(--ui-primary) 40%, transparent); transition: filter .15s; }
-.wf-share-replay:hover { filter: brightness(1.1); }
-.wf-share-replay.is-playing { background: var(--wf-hover, #ffffff14); color: var(--wf-text); box-shadow: none; }
-.wf-share-replay :deep(svg) { width: 14px; height: 14px; }
-/* Playback: replay a finished run on the same drawing. */
-.wf-player { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 16px; border-top: 1px solid var(--wf-border); color: var(--wf-muted); font-size: 12px; }
-.wf-player-button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--wf-border); border-radius: 50%; background: var(--wf-surface); color: var(--wf-text); cursor: pointer; }
-.wf-player-button:disabled { opacity: .4; cursor: default; }
-.wf-player-button:not(:disabled):hover { background: var(--wf-hover); }
-.wf-player-button :deep(svg) { width: 13px; height: 13px; }
-.wf-player :deep(.wf-speed) { height: 28px; padding: 0 6px 0 8px; gap: 4px; border: 1px solid var(--wf-border); border-radius: 6px; background: var(--wf-well); color: var(--wf-text); font: inherit; font-size: 12px; cursor: pointer; }
+/* Playback scrubber and speed pills, matching RealtimeView. */
+.wf-player { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; }
 .wf-scrub { flex: 1; min-width: 120px; accent-color: var(--wf-accent); cursor: pointer; }
-.wf-player-time { font-family: var(--wf-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wf-player-time { min-width: 72px; color: var(--wf-text); font-family: var(--wf-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wf-player :is(button, input):focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
 
 .wf-card-close { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--ui-text-muted); cursor: pointer; }
@@ -1460,11 +1551,13 @@ const selected_notes = computed(() => {
   .wf-grid { grid-template-columns: var(--wf-label-col) minmax(0, 1fr) 68px; }
   .wf-end { padding-right: 10px; }
 }
+/* A phone-wide view keeps the icons; the zoom keeps its number so the level still shows (matching RealtimeView). */
+@container wf (max-width: 640px) { .wf-tool-label { display: none; } .wf-tool-short { display: inline; } }
 /* Phones (decided by the page's own width, in script): the same one axis as on a PC, idle folded, a few clock ticks on
    top, so every bar reads left to right in time and a dispatch steps down. Each execution is two lines: when, who and how
    long, then its bar; running and failed rows add where their time went. A tap opens the row's own detail, at its own
    scale, in place of zooming. */
-.wf.is-compact .wf-head, .wf.is-compact .wf-foot, .wf.is-compact .wf-player { padding-inline: 12px; }
+.wf.is-compact .wf-head, .wf.is-compact .wf-controls, .wf.is-compact .wf-foot { padding-inline: 12px; }
 .wf.is-compact .wf-run { padding-inline: 12px; }
 .wf.is-compact .wf-run-body { padding-inline: 12px; }
 .wf.is-compact .wf-run > .wf-run-note { padding-left: 0; }
@@ -1513,6 +1606,7 @@ const selected_notes = computed(() => {
 .wf.is-compact .wf-dist-key { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 /* Touch: controls keep their look but take a fingertip; a note's tick is easier to hit. */
 @media (pointer: coarse) {
+  .wf-tool { min-width: 36px; height: 32px; padding: 0 10px; font-size: 13px; }
   .wf-toggle { flex: 0 0 32px; width: 32px; height: 32px; margin: -8px; }
   .wf-text-button { height: 32px; }
   .wf-note { width: 24px; margin-left: -12px; }

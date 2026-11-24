@@ -79,7 +79,7 @@ export function access_label(level) { return level === 'own' ? '自行决定' : 
  * Subcommands an automatic task may run; service, run, api, setup and the rest of launch stay unapproved.
  * `launch workflow-adopt`, `launch workflow-join`, `launch workflow-leave` and `launch host-control` check themselves that the caller is the room's host (adopt and host-control also need the owner's grant).
  */
-export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image', 'repo', 'site'];
+export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image', 'repo', 'site', 'share-card'];
 
 /**
  * The limit on a quick answer given inline with --body: a run allowed only codiscuss commands refuses a command line
@@ -100,8 +100,9 @@ export const correctable_refusals = denials => (denials || []).filter(item => it
  * What a member hears when the program resumes its session after this computer's room service restarted (an update,
  * a crash) and ended its turn midway: the same execution goes on, checking the workspace before redoing anything.
  */
-export function restart_resume_prompt(execution_id) {
-  return `你正在做的这次房间任务（执行 #${execution_id}，仍在进行）被本机服务重启打断，上一轮在中途结束，回答还没有提交。`
+export function restart_resume_prompt(execution_id, cause = 'restart') {
+  const cause_text = cause === 'network' ? '网络中断' : '本机服务重启';
+  return `你正在做的这次房间任务（执行 #${execution_id}，仍在进行）被${cause_text}打断，上一轮在中途结束，回答还没有提交。`
     + '先核对工作区与上一轮最后在做的操作（中途被打断的命令可能只执行了一部分），已经做完的部分不必重做，接着完成原任务，最后照常提交这次执行的回答。';
 }
 

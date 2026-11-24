@@ -4,7 +4,7 @@
  *
  * usage: node codex_bridge.mjs <codex executable> [codex app-server options...]
  * stdin: first line `{prompt, thread_id?, cwd, model?, effort?, full?, images?, developer_instructions?}` (`images`: local
- * image paths sent with the prompt; `developer_instructions`: system-level rules of a new thread); every later line `{steer: text}`.
+ * image paths sent with the prompt; `developer_instructions`: system-level rules of a new thread); later lines carry `{steer: text, interjection_id?}`.
  * stdout: `thread.started`, `turn.started`, `item.started|completed`, `turn.completed|failed`, `error` events in the
  * shape `codex exec --json` prints. The process exits when the turn ends; exit 1 with the reason on stderr otherwise.
  * One process per execution: an app-server keeps the thread it loaded as its writer until it exits.
@@ -27,6 +27,8 @@ let thread_id = '';
 let turn_id = '';
 let finished = false;
 const queued_steers = [];
+const pending_steers = new Map();
+const completed_user_items = new Set();
 
 const server = spawn(executable, ['app-server', ...CONTEXT_OVERRIDES, ...server_args], { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
 tree_killable(server);
@@ -84,6 +86,7 @@ function notification({ method, params = {} }) {
   if (params.threadId && params.threadId !== thread_id) return;
   if (method === 'turn/started') emit({ type: 'turn.started' });
   else if (method === 'item/started' || method === 'item/completed') {
+    if (method === 'item/completed' && params.threadId === thread_id && params.turnId === turn_id) confirm_steer(params.item);
     const item = exec_item(params.item || {});
     if (item) emit({ type: method === 'item/started' ? 'item.started' : 'item.completed', item });
   } else if (method === 'error') emit({ type: 'error', message: params.error?.message || params.message || 'Codex 返回错误', ...error_details(params.error) });
@@ -97,6 +100,16 @@ function notification({ method, params = {} }) {
   }
 }
 
+/** Match a completed user message to one pending interjection without emitting the message text. */
+function confirm_steer(item) {
+  if (item?.type !== 'userMessage' || !item.id || completed_user_items.has(item.id)
+    || item.content?.length !== 1 || item.content[0].type !== 'text') return;
+  completed_user_items.add(item.id);
+  const matches = [...pending_steers].filter(([, text]) => text === item.content[0].text);
+  for (const [id] of matches) pending_steers.delete(id);
+  if (matches.length === 1) emit({ type: 'codiscuss.interjection_confirmed', interjection_id: matches[0][0] });
+}
+
 createInterface({ input: server.stdout, crlfDelay: Infinity }).on('line', line => {
   let message;
   try { message = JSON.parse(line); } catch { return; }
@@ -108,11 +121,12 @@ createInterface({ input: server.stdout, crlfDelay: Infinity }).on('line', line =
 });
 
 /** Pass an interjection into the running turn; before the turn exists it waits, after the turn it is refused. */
-async function steer(text) {
+async function steer(text, id) {
   if (finished) return;
-  if (!turn_id) { queued_steers.push(text); return; }
+  if (!turn_id) { queued_steers.push({ text, id }); return; }
+  if (Number.isSafeInteger(id) && id > 0) pending_steers.set(id, text);
   try { await request('turn/steer', { threadId: thread_id, expectedTurnId: turn_id, input: [{ type: 'text', text }] }); }
-  catch (error) { process.stderr.write(`插话未送达：${error.message}\n`); }
+  catch (error) { pending_steers.delete(id); process.stderr.write(`插话未送达：${error.message}\n`); }
 }
 
 /** Open or resume the thread, then start the turn with the prompt. */
@@ -132,7 +146,7 @@ async function start(task) {
     ...(task.model ? { model: task.model } : {}), ...(task.effort ? { effort: task.effort } : {}) });
   turn_id = started.turn.id;
   emit({ type: 'codiscuss.turn', thread_id, turn_id, rollout_path: opened.thread.path || '' });
-  for (const text of queued_steers.splice(0)) await steer(text);
+  for (const { text, id } of queued_steers.splice(0)) await steer(text, id);
 }
 
 let first = true;
@@ -140,5 +154,5 @@ createInterface({ input: process.stdin, crlfDelay: Infinity }).on('line', line =
   let input;
   try { input = JSON.parse(line); } catch { return; }
   if (first) { first = false; start(input).catch(error => fail(error.message)); }
-  else if (typeof input.steer === 'string') steer(input.steer);
+  else if (typeof input.steer === 'string') steer(input.steer, input.interjection_id);
 });

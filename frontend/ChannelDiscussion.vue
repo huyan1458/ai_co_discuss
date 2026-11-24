@@ -500,24 +500,32 @@ const preview_round = computed(() => preview_group.value?.label);
 const preview_index = computed(() => preview_open.value ? navigation_entries.value.findIndex((entry) => entry.key === preview_entry.value) : -1);
 const prompt = ref(null);
 const follow_tail = ref(true);
+const send_clipped = ref(false);
 let sent_position = null;
+let debug_log = null;
 
-/** Keep the send's first landing while its receipt and execution status replace the preview. */
+/** Follow growing status cards until scrolling farther would hide the sent message's heading. */
 function follow_destination(element) {
   const bottom = element.scrollHeight - element.clientHeight;
   if (!sent_position) return bottom;
   const latest = view.value.messages.at(-1);
   if (view.value.sending_preview?.id !== sent_position.id && latest?.submission_id !== sent_position.id) {
+    if (typeof debug_log === "function") debug_log("follow", { send: sent_position.id, reason: "send-no-longer-latest", target: bottom });
     sent_position = null;
     return bottom;
   }
-  if (sent_position.top == null) {
-    const preview = element.querySelector(`[data-sending-id="${CSS.escape(sent_position.id)}"]`);
-    if (!preview) return bottom;
-    const heading = element.scrollTop + preview.getBoundingClientRect().top - reading_top(element) - send_y.get();
-    sent_position.top = Math.max(0, Math.min(bottom, heading));
+  const preview = element.querySelector(`[data-sending-id="${CSS.escape(sent_position.id)}"]`);
+  const card = preview || (latest?.submission_id === sent_position.id && element.querySelector(`[data-message-id="${latest.id}"]`));
+  if (!card) {
+    if (typeof debug_log === "function") debug_log("follow", { send: sent_position.id, reason: "card-not-mounted", target: bottom });
+    return bottom;
   }
-  return Math.min(bottom, sent_position.top);
+  const rise = preview || latest.id === rising_id ? send_y.get() : 0;
+  const heading = element.scrollTop + card.getBoundingClientRect().top - rise - reading_top(element) - READING_OFFSET;
+  const target = Math.max(0, Math.min(bottom, heading));
+  if (typeof debug_log === "function") debug_log("follow", { send: sent_position.id, message: preview ? null : latest.id,
+    reason: target < bottom ? "keep-heading" : "bottom", heading, bottom, target, actual: element.scrollTop });
+  return target;
 }
 const FOLLOW_TAIL_THRESHOLD = 70;
 // A room just opened keeps following its end this long while cards settle, unless the reader scrolls by hand: estimated
@@ -612,14 +620,17 @@ const free = computed(() => !["active", "paused"].includes(room.value?.session?.
  * (`view.history_cards`). Cards read from both: the room view's copy wins, being the newer one.
  */
 function with_history(kind, recent) {
-  const items = new Map((view.value.history_cards?.[kind] || []).map((item) => [item.key || item.id, item]));
-  for (const item of recent || []) items.set(item.key || item.id, item);
+  const key_of = (item) => item.key || item.id || item.message_id;
+  const items = new Map((view.value.history_cards?.[kind] || []).map((item) => [key_of(item), item]));
+  for (const item of recent || []) items.set(key_of(item), item);
   return [...items.values()];
 }
 const all_executions = computed(() => with_history("executions", room.value.free?.executions));
 const all_decisions = computed(() => with_history("scheduler_decisions", room.value.scheduler_decisions));
 const all_arrangements = computed(() => with_history("host_arrangements", room.value.host_arrangements));
 const all_cancelled_turns = computed(() => with_history("cancelled_turns", room.value.cancelled_turns));
+const all_failure_wakes = computed(() => with_history("failure_wakes", room.value.free?.failure_wakes));
+const all_quiet_checkins = computed(() => with_history("quiet_checkins", room.value.free?.quiet_checkins));
 /** What the runner last saw a member's software doing; unknown phases keep the generic text. Declared before `free_busy`, which an immediate watch reads during setup. */
 const ACTIVITY_LABELS = { thinking: t('正在执行'), command: t('正在运行命令'), tool: t('正在调用工具'), editing: t('正在修改文件'), writing: t('正在撰写回答'), waiting: t('正在等待后台任务') };
 /** Active members a free-room message can name; chips appear only when there is a choice. */
@@ -630,6 +641,7 @@ const free_host = computed(() => free_members.value.find((member) => member.role
 const free_busy = computed(() => {
   if (room.value.archived) return [];
   const reports = new Map((room.value.free?.executions || []).map((execution) => [execution.id, execution]));
+  const wake_replaces = new Map(all_failure_wakes.value.map((wake) => [wake.message_id, wake.execution_id]));
   return (room.value.free?.members || []).flatMap((member) => {
     const execution = member.execution;
     if (execution && ["dispatched", "started"].includes(execution.status)) {
@@ -637,15 +649,21 @@ const free_busy = computed(() => {
       // waits to deliver again; once it does, `attempt` keeps which retry is running.
       const retry = execution.retry?.retry_at && !execution.retry.stopped ? execution.retry : null;
       const attempt = !retry && !execution.retry?.stopped ? execution.retry?.attempt || 0 : 0;
-      return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id, retry, attempt,
-        text: execution.stale ? t('执行失联：网站已不再接受本次回答，软件停止未确认') : retry ? t('投递未成功，等待自动重试')
+      const report = reports.get(execution.id);
+      const replaced_id = report?.replaces_execution_id || wake_replaces.get(report?.request_message_id) || 0;
+      const replaced = replaced_id ? (reports.get(replaced_id) || { id: replaced_id }) : null;
+      const work_message_id = report?.requests?.length
+        ? Math.max(...report.requests.map((request) => request.message_id || 0)) || report.request_message_id
+        : report?.request_message_id;
+      return [{ id: `free-${execution.id}`, author: member.name, member_id: member.id, retry, attempt, replaced,
+        text: execution.stale ? t('执行失联：网站已不再接受本次回答，软件停止未确认') : retry ? t('等待自动重试')
           : execution.paused_at ? t('已在私聊中暂停，等你补充后接着做') : ACTIVITY_LABELS[execution.activity] || t('正在处理'),
         paused: Boolean(execution.paused_at), working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, capabilities: execution.capabilities,
         activity: execution.activity, activity_at: execution.activity_at, model: execution.model || "", effort: execution.effort || "", notes: execution.notes || 0, steps: execution.steps || 0, tools: execution.tools || [],
-        execution_id: execution.id, request_message_id: reports.get(execution.id)?.request_message_id, layout_after: reports.get(execution.id)?.layout_after,
-        layout_at: reports.get(execution.id)?.layout_at ?? execution.created_at, background: Boolean(reports.get(execution.id)?.background),
-        discussion_request: reports.get(execution.id)?.requests?.find((request) => request.discussion_session_id),
-        marks: line_marks(member.name, reports.get(execution.id)) }];
+        execution_id: execution.id, request_message_id: report?.request_message_id, work_message_id, layout_after: report?.layout_after,
+        layout_at: report?.layout_at ?? execution.created_at, background: Boolean(report?.background),
+        discussion_request: report?.requests?.find((request) => request.discussion_session_id),
+        marks: line_marks(member.name, report) }];
     }
     return [];
   }).sort((left, right) => (left.created_at ?? Infinity) - (right.created_at ?? Infinity));
@@ -686,33 +704,58 @@ const QUEUED_PURPOSES = new Set(["ask", "route", "group", "all"]);
  * happened"): who answers is known when the message is sent, so the card need not wait for the runner to deliver.
  * Discussion turns have their own arrangement cards; a member that cannot be taken over shows an undeliverable card.
  */
+/**
+ * Pending requests eligible for a slot card: hide a retried/interrupted request only when a newer *visible* request
+ * of the same member is in the same next delivery batch (`next_batch`), so an earlier card never vanishes behind a
+ * hidden analysing route card or a request from a separate delivery lane.
+ */
+function visible_pending_requests(requests, predicate) {
+  const eligible = (requests || []).filter(predicate).sort((left, right) => left.id - right.id);
+  const latest_batch = new Map();
+  for (const request of eligible) {
+    if (request.next_batch) latest_batch.set(request.member_id, request.id);
+  }
+  return eligible.filter((request) => {
+    const newer = latest_batch.get(request.member_id);
+    const hidden = request.retried && request.next_batch && newer !== request.id;
+    if (hidden && typeof debug_log === "function") debug_log("card-hidden", { request: request.id, message: request.message_id,
+      reason: "newer-visible-in-next-batch", newer });
+    return !hidden;
+  });
+}
 const free_queued = computed(() => {
   // A share page is frozen in time: a request pending when it was made would say "waking" forever.
   if (room.value.archived || view.value.query || view.value.share) return [];
   const members = new Map((room.value.free?.members || []).map((member) => [member.id, member]));
-  // Several pending requests of one member are delivered together: only the first says it is waking the member.
+  // Requests bundled into the same next execution share one wake-up; separate lanes wait for the next turn.
   const waking = new Set();
   const requests = room.value.free?.requests || [];
-  const cards = requests.filter((request) => request.status === "pending" && !request.execution_id
+  const visible = visible_pending_requests(requests, (request) => request.status === "pending" && !request.execution_id
     && QUEUED_PURPOSES.has(request.purpose) && !request.discussion_session_id
     && members.get(request.member_id)?.status === "active" && !members.get(request.member_id).adopt_error
     // While smart scheduling is still judging an unnamed message the host is not woken yet (user 2026-11-23, #7974):
     // only the "analysing" card shows, and the host's card appears once the judgment says it takes the message.
-    && !(request.purpose === "route" && routing_messages.value.has(request.message_id) && !scheduler_decisions.value.get(request.message_id)?.length))
-    .sort((left, right) => left.id - right.id)
-    .map((request) => {
+    && !(request.purpose === "route" && routing_messages.value.has(request.message_id) && !scheduler_decisions.value.get(request.message_id)?.length));
+  const has_batch = new Set(visible.filter((request) => request.next_batch).map((request) => request.member_id));
+  const cards = visible.map((request) => {
       const member = members.get(request.member_id);
       const busy = ["dispatched", "started"].includes(member.execution?.status);
-      const later = waking.has(member.id);
-      waking.add(member.id);
+      const in_batch = Boolean(request.next_batch);
+      const waits_batch = !in_batch && has_batch.has(member.id);
+      const later = !waits_batch && waking.has(member.id);
+      if (!waits_batch) waking.add(member.id);
       // The same states as the member's line in the side panel: a manual member is not woken by the runner, and one
       // out of quota is not delivered to until it recovers.
       const text = member.access === "manual" ? t('等它在自己的会话里接入')
         : member.quota_until ? t('额度已用尽，预计 {time} 恢复', { time: new Date(member.quota_until * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) })
-        : busy ? t('排队中：等当前执行结束') : later ? t('将和上一条一起处理') : member.held_until ? t('排队中：等上一轮结束') : t('正在唤醒');
+        : busy ? t('排队中：等当前执行结束')
+        : waits_batch ? t('排队中：等上一轮结束')
+        : later ? (in_batch ? t('将和上一条一起处理') : t('排队中：等上一轮结束'))
+        : member.held_until ? t('排队中：等上一轮结束') : t('正在唤醒');
+      const queued_at = request.layout_at ?? request.created_at;
       return { id: `queued-${request.id}`, author: member.name, member_id: member.id, queued: true, slot_card: true, text,
-        created_at: request.created_at, request_message_id: request.message_id,
-        layout_after: request.layout_after ?? request.message_id, layout_at: request.created_at, marks: line_marks(member.name, null) };
+        compact_queue: busy && member.access !== "manual" && !member.quota_until, created_at: queued_at, request_message_id: request.message_id,
+        layout_after: request.layout_after ?? request.message_id, layout_at: queued_at, marks: line_marks(member.name, null) };
     });
   for (const { message, members: recipients } of view.value.recipient_previews || []) {
     for (const member of recipients) {
@@ -722,6 +765,7 @@ const free_queued = computed(() => {
       cards.push({ id: `receipt-${message.id}-${member.id}`, author: member.name, member_id: member.id,
         queued: true, slot_card: true, provisional: true, created_at, request_message_id: message.id,
         layout_after: message.id, layout_at: created_at, marks: line_marks(member.name, null),
+        compact_queue: busy && member.access !== "manual" && !member.quota_until,
         text: busy ? t('排队中，等它做完当前工作') : t('等待开始…') });
     }
   }
@@ -863,12 +907,21 @@ function dispatch_badges(message_id) {
   return badges;
 }
 /** How long the working card has run or waited, with the retry attempt when it is being redelivered. */
-function working_elapsed(message, now) {
+function working_elapsed(message, now, { show_replaced = false } = {}) {
   if (message.provisional) return "";
   const spent = format_elapsed(Math.max(0, now - message.created_at));
   const text = message.waiting ? t('手动启动{value1}', { value1: message.created_at ? t(' · 已等 {value1}', { value1: spent }) : '' })
     : message.queued ? t('已等 {value1}', { value1: spent }) : t('已用 {value1}', { value1: spent });
+  if (show_replaced && message.replaced && !message.attempt) return t('重试 · {value1}', { value1: text });
   return text + (message.attempt ? t(' · 第 {value1}/{value2} 次重试', { value1: message.attempt, value2: MAX_DELIVERY_RETRIES }) : '');
+}
+/** Hover text for a host failure wake-up card, naming the failed run it replaced. */
+function replaced_title(replaced) {
+  const elapsed = replaced.created_at && replaced.finished_at ? format_elapsed(Math.max(0, replaced.finished_at - replaced.created_at)) : "";
+  if (elapsed && replaced.result) return t('上次执行 #{id} 耗时 {elapsed} 后失败，已自动重试：{reason}', { id: replaced.id, elapsed, reason: replaced.result });
+  if (elapsed) return t('上次执行 #{id} 耗时 {elapsed} 后失败，已自动重试', { id: replaced.id, elapsed });
+  if (replaced.result) return t('上次执行 #{id} 失败，已自动重试：{reason}', { id: replaced.id, reason: replaced.result });
+  return t('上次执行 #{id} 失败，已自动重试', { id: replaced.id });
 }
 /**
  * The working card's one status line: the phase while output keeps coming, a warning only after a long silence.
@@ -1044,18 +1097,16 @@ const execution_reports = stable_computed(() => {
   if (!room.value.free) return reports;
   for (const execution of all_executions.value) {
     if (!["completed", "failed", "cancelled"].includes(execution.status)) continue;
-    // A clean completion adds nothing to the message header; only failures, files the member changed or may have changed
-    // by running commands, and refused operations earn a card. Without commands, other files changing are someone else's.
-    const listed_changes = execution.changes?.some((path) => execution.commands > 0 || execution.edited?.includes(path));
+    const changes = (execution.changes || []).filter((path) => execution.edited?.includes(path));
     // The runner counts the changed files once the member's software has exited, seconds after the answer: a member
     // that edited files holds the card's place meanwhile, so the list does not appear from nothing (user 2026-11-19, #5665).
     const tallying = execution.status === "completed" && execution.edits > 0 && execution.changes_recorded === false
       && Math.max(tally_now.value, Math.floor(Date.now() / 1000)) - execution.finished_at < TALLY_WAIT_SECONDS;
-    if (execution.status === "completed" && !listed_changes && !execution.denials?.length && !tallying) continue;
+    if (execution.status === "completed" && !changes.length && !execution.denials?.length && !tallying) continue;
     // A failed free-room execution keeps its own card in the slot it worked in, and so does a delivered one that was voided.
     if (execution.status === "failed" || (execution.status === "cancelled" && execution.capabilities)) continue;
     const message_id = execution.answer_id || execution.request_message_id;
-    const report = { ...execution, tallying, label: execution.status === "cancelled" ? bridge.stop_label(execution) : { completed: t('已完成'), failed: t('失败') }[execution.status] };
+    const report = { ...execution, changes, tallying, label: execution.status === "cancelled" ? bridge.stop_label(execution) : { completed: t('已完成'), failed: t('失败') }[execution.status] };
     reports.set(message_id, [...(reports.get(message_id) || []), report]);
   }
   return reports;
@@ -1884,12 +1935,14 @@ const end_anchor = stable_computed(() => {
   return index < 0 ? "end" : messages[index].id;
 });
 /** Notices waking the host after its own failure, by message id: the wake-up takes the failed card's place, not a new card. */
-const failure_wakes = computed(() => new Map((room.value.free?.failure_wakes || []).map((wake) => [wake.message_id, wake.execution_id])));
+const failure_wakes = computed(() => new Map(all_failure_wakes.value.map((wake) => [wake.message_id, wake.execution_id])));
 /** Timed checks the host answered without dispatching, by notice id → answer: the answer folds into the check's line. */
 const quiet_checkins = computed(() => {
   if (view.value.query || view.value.source_filter) return new Map();
-  const answers = new Map(view.value.messages.map((message) => [message.id, message]));
-  return new Map((room.value.free?.quiet_checkins || []).map((check) => [check.message_id, answers.get(check.answer_id)]).filter(([, answer]) => answer));
+  const by_id = new Map(view.value.messages.map((message) => [message.id, message]));
+  return new Map(all_quiet_checkins.value
+    .filter((check) => by_id.has(check.message_id) && by_id.has(check.answer_id))
+    .map((check) => [check.message_id, by_id.get(check.answer_id)]));
 });
 const folded_checkin_answers = computed(() => new Set([...quiet_checkins.value.values()].map((answer) => answer.id)));
 /** Failed free-room executions, shaped like working cards so a failure stays where its work was shown. */
@@ -1897,7 +1950,8 @@ const free_failures = computed(() => {
   if (view.value.query) return [];
   const names = new Map((room.value.free?.members || []).map((member) => [member.id, member.name]));
   // A host failure whose wake-up has started is shown by that wake-up's card in the same place.
-  const followed = new Set(all_executions.value.map((execution) => failure_wakes.value.get(execution.request_message_id)).filter(Boolean));
+  const followed = new Set(all_executions.value.map((execution) =>
+    execution.replaces_execution_id || failure_wakes.value.get(execution.request_message_id)).filter(Boolean));
   return all_executions.value.filter((execution) => execution.status === "failed" && !followed.has(execution.id))
     .map((execution) => ({ id: `failed-${execution.id}`, author: execution.member || names.get(execution.member_id) || t('成员'), slot_card: true, created_at: execution.created_at,
       execution_id: execution.id, request_message_id: execution.request_message_id, layout_after: execution.layout_after,
@@ -1909,10 +1963,13 @@ const free_failures = computed(() => {
 /** Pending requests the local service cannot deliver, because it could not take over the member's session; the reason sits under the message. */
 function undeliverable_requests() {
   const blocked = new Map((room.value.free?.members || []).filter((member) => member.adopt_error).map((member) => [member.id, member]));
-  return (room.value.free?.requests || []).filter((request) => request.status === "pending" && blocked.has(request.member_id))
-    .map((request) => ({ id: `undeliverable-${request.id}`, author: blocked.get(request.member_id).name, slot_card: true, undeliverable: true,
-      created_at: request.created_at, request_message_id: request.message_id, layout_after: request.layout_after, layout_at: request.created_at,
-      failure: { role: blocked.get(request.member_id).role, result: blocked.get(request.member_id).adopt_error } }));
+  return visible_pending_requests(room.value.free?.requests, (request) => request.status === "pending" && blocked.has(request.member_id))
+    .map((request) => {
+      const queued_at = request.layout_at ?? request.created_at;
+      return { id: `undeliverable-${request.id}`, author: blocked.get(request.member_id).name, slot_card: true, undeliverable: true,
+        created_at: queued_at, request_message_id: request.message_id, layout_after: request.layout_after ?? request.message_id, layout_at: queued_at,
+        failure: { role: blocked.get(request.member_id).role, result: blocked.get(request.member_id).adopt_error } };
+    });
 }
 /** Consecutive rewound messages share one box at the first of them, which lists them when expanded; a retracted one is a line of its own. */
 const rewound_runs = stable_computed(() => {
@@ -1950,15 +2007,19 @@ const free_layout = computed(() => {
   const executions = new Map(all_executions.value.map((execution) => [execution.id, execution]));
   // Top-level messages in id order, filled while the messages are placed.
   const root_ids = [];
+  const record = typeof debug_log === "function" ? (item, after, reason, anchor) =>
+    debug_log("card-layout", { card: item.id, execution: item.execution_id, requestMessage: item.request_message_id,
+      after, at: item.layout_at, anchor, reason }) : null;
   const place = (item) => {
-    if ((!item.execution_id && !item.cancelled_turn && !item.arrangement && !item.undeliverable && !item.queued) || item.withdrawn) return false;
-    if (taken_back.has(item.request_message_id)) return false;
+    if (!item.execution_id && !item.cancelled_turn && !item.arrangement && !item.undeliverable && !item.queued) return false;
     const after = item.arrangement?.after_message_id ?? item.cancelled_turn?.after_message_id ?? item.layout_after;
-    if (after == null) return false;
+    if (item.withdrawn || taken_back.has(item.request_message_id)) { record?.(item, after, "withdrawn"); return false; }
+    if (after == null) { record?.(item, after, "no-anchor"); return false; }
     // Before the first loaded message, the card shows once that part of the history is loaded.
     const anchor = after === 0 ? 0 : root_ids.findLast((root) => root <= after);
-    if (anchor === undefined) return false;
+    if (anchor === undefined) { record?.(item, after, "anchor-not-loaded"); return false; }
     slots.set(anchor, [...(slots.get(anchor) || []), item]);
+    record?.(item, after, "attached", anchor);
     return true;
   };
   const roots = messages.filter((message) => {
@@ -1985,13 +2046,28 @@ const free_layout = computed(() => {
   }
   free_queued.value.forEach(place);
   const tail = free_working.value.map((item) => ({ ...without_progress(item), slot_card: true })).filter((item) => !place(item));
-  const by_start = (left, right) => ((left.layout_at ?? 0) - (right.layout_at ?? 0)) || ((left.execution_id || 0) - (right.execution_id || 0));
+  const is_pending = (item) => Boolean(item.queued || item.undeliverable);
+  const by_start = (left, right) => ((left.layout_at ?? 0) - (right.layout_at ?? 0))
+    || (Number(is_pending(left)) - Number(is_pending(right)))
+    || ((left.execution_id || 0) - (right.execution_id || 0));
   const ordered = [];
   layout_anchors.clear();
   // Each card remembers the message it shows under, so a filtered card can lead back to its place in the full transcript.
   const visit = (cards, anchor) => cards.sort(by_start).forEach((item) => { ordered.push(item); layout_anchors.set(item.id, anchor); });
   visit(slots.get(0) || [], 0);
-  roots.forEach((item) => { ordered.push(item); visit(slots.get(item.id) || [], item.id); });
+  const root_set = new Set(root_ids);
+  const supplements = new Map();
+  for (const item of roots) {
+    if (!root_set.has(item.interjection_parent_id)) continue;
+    const siblings = supplements.get(item.interjection_parent_id) || [];
+    siblings.push(item);
+    supplements.set(item.interjection_parent_id, siblings);
+  }
+  for (const item of roots) {
+    if (!root_set.has(item.interjection_parent_id)) ordered.push(item);
+    ordered.push(...(supplements.get(item.id) || []));
+    visit(slots.get(item.id) || [], item.id);
+  }
   return [...ordered, ...tail];
 });
 /** Id of the top-level message at or before `index`, where a shown range can start without splitting a slot; 0 shows all. */
@@ -2077,6 +2153,8 @@ function write_scroll(element, top) {
   element.scrollTop = top;
   written_top = own_top = element.scrollTop;
   reading_position?.mark();
+  debug_log?.("scroll-write", { target: top, actual: element.scrollTop, anchor: active_message.value,
+    send: sent_position?.id, jump: jump_target.value, manual: moved_by_hand });
 }
 // The last position the page wrote, kept until a scroll of someone else's: its scroll event records no reading position.
 let own_top = null;
@@ -2287,7 +2365,8 @@ const sending_day_label = computed(() => {
 /** Preserve room-wide round boundaries while navigating filtered history. */
 const navigation_groups = computed(() => {
   const groups = [];
-  for (const message of transcript_messages.value.filter((item) => !item.slot_card)) {
+  for (const message of transcript_messages.value) {
+    if (message.slot_card || message.arrangement || message.author === "系统" || ["goal", "room_link", "notice"].includes(message.source)) continue;
     const candidate = bridge.round_groups(room.value)?.findLast((item) => item.start_id <= message.id);
     const round = candidate && (candidate.end_id == null || message.id <= candidate.end_id) ? candidate : null;
     const number = round?.number || 0;
@@ -2326,6 +2405,7 @@ const navigation_working = computed(() => transcript_messages.value.filter((item
 function jump_to_working(item) {
   const element = transcript.value;
   const card = element?.querySelector(`[id="execution-${item.id}"]`);
+  debug_log?.("navigation", { input: "working-card", card: item.id, execution: item.execution_id, found: Boolean(card) });
   if (!card) return;
   close_preview();
   reader.state.following = false;
@@ -2364,11 +2444,13 @@ function track_scroll() {
   // After a resize the cards have rewrapped; until the reading position is restored this scrollTop is not the reader's.
   if (reading_position?.stale()) return;
   schedule_preload(preload_urgent(element));
-  const distance = follow_destination(element) - element.scrollTop - visual_tail_space;
+  const destination = follow_destination(element);
+  send_clipped.value = element.scrollHeight - element.clientHeight - destination > 1;
+  const distance = destination - element.scrollTop - visual_tail_space;
   if (distance >= 0) set_visual_tail_space(0);
   const near_end = !visual_tail_space && distance < FOLLOW_TAIL_THRESHOLD;
   if (!near_end && follow_tail.value && !moved_by_hand && !reader_busy() && performance.now() < settle_until && jump_target.value == null && !pending_jump) {
-    write_scroll(element, element.scrollHeight - element.clientHeight);
+    write_scroll(element, destination);
     return;
   }
   follow_tail.value = near_end;
@@ -2489,7 +2571,7 @@ send_entry.on("animationComplete", () => {
 // The sending card shows before the site answers; it rises in while the transcript glides to it.
 watch(() => view.value.sending_preview?.id, (id) => {
   if (!id) return;
-  sent_position = { id, top: null };
+  sent_position = { id };
   // Sending is the reader's own move to the end; a scroll of theirs still settling no longer holds the transcript.
   release_reader();
   if (document.documentElement.dataset.motion === "off") send_entry.jump(1);
@@ -2553,11 +2635,13 @@ function jump_to(id) {
   const messages = transcript_messages.value;
   const first = messages.find((message) => !message.slot_card);
   if (id != null && first && Number(id) < Number(first.id) && !messages.some((message) => message.id === id)) {
+    debug_log?.("jump", { message: id, phase: "waiting-history" });
     close_preview();
     awaiting_jump = id;
     return;
   }
   if (not_rendered(id)) {
+    debug_log?.("jump", { message: id, phase: "waiting-render" });
     close_preview();
     pending_jump = id;
     schedule_preload(true);
@@ -2567,7 +2651,7 @@ function jump_to(id) {
   const element = transcript.value;
   const message = element?.querySelector(`[data-message-id="${id}"]`);
   if (locating.value === id) { locating.value = null; clearTimeout(locating_timer); }
-  if (!message) return;
+  if (!message) { debug_log?.("jump", { message: id, phase: "missing" }); return; }
   close_preview();
   reader.state.following = false;
   // Clearing a filter turns on following the end; left on, the next re-render pulled the transcript back to the bottom.
@@ -2575,6 +2659,7 @@ function jump_to(id) {
   jump_target.value = id;
   active_message.value = id;
   write_scroll(element, element.scrollTop + message.getBoundingClientRect().top - reading_top(element) - READING_OFFSET);
+  debug_log?.("jump", { message: id, phase: "landed", actual: element.scrollTop });
   message.focus({ preventScroll: true });
   if (located_id === id) { located_id = null; flash_located(message); }
   track_scroll();
@@ -2609,6 +2694,7 @@ function stop_following(event) {
 function resume_tracking(event) {
   const is_scroll_input = event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key);
   if (is_scroll_input) {
+    debug_log?.("manual", { input: event.type, send: sent_position?.id, anchor: active_message.value, actual: transcript.value?.scrollTop });
     sent_position = null;
     moved_by_hand = true;
     // The reader's own scroll ends a fold control's hold: it pulled the card back to its place on every frame, against the
@@ -2752,6 +2838,7 @@ function end_scrub(event) {
   const scrub = navigation_scrub;
   if (scrub?.pointer !== event.pointerId) return;
   const target = event.type === "pointerup" && scrub.key && preview_open.value ? navigation_entries.value.find((entry) => entry.key === scrub.key) : null;
+  debug_log?.("navigation", { input: "scrub", message: target?.message.id, cancelled: !target });
   stop_scrub();
   close_preview();
   if (target) jump_to(target.message.id);
@@ -2778,6 +2865,7 @@ function activate_navigation(item, event) {
     event.preventDefault();
     return;
   }
+  debug_log?.("navigation", { input: event.detail === 0 ? "keyboard" : "click", message: item.message.id });
   jump_to(item.message.id);
 }
 
@@ -2795,6 +2883,8 @@ function browse_navigation(event) {
 
 /** Return to the newest record and resume following newly arriving messages. */
 function return_to_latest() {
+  sent_position = null;
+  send_clipped.value = false;
   close_preview();
   if (toggle_hold?.inline) toggle_hold = null;
   reader.state.following = false;
@@ -2973,45 +3063,106 @@ onMounted(() => {
   group_observer.observe(transcript.value, { childList: true });
 });
 onBeforeUnmount(() => { group_observer.disconnect(); growth_observer.disconnect(); });
-// `?scrolldebug` on the address: an on-screen log of every change to the transcript's scroll position, telling the page's
-// own writes (with where they came from) from the browser's, with the heights involved. For movement that only a real
-// phone shows; nothing is installed without the parameter.
+// `?scrolldebug` captures the browser decisions that do not appear in the room's server events.
 onMounted(() => {
   let enabled = false;
   try { enabled = sessionStorage.getItem("scrolldebug") === "1"; } catch { /* Storage may be unavailable. */ }
   if (!enabled || !transcript.value) return;
-  const element = transcript.value, lines = [];
-  const panel = Object.assign(document.createElement("pre"), { title: "scrolldebug" });
-  Object.assign(panel.style, { position: "fixed", left: "0", right: "0", top: "0", maxHeight: "38vh", overflow: "auto", zIndex: "9999", margin: "0",
-    padding: "4px 6px", font: "10px/1.35 ui-monospace,monospace", color: "#7f7", background: "rgba(0,0,0,.82)", whiteSpace: "pre-wrap", userSelect: "text" });
-  const state = () => `h=${element.scrollHeight} c=${element.clientHeight} vv=${window.visualViewport?.height.toFixed(1)} ih=${window.innerHeight} pad=${getComputedStyle(element.parentElement).getPropertyValue("--channel-composer-height")} pre=${getComputedStyle(element).getPropertyValue("--preload-pad") || 0}`;
-  const log = (text) => {
-    lines.push(`${(performance.now() / 1000).toFixed(2)} ${text}`);
-    if (lines.length > 120) lines.shift();
-    panel.textContent = lines.join("\n");
+  const element = transcript.value, lines = [], previous = new Map();
+  const panel = Object.assign(document.createElement("aside"), { id: "scrolldebug" });
+  const output = document.createElement("pre");
+  const copy = Object.assign(document.createElement("button"), { type: "button", textContent: t('复制浏览器调试记录') });
+  panel.className = "channel-debug";
+  panel.append(copy, output);
+  copy.addEventListener("click", () => act("copy", lines.join("\n")));
+  let frame = 0;
+  debug_log = (event, data) => {
+    const detail = JSON.stringify(data);
+    const key = debug_repeat_key(event, data);
+    const signature = event === "follow" ? `${data.message}:${data.reason}` : detail;
+    if (key && previous.get(key) === signature) return;
+    if (key) {
+      previous.delete(key);
+      previous.set(key, signature);
+      if (previous.size > DEBUG_LINE_LIMIT) previous.delete(previous.keys().next().value);
+    }
+    lines.push(`${performance.now().toFixed(0)}ms ${data.room ?? room.value.id} ${event} ${detail}`);
+    if (lines.length > DEBUG_LINE_LIMIT) lines.shift();
+    if (!frame) frame = requestAnimationFrame(() => { frame = 0; output.textContent = lines.join("\n"); });
   };
-  const native = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
-  const origin = () => (new Error().stack || "").split("\n").slice(3, 6).map((line) => line.trim().replace(/^at\s+/, "").slice(0, 48)).join(" < ");
-  Object.defineProperty(element, "scrollTop", { configurable: true, get() { return native.get.call(this); }, set(value) {
-    const before = native.get.call(this);
-    native.set.call(this, value);
-    const after = native.get.call(this);
-    if (Math.abs(after - before) >= 0.5) { written = after; log(`SET ${before.toFixed(1)}→${after.toFixed(1)} ${state()} by ${origin()}`); }
-  } });
-  for (const name of ["scrollBy", "scrollTo"]) {
-    const call = element[name].bind(element);
-    element[name] = (...args) => { log(`${name.toUpperCase()} ${JSON.stringify(args).slice(0, 60)} by ${origin()}`); return call(...args); };
-  }
-  let last = element.scrollTop, written = null;
-  element.addEventListener("scroll", () => {
-    const now = element.scrollTop;
-    if (Math.abs(now - last) >= 0.5 && now !== written) log(`scroll ${last.toFixed(1)}→${now.toFixed(1)} ${state()}`);
-    last = now; written = null;
-  }, { passive: true });
-  new ResizeObserver(() => log(`resize ${state()}`)).observe(element);
-  log(`start ${state()} ua=${navigator.userAgent.slice(0, 60)}`);
   document.body.append(panel);
+  const stop = observe_debug(element);
+  const stop_room = watch(() => room.value.id, () => { previous.clear(); debug_log("viewport", debug_viewport(element)); });
+  const stop_annotations = watch(() => file_preview.excerpts.map(excerpt => excerpt.id), (next, prior) => {
+    const added = next.filter(id => !prior.includes(id)), removed = prior.filter(id => !next.includes(id));
+    if (added.length || removed.length) debug_log("annotation-draft", { added, removed });
+  });
+  cleanup_debug = () => { stop_room(); stop_annotations(); stop(); cancelAnimationFrame(frame); panel.remove(); debug_log = null; };
 });
+const DEBUG_LINE_LIMIT = 240;
+let cleanup_debug = null;
+onBeforeUnmount(() => cleanup_debug?.());
+
+/** Suppress repeated layout decisions while the reader follows a changing transcript. */
+function debug_repeat_key(event, data) {
+  if (event === "follow") return `follow:${data.send}`;
+  if (event === "card-layout") return `layout:${data.card}`;
+  if (event === "card-hidden") return `hidden:${data.request ?? data.card}`;
+  return null;
+}
+
+/** Report browser viewport geometry in CSS pixels, including visual viewport scaling on touch devices. */
+function debug_viewport(element) {
+  const viewport = window.visualViewport;
+  return { width: window.innerWidth, height: window.innerHeight, visualWidth: viewport?.width, visualHeight: viewport?.height,
+    visualScale: viewport?.scale, devicePixelRatio: window.devicePixelRatio, transcriptHeight: element.clientHeight,
+    contentHeight: element.scrollHeight };
+}
+
+/** Observe writes, native scroll, annotation input and diagnostic events while the panel is open. */
+function observe_debug(element) {
+  const listeners = new AbortController();
+  const { signal } = listeners;
+  const viewport = () => debug_log("viewport", debug_viewport(element));
+  const native = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+  let last = element.scrollTop, written = null;
+  Object.defineProperty(element, "scrollTop", { configurable: true, get() { return native.get.call(this); }, set(target) {
+    const before = native.get.call(this);
+    native.set.call(this, target);
+    const actual = native.get.call(this);
+    if (Math.abs(actual - before) >= 0.5) {
+      written = actual;
+      debug_log("scroll-set", { before, target, actual, anchor: active_message.value, manual: moved_by_hand });
+    }
+  } });
+  element.addEventListener("scroll", () => {
+    const actual = element.scrollTop;
+    if (Math.abs(actual - last) >= 0.5 && actual !== written) debug_log("browser-scroll", { before: last, actual, manual: moved_by_hand });
+    last = actual;
+    written = null;
+  }, { passive: true, signal });
+  for (const type of ["focusin", "keydown", "compositionstart", "compositionend", "submit", "input"]) {
+    document.addEventListener(type, record_annotation, { capture: true, signal });
+  }
+  document.addEventListener("discuss:browser-debug", ({ detail }) => debug_log(detail.event, detail.data), { signal });
+  window.addEventListener("resize", viewport, { signal });
+  window.visualViewport?.addEventListener("resize", viewport, { signal });
+  const resize = new ResizeObserver(viewport);
+  resize.observe(element);
+  viewport();
+  return () => { listeners.abort(); resize.disconnect(); delete element.scrollTop; };
+}
+
+/** Record annotation actions and IME state without capturing a key, selection, or comment. */
+function record_annotation(event) {
+  const form = event.target.closest?.("form.selection-comment");
+  if (!form || (event.type === "keydown" && !["Enter", "Escape"].includes(event.key))) return;
+  const { width, height } = form.getBoundingClientRect();
+  debug_log("annotation", { phase: event.type, action: event.type === "keydown" ? event.key : undefined,
+    composing: event.isComposing, source: form.classList.contains("file-comment") ? "file" : "message",
+    entry: form.classList.contains("is-inline") ? "list" : form.classList.contains("excerpt-edit") ? "mark" : "selection",
+    docked: form.classList.contains("is-docked"), width, height });
+}
 onBeforeUnmount(() => dock_observer.disconnect());
 onBeforeUnmount(stop_scrub);
 
@@ -3382,7 +3533,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
   <section class="channel-conversation" :class="{ 'is-filtered': view.query || view.source_filter }" role="tabpanel" :aria-label="t('消息')">
   <ExternalMemberDialog v-model:open="pending_seat_open" :member="pending_seat" />
     <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? t('正在筛选…') : t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
-    <nav v-if="view.messages.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
+    <nav v-if="navigation_sections.length || navigation_working.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
       <div class="channel-map-track">
         <div v-for="section in navigation_sections" :key="section.entries[0].key"v-memo="[section, preview_open, active_round === section.number ? active_message : null, section_preview_position(section), section === navigation_sections.at(-1) ? navigation_working : null]" class="channel-map-round" :style="{ '--round-message-count': section.count + (section === navigation_sections.at(-1) ? navigation_working.length : 0) }">
           <!-- A free room is one long section, so each tick keeps its own memo: moving the reading position or the hover redraws only the ticks it reaches. -->
@@ -3427,7 +3578,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <div v-if="!view_query && !view_source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
-        <template v-for="message in group.messages" :key="(message.queued || message.working) && message.request_message_id ? `work-${message.request_message_id}-${message.member_id}` : message.id">
+        <template v-for="message in group.messages" :key="(message.queued || message.working) && (message.work_message_id || message.request_message_id) ? `work-${message.work_message_id || message.request_message_id}-${message.member_id}` : message.id">
         <DiscussionEndCard v-if="message.id === end_anchor && !view_query && !view_source_filter" />
         <TopicCard v-if="message.id === topic_anchor && !view_query && !view_source_filter" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <!-- A free-room working card holds the slot its answer will take. -->
@@ -3474,6 +3625,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <LiveClock v-if="run?.notes || run?.steps" v-slot="{ note_map }"><ExecutionNotes :count="run.notes || 0" :steps="run.steps || 0" :notes="note_map.get(run.id)" :load="() => load_notes(run.id)" :preload="(near) => preload_notes(run.id, near)" /></LiveClock>
           </template></template>
         </UChatMessage>
+        <LiveClock v-else-if="message.slot_card && message.queued && message.compact_queue" v-slot="{ now }">
+          <ScheduleCard :id="`execution-${message.id}`" icon="i-lucide-clock" plain :expandable="false" :label="t('排队中')"
+            :title="t('已等 {value1}', { value1: format_elapsed(Math.max(0, now - Math.floor(message.created_at))) })">
+            <template #text><span class="channel-checkin-line">{{ t('{member} 排队中：做完当前这件后接 #{message}', { member: bridge.display_name(message.author), message: message.request_message_id }) }}</span></template>
+          </ScheduleCard>
+        </LiveClock>
         <!-- Work in progress is a compact card: who and how long, the stage as the main line with the stop key at its end, -->
         <!-- and the notes below as a subordinate thread, folded to the latest note with the count after it. -->
         <div v-else-if="message.slot_card && !message.failure && !message.retry" :id="`execution-${message.id}`" class="channel-working-strip" :class="message.marks?.edge" :data-author="bridge.identities[message.author]?.style">
@@ -3485,7 +3642,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><UBadge v-for="badge in message.marks?.badges || []" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UTooltip v-if="message.background" :text="t('后台进行：主持人没有等它，接着在做别的')"><UIcon name="i-lucide-split" class="channel-working-background" role="img" :aria-label="t('后台进行：主持人没有等它')" /></UTooltip></div>
                 <span v-if="message.model || message.effort" class="channel-message-provenance channel-message-model" :title="[message.model, message.effort].filter(Boolean).join(' · ')"><bdi v-if="message.model" class="channel-model-id">{{ message.model }}</bdi><span v-if="message.effort" class="channel-model-effort">{{ message.model ? ` · ${message.effort}` : message.effort }}</span></span>
               </div>
-              <div class="channel-message-provenance channel-message-facts"><time v-if="message.created_at" :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time><LiveClock v-slot="{ now }"><span class="channel-message-elapsed">{{ working_elapsed(message, now) }}</span></LiveClock></div>
+              <div class="channel-message-provenance channel-message-facts"><span v-if="message.replaced && !message.attempt" :title="replaced_title(message.replaced)">{{ t('重试') }}</span><time v-if="message.created_at" :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time><LiveClock v-slot="{ now }"><span class="channel-message-elapsed">{{ working_elapsed(message, now) }}</span></LiveClock></div>
             </div>
             <UTooltip v-if="can_manage && shows_progress(message) && message.execution_id" :text="t('私聊：查看它正在做什么')"><UButton icon="i-lucide-message-square" class="channel-private-chat-key channel-corner-key" size="xs" variant="ghost" color="neutral" :aria-label="t('私聊 {value1}：查看本次执行过程', { value1: bridge.display_name(message.author) })" @click="open_private_chat(act, message.author, message.execution_id)" /></UTooltip>
           </div>
@@ -3503,7 +3660,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <span v-else>{{ status.text }}</span>
             </span>
             <!-- Phone only: the time used moves here from the head, so both sides of the strip are two lines (user 2026-11-22, #6945). -->
-            <span class="channel-message-provenance channel-working-elapsed">{{ working_elapsed(message, now) }}</span></LiveClock>
+            <span class="channel-message-provenance channel-working-elapsed" :title="message.replaced && !message.attempt ? replaced_title(message.replaced) : undefined">{{ working_elapsed(message, now, { show_replaced: true }) }}</span></LiveClock>
             <span v-if="can_manage && !message.queued" class="channel-working-actions">
                 <!-- In a discussion, stopping the current speaker skips the turn so the next one speaks. -->
                 <template v-if="speaking_turn?.expert === message.author && message.discussion_request">
@@ -3548,9 +3705,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <div class="channel-failure-actions">
                 <LiveClock v-slot="{ now }"><span class="channel-message-provenance">{{ t('{value1}（第 {value2}/{value3} 次）', { value1: message.retry.retry_at > now ? t('{value1} 秒后自动重试', { value1: message.retry.retry_at - now }) : t('正在重试'), value2: message.retry.attempt, value3: MAX_DELIVERY_RETRIES }) }}</span></LiveClock>
                 <template v-if="can_manage">
-                  <UButton :label="t('立即重试')" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="t('立即重新投递给 {value1}', { value1: bridge.display_name(message.author) })"
+                  <UButton :label="t('立即重试')" icon="i-lucide-rotate-ccw" size="sm" variant="soft" color="primary" :aria-label="t('立即重试 {value1} 的任务', { value1: bridge.display_name(message.author) })"
                     @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_now' })" />
-                  <UButton :label="t('停止')" icon="i-lucide-circle-stop" size="sm" variant="soft" color="error" :aria-label="t('停止自动重试 {value1} 的投递', { value1: bridge.display_name(message.author) })"
+                  <UButton :label="t('停止')" icon="i-lucide-circle-stop" size="sm" variant="soft" color="error" :aria-label="t('停止自动重试 {value1} 的任务', { value1: bridge.display_name(message.author) })"
                     @click="act('retry_delivery', { execution_id: message.execution_id, action: 'retry_stop' })" />
                 </template>
               </div>
@@ -3604,12 +3761,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         <!-- Each card keeps its own render cache and reads only its card object; a room refresh re-renders only the cards whose inputs changed. -->
         <template v-for="card in [cached_card(message)]" :key="message.id">
         <MemoBlock :deps="card.deps">
-        <UChatMessage :id="String(message.id)" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" @pointerenter="card.armed || arm_card(message.id, $event)" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="card.line.edge" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
+        <UChatMessage :id="String(message.id)" :data-message-id="message.id" :data-author="bridge.identities[message.author]?.style" tabindex="-1" @pointerenter="card.armed || arm_card(message.id, $event)" :role="message.author === '用户' ? 'user' : 'assistant'" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :class="[card.line.edge, { 'channel-interjection': message.interjection_parent_id }]" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
           <template #body>
             <div class="channel-message-byline">
               <UAvatar :src="bridge.identities[message.author]?.icon" :text="bridge.identities[message.author]?.initials || '?'" :alt="bridge.display_name(message.author)" size="md" class="channel-avatar" :class="bridge.identities[message.author]?.style" />
               <div class="channel-message-meta">
-                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><span class="channel-message-round">{{ card.round_label }}</span><UBadge v-for="badge in card.line.badges.filter((item) => !item.goes)" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UBadge v-if="!QUIET_SOURCES.has(message.source)" size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('运行回执') }}</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求')">{{ t('主动发言') }}</UBadge><UBadge v-if="message.relay_room" as="button" type="button" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('另一房间的主持人经房主凭据在本房间发言；点击打开该房间')" @click="message.relay_title !== null && act('room', message.relay_room)">{{ t('来自房间「{room}」的主持人 {host}', { room: message.relay_title ?? t('已删除的房间'), host: message.relay_host }) }}</UBadge><UBadge v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('{value1} 代发', { value1: bridge.display_name(message.submitted_by) }) }}</UBadge><UBadge v-if="message.source === 'auto'" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员结束时没有提交回答，本机服务把它最后一段回复收录为本次回答')">{{ t('自动收录') }}</UBadge><UBadge v-for="badge in card.line.badges.filter((item) => item.goes)" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UBadge v-if="card.waits" size="xs" color="neutral" variant="soft" class="channel-source" :title="card.speaking_expert ? t('{value1} 说完后交给主持人处理', { value1: bridge.display_name(card.speaking_expert) }) : t('等待主持人处理')">{{ t('待主持人处理') }}</UBadge></div>
+                <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><UBadge v-if="message.interjection_parent_id" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('插话') }}</UBadge><span class="channel-message-round">{{ card.round_label }}</span><UBadge v-for="badge in card.line.badges.filter((item) => !item.goes)" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UBadge v-if="!QUIET_SOURCES.has(message.source)" size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('运行回执') }}</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求')">{{ t('主动发言') }}</UBadge><UBadge v-if="message.relay_room" as="button" type="button" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('另一房间的主持人经房主凭据在本房间发言；点击打开该房间')" @click="message.relay_title !== null && act('room', message.relay_room)">{{ t('来自房间「{room}」的主持人 {host}', { room: message.relay_title ?? t('已删除的房间'), host: message.relay_host }) }}</UBadge><UBadge v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户')" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('{value1} 代发', { value1: bridge.display_name(message.submitted_by) }) }}</UBadge><UBadge v-if="message.source === 'auto'" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员结束时没有提交回答，本机服务把它最后一段回复收录为本次回答')">{{ t('自动收录') }}</UBadge><UBadge v-for="badge in card.line.badges.filter((item) => item.goes)" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UBadge v-if="card.waits" size="xs" color="neutral" variant="soft" class="channel-source" :title="card.speaking_expert ? t('{value1} 说完后交给主持人处理', { value1: bridge.display_name(card.speaking_expert) }) : t('等待主持人处理')">{{ t('待主持人处理') }}</UBadge></div>
                 <span v-if="card.model || card.effort" class="channel-message-provenance channel-message-model" :title="[card.model, card.effort].filter(Boolean).join(' · ')"><bdi v-if="card.model" class="channel-model-id">{{ card.model }}</bdi><span v-if="card.effort" class="channel-model-effort">{{ card.model ? ` · ${card.effort}` : card.effort }}</span></span>
               </div>
               <div class="channel-message-provenance channel-message-facts"><RequestStatus v-if="card.badges?.length" :badges="card.badges" @locate="(id) => locate({ id })" /><time :title="new Date(message.created_at).toLocaleString(locale)">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="t('查看原文 #{value1}', { value1: message.id })" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="card.elapsed !== null" class="channel-message-elapsed">{{ t('耗时 {value1}', { value1: format_elapsed(card.elapsed) }) }}</span></div>
@@ -3761,13 +3918,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <!-- Back from the background: the opening load covers the old cards until the room is read again (state.resuming). -->
     <div v-if="view.resuming" class="channel-resume-loading" role="status" :aria-label="t('正在读取消息')"><div class="channel-message-group channel-loading-skeleton grid gap-6 py-6"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div></div>
     <!-- The opening load (state.resuming) covers the cards, so nothing to jump to or quote shows over it. -->
-    <div v-if="!view.resuming && ((transcript_messages.length && !follow_tail) || listen_here?.touch || reader.state.message_id)" class="channel-latest-dock">
+    <div v-if="!view.resuming && ((transcript_messages.length && (!follow_tail || send_clipped)) || listen_here?.touch || reader.state.message_id)" class="channel-latest-dock">
       <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
       <button v-if="listen_here?.touch && listen_here.speech" type="button" class="channel-listen-pill" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
       <span v-if="reader.state.message_id && reader.state.loading" class="channel-listen-pill" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ t('加载中') }}</span>
       <button v-else-if="reader.state.message_id" type="button" class="channel-listen-pill" :class="{ 'is-on': reader.state.following }" :aria-pressed="reader.state.following" :title="reader.state.following ? t('手动滚动即取消跟随') : t('页面跟随朗读位置滚动')" @click="reader.state.following ? (reader.state.following = false) : reader.follow()"><UIcon name="i-lucide-locate-fixed" />{{ reader.state.following ? t('跟随中') : t('跟随') }}</button>
       <button v-if="reader.state.reading" type="button" class="channel-listen-pill" :aria-label="t('停止朗读')" @click="reader.stop()"><UIcon name="i-lucide-square" />{{ t('停止') }}</button>
-      <UButton v-if="transcript_messages.length && !follow_tail" icon="i-lucide-arrow-down" color="neutral" variant="outline" :aria-label="t('回到最新消息')" class="channel-latest-button" @click="return_to_latest" />
+      <UButton v-if="transcript_messages.length && (!follow_tail || send_clipped)" icon="i-lucide-arrow-down" color="neutral" variant="outline" :aria-label="t('回到最新消息')" class="channel-latest-button" @click="return_to_latest" />
     </div>
     <div ref="composer_dock" class="channel-composer-dock"><div v-if="view.share || view.destroying.includes(view.room?.id)" class="channel-composer-column channel-share-composer">
       <UChatPrompt model-value="" disabled :autofocus="false" :rows="1" :placeholder="view.share ? t('这是只读分享，不能在这里发消息') : t('房间正在销毁，不能再发消息')" :aria-label="t('留言正文')" variant="outline" color="neutral" class="channel-composer" :ui="{ base: 'channel-editor', footer: 'channel-composer-footer' }">

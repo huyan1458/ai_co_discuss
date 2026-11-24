@@ -344,7 +344,7 @@ async function save_projects() {
 .project-box:hover:not(.is-disabled) { border-color: var(--ui-border-accented); }
 .project-box.is-disabled { cursor: not-allowed; opacity: .6; }
 /* One fixed width, so stacked rows (main and other directories) line their paths up whatever the project names. */
-.project-prefix { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; width: 160px; padding: 0 8px 0 10px; border-right: 1px solid var(--ui-border-muted);
+.project-prefix { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; width: 132px; padding: 0 8px 0 10px; border-right: 1px solid var(--ui-border-muted);
   border-radius: 5px 0 0 5px; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; transition: background-color .15s, color .15s; }
 .project-prefix:hover:not(:disabled) { background: var(--channel-ghost-hover, var(--ui-bg-elevated)); color: var(--ui-text-highlighted); }
 .project-prefix > span { flex: 1; min-width: 0; overflow: hidden; text-align: left; text-overflow: ellipsis; }

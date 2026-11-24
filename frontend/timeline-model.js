@@ -1,4 +1,6 @@
 import { t } from './i18n.js';
+import { USER_MEMBER, execution_stages, format_duration, realtime_model, timeline_segments } from '../runner/timeline_metrics.mjs';
+export { USER_MEMBER, execution_stages, format_duration, realtime_model, timeline_segments };
 /**
  * Layout for the execution timeline page, from the website's timeline read: rows nested by who dispatched whom, each
  * execution's stages in epoch milliseconds, and a time axis on which long idle stretches fold into labelled bands.
@@ -12,46 +14,6 @@ export const STATE_LABELS = { running: t('进行中'), done: t('完成'), failed
 /** Idle stretches longer than this fold into a band; each band takes this share of the axis. */
 export const FOLD_GAP_MS = 5 * 60_000;
 export const FOLD_SHARE = 0.03;
-
-/** 820ms, 6.9s, 42s, 3m 05s, 2h 05m: the precision a reader compares at each scale. */
-export function format_duration(ms) {
-  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
-  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
-  return `${Math.floor(seconds / 3600)}h ${String(Math.floor(seconds % 3600 / 60)).padStart(2, "0")}m`;
-}
-
-/**
- * One execution's stages. Queue runs from the request to delivery and wake from delivery to the first sign of work:
- * the discussion's enter, else a free execution's first recorded segment (approximate). Without either, the time after
- * delivery is all work and wake is absent. An execution still running ends at `now_ms`, and so does its last segment:
- * the phase it was last seen in is shown as lasting until the next report says otherwise (`live`). Progress notes are
- * placed when the website received them, within the execution.
- */
-export function execution_stages(item, now_ms) {
-  const running = item.state === "running";
-  const end = item.finished_at ? item.finished_at * 1000 : now_ms;
-  const dispatched = item.dispatched_at ? item.dispatched_at * 1000 : 0;
-  const queued = Math.min(item.queued_at ? item.queued_at * 1000 : dispatched || end, dispatched || end);
-  // `seen` is where output was last seen; past it a live segment is only assumed to go on, and is drawn as a faint tail.
-  const segments = dispatched ? item.segments.map((segment, index) => {
-    const live = running && index === item.segments.length - 1;
-    const seen = Math.min(dispatched + segment.end_ms, end);
-    return { phase: segment.phase, tool: segment.tool, live, seen, start: Math.min(dispatched + segment.start_ms, end), end: live ? end : seen };
-  }) : [];
-  // Phases not read yet (`segments_pending`, see has_phase_detail) still say where the first began.
-  const entered = item.started_at ? item.started_at * 1000 : segments[0]?.start ?? (dispatched && item.first_ms != null ? Math.min(dispatched + item.first_ms, end) : 0);
-  const work_start = dispatched ? Math.max(dispatched, Math.min(entered || dispatched, end)) : end;
-  const notes = dispatched ? (item.notes || []).map((at, index) => ({ index, at: Math.min(Math.max(at * 1000, dispatched), end) })) : [];
-  return {
-    start: queued, end, queue: [queued, dispatched || end],
-    wake: dispatched && work_start > dispatched ? [dispatched, work_start] : null,
-    work: dispatched ? [work_start, end] : null,
-    wake_approx: !item.started_at, segments, notes,
-  };
-}
 
 /** No output for this long marks a running execution as possibly stuck, as the message page's working card does. */
 export const STALL_MS = 3 * 60_000;
@@ -269,44 +231,6 @@ export function recent_window(executions, count) {
   return executions.filter((item) => picked.has(item));
 }
 
-/**
- * The room cut into tasks, oldest first. A task starts only where the owner asked for something new while the room was
- * idle: an execution started by a message the owner wrote (`task_author` "用户") that no earlier execution answered, with
- * every execution requested before it already ended. Everything else joins the task in progress: the owner's
- * interjections while work runs, the host's dispatches and proactive posts, hand-backs, the program's wakes, Goal runs and
- * retries. No time threshold and no dispatch chain decide it.
- *
- * Each task: `key` (the execution that opened it), `opener` (that execution's item), `items` (each `{ item, stages }`),
- * `keys` (their row keys), `interjections` (the owner's messages that joined it while work ran: `key`, `task_id`, `task`,
- * `at`), and `opened` (false for the first task when it does not begin at an owner's message, as when older executions
- * were not loaded).
- */
-export function timeline_segments(executions, now_ms) {
-  const ordered = executions.map((item) => ({ item, stages: execution_stages(item, now_ms) }))
-    .sort((a, b) => a.stages.queue[0] - b.stages.queue[0] || a.item.id - b.item.id);
-  const segments = [];
-  const asked = new Set();
-  let busy_until = -Infinity;
-  for (const entry of ordered) {
-    const { item, stages } = entry;
-    const key = `${item.source}:${item.id}`;
-    const new_ask = item.task_author === "用户" && item.task_id != null && !asked.has(item.task_id);
-    if (!segments.length || (new_ask && stages.queue[0] >= busy_until)) {
-      segments.push({ key, opener: item, opened: new_ask, items: [], keys: new Set(), interjections: [] });
-    } else if (new_ask) {
-      segments.at(-1).interjections.push({ key, task_id: item.task_id, task: item.task || "", at: stages.queue[0] });
-    }
-    const segment = segments.at(-1);
-    segment.items.push(entry);
-    segment.keys.add(key);
-    if (item.task_id != null) asked.add(item.task_id);
-    busy_until = Math.max(busy_until, stages.end);
-  }
-  return segments;
-}
-
-/** The owner as a member of the timeline: rows named this, drawn from the owner's messages rather than executions. */
-export const USER_MEMBER = "用户";
 export const is_user_row = (row) => row.item.source === "user";
 
 /**
@@ -549,6 +473,66 @@ export function pan_window(window, delta) {
   return { from: Math.min(1 - window.span, Math.max(0, window.from + delta * window.span)), span: window.span };
 }
 
+/**
+ * Target zoom window for replay auto-follow (#8678, #8701, #8717): frame the execution(s) running at `at_ms` from their
+ * earliest start to `at_ms` so elapsed work occupies a readable share of the viewport with preceding context on the left
+ * and headroom past `FOLLOW_AT`. Brief hand-off gaps hold the previous run's scale; longer idle gaps widen smoothly with
+ * elapsed idle time until the next run begins. Works on both folded (Traces) and linear (Concurrency) axes via `x(ms)`.
+ */
+export const FOLLOW_AT = 0.8;
+const AUTO_FOCUS_SHARE = 0.55;
+const AUTO_MIN_WINDOW_MS = 60_000;
+const AUTO_SHORT_GAP_MS = 90_000;
+const AUTO_NEAR_WHOLE = 0.88;
+const AUTO_ZOOM_OUT_MS = 320;
+const AUTO_ZOOM_IN_MS = 620;
+
+export function replay_follow_window(spans, x, at_ms, total_ms, follow_at = FOLLOW_AT) {
+  if (!spans.length || !total_ms) return { from: 0, span: 1 };
+  const now_x = Math.min(1, Math.max(0, x(at_ms)));
+  const min_span = Math.min(1, Math.max(MIN_VIEW_SPAN, AUTO_MIN_WINDOW_MS / total_ms));
+  const active = [];
+  let prev = null;
+  let next = null;
+  for (const item of spans) {
+    if (item.start <= at_ms && item.end >= at_ms) active.push(item);
+    else if (item.end < at_ms && (!prev || item.end > prev.end)) prev = item;
+    else if (item.start > at_ms && (!next || item.start < next.start)) next = item;
+  }
+  const run_span = (start, end) => Math.max(0, x(end) - x(start)) / AUTO_FOCUS_SHARE;
+  let target = min_span;
+  if (active.length) {
+    target = run_span(Math.min(...active.map((item) => item.start)), at_ms);
+  } else if (prev && next && at_ms - prev.end > AUTO_SHORT_GAP_MS) {
+    target = Math.max(run_span(prev.end, at_ms), run_span(prev.start, prev.end));
+  } else if (prev) {
+    target = run_span(prev.start, prev.end);
+  }
+  let span = Math.min(1, Math.max(min_span, target));
+  if (span >= AUTO_NEAR_WHOLE) span = 1;
+  const from = Math.min(1 - span, Math.max(0, now_x - follow_at * span));
+  return { from, span };
+}
+
+/**
+ * Smoothly move `current` toward `target` during continuous replay: `span` eases in log space (widening faster than
+ * tightening so a growing bar never clips), while `from` anchors `now_x` at `follow_at`.
+ */
+export function step_follow_window(current, target, now_x, elapsed_ms, follow_at = FOLLOW_AT) {
+  const cur_span = Math.min(1, Math.max(MIN_VIEW_SPAN, current.span || 1));
+  const dst_span = Math.min(1, Math.max(MIN_VIEW_SPAN, target.span || 1));
+  let span = dst_span;
+  if (elapsed_ms > 0 && Math.abs(dst_span - cur_span) > 0.0005) {
+    const tau = dst_span > cur_span ? AUTO_ZOOM_OUT_MS : AUTO_ZOOM_IN_MS;
+    const alpha = 1 - Math.exp(-elapsed_ms / tau);
+    span = Math.exp(Math.log(cur_span) * (1 - alpha) + Math.log(dst_span) * alpha);
+  }
+  if (span >= 0.999) span = 1;
+  const clamped_x = Math.min(1, Math.max(0, now_x));
+  const from = Math.min(1 - span, Math.max(0, clamped_x - follow_at * span));
+  return { from, span };
+}
+
 /** The step a reader should look at first: the longest recorded phase segment, and the counts the run picker needs. */
 export function timeline_summary(rows) {
   // Only recorded time counts: a live segment's assumed tail would make a stuck execution look like the slowest step.
@@ -666,60 +650,4 @@ export function state_at(events, index) {
     else if (event.kind === "chain.released") chains.delete(data.chain_id);
   }
   return { requests: [...requests.values()], executions: [...executions.values()], queue: [...queue.values()], chains: [...chains.values()] };
-}
-
-/**
- * The room in real time (2026-11-23 user's request, #8032): one linear axis from the first execution to the last end,
- * nothing folded. `steps` cut that span wherever an execution starts or ends; each has `members` (who was working then,
- * as `{ member, count, keys }` in order of first appearance, `keys` the row keys of their executions then) and `total`. An execution counts from its delivery to its end, so
- * waiting in the queue is not work; a step with `total` 0 is the room standing idle, also listed in `idle`. `tasks` are
- * the segments' spans (`key`, `task`, `opened`, `start`, `end`), the owner's rows left out. `peak` is the most at once.
- * What the view is opened for (#8279): how much of the span the room worked by itself (`busy_ms`, the span less its idle
- * time) and how many executions started without the owner (`runs`, of which `self_started` were begun by the host's
- * dispatch, a relay, a hand-back, a wake or a Goal run rather than a message the owner wrote). `unattended` is the
- * longest the room ran on by itself after one of the owner's messages (#8313): from the message until the room first
- * stood idle or the owner wrote again, as `{ start, end }`, or null.
- */
-export function realtime_model(segments) {
-  const runs = segments.flatMap((segment) => segment.items).filter(({ item, stages }) => item.source !== "user" && stages.work)
-    .map(({ item, stages }) => ({ key: `${item.source}:${item.id}`, member: item.member, start: stages.queue[1], end: Math.max(stages.queue[1], stages.end),
-      asked: stages.queue[0], self_started: Boolean(item.task_author) && item.task_author !== USER_MEMBER }));
-  if (!runs.length) return { start: 0, end: 0, steps: [], idle: [], tasks: [], peak: 0, members: [], idle_ms: 0, busy_ms: 0, runs: 0, self_started: 0, unattended: null };
-  const members = [...new Set([...runs].sort((a, b) => a.start - b.start).map((run) => run.member))];
-  const times = [...new Set(runs.flatMap((run) => [run.start, run.end]))].sort((a, b) => a - b);
-  const steps = [];
-  for (let index = 0; index + 1 < times.length; index += 1) {
-    const [start, end] = [times[index], times[index + 1]];
-    const keys = new Map();
-    for (const run of runs) if (run.start <= start && run.end >= end) keys.set(run.member, [...(keys.get(run.member) || []), run.key]);
-    const list = members.filter((member) => keys.has(member)).map((member) => ({ member, count: keys.get(member).length, keys: keys.get(member) }));
-    const total = list.reduce((sum, entry) => sum + entry.count, 0);
-    const last = steps.at(-1);
-    if (last && last.total === total && last.members.length === list.length && last.members.every((entry, at) => entry.member === list[at].member && entry.keys.join() === list[at].keys.join())) last.end = end;
-    else steps.push({ start, end, members: list, total });
-  }
-  const idle = steps.filter((step) => !step.total).map(({ start, end }) => ({ start, end }));
-  const tasks = segments.map((segment) => {
-    const spans = segment.items.filter(({ item }) => item.source !== "user").map(({ stages }) => stages);
-    return spans.length ? { key: segment.key, task: segment.opener.task || "", opened: segment.opened,
-      start: Math.min(...spans.map((stages) => stages.queue[1] || stages.start)), end: Math.max(...spans.map((stages) => stages.end)) } : null;
-  }).filter(Boolean);
-  const idle_ms = idle.reduce((sum, gap) => sum + gap.end - gap.start, 0);
-  // The room's busy stretches, then for each run the owner asked for: until its stretch ends or the owner writes again.
-  const busy = [];
-  for (const run of [...runs].sort((a, b) => a.start - b.start)) {
-    const last = busy.at(-1);
-    if (last && run.start <= last.end) last.end = Math.max(last.end, run.end);
-    else busy.push({ start: run.start, end: run.end });
-  }
-  const asks = [...new Set(runs.filter((run) => !run.self_started).map((run) => run.asked))].sort((a, b) => a - b);
-  let unattended = null;
-  for (const run of runs.filter((item) => !item.self_started)) {
-    const stretch = busy.find((item) => item.start <= run.start && run.start <= item.end);
-    const next = asks.find((at) => at > run.asked) ?? Infinity;
-    const end = Math.min(stretch?.end ?? run.end, next);
-    if (end > run.asked && (!unattended || end - run.asked > unattended.end - unattended.start)) unattended = { start: run.asked, end };
-  }
-  return { start: times[0], end: times.at(-1), steps, idle, tasks, members, peak: Math.max(...steps.map((step) => step.total)),
-    idle_ms, busy_ms: times.at(-1) - times[0] - idle_ms, runs: runs.length, self_started: runs.filter((run) => run.self_started).length, unattended };
 }

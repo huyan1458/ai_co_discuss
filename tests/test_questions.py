@@ -242,6 +242,35 @@ class QuestionTests(base.HostRoomTests):
         self.assertIn(answered["message_id"], [item["message_id"] for item in detail["requests"]])
         self.assertEqual(len(self.request(f"{self.path}/inbox", token=self.owner)[1]["executions"][0]["interjections"]), 1)
 
+    def test_only_live_steering_groups_the_message_under_the_original(self):
+        for steer, resume in ((True, True), (False, True), (False, False)):
+            with self.subTest(steer=steer, resume=resume):
+                original = self.say("Original task", to=["Codex"])[1]["message"]["id"]
+                execution = self.reserve_for("Codex")[1]["id"]
+                self.request(f"{self.path}/executions/{execution}", {
+                    "action": "delivery", "stoppable": True, "progress": True, "steer": steer, "resume": resume}, self.owner)
+                self.say("Follow-up", to=["Codex"], queue=True)
+                queue = self.request(self.path)[1]["free"]["queued_messages"]["items"]
+                self.request(f"{self.path}/queue", {"action": "send", "id": queue[0]["id"]}, self.owner)
+                messages = self.request(f"{self.path}/messages")[1]["messages"]
+                supplement = next(item for item in reversed(messages) if item["text"] == "Follow-up")
+                self.assertEqual(supplement["interjection_parent_id"], original if steer else None)
+                status, trace = self.request(f"{self.path}/trace?message_id={supplement['id']}", token=self.owner)
+                self.assertEqual(status, 200, trace)
+                self.assertEqual(trace["message"]["interjection_parent_id"], original if steer else None)
+                if steer:
+                    insertion = next(record["data"] for record in trace["records"] if record["kind"] == "interjection")
+                    self.assertEqual((insertion["execution_id"], insertion["status"]), (execution, "pending"))
+                    self.assertEqual(self.request(f"{self.path}/executions/{execution}",
+                                                 {"action": "interjection", "interjection_id": insertion["interjection_id"],
+                                                  "status": "delivered"}, self.owner)[0], 200)
+                    delivered = self.request(f"{self.path}/trace?message_id={original}", token=self.owner)[1]["records"]
+                    self.assertTrue(any(record["kind"] == "interjection" and record["data"]["status"] == "delivered"
+                                        for record in delivered))
+                    self.assertTrue(any(record["source"] == "history" and record["data"].get("action") == "interjection"
+                                        for record in delivered))
+                self.request(f"{self.path}/stop", {}, self.owner)
+
     def test_a_goal_waiting_only_on_a_question_does_not_idle_wake_the_host(self):
         receipt = self.ask_owner_question()
         status, view = self.request(f"{self.path}/goal", {"action": "start", "objective": "挑完方案",
@@ -414,6 +443,9 @@ class DiscussionHintTests(base.FreeRoomTests):
         read = self.request(f"{self.path}/messages?execution_id={execution['id']}", token=self.member)[1]
         scope = read["read_scope"]
         self.assertEqual((scope["room_latest_id"] > scope["read_until"], "note" in scope, "beyond" in scope), (True, True, False), scope)
+        status, hidden = self.request(f"{self.path}/trace?message_id={scope['room_latest_id']}&execution_id={execution['id']}",
+                                      token=self.member)
+        self.assertEqual((status, hidden["code"]), (403, "reading_boundary"), hidden)
 
 
     def test_questions_respect_the_independent_reading_boundary(self):

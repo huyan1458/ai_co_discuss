@@ -1,9 +1,9 @@
 <script setup>
 import { onMounted, ref } from "vue";
 
-// Re-edits one note's comment in the same pill as adding one (the selection comment box): Enter or ↑ saves, Esc or ×
+// Re-edits one note's comment in the same card as adding one (the selection comment box): Enter or ✓ saves, Esc or ×
 // leaves it as it was. Beside a passage it floats where the parent places it (a fixed `style`) and offers removal;
-// `inline` puts it in the flow, as in the notes list, whose rows have their own remove button.
+// `inline` puts it in the flow (resizable, not movable), as in the notes list, whose rows have their own remove button.
 // `context`: which note this is, shown above the box when it is docked away from its passage (user 2026-11-17: editing
 // from the list on a phone hid the quoted text).
 const props = defineProps({ comment: { type: String, default: "" }, inline: Boolean, removable: { type: Boolean, default: true }, context: { type: String, default: "" } });
@@ -20,7 +20,7 @@ function keydown(event) {
 </script>
 
 <template>
-  <form v-float-box="!inline" class="selection-comment excerpt-edit" :class="{ 'is-inline': inline, 'has-context': context }" @submit.prevent="emit('save', draft.trim())">
+  <form v-float-box="inline ? 'resize' : true" class="selection-comment excerpt-edit" :class="{ 'is-inline': inline, 'has-context': context }" @submit.prevent="emit('save', draft.trim())">
     <small v-if="context" class="excerpt-edit-context">{{ context }}</small>
     <textarea ref="input" v-model="draft" rows="1" :placeholder="t('添加批注（可选）')" :aria-label="t('注释的批注')" enterkeyhint="done" @keydown="keydown"></textarea>
     <div class="selection-comment-actions">

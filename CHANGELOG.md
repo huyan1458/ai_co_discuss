@@ -2,6 +2,14 @@
 
 Versions match the npm package. Recorded from 0.5.0 on, listing only the changes you will notice. The Chinese version is `CHANGELOG.zh-CN.md`; on the website, click the version number at the top left to read it.
 
+## 0.5.20 (2026-11-23)
+
+- New: Customize share cards by editing text, picking a room image, or using "Upload cover" with cropping; updates keep your cover.
+- New: Antigravity automatically retries up to 3 times in the same session after mid-run network drops, with a "Retry now" option.
+- New: Run details add "Run diagnostics" for progress, retries and file attribution, and API members now have time limits so runs do not hang.
+- Changed: Timeline replay now auto-zooms to follow the playback line when "Follow" is on, with a unified zoom and replay bar.
+- Changed: Interjected messages now nest under the original message; revoking or renewing a shared link updates the list immediately.
+
 ## 0.5.19 (2026-11-23)
 
 - Fixed: Background share uploads failed immediately on brief network drops instead of retrying automatically.

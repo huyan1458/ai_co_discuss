@@ -122,6 +122,8 @@ test('complete skills install idempotently, preserve user edits and keep hashes 
     const skills = join(directory, 'skills'), record = join(directory, 'service', 'skills-manifest.json');
     assert(install_skills(skills, record).every(item => item.status === 'installed'));
     assert(existsSync(join(skills, 'discuss-host/references/manual.md')));
+    assert(existsSync(join(skills, 'share-card/SKILL.md')));
+    assert(existsSync(join(skills, 'share-card/references/share-card.md')));
     assert(existsSync(join(skills, 'discuss-report/assets/Discussion_Report_Template.md')));
     assert.equal(existsSync(join(skills, '.codiscuss-skills.json')), false);
     assert(install_skills(skills, record).every(item => item.status === 'unchanged'));

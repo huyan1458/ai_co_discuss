@@ -41,7 +41,8 @@ const shown_people = computed(() => view.value.share ? topic.value.experts.slice
  * limit; the API members' search and request limit only when the room has an API member. Empty when nothing is known.
  */
 function settings_summary(value) {
-  const saved = !props.preview && view.value.launch?.room_models?.room_id === value.id ? view.value.launch.room_models : null;
+  const models = view.value.launch?.room_models;
+  const saved = props.preview ? value.launch_summary : models?.room_id === value.id ? models : null;
   const items = [];
   if (saved?.scheduler) items.push(t('智能调度'));
   if (saved?.image_generation) items.push(t('生图'));
@@ -73,7 +74,7 @@ defineExpose({ measure });
 
 <template>
   <section v-if="ready" class="channel-message channel-topic-card" :class="{ 'is-expanded': topic_expanded }" :aria-label="t('议题')">
-    <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />{{ t('议题') }}</span><h2>{{ room.title }}</h2><UButton v-if="!preview && !view.share" icon="i-lucide-pencil" :label="t('编辑')" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
+    <header class="channel-topic-heading"><span class="channel-topic-eyebrow"><UIcon name="i-lucide-target" />{{ t('议题') }}</span><h2>{{ room.title }}</h2><UButton v-if="!view.share" :class="{ invisible: preview }" :disabled="Boolean(preview)" icon="i-lucide-pencil" :label="t('编辑')" color="neutral" variant="ghost" size="xs" @click="emit('edit')" /></header>
     <div ref="topic_body" class="channel-topic-body" :class="{ 'is-clamped': topic_overflows && !topic_expanded }">
     <div v-if="topic.request" class="channel-topic-section channel-topic-request"><h3>{{ topic.request.label }}</h3><p class="channel-topic-text">{{ topic.request.text }}</p></div>
     <div v-if="topic.goal" class="channel-topic-section"><h3>{{ t('目标') }}</h3><p class="channel-topic-text">{{ topic.goal }}</p></div>

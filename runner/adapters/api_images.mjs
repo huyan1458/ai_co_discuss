@@ -147,7 +147,7 @@ async function image_body(context, name, args) {
 /** Call the Images API; a refusal comes back with the provider's own reason so the model can correct the call. */
 async function images_request(context, name, path, body) {
   let response, data = null;
-  const heartbeat = setInterval(() => context.on_activity?.('tool', name), HEARTBEAT_MS);
+  const heartbeat = setInterval(() => context.on_activity?.('tool', name, undefined, { synthetic: true }), HEARTBEAT_MS);
   try {
     try {
       response = await fetch(`${context.image.base_url}${path}`, { method: 'POST', redirect: 'error',

@@ -40,6 +40,14 @@ test('managed shares preserve the reviewed snapshot, selections and room boundar
       if (req.method === 'POST') { let body=''; for await (const part of req) body+=part; link=JSON.parse(body).link; }
       return send({ link });
     }
+    if (req.url === path+'/share-card' && req.method === 'POST') {
+      let body = ''; for await (const part of req) body += part;
+      const { share_id, publication } = JSON.parse(body);
+      assert.equal(share_id, link.share_id);
+      assert.equal(publication.revision, link.card.publication.revision);
+      link.card.publication.done = publication.done;
+      return send({ recorded: true });
+    }
     if (req.url.startsWith(path+'/attachments/file')) { return res.end(text); }
     secret_read = true; res.statusCode=404; send({});
   });
@@ -78,6 +86,7 @@ test('managed shares preserve the reviewed snapshot, selections and room boundar
     const op=(op,fields={}) => manager.command({ op, id, room_id:room,...fields }).job;
     const ready=await wait_for(()=>op('get'),j=>j.phase==='ready');
     assert.equal(ready.summary.files.length,8); assert.equal(notes,1); assert.equal(ready.summary.file_spots.length,7);
+    assert.deepEqual(ready.summary.materials, { through: 2, count: 2 });
     assert.ok(!JSON.stringify(ready).includes('responses')); assert.ok(!JSON.stringify(ready).includes(home.replaceAll('\\','\\\\')));
     assert.ok(!JSON.stringify(manager.command({op:'list'})).includes('file_name'));
     assert.throws(()=>op('get',{room_id:'other'}));
@@ -88,6 +97,7 @@ test('managed shares preserve the reviewed snapshot, selections and room boundar
     op('cancel'); await wait_for(()=>active,v=>v===0); assert.equal(op('get').phase,'cancelled');
     slow=false; fail=true; op('retry');
     const failed=await wait_for(()=>op('get'),j=>j.phase==='failed');
+    assert.deepEqual(link.card.publication, { revision: 'R'.repeat(22), total: 7, done: 0 });
     assert.match(failed.error,/receipt/); assert.deepEqual(failed.selection,selection);
     assert.deepEqual(methods.slice(0,3),['POST','PUT','POST']); assert.equal(notes,1);
     assert.equal(Object.keys(bodies.at(-1).files).length,7); assert.equal(readFileSync(stored,'utf8'),raw);
@@ -97,6 +107,7 @@ test('managed shares preserve the reviewed snapshot, selections and room boundar
     slow=false; transient=1; op('retry'); const done=await wait_for(()=>op('get'),j=>j.phase==='published');
     assert.equal(transient,0); assert.equal(peak,6); assert.equal(done.progress.done,7); assert.equal(done.progress.bytes_done,done.progress.bytes_total);
     assert.ok(done.result.updated); assert.equal(done.result.card.url,link.url); assert.ok(!JSON.stringify(done).includes(link.manage_token)); assert.equal(secret_read,false);
+    assert.equal(link.card.publication.done, 7);
     op('dismiss'); assert.deepEqual(manager.command({op:'list'}).jobs,[]);
 
     // Imported rooms may not have a runner configuration. They can use room attachments, with no project directories.

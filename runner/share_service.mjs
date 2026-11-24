@@ -101,7 +101,8 @@ async function prepare(config, room, signal) {
   const members = (info.members || []).filter(m => m.status !== 'removed').map(m => m.label || m.name);
   const linked = Boolean((await (await local_read(config, '/api/rooms/' + room + '/share-link', signal)).json()).link);
   return { summary: { title: info.title, description: t('{members} 在同一个房间协作 · {messages} 条消息 · {runs} 次执行', { members: members.join('、'), messages: info.message_count, runs }),
-    fingerprint: await share_fingerprint(clean, with_files), exported_at: now(), files, spots: core.share_sensitive_spots(clean), file_spots, linked, runs },
+    fingerprint: await share_fingerprint(clean, with_files), exported_at: now(), files, spots: core.share_sensitive_spots(clean), file_spots, linked, runs,
+    materials: core.share_card_materials_info(clean) },
     payload: { responses: clean, responses_with_files: with_files } };
 }
 
@@ -171,9 +172,26 @@ async function publish(config, job, plan, signal, transport, update) {
   const link = { share_id: result.id || prior?.share_id, manage_token: result.manage_token || prior?.manage_token, url: result.url || prior?.url, expires_at: result.expires_at };
   if (!ID.test(link.share_id) || !/^[\w-]{43}$/.test(link.manage_token) || (plan.files.length && !ID.test(result.revision))
       || link.url !== SHARE_SITE + '/s/' + link.share_id) throw new Error(t('分享站返回了无效的链接'));
-  await local_read(config, route, signal, { link }).then(r => r.json());
+  const card = core.share_card(plan.draft, link);
+  card.publication = { revision: result.revision, total: plan.files.length, ...(plan.files.length ? {} : { done: 0 }) };
+  await local_read(config, route, signal, { link: { ...link, card } }).then(r => r.json());
+  if (plan.files.length) {
+    update(0, 0, result.revision);
+    try { await publish_attachments(plan.files, { link, card, config, signal, transport, update }); }
+    finally {
+      const { revision, done } = card.publication;
+      await local_read(config, '/api/rooms/' + job.room_id + '/share-card', signal,
+        { share_id: link.share_id, publication: { revision, done } }).catch(() => {});
+    }
+  }
+  return { url: link.url, expires_at: link.expires_at, updated, card };
+}
+
+async function publish_attachments(files, { link, card, config, signal, transport, update }) {
   const group = new AbortController(), active = AbortSignal.any([signal, group.signal]);
-  await core.share_parallel(plan.files, SHARE_UPLOAD_CONCURRENCY, async file => {
+  const { revision } = card.publication;
+  card.publication.done = 0;
+  await core.share_parallel(files, SHARE_UPLOAD_CONCURRENCY, async file => {
     for (let attempt = 1; ; attempt++) {
       let sent = 0;
       try {
@@ -189,8 +207,9 @@ async function publish(config, job, plan, signal, transport, update) {
           }
           if (size !== file.size) throw Object.assign(new Error(t('附件大小已变化，请重新整理分享')), { permanent: true });
         }
-        await transport.file(SHARE_SITE + '/api/shares/' + link.share_id + '/files/' + file.id + '?revision=' + result.revision,
+        await transport.file(SHARE_SITE + '/api/shares/' + link.share_id + '/files/' + file.id + '?revision=' + revision,
           { Authorization: 'Bearer ' + link.manage_token, 'Content-Type': file.site_type, 'Content-Length': file.size }, measured(), active);
+        card.publication.done++;
         update(1, 0);
         break;
       } catch (error) {
@@ -200,8 +219,6 @@ async function publish(config, job, plan, signal, transport, update) {
       }
     }
   });
-  const card = core.share_card(plan.draft, link);
-  return { url: link.url, expires_at: link.expires_at, updated, card: { ...card, question: card.question.slice(0, 600), outcome: card.outcome.slice(0, 600) } };
 }
 
 
@@ -273,9 +290,10 @@ class ShareManager {
     job.progress = { ...progress(job.phase), total: plan?.files.length || 0, bytes_total: plan?.bytes || 0 };
     this.save(job);
     let last_save = Date.now();
-    const update = (count, bytes) => {
+    const update = (count, bytes, revision) => {
       signal.throwIfAborted();
       job.progress.step = 'uploading'; job.progress.done += count; job.progress.bytes_done += bytes;
+      if (revision) job.progress.revision = revision;
       if (Date.now() - last_save > PROGRESS_SAVE_MS) { this.save(job); last_save = Date.now(); }
     };
     (async () => {

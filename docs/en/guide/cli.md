@@ -4,6 +4,8 @@ This page lists the codiscuss commands people use for everyday tasks. Commands f
 
 ## Commands by task
 
+Use `codiscuss room list --query "story"` to find rooms by part of their title. Each match includes the room ID, full title, and folder name. Rooms outside a folder have a `null` folder.
+
 ### Install, configure, and update
 
 | Task | Command |
@@ -49,7 +51,25 @@ The local site stores rooms and serves the web interface. The discussion service
 | --- | --- |
 | Check whether a local or online site responds | `codiscuss health --site http://127.0.0.1:8765` |
 | Review room events when a card is stuck or an AI was not woken | `codiscuss room events <room-ID>` |
+| Inspect a run’s heartbeat, activity, retries, interjection receipts, workflow history, and file attribution | `codiscuss execution view <room-ID> <run-ID>`, under `diagnostics` |
+| Trace requests, executions, failure follow-ups, and card placement for a message | `codiscuss room trace <room-ID> --message <message-ID>` |
+| Check a hosted site's manifest, active version, and public responses | `codiscuss site diagnose <site-ID> [--room <room-ID>]` |
 | Check the management panel and all services | `codiscuss admin status --full` |
+
+In `room trace`, `history` records come from the event log. `current` records show the current requests, executions, retry links, interjections, and card placement. If the response includes `next_page`, repeat the same command with `--page <number>`. When the room is active, later pages may reflect newer state. The command follows existing message and event visibility rules and excludes private chats.
+
+`site diagnose` uses this computer's existing publishing identity. It reads the room registration, the linked staging record, the hosting service's latest manifest, and the active version. It fetches the entry page and one static asset anonymously, compares the SHA-256 digests of the response bytes with the active manifest, and reports the last confirmed step. A pending upload and the version still being served appear separately. Older hosting services report the active version and leave responses unverified when the expected digest is unavailable. If the room address cannot be resolved automatically, supply it with `--url <room-site-URL>`.
+
+### Share-card cover tools
+
+In a room, ask `$share-card Make a share card for <room link> highlighting the finished product`. Omit the link for the current room. The agent collects the materials, makes the cover and attaches the PNG to its reply.
+
+Used by room AI members or locally from the terminal to build custom share-card covers. The share panel accepts rendered images (PNG / JPG / WebP) and appends a unified QR code, domain, and expiry footer automatically. When invoked with a room task credential, `materials` is restricted to the credential's bound site and `render` enforces the member's directory permissions; manual terminal runs without a task credential use the local OS user's own file permissions.
+
+| Task | Command |
+| --- | --- |
+| Read shareable-scope room collaboration metrics, concurrency curve, and material index (with truncation flags) | `codiscuss share-card materials [room-ID]` |
+| Render a local static HTML cover to high-DPI PNG (default 750 CSS px @2× via a sandboxed browser from trusted system install locations over a private process pipe) | `codiscuss share-card render cover.html --out cover.png` |
 
 ### Backups, export, and import
 

@@ -7,6 +7,8 @@ import mimetypes
 import os
 import sqlite3
 import struct
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -397,6 +399,107 @@ class DiscussionTests(unittest.TestCase):
                 current = self.request(path)[1]["free"]["requests"]
                 self.assertEqual([(item["purpose"], item["status"]) for item in current if item["message_id"] == message], [("group", "pending")])
                 self.assertEqual(self.request(url, {"action": "host"})[0], 200)
+
+    def test_execution_diagnostics_over_http(self):
+        """Record diagnostic evidence through the normal execution route and enforce its read boundaries."""
+        members = [{"name": name, "access": "runner", "token": self.member_tokens[name]}
+                   for name in ("Claude", "Codex", "Qwen")]
+        status, room = self.request("/api/rooms", {"title": "执行诊断", "mode": "free", "host": "Claude", "members": members})
+        self.assertEqual(status, 201, room)
+        path = f"/api/rooms/{room['id']}"
+        self.request(path + "/messages", {"author": "用户", "text": "安排执行", "to": ["Codex"], "submission_id": uuid.uuid4().hex})
+        codex = next(item for item in self.request(path + "/inbox")[1]["members"] if item["name"] == "Codex")
+        execution = self.request(path + "/executions", {"member_id": codex["id"], "client_id": uuid.uuid4().hex})[1]
+        url = f"{path}/executions/{execution['id']}"
+        self.assert_legacy_execution_diagnostics(url)
+        self.assertEqual(self.request(url, {"action": "report", "changes": ["old.txt"], "provisional": True})[0], 200)
+        self.assertIsNone(self.request(url)[1]["diagnostics"]["file_attribution"]["recorded_writes"])
+
+        workflow = {"id": "script", "revision": "0123456789abcdef", "card": "reviewer", "sub_workflow": "checks",
+                    "sub_revision": "0123456789ab", "skills": ["review", "C:/private/skill"], "prompt": "omit-this-prompt"}
+        delivery = {"action": "delivery", "progress": True, "stoppable": True, "steer": True,
+                    "diagnostics": {"workflow": workflow}}
+        for _ in range(2):
+            self.assertEqual(self.request(url, delivery)[0], 200)
+        now = time.time_ns() // 1_000_000
+        retry = {"layer": "model", "state": "started", "attempt": 1, "at": now - 50}
+        restart = {"layer": "adapter", "state": "started", "attempt": 1, "at": now - 25}
+        for at in (now - 100, now - 200):
+            progress = {"last_activity_at": at, "timeout_limits": {"total_ms": 2700000, "idle_ms": 900000}, "retries": [retry, restart]}
+            self.assertEqual(self.request(url, {"action": "renew", "diagnostics": progress})[0], 200)
+        retry_wait = {"action": "retry_wait", "attempt": 1, "retry_at": int(time.time()) + 10, "reason": "retry",
+                      "diagnostics": {"retry": {"layer": "runner", "state": "waiting", "attempt": 1, "mode": "resume"}}}
+        status, result = self.request(url, retry_wait)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(self.request(url, {"action": "retry_start", "diagnostics": {
+            "retry": {"layer": "runner", "state": "started", "attempt": 1, "mode": "resume"}}})[0], 200)
+
+        status, result = self.request(url, {"action": "interject", "text": "private interjection", "submission_id": uuid.uuid4().hex})
+        self.assertEqual(status, 200, result)
+        interjection_id = result["interjection"]["id"]
+        self.assertEqual(self.request(url, {"action": "fail", "reason": "timeout", "diagnostics": {"timeout_kind": "idle"}})[0], 200)
+        # The adapter proves delivery after the execution ends; a late retry of the original report still has no receipt.
+        for confirmed_at in (now, None, now + 100):
+            receipt = {"action": "interjection", "interjection_id": interjection_id, "status": "delivered",
+                       "diagnostics": {"transport": "steer", "confirmed_at": confirmed_at}}
+            self.assertEqual(self.request(url, receipt)[0], 200)
+        final = {"action": "report", "changes": ["observed.txt", "written.txt"], "edited": ["written.txt"],
+                 "diagnostics": {"file_attribution": {"omitted": 2}}}
+        self.assertEqual(self.request(url, final)[0], 200)
+        self.assertEqual(self.request(url, {"action": "renew"})[0], 409)
+
+        self.assert_diagnostic_detail(url, now, workflow, interjection_id)
+        self.assert_diagnostic_visibility(url, path, room["id"])
+        self.assert_execution_view_cli(room["id"], execution["id"], self.request(url)[1]["diagnostics"])
+
+    def assert_legacy_execution_diagnostics(self, url):
+        """Upgrade storage shaped like a pre-diagnostics database with an existing execution."""
+        if not self.external:
+            with closing(sqlite3.connect(self.database)) as connection, connection:
+                connection.execute("DROP TABLE execution_diagnostics")
+            init_database(self.database, seed=False)
+        self.assertEqual(self.request(url)[1]["diagnostics"], {})
+
+    def assert_execution_view_cli(self, room, execution, diagnostics):
+        """Run the source CLI against the same temporary service and compare its returned metadata."""
+        cli = Path(__file__).resolve().parents[1] / "runner" / "discuss.py"
+        with tempfile.TemporaryDirectory() as directory:
+            credential = Path(directory) / "access.json"
+            credential.write_text(json.dumps({"site": self.base, "room": room, "token": self.owner}), encoding="utf-8")
+            result = subprocess.run([sys.executable, str(cli), "execution", "view", room, str(execution), "--access-file", str(credential)],
+                                    capture_output=True, encoding="utf-8", timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["data"]["diagnostics"], diagnostics)
+
+    def assert_diagnostic_detail(self, url, now, workflow, interjection_id):
+        """Verify that one detail read preserves the source and timing of each recorded fact."""
+        owner = self.request(url)[1]["diagnostics"]
+        self.assertGreaterEqual(owner["last_heartbeat_at"], now)
+        self.assertEqual(owner["last_activity_at"], now - 100)
+        self.assertEqual(owner["timeout_kind"], "idle")
+        self.assertEqual(owner["timeout_limits"]["idle_ms"], 900000)
+        self.assertEqual([(item["layer"], item["state"]) for item in owner["retries"]],
+                         [("model", "started"), ("adapter", "started"), ("runner", "waiting"), ("runner", "started")])
+        self.assertEqual(owner["interjections"][str(interjection_id)]["confirmed_at"], now)
+        self.assertEqual(len(owner["workflow_bindings"]), 1)
+        self.assertEqual(owner["workflow_bindings"][0]["skills"], ["review"])
+        self.assertEqual(owner["workflow_bindings"][0]["revision"], workflow["revision"])
+        self.assertEqual(owner["file_attribution"], {"observed": 2, "recorded_writes": 1, "provisional": False, "omitted": 2,
+            "paths": [{"path": "observed.txt", "recorded_write": False}, {"path": "written.txt", "recorded_write": True}]})
+
+    def assert_diagnostic_visibility(self, url, path, room_id):
+        """Check authorized metadata, owner file names, and exclusion from public and event reads."""
+        owner = self.request(url)[1]["diagnostics"]
+        for reader in ("Claude", "Codex"):
+            detail = self.request(url, token=self.member_tokens[reader])[1]["diagnostics"]
+            self.assertEqual(detail["last_heartbeat_at"], owner["last_heartbeat_at"])
+            self.assertNotIn("paths", detail["file_attribution"])
+        for token in (self.member_tokens["Qwen"], "anonymous"):
+            self.assertEqual(self.request(url, token=token)[0], 403)
+            self.assertEqual(self.request(url, {"action": "report", "changes": []}, token=token)[0], 403)
+        self.assertNotIn("omit-this-prompt", json.dumps(self.request(path + "/events")[1]))
+        self.assertNotIn("diagnostics", json.dumps(self.request(path + "/timeline")[1]))
+        self.assertNotIn("last_heartbeat_at", json.dumps(self.request(f"/r/{room_id}", token="anonymous")[1]))
 
     def test_runner_reports_delivery_and_how_a_voided_execution_stopped(self):
         """The page learns how each execution reached its software and whether a stop really ended it."""
@@ -846,9 +949,46 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(listed["share_link"], {"url": link["url"], "expires_at": link["expires_at"]})
         self.assertNotIn(link["manage_token"], json.dumps(self.request("/api/rooms")[1]))
         self.assertNotIn(link["manage_token"], json.dumps(self.request(base + "/backup")[1]))
+        card_path = base + "/share-card"
+        change = {"share_id": link["share_id"], "edits": {"question": "Edited on phone"}}
+        self.assertEqual(self.request(card_path, token=member)[0], 403)
+        self.assertEqual(self.request(card_path, change, token=member)[0], 403)
+        self.assertEqual(self.request(card_path, change)[0], 200)
+        self.request(base + "/share-link", {"link": {**link, "card": {"title": "Published title", "question": "Initial question"}}})
+        self.request(base + "/share-link", {"link": link})
+        self.assertEqual(self.request(card_path)[1]["card"], {"question": "Edited on phone", "title": "Published title"})
+        replacement = {**link, "share_id": "B" * 22, "url": link["url"].replace("A" * 22, "B" * 22)}
+        self.request(base + "/share-link", {"link": replacement})
+        self.assertEqual(self.request(card_path, change)[0], 409)
+        self.assertEqual(self.request(card_path)[1]["card"], {})
         self.request(base + "/share-link", {"link": {**link, "expires_at": "2000-01-01T00:00:00.000Z"}})
         self.assertIsNone(self.request(base + "/share-link")[1]["link"], "an expired link is not offered")
         self.assertEqual(self.request(base + "/share-link", {"link": None})[1], {"link": None})
+
+    def test_share_card_upload_counts_belong_to_the_current_revision(self):
+        base = f"/api/rooms/{self.room['id']}"
+        card_path = base + "/share-card"
+        link = {"share_id": "A" * 22, "url": "https://share.codiscuss.com/s/" + "A" * 22,
+                "manage_token": "T" * 43, "expires_at": "2999-01-01T00:00:00.000Z"}
+        def save(revision, total):
+            return self.request(base + "/share-link", {"link": {**link, "card": {
+                "publication": {"revision": revision, "total": total}}}})[0]
+
+        old, new = "A" * 22, "B" * 22
+        self.assertEqual(save(old, 3), 200)
+        status = {"share_id": link["share_id"], "publication": {"revision": old, "done": 2}}
+        self.assertEqual(self.request(card_path, status, token=next(iter(self.member_tokens.values())))[0], 403)
+        self.assertTrue(self.request(card_path, status)[1]["recorded"])
+        self.assertEqual(self.request(card_path)[1]["card"]["publication"]["done"], 2)
+        self.assertEqual(save(new, 1), 200)
+        status["publication"]["done"] = 1
+        self.assertFalse(self.request(card_path, status)[1]["recorded"])
+        self.assertNotIn("done", self.request(card_path)[1]["card"]["publication"])
+        status["publication"]["revision"] = new
+        self.assertTrue(self.request(card_path, status)[1]["recorded"])
+        status["publication"]["done"] = 0
+        self.assertFalse(self.request(card_path, status)[1]["recorded"])
+        self.assertEqual(self.request(card_path)[1]["card"]["publication"], {"revision": new, "done": 1, "total": 1})
 
     def test_room_backup_excludes_other_rooms_and_retains_archived_data(self):
         """Folder membership must not pull another room's messages or configuration."""

@@ -226,7 +226,7 @@ const shares_open = ref(false);
 const shared_rooms = computed(() => view.value.rooms.filter((room) => view.value.share_links?.[room.id])
   .map((room) => ({ ...room, share_link: view.value.share_links[room.id] }))
   .sort((a, b) => Date.parse(a.share_link.expires_at) - Date.parse(b.share_link.expires_at)));
-const jobs = computed(() => view.value.managed_share_jobs || []);
+const jobs = computed(() => (view.value.managed_share_jobs || []).filter(job => job.phase !== "published"));
 const active_job = computed(() => jobs.value.find(job => ["preparing","publishing"].includes(job.phase)));
 function phase_label(job) {
   switch (job.phase) {
@@ -280,7 +280,7 @@ function actions(room, index, folder_id, folder_room_count) {
     { label: t("导出对话"), icon: "i-lucide-upload", disabled: view.value.backup_pending, onSelect: () => act("backup", room.id) },
     { label: t("分享"), icon: "i-lucide-share-2", onSelect: () => emit("manage", { room, action: "share_prepare" }) },
     ...(share_link(room) ? [{ label: t("复制分享链接"), icon: "i-lucide-link-2", onSelect: () => act("share_copy", room.id) },
-      { label: t("撤销分享链接"), icon: "i-lucide-link-2-off", disabled: view.value.backup_pending, onSelect: () => { revoking.value = room; } }] : []),
+      { label: t("撤销分享链接"), icon: "i-lucide-link-2-off", onSelect: () => { revoking.value = room; } }] : []),
   ], ...(current ? [[{ label: t("刷新消息"), icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") }]] : []), [
     { label: t("移至文件夹"), icon: "i-lucide-folder-input", disabled: (!room.folder_id && !view.value.folders?.length), children: [
       { label: t("移出文件夹"), icon: "i-lucide-folder-minus", disabled: !room.folder_id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: null }) },
@@ -328,7 +328,7 @@ function actions(room, index, folder_id, folder_room_count) {
        </MemoBlock>
        </template>
        <div v-if="folder_open(folder.id)" :class="folder.id ? 'channel-folder-rooms' : 'channel-root-rooms'" :data-drop-folder="folder.id ? undefined : ''">
-      <MemoBlock v-for="(room, index) in visible_rooms(folder)" :key="room.id" :deps="[JSON.stringify(room), index, folder.rooms.length, row_state, room_time(room)]">
+      <MemoBlock v-for="(room, index) in visible_rooms(folder)" :key="room.id" :deps="[JSON.stringify(room), index, folder.rooms.length, row_state, room_time(room), Boolean(share_link(room))]">
       <template v-for="row in [room_row(room, index, folder.rooms.length)]" :key="room.id">
       <UContextMenu :items="row.items" :ui="{ content: 'channel-menu channel-topic-menu' }">
         <div class="channel-room-row" :class="{ active: row.active, 'is-destroying': row.destroying }" :data-drag-room="room.id" :inert="row.destroying || undefined">
@@ -373,10 +373,6 @@ function actions(room, index, folder_id, folder_room_count) {
               <UButton v-if="['ready','preparing','publishing'].includes(job.phase)" size="xs" color="neutral" variant="soft" :label="t('取消')" @click="job_action('cancel', job)" />
               <UButton v-if="['failed','cancelled'].includes(job.phase)" size="xs" :label="t('重试')" @click="job_action('retry', job)" />
               <UButton v-if="job.phase === 'failed' && job.adjustable" size="xs" color="neutral" variant="soft" :label="t('调整附件')" @click="job_action('open', job)" />
-              <template v-if="job.phase === 'published'">
-                <UButton size="xs" :label="t('查看分享卡')" @click="job_action('open', job)" />
-                <UButton size="xs" color="neutral" variant="soft" :label="t('复制链接')" @click="job_action('copy', job)" />
-              </template>
               <UButton v-if="['failed','cancelled','published'].includes(job.phase)" size="xs" color="neutral" variant="ghost" :label="t('清除')" @click="job_action('dismiss', job)" />
             </div>
           </article>
@@ -390,14 +386,15 @@ function actions(room, index, folder_id, folder_room_count) {
             <div class="shared-room-side">
               <span class="shared-room-expiry"><UIcon name="i-lucide-clock" />{{ expiry_label(room.share_link) }}</span>
               <div class="shared-room-actions">
+                <UButton size="xs" color="neutral" variant="soft" :label="t('查看分享卡')" @click="shares_open = false; act('open_share_card', room.id)" />
                 <UButton v-if="!jobs.some(job => job.room_id === room.id) && view.share_tasks?.[room.id]?.phase === 'publishing'" color="primary" size="xs" variant="soft"
                   :label="view.share_tasks[room.id].upload ? t('正在上传附件 {done}/{total}', view.share_tasks[room.id].upload) : t('正在上传…')"
                   @click="shares_open = false; emit('manage', { room, action: 'share_open' })" />
                 <UTooltip :text="t('复制链接')"><UButton icon="i-lucide-copy" size="xs" color="neutral" variant="ghost" :aria-label="t('复制「{name}」的分享链接', { name: room.title })" @click="act('share_copy', room.id)" /></UTooltip>
                 <UTooltip :text="t('打开分享页')"><UButton icon="i-lucide-external-link" size="xs" color="neutral" variant="ghost" :aria-label="t('打开「{name}」的分享页', { name: room.title })" :to="room.share_link.url" target="_blank" rel="noopener noreferrer" /></UTooltip>
                 <UDropdownMenu :items="renew_items(room)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
-                  <UButton icon="i-lucide-timer-reset" :label="t('续期')" size="xs" color="neutral" variant="soft" :disabled="view.backup_pending" :aria-label="t('续期「{name}」的分享链接', { name: room.title })" /></UDropdownMenu>
-                <UTooltip :text="t('撤销链接')"><UButton icon="i-lucide-link-2-off" size="xs" color="neutral" variant="ghost" class="shared-room-revoke" :disabled="view.backup_pending" :aria-label="t('撤销「{name}」的分享链接', { name: room.title })" @click="revoking = room" /></UTooltip>
+                  <UButton icon="i-lucide-timer-reset" :label="t('续期')" size="xs" color="neutral" variant="soft" :aria-label="t('续期「{name}」的分享链接', { name: room.title })" /></UDropdownMenu>
+                <UTooltip :text="t('撤销链接')"><UButton icon="i-lucide-link-2-off" size="xs" color="neutral" variant="ghost" class="shared-room-revoke" :aria-label="t('撤销「{name}」的分享链接', { name: room.title })" @click="revoking = room" /></UTooltip>
               </div>
             </div>
             <span class="shared-room-life" aria-hidden="true"><i :style="{ width: `${life_left(room.share_link)}%` }"></i></span>

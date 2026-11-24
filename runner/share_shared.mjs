@@ -64,6 +64,13 @@ export const SHARE_HOME_FOLDERS = [/(?<![\w./-])[A-Za-z]:[\\/]+Users[\\/]+[^\\/\
 const ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\/)/;
 // A folder named by fewer parts ("C:", "/home") is too broad to rewrite in text.
 export const SHARE_FOLDER_MIN_PARTS = 2;
+/** Identify the receipt headings produced by answering, recommending or delegating a room question. */
+export function is_share_question_receipt(text) {
+  const heading = String(text || "").trimStart().split("\n", 1)[0].trimEnd();
+  return /^(?:回答问题\s*#?\d+|Answer to question #\d+)(?:[：:]|$)/iu.test(heading)
+    || /^(?:请主持人先讨论并给推荐|交给主持人决定)（问题 #\d+）$/u.test(heading)
+    || /^(?:Host, please discuss and recommend first|Leaving it to the host to decide) \(question #\d+\)$/iu.test(heading);
+}
 // Attachments whose text is scanned for keys and folders before sharing: plain text up to this size, not packed office files.
 export const TEXT_ATTACHMENT = /\.(md|markdown|txt|log|csv|tsv|json|jsonc|ya?ml|toml|ini|xml|html?|css|vue|[cm]?js|jsx|tsx?|py|sql|sh|ps1|bat|srt|vtt|ass|ssa|lrc|fcpxml|kdenlive|mlt|otio|edl|docx|xlsx|xls|ods|pptx|prproj|zip)$/i;
 export const SHARE_SCAN_BYTES = 2 * 1024 * 1024;
@@ -350,20 +357,34 @@ export function create_share_core({ t, display_name, collapse_visual_fences, is_
     return String(text || "").replace(/```[\s\S]*?```/g, " ").replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[`*_>#|~-]+/g, " ").replace(/\s+/g, " ").trim();
   }
 
+  function share_card_messages(responses) {
+    return Object.entries(responses).filter(([path]) => /\/messages\?/.test(path)).flatMap(([, body]) => body.messages || [])
+      .filter(message => message.kind !== "system" && message.text).sort((a, b) => a.id - b.id);
+  }
+
+  function share_card_materials_info(responses) {
+    const messages = share_card_messages(responses);
+    return { through: messages.at(-1)?.id ?? null, count: messages.length };
+  }
+
   /** What the share card shows of a prepared page: members, the first question, the latest outcome and the counts. */
   function share_card(draft, link) {
     const room = draft.responses[`/api/rooms/${draft.room_id}`] || {};
     const members = (room.members || []).filter(member => member.status !== "removed").map(member => member.label || display_name(member.name));
-    const messages = Object.entries(draft.responses).filter(([path]) => /\/messages\?/.test(path)).flatMap(([, body]) => body.messages || [])
-      .filter(message => message.kind !== "system" && message.text).sort((a, b) => a.id - b.id);
-    // The latest question and what came of it, so the two belong together even in a room used for months.
-    const question = messages.findLast(message => message.author === "用户");
-    const answers = messages.filter(message => message.author !== "用户" && message.id > (question?.id ?? 0));
+    const messages = share_card_messages(draft.responses);
+    const question = messages.find(message => message.author === "用户" && !is_share_question_receipt(message.text)
+      && !/^\/?(?:继续|好的?|同意|continue|ok)[。.!！\s]*$/iu.test(message.text.trim()));
+    const answers = messages.filter(message => message.author !== "用户" && message.author !== "系统" && message.id > (question?.id ?? 0));
     const outcome = answers.findLast(message => message.summary) || answers.at(-1);
     // Text the owner was asked to check stays off the card, which cannot be taken back once posted; it can be typed in.
     const flagged = new Set((draft.spots || []).map(spot => spot.where));
     const text = (message, value) => message && !flagged.has(`#${message.id}`) ? share_plain(value) : "";
-    return { title: draft.title, members, question: text(question, question?.text), outcome: text(outcome, outcome?.summary || outcome?.text),
+    const result = text(outcome, outcome?.summary || outcome?.text);
+    const sentences = result.match(/[^。！？.!?]+(?:[。！？]|[.!?](?=\s|$)|$)/gu) || [];
+    const complete = sentences[0]?.trim();
+    return { title: draft.title, members, materials: { through: messages.at(-1)?.id ?? null, count: messages.length },
+      question: text(question, question?.text).slice(0, 600),
+      outcome: (complete && result.startsWith(complete) ? complete : result).slice(0, 600),
       stats: t('{members} 位 AI · {messages} 条消息 · {runs} 次执行', { members: members.length, messages: room.message_count ?? messages.length, runs: draft.runs ?? 0 }),
       url: link.url, expires: t('{time} 前有效', { time: new Date(link.expires_at).toLocaleString(undefined, { hour12: false }) }) };
   }
@@ -443,5 +464,5 @@ export function create_share_core({ t, display_name, collapse_visual_fences, is_
     const extra = scanned.filter(item => item.texts), unread = scanned.filter(item => !item.texts);
     return [...share_sensitive_spots({}, extra), ...unread];
   }
-  return { share_path, share_clean, share_parallel, share_batch, share_strings, share_sensitive_spots, share_files, share_file_route, share_site_file, share_carried_files, share_file_kind, share_file_kinds, share_responses, share_named_paths, share_folder_pattern, share_payload, share_plain, share_card, share_collect_reads, share_find_delivered, share_scan_files };
+  return { share_path, share_clean, share_parallel, share_batch, share_strings, share_sensitive_spots, share_files, share_file_route, share_site_file, share_carried_files, share_file_kind, share_file_kinds, share_responses, share_named_paths, share_folder_pattern, share_payload, share_plain, share_card, share_card_materials_info, share_collect_reads, share_find_delivered, share_scan_files };
 }

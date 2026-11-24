@@ -14,7 +14,7 @@ import { image_settings } from './image_service.mjs';
 import { outside_directory, room_directories } from './project_files.mjs';
 import { SessionDriver } from './session_driver.mjs';
 import { slash_names } from './slash_names.mjs';
-import { effective_profile, load_room_workflow, member_knowledge, workflow_directory, workflow_in_use, workflow_task_field } from './workflows.mjs';
+import { effective_profile, load_room_workflow, member_knowledge, workflow_directory, workflow_execution_binding, workflow_in_use, workflow_task_field } from './workflows.mjs';
 import { GOAL_CONFIDENCE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_GUIDED_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, SCHEDULER_MODE, decide_review_completion, route_free_message, some_members } from './scheduler.mjs';
 import { room_text, room_payload } from './room_text.mjs';
 import { question_notice } from './question_weixin.mjs';
@@ -42,7 +42,9 @@ const NOTICE_RETRY_MS = 60_000;
 const NOTICE_EXCERPT = 300;
 // A manual member's session that refuses a delivery is retried in the same execution, after a wait the owner can cut short.
 const MAX_DELIVERY_RETRIES = 3;
+const MAX_DIAGNOSTIC_RETRIES = 30;
 const RETRY_DELAY_SECONDS = 60;
+const NETWORK_RETRY_SECONDS = [10, 30, 60];
 // How long a voided turn the runner cannot stop is still watched for its end: a little past the site's 600-second hold.
 const UNSTOPPABLE_FOLLOW_MS = 15 * 60_000;
 // The failure classes an adapter may report (adapter contract `on_failure(reason, {failure_class, ...})`).
@@ -541,6 +543,7 @@ export class FreeRoomRunner {
     this.snapshots = new Map();
     // Execution id -> { phase, at, sent_phase, sent_at }: what the member's software last showed it doing.
     this.activity = new Map();
+    this.diagnostics = new Map();
     // Execution id -> until when its completed software may still record its receipt (0: stop it now), see `closing`.
     this.closed_at = new Map();
     this.segments = new SegmentLog();
@@ -1065,7 +1068,7 @@ export class FreeRoomRunner {
     await this.invoke(member, execution);
   }
   /** Hand the execution to the member's software; only proven non-delivery is released for retry. */
-  async invoke(member, execution, { resume = '' } = {}) {
+  async invoke(member, execution, { resume = '', network_binding = '' } = {}) {
     const adapter = this.config.participants[member.name];
     const review_request = execution.requests?.find(request => request.review?.phase === 'review');
     if (review_request) {
@@ -1126,9 +1129,16 @@ export class FreeRoomRunner {
       this.store.db.prepare('DELETE FROM metadata WHERE key IN (?,?)').run(`recovery:${execution.id}`, `recovery-denied:${execution.id}`);
       invoked = true;
       this.segments.start(execution.id);
+      this.record_diagnostics(execution.id, { workflow: workflow_execution_binding(workflow, member, Boolean(task.workflow)) });
       if (warning) this.note(execution.id, warning);
       const result = await this.deliver(review_request ? structuredClone(task.profile) : task.profile, binding, { ...task, ...(resume ? { prompt: resume, images: [] } : {}), room_title: this.room_title,
-        ...(review_request ? { before_model_start: () => this.check_review_delivery(member, review_request) } : {}),
+        ...(review_request || network_binding ? { before_model_start: async () => {
+          if (review_request) await this.check_review_delivery(member, review_request);
+          if (network_binding) {
+            const latest = await api(this.config, `/executions/${execution.id}`);
+            if (!['dispatched', 'started'].includes(latest.status) || latest.retry?.stopped) throw new Error(room_text("送达前本次执行已结束"));
+          }
+        } } : {}),
         api_context: { site: this.config.site, room: this.config.room, token: this.config.members[member.name].token,
           home: this.config.api_home, mode: 'free', role: member.role || 'member', execution_id: execution.id,
           // An API member reads its knowledge through the file tools; writing it waits for per-directory write access.
@@ -1149,7 +1159,17 @@ export class FreeRoomRunner {
         on_binding: session => this.store.bind(member.name, session),
         on_process: child => this.track(member.name, child, live()),
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(live()); this.segments.mark(live()); },
-        on_activity: (phase, tool, call) => { worked = true; this.touch(live(), phase); this.segments.mark(live(), phase, tool, call); },
+        on_activity: (phase, tool, call, { synthetic = false } = {}) => {
+          if (!current()) return;
+          worked = true;
+          this.touch(live(), phase);
+          this.segments.mark(live(), phase, tool, call);
+          if (!synthetic && phase !== 'waiting') this.record_diagnostics(live(), { last_activity_at: Date.now() });
+        },
+        on_diagnostic: facts => {
+          if (facts.interjection_confirmed) return this.confirm_interjection(facts.interjection_confirmed);
+          if (current()) this.record_diagnostics(live(), facts);
+        },
         on_note: text => {
           this.note(live(), text);
           if (worked && current()) this.replies.set(live(), text);
@@ -1161,7 +1181,7 @@ export class FreeRoomRunner {
           if (snapshot && !paths.length) snapshot.edited ||= new Set();
         },
         // A stopped process may report after the next execution started; only its own execution takes the result.
-        on_failure: (error, { not_started = false, retryable = true, failure_class = '', resets = '', reset_at = 0 } = {}) => {
+        on_failure: (error, { not_started = false, retryable = true, failure_class = '', resets = '', reset_at = 0, resume_session = '' } = {}) => {
           if (!current()) return;
           if (not_started) this.not_started.add(live());
           if (!retryable) this.not_retryable.add(live());
@@ -1169,7 +1189,12 @@ export class FreeRoomRunner {
           // `auth` asks for signing in again, `output_truncated` states where the model's reply was cut.
           if (FAILURE_CLASSES.includes(failure_class)) this.failure_classes.set(live(), { failure_class, ...(resets ? { resets: String(resets) } : {}),
             ...(Number.isSafeInteger(reset_at) && reset_at > 0 ? { reset_at } : {}) });
-          try { if (this.row(member.name)?.execution_id === live()) this.save(member.name, { error }); } catch { /* Store may already be closed at shutdown. */ }
+          try {
+            if (this.row(member.name)?.execution_id !== live()) return;
+            const retry_binding = resume_session ? `network:${adapter.adapter}:${resume_session}` : not_started && network_binding;
+            if (retry_binding) this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`retry-reason:${live()}`, retry_binding);
+            this.save(member.name, { error });
+          } catch { /* Store may already be closed at shutdown. */ }
         },
         // The turn was seen to end in a window or App the runner cannot stop; unlike on_exit it says nothing about an answer.
         on_turn_end: () => { if (current()) this.turn_ended.add(live()); },
@@ -1206,6 +1231,7 @@ export class FreeRoomRunner {
       }
     } catch (error) {
       if (review_request && error.delivery_status === 'not_sent') return this.reject_review(member, execution, error.message);
+      if (network_binding) return this.fail(member.name, execution.id, room_text("投递失败：{value1}", { value1: error.message }));
       if (adapter.project_access === 'own') return this.retry_or_fail(member.name, execution, `投递失败：${error.message}`);
       const attempts = (this.row(member.name)?.attempts || 0) + 1;
       if ((invoked && error.delivery_status !== 'not_sent') || attempts >= MAX_DELIVERY_ATTEMPTS) {
@@ -1324,11 +1350,19 @@ export class FreeRoomRunner {
       if (reason_code === RESTART_REASON_CODE) return this.recover_orphan(member, row, execution);
       const retry = execution.retry;
       if (retry?.stopped) return this.fail(member.name, execution.id, room_text("{value1}（已停止自动重试）", { value1: retry.reason }));
-      if (retry?.retry_at && Date.now() >= retry.retry_at * 1000) {
-        await api(this.config, `/executions/${execution.id}`, { action: 'retry_start' });
+      // retry_at is already zero if the site received retry_start but its response was lost.
+      // The local retry_wait row proves this runner has not begun the next delivery.
+      if (!execution.paused_at && retry && Date.now() >= retry.retry_at * 1000) {
+        const network_binding = reason_code?.startsWith('network:') ? reason_code : '';
+        const latest = await api(this.config, `/executions/${execution.id}`, { action: 'retry_start',
+          diagnostics: { retry: { layer: 'runner', state: 'started', attempt: retry.attempt, mode: network_binding ? 'resume' : 'redeliver' } } });
+        if (latest.retry?.stopped) return this.fail(member.name, execution.id, room_text("{value1}（已停止自动重试）", { value1: retry.reason }));
+        if (network_binding && network_binding !== `network:${this.config.participants[member.name]?.adapter}:${this.store.binding(member.name).session_id}`) {
+          return this.fail(member.name, execution.id, room_text("原会话绑定已改变，无法继续本次执行"));
+        }
         this.save(member.name, { status: 'delivering' });
         this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`retry-reason:${execution.id}`);
-        return this.invoke(member, await api(this.config, `/executions/${execution.id}`));
+        return this.invoke(member, latest, { network_binding, resume: network_binding ? restart_resume_prompt(execution.id, 'network') : '' });
       }
     }
     // A restart between persisting and invoking cannot prove non-delivery, so it never resends.
@@ -1376,6 +1410,7 @@ export class FreeRoomRunner {
     const elapsed = Date.now() - row.last_renew;
     if (elapsed >= RENEW_MS || (changed && elapsed >= ACTIVITY_REPORT_MS)) {
       const renew = phase => api(this.config, `/executions/${execution.id}`, { action: 'renew',
+        diagnostics: this.diagnostics.get(execution.id),
         ...(activity ? { activity: phase, activity_at: Math.floor(activity.at / 1000) } : {}) });
       try { await renew(activity?.phase); }
       catch (error) {
@@ -1416,7 +1451,9 @@ export class FreeRoomRunner {
       this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`${prefix}:${id}`, value);
       this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`${prefix}:${old}`);
     }
+    const workflow = this.diagnostics.get(old)?.workflow;
     await this.report_segments(old, true);
+    if (workflow) this.record_diagnostics(id, { workflow });
     this.segments.start(id);
     this.save(name, { execution_id: id, last_renew: 0 });
   }
@@ -1442,7 +1479,8 @@ export class FreeRoomRunner {
     if (this.row(member.name)?.status !== 'running') return true;
     for (const interjection of execution.interjections) {
       this.interjecting.set(interjection.id, { status: 'delivered' });
-      await api(this.config, `/executions/${execution.id}`, { action: 'interjection', interjection_id: interjection.id, status: 'delivered' })
+      await api(this.config, `/executions/${execution.id}`, { action: 'interjection', interjection_id: interjection.id, status: 'delivered',
+        diagnostics: { transport: 'resumed_turn', confirmed_at: null } })
         .catch(error => this.log(`插话 #${interjection.id} 的结果未能上报：${error.message}`));
     }
     return true;
@@ -1455,7 +1493,8 @@ export class FreeRoomRunner {
   async report_delivery(execution_id, { stoppable, progress, ends = false, steer = false, resume = false }, member) {
     // `ends`: the adapter cannot stop or follow this turn but reports when it ends (`on_turn_end`); kept locally only.
     this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`delivery:${execution_id}`, JSON.stringify({ stoppable, progress, ends, member }));
-    await api(this.config, `/executions/${execution_id}`, { action: 'delivery', stoppable, progress, steer, resume })
+    await api(this.config, `/executions/${execution_id}`, { action: 'delivery', stoppable, progress, steer, resume,
+      diagnostics: this.diagnostics.get(execution_id) })
       .catch(error => this.log(`执行 #${execution_id} 的投递能力未能上报：${error.message}`));
   }
   /** Tell the site which model and effort an execution ran with, for its card; a lost report only leaves the card without it. */
@@ -1553,7 +1592,7 @@ export class FreeRoomRunner {
   }
   /** Drop the records an ended execution leaves: its process owners and whether a restart already resumed it. */
   forget_owner(execution_id) {
-    this.store.db.prepare('DELETE FROM metadata WHERE key IN (?,?)').run(`owner:${execution_id}`, `restart-resumed:${execution_id}`);
+    this.store.db.prepare('DELETE FROM metadata WHERE key IN (?,?,?)').run(`owner:${execution_id}`, `restart-resumed:${execution_id}`, `retry-reason:${execution_id}`);
   }
   /** Once a new task received the stop reminders, retire acknowledged unconfirmed reports for its old turns. */
   clear_stopped(name) {
@@ -1571,9 +1610,30 @@ export class FreeRoomRunner {
     return JSON.parse(this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`stopped:${name}`)?.value || '[]');
   }
   /** Send the execution's recorded segments and progress notes; `final` sends the rest once it has ended. */
-  report_segments(execution_id, final = false) {
-    return this.segments.report(execution_id, final, ({ segments, notes }) =>
-      api(this.config, `/executions/${execution_id}`, { action: 'segments', segments, ...(notes.length ? { notes } : {}) }));
+  async report_segments(execution_id, final = false) {
+    const diagnostics = this.diagnostics.get(execution_id);
+    await this.segments.report(execution_id, final, ({ segments, notes }) =>
+      api(this.config, `/executions/${execution_id}`, { action: 'segments', diagnostics, segments, ...(notes.length ? { notes } : {}) }));
+    if (final) {
+      const snapshot = this.snapshots.get(execution_id);
+      if (snapshot) snapshot.diagnostics = this.diagnostics.get(execution_id);
+      this.diagnostics.delete(execution_id);
+    }
+  }
+  /** Record adapter evidence without carrying output text, tool arguments, or session credentials. */
+  record_diagnostics(execution_id, { retry, ...facts }) {
+    const previous = this.diagnostics.get(execution_id);
+    const retries = retry ? [...(previous?.retries || []), { ...retry, at: Date.now() }].slice(-MAX_DIAGNOSTIC_RETRIES) : null;
+    this.diagnostics.set(execution_id, { ...previous, ...facts, ...(retries ? { retries } : {}) });
+  }
+  /** Keep software confirmation bound to the original interjection even if the turn has continued onto another execution. */
+  confirm_interjection(interjection_id) {
+    const report = this.interjecting.get(interjection_id);
+    if (report?.status !== 'delivered' || !report.execution_id) return;
+    const execution_id = report.execution_id;
+    report.confirmed_at ||= Date.now();
+    return this.report_interjection(execution_id, interjection_id, report)
+      .catch(error => this.log(`插话 #${interjection_id} 的确认未能上报：${error.message}`));
   }
   /** Note that the software produced output now, and its phase when the output names one. */
   touch(execution_id, phase) {
@@ -1631,18 +1691,25 @@ export class FreeRoomRunner {
         if (profile) this.report_model(execution_id, session_settings(profile.adapter, this.store.binding(snapshot.member).session_id));
       }
       const after = snapshot.before ? workspace_snapshot(snapshot.directory) : null;
+      let workspace_observed = Boolean(after);
       const extra = (snapshot.extras || []).flatMap(item => {
         const current = workspace_snapshot(item.directory);
+        if (current) workspace_observed = true;
         return current ? changed_between(item.before, current).map(path => extra_change(item.directory, path)) : [];
       });
+      if (!workspace_observed) continue;
       const own = after ? changed_between(snapshot.before, after) : [];
       const changes = [...own, ...extra].slice(0, 200);
       // `edited` is sent only when the adapter tracked edits; without it the site cannot tell who wrote a shared file.
       const edited = snapshot.edited ? { edited: edited_changes(changes, snapshot.edited) } : {};
+      const diagnostics = { ...(this.diagnostics.get(execution_id) || snapshot.diagnostics),
+        file_attribution: { tracked: Boolean(snapshot.edited), provisional: running,
+          omitted: Math.max(0, own.length + extra.length - changes.length) } };
       // Line counts and patches of the files in the member's own working tree, for the card's "edited N files".
       let diffs = [];
       if (own.length) try { diffs = file_diffs(snapshot.directory, own.slice(0, 200), snapshot.base); } catch { /* The card then lists names only. */ }
-      try { await api(this.config, `/executions/${execution_id}`, { action: 'report', ...(running ? { provisional: true } : {}), changes, ...edited, ...(diffs.length ? { diffs } : {}) }); }
+      try { await api(this.config, `/executions/${execution_id}`, { action: 'report', ...(running ? { provisional: true } : {}),
+        changes, ...edited, ...(diffs.length ? { diffs } : {}), diagnostics }); }
       catch (error) { if (!/HTTP (404|409)/.test(error.message)) throw error; }
     }
   }
@@ -1691,21 +1758,25 @@ export class FreeRoomRunner {
     await this.invoke(member, execution, { resume: restart_resume_prompt(execution.id) });
     return true;
   }
-  /** Retry only deliveries known not to have started, or a manual member's refused delivery. */
+  /** Redeliver an unstarted or manual task, or resume the session named by a transient network failure. */
   async retry_or_fail(name, execution, reason) {
+    // Recover a retry_wait acknowledged by the site before the local row was saved.
+    if (execution.retry?.retry_at) return this.save(name, { status: 'retry_wait', error: '' });
     const attempt = (execution.retry?.attempt || 0) + 1;
     const not_started = this.not_started.delete(execution.id);
     if (this.not_retryable.delete(execution.id)) return this.fail(name, execution.id, reason);
-    if (this.config.participants[name]?.project_access !== 'own' && !not_started) return this.fail(name, execution.id, reason);
+    const retry_reason = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`retry-reason:${execution.id}`)?.value;
+    const network = retry_reason?.startsWith('network:');
+    if (!network && this.config.participants[name]?.project_access !== 'own' && !not_started) return this.fail(name, execution.id, reason);
     if (attempt > MAX_DELIVERY_RETRIES) return this.fail(name, execution.id, room_text("{value1}（已自动重试 {value2} 次）", { value1: reason, value2: MAX_DELIVERY_RETRIES }));
     this.stop_member(name);
     this.exited.delete(execution.id);
     this.replies.delete(execution.id);
     this.denied.delete(execution.id);
-    this.store.db.prepare('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
-      .run(`retry-reason:${execution.id}`, 'delivery_failed');
+    const delay = network ? NETWORK_RETRY_SECONDS[attempt - 1] : RETRY_DELAY_SECONDS;
     await api(this.config, `/executions/${execution.id}`, { action: 'retry_wait', attempt,
-      retry_at: Math.floor(Date.now() / 1000) + RETRY_DELAY_SECONDS, reason: reason.slice(0, MAX_RETRY_REASON) });
+      retry_at: Math.floor(Date.now() / 1000) + delay, reason: reason.slice(0, MAX_RETRY_REASON),
+      diagnostics: { retry: { layer: 'runner', state: 'waiting', attempt, mode: network ? 'resume' : 'redeliver' } } });
     this.save(name, { status: 'retry_wait', error: '' });
   }
   /**
@@ -1730,6 +1801,7 @@ export class FreeRoomRunner {
     this.save(name, { status: 'idle', error: '' });
   }
   async fail(name, execution_id, reason) {
+    const diagnostics = this.diagnostics.get(execution_id);
     this.activity.delete(execution_id);
     this.not_started.delete(execution_id);
     this.not_retryable.delete(execution_id);
@@ -1737,7 +1809,7 @@ export class FreeRoomRunner {
     this.failure_classes.delete(execution_id);
     await this.report_segments(execution_id, true);
     let recorded = true;
-    try { await api(this.config, `/executions/${execution_id}`, { action: 'fail', reason, ...failure_class }); }
+    try { await api(this.config, `/executions/${execution_id}`, { action: 'fail', reason, ...failure_class, diagnostics }); }
     catch (error) { if (!/HTTP 409/.test(error.message)) throw error; recorded = false; }
     if (recorded && this.on_failed) {
       try { this.on_failed({ member: name, execution_id, reason, room: this.config.room, title: this.room_title || '' }); }
@@ -1793,15 +1865,21 @@ export class FreeRoomRunner {
           const steer = this.steers.get(execution.id);
           report = { status: 'failed', reason: room_text("本次投递不支持执行中插话") };
           if (steer) {
-            try { report = await steer(interjection_text(interjection)) ? { status: 'delivered' } : { status: 'failed', reason: room_text("它已结束本轮，插话未送达") }; }
+            try { report = await steer(interjection_text(interjection), interjection.id) ? { status: 'delivered' } : { status: 'failed', reason: room_text("它已结束本轮，插话未送达") }; }
             catch (error) { report = { status: 'failed', reason: String(error.message).slice(0, 400) }; }
           }
+          Object.assign(report, { execution_id: execution.id, confirmed_at: null });
           this.interjecting.set(interjection.id, report);
         }
-        try { await api(this.config, `/executions/${execution.id}`, { action: 'interjection', interjection_id: interjection.id, ...report }); }
+        try { await this.report_interjection(execution.id, interjection.id, report); }
         catch (error) { this.log(`插话 #${interjection.id} 的结果未能上报：${error.message}`); }
       }
     }
+  }
+  /** Report transport status and the optional matching software receipt as independent facts. */
+  report_interjection(execution_id, interjection_id, { status, reason, confirmed_at = null }) {
+    return api(this.config, `/executions/${execution_id}`, { action: 'interjection', interjection_id, status, reason,
+      diagnostics: { transport: 'steer', confirmed_at } });
   }
   /**
    * The owner's private chat lines (backend/private_chat.py), each run as a turn of its member's own session once the

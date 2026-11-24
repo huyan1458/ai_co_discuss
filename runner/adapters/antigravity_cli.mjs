@@ -390,6 +390,9 @@ function lifecycle(state, event, task, bind) {
     // agy reports `error` as a plain string (1.4.x), older builds as { message }.
     const reason = typeof result.error === 'string' ? result.error : result.error?.message;
     if (!state.completed) state.error = `Antigravity CLI ${result.status || '缺少结果状态'}：${reason || result.response || '执行未成功'}`;
+    if (result.status === 'ERROR' && result.conversation_id && reason === 'There was a network issue connecting to the server, please try again.') {
+      state.network_error = state.error;
+    }
     // Failed before opening a conversation (sign-in, eligibility check): no turn ran, so delivering again repeats nothing.
     if (!state.completed && !state.initialized && !result.conversation_id && !result.num_turns) state.not_started = true;
   }
@@ -724,6 +727,11 @@ function abandon_sign_in(state, text) {
   if (AGY_SIGN_IN_PROMPT.test(text)) state.abandon = AGY_SIGN_IN_STOPPED;
 }
 
+/** Read agy's own structured diagnostic after stdout and stderr have been split into complete lines. */
+function agy_error_line(state, line) {
+  if (line.startsWith('AGY_ERROR: ')) state.retryable_error = json_line(line.slice('AGY_ERROR: '.length))?.retryable === true;
+}
+
 /**
  * How a failed agy turn is classified for the room (adapter contract `on_failure(reason, {failure_class, resets,
  * reset_at})`, as Claude's): a signed-out account is `auth` (`restartable` when it may be a sign-in that failed to
@@ -757,7 +765,13 @@ export const antigravity_cli = {
   // A deleted room's session records and any legacy private agy projects are removed with it.
   cleanup: remove_agy_projects, sweep: sweep_legacy_agy_projects,
   deliver,
-  invocation, lifecycle, events, failure_class: reason => agy_failure_class(reason), on_stderr: abandon_sign_in,
+  invocation, lifecycle, events, on_stderr: abandon_sign_in, stderr_line: agy_error_line,
+  failure_class(reason, state) {
+    if (state.network_error === reason && state.retryable_error && !state.stopped && !state.denial) {
+      return { resume_session: state.session_id };
+    }
+    return agy_failure_class(reason);
+  },
   session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings,
     list: list_sessions, preview: preview_session,
     remove: (id, { home = homedir() } = {}) => remove_conversation(join(home, '.gemini', 'antigravity-cli'), id),

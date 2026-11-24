@@ -237,6 +237,10 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 /* The composer floats over the transcript's lower edge: the transcript runs under it, padded by the composer's height,
    and only the strip below the composer fades out, so cards scroll on right up to the composer's top edge. */
 .channel-conversation .channel-transcript { grid-row: 2 / 4; padding-bottom: calc(var(--channel-composer-height, 0px) + 28px + var(--visual-tail-space, 0px)); }
+.channel-debug { position: fixed; inset: 0 0 auto auto; z-index: 9999; width: min(38rem, 100%); padding: 4px 8px;
+  background: rgba(0, 0, 0, .88); color: #e3f5e8; font: 11px/1.4 ui-monospace, monospace; }
+.channel-debug button { padding: 4px 6px; border: 1px solid currentColor; border-radius: 4px; cursor: pointer; }
+.channel-debug pre { max-height: 20vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 /* Messages fade out above the composer only: from its top edge down the dock is solid, so no cut line of text shows
    between the composer and the note under it (user 2026-11-20, #6124). */
 /* A question card above the composer floats: the dock is see-through down to the card's lower edge
@@ -609,6 +613,7 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 :is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="gemini"] { --speaker-accent: #b5bdf8; }
 :is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="deepseek"] { --speaker-accent: #98bcff; }
 :is(.channel-message, .channel-message-jump, .channel-working-strip)[data-author="qwen"] { --speaker-accent: #c9b5eb; }
+.channel-message.channel-interjection { margin-left: clamp(24px, 4vw, 48px) !important; margin-top: -10px !important; }
 .channel-message { position: relative; width: auto !important; margin: 0 16px 20px !important; padding: 20px 22px !important; border: 1px solid #ffffff0d; border-radius: 10px; background: #313338; box-shadow: none; transition: border-color .12s; }
 .channel-message:hover { border-color: #ffffff1d; }
 .channel-message-header { display: contents; }
@@ -875,26 +880,29 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .excerpt-chip:is(:hover, :focus-within) .excerpt-chip-clear { opacity: 1; }
 @media (hover: none) { .excerpt-chip-clear { opacity: 1; } }
 .excerpt-chip-clear > span { width: 13px; height: 13px; }
-.excerpt-list { display: flex; flex-direction: column; gap: 12px; width: min(400px, calc(100vw - 32px)); max-height: min(420px, 60vh); margin: 0; padding: 12px 10px 12px 14px; overflow-y: auto; list-style: none; }
-.excerpt-list li { display: flex; align-items: flex-start; gap: 8px; }
+.excerpt-list { display: flex; flex-direction: column; gap: 12px; width: min(480px, calc(100vw - 32px)); max-height: min(420px, 60vh); margin: 0; padding: 12px 14px; overflow-y: auto; list-style: none; }
+.excerpt-list:has(.selection-comment[data-sized]) { width: fit-content; max-width: calc(100vw - 32px); max-height: min(640px, calc(var(--reka-popover-content-available-height, 75vh) - 16px)); }
+.excerpt-list:has(.selection-comment[data-sized]) .excerpt-item > :not(.selection-comment) { width: 0; min-width: 100%; }
+.excerpt-list li { position: relative; display: flex; align-items: flex-start; gap: 8px; }
 .excerpt-number { flex-shrink: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 18px; }
 .excerpt-item { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
 .excerpt-item small { color: var(--ui-text-muted); font-size: 11.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.excerpt-item > small:first-child { padding-right: 54px; }
 .excerpt-item small:not(:first-child) { margin-top: 6px; }
 .excerpt-text, .excerpt-comment { margin: 0; color: var(--ui-text); font-size: 13px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .excerpt-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
-.excerpt-actions { display: flex; flex-shrink: 0; gap: 2px; }
+.excerpt-actions { position: absolute; top: -3px; right: 0; display: flex; flex-shrink: 0; gap: 2px; }
 .excerpt-actions button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--ui-text-muted); }
 .excerpt-actions button:hover { background: var(--ui-bg-accented); color: var(--ui-text); }
 .excerpt-actions button > span { width: 14px; height: 14px; }
 /* Adding a selection to the chat: a comment box beside it, the selection kept highlighted, then a number mark at its end. */
 /* A card: the text takes the full width and the buttons sit in a row under it. It has three places: floating beside
-   the passage (desktop), a sheet across the window's bottom (phones, `is-docked`), and a pill in the notes list (`is-inline`). */
+   the passage (desktop), a sheet across the window's bottom (phones, `is-docked`), and inline in the notes list (`is-inline`). */
 .selection-comment { position: fixed; z-index: 40; display: flex; flex-direction: column; gap: 4px; width: 440px; max-width: calc(100vw - 16px); padding: 10px 14px 6px; border: 1px solid var(--ui-border-accented);
   border-radius: 14px; background: var(--ui-bg-elevated); box-shadow: 0 8px 24px #0006; }
 .selection-comment textarea { flex: 1 1 auto; min-width: 0; min-height: 40px; max-height: 240px; padding: 0; border: 0; outline: none; resize: none; field-sizing: content; background: transparent;
   color: var(--ui-text); font-size: 13px; line-height: 20px; }
-.selection-comment[data-sized] textarea { max-height: none; }
+.selection-comment[data-sized] textarea { min-height: 20px; max-height: none; }
 .selection-comment-actions { display: flex; flex-shrink: 0; justify-content: flex-end; gap: 4px; }
 .selection-comment textarea::placeholder { color: var(--ui-text-dimmed); }
 .selection-comment button { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; }
@@ -930,10 +938,8 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .selection-comment.is-docked button > span { width: 20px; height: 20px; }
 .selection-comment.is-docked .selection-comment-cancel, .selection-comment.is-docked .selection-comment-remove { background: var(--ui-bg-accented); }
 .selection-comment.is-docked .selection-comment-send { margin-left: auto; }
-/* In the notes list: a pill in the flow, the buttons on the text's row. */
-.selection-comment.is-inline { position: static; z-index: auto; flex-direction: row; align-items: flex-end; width: 100%; max-width: none; min-height: 40px; margin-top: 6px; padding: 5px 5px 5px 14px; border-radius: 20px; box-shadow: none; }
-.selection-comment.is-inline textarea { align-self: center; min-height: 0; max-height: 120px; }
-.selection-comment.is-inline .selection-comment-actions { display: contents; }
+/* In the notes list: the same multi-line resizable card as the floating box, sitting in the flow instead of fixed. */
+.selection-comment.is-inline { position: relative; z-index: auto; width: 100%; max-width: none; margin-top: 6px; box-shadow: none; }
 .channel-mention-group { margin: 0; padding: 8px 10px 4px; color: var(--ui-text-dimmed); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-mention-group:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--ui-border); padding-top: 10px; }
 .channel-mention-option .channel-mention-drill { margin-left: auto; }

@@ -491,6 +491,7 @@ async function fixture(t) {
   const observers = [];
   const calls = [];
   const limits = { reached: false };
+  const diagnostics_reports = [];
   const failures = {};
   const executions = new Map();
   let next_execution_id = 1;
@@ -545,6 +546,7 @@ async function fixture(t) {
       else if (request.method === 'GET') result = execution;
       else {
         calls.push(body.action);
+        if (body.diagnostics) diagnostics_reports.push({ action: body.action, diagnostics: body.diagnostics });
         if (body.action === 'renew') { execution.status = 'started'; execution.lease_until = Math.floor(Date.now() / 1000) + 120; }
         if (body.action === 'fail') finish_execution(id, 'failed', body.reason);
         if (body.action === 'release') {
@@ -573,9 +575,80 @@ async function fixture(t) {
     rmSync(directory, { recursive: true, force: true }); rmSync(`${directory}-drafts`, { recursive: true, force: true }); });
   const config = { site: `http://127.0.0.1:${server.address().port}`, room: 'room', token: 'private-token', directory, project: directory,
     members: { Codex: { token: 'member-token' } }, participants: { Codex: { adapter: 'codex' } } };
-  return { store, request, member, observers, room, calls, config, limits, failures, executions, add_request, finish_execution,
+  return { store, request, member, observers, room, calls, config, limits, failures, executions, add_request, finish_execution, diagnostics_reports,
     current_execution: () => [...executions.values()].at(-1) };
 }
+
+test('execution diagnostics distinguish adapter progress, a synthetic pulse, and a matching interjection receipt', async t => {
+  const fixture_run = await fixture(t);
+  let callbacks;
+  const runner = new FreeRoomRunner(fixture_run.config, fixture_run.store, async (profile, binding, task) => {
+    callbacks = task;
+    return { status: 'accepted', steer: () => true };
+  });
+  await runner.tick();
+  const execution = fixture_run.current_execution();
+  callbacks.on_activity('tool', 'image', undefined, { synthetic: true });
+  await runner.report_segments(execution.id);
+  const pulse_report = fixture_run.diagnostics_reports.at(-1).diagnostics;
+  assert.equal(pulse_report.last_activity_at, undefined);
+
+  callbacks.on_activity('thinking');
+  callbacks.on_diagnostic({ retry: { layer: 'model', state: 'started', attempt: 1 } });
+  execution.interjections = [{ id: 42, text: 'private debug prompt' }];
+  await runner.deliver_interjections([execution]);
+  assert.equal(fixture_run.diagnostics_reports.at(-1).diagnostics.confirmed_at, null);
+  await callbacks.on_diagnostic({ interjection_confirmed: 42 });
+  assert.ok(fixture_run.diagnostics_reports.at(-1).diagnostics.confirmed_at > 0);
+  await runner.report_segments(execution.id, true);
+  const report = fixture_run.diagnostics_reports.at(-1).diagnostics;
+  assert.ok(report.last_activity_at > 0);
+  assert.deepEqual(report.retries.map(({ layer, attempt }) => [layer, attempt]), [['model', 1]]);
+  assert.doesNotMatch(JSON.stringify(report), /private debug prompt/);
+});
+
+test('Codex bridge confirms an interjection only on the matching completed user item', { timeout: 10000 }, async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'codex-steer-receipt-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  writeFileSync(join(directory, 'app-server'), `
+    const send = message => process.stdout.write(JSON.stringify(message) + '\\n');
+    const notify = (method, params) => send({ method, params: { threadId: 'thread', turnId: 'turn', ...params } });
+    require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+      const { id, method, params } = JSON.parse(line);
+      if (!id) return;
+      const result = method === 'thread/start' ? { thread: { id: 'thread' } }
+        : method === 'turn/start' ? { turn: { id: 'turn' } } : {};
+      send({ id, result });
+      if (method === 'turn/steer') {
+        const item = { id: 'user-item', type: 'userMessage', content: params.input };
+        notify('item/started', { item });
+        notify('item/completed', { item, turnId: 'wrong-turn' });
+        notify('item/completed', { item: { id: 'marker', type: 'agentMessage', text: 'before valid receipt' } });
+        notify('item/completed', { item });
+        notify('item/completed', { item });
+        notify('turn/completed', { turn: { status: 'completed' } });
+      }
+    });`);
+  const bridge = spawn(process.execPath, [fileURLToPath(new URL('../runner/adapters/codex_bridge.mjs', import.meta.url)), process.execPath],
+    { cwd: directory, stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => { if (bridge.exitCode === null) bridge.kill(); });
+  bridge.stdin.write(`${JSON.stringify({ prompt: 'start', cwd: directory })}\n`);
+  let output = '';
+  let requested = false;
+  bridge.stdout.on('data', chunk => {
+    output += chunk;
+    if (requested || !output.includes('"type":"codiscuss.turn"')) return;
+    requested = true;
+    bridge.stdin.write(`${JSON.stringify({ steer: 'private text', interjection_id: 42 })}\n`);
+  });
+  const [code] = await once(bridge, 'close');
+  assert.equal(code, 0);
+  const events = output.trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(events.findIndex(event => event.type === 'codiscuss.interjection_confirmed') > events.findIndex(event => event.item?.id === 'marker'));
+  assert.deepEqual(events.filter(event => event.type === 'codiscuss.interjection_confirmed'),
+    [{ type: 'codiscuss.interjection_confirmed', interjection_id: 42 }]);
+  assert.doesNotMatch(output, /private text/);
+});
 
 test('a backup carries local member sessions, and restoring it resumes them while Claude Code stays manual', async t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-restore-'));
@@ -907,7 +980,7 @@ test(`agy that is signed out (${cause}) fails once as auth after ${runs} run(s),
 });
 }
 
-test('agy that fails after its conversation started is not delivered again', async t => {
+test('agy that reports an unclassified failure after its conversation started is not delivered again', async t => {
   const f = await fixture(t);
   f.config.participants.Codex = { adapter: 'antigravity_cli', executable: process.execPath };
   const process_fixture = fake_cli([{ event: 'init', conversation_id: 'started' },
@@ -917,6 +990,60 @@ test('agy that fails after its conversation started is not delivered again', asy
   assert.equal(f.current_execution().status, 'failed');
   assert.equal(f.current_execution().retry, null);
 });
+
+for (const outcome of ['recovered', 'exhausted', 'stopped', 'answered', 'not retryable']) {
+test(`agy network interruption in a running conversation: ${outcome}`, { timeout: 20_000 }, async t => {
+  const f = await free_fixture(t);
+  f.config.participants.Claude = { adapter: 'antigravity_cli', executable: process.execPath };
+  const session = 'actual-cli-session';
+  const error = 'There was a network issue connecting to the server, please try again.';
+  const diagnostic = { short_error: 'stream reading error: unexpected EOF', retryable: outcome !== 'not retryable' };
+  const failure = { events: [{ event: 'init', conversation_id: session },
+    { event: 'result', result: { conversation_id: session, status: 'ERROR', error, num_turns: 4 } }],
+    stderr: `AGY_ERROR: ${JSON.stringify(diagnostic)}\n`, exit_code: 1 };
+  const cli = outcome === 'recovered' ? fake_cli([{ event: 'init', conversation_id: session },
+    { event: 'step_update', step_update: { step_index: 5, step_type: 'agent_response', state: 'DONE', text_delta: '工作已完成' } },
+    { event: 'result', result: { conversation_id: session, status: 'SUCCESS' } }], { earlier: [failure] })
+    : fake_cli(failure.events, failure);
+  const deliver = (config, binding, task) => deliver_task(config, binding, task, cli.spawn_process, join(f.config.directory, 'user'));
+  const runner = new FreeRoomRunner(f.config, f.store, deliver);
+  await agy_not_started_attempt(f, runner, cli, 1);
+  const [execution] = f.state.executions;
+  if (outcome === 'not retryable') {
+    assert.equal(execution.status, 'failed');
+    assert.ok(!execution.retry);
+    return;
+  }
+  if (outcome === 'stopped' || outcome === 'answered') {
+    if (outcome === 'answered') execution.status = 'completed';
+    else execution.retry.stopped = 1;
+    execution.retry.retry_at = 1;
+    await runner.tick();
+    assert.equal(cli.calls.length, 1);
+    assert.equal(execution.status, outcome === 'answered' ? 'completed' : 'failed');
+    return;
+  }
+  for (const [index, seconds] of [10, 30, 60].entries()) {
+    assert.equal(execution.retry.attempt, index + 1);
+    assert.ok(Math.abs(execution.retry.retry_at - Math.floor(Date.now() / 1000) - seconds) <= 1);
+    // In the recovery case the site accepted retry_start just before the runner restarted.
+    execution.retry.retry_at = outcome === 'recovered' ? 0 : 1;
+    const current = outcome === 'recovered' ? new FreeRoomRunner(f.config, f.store, deliver) : runner;
+    await agy_not_started_attempt(f, current, cli, 1);
+    const args = cli.calls.at(-1).args;
+    assert.equal(args[args.indexOf('--conversation') + 1], session);
+    assert.match(args[args.indexOf('-p') + 1], /网络中断/);
+    if (outcome === 'recovered') {
+      assert.equal(execution.status, 'completed');
+      assert.deepEqual(f.state.posts.map(({ body }) => [body.execution_id, body.text]), [[execution.id, '工作已完成']]);
+      return;
+    }
+  }
+  assert.equal(f.state.executions.length, 1);
+  assert.equal(execution.status, 'failed');
+  assert.match(execution.result, /已自动重试 3 次/);
+});
+}
 
 test('agy whose account quota is exhausted fails as quota with its reset time, without a restart or a retry (必 9)', async t => {
   const f = await fixture(t);

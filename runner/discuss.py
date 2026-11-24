@@ -121,6 +121,7 @@ class RequestPlan:
     params: dict | None = None
     upload_file: str | None = None
     download_file: str | None = None
+    title_query: str | None = None
 
 
 class JoinPreviousStep(argparse.Action):
@@ -324,6 +325,7 @@ def room_commands(subcommands, registry):
                                 ("protocol", "按需读取当前服务的参与协议")):
         parser = add_leaf(subcommands, registry, f"room {action}", description, action != "list")
         if action == "list":
+            parser.add_argument("--query", help="按房间标题片段搜索 / Search by part of the room title")
             parser.add_argument("--submission-id", type=submission_id, help="按建房提交编号精确查询")
         elif action in ("view", "brief"):
             parser.add_argument("--request", type=positive_int, help="手动成员：按自己的有效请求限制可读原文")
@@ -332,6 +334,12 @@ def room_commands(subcommands, registry):
     paging = events.add_mutually_exclusive_group()
     paging.add_argument("--after", type=non_negative_int, help="只读此事件编号之后的记录")
     paging.add_argument("--before", type=non_negative_int, help="读此事件编号之前的一页；按返回的 more 继续向前")
+    trace = add_leaf(subcommands, registry, "room trace",
+                     "按消息编号追踪请求、执行、重试、失败唤醒、交回、插话和卡片位置 / Trace a message through room work and card layout",
+                     True)
+    trace.add_argument("--message", type=positive_int, required=True, help="要追踪的房间消息编号 / Room message ID to trace")
+    trace.add_argument("--page", type=positive_int, default=1, help="按 next_page 续读 / Continue at next_page")
+    trace.add_argument("--request", type=positive_int, help="手动成员的有效请求编号 / Active request ID for manual members")
     limits = add_leaf(subcommands, registry, "room limits", "查看上限；--check 检查并执行到限处理；--done 通知程序目标已完成", True)
     limits.add_argument("--check", action="store_true")
     limits.add_argument("--done", action="store_true", help="主持人宣告目标已完成：结束讨论，房间照常协作；须带 --conclusion")
@@ -775,7 +783,13 @@ def topic_payload(args):
 def read_context_params(args):
     """Select an explicit manual request or the execution bound to this access file."""
     request_id = getattr(args, "request", None)
-    execution_value = load_access(args).get("execution_id")
+    access = load_access(args)
+    if access.get("room") and args.room != access["room"]:
+        # A bound execution is only valid in its own room. An explicit request must not silently become an unscoped read.
+        if request_id is not None:
+            raise CliError("--request 须属于凭据绑定的房间 / --request requires the room bound to the credential")
+        return {}
+    execution_value = access.get("execution_id")
     if request_id is not None and execution_value is not None:
         raise CliError("读取时 --request 不能与凭据文件中的 execution_id 同用")
     if request_id is not None:
@@ -793,7 +807,7 @@ def plan_room(args):
     """Translate room operations to one existing HTTP endpoint."""
     if args.action == "list":
         params = {"submission_id": args.submission_id} if args.submission_id else None
-        return RequestPlan("/api/rooms", view="room_list", params=params)
+        return RequestPlan("/api/rooms", view="room_list", params=params, title_query=args.query)
     if args.action == "create":
         payload = topic_payload(args)
         payload.setdefault("host", require_actor(args))
@@ -821,6 +835,9 @@ def plan_room(args):
     if args.action == "events":
         params = {"after": args.after, "before": args.before}
         return RequestPlan(base + "/events", params={key: value for key, value in params.items() if value})
+    if args.action == "trace":
+        return RequestPlan(base + "/trace",
+                           params={"message_id": args.message, "page": args.page, **read_context_params(args)})
     return RequestPlan(base, view="brief" if args.action == "brief" else "overview", params=read_context_params(args))
 
 
@@ -1438,6 +1455,11 @@ def select_fields(value, names):
 def project_result(value, plan, site):
     """Keep summaries, briefing material, host state, and original text separate."""
     if plan.view == "room_list":
+        if plan.title_query is not None:
+            query = plan.title_query.strip().casefold()
+            folders = {folder["id"]: folder["name"] for folder in value.get("folders", [])}
+            return {"rooms": [{"id": room["id"], "title": room["title"], "folder": folders.get(room.get("folder_id"))}
+                              for room in value["rooms"] if query in room["title"].casefold()]}
         return {"rooms": [select_fields(room, ROOM_LIST_FIELDS) for room in value["rooms"]]}
     if plan.view in ("overview", "brief", "state"):
         fields = {"overview": OVERVIEW_FIELDS, "brief": BRIEF_FIELDS,

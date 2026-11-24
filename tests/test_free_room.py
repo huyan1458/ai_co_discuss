@@ -290,7 +290,7 @@ class SingleMemberTests(FreeRoomTests):
 
     def test_interjection_reaches_only_a_steerable_running_execution_once(self):
         """The owner's interjection waits for the runner, is idempotent by submission_id and never outlives its execution."""
-        self.say("开始", to=["Claude"])
+        original = self.say("开始", to=["Claude"])[1]["message"]["id"]
         execution = self.reserve()[1]
         url = f"{self.path}/executions/{execution['id']}"
         interject = lambda text="直接给结论", submission="i-1", token=None: self.request(
@@ -307,6 +307,9 @@ class SingleMemberTests(FreeRoomTests):
         self.assertEqual(pending, [{"id": body["interjection"]["id"], "text": "直接给结论", "author": ""}], "the owner's carries no host author")
         report = {"action": "interjection", "interjection_id": body["interjection"]["id"], "status": "delivered"}
         self.assertEqual(self.request(url, report, self.owner)[0], 200)
+        trace = self.request(f"{self.path}/trace?message_id={original}", token=self.owner)[1]
+        self.assertFalse(any(record["kind"] == "interjection" or record["data"].get("action") == "interjection"
+                             for record in trace["records"]), trace)
         self.assertEqual(self.request(self.path + "/inbox", token=self.owner)[1]["executions"][0]["interjections"], [])
         second = interject("再补一句", "i-2")[1]["interjection"]
         self.assertEqual(self.answer(execution["id"])[0], 201)
@@ -1851,6 +1854,12 @@ class HostTests(HostRoomTests):
         # The host still reads all of it, including the other member's requests.
         everything = self.request(f"{self.path}/events", token=self.member)[1]["events"]
         self.assertTrue(any(event["data"].get("member_id") == self.member_id("Antigravity") for event in everything))
+        status, trace = self.request(f"{self.path}/trace?message_id={dispatch}", token=self.codex)
+        self.assertEqual(status, 200, trace)
+        self.assertTrue(any(record["kind"] == "request" for record in trace["records"]))
+        self.assertTrue(all(record["data"].get("member_id") in (None, codex) for record in trace["records"]))
+        self.assertNotIn("私下的话", json.dumps(trace, ensure_ascii=False))
+        self.assertEqual(self.request(f"{self.path}/trace?message_id={dispatch}", token=uuid.uuid4().hex)[0], 403)
         # In a discussion the member's reading boundary also bounds the log.
         with mock.patch("backend.session_room.session_message_access", return_value=dispatch - 1):
             bounded = self.request(f"{self.path}/events", token=self.codex)[1]["events"]
@@ -2302,6 +2311,18 @@ class HostTests(HostRoomTests):
         self.assertIn("设为主持人", notice)
         self.assertNotIn(("Claude", "notice", "pending"), self.requests())
 
+    def test_trace_follows_a_direct_member_failure_notice_to_the_host(self):
+        """A failed direct request names the host notice without exposing the host's work to the failed member."""
+        message = FreeRoomTests.say(self, "问 Codex", to=["Codex"])[1]["message"]["id"]
+        failed = self.reserve_for("Codex")[1]["id"]
+        self.assertEqual(self.request(f"{self.path}/executions/{failed}", {"action": "fail", "reason": "中断"}, self.owner)[0], 200)
+        notice = self.reserve_for("Claude")[1]["requests"][0]["message_id"]
+        path = f"{self.path}/trace?message_id={message}"
+        visible = self.request(path, token=self.owner)[1]["records"]
+        self.assertIn({"source": "current", "kind": "failure_wake", "data": {"message_id": notice, "execution_id": failed}}, visible)
+        limited = self.request(path, token=self.codex)[1]["records"]
+        self.assertFalse(any(record["data"].get("message_id") == notice for record in limited), limited)
+
     def test_a_retry_that_fails_again_is_told_to_the_host_when_others_of_the_batch_finished(self):
         """COVERAGE 3②: retrying one failed member of a batch the others completed still hands the outcome back."""
         FreeRoomTests.say(self, "两人并行")
@@ -2357,6 +2378,154 @@ class HostTests(HostRoomTests):
         status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "补交", "source": "cli",
                                                                 "submission_id": uuid.uuid4().hex, "execution_id": first["id"]}, self.member)
         self.assertEqual(status, 201, saved)
+
+    def test_retried_host_failure_wake_up_and_pending_retry_keep_chronological_layout_at(self):
+        """Retrying a failed host wake-up keeps the failed card in place and places the retry and its answer after it."""
+        FreeRoomTests.say(self, "交给主持人")
+        first = self.reserve_for("Claude")[1]
+        self.request(f"{self.path}/executions/{first['id']}", {"action": "fail", "reason": "网络中断"}, self.owner)
+        notice = self.reserve_for("Claude")[1]
+        self.request(f"{self.path}/executions/{notice['id']}", {"action": "fail", "reason": "再次中断"}, self.owner)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE member_executions SET created_at=1000,finished_at=1100 WHERE id=?", (first["id"],))
+            connection.execute("UPDATE member_executions SET created_at=1200,finished_at=1300 WHERE id=?", (notice["id"],))
+        self.assertEqual(self.request(f"{self.path}/executions/{notice['id']}", {"action": "retry"}, self.owner)[0], 200)
+        retried = self.reserve_for("Claude")[1]
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE member_executions SET created_at=1500 WHERE id=?", (retried["id"],))
+        reports = {item["id"]: item for item in self.request(self.path)[1]["free"]["executions"]}
+        self.assertEqual(reports[notice["id"]]["layout_after"], reports[first["id"]]["layout_after"])
+        self.assertEqual(reports[retried["id"]]["layout_after"], reports[first["id"]]["layout_after"])
+        self.assertEqual(reports[notice["id"]]["layout_at"], 1000, "the first wake-up keeps the original failed card's slot")
+        self.assertEqual(reports[retried["id"]]["layout_at"], 1500, "a retry of the wake-up orders by its own start time")
+        status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "重试成功", "source": "cli",
+                                                               "submission_id": uuid.uuid4().hex, "execution_id": retried["id"]}, self.member)
+        self.assertEqual(status, 201, saved)
+        answer = next(item for item in self.request(f"{self.path}/messages")[1]["messages"] if item["id"] == saved["message"]["id"])
+        self.assertEqual(answer["layout_at"], 1500, "the retried wake-up's answer stays after the failed card too")
+
+        # A normal pending retry also carries a layout_at no earlier than the failed execution it replaces.
+        FreeRoomTests.say(self, "交给 Codex", to=["Codex"])
+        normal = self.reserve_for("Codex")[1]
+        self.request(f"{self.path}/executions/{normal['id']}", {"action": "fail", "reason": "临时失败"}, self.owner)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE member_requests SET created_at=2000 WHERE execution_id=?", (normal["id"],))
+            connection.execute("UPDATE member_executions SET created_at=2100,finished_at=2200 WHERE id=?", (normal["id"],))
+        self.assertEqual(self.request(f"{self.path}/executions/{normal['id']}", {"action": "retry"}, self.owner)[0], 200)
+        free = self.request(self.path)[1]["free"]
+        pending = next(item for item in free["requests"] if item["member"] == "Codex" and item["status"] == "pending")
+        failed_report = next(item for item in free["executions"] if item["id"] == normal["id"])
+        self.assertGreaterEqual(pending["layout_at"], failed_report["layout_at"])
+        self.assertTrue(pending["retried"])
+        # Interrupting a live execution via immediate send marks the requeued request as retried, not the new message's request.
+        live = self.reserve_for("Codex")[1]
+        self.request(f"{self.path}/executions/{live['id']}", {"action": "delivery", "stoppable": True, "progress": True, "steer": False, "resume": False}, self.owner)
+        status, queued = FreeRoomTests.say(self, "插队消息", queue=True, to=["Codex"])
+        self.assertEqual(status, 201, queued)
+        self.assertTrue(queued.get("queued"), queued)
+        status, sent_queue = self.request(f"{self.path}/queue", {"action": "send", "id": queued["queued"]}, self.owner)
+        self.assertEqual(status, 200, sent_queue)
+        self.assertIsInstance(sent_queue.get("message_id"), int, "send-now returns the new message id for preview handoff")
+        codex_pending = [item for item in self.request(self.path)[1]["free"]["requests"] if item["member"] == "Codex" and item["status"] == "pending"]
+        self.assertEqual([(item["retried"], item["next_batch"]) for item in codex_pending], [(True, True), (False, True)])
+        # Separate delivery lanes (user ask vs host ask): only the earlier lane is in next_batch.
+        running_codex = self.reserve_for("Codex")[1]
+        self.request(f"{self.path}/executions/{running_codex['id']}", {"action": "fail", "reason": "失败"}, self.owner)
+        FreeRoomTests.say(self, "请主持人派给 Codex")
+        self.work("Claude", to=["Codex"])
+        self.assertEqual(self.request(f"{self.path}/executions/{running_codex['id']}", {"action": "retry"}, self.owner)[0], 200)
+        lanes = [item for item in self.request(self.path)[1]["free"]["requests"] if item["member"] == "Codex" and item["status"] == "pending"]
+        self.assertTrue(all(item["next_batch"] for item in lanes if item["created_by"] == "user"))
+        self.assertTrue(all(not item["next_batch"] for item in lanes if item["created_by"] == "host"))
+
+    def test_rewinding_a_failed_execution_blocks_late_revive_and_retry(self):
+        """Rewinding any source message of a failed execution blocks reviving it with a late answer; rewound requests cannot retry."""
+        first_msg = FreeRoomTests.say(self, "第一条", to=["Codex"])[1]["message"]["id"]
+        second_msg = FreeRoomTests.say(self, "第二条", to=["Codex"])[1]["message"]["id"]
+        merged = self.reserve_for("Codex")[1]
+        self.request(f"{self.path}/executions/{merged['id']}", {"action": "fail", "reason": "中断"}, self.owner)
+        plan = self.request(f"{self.path}/rewind?message_id={second_msg}", token=self.owner)[1]
+        self.assertEqual(self.request(f"{self.path}/rewind", {"message_id": second_msg, "revision": plan["revision"]}, self.owner)[0], 200)
+        # The merged execution read the rewound second message, so a late answer must be refused.
+        late = self.request(f"{self.path}/messages", {"author": "Codex", "text": "迟到回答", "source": "cli",
+                                                      "submission_id": uuid.uuid4().hex, "execution_id": merged["id"]}, self.codex)
+        self.assertEqual(late[0], 409, late)
+        # Rewinding the first message too leaves no retryable request on the failed execution.
+        plan_all = self.request(f"{self.path}/rewind?message_id={first_msg}", token=self.owner)[1]
+        self.assertEqual(self.request(f"{self.path}/rewind", {"message_id": first_msg, "revision": plan_all["revision"]}, self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/executions/{merged['id']}", {"action": "retry"}, self.owner)[0], 409)
+
+    def test_host_failure_wake_up_inherits_latest_anchor_and_open_work_survives_recent_caps(self):
+        """A host wake-up for a merged failure stays under the latest anchor; pending requests and live runs are never truncated."""
+        from backend import free_room
+        FreeRoomTests.say(self, "第一问", to=["Claude"])
+        second = FreeRoomTests.say(self, "第二问", to=["Claude"])[1]["message"]["id"]
+        merged = self.reserve_for("Claude")[1]
+        execution_path = f"{self.path}/executions/{merged['id']}"
+        self.assertEqual(self.request(execution_path, {"action": "retry_wait", "attempt": 1, "retry_at": int(time.time()) + 60,
+                                                       "reason": "临时断线"}, self.owner)[0], 200)
+        self.assertEqual(self.request(execution_path, {"action": "retry_start"}, self.owner)[0], 200)
+        self.request(f"{self.path}/executions/{merged['id']}", {"action": "fail", "reason": "网络中断"}, self.owner)
+        wake = self.reserve_for("Claude")[1]
+        reports = {item["id"]: item for item in self.request(self.path)[1]["free"]["executions"]}
+        self.assertEqual(reports[merged["id"]]["layout_after"], second)
+        self.assertEqual(reports[wake["id"]]["layout_after"], second, "wake-up keeps the merged execution's latest anchor")
+        # History card batches also carry failure_wakes for their message span.
+        batch = self.request(f"{self.path}/messages?after=0&cards=1&withdrawn=include")[1]["cards"]
+        self.assertIn({"message_id": reports[wake["id"]]["request_message_id"], "execution_id": merged["id"]}, batch["failure_wakes"])
+        # A wake-up bundled with an earlier pending message still reports replaces_execution_id so the failed card hides.
+        self.assertEqual(self.request(f"{self.path}/messages", {"author": "Claude", "text": "已恢复", "source": "cli",
+                                                                "submission_id": uuid.uuid4().hex, "execution_id": wake["id"]}, self.member)[0], 201)
+        self.assert_failure_trace(second, merged["id"], wake["id"], reports[wake["id"]]["request_message_id"])
+        earlier_b = FreeRoomTests.say(self, "主持人任务 B", to=["Claude"])[1]["message"]["id"]
+        task_b = self.reserve_for("Claude")[1]
+        self.request(f"{self.path}/executions/{task_b['id']}", {"action": "fail", "reason": "超时"}, self.owner)
+        # Retrying task_b while its host_failed notice is still pending bundles both B and the notice into one execution.
+        self.assertEqual(self.request(f"{self.path}/executions/{task_b['id']}", {"action": "retry"}, self.owner)[0], 200)
+        bundled_wake = self.reserve_for("Claude")[1]
+        latest_reports = {item["id"]: item for item in self.request(self.path)[1]["free"]["executions"]}
+        self.assertEqual(latest_reports[bundled_wake["id"]]["request_message_id"], earlier_b)
+        self.assertEqual(latest_reports[bundled_wake["id"]]["replaces_execution_id"], task_b["id"])
+        retry_trace = self.request(f"{self.path}/trace?message_id={earlier_b}", token=self.owner)[1]["records"]
+        self.assertTrue(any(record["kind"] == "retry.request" and record["data"]["execution_id"] == task_b["id"]
+                            for record in retry_trace), retry_trace)
+        # Open pending requests and live executions stay in free_view even when newer finished items exceed the recent cap.
+        FreeRoomTests.say(self, "让 Codex 等着", to=["Codex"])
+        FreeRoomTests.say(self, "让 Gemini 跑两轮", to=["Antigravity"])
+        self.work("Antigravity")
+        FreeRoomTests.say(self, "再跑一轮", to=["Antigravity"])
+        self.work("Antigravity")
+        orig_req, orig_exec = free_room.RECENT_REQUESTS, free_room.RECENT_EXECUTIONS
+        free_room.RECENT_REQUESTS, free_room.RECENT_EXECUTIONS = 1, 1
+        try:
+            free = self.request(self.path)[1]["free"]
+            self.assertTrue(any(item["member"] == "Codex" and item["status"] == "pending" for item in free["requests"]))
+            self.assertTrue(any(item["id"] == bundled_wake["id"] for item in free["executions"]))
+        finally:
+            free_room.RECENT_REQUESTS, free_room.RECENT_EXECUTIONS = orig_req, orig_exec
+
+    def assert_failure_trace(self, message_id, failed_id, wake_id, notice_id):
+        """The same trace is returned in pages without losing the earlier failure or its recovery."""
+        path = f"{self.path}/trace?message_id={message_id}"
+        status, complete = self.request(path, token=self.owner)
+        self.assertEqual(status, 200, complete)
+        with mock.patch("backend.room_trace.TRACE_PAGE", 2):
+            records, page = [], 1
+            while page is not None:
+                status, view = self.request(f"{path}&page={page}", token=self.owner)
+                self.assertEqual(status, 200, view)
+                records.extend(view["records"])
+                page = view["next_page"]
+        self.assertEqual(records, complete["records"])
+        self.assertIn({"source": "current", "kind": "failure_wake",
+                       "data": {"message_id": notice_id, "execution_id": failed_id}}, records)
+        executions = {record["data"]["execution_id"]: record["data"] for record in records if record["kind"] == "execution"}
+        self.assertEqual(set(executions), {failed_id, wake_id})
+        self.assertEqual((executions[failed_id]["status"], executions[wake_id]["status"]), ("failed", "completed"))
+        self.assertEqual(executions[wake_id]["layout_after"], message_id)
+        self.assertTrue(any(record["source"] == "history" and record["data"].get("result") == "网络中断" for record in records))
+        self.assertTrue(any(record["kind"] == "execution.retry" and record["data"].get("attempt") == 1 for record in records))
+        self.assertTrue(any(record["data"].get("action") == "retry_start" for record in records))
 
     def test_round_limit_holds_the_next_dispatch_until_the_owner_continues(self):
         """A round is a host dispatch: its hand-back always comes, the next dispatch past the limit is held, and continuing sends it."""
@@ -2939,6 +3108,10 @@ class HostTests(HostRoomTests):
         self.assertEqual(status, 201, saved)
         answer = next(item for item in self.request(f"{self.path}/messages?after=0&withdrawn=include")[1]["messages"] if item["id"] == saved["message"]["id"])
         self.assertEqual(answer["layout_after"], returned)
+        trace = self.request(f"{self.path}/trace?message_id={dispatch}", token=self.owner)[1]["records"]
+        self.assertTrue(any(record["kind"] == "batch.handoff" for record in trace), trace)
+        self.assertTrue(any(record["kind"] == "execution" and record["data"]["execution_id"] == handoff["id"]
+                            and record["data"]["layout_after"] == returned for record in trace), trace)
 
     def test_transcript_batches_carry_cards_older_than_the_room_view(self):
         """A failed card stays once the room view no longer lists its execution: the transcript read brings it."""

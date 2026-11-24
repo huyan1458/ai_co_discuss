@@ -911,6 +911,29 @@ test('an API member answers a private chat in text with the earlier lines as its
   assert.equal(execution_details('api', JSON.stringify({ type: 'codiscuss.entry', entry: { id: 'x', kind: 'tool', title: 'read_room', state: 'done' } })).entries[0].title, 'read_room');
 });
 
+for (const busy of [false, true]) {
+  test(`Pi stops an execution at its ${busy ? 'total' : 'idle'} time limit`, t => {
+    const home = mkdtempSync(join(tmpdir(), 'codiscuss-pi-timeout-'));
+    t.after(() => rmSync(home, { recursive: true, force: true }));
+    t.mock.timers.enable({ apis: ['Date', 'setInterval', 'setTimeout'] });
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+    child.kill = () => child.emit('close', null);
+    let failure;
+    pi_delivery({ cli: 'pi.js', profile: { model: 'm' }, key: '', binding: {}, service_home: home,
+      task: { id: 'free-1', directory: home, on_failure: reason => { failure = reason; } },
+      context_file: '', system_file: '', prompt: 'go', spawn_process: () => child });
+    child.stdout.write('{"type":"tool_execution_start","toolName":"bash","toolCallId":"1"}\n');
+    for (let minute = 0; minute < (busy ? 45 : 15); minute++) {
+      assert.equal(failure, undefined);
+      if (busy) child.stdout.write('{"type":"tool_execution_update"}\n');
+      t.mock.timers.tick(60_000);
+    }
+    t.mock.timers.tick(3000);
+    assert.match(failure, busy ? /45 分钟上限/ : /15 分钟没有模型或工具进展/);
+    assert.match(child.stdin.read().toString(), /"type":"abort"/);
+  });
+}
+
 test('a Pi session whose automatic compaction fails reports why and leaves the next execution a new session', async t => {
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-pi-compact-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -952,7 +975,7 @@ async function room_stub(t, handle) {
   const server = createServer(async (request, response) => {
     let text = ''; for await (const chunk of request) text += chunk;
     const url = new URL(request.url, 'http://stub');
-    const call = { method: request.method, path: url.pathname.replace(/^\/api\/rooms\/room-1/, ''), query: url.searchParams, body: text ? JSON.parse(text) : undefined };
+    const call = { headers: request.headers, method: request.method, path: url.pathname.replace(/^\/api\/rooms\/room-1/, ''), query: url.searchParams, body: text ? JSON.parse(text) : undefined };
     seen.push(call);
     const reply = await handle(call, seen, response);
     if (reply === undefined) return;
@@ -968,6 +991,24 @@ async function room_stub(t, handle) {
     role: 'member', participant: 'Grok', execution_id: 7, directory, task_id: 'free-7' };
   return { seen, context };
 }
+
+test('cross-room message reads drop execution credentials and respect lockdown', async t => {
+  const { seen, context } = await room_stub(t, () => [200, { messages: [] }]);
+  const room = '123456abcdef';
+  const call = { name: 'read_messages', arguments: { room } };
+  await execute_tool(context, call, participant_tools(context));
+  const request = seen.find(item => item.path === `/api/rooms/${room}/messages`);
+  assert.ok(request);
+  assert.equal(request.headers['x-discussion-read-only'], '1');
+  assert.equal(request.headers['x-discussion-token'], undefined);
+  assert.equal(request.query.has('execution_id'), false);
+  const count = seen.length;
+  for (const restricted of [{ tool_lockdown: true }, { external_access: {} }]) {
+    const task = { ...context, ...restricted };
+    assert.ok((await execute_tool(task, call, participant_tools(task))).result.error);
+  }
+  assert.equal(seen.length, count);
+});
 
 test('an API answer keeps one submission ID: an unknown result is looked up, and the same content again is the same submission (5b)', async t => {
   const stored = new Map();

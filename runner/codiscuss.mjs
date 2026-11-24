@@ -38,6 +38,7 @@ const HELP = t(`AI CoDiscuss CLI
   invited COMMAND       查看外部房间，调整信任等级、同意或拒绝唤醒、退出
   repo COMMAND          外部成员只读查看对方电脑开放的项目
   site COMMAND          预检、发布、续期、回滚或撤销房间静态网站（公开发布须经用户明确授权）
+  share-card COMMAND    读取房间可分享协作指标与素材，或将本地静态 HTML 封面导出为 PNG
 
   codiscuss service --help
   codiscuss room --help
@@ -45,6 +46,11 @@ const HELP = t(`AI CoDiscuss CLI
 
 网站操作使用 --site、DISCUSS_URL 或 --access-file 中的站点，并需要 Python 3.10+。
 原有 start、status、stop、add 等服务命令继续兼容。
+`) + '\n' + t(`排障速查
+  按标题找房间      codiscuss room list --query "标题片段"
+  追踪消息的处理    codiscuss room trace ROOM --message MESSAGE_ID
+  查看执行详情      codiscuss execution view ROOM EXECUTION_ID
+  核对站点版本      codiscuss site diagnose SITE_ID
 `);
 const SERVICE_HELP = t(`AI CoDiscuss 讨论服务
 
@@ -144,6 +150,7 @@ async function main(args = process.argv.slice(2)) {
   // Rooms on other computers this one was invited to, and the AI's entry to them (runner/external_client.mjs).
   if (['join', 'invited', 'repo', 'external-proxy'].includes(command)) return (await import('./external_client.mjs')).external_main(command, args.slice(1));
   if (command === 'site') return (await import('./site_deploy.mjs')).site_cli(args.slice(1));
+  if (command === 'share-card') return (await import('./share_card.mjs')).share_card_cli(args.slice(1));
   if (!command || (command === 'run' && args.length === 1)) return service_cli([]);
   if (SERVICE_COMMANDS.has(command) || command === '--json') return service_cli(args);
   return website_cli(args);

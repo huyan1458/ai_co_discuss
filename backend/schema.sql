@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS topic_folders (
 -- device. Never part of a room backup.
 CREATE TABLE IF NOT EXISTS room_share_links (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
-    share_id TEXT NOT NULL, url TEXT NOT NULL, manage_token TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    share_id TEXT NOT NULL, url TEXT NOT NULL, manage_token TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    card_json TEXT NOT NULL DEFAULT '{}', card_edits TEXT NOT NULL DEFAULT '{}'
 );
 -- Site-wide preferences of the person managing the site; `last_room` is the room they last opened on any device.
 CREATE TABLE IF NOT EXISTS site_preferences (
@@ -368,6 +369,10 @@ CREATE TABLE IF NOT EXISTS execution_denials (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
     denials TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS execution_diagnostics (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    details TEXT NOT NULL
+);
 -- A manual member's session refused a delivery: the runner keeps the execution and delivers again at retry_at
 -- (0 while delivering). The owner may ask for it now or stop it, and the runner then fails it. Not part of backups.
 -- What the runner's adapter classified a failed execution as ('quota' a usage limit, 'auth' signed out,
@@ -387,6 +392,7 @@ CREATE TABLE IF NOT EXISTS execution_failures (
 CREATE TABLE IF NOT EXISTS retried_requests (
     execution_id INTEGER NOT NULL REFERENCES member_executions(id) ON DELETE CASCADE,
     request_id INTEGER NOT NULL REFERENCES member_requests(id) ON DELETE CASCADE,
+    retried_at INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (execution_id, request_id)
 );
 CREATE TABLE IF NOT EXISTS execution_retries (

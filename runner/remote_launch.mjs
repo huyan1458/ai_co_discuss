@@ -31,12 +31,12 @@ const LAUNCH_SCRIPT = fileURLToPath(new URL('./discussion_launch.mjs', import.me
 // What a connected browser may ask the local bridge for, minus the folder dialog nobody would see and pairing itself.
 export const RELAYED_ACTIONS = new Set(['settings', 'launch', 'wipe-histories', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
   'room-member-model', 'room-profiles', 'room-skills', 'room-files', 'share-job', 'room-page', 'room-media', 'execution-details', 'room-restore', 'room-fork', 'models', 'sessions', 'api-key', 'api-check', 'scheduler-check', 'image-check', 'image-settings', 'tts-settings', 'tts', 'tts-release', 'local-speech', 'stt', 'weixin', 'projects', 'presets', 'workflows', 'room-workflow', 'room-settings', 'browse-directory', 'room-invite', 'room-invites', 'room-invite-revoke',
-  'site-stage', 'site-publish', 'site-list', 'site-renew', 'site-rollback', 'site-revoke',
+  'site-stage', 'site-publish', 'site-list', 'site-diagnose', 'site-renew', 'site-rollback', 'site-revoke',
   // Rooms on other computers this one was invited to (runner/external_client.mjs): its paired devices manage them as here.
   'invited-list', 'invited-join', 'invited-trust', 'invited-ai', 'invited-pause', 'invited-approve', 'invited-refuse', 'invited-lend', 'invited-leave', 'invited-remove', 'invited-room']);
 export const ROOM_ACTIONS = new Set(['launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
   'room-member-model', 'room-profiles', 'room-skills', 'room-files', 'share-job', 'room-page', 'room-media', 'execution-details', 'room-restore', 'room-fork', 'room-workflow', 'room-settings', 'workflows',
-  'site-stage', 'site-publish', 'site-list', 'site-renew', 'site-rollback', 'site-revoke',
+  'site-stage', 'site-publish', 'site-list', 'site-diagnose', 'site-renew', 'site-rollback', 'site-revoke',
   // Invites to members on other computers: paired devices issue them as this computer does (PLAN §4.2 item 1).
   'room-invite', 'room-invites', 'room-invite-revoke']);
 

@@ -36,6 +36,11 @@ const STOP_GRACE_MS = 3000;
 const EXIT_GRACE_MS = 5000;
 // A long tool (an image request) shows no events; the runner still hears from it at its lease-renewal pace.
 const TOOL_HEARTBEAT_MS = 30_000;
+const MINUTE_MS = 60_000;
+const EXECUTION_MINUTES = 45;
+const IDLE_MINUTES = 15;
+const PROGRESS_EVENTS = new Set(['turn_start', 'message_update', 'message_end', 'tool_execution_start',
+  'tool_execution_update', 'tool_execution_end', 'compaction_start', 'compaction_end']);
 const DIAGNOSTIC_CHARS = 1200;
 const REPLY_EXCERPT_CHARS = 300;
 // What a tool call's progress note shows of its arguments: what it targets, never content it writes.
@@ -233,14 +238,38 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
     setTimeout(() => child.kill(), STOP_GRACE_MS).unref();
     return true;
   };
+  const started_at = Date.now();
+  let last_progress = started_at;
+  task.on_diagnostic?.({ timeout_limits: { total_ms: EXECUTION_MINUTES * MINUTE_MS, idle_ms: IDLE_MINUTES * MINUTE_MS } });
   const heartbeat = setInterval(() => {
+    if (state.stopped) return;
+    const now = Date.now();
+    const deadline = now - started_at >= EXECUTION_MINUTES * MINUTE_MS;
+    if (deadline || now - last_progress >= IDLE_MINUTES * MINUTE_MS) {
+      clearInterval(heartbeat);
+      if (!state.terminal) task.on_diagnostic?.({ timeout_kind: deadline ? 'total' : 'idle' });
+      if (!state.terminal) fail(deadline ? room_text('API 执行达到 {minutes} 分钟上限，已停止', { minutes: EXECUTION_MINUTES })
+        : room_text('API 执行连续 {minutes} 分钟没有模型或工具进展，已停止', { minutes: IDLE_MINUTES }),
+      { failure_class: 'execution_timeout', retryable: false });
+      send({ type: 'abort' });
+      setTimeout(() => child.kill(), STOP_GRACE_MS).unref();
+      return;
+    }
     const running = [...state.tools.values()].at(-1);
-    if (running) task.on_activity?.(WRITE_TOOLS.includes(running.name) ? 'editing' : 'tool', running.name);
+    if (running) task.on_activity?.(WRITE_TOOLS.includes(running.name) ? 'editing' : 'tool', running.name, undefined, { synthetic: true });
   }, TOOL_HEARTBEAT_MS);
   heartbeat.unref();
   on_records(child.stdout, line => {
     const event = json(line);
     if (!event) return;
+    if (PROGRESS_EVENTS.has(event.type)) {
+      last_progress = Date.now();
+      task.on_diagnostic?.({ last_activity_at: last_progress });
+    }
+    if (event.type === 'auto_retry_start' || event.type === 'auto_retry_end') {
+      const state = event.type === 'auto_retry_start' ? 'started' : event.success === true ? 'succeeded' : event.success === false ? 'failed' : 'ended';
+      task.on_diagnostic?.({ retry: { layer: 'model', state, attempt: Number.isSafeInteger(event.attempt) ? event.attempt : null } });
+    }
     if (event.type !== 'message_update') log(`${line}\n`);
     handle_event(event);
   });
