@@ -984,3 +984,50 @@ test('the canvas supports user nodes and conditional branch nodes with N branche
     [{ ...flow, edges: [{ source: 'b1', branch: 'normal', target: 'w' }, { source: 'b1', branch: 'normal', target: 'w' }] }, /同一分支到同一节点只能有一条连线/],
   ]) assert.throws(() => save_workflow(home, { ...NOVEL, flow: bad }, validate_preset, REPLACE), pattern);
 });
+
+test('workflow display metadata (author, source) round-trips, survives rename, clears cleanly, validates limits, and stays out of host routing', t => {
+  const home = home_fixture(t);
+  const meta = { author: '数字生命卡兹克', source: '小红书《给三个顶流 AI 分完岗，爽飞了》' };
+  const saved = save_workflow(home, { ...NOVEL, ...meta }, validate_preset, REPLACE);
+  assert.deepEqual([saved.author, saved.source], [meta.author, meta.source]);
+  const skill_text = readFileSync(join(home, 'workflows', NOVEL.id, 'SKILL.md'), 'utf8');
+  assert.match(skill_text, /\nmetadata:\n {2}label: 连载小说\n {2}author: 数字生命卡兹克\n {2}source: 小红书《给三个顶流 AI 分完岗，爽飞了》\n/);
+  const listed = list_workflows(home)[0];
+  assert.deepEqual([listed.author, listed.source], [meta.author, meta.source]);
+  const previewed = preview_workflow({ folder: join(home, 'workflows', NOVEL.id) }, validate_preset, () => true);
+  assert.deepEqual([previewed.author, previewed.source], [meta.author, meta.source]);
+  // Renaming preserves display metadata.
+  rename_workflow(home, NOVEL.id, '新名字');
+  const renamed = get_workflow(home, NOVEL.id);
+  assert.deepEqual([renamed.label, renamed.author, renamed.source], ['新名字', meta.author, meta.source]);
+  // Display metadata never enters host routing context (neither CLI task file nor API host system prompt).
+  const directory = join(home, 'runtime');
+  mkdirSync(directory);
+  const config = { mode: 'free', site: 'https://discussion.test', room: 'room', token: 'o'.repeat(32), directory, project: resolve('.'),
+    api_home: home, members: { Claude: { token: 'c'.repeat(32) } }, participants: { Claude: { adapter: 'claude', project_access: 'write' } },
+    workflow: { id: NOVEL.id, enabled: true, members: {} } };
+  const loaded = load_room_workflow(config);
+  assert.equal(loaded.author, undefined);
+  assert.equal(loaded.source, undefined);
+  const task_field = workflow_task_field(loaded, [{ name: 'Claude', label: 'Claude', status: 'active' }], config.participants);
+  assert.equal(task_field.author, undefined);
+  assert.equal(task_field.source, undefined);
+  free_task_files(config, { name: 'Claude', role: 'host' }, { id: 1, read_until: 0, requests: [{ id: 1, message_id: 9, purpose: 'route' }] },
+    {}, { workflow: loaded, room_members: [{ name: 'Claude', label: 'Claude', status: 'active' }] });
+  const host_task = readFileSync(runtime_file(directory, 'free-1.task.json'), 'utf8');
+  assert.doesNotMatch(host_task, /数字生命卡兹克|给三个顶流/);
+  const api_prompt = system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'free', workflow: { ...loaded, members: [] } });
+  assert.doesNotMatch(api_prompt, /数字生命卡兹克|给三个顶流/);
+  // Clearing author/source omits them from SKILL.md.
+  const cleared = save_workflow(home, { ...NOVEL, author: '', source: '' }, validate_preset, REPLACE);
+  assert.equal(cleared.author, undefined);
+  assert.equal(cleared.source, undefined);
+  assert.doesNotMatch(readFileSync(join(home, 'workflows', NOVEL.id, 'SKILL.md'), 'utf8'), /\b(author|source):/);
+  // Validation rejects oversized or multi-line display metadata.
+  for (const [change, pattern] of [
+    [{ author: 'a'.repeat(65) }, /工作流作者最多 64 字/],
+    [{ author: '两\n行' }, /工作流作者最多 64 字，且不能换行/],
+    [{ source: 's'.repeat(201) }, /工作流出处最多 200 字/],
+    [{ source: '两\n行' }, /工作流出处最多 200 字，且不能换行/],
+  ]) assert.throws(() => save_workflow(home, { ...NOVEL, ...change }, validate_preset, REPLACE), pattern);
+});

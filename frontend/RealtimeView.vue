@@ -16,7 +16,7 @@ import { touch_zoom } from "./touch-zoom.js";
 
 const props = defineProps({ segments: { type: Array, required: true }, tones: { type: Map, required: true }, name: { type: Function, required: true } });
 const emit = defineEmits(["open", "hover", "leave", "pick"]);
-// About this many clock ticks across the axis.
+// About this many candidate clock ticks across the axis; pixel-clearance filtering drops any that would crowd a narrow chart.
 const TICK_COUNT = 8;
 // An idle stretch narrower than this share of the width carries no label.
 const LABEL_MIN_SHARE = 0.06;
@@ -33,8 +33,6 @@ const BUTTON_ZOOM = 0.5;
 const REPLAY_TARGET_MS = 20_000;
 const REPLAY_SPEEDS = [0, 60, 600, 3600];
 const WHOLE = { from: 0, span: 1 };
-// A tick this far right puts its label to the left of its line, so the edge never cuts it.
-const TICK_END_SHARE = 0.9;
 
 const model = computed(() => realtime_model(props.segments));
 const span = computed(() => Math.max(1, model.value.end - model.value.start));
@@ -43,18 +41,28 @@ const zoomed = computed(() => zoom.value.span < 1);
 // Where a time sits in the view: 0 the left edge, 1 the right; outside the view falls beyond and is clipped.
 const x = (time) => ((time - model.value.start) / span.value - zoom.value.from) / zoom.value.span;
 const shown_span = computed(() => span.value * zoom.value.span);
-const ticks = computed(() => axis_ticks({ total_ms: span.value, busy_ms: span.value, x: (time) => (time - model.value.start) / span.value,
-  spans: [{ start: model.value.start, end: model.value.end, from: 0, width: 1 }] }, TICK_COUNT, zoom.value)
-  .map((tick) => ({ ...tick, x: (tick.x - zoom.value.from) / zoom.value.span }))
-  // The last tick's label sits left of its line, so on a narrow chart it can run into the one before (#8454): then it goes.
-  .filter((tick, index, list) => {
-    if (tick.x <= TICK_END_SHARE || !index || !chart_width.value) return true;
-    const label = (item) => (tick_label(item).length * TICK_CHAR_PX + TICK_PAD_PX) / chart_width.value;
-    return list[index - 1].x + label(list[index - 1]) <= tick.x - label(tick);
-  }));
-// Rough width of a tick label: per character and its padding, in pixels.
-const TICK_CHAR_PX = 7;
-const TICK_PAD_PX = 8;
+// Rough width of a tick label plus breathing room, in pixels (covers dated labels like "11/22 02:00").
+const TICK_CHAR_PX = 6.5;
+const TICK_PAD_PX = 14;
+const ticks = computed(() => {
+  const width = chart_width.value || 600;
+  const raw = axis_ticks({ total_ms: span.value, busy_ms: span.value, x: (time) => (time - model.value.start) / span.value,
+    spans: [{ start: model.value.start, end: model.value.end, from: 0, width: 1 }] }, TICK_COUNT, zoom.value)
+    .map((tick) => ({ ...tick, x: (tick.x - zoom.value.from) / zoom.value.span }));
+  // Check every adjacent tick against real pixel clearance so dated labels never collide or clip on phones (#8454, #8966).
+  const kept = [];
+  let prev_right = -Infinity;
+  for (const tick of raw) {
+    const label_share = (tick_label(tick).length * TICK_CHAR_PX + TICK_PAD_PX) / width;
+    const end = tick.x + label_share > 1;
+    const left = end ? tick.x - label_share : tick.x;
+    const right = end ? tick.x : tick.x + label_share;
+    if (left < 0 || right > 1 || left < prev_right) continue;
+    kept.push({ ...tick, end });
+    prev_right = right;
+  }
+  return kept;
+});
 const tick_label = (tick) => new Date(tick.at).toLocaleString(locale, { hour: "2-digit", minute: "2-digit", ...(tick.seconds ? { second: "2-digit" } : {}),
   ...(shown_span.value >= DATED_SPAN_MS ? { month: "numeric", day: "numeric" } : {}), hour12: false });
 const when = (ms) => new Date(ms).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
@@ -279,7 +287,7 @@ onBeforeUnmount(pause);
         <i v-if="position != null" class="rt-cursor" :style="{ left: `${x(position) * 100}%` }"></i>
       </div>
       <div class="rt-axis" aria-hidden="true">
-        <span v-for="tick in ticks" :key="tick.at" class="rt-tick" :class="{ 'is-end': tick.x > TICK_END_SHARE }" :style="{ left: `${tick.x * 100}%` }">{{ tick_label(tick) }}</span>
+        <span v-for="tick in ticks" :key="tick.at" class="rt-tick" :class="{ 'is-end': tick.end }" :style="{ left: `${tick.x * 100}%` }">{{ tick_label(tick) }}</span>
       </div>
       <div class="rt-tasks">
         <template v-for="task in seen(model.tasks)" :key="task.key">

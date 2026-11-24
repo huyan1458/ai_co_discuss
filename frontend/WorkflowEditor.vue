@@ -55,8 +55,21 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
       </label>
       <label class="workflow-skill-description">
         <span>{{ t('一句话描述') }} <small>{{ t('主持人凭它判断何时使用') }}</small></span>
-        <input v-model="workflow.description" :maxlength="500" :placeholder="sub ? t('做什么、什么时候用（必填）') : t('做什么、什么时候用')" />
+        <textarea v-model="workflow.description" class="workflow-description-text" rows="1" :maxlength="500" :placeholder="sub ? t('做什么、什么时候用（必填）') : t('做什么、什么时候用')" />
       </label>
+      <div v-if="!sub" class="workflow-skill-meta">
+        <div class="workflow-skill-meta-row">
+          <label class="workflow-skill-description">
+            <span>{{ t('作者') }}</span>
+            <input v-model="workflow.author" :maxlength="64" :placeholder="t('原作者或整理者（可选）')" />
+          </label>
+          <label class="workflow-skill-description">
+            <span>{{ t('出处') }}</span>
+            <input v-model="workflow.source" :maxlength="200" :placeholder="t('来源文章、链接或实践（可选）')" />
+          </label>
+        </div>
+        <small class="workflow-skill-meta-hint">{{ t('作者与出处仅用于展示，不发给主持人') }}</small>
+      </div>
       <textarea v-if="editing" ref="source" v-model="workflow.skill" :maxlength="MAX_SKILL" class="workflow-skill-source" spellcheck="false" :aria-label="t('SKILL.md 正文')" />
       <div v-else-if="workflow.skill?.trim()" class="workflow-skill-preview markdown-body" v-html="rendered" @dblclick="edit"></div>
       <button v-else type="button" class="workflow-skill-empty" @click="edit"><UIcon name="i-lucide-pencil" class="workflow-skill-icon" />{{ t('写下主持人怎么组织这个{value1}', { value1: sub ? t('子工作流') : t('工作流') }) }}</button>
@@ -83,9 +96,14 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
 .workflow-skill-head small { overflow: hidden; color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; text-overflow: ellipsis; }
 .workflow-skill-description { display: grid; gap: 4px; font-size: 12px; color: var(--ui-text-muted); }
 .workflow-skill-description small { color: var(--ui-text-dimmed); }
+.workflow-description-text { field-sizing: content; box-sizing: border-box; width: 100%; min-width: 0; padding: 3px 10px; border: 0; border-inline-start: 3px solid var(--ui-border-accented); border-radius: 0; background: transparent; color: var(--ui-text-muted); font: inherit; line-height: 1.6; resize: none; }
+.workflow-description-text:focus-visible { outline: none; border-inline-start-color: var(--channel-accent, var(--ui-primary)); }
 .workflow-skill-description input { height: 30px; padding: 0 8px; border: 1px solid var(--ui-border-muted); border-radius: 7px; background: var(--ui-bg-elevated); color: var(--ui-text);
   font-size: 13px; outline: none; }
 .workflow-skill-description input:focus { border-color: var(--channel-accent, var(--ui-primary)); }
+.workflow-skill-meta { display: grid; gap: 4px; }
+.workflow-skill-meta-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.workflow-skill-meta-hint { color: var(--ui-text-dimmed); font-size: 11px; }
 /* One scrolling column: the description, then the text (the source box grows to its text and fills at least the rest). */
 .workflow-skill-body { display: flex; flex: 1; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
 .workflow-skill-source { flex: 1 0 auto; min-height: 240px; padding: 10px 12px; overflow: hidden; border: 1px solid var(--channel-accent, var(--ui-primary)); border-radius: 8px; background: var(--ui-bg-elevated);
@@ -107,5 +125,6 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
 .workflow-skill-grant, .workflow-skill-warn { display: flex; gap: 6px; align-items: center; margin: 0; color: var(--ui-warning, #e0a33a); font-size: 12px; }
 /* Stacked page: tighter, the subtitle gives way to the text. */
 .workflow-skill.is-compact { gap: 8px; padding: 8px 12px; }
-.workflow-skill.is-compact .workflow-skill-head small, .workflow-skill.is-compact .workflow-skill-description small { display: none; }
+.workflow-skill.is-compact .workflow-skill-head small, .workflow-skill.is-compact .workflow-skill-description small, .workflow-skill.is-compact .workflow-skill-meta-hint { display: none; }
+.workflow-skill.is-compact .workflow-skill-meta-row { grid-template-columns: minmax(0, 1fr); }
 </style>

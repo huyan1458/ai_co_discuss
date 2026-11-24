@@ -20,6 +20,8 @@ export const MAX_WORKFLOW_SKILL = 20000;
 export const MAX_WORKFLOW_CARDS = 30;
 const MAX_WORKFLOW_LABEL = 32;
 const MAX_WORKFLOW_DESCRIPTION = 500;
+const MAX_WORKFLOW_AUTHOR = 64;
+const MAX_WORKFLOW_SOURCE = 200;
 const MAX_DRAFT_PARTS = 20;
 const WORKFLOW_LOCK_WAIT_MS = 5000;
 const BACKUP_DIRECTORY = /^\.old-([a-z0-9_-]{1,40})-[0-9a-f-]{36}$/;
@@ -177,9 +179,19 @@ function skill_label(fields) {
   return (fields.metadata && typeof fields.metadata === 'object' ? fields.metadata.label : '') || (typeof fields.label === 'string' ? fields.label : '');
 }
 
-/** SKILL.md frontmatter as the Agent Skills format writes it: the display name (and a sub-workflow's `attach`) go under `metadata`. */
-function skill_fields(id, label, description, attach = []) {
-  return { name: id, description, metadata: { label, ...(attach?.length ? { attach: attach.join(', ') } : {}) } };
+/** Human-facing display metadata under `metadata:` (`author`, `source`), never sent to the host. */
+function skill_meta(fields) {
+  const meta = fields.metadata && typeof fields.metadata === 'object' ? fields.metadata : {};
+  const pick = key => (typeof meta[key] === 'string' ? meta[key].trim() : '');
+  const author = pick('author'), source = pick('source');
+  return { ...(author ? { author } : {}), ...(source ? { source } : {}) };
+}
+
+/** SKILL.md frontmatter as the Agent Skills format writes it: display fields (and a sub-workflow's `attach`) go under `metadata`. */
+function skill_fields(id, label, description, attach = [], meta = {}) {
+  const { author, source } = meta;
+  return { name: id, description, metadata: { label, ...(author ? { author } : {}), ...(source ? { source } : {}),
+    ...(attach?.length ? { attach: attach.join(', ') } : {}) } };
 }
 
 /** A sub-workflow's `metadata.attach`: the main flow's stage IDs it attaches to, written comma-separated. */
@@ -285,7 +297,7 @@ function workflow_from_files(skill_text, cards, resources = {}, ignored = []) {
   const { [FLOW_FILE]: flow_text, ...others } = resources;
   const flow = typeof flow_text === 'string' ? parse_flow_text(flow_text, FLOW_FILE) : undefined;
   const { sub_workflows, rest } = split_sub_workflows(others, ignored);
-  return { id: fields.name || '', label: skill_label(fields), description: fields.description || '', skill: body,
+  return { id: fields.name || '', label: skill_label(fields), description: fields.description || '', ...skill_meta(fields), skill: body,
     agents: cards_from_files(cards, 'agents/', ignored), resources: rest, sub_workflows, ...(flow ? { flow } : {}) };
 }
 
@@ -549,8 +561,11 @@ export function validate_workflow(input, validate_card) {
   // Checked only when saving: a workflow saved earlier under one of these names can still be read and deleted.
   if (RESERVED_WORKFLOW_IDS.includes(id)) throw new Error(`工作流 ID 不能用 ${id}：它是内置模式 /${id} 的命令`);
   const label = String(input.label || '').trim(), description = String(input.description || '').trim(), skill = String(input.skill || '').trim();
+  const author = String(input.author || '').trim(), source = String(input.source || '').trim();
   if (label.length > MAX_WORKFLOW_LABEL) throw new Error(`工作流显示名最多 ${MAX_WORKFLOW_LABEL} 字`);
   if (description.length > MAX_WORKFLOW_DESCRIPTION || /\n/.test(description)) throw new Error(`工作流描述最多 ${MAX_WORKFLOW_DESCRIPTION} 字，且不能换行`);
+  if (author.length > MAX_WORKFLOW_AUTHOR || /\n/.test(author)) throw new Error(`工作流作者最多 ${MAX_WORKFLOW_AUTHOR} 字，且不能换行`);
+  if (source.length > MAX_WORKFLOW_SOURCE || /\n/.test(source)) throw new Error(`工作流出处最多 ${MAX_WORKFLOW_SOURCE} 字，且不能换行`);
   if (!skill) throw new Error('SKILL.md 正文不能为空');
   if (skill.length > MAX_WORKFLOW_SKILL) throw new Error(`SKILL.md 正文最多 ${MAX_WORKFLOW_SKILL} 字`);
   const agents = input.agents || [];
@@ -563,7 +578,7 @@ export function validate_workflow(input, validate_card) {
   const sub_workflows = input.sub_workflows === undefined ? undefined : validate_sub_workflows(input.sub_workflows, validate_card, main_cards);
   workflow_cards({ agents: normalized, sub_workflows });
   const flow = validate_flow(input.flow, main_cards, sub_workflows?.map(sub => sub.id));
-  return { id, label, description, skill, agents: normalized,
+  return { id, label, description, ...(author ? { author } : {}), ...(source ? { source } : {}), skill, agents: normalized,
     ...(resources === undefined ? {} : { resources }),
     ...(sub_workflows === undefined ? {} : { sub_workflows }),
     ...(flow === undefined ? {} : { flow }) };
@@ -658,7 +673,10 @@ export function list_workflows(home, card_ready = null) {
         const unavailable = card_ready ? workflow_cards(workflow).filter(agent => !card_ready(agent.name)).map(agent => ({
           card: agent.card, label: agent.label || agent.card, platform: agent.name.slice(0, agent.name.length - agent.card.length - 1),
           ...(agent.sub_workflow ? { sub_workflow: agent.sub_workflow } : {}) })) : [];
-        return { id, label: workflow.label || id, description: workflow.description, cards: workflow.agents.length, directory: workflow.directory,
+        return { id, label: workflow.label || id, description: workflow.description,
+          ...(workflow.author ? { author: workflow.author } : {}),
+          ...(workflow.source ? { source: workflow.source } : {}),
+          cards: workflow.agents.length, directory: workflow.directory,
           ...(unavailable.length ? { unavailable } : {}), ...flag };
       } catch (error) { return { id, label: id, description: '', cards: 0, error: error.message, ...flag }; }
     });
@@ -703,7 +721,7 @@ export function rename_workflow(home, id, label) {
   if (text.length > MAX_WORKFLOW_LABEL) throw new Error(`工作流显示名最多 ${MAX_WORKFLOW_LABEL} 字`);
   return with_workflow_lock(home, () => {
     const workflow = read_saved_workflow(home, id);
-    writeFileSync(join(workflow.directory, 'SKILL.md'), serialize_markdown(skill_fields(id, text, workflow.description), workflow.skill));
+    writeFileSync(join(workflow.directory, 'SKILL.md'), serialize_markdown(skill_fields(id, text, workflow.description, [], workflow), workflow.skill));
     return { id, label: text };
   });
 }
@@ -801,7 +819,7 @@ export function save_workflow(home, input, validate_card, base = {}) {
       const carry = { folders: card_folders(directory), replace: base.overwrite === true || !existsSync(directory),
         backup: (card, folder) => backups.push(backup_card(home, workflow.id, card, folder)) };
       mkdirSync(join(staging, 'agents'), { recursive: true });
-      writeFileSync(join(staging, 'SKILL.md'), serialize_markdown(skill_fields(workflow.id, workflow.label, workflow.description), workflow.skill));
+      writeFileSync(join(staging, 'SKILL.md'), serialize_markdown(skill_fields(workflow.id, workflow.label, workflow.description, [], workflow), workflow.skill));
       write_cards(join(staging, 'agents'), workflow.agents, carry);
       if (workflow.resources) write_resources(staging, workflow.resources);
       else if (existsSync(directory)) keep_resources(directory, staging);

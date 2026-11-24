@@ -59,8 +59,9 @@ function saved_flow(flow, agents, subs = []) {
  */
 function payload(value) {
   // `revision` is the folder's version the page loaded; it travels beside the workflow as `base_revision`, not in it.
-  const { resources, commands: ignored, flow, directory, sub_workflows, revision: loaded, ...fields } = value;
-  return { ...fields, flow: saved_flow(flow, fields.agents, (sub_workflows || []).map((sub) => sub.id)), resources,
+  const { resources, commands: ignored, flow, directory, sub_workflows, revision: loaded, author, source, ...fields } = value;
+  const meta = { ...(author ? { author } : {}), ...(source ? { source } : {}) };
+  return { ...fields, ...meta, flow: saved_flow(flow, fields.agents, (sub_workflows || []).map((sub) => sub.id)), resources,
     ...(sub_workflows ? { sub_workflows: sub_workflows.map((sub) => ({ ...sub, flow: saved_flow(sub.flow, [...sub.agents, ...fields.agents]) })) } : {}) };
 }
 

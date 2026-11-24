@@ -142,6 +142,8 @@ name: novel-serial
 description: 做什么、什么时候用，一句话，不换行
 metadata:
   label: 连载小说
+  author: 原作者或整理者（可选）
+  source: 来源文章、链接或实践出处（可选）
 ---
 （正文，最多 20,000 字）
 ```
@@ -160,6 +162,7 @@ project_access: write
 ```
 
 - **工作流 ID**（文件夹名 = SKILL.md 的 `name`）：小写英文和数字，可用单个连字符连接（不在首尾），1—40 位。`metadata` 下的 `label`（显示名）最多 32 字；早期写在顶层的 `label` 仍可读取，保存时移到 `metadata` 下。
+- **展示元数据**（均可选，不换行，只给人看和分享，**不会发给主持人**）：`metadata.author`（作者，最多 64 字）、`metadata.source`（出处，最多 200 字）。不要把作者、出处等背景信息塞进 `description`。
 - **`description`** 最多 500 字：写清做什么、什么时候用。主持人只凭它判断一条请求该不该按这个工作流做，写含糊了，该用时会不用、不该用时会套用。
 - **卡片**：最多 30 张。`name` 是卡片 ID，等于文件名，只用小写英文、数字和下划线，最多 16 位。`platform` 是平台 ID：`Claude`、`Codex`、`Antigravity`、`DeepSeek`、`Qwen`、`Grok`、`OpenAI`、`Custom`（网页显示的 Gemini 写 `Antigravity`，自定义 API 写 `Custom`），须是本机已配置的软件，或已配置的模型 API（官方平台可按已保存的 API Key 加入；Custom 须先保存完整的本机 API 配置）。成员名由程序拼成 `平台-卡片ID`。
 - **卡片可选字段**：`label`、`description`、`project_access`（read / write / auto / full）、`model`、`effort`。生图不是卡片字段：房间添加了生图卡片后所有成员都能画，卡片提示词写清谁负责出图即可。不用的字段直接省略；模型和强度省略即用本机默认值。接入方式、可执行文件、密钥不写进卡片，由各自电脑的配置决定。各角色挑哪个平台和模型，见 [给卡片挑平台和模型](references/model-selection.md)。

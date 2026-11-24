@@ -56,6 +56,11 @@ const section_element = ref(null);
 const section_width = ref(0);
 const axis_element = ref(null);
 const axis_width = ref(0);
+const controls_element = ref(null);
+const controls_height = ref(0);
+let scroll_pane = null;
+let last_auto_top = null;
+let auto_scroll_until = 0;
 let size_observer = null;
 const room_id = computed(() => view.value.room?.id);
 const executions = ref(new Map());
@@ -324,27 +329,45 @@ function close_on_outside(event) {
   if (opened.value && !event.target.closest?.(".wf-detail, .wf-names, .wf-bar, .wf-note, .rt-block, .wf.is-compact .wf-lane, .wf-now-card")) opened.value = "";
 }
 function close_on_escape(event) { if (event.key === "Escape") opened.value = ""; }
+function on_pane_scroll() {
+  if (!replaying.value || !follow.value || overview.value) return;
+  if (performance.now() < auto_scroll_until || !scroll_pane || last_auto_top === null) return;
+  if (Math.abs(scroll_pane.scrollTop - last_auto_top) > 24) {
+    follow.value = false;
+    auto_zoom.value = false;
+  }
+}
 onMounted(() => {
   document.addEventListener("pointerdown", close_on_outside);
   document.addEventListener("keydown", close_on_escape);
+  scroll_pane = section_element.value?.closest(".content-page") || null;
+  scroll_pane?.addEventListener("scroll", on_pane_scroll, { passive: true });
   size_observer = new ResizeObserver((entries) => {
     for (const entry of entries) {
       if (entry.target === section_element.value) section_width.value = entry.contentRect.width;
       else if (entry.target === axis_element.value) axis_width.value = entry.contentRect.width;
+      else if (entry.target === controls_element.value) controls_height.value = Math.round(entry.target.getBoundingClientRect().height);
     }
   });
   if (section_element.value) size_observer.observe(section_element.value);
   if (axis_element.value) size_observer.observe(axis_element.value);
+  if (controls_element.value) size_observer.observe(controls_element.value);
 });
-// The axis appears only once there are rows, so it is observed whenever it is (re)rendered.
+// The axis and controls appear only once there are rows, so they are observed whenever (re)rendered.
 watch(axis_element, (element, previous) => {
   if (previous) size_observer?.unobserve(previous);
   if (element) size_observer?.observe(element);
+});
+watch(controls_element, (element, previous) => {
+  if (previous) size_observer?.unobserve(previous);
+  if (element) { size_observer?.observe(element); controls_height.value = Math.round(element.getBoundingClientRect().height); }
+  else controls_height.value = 0;
 });
 onBeforeUnmount(() => {
   clearInterval(refresh_timer); cancelAnimationFrame(frame);
   document.removeEventListener("pointerdown", close_on_outside);
   document.removeEventListener("keydown", close_on_escape);
+  scroll_pane?.removeEventListener("scroll", on_pane_scroll);
   size_observer?.disconnect();
 });
 
@@ -533,6 +556,35 @@ function sync_follow(elapsed_ms = 0) {
     zoom.value = { from: Math.min(1 - zoom.value.span, Math.max(0, share - FOLLOW_AT * zoom.value.span)), span: zoom.value.span };
   }
 }
+const active_row_key = computed(() => {
+  const list = rows.value;
+  for (let i = list.length - 1; i >= 0; i -= 1) if (list[i].item.state === "running") return list[i].key;
+  return list.at(-1)?.key || "";
+});
+/** Keep the latest active row visible below the sticky controls and axis while replay follow is on (#8966). */
+function scroll_to_active() {
+  if (!replaying.value || !follow.value || overview.value) return;
+  const scroller = scroll_pane || section_element.value?.closest(".content-page");
+  if (!scroller || !wf_element.value || !active_row_key.value) return;
+  scroll_pane = scroller;
+  const label = wf_element.value.querySelector(`.wf-label[data-row="${CSS.escape(active_row_key.value)}"]`);
+  if (!label) return;
+  const row_rect = label.getBoundingClientRect();
+  const pane_rect = scroller.getBoundingClientRect();
+  const row_bottom = row_rect.bottom + (compact.value ? 34 : 18);
+  const sticky_bottom = pane_rect.top + (controls_height.value || 0) + (axis_element.value?.offsetHeight || 30) + 8;
+  let delta = 0;
+  if (row_bottom > pane_rect.bottom - 12) delta = row_bottom - (pane_rect.bottom - 12);
+  else if (row_rect.top < sticky_bottom) delta = row_rect.top - sticky_bottom;
+  if (Math.abs(delta) < 2) { if (last_auto_top === null) last_auto_top = scroller.scrollTop; return; }
+  const next_top = Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + delta));
+  if (Math.abs(next_top - scroller.scrollTop) < 2) { if (last_auto_top === null) last_auto_top = scroller.scrollTop; return; }
+  last_auto_top = next_top;
+  auto_scroll_until = performance.now() + 180;
+  scroller.scrollTop = next_top;
+}
+watch(active_row_key, () => { if (replaying.value && follow.value) nextTick(scroll_to_active); }, { flush: "post" });
+
 function toggle_follow() {
   if (follow_active.value) {
     follow.value = false;
@@ -540,7 +592,9 @@ function toggle_follow() {
   } else {
     follow.value = true;
     auto_zoom.value = true;
+    last_auto_top = scroll_pane?.scrollTop ?? null;
     sync_follow(0);
+    nextTick(scroll_to_active);
   }
 }
 watch(axis, () => { if (replaying.value && follow.value) sync_follow(0); });
@@ -583,17 +637,26 @@ function play() {
   } else {
     play_position = replay.position;
   }
+  last_auto_top = scroll_pane?.scrollTop ?? null;
   Object.assign(replay, { position: play_position, playing: true });
   sync_follow(0);
+  nextTick(scroll_to_active);
   load_run_notes();
 }
 /** A replay shows what each execution was saying at the time, so it needs the run's note texts, read once each. */
 function load_run_notes() { for (const item of shown.value?.executions || []) note_texts_for({ item, notes: item.notes || [] }); }
 function pause() { replay.playing = false; }
-function scrub(event) { play_position = Number(event.target.value); replay.position = play_position; sync_follow(0); load_run_notes(); }
+function scrub(event) {
+  play_position = Number(event.target.value);
+  replay.position = play_position;
+  sync_follow(0);
+  nextTick(scroll_to_active);
+  load_run_notes();
+}
 function stop_replay() {
   if (auto_zoom.value) zoom.value = WHOLE;
   auto_zoom.value = false;
+  last_auto_top = null;
   Object.assign(replay, { position: null, playing: false });
 }
 // A share page's 执行 tab replays from the start each time it is opened (the tab mounts this anew).
@@ -641,11 +704,23 @@ const shown_folds = computed(() => {
   }
   return kept;
 });
-/** Ticks that clear the fold labels and the axis's right end. */
+/** Ticks that clear previous tick labels, fold labels and the axis's right end (#8966). */
+const TICK_CHAR_PX = 7;
+const TICK_PAD_PX = 12;
 const shown_ticks = computed(() => {
-  const clearance = AXIS_LABEL_CLEARANCE_PX / (axis_width.value || 800);
-  const end = 1 - AXIS_END_CLEARANCE_PX / (axis_width.value || 800);
-  return ticks.value.filter((tick) => tick.x <= end && !shown_folds.value.some((fold) => Math.abs(tick.x - fold.middle) < clearance));
+  const width = axis_width.value || 800;
+  const clearance = AXIS_LABEL_CLEARANCE_PX / width;
+  const kept = [];
+  let prev_right = -Infinity;
+  for (const tick of ticks.value) {
+    const label_share = (tick_label(tick).length * TICK_CHAR_PX + TICK_PAD_PX) / width;
+    if (tick.x < 0 || tick.x + label_share > 1 || tick.x < prev_right) continue;
+    if (shown_folds.value.some((fold) => Math.abs(tick.x - fold.middle) < clearance
+      || (tick.x < fold.middle && tick.x + label_share > fold.middle - clearance / 2))) continue;
+    kept.push(tick);
+    prev_right = tick.x + label_share;
+  }
+  return kept;
 });
 // Data read before the page was hidden or went offline may be old, so possible stalls are judged only up to that read.
 const status_time = computed(() => replaying.value ? view_time.value : Math.min(view_time.value, read_at.value));
@@ -954,7 +1029,7 @@ const selected_notes = computed(() => {
     <p v-else-if="error" role="alert" class="fine-print wf-error">{{ error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" :loading="reading" @click="load(true)" /></p>
     <p v-if="timeline && !timeline.executions.length" class="fine-print">{{ t('还没有执行记录。') }}</p>
     <div v-if="timeline?.executions.length" ref="wf_element" class="wf" :class="{ 'is-compact': compact }"
-      :style="{ '--wf-depth-px': `${compact ? COMPACT_DEPTH_PX : DEPTH_PX}px` }">
+      :style="{ '--wf-depth-px': `${compact ? COMPACT_DEPTH_PX : DEPTH_PX}px`, '--wf-controls-h': replaying && !overview ? `${controls_height}px` : '0px' }">
       <header class="wf-head">
         <div class="wf-head-line">
           <span class="wf-modes" role="tablist" :aria-label="t('查看方式')">
@@ -967,7 +1042,7 @@ const selected_notes = computed(() => {
         <p v-if="view_mode === 'tasks' && headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
       </header>
 
-      <div v-if="!overview" class="wf-controls">
+      <div v-if="!overview" ref="controls_element" class="wf-controls" :class="{ 'is-sticky': replaying }">
         <div class="wf-toolbar">
           <p v-if="headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
           <span class="wf-tools">
@@ -1258,7 +1333,8 @@ const selected_notes = computed(() => {
 .wf-modes button.is-active { background: var(--wf-surface); color: var(--wf-text); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .2); }
 .wf-modes button:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 1px; }
 /* Zoom and replay bar: same position, button style and narrow-screen icon-only behaviour as RealtimeView. */
-.wf-controls { display: grid; gap: 8px; padding: 12px 16px 10px; border-bottom: 1px solid var(--wf-border); }
+.wf-controls { display: grid; gap: 8px; padding: 12px 16px 10px; border-bottom: 1px solid var(--wf-border); background: var(--wf-surface); }
+.wf-controls.is-sticky { position: sticky; top: var(--wf-sticky-top, 0px); z-index: 4; }
 .wf-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
 .wf-tools, .wf-speeds { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .wf-tool-short { display: none; }
@@ -1309,8 +1385,8 @@ const selected_notes = computed(() => {
 
 /* Grid: the label column, the lanes and the duration column share one template, the axis included. */
 .wf-grid { display: grid; grid-template-columns: var(--wf-label-col) minmax(0, 1fr) 76px; }
-/* The axis row stays in view while the rows scroll under it. */
-.wf-axis-label, .wf-axis, .wf-axis-end { position: sticky; top: var(--wf-sticky-top, 0px); z-index: 3; background: var(--wf-surface); }
+/* The axis row stays in view while the rows scroll under it (and sits under the sticky replay controls while replaying). */
+.wf-axis-label, .wf-axis, .wf-axis-end { position: sticky; top: calc(var(--wf-sticky-top, 0px) + var(--wf-controls-h, 0px)); z-index: 3; background: var(--wf-surface); }
 /* The page scrolls inside .content-page, whose top padding (channel.css: 34px, 24px at 700px and below) a sticky box
    would otherwise stop under, letting rows show above it. */
 .execution-timeline { --wf-sticky-top: -34px; }

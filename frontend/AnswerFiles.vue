@@ -1,3 +1,7 @@
+<script>
+// Keep verified cards when switching away from a room unmounts its transcript.
+const found_files = new Map();
+</script>
 <script setup>
 /**
  * The files an answer delivers, as cards under its text that open in the file preview. A file counts when the answer
@@ -17,8 +21,6 @@ const MAX_FILES = 6;
 // window the transcript clips the card, so reading began only once it showed and the cards popped in under the reader,
 // moving the cards below (user 2026-11-21).
 const READ_AHEAD = "800px 0px";
-// What each answer found, so a card that is mounted again shows at once and does not ask the computer again.
-const found_files = new Map();
 
 const props = defineProps({
   message: { type: Object, required: true },
@@ -35,10 +37,14 @@ const directories = computed(() => {
   return models?.room_id === props.roomId ? [models.project_directory, ...(models.extra_directories || [])].filter(Boolean) : [];
 });
 const cache_key = computed(() => `${props.roomId}\n${props.message.id}`);
-const files = ref(found_files.get(cache_key.value) || []);
+const files = ref(found_files.get(cache_key.value) ?? null);
+const candidates = computed(() => named_paths(props.message.text));
 const shown_files = computed(() => {
   const attached = new Set(props.attachments.map((file) => String(file.file_name).toLowerCase()));
-  return files.value.filter((file) => !attached.has(file.name.toLowerCase()));
+  const rows = files.value ?? candidates.value.filter(path => locations(path).length).map(path => ({
+    path, name: path.replaceAll("\\", "/").split("/").at(-1), pending: true,
+  }));
+  return rows.filter((file) => !attached.has(file.name.toLowerCase()));
 });
 const anchor = ref(null);
 let observer = null;
@@ -75,7 +81,7 @@ async function delivered(named) {
 }
 
 async function read_files() {
-  const results = await Promise.all(named_paths(props.message.text).map(delivered));
+  const results = await Promise.all(candidates.value.map(delivered));
   files.value = results.filter(Boolean);
   // Finding nothing is not kept: the computer may only have been out of reach.
   if (files.value.length) found_files.set(cache_key.value, files.value);
@@ -87,7 +93,7 @@ const deploy_file = (file) => open_deploy(bridge, { room_id: props.roomId, messa
 const open_file = (file) => file_preview.open?.(file.path, directories.value[file.root] || "", file.root, file);
 
 onMounted(() => {
-  if (found_files.has(cache_key.value) || !named_paths(props.message.text).length) return;
+  if (files.value || !candidates.value.length) return;
   observer = new IntersectionObserver((entries) => {
     if (!entries.some((entry) => entry.isIntersecting)) return;
     observer.disconnect();
@@ -100,7 +106,7 @@ onBeforeUnmount(() => observer?.disconnect());
 
 <template>
   <div ref="anchor" class="answer-files">
-    <div v-for="file in shown_files" :key="`${file.root}/${file.path}`" class="attachment-file answer-file">
+    <div v-for="file in shown_files" :key="`${file.root}/${file.path}`" class="attachment-file answer-file" :inert="file.pending" :class="{ 'is-pending': file.pending }">
       <button type="button" class="attachment-file-main" :title="file.path" :aria-label="t('打开文件 {value1}', { value1: file.name })" @click="open_file(file)">
         <span class="answer-file-icon" v-html="bridge.attachment_file_icon(file.name)"></span>
         <span class="attachment-name">
@@ -122,6 +128,7 @@ onBeforeUnmount(() => observer?.disconnect());
 .answer-files { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; max-width: 100%; }
 .answer-files:not(:empty) { margin-top: 10px; }
 .answer-file-icon { display: contents; }
+.answer-file.is-pending { opacity: .45; }
 .answer-file { background: transparent; border-color: color-mix(in srgb, currentColor 14%, transparent); }
 .answer-file:hover { background: color-mix(in srgb, currentColor 4%, transparent); }
 .answer-file .attachment-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

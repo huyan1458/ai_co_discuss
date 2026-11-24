@@ -2,6 +2,13 @@
 
 Versions match the npm package. Recorded from 0.5.0 on, listing only the changes you will notice. The Chinese version is `CHANGELOG.zh-CN.md`; on the website, click the version number at the top left to read it.
 
+## 0.5.21 (2026-11-23)
+
+- New: Bundled workflows add tri-model-dev and update flowcharts across the other built-in workflows.
+- New: Workflows support optional "Author" and "Source" fields, and the description wraps cleanly and can be edited above the body.
+- Fixed: Dated time labels overlapped or clipped on phones in the timeline, and replay now scrolls to follow the active run.
+- Changed: Project files delivered in answers reserve their card space while verifying, stopping messages below from jumping when scrolling or switching rooms.
+
 ## 0.5.20 (2026-11-23)
 
 - New: Customize share cards by editing text, picking a room image, or using "Upload cover" with cropping; updates keep your cover.

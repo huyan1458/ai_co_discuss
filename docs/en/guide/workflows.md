@@ -38,6 +38,8 @@ You can create or import a ZIP file or folder with the “+” on the Workflows 
 
 ### 4. The canvas and SKILL.md
 
+Edit the “Short description” directly above the workflow text. It wraps to the panel width so you can read the full description.
+
 Select a workflow on the Workflows page. The canvas opens in the center, and its SKILL.md appears on the right. Click “Edit,” then “Save” or press Ctrl+S to save changes. If the workflow was changed elsewhere after you opened it, saving is refused and the page says “The workflow was changed elsewhere; reload it”; “Reload” reads the new version and first asks before discarding unsaved edits. An imported workflow whose ID is already in the library is saved only after you choose “Save and replace.”
 
 - **The canvas is a diagram:** You can move cards, add host nodes, user nodes (to show where you step in, confirm, or speak), and conditional branch nodes (splitting into multiple named branches, each with its own output dot on the right; select to add, rename, or remove branches), connect nodes to show order, parallel branches, or loops, add notes to connections, or choose “Auto arrange.” Click a connection or its note to select it before editing; once a gold loop is selected, drag it up or down to change its height. Dragging an unselected connection or note just pans the canvas. The program does not execute canvas connections, and the host cannot see the canvas.
