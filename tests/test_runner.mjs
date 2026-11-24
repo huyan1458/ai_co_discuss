@@ -9,7 +9,7 @@ test('room-owned reasons carry source templates while replies and truncated text
   assert.deepEqual(room_payload({ text: reason }), { text: reason });
   assert.deepEqual(room_payload({ reason: reason.slice(0, 4) }), { reason: reason.slice(0, 4) });
 });
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readdirSync, rmSync, existsSync, readFileSync, utimesSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readdirSync, rmSync, existsSync, readFileSync, symlinkSync, utimesSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
@@ -55,7 +55,7 @@ import { read_only_enforced } from '../runner/project_files.mjs';
 import { adopted_fork, claude_api_error, claude_input, claude_permissions, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
 import { codex_developer_instructions, codex_permissions, codex_sandbox_missing, codex_sandbox_refusal } from '../runner/adapters/codex_cli.mjs';
 import { agy_rule, prepare_agy_project, remove_agy_projects, sweep_legacy_agy_projects } from '../runner/adapters/antigravity_cli.mjs';
-import { kill_process_tree, run_program, TASK_SUBCOMMANDS } from '../runner/adapters/common.mjs';
+import { kill_process_tree, run_program, shell_written_paths, TASK_SUBCOMMANDS, watch_events } from '../runner/adapters/common.mjs';
 
 // The service and setup install Pi from npm unless one is given; tests never download it.
 process.env.CODISCUSS_PI_CLI ??= 'pi-not-needed-in-this-test';
@@ -2194,6 +2194,48 @@ test('the housekeeping sweep removes week-old files of ended executions and keep
   assert.ok(existsSync(join(config.directory, 'runtime.sqlite3')));
 });
 
+test('remove_room_files clears read-only draft files and still removes sibling drafts and launches when one draft entry is locked', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'discussion-remove-tree-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const launch = join(home, 'launches', 'room-ro');
+  const runtime = join(launch, 'runtime');
+  mkdirSync(runtime, { recursive: true });
+  writeFileSync(join(launch, 'config.json'), '{}');
+  const ro_drafts = service_drafts(home, runtime);
+  const ro_file = join(ro_drafts, 'pack', 'readonly.pack');
+  mkdirSync(dirname(ro_file), { recursive: true });
+  writeFileSync(ro_file, 'data');
+  chmodSync(ro_file, 0o444);
+  remove_room_files(home, join(launch, 'config.json'), runtime);
+  assert.equal(existsSync(ro_drafts), false);
+  assert.equal(existsSync(launch), false);
+
+  if (process.platform === 'win32') {
+    const blocked_launch = join(home, 'launches', 'room-locked');
+    const blocked_runtime = join(blocked_launch, 'runtime');
+    mkdirSync(blocked_runtime, { recursive: true });
+    writeFileSync(join(blocked_launch, 'config.json'), '{}');
+    const blocked_drafts = service_drafts(home, blocked_runtime);
+    const held_dir = join(blocked_drafts, 'held');
+    mkdirSync(held_dir, { recursive: true });
+    const sibling = join(blocked_drafts, 'removable.txt');
+    writeFileSync(sibling, 'bye');
+    // A child process whose cwd sits inside drafts/ holds the directory without FILE_SHARE_DELETE on Windows.
+    const holder = spawn(process.execPath, ['-e', 'process.stdout.write("ready"); setInterval(() => {}, 1000)'], { cwd: held_dir, stdio: ['ignore', 'pipe', 'ignore'] });
+    await once(holder.stdout, 'data');
+    try {
+      assert.throws(() => remove_room_files(home, join(blocked_launch, 'config.json'), blocked_runtime));
+      assert.equal(existsSync(sibling), false, 'deletable sibling drafts are still removed');
+      assert.equal(existsSync(blocked_launch), false, 'launch folder is still removed despite draft error');
+    } finally {
+      holder.kill();
+      await once(holder, 'exit');
+    }
+    remove_room_files(home, join(blocked_launch, 'config.json'), blocked_runtime);
+    assert.equal(existsSync(blocked_drafts), false);
+  }
+});
+
 test('the service ticks every registered room and pauses a room once it is unregistered', async t => {
   const f = await fixture(t);
   const home = mkdtempSync(join(tmpdir(), 'discussion-service-'));
@@ -2642,6 +2684,9 @@ async function free_fixture(t) {
     } else if (url.startsWith('/executions/')) {
       const execution = state.executions.find(item => item.id === Number(url.split('/')[2]));
       if (body?.action === 'fail') {
+        if (state.before_fail && !(await state.before_fail(execution))) {
+          response.writeHead(execution.status === 'completed' ? 409 : 503); response.end('{}'); return;
+        }
         execution.status = 'failed'; execution.result = body.reason;
         const failed_request = execution.requests.find(item => item.purpose === 'discuss' && item.session_id);
         if (failed_request) state.pending = [{ id: 90, purpose: 'discuss_host', session_id: failed_request.session_id,
@@ -2729,6 +2774,266 @@ async function free_fixture(t) {
     directory, project: directory, participants: { Claude: { adapter: 'claude' } }, members: { Claude: { token: 'member-credential'.repeat(3) } } };
   return { state, store, config };
 }
+
+test('installed cleanup skill can recover dispatch from legacy drafts without deleting unique work', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const { install_skills } = await import('../runner/discussion_skills.mjs');
+  const { measure, block_reason } = await import('../runner/storage_guard.mjs');
+  const home = join(config.directory, 'custom-home'), skills = join(config.directory, 'skills');
+  config.draft_directory = join(home, 'drafts', 'room');
+  const member = join(config.draft_directory, 'member');
+  mkdirSync(member, { recursive: true });
+  install_skills(skills, join(home, 'manifest.json'));
+  const script = (file, ...args) => spawnSync(process.platform === 'win32' ? 'python' : 'python3',
+    [join(skills, 'codiscuss-draft-cleanup', file), '--home', home, ...args], { encoding: 'utf8' });
+  const archived = Buffer.alloc(4096, 65);
+  for (const name of ['keep.zip', 'drop.zip']) writeFileSync(join(member, name), archived);
+  writeFileSync(join(member, 'only.md'), 'unique');
+  let sent = 0;
+  const runner = new FreeRoomRunner(config, store, async () => { sent++; return { status: 'accepted' }; });
+  runner.storage_reason = async () => block_reason(await measure(home), 'room', null, { room_limit: 6000 });
+  await runner.tick();
+  assert.equal(state.executions[0].status, 'failed');
+  assert.equal(sent, 0);
+  assert.match(script('scan.py').stdout, /8198\s+room\/member\/legacy/);
+  const pair = ['--keep', 'room/member/keep.zip', '--drop', 'room/member/drop.zip'];
+  assert.equal(script('cleanup.py', ...pair).status, 0);
+  assert.ok(existsSync(join(member, 'drop.zip')));
+  assert.equal(script('cleanup.py', ...pair, '--apply').status, 0);
+  assert.deepEqual(readFileSync(join(member, 'keep.zip')), archived);
+  assert.equal(readFileSync(join(member, 'only.md'), 'utf8'), 'unique');
+  state.pending = [{ id: 3, message_id: 11 }];
+  await runner.tick();
+  assert.equal(sent, 1);
+});
+
+test('idle storage stays cached and concurrent retries verify the whole blocked home immediately', async t => {
+  const { config, state, store } = await free_fixture(t);
+  const { GIB, block_reason } = await import('../runner/storage_guard.mjs');
+  config.draft_directory = join(config.directory, 'drafts', 'room');
+  let total = 11 * GIB, scans = 0, delivered = 0;
+  const service = new DiscussionService(config.directory, undefined, undefined, {
+    disk_free: () => ({ available_bytes: 40 * GIB, reserve_bytes: GIB }),
+      measure: async path => { assert.equal(path, config.directory); scans++; return { total_bytes: total, rooms: {}, draft_bytes: 0 }; },
+    block_reason,
+  });
+  const runner = service.create_runner(config, store, () => {});
+  runner.deliver = async () => { delivered++; return { status: 'accepted' }; };
+  service.workers.set('room', { config, runner, state: { room: config.room, site: config.site } });
+  await runner.tick();
+  assert.equal(state.executions[0].status, 'failed');
+  service.monitor_storage(false, Date.now() + 60000);
+  assert.equal(scans, 1);
+  const reasons = await Promise.all([runner.storage_reason(true), runner.storage_reason(true)]);
+  assert.ok(reasons.every(Boolean));
+  assert.equal(scans, 2);
+  total = GIB;
+  assert.equal(delivered, 0);
+  state.pending = [{ id: 3, message_id: 11 }];
+  await runner.tick();
+  assert.equal(delivered, 1);
+  assert.equal(scans, 3);
+});
+
+test('room draft pressure prevents dispatch to an app without stop support', async t => {
+  const { config, state, store } = await free_fixture(t);
+  const { block_reason } = await import('../runner/storage_guard.mjs');
+  config.participants.Claude.adapter = 'codex';
+  let deliveries = 0;
+  const runner = new FreeRoomRunner(config, store, async () => { deliveries++; });
+  runner.storage_reason = stoppable => block_reason({ rooms: { room: 80 } }, 'room', null, { stoppable, room_limit: 100 });
+  await runner.tick();
+  assert.equal(deliveries, 0);
+  assert.equal(state.executions[0].status, 'failed');
+  assert.match(state.executions[0].result, /80%/);
+});
+
+test('storage guard rejects a reserved execution before delivery and records the quota reason', async t => {
+  const { state, store, config } = await free_fixture(t);
+  let sent = 0;
+  const runner = new FreeRoomRunner(config, store, async () => { sent++; });
+  runner.storage_reason = async () => 'Room drafts exceed 1 GiB';
+  await runner.tick();
+  assert.equal(sent, 0);
+  assert.equal(state.executions[0].status, 'failed');
+  assert.equal(state.executions[0].result, 'Room drafts exceed 1 GiB');
+});
+
+test('storage guard stops only a stoppable delivery and reclaims its failed scratch under pressure', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const { block_reason, disk_free } = await import('../runner/storage_guard.mjs');
+  const disk = disk_free(config.directory, { statfs: () => ({ bavail: 1, blocks: 1e8, bsize: 4096 }) });
+  const reason = block_reason({ rooms: {}, draft_bytes: 0, total_bytes: 0 }, 'room', disk);
+  assert.ok(reason);
+  let stopped = false, scratch;
+  const child = Object.assign(new EventEmitter(), { kill() { stopped = true; this.emit('close'); } });
+  const runner = new FreeRoomRunner(config, store, async (profile, binding, task) => {
+    scratch = task.scratch_directory;
+    task.on_process(child);
+    return { status: 'accepted', capabilities: { stoppable: false } };
+  });
+  await runner.tick();
+  await runner.stop_for_storage(reason);
+  assert.equal(stopped, false);
+  await runner.report_delivery(1, { stoppable: true, progress: true }, 'Claude');
+  await runner.stop_for_storage(reason);
+  assert.equal(stopped, true);
+  assert.equal(state.executions[0].result, reason);
+  await runner.tick();
+  assert.ok(existsSync(scratch));
+  assert.equal(runner.reclaim_failed_scratch(), true);
+  assert.equal(existsSync(scratch), false);
+});
+
+test('storage stops all eligible processes before reporting and retries the original failure after an outage', async t => {
+  const { state, store, config } = await free_fixture(t);
+  for (const [id, name] of [[8, 'Second'], [9, 'Third']]) {
+    state.others.push({ id, name, role: 'member', pending: [{ id, message_id: id }] });
+    config.participants[name] = config.participants.Claude;
+    config.members[name] = config.members.Claude;
+  }
+  const killed = [];
+  const runner = new FreeRoomRunner(config, store, async (_, binding, task) => {
+    const id = task.api_context.execution_id;
+    const child = Object.assign(new EventEmitter(), { kill() { killed.push(id); this.emit('close'); } });
+    task.on_process(child);
+    return { status: 'accepted', capabilities: { stoppable: id !== 3 } };
+  });
+  await runner.tick();
+  let unblock, observed;
+  const gate = new Promise(resolve => { unblock = resolve; });
+  const entered = new Promise(resolve => { observed = resolve; });
+  state.before_fail = async execution => {
+    if (execution.id !== 1) return true;
+    observed(); await gate; return false;
+  };
+  const stopped = runner.stop_for_storage('quota exceeded');
+  assert.deepEqual(killed.sort(), [1, 2]);
+  await entered;
+  unblock();
+  await assert.rejects(stopped);
+  assert.equal(state.executions[1].result, 'quota exceeded');
+  state.before_fail = null;
+  await runner.tick();
+  assert.equal(state.executions[0].result, 'quota exceeded');
+  assert.ok(['started', 'dispatched'].includes(state.executions[2].status));
+  assert.deepEqual(killed.sort(), [1, 2]);
+});
+
+test('a completion racing the storage failure remains completed', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const runner = new FreeRoomRunner(config, store, async (_, binding, task) => {
+    const child = Object.assign(new EventEmitter(), { kill() { this.emit('close'); } });
+    task.on_process(child);
+    return { status: 'accepted', capabilities: { stoppable: true } };
+  });
+  await runner.tick();
+  let reports = 0;
+  state.before_fail = async execution => {
+    reports++;
+    execution.status = 'completed';
+    return false;
+  };
+  await runner.stop_for_storage('quota exceeded');
+  await runner.tick();
+  assert.equal(reports, 1);
+  assert.equal(state.executions[0].status, 'completed');
+  assert.equal(runner.row('Claude').status, 'idle');
+});
+
+for (const status of ['cancelled', 'failed']) test(`scratch remains tracked after ${status} until exit is confirmed`, async t => {
+  const { state, store, config } = await free_fixture(t);
+  let ended;
+  const runner = new FreeRoomRunner(config, store, async (_, binding, task) => {
+    ended = task.on_turn_end;
+    return { status: 'accepted', capabilities: { stoppable: false, ends: true } };
+  });
+  await runner.tick();
+  state.executions[0].status = status;
+  await runner.tick();
+  assert.equal(runner.reclaim_failed_scratch(), false);
+  assert.ok(store.db.prepare("SELECT 1 FROM metadata WHERE key='scratch:1'").get());
+  ended();
+  await runner.tick();
+  assert.equal(runner.reclaim_failed_scratch(), true);
+  assert.ok(!existsSync(join(member_drafts(config, 'Claude'), '.scratch', '1')));
+});
+
+test('restarted runner keeps uncertain scratch and accepts a confirmed cancellation receipt', async t => {
+  const { state, store, config } = await free_fixture(t);
+  let ended;
+  const first = new FreeRoomRunner(config, store, async (_, binding, task) => {
+    ended = task.on_turn_end;
+    return { status: 'accepted', capabilities: { stoppable: false, ends: true } };
+  });
+  await first.tick();
+  state.executions[0].status = 'cancelled';
+  const restarted = new FreeRoomRunner(config, store);
+  await restarted.tick();
+  assert.equal(restarted.reclaim_failed_scratch(), false);
+  ended();
+  await first.report_stop('Claude', 1);
+  assert.equal(state.executions[0].stop_result, 'stopped');
+  await restarted.tick();
+  assert.equal(restarted.reclaim_failed_scratch(), true);
+});
+
+test('scratch cleanup accepts a linked service home and rejects a redirected member folder', async t => {
+  const { store, config } = await free_fixture(t);
+  const root = join(config.directory, 'real-home'), home = join(config.directory, 'linked-home');
+  mkdirSync(root);
+  symlinkSync(root, home, process.platform === 'win32' ? 'junction' : 'dir');
+  config.draft_directory = service_drafts(home, config.directory);
+  const runner = new FreeRoomRunner(config, store);
+  const member = member_drafts(config, 'Claude'), path = join(member, '.scratch', '1');
+  const record = () => store.db.prepare('INSERT INTO metadata VALUES (?,?)')
+    .run('failed-scratch:1', JSON.stringify({ member: 'Claude', id: 1, ended: 1 }));
+  mkdirSync(path, { recursive: true });
+  record();
+  assert.equal(runner.reclaim_failed_scratch(), true);
+  assert.equal(existsSync(path), false);
+  rmSync(member, { recursive: true });
+  const outside = join(config.directory, 'outside');
+  mkdirSync(join(outside, '.scratch', '1'), { recursive: true });
+  symlinkSync(outside, member, process.platform === 'win32' ? 'junction' : 'dir');
+  record();
+  assert.throws(() => runner.reclaim_failed_scratch(), /Redirected scratch path/);
+  assert.ok(existsSync(join(outside, '.scratch', '1')));
+  assert.ok(store.db.prepare("SELECT 1 FROM metadata WHERE key='failed-scratch:1'").get());
+});
+
+test('storage guard removes completed scratch while retaining member drafts and legacy directories', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const guard = await import('../runner/storage_guard.mjs');
+  const home = join(config.directory, 'service-home');
+  config.draft_directory = join(home, 'drafts', 'room');
+  mkdirSync(home, { recursive: true });
+  const measured = [];
+  const service = new DiscussionService(home, undefined, undefined, { ...guard,
+    disk_free: () => ({ available_bytes: 40 * guard.GIB, reserve_bytes: guard.GIB }),
+    measure: (path, options) => { measured.push(path); return guard.measure(path, options); },
+    block_reason: (snapshot, room, disk, options) => guard.block_reason(snapshot, room, disk, { ...options, room_limit: 3 }),
+  });
+  const runner = service.create_runner(config, store, () => {});
+  runner.deliver = async () => ({ status: 'accepted' });
+  await runner.tick();
+  const draft = member_drafts(config, 'Claude'), scratch = join(draft, '.scratch');
+  writeFileSync(join(draft, 'answer.md'), 'keep');
+  mkdirSync(join(scratch, '99'));
+  state.executions[0].status = 'completed';
+  await runner.tick();
+  assert.equal(existsSync(join(scratch, '1')), false);
+  assert.ok(existsSync(join(scratch, '99')));
+  assert.equal(readFileSync(join(draft, 'answer.md'), 'utf8'), 'keep');
+  assert.deepEqual(measured, [home, draft]);
+  assert.equal(service.storage.rooms.room, 4);
+  const reasons = await Promise.all([runner.storage_reason(true), runner.storage_reason(true)]);
+  assert.ok(reasons.every(Boolean));
+  assert.deepEqual(measured, [home, draft, config.draft_directory]);
+  writeFileSync(join(draft, 'answer.md'), 'ok');
+  assert.equal(await runner.storage_reason(true), '');
+  assert.equal(measured.at(-1), config.draft_directory);
+});
 
 test('an idle goal wakes the host only after the room stays unchanged for the grace period', async t => {
   const f = await free_fixture(t);
@@ -3225,27 +3530,94 @@ test('streamed CLI events map to the phase the card shows', () => {
 });
 
 test('edit tool events name the files an agent wrote, so concurrent snapshots are not blamed on it', () => {
+  const observed = ['src/index.js', 'D:/extra/src/index.js', 'index.js'];
+  assert.deepEqual(edited_changes(observed, ['../extra/src/index.js'], 'D:/proj', 'win32'), ['D:/extra/src/index.js']);
   const claude_event = { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: String.raw`D:\proj\剧本\库存.yaml` } },
     { type: 'tool_use', name: 'Read', input: { file_path: String.raw`D:\proj\other.md` } }] } };
   const codex_event = { type: 'item.completed', item: { type: 'file_change', changes: [{ path: '/proj/剧本/成长.yaml', kind: 'update' }] } };
   assert.deepEqual(adapter_of('claude').events.edits(claude_event), [String.raw`D:\proj\剧本\库存.yaml`]);
   assert.deepEqual(adapter_of('codex_cli').events.edits(codex_event), ['/proj/剧本/成长.yaml']);
   const changes = ['剧本/库存.yaml', '剧本/成长.yaml', '剧本/第06集.md'];
-  assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(claude_event), 'win32'), ['剧本/库存.yaml']);
-  assert.deepEqual(edited_changes(changes, adapter_of('codex_cli').events.edits(codex_event), 'linux'), ['剧本/成长.yaml']);
+  assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(claude_event), 'D:/proj', 'win32'), ['剧本/库存.yaml']);
+  assert.deepEqual(edited_changes(changes, adapter_of('codex_cli').events.edits(codex_event), '/proj', 'linux'), ['剧本/成长.yaml']);
   // A writing shell command claims the paths it names; a reading one claims none.
   const shell = command => ({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command } }] } });
   const script = "python - <<'EOF'\np='剧本/第06集.md'\nopen(p,'w').write(s)\nEOF";
-  assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(shell(script)), 'win32'), ['剧本/第06集.md']);
-  assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(shell('sed -i s/a/b/ 剧本/库存.yaml')), 'win32'), ['剧本/库存.yaml']);
+  assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(shell(script)), 'D:/proj', 'win32'), ['剧本/第06集.md']);
+  assert.deepEqual(edited_changes(changes, adapter_of('claude').events.edits(shell('sed -i s/a/b/ 剧本/库存.yaml')), 'D:/proj', 'win32'), ['剧本/库存.yaml']);
   assert.deepEqual(adapter_of('claude').events.edits(shell('grep -n x 剧本/库存.yaml 2>&1 | head')), []);
   // agy 1.5.x: a finished write_file / edit_file names its Path; a running or failed one, or a read, claims nothing.
-  const agy = (tool_name, parameters, state = 'DONE') => ({ event: 'step_update', step_update: { step_type: 'tool', state, tool_name, tool_info: { parameters } } });
+  const agy = (tool_name, parameters, state = 'DONE', extra = {}) => ({ event: 'step_update', step_update: { step_type: 'tool', state, tool_name, tool_info: { parameters, ...extra } } });
   const agy_edits = adapter_of('antigravity_cli').events.edits;
-  assert.deepEqual(edited_changes(changes, agy_edits(agy('edit_file', { Path: String.raw`D:\proj\剧本\库存.yaml` })), 'win32'), ['剧本/库存.yaml']);
+  assert.deepEqual(edited_changes(changes, agy_edits(agy('edit_file', { Path: String.raw`D:\proj\剧本\库存.yaml` })), 'D:/proj', 'win32'), ['剧本/库存.yaml']);
   assert.deepEqual(agy_edits(agy('write_file', { Path: String.raw`D:\proj\剧本\第06集.md` }, 'ACTIVE')), []);
+  assert.deepEqual(agy_edits(agy('edit_file', { Path: String.raw`D:\proj\剧本\库存.yaml` }, 'DONE', { error: { message: 'denied' } })), []);
   assert.deepEqual(agy_edits(agy('read_file', { Path: String.raw`D:\proj\剧本\第06集.md` })), []);
-  assert.deepEqual(edited_changes(changes, agy_edits(agy('run_command', { CommandLine: 'sed -i s/a/b/ 剧本/成长.yaml' })), 'win32'), ['剧本/成长.yaml']);
+  assert.deepEqual(edited_changes(changes, agy_edits(agy('run_command', { CommandLine: 'sed -i s/a/b/ 剧本/成长.yaml' }, 'DONE', { output: 'Command exited with code 0.\n' })), 'D:/proj', 'win32'), ['剧本/成长.yaml']);
+  // agy marks a non-zero run_command step DONE while putting the exit code in output: failed commands claim nothing.
+  assert.deepEqual(agy_edits(agy('run_command', { CommandLine: 'echo hi > README.md' }, 'DONE', { output: 'Command exited with code 1.\nerror' })), []);
+});
+
+test('shell command write extraction ignores copy sources, redirected inputs and read-only compound segments', () => {
+  // Concurrent edits to read-only source/input files must never be attributed to the agent.
+  const observed = ['src/input.js', 'out/result.js', 'README.md', 'Makefile', 'docs/my file.md', 'err.log', 'fix.patch'];
+  const claim = command => edited_changes(observed, shell_written_paths(command), 'D:/proj', 'win32');
+  assert.deepEqual(claim('cp src/input.js out/result.js'), ['out/result.js']);
+  assert.deepEqual(claim('Copy-Item -Path src/input.js -Destination out/result.js'), ['out/result.js']);
+  assert.deepEqual(claim('cat src/input.js > out/result.js'), ['out/result.js']);
+  assert.deepEqual(claim('cat < src/input.js > out/result.js'), ['out/result.js']);
+  assert.deepEqual(claim('cat src/input.js 2> err.log'), []);
+  assert.deepEqual(claim('git diff src/input.js && echo hi > README.md'), ['README.md']);
+  assert.deepEqual(claim('grep foo src/input.js; Set-Content README.md hello'), ['README.md']);
+  assert.deepEqual(claim('sed -i s/a/b/ Makefile'), ['Makefile']);
+  assert.deepEqual(claim('echo hi > "docs/my file.md"'), ['docs/my file.md']);
+  assert.deepEqual(claim('git apply fix.patch'), []);
+  assert.deepEqual(claim("python - <<'PY'\nopen('src/input.js', 'r', encoding='ascii').read()\nPY"), []);
+  assert.deepEqual(claim("python - <<'PY'\nprint(\"Path('src/input.js').write_text('x')\")\nPY"), []);
+  // Unknown dynamic targets stay empty rather than blaming unrelated paths in the command.
+  assert.deepEqual(shell_written_paths("node -e \"import fs from 'node:fs'; import { x } from './src/input.js'; fs.writeFileSync(process.env.OUT, x)\""), []);
+});
+
+test('Codex CLI extracts literal PowerShell/Python command writes and ignores failed items', () => {
+  const codex_edits = adapter_of('codex_cli').events.edits;
+  const cmd_event = (command, exit_code = 0, status = 'completed') => ({ type: 'item.completed', item: { type: 'command_execution', command, exit_code, status } });
+  // Desensitized multi-file Python here-string pattern (reassignment + tuple loop, as in execution #6120).
+  const py_multi = '"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe" -Command "@\'\n'
+    + "from pathlib import Path\np=Path('frontend/AnswerFiles.vue')\ns=p.read_bytes()\np.write_bytes(s)\n"
+    + "for path,old,new in [('docs/guide/working.md','旧','新'),('docs/en/guide/working.md','old','new')]:\n"
+    + " p=Path(path);s=p.read_bytes();p.write_bytes(s)\n'@ | python -X utf8 -\"";
+  assert.deepEqual(codex_edits(cmd_event(py_multi)), ['frontend/AnswerFiles.vue', 'docs/guide/working.md', 'docs/en/guide/working.md']);
+  // PowerShell [IO.File]::WriteAllText with Resolve-Path binding (as in execution #6140).
+  const ps_io = `"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe" -Command '$p=Resolve-Path '"'.dev/docs/Ref_外部软件通信.md'\n"'$s=[IO.File]::ReadAllText($p)\n[IO.File]::WriteAllText($p,$s)'`;
+  assert.deepEqual(codex_edits(cmd_event(ps_io)), ['.dev/docs/Ref_外部软件通信.md']);
+  assert.deepEqual(codex_edits(cmd_event('Set-Content src/file.js hello')), ['src/file.js']);
+  assert.deepEqual(codex_edits(cmd_event('Set-Content src/file.js hello', 1)), [], 'non-zero exit claims nothing');
+  assert.deepEqual(codex_edits({ type: 'item.completed', item: { type: 'file_change', status: 'failed', changes: [{ path: 'src/file.js' }] } }), []);
+});
+
+test('Claude stream-json pairs tool_use with tool_result and drops failed tool edits', async () => {
+  const { PassThrough } = await import('node:stream');
+  const stream = new PassThrough();
+  const seen = [];
+  watch_events(adapter_of('claude'), stream, { on_edits: paths => seen.push(paths) });
+  const lines = [
+    { type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: 'src/ok.js' } },
+      { type: 'tool_use', id: 't2', name: 'Edit', input: { file_path: 'src/denied.js' } },
+      { type: 'tool_use', id: 't3', name: 'Bash', input: { command: 'cp src/in.js out/ok.js' } },
+      { type: 'tool_use', id: 't4', name: 'Bash', input: { command: 'echo x > out/fail.js' } },
+    ] } },
+    { type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 't1', content: 'ok', is_error: false },
+      { type: 'tool_result', tool_use_id: 't2', content: 'permission denied', is_error: true },
+      { type: 'tool_result', tool_use_id: 't3', content: '', is_error: false },
+      { type: 'tool_result', tool_use_id: 't4', content: 'blocked', is_error: true },
+    ] } },
+  ];
+  for (const item of lines) stream.write(`${JSON.stringify(item)}\n`);
+  stream.end();
+  await once(stream, 'close');
+  assert.deepEqual(seen, [[], ['src/ok.js', 'out/ok.js']]);
 });
 
 test('a free member that exits without answering fails only its own execution', async t => {

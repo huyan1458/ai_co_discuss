@@ -8,7 +8,7 @@
 import { computed, ref, watch } from "vue";
 import { sub_member_count, use_workflow_library } from "./workflow-library.js";
 
-const props = defineProps({ compact: Boolean });
+const props = defineProps({ compact: Boolean, readonly: Boolean });
 const emit = defineEmits(["place"]);
 const library = use_workflow_library();
 const { draft, scope, subs } = library;
@@ -57,7 +57,7 @@ function remove(id) {
         </button>
       </li>
       <li v-for="sub in subs" :key="sub.id" class="workflow-parts-row" :class="{ 'is-confirming': confirming === sub.id }">
-        <template v-if="confirming === sub.id">
+        <template v-if="!readonly && confirming === sub.id">
           <span class="workflow-parts-confirm">{{ t('删除「{value1}」？保存后生效', { value1: sub.label || sub.id }) }}</span>
           <UButton :label="t('删除')" size="xs" color="error" variant="soft" @click="remove(sub.id)" />
           <UButton :label="t('取消')" size="xs" color="neutral" variant="ghost" @click="confirming = ''" />
@@ -70,16 +70,16 @@ function remove(id) {
             <button v-if="!scope && placed.has(sub.id)" type="button" class="workflow-parts-action" :aria-label="t('在画布上定位 {value1}', { value1: sub.label || sub.id })" :title="t('已在画布上：点一下定位到它')" @click="place(sub.id)">
               <UIcon name="i-lucide-locate-fixed" class="workflow-parts-icon" />
             </button>
-            <button v-else-if="!scope" type="button" class="workflow-parts-action" :aria-label="t('把 {value1} 放到画布', { value1: sub.label || sub.id })" :title="t('放到画布：示意流程走到这里转去这个子工作流')" @click="place(sub.id)">
+            <button v-else-if="!readonly && !scope" type="button" class="workflow-parts-action" :aria-label="t('把 {value1} 放到画布', { value1: sub.label || sub.id })" :title="t('放到画布：示意流程走到这里转去这个子工作流')" @click="place(sub.id)">
               <UIcon name="i-lucide-square-plus" class="workflow-parts-icon" />
             </button>
-            <button type="button" class="workflow-parts-action is-danger" :aria-label="t('删除子工作流 {value1}', { value1: sub.label || sub.id })" :title="t('删除子工作流')" @click="confirming = sub.id">
+            <button v-if="!readonly" type="button" class="workflow-parts-action is-danger" :aria-label="t('删除子工作流 {value1}', { value1: sub.label || sub.id })" :title="t('删除子工作流')" @click="confirming = sub.id">
               <UIcon name="i-lucide-trash-2" class="workflow-parts-icon" />
             </button>
           </span>
         </template>
       </li>
-      <li>
+      <li v-if="!readonly">
         <button type="button" class="workflow-parts-item is-add" :title="t('主线之外按需用的一套做法：自己的 SKILL.md、成员卡片和画布')" @click="library.add_sub()">
           <UIcon name="i-lucide-plus" class="workflow-parts-icon" /><span>{{ t('新建子工作流') }}</span>
         </button>

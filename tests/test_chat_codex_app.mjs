@@ -1,18 +1,25 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { adapter_of } from '../runner/adapters/index.mjs';
+import { adapter_of, execution_details } from '../runner/adapters/index.mjs';
 import { codex_chat, watch_room_turn } from '../runner/adapters/codex_app.mjs';
+import { SegmentLog } from '../runner/execution_progress.mjs';
 
 const THREAD = 'thread-1';
 const PROMPT = '私聊开头\n\n请看一下 a < b & c';
+const ROOM_PROMPT = '主持人给你安排了一项请求，先读任务文件 free-42.task.json 并提交回答。';
 
 /** The App's wrapping of a delivered message, with its text XML-escaped as the App writes it. */
-function delegation(id, text) {
+function delegation(id, text, name = 'send_message_to_thread') {
   const escaped = text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-  return { type: 'functionCallOutput', id, name: 'send_message_to_thread', output: { text: `<codex_delegation>\n  <source_thread_id>${THREAD}</source_thread_id>\n  <input>${escaped}</input>\n</codex_delegation>`, truncated: false } };
+  return { type: 'functionCallOutput', id, name, output: { text: `<codex_delegation>\n  <source_thread_id>${THREAD}</source_thread_id>\n  <input>${escaped}</input>\n</codex_delegation>`, truncated: false } };
+}
+
+/** A `codex queue` or user-typed input item in `read_thread`. */
+function user_message(id, text) {
+  return { type: 'userMessage', id, content: [{ type: 'text', text }] };
 }
 
 /** A stand-in for the App: `script(reads)` gives the chat's state on each read after the line was sent. */
@@ -115,19 +122,216 @@ test('Codex App private chat fails before sending without a chat, and kill() arc
   cleanup();
 });
 
-test('a Codex App room turn is watched for its end, not for turns the chat had before', async () => {
+test('a Codex App room turn matches only this task prompt and ignores earlier or private turns', async () => {
+  const { directory, cleanup } = setup();
   const states = [
-    { thread: { status: { type: 'active' } }, turns: [{ id: 'old', status: 'inProgress' }] },
-    { thread: { status: { type: 'active' } }, turns: [{ id: 'room', status: 'inProgress' }, { id: 'old', status: 'completed' }] },
-    { thread: { status: { type: 'idle' } }, turns: [{ id: 'room', status: 'interrupted' }, { id: 'old', status: 'completed' }] },
+    { thread: { status: { type: 'active' } }, turns: [
+      { id: 'private-1', status: 'inProgress', items: [
+        user_message('priv-in', '这是用户在 App 里手打的私人消息'),
+        { type: 'agentMessage', id: 'priv-note', phase: 'commentary', text: '私人回复不应该串入房间' },
+        { type: 'commandExecution', id: 'priv-cmd', command: '"pwsh.exe" -Command "echo secret > secret.txt"', status: 'completed', exitCode: 0, output: { text: 'secret' } },
+      ] },
+      { id: 'old', status: 'completed', items: [user_message('old-in', ROOM_PROMPT)] },
+    ] },
+    { thread: { status: { type: 'active' } }, turns: [
+      { id: 'room', status: 'inProgress', items: [user_message('room-in', ROOM_PROMPT)] },
+      { id: 'private-1', status: 'completed', items: [
+        user_message('priv-in', '这是用户在 App 里手打的私人消息'),
+        { type: 'fileChange', id: 'priv-fc', status: 'completed', changes: [{ path: 'private.md' }] },
+      ] },
+    ] },
+    { thread: { status: { type: 'active' } }, turns: [
+      { id: 'private-after', status: 'inProgress', items: [
+        user_message('priv-after-in', '下一条私人对话'),
+        { type: 'commandExecution', id: 'priv-after-cmd', command: '"pwsh.exe" -Command "dir"', status: 'completed', exitCode: 0, output: { text: 'private-list' } },
+      ] },
+      { id: 'room', status: 'interrupted', items: [user_message('room-in', ROOM_PROMPT)] },
+    ] },
   ];
   let reads = 0, ended = 0;
+  const lines = [], notes = [], activities = [], edits = [];
   const app = { async read_thread() { return states[Math.min(reads++, states.length - 1)]; }, close() {} };
-  await watch_room_turn({}, THREAD, new Set(['old']), { on_turn_end: () => { ended++; } }, { connect: async () => app, poll_ms: 1 });
+  await watch_room_turn({}, THREAD, { turns: new Set(['old']), items: new Set(['old-in']) },
+    { id: 'free-42', directory, prompt: ROOM_PROMPT,
+      on_output: (path, line) => lines.push([path, JSON.parse(line)]),
+      on_activity: (phase, tool, call) => activities.push([phase, tool, call]),
+      on_note: text => notes.push(text),
+      on_edits: paths => edits.push(paths),
+      on_turn_end: () => { ended++; } },
+    { connect: async () => app, poll_ms: 1 });
   assert.equal(ended, 1);
-  assert.equal(reads, 3, 'the earlier turn ending does not count; the room turn stopped in the App does');
+  assert.equal(reads, 3, 'private turns before and after do not count; the matched room turn ending does');
+  assert.deepEqual(notes, [], 'private commentary never leaks into room notes');
+  assert.deepEqual(edits, [[]], 'private file edits never leak into room edits');
+  assert.deepEqual(activities, [['thinking', undefined, undefined]], 'private commands never enter room timeline');
+  const parsed = execution_details('codex', lines.map(([, entry]) => JSON.stringify(entry)).join('\n'));
+  assert.deepEqual(parsed.entries.map(entry => [entry.kind, entry.state]), [['error', 'failed']], 'an interrupted room turn logs only its own error');
   reads = 0; ended = 0;
   const failing = { async read_thread() { throw new Error('pipe closed'); }, close() {} };
-  await watch_room_turn({}, THREAD, new Set(), { on_turn_end: () => { ended++; } }, { connect: async () => failing, poll_ms: 1 });
+  await watch_room_turn({}, THREAD, { turns: new Set(), items: new Set() }, { prompt: ROOM_PROMPT, on_turn_end: () => { ended++; } }, { connect: async () => failing, poll_ms: 1 });
   assert.equal(ended, 0, 'an unreadable App gives up quietly');
+  cleanup();
+});
+
+test('a Codex App room turn logs steps, deduplicates timeline and edits across polls, and survives prompt scroll-off', async () => {
+  const { directory, cleanup } = setup();
+  const commentary = { type: 'agentMessage', id: 'm1', phase: 'commentary', text: '先检查代码再修改。' };
+  const fc_run = { type: 'fileChange', id: 'fc-run', status: 'inProgress', changes: [{ path: 'src/pending.js' }] };
+  const fc_ok = { type: 'fileChange', id: 'fc-ok', status: 'completed', changes: [{ path: 'src/app-edited.js', diff: { text: '+ok' } }] };
+  const fc_fail = { type: 'fileChange', id: 'fc-fail', status: 'failed', changes: [{ path: 'src/failed.js' }] };
+  const cmd_run = { type: 'commandExecution', id: 'cmd-ok', status: 'inProgress', command: '"pwsh.exe" -Command "cp src/in.js out/copied.js"' };
+  const cmd_done = { ...cmd_run, status: 'completed', exitCode: 0, output: { text: 'copied' } };
+  const cmd_fail = { type: 'commandExecution', id: 'cmd-fail', status: 'completed', exitCode: 1, command: '"pwsh.exe" -Command "echo x > out/failed.js"', output: { text: 'boom' } };
+  const search = { type: 'webSearch', id: 'ws-1', query: 'codex app tools' };
+  const mcp = { type: 'mcpToolCall', id: 'mcp-1', server: 'docs', tool: 'lookup', status: 'completed' };
+  const states = [
+    { thread: { status: { type: 'active' } }, turns: [
+      { id: 'room', status: 'inProgress', items: [user_message('room-in', ROOM_PROMPT), commentary, fc_run, fc_ok, fc_fail, cmd_run] },
+      { id: 'old', status: 'completed', items: [{ type: 'fileChange', id: 'fc-old', status: 'completed', changes: [{ path: 'src/earlier.js' }] }] },
+    ] },
+    // Repeated identical snapshot: must produce zero duplicate log lines, segments, notes or edits.
+    { thread: { status: { type: 'active' } }, turns: [
+      { id: 'room', status: 'inProgress', items: [user_message('room-in', ROOM_PROMPT), commentary, fc_run, fc_ok, fc_fail, cmd_run] },
+    ] },
+    // Later poll where the initial prompt scrolled off the 32-item page cap while items finish and new ones arrive.
+    { thread: { status: { type: 'idle' } }, turns: [
+      { id: 'room', status: 'completed', items: [
+        { ...fc_run, status: 'declined' }, fc_ok, cmd_done, cmd_fail, search, mcp,
+        { type: 'agentMessage', id: 'm2', phase: 'final_answer', text: '已提交 #9399' },
+      ] },
+      { id: 'old', status: 'completed', items: [{ type: 'fileChange', id: 'fc-old', status: 'completed', changes: [{ path: 'src/earlier.js' }] }] },
+    ] },
+  ];
+  let reads = 0, ended = 0, clock = 1000;
+  const edits = [], notes = [], lines = [];
+  const segments = new SegmentLog(() => (clock += 50));
+  segments.start(42);
+  const app = { async read_thread() { return states[Math.min(reads++, states.length - 1)]; }, close() {} };
+  await watch_room_turn({}, THREAD, { turns: new Set(['old']), items: new Set() },
+    { id: 'free-42', directory, prompt: ROOM_PROMPT,
+      on_output: (path, line) => { lines.push([path, line]); segments.mark(42); },
+      on_activity: (phase, tool, call) => segments.mark(42, phase, tool, call),
+      on_note: text => { notes.push(text); segments.note(42, text); },
+      on_edits: paths => edits.push(paths),
+      on_turn_end: () => { ended++; } },
+    { connect: async () => app, poll_ms: 1 });
+  assert.equal(ended, 1);
+  assert.deepEqual(edits, [[], ['src/app-edited.js'], ['out/copied.js']]);
+  assert.deepEqual(notes, ['先检查代码再修改。']);
+  assert.ok(lines.every(([path]) => path === join(directory, 'codex-free-42.log')));
+  const batch = segments.batch(42, true);
+  assert.equal(batch.segments.filter(item => item.phase === 'command').length, 2, 'cmd-ok transitioning inProgress -> completed is counted once alongside cmd-fail');
+  assert.equal(batch.segments.filter(item => item.phase === 'editing').length, 3, 'each fileChange item is counted once across polls');
+  assert.deepEqual(batch.segments.filter(item => item.phase === 'tool').map(item => item.tool), ['web_search', 'lookup']);
+  const details = execution_details('codex', lines.map(([, line]) => line).join(''));
+  assert.deepEqual(details.entries.map(entry => [entry.id, entry.kind, entry.state]), [
+    ['m1', 'message', 'done'], ['fc-run', 'edit', 'failed'], ['fc-ok', 'edit', 'done'], ['fc-fail', 'edit', 'failed'],
+    ['cmd-ok', 'command', 'done'], ['cmd-fail', 'command', 'failed'], ['ws-1', 'search', 'done'], ['mcp-1', 'tool', 'done'],
+  ]);
+  assert.equal(details.entries.find(entry => entry.id === 'cmd-ok').body, 'copied', 'completed output replaces the inProgress entry in place');
+  cleanup();
+});
+
+test('Codex App deliver reports progress when readable (queue, notLoaded, create_thread) and degrades when unreadable', async () => {
+  const { directory, cleanup } = setup();
+  const access_path = join(directory, 'free-77.access.json');
+  writeFileSync(access_path, JSON.stringify({ token: 't', session_id: '' }));
+
+  // 1. Readable loaded thread via `codex queue`: progress=true, steer logs interjection, steps reach codex-free-77.log.
+  let poll = 0, ended_resolve;
+  const ended = new Promise(resolve => { ended_resolve = resolve; });
+  const queue_calls = [], log_lines = [];
+  const loaded_app = {
+    async read_thread(_id, opts) {
+      if (opts.turnLimit === 1) return { thread: { status: { type: 'active' } }, turns: [] };
+      poll++;
+      if (poll === 1) return { thread: { status: { type: 'idle' } }, turns: [{ id: 'old', status: 'completed', items: [user_message('old-1', 'earlier')] }] };
+      return { thread: { status: { type: 'idle' } }, turns: [
+        { id: 'room-1', status: 'completed', items: [
+          user_message('u-77', ROOM_PROMPT),
+          { type: 'commandExecution', id: 'c-77', status: 'completed', exitCode: 0, command: '"pwsh.exe" -Command "git status"', output: { text: 'clean' } },
+        ] },
+      ] };
+    },
+    async send_message(id, text) { queue_calls.push(['send', id, text]); },
+    close() {},
+  };
+  const task = { id: 'free-77', participant: 'Codex', directory, access_path, prompt: ROOM_PROMPT,
+    on_output: (_path, line) => log_lines.push(line),
+    on_turn_end: () => ended_resolve(),
+    on_edits: () => {} };
+  const result = await adapter_of('codex').deliver({ adapter: 'codex', executable: 'codex.exe' }, { session_id: THREAD }, task, undefined, undefined, {
+    connect: async () => loaded_app,
+    run: async (_exe, args) => { queue_calls.push(['queue', args]); return 'ok'; },
+    poll_ms: 1,
+  });
+  assert.deepEqual(result.capabilities, { stoppable: false, progress: true, ends: true });
+  assert.equal(await result.steer('顺便跑下测试'), true);
+  await ended;
+  assert.equal(queue_calls[0][0], 'queue');
+  const parsed = execution_details('codex', log_lines.join(''));
+  assert.ok(parsed.entries.some(entry => entry.kind === 'interjection' && entry.body === '顺便跑下测试'));
+  assert.ok(parsed.entries.some(entry => entry.kind === 'command' && entry.title === 'git status' && entry.body === 'clean'));
+
+  // 2. Unreadable App before delivery: falls back to `codex queue` and degrades to progress=false with no edits/log.
+  let degraded_edits = 0, degraded_logs = 0;
+  const degraded = await adapter_of('codex').deliver({ adapter: 'codex', executable: 'codex.exe' }, { session_id: THREAD },
+    { id: 'free-78', participant: 'Codex', directory, access_path, prompt: ROOM_PROMPT,
+      on_output: () => { degraded_logs++; }, on_edits: () => { degraded_edits++; } },
+    undefined, undefined, {
+      connect: async () => { throw new Error('pipe unavailable'); },
+      run: async () => 'queued',
+      poll_ms: 1,
+    });
+  assert.deepEqual(degraded.capabilities, { stoppable: false, progress: false });
+  assert.equal(degraded_edits, 0, 'degraded delivery keeps file attribution unknown');
+  assert.equal(degraded_logs, 0, 'degraded delivery writes no process log');
+
+  // 3. `notLoaded` thread via `send_message_to_thread` and new thread via `create_thread` both match delegation items.
+  let nl_poll = 0, nl_done;
+  const nl_ended = new Promise(resolve => { nl_done = resolve; });
+  const nl_app = {
+    async read_thread() {
+      nl_poll++;
+      if (nl_poll === 1) return { thread: { status: { type: 'notLoaded' } }, turns: [] };
+      return { thread: { status: { type: 'idle' } }, turns: [{ id: 'nl-1', status: 'completed', items: [delegation('d-1', ROOM_PROMPT)] }] };
+    },
+    async send_message() {},
+    close() {},
+  };
+  const nl = await adapter_of('codex').deliver({ adapter: 'codex', executable: 'codex.exe' }, { session_id: THREAD },
+    { id: 'free-79', participant: 'Codex', directory, access_path, prompt: ROOM_PROMPT, on_turn_end: () => nl_done() },
+    undefined, undefined, { connect: async () => nl_app, poll_ms: 1 });
+  assert.deepEqual(nl.capabilities, { stoppable: false, progress: true, ends: true });
+  await nl_ended;
+
+  let cr_done;
+  const cr_ended = new Promise(resolve => { cr_done = resolve; });
+  const cr_logs = [];
+  const cr_app = {
+    async read_thread() {
+      return { thread: { status: { type: 'idle' } }, turns: [{ id: 'cr-1', status: 'completed', items: [
+        delegation('c-in', ROOM_PROMPT, 'create_thread'),
+        { type: 'agentMessage', id: 'cr-m', phase: 'commentary', text: '新建会话已开始' },
+      ] }] };
+    },
+    async create_thread() { return { thread_id: 'created-1', title: 'CoDiscuss · Codex' }; },
+    async set_archived() {},
+    close() {},
+  };
+  const prev_home = process.env.DISCUSS_SERVICE_HOME;
+  process.env.DISCUSS_SERVICE_HOME = directory;
+  try {
+    const cr = await adapter_of('codex').deliver({ adapter: 'codex', source_thread_id: 'src-1' }, {},
+      { id: 'free-80', participant: 'Codex', directory, access_path, prompt: ROOM_PROMPT,
+        on_binding: () => {}, on_output: (_p, l) => cr_logs.push(l), on_turn_end: () => cr_done() },
+      undefined, directory, { connect: async () => cr_app, poll_ms: 1 });
+    assert.deepEqual(cr.capabilities, { stoppable: false, progress: true, ends: true });
+    await cr_ended;
+    assert.equal(execution_details('codex', cr_logs.join('')).entries[0].body, '新建会话已开始');
+  } finally {
+    if (prev_home === undefined) delete process.env.DISCUSS_SERVICE_HOME;
+    else process.env.DISCUSS_SERVICE_HOME = prev_home;
+  }
+  cleanup();
 });

@@ -78,7 +78,7 @@ function save() {
       </div>
     </template>
     <template #extra>
-      <UCheckbox v-if="can_template" v-model="as_template" :label="t('存为 {value1} 的默认描述', { value1: shown.platform })" />
+      <UCheckbox v-if="can_template" v-model="as_template" size="sm" :label="t('存为 {value1} 的默认描述', { value1: shown.platform })" />
     </template>
   </MemberTextDialog>
 </template>

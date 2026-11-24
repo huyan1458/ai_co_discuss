@@ -14,7 +14,10 @@ import { tray_script } from '../runner/tray.mjs';
 import { admin_cli } from '../runner/admin_cli.mjs';
 import { read_relay_health, relay_health_writer, request_relay_reconnect } from '../runner/relay_health.mjs';
 import { start_relay_channels } from '../runner/relay_channel.mjs';
-import { relay_commands } from '../runner/remote_launch.mjs';
+import { relay_commands, relayed_command } from '../runner/remote_launch.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { service_drafts } from '../runner/discussion_runner.mjs';
+import { member_drafts } from '../runner/free_runner.mjs';
 
 process.env.CODISCUSS_LANG = 'zh-CN';
 
@@ -698,6 +701,52 @@ test('the owner binds and leaves the online site without hosting, and never from
   assert.equal(await online(), '');
 });
 
+test('admin storage accounts for members and separate speech models and cleans only confirmed scratch', async () => {
+  const { data, ops } = fixture();
+  const project_data_root = mkdtempSync(join(tmpdir(), 'hosted-projects-'));
+  folders.push(project_data_root);
+  mkdirSync(join(project_data_root, 'drafts'));
+  writeFileSync(join(data, 'local-settings.json'), JSON.stringify({ hosting: true, project_data_root }));
+  const { port, request } = await serve(data, ops);
+  const directory = join(data, 'runtime'), config_path = join(data, 'room.json');
+  const config = { room: 'test', site: 'https://example.org', data_directory: directory, members: { Expert: {} } };
+  writeFileSync(config_path, JSON.stringify(config));
+  writeFileSync(join(data, 'rooms.json'), JSON.stringify({ configs: [config_path] }));
+  mkdirSync(directory);
+  const db = new DatabaseSync(join(directory, 'runtime.sqlite3'));
+  db.exec('CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT)');
+  db.prepare('INSERT INTO metadata VALUES (?,?)').run('failed-scratch:2', JSON.stringify({ member: 'Expert', id: 2, ended: 1 }));
+  db.close();
+  const drafts = member_drafts({ draft_directory: service_drafts(data, directory) }, 'Expert');
+  assert.ok(drafts.startsWith(join(project_data_root, 'drafts')));
+  for (const id of ['1', '2']) {
+    const folder = join(drafts, '.scratch', id);
+    mkdirSync(folder, { recursive: true }); writeFileSync(join(folder, 'temp'), 'abc');
+  }
+  writeFileSync(join(drafts, 'answer'), 'keep');
+  mkdirSync(join(data, 'yovoice')); writeFileSync(join(data, 'yovoice', 'weights'), 'model');
+  assert.equal((await request('/api/storage')).status, 401);
+  assert.equal((await request('/api/storage/clean', { body: {} })).status, 401);
+  writeFileSync(join(data, 'admin-panel.json'), JSON.stringify({ port, key: KEY, pid: process.pid }));
+  const call = (...args) => admin_cli(['storage', ...args, '--data', data], { print() {} });
+  const snapshot = await call(), room = snapshot.rooms[0];
+  assert.equal(snapshot.model_bytes, 5);
+  assert.equal(room.room_id, 'test');
+  assert.equal(room.bytes, 10);
+  assert.equal(room.scratch_bytes, 3);
+  assert.equal(room.members[0].name, 'Expert');
+  assert.equal(room.members[0].bytes, 10);
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  const outside = await request('/api/storage/clean', { cookie, body: { room_key: 'other' } });
+  assert.equal((await outside.json()).removed, 0);
+  assert.deepEqual(await call('clean'), { removed: 1, freed_bytes: 3, failed: 0 });
+  assert.deepEqual(await call('clean'), { removed: 0, freed_bytes: 0, failed: 0 });
+  assert.deepEqual(readdirSync(join(drafts, '.scratch')), ['1']);
+  assert.equal(readFileSync(join(drafts, 'answer'), 'utf8'), 'keep');
+  assert.equal(relayed_command(config.site, 'storage').command, 'storage');
+  assert.deepEqual(relayed_command(config.site, 'storage-clean', { room_key: room.key }).input, { room_key: room.key });
+});
+
 test('the admin command line works the panel with the owner key only, and does what the panel does', async () => {
   const { data, ops } = fixture();
   const { port } = await serve(data, ops);
@@ -708,6 +757,8 @@ test('the admin command line works the panel with the owner key only, and does w
   await assert.rejects(run(['status']), /拒绝了钥匙/);
   writeFileSync(join(data, 'admin-panel.json'), JSON.stringify({ port, key: KEY, pid: process.pid }));
   assert.equal((await run(['status'])).hosting, true);
+  assert.deepEqual(await run(['account', 'migration-backups', 'demo']), []);
+  await assert.rejects(run(['account', 'release-backup', 'demo', 'unknown', 'drafts']), /confirm/);
   assert.deepEqual(await run(['site', 'status']), { local: null, online: null });
   const created = await run(['key', 'add', 'demo', '--base-url', 'https://api.deepseek.com/v1', '--key', 'sk-secret-5678']);
   assert.ok(created);

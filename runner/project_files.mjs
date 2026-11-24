@@ -160,8 +160,14 @@ function search_result(query, searches) {
 }
 
 /** The room's project directories: the main one (`cwd`) first, then the extra ones in the order they were added. */
+export function room_directory_entries(config) {
+  return [config.cwd, ...(config.extra_directories || [])].filter(Boolean)
+    .map(item => typeof item === 'string' ? { path: item, access: 'write' } : item);
+}
+
+/** Project paths in room order, including legacy string-only entries. */
 export function room_directories(config) {
-  return [config.cwd, ...(config.extra_directories || [])].filter(Boolean);
+  return room_directory_entries(config).map(item => item.path);
 }
 
 /** Whether `directory` is one of the room's project directories or lies inside one; Windows paths compare without case. */

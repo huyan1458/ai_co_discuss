@@ -1,3 +1,4 @@
+import { ensure_global_experts_migrated, replace_global_experts, change_project_expert, project_experts } from './experts.mjs';
 import { local_settings } from './discussion_setup.mjs';
 /** Shared launch configuration for an existing AI conversation and the local website. */
 import { spawn } from 'node:child_process';
@@ -16,7 +17,7 @@ import { atomic_json } from './files.mjs';
 import { room_draft_space } from './room_destruction.mjs';
 import { ISOLATED_ACCOUNT_VARIABLE } from './os_users.mjs';
 import { read_store } from './external_client.mjs';
-import { bundle_project_markdown, bundle_project_page, inside_room, outside_directory, project_media, project_root, project_zip, read_only_enforced, read_project_files, read_project_folders, room_directories, search_project_roots } from './project_files.mjs';
+import { bundle_project_markdown, bundle_project_page, inside_room, outside_directory, project_media, project_root, project_zip, read_only_enforced, read_project_files, read_project_folders, room_directories, room_directory_entries, search_project_roots } from './project_files.mjs';
 import { delete_entry, make_folder, paste_entry, read_text, RecycleArea, rename_entry, save_text, upload_part } from './project_manage.mjs';
 import { guard_remote_request, list_remote_directories, remote_allows, remote_roots } from './remote_policy.mjs';
 import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
@@ -35,8 +36,8 @@ import { run_image_tool } from './adapters/api_images.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, check_extra_directories, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files, member_drafts, member_extra_directories } from './free_runner.mjs';
-import { assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, workflow_member_list, WORKFLOW_ID_PATTERN,
-  card_folder, CARD_ID_PATTERN, expert_skills, experts_home, load_room_workflow as load_workflow_for_cards, parse_markdown, serialize_markdown, SKILL_FILE,
+import { transfer_workflow, bound_workflow, room_workflow_store, trust_workflow, assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, workflow_member_list, WORKFLOW_ID_PATTERN,
+  card_folder, expert_disk_key, CARD_ID_PATTERN, expert_skills, experts_home, load_room_workflow as load_workflow_for_cards, parse_markdown, serialize_markdown, SKILL_FILE,
   SKILL_NAME_PATTERN, SKILLS_DIRECTORY } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 import { site_fetch } from './entry_client.mjs';
@@ -115,7 +116,8 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch projects [--file FILE]
       codiscuss launch presets [--file FILE]
       codiscuss launch machine-link --file FILE
-      codiscuss launch workflow-adopt (--draft FILE | --id WORKFLOW) [--access-file FILE]
+      codiscuss launch workflow-adopt (--draft FILE | --id WORKFLOW) [--scope project|global] [--project-id ID] [--access-file FILE]
+      codiscuss launch workflow-promote --id ID [--project-id ID] [--access-file FILE]
       codiscuss launch workflow-join [--card ID[,ID] | --sub SUB | --card ID --label 显示名] [--access-file FILE]
       codiscuss launch workflow-leave (--sub SUB | --member 成员) [--access-file FILE]
       codiscuss launch host-control ACTION [选项] [--access-file FILE]
@@ -166,6 +168,7 @@ room-member-adapter 把自由房间里空闲的 Codex 成员在 App（codex）�
 room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含凭据），供备份附带；须提供 site、room_id、token。
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
 room-fork 把从原房间分支出的新房间登记到本机，各本机成员从原会话分叉、不含分支点之后的执行，原会话不变；须提供 site、room_id、token、source_room_id、source_token、executions（{成员名: [排除的执行编号]}）。
+workflow-promote 将本房间的项目工作流移到全局，房主须允许主持人管理工作流。
 workflow-adopt 主持人在本房间启用工作流：--draft 把自己的草稿（一段，分段头 1/1）保存进工作流库后启用，--id 启用工作流库里已有的工作流（不改动它）；缺的卡片成员由本机服务邀请，项目权限最高可写；须房主已为本房间打开“主持人完整权限”。凭据为本次任务的 access_file（或 DISCUSS_ACCESS_FILE）。
 workflow-join 主持人为本房间在用工作流里还没有成员的卡片（启用后才新增的）邀请成员，不填 --card 即全部主线卡片；无需额外授权，离开或移除的成员由用户请回。--sub 改为请进该子工作流的卡片成员（离开的请回原会话）。凭据同上。 --card 一张卡片加 --label 显示名：按这个显示名请一位扮演该卡片的成员（同一张卡可请多位，各有自己的会话；显示名只在本房间、不能和别的成员重复；该卡片已有同名的离开成员就请回它的原会话）。
 workflow-leave 主持人用完子工作流后，把 --sub 子工作流卡片的成员设为离开（会话保留，下次 workflow-join --sub 请回）；主线成员不能这样请离。凭据同上。 --member 成员（成员 ID 或显示名）只请离子工作流卡片的这一位成员。
@@ -410,6 +413,7 @@ function assert_model_available(home, name, profile) {
  * set up, `unknown_model` when that software's list lacks its model. The import goes ahead either way.
  */
 function expert_readiness(home, preset) {
+  home = home.service_home || home;
   if (!card_platform_ready(home, preset.name)) return { needs_platform: true };
   const saved = launch_settings(home).participants[platform_of(preset.name)];
   const model = saved ? unknown_model(home, { ...saved, model: preset.model || '' }) : '';
@@ -429,7 +433,7 @@ export function launch_settings(home) {
  * `actual_model` / `actual_effort` (present only when known) are what each member's session last ran with, read from the software's own session log.
  * With `quick`, agy's default model is not queried and its entry is marked `defaults_pending`.
  */
-export async function room_models(home, raw, { read_defaults = profile => cached_software_defaults(home, profile), read_session = session_settings } = {}) {
+export async function room_models(home, raw, { read_defaults = profile => cached_software_defaults(home, profile), read_session = session_settings, restricted = false } = {}) {
   const input = launch_input({ ...raw, entry: 'web' });
   if (!input.room_id) throw new Error('读取本场模型须提供 room_id');
   const paths = read_registry(home).filter(path => {
@@ -467,7 +471,10 @@ export async function room_models(home, raw, { read_defaults = profile => cached
   })));
   // Smart scheduling is a local choice; only which model decides is shown, never its key.
   const scheduler = config.scheduler ? { provider: config.scheduler.provider, model: config.scheduler.model } : null;
-  return { room_id: input.room_id, registered: paths.length > 0, participants, scheduler, project_directory: config.cwd || '',
+  const roots = paths.length ? library_projects(home, { room_id: input.room_id }, restricted) : [];
+  const project_workflows = roots.flatMap(root => list_workflows(project_store(home, root)).map(({ directory, ...entry }) => ({ ...entry, ...scope_fields(root) })));
+  return { room_id: input.room_id, project_workflows, project_experts: roots.flatMap(root => project_experts(home, root, validate_preset)),
+    project_roots: roots.map(({ path, ...fields }) => fields), registered: paths.length > 0, participants, scheduler, project_directory: config.cwd || '',
     extra_directories: config.extra_directories || [],
     workflow: room_workflow_status(config, home), host_workflows: Boolean(config.host_workflows), host_permissions: host_permissions(config),
     api_max_requests: config.api_max_requests ?? DEFAULT_API_MAX_REQUESTS,
@@ -514,7 +521,7 @@ function room_workflow_status(config, home) {
   const loaded = load_room_workflow({ ...config, api_home: config.api_home || home, workflow: { ...config.workflow, enabled: true } });
   // `cards` are the main flow's, which a refresh fills; a sub-workflow's cards join only when it is used.
   const cards = Object.values(loaded.cards || {});
-  return { id: config.workflow.id, label: loaded.label || config.workflow.id, enabled: Boolean(config.workflow.enabled),
+  return { id: config.workflow.id, scope: config.workflow.scope || 'global', ...(config.workflow.project_id ? { project_id: config.workflow.project_id, ...(loaded.directory ? { project_name: basename(dirname(dirname(dirname(loaded.directory)))) } : {}) } : {}), label: loaded.label || config.workflow.id, enabled: Boolean(config.workflow.enabled),
     available: !loaded.error, members: config.workflow.members || {}, ...(config.workflow.extra_members ? { extra_members: config.workflow.extra_members } : {}),
     cards: cards.filter(card => !card.sub_workflow).map(card => card.card), stages: loaded.stages || [],
     sub_workflows: (loaded.sub_workflows || []).map(sub => ({ id: sub.id, label: sub.label || sub.id, description: sub.description, cards: sub.cards, attach: sub.attach || [] })) };
@@ -638,7 +645,15 @@ const FILE_OPERATIONS = ['roots', 'mkdir', 'rename', 'delete', 'paste', 'upload'
 function file_operation(home, config, input) {
   if (!FILE_OPERATIONS.includes(input.op)) throw new Error(`文件操作只能为 ${FILE_OPERATIONS.join('/')}`);
   const recycle = recycle_area(home);
-  const root = () => project_root(files_root(home, config, input.root ?? 0));
+  const readonly = room_directory_entries(config).filter(item => item.access === 'read');
+  const assert_writable = path => {
+    if (readonly.some(item => realpathSync(item.path).toLowerCase() === realpathSync(path).toLowerCase())) throw new Error('项目目录只读');
+  };
+  const root = () => {
+    const directory = files_root(home, config, input.root ?? 0);
+    if (input.op !== 'read') assert_writable(directory);
+    return project_root(directory);
+  };
   // A folder some room works in keeps its place: renaming, moving, replacing or deleting it is refused.
   const rooms_in = folder => rooms_using(home, folder);
   if (input.op === 'roots') return list_account_roots(home);
@@ -646,6 +661,7 @@ function file_operation(home, config, input) {
   if (input.op === 'rename') return rename_entry(root(), input.path, input.name, rooms_in);
   if (input.op === 'delete') return delete_entry(root(), input.path, recycle, rooms_in);
   if (input.op === 'paste') {
+    if (input.mode === 'move') assert_writable(files_root(home, config, input.source?.root ?? 0));
     return paste_entry({ source_root: project_root(files_root(home, config, input.source?.root ?? 0)), source_path: input.source?.path,
       root: root(), path: input.path, mode: input.mode, conflict: input.conflict, recycle, rooms_in });
   }
@@ -660,7 +676,7 @@ function file_operation(home, config, input) {
     const key = path => { try { return realpathSync(path).toLowerCase(); } catch { return ''; } };
     const reachable = [...account_roots(home).map(item => item.path), ...room_directories(config), account_space(home).workspace,
       account_space(home).projects_root].filter(Boolean).map(key).filter(Boolean);
-    return recycle.restore(input.id, origin => reachable.includes(key(origin)));
+    return recycle.restore(input.id, origin => reachable.includes(key(origin)) && !readonly.some(item => key(item.path) === key(origin)));
   }
   if (input.op === 'new-project') {
     const { projects_root } = account_space(home);
@@ -939,42 +955,12 @@ const MAX_PRESET_FIELD = 200;
 const PRESET_FIELDS = ['name', 'label', 'description', 'system_prompt', 'project_access', 'model', 'effort'];
 const MAX_PRESET_LABEL = 32;
 
-/**
- * Presets saved while IDs could hold Chinese: such an ID becomes `platform-presetN` and its old name the label, so the
- * add row still shows it. The next save keeps the new form.
- */
-function english_preset_ids(presets) {
-  const taken = new Set(presets.map(preset => preset.name));
-  return presets.map(preset => {
-    const platform = /^(Codex|Claude|Antigravity|DeepSeek|Qwen|Grok|OpenAI|Custom)(?:-|$)/.exec(preset.name || '')?.[1];
-    if (!platform || platform_of(preset.name)) return preset;
-    let number = 1;
-    while (taken.has(`${platform}-preset${number}`)) number++;
-    const name = `${platform}-preset${number}`;
-    taken.add(name);
-    return { ...preset, name, label: preset.label || preset.name };
-  });
-}
-
-/** The user's expert presets and per-platform default descriptions saved on this computer, plus the built-in presets the user has not deleted. */
+/** Read canonical expert definitions, initializing the global library on its first use. */
 export function expert_presets(home) {
-  const path = join(home, 'expert-presets.json');
-  const saved = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
-  const hidden_builtins = saved.hidden_builtins || [];
-  // A preset saved while members drew with their own image model keeps the rest; drawing is the room's switch now.
-  const presets = (saved.presets || []).map(({ image_model, ...preset }) => preset);
-  const builtin_presets = BUILTIN_EXPERT_PRESETS.filter(preset => !hidden_builtins.includes(preset.name));
-  const listed = english_preset_ids(presets);
-  return { presets: listed, description_templates: saved.description_templates || {}, hidden_builtins, builtin_presets,
-    skilled_presets: skilled_presets(home, [...listed, ...builtin_presets]) };
-}
-
-/** The presets that keep skills of their own in the service home (`experts/<编号>/skills/`): advisors, which the panel opens in 高级配置. */
-function skilled_presets(home, presets) {
-  return presets.filter(preset => {
-    const key = preset.name.slice(platform_of(preset.name).length + 1);
-    return CARD_ID_PATTERN.test(key) && expert_skills(join(experts_home(home), key)).length > 0;
-  }).map(preset => preset.name);
+  if (!home.root) ensure_global_experts_migrated(home);
+  const presets = project_experts(home.service_home || home, home.root, validate_preset);
+  return { presets, description_templates: launch_settings(home.service_home || home).description_templates || {},
+    hidden_builtins: [], builtin_presets: [], skilled_presets: presets.filter(item => item.skills.length).map(item => item.name) };
 }
 
 /** Check one expert preset; a workflow's agent card is a preset and obeys the same rule. */
@@ -992,7 +978,12 @@ export function validate_preset(preset) {
 /** Replace the user's presets, default descriptions or deleted built-ins (whichever the input carries); every field is checked first. */
 export function save_expert_presets(home, input) {
   const current = expert_presets(home);
-  const presets = input.presets === undefined ? current.presets : input.presets;
+  const presets = input.presets === undefined ? [] : Array.isArray(input.presets)
+    ? input.presets.map(item => {
+      if (item?.scope !== 'global') return item;
+      const { scope, id, platform, skills, ...preset } = item;
+      return preset;
+    }) : input.presets;
   const templates = input.description_templates === undefined ? current.description_templates : input.description_templates;
   const hidden_builtins = input.hidden_builtins === undefined ? current.hidden_builtins : input.hidden_builtins;
   const builtin_names = BUILTIN_EXPERT_PRESETS.map(preset => preset.name);
@@ -1008,8 +999,10 @@ export function save_expert_presets(home, input) {
     platform_of(platform) !== platform || typeof text !== 'string' || !text.trim() || text.length > MAX_PRESET_DESCRIPTION)) {
     throw new Error(`description_templates 须为 {平台名: 描述}，每段 1–${MAX_PRESET_DESCRIPTION} 字`);
   }
-  mkdirSync(home, { recursive: true, mode: 0o700 });
-  atomic_json(join(home, 'expert-presets.json'), { presets, description_templates: templates, hidden_builtins });
+  const hidden = new Set(hidden_builtins);
+  const remaining = input.presets === undefined ? current.presets : presets;
+  const updated = remaining.filter(item => !hidden.has(item.name));
+  replace_global_experts(home, input.presets !== undefined || input.hidden_builtins !== undefined ? updated : null, input.description_templates, validate_preset);
   return expert_presets(home);
 }
 
@@ -1018,8 +1011,10 @@ function validate_profile(name, profile, binding = false) {
   if (!clients_of(name) || !profile || typeof profile !== 'object' || Array.isArray(profile)) throw new Error(`不支持的软件配置：${name}`);
   if (profile.adapter && !clients_of(name).includes(profile.adapter)) throw new Error(`${name} 的客户端不匹配`);
   // Session bindings and project write access apply to one launch only, never to machine defaults.
-  const fields = binding ? [...PROFILE_FIELDS, 'session_id', 'project_access'] : PROFILE_FIELDS;
+  const fields = binding ? [...PROFILE_FIELDS, 'session_id', 'project_access', 'preset_scope', 'preset_project_id'] : PROFILE_FIELDS;
   if (Object.keys(profile).some(key => !fields.includes(key))) throw new Error('软件配置包含不支持的字段；默认配置不能保存房间或会话绑定');
+  if (profile.preset_scope && !['global', 'project'].includes(profile.preset_scope)) throw new Error('专家作用域无效');
+  if (profile.preset_project_id && !/^[0-9a-f]{16}$/.test(profile.preset_project_id)) throw new Error('专家项目编号无效');
   for (const [key, value] of Object.entries(profile)) {
     if (key === 'allowed_tools') {
       if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) throw new Error(`${name}.allowed_tools 必须为工具名称数组`);
@@ -1121,7 +1116,7 @@ function free_launch_config(home, input, room, directory, options) {
   const members = launch_members(input, names, options);
   // A workflow chosen at creation is written with the members, so the first wake already carries it.
   const workflow = input.workflow ? bind_room_workflow({}, { ...input.workflow, enabled: true }).workflow : undefined;
-  if (workflow) { get_workflow(home, workflow.id); assert_workflow_enabled(home, workflow.id); }
+  if (workflow) bound_workflow(home, { ...input, workflow });
   if (workflow && Object.values(workflow.members).some(name => !names.includes(name))) throw new Error('工作流成员须在本次邀请的成员中');
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
     scheduler: input.scheduler || undefined, cwd: input.cwd, extra_directories: input.extra_directories, project_access: input.project_access || undefined, workflow,
@@ -1152,7 +1147,7 @@ function launch_members(input, names, options) {
 export function participant_profile(name, defaults, input, current_host) {
   const platform = platform_of(name);
   // An extra instance starts from its platform's settings but never from another instance's bound session.
-  const { session_id: ignored_session, ...inherited } = name === platform ? {} : input.participants?.[platform] || {};
+  const { session_id: ignored_session, preset_scope: ignored_scope, preset_project_id: ignored_project_id, ...inherited } = name === platform ? {} : input.participants?.[platform] || {};
   const saved = { ...defaults[platform], ...(name === platform ? {} : defaults[name]) };
   if (input.without_saved_tools) delete saved.allowed_tools;
   // An adopted session keeps its own model and effort, and its adapter may differ from the saved one (App vs CLI),
@@ -2100,31 +2095,133 @@ async function perform_launch(home, context, options) {
   } catch (error) { error.launch = progress; throw error; }
 }
 
+/** Resolve project roots from a registered room, saved project or the local creation form. */
+function library_projects(home, input, restricted = false) {
+  const config = input.room_id ? room_config_by_id(home, input.room_id) : null;
+  if (restricted && (input.cwd || input.extra_directories?.length)) throw new Error('此请求须使用项目编号或房间编号');
+  const selected = input.project_id || input.target_project_id;
+  const registered = !config && selected && (!input.cwd || restricted) ? account_roots(home).find(item => item.id === selected) : null;
+  const cwd = config ? (room_draft_space(home, config) ? null : config.cwd) : !input.room_id && (registered?.path || input.cwd);
+  const extras = config?.extra_directories || (!input.room_id && input.extra_directories) || [];
+  const grant = restricted ? { roots: remote_roots(granted_projects(home)), home } : null;
+  return [cwd, ...extras].flatMap((item, index) => {
+    const path = typeof item === 'string' ? item : item?.path;
+    if (!path || !isAbsolute(path) || !existsSync(path) || (grant && !remote_allows(path, grant))) return [];
+    const id = createHash('sha256').update(resolve(path).toLowerCase()).digest('hex').slice(0, 16);
+    return [{ id, name: basename(path), readonly: item?.access === 'read', primary: index === 0, path }];
+  });
+}
+
+function project_store(home, root) {
+  return { service_home: home, project_dir: root.path, project_id: root.id, root };
+}
+
+/** Scope fields shared by the editor and the library list. */
+function scope_fields(root) {
+  return root ? { scope: 'project', project_id: root.id, project_name: root.name, readonly: root.readonly } : { scope: 'global' };
+}
+
+/** List and edit the independent experts available to the room or creation form. */
+export function presets_command(home, input = {}, restricted = false) {
+  if (input.scope && !['project', 'global'].includes(input.scope)) throw new Error('专家作用域无效');
+  const roots = library_projects(home, input, restricted);
+  let global;
+  if (input.scope === 'project' || input.action === 'trust') {
+    const root = roots.find(item => input.project_id ? item.id === input.project_id : item.primary);
+    if (!root) throw new Error('找不到已授权的项目目录');
+    if (input.action !== 'list') change_project_expert(home, root, input, validate_preset);
+  } else if (input.action === 'save' || input.action === 'delete') {
+    ensure_global_experts_migrated(home);
+    change_project_expert(home, null, input, validate_preset);
+  } else if (!input.action && ['presets', 'description_templates', 'hidden_builtins'].some(key => Object.hasOwn(input, key))) {
+    global = save_expert_presets(home, input);
+  }
+  const project_presets = roots.flatMap(root => project_experts(home, root, validate_preset));
+  const current = global || expert_presets(home);
+  const presets = current.presets;
+  return { ...current, presets, project_presets, project_roots: roots.map(({ path, ...fields }) => fields),
+    skilled_project_presets: project_presets.filter(item => item.skills.length).map(item => `project:${item.project_id}:${item.name}`) };
+}
+
 /** The workflow library: list, read, save, rename, disable or enable, delete, preview an import, or read a room's member cards. */
-export function workflows_command(home, input = {}) {
+export function workflows_command(home, input = {}, restricted = false) {
   const action = input.action || 'list';
-  if (action === 'list') return workflow_library(home);
-  if (action === 'get') return get_workflow(home, input.id);
-  // The page names the revision it loaded (`base_revision`), or `overwrite` after the user chose to replace an entry.
-  if (action === 'save') return save_workflow(home, input.workflow, validate_preset, { base_revision: input.base_revision, overwrite: input.overwrite === true });
-  if (action === 'delete') return delete_workflow(home, input.id);
-  if (action === 'rename') return rename_workflow(home, input.id, input.label);
-  if (action === 'disable' || action === 'enable') return set_workflow_disabled(home, input.id, action === 'disable');
+  if (action === 'trust') input = { ...input, scope: 'project' };
+  if (restricted && input.folder) throw new Error('其他设备请选择 zip 或文件夹导入工作流');
+  if (input.scope && !['global', 'project'].includes(input.scope)) throw new Error('工作流作用域无效');
+  const roots = ['list', 'copy', 'move', 'save-preset'].includes(action) || input.scope === 'project' ? library_projects(home, input, restricted) : [];
+  if (action === 'list') {
+    const global = workflow_library(home);
+    const project_workflows = roots.flatMap(root => list_workflows(project_store(home, root), name => card_platform_ready(home, name))
+      .map(({ directory, ...entry }) => ({ ...entry, ...scope_fields(root) })));
+    return { ...global, workflows: global.workflows.map(entry => ({ ...entry, scope: 'global' })), project_workflows,
+      project_roots: roots.map(({ path, ...entry }) => entry) };
+  }
+  const root = input.scope === 'project' ? roots.find(item => input.project_id ? item.id === input.project_id : item.primary) : null;
+  if (input.scope === 'project' && !root) throw new Error('找不到已授权的项目目录');
+  const store = root ? project_store(home, root) : home;
+  if (root?.readonly && !['get', 'export', 'preview', 'skills', 'export-expert', 'trust', 'copy'].includes(action)) throw new Error('项目目录只读');
+  const fields = scope_fields(root);
+  const present = workflow => {
+    if (root && restricted) { const { directory, ...rest } = workflow; return { ...rest, ...fields }; }
+    return { ...workflow, ...fields };
+  };
+  if (['move', 'copy'].includes(action)) {
+    if (!['project', 'global'].includes(input.target_scope)) throw new Error('请选择目标作用域');
+    const target = input.target_scope === 'project' ? roots.find(item => input.target_project_id ? item.id === input.target_project_id : item.primary) : null;
+    if (input.target_scope === 'project' && (!target || target.readonly)) throw new Error('目标项目不存在或只读');
+    const config = action === 'move' && input.room_id && room_config_by_id(home, input.room_id);
+    const path = config && registered_room_path(home, config.site, config.room);
+    const release = path && acquire_lock(join(dirname(path), 'configuration-edit'));
+    let room_updated = false;
+    try {
+      const after_publish = () => {
+        if (!path) return;
+        const current = configuration_snapshot(path).config;
+        const binding = current.workflow;
+        if (binding?.id !== input.id || (binding.scope || 'global') !== fields.scope || binding.project_id !== root?.id) return;
+        const { project_id, project_dir, ...rest } = binding;
+        atomic_json(path, { ...current, workflow: { ...rest, scope: input.target_scope, ...(target ? { project_id: target.id, project_dir: target.path } : {}) } });
+        room_updated = true;
+      };
+      const result = transfer_workflow(store, target ? project_store(home, target) : home, input.id,
+        { move: action === 'move', overwrite: input.overwrite === true, after_publish });
+      return { ...result, ...scope_fields(target), room_updated };
+    } finally { if (release) release(); }
+  }
+  if (action === 'trust' && root) {
+    trust_workflow(store, input.id);
+    return { ...fields, ok: true, id: input.id, trusted: true };
+  }
+  if (action === 'get') return present(get_workflow(store, input.id));
+  if (action === 'save') return present(save_workflow(store, input.workflow, validate_preset, { base_revision: input.base_revision, overwrite: input.overwrite === true }));
+  if (action === 'delete') return { ...delete_workflow(store, input.id), ...fields };
+  if (action === 'rename') return { ...rename_workflow(store, input.id, input.label), ...fields };
+  if (action === 'disable' || action === 'enable') return { ...set_workflow_disabled(store, input.id, action === 'disable'), ...fields };
+  if (action === 'export') {
+    get_workflow(store, input.id);
+    return export_workflow_files(store, input.id);
+  }
+
   if (action === 'preview') {
     return preview_workflow(input, validate_preset, name => card_platform_ready(home, name));
   }
   if (action === 'room-cards') return room_cards(home, input);
-  if (action === 'save-preset') return save_card_preset(home, { ...input, replace_knowledge: input.replace_knowledge === true });
+  if (action === 'save-preset') {
+    const target = input.target_scope === 'project' ? roots.find(item => input.target_project_id ? item.id === input.target_project_id : item.primary) : null;
+    if (input.target_scope === 'project' && (!target || target.readonly)) throw new Error('目标项目不存在或只读');
+    const destination = input.target_scope ? (target ? project_store(home, target) : home) : store;
+    return save_card_preset(store, input, destination);
+  }
   // The page's expert export and import (the command line has expert-export / expert-import), by files `{path: text}`.
-  if (action === 'export-expert') return expert_export_files(home, input);
-  if (action === 'export') return export_workflow_files(home, input.id);
-  if (action === 'import-expert') return import_expert(home, { files: input.files, overwrite_preset: input.overwrite_preset === true, replace_knowledge: input.replace_knowledge === true });
-  if (action === 'import-expert-workflow') return import_expert_to_workflow(home, { files: input.files, workflow: input.workflow, sub: input.sub || '' });
+  if (action === 'export-expert') return expert_export_files(store, input);
+  if (action === 'import-expert') return import_expert(store, { files: input.files, overwrite_preset: input.overwrite_preset === true, replace_knowledge: input.replace_knowledge === true });
+  if (action === 'import-expert-workflow') return import_expert_to_workflow(store, { files: input.files, workflow: input.workflow, sub: input.sub || '' });
   // An expert's skills, file by file, outside the workflow's save (see expert_skill_files).
-  if (action === 'skills') return expert_skill_files(home, input);
-  if (action === 'skill-write') return write_skill_file(home, input);
-  if (action === 'skill-delete') return delete_skill_file(home, input);
-  if (action === 'skill-remove') return remove_skill(home, input);
+  if (action === 'skills') return { ...expert_skill_files(store, input), ...fields };
+  if (action === 'skill-write') return { ...write_skill_file(store, input), ...fields };
+  if (action === 'skill-delete') return { ...delete_skill_file(store, input), ...fields };
+  if (action === 'skill-remove') return { ...remove_skill(store, input), ...fields };
   throw new Error('action 须为 list、get、save、rename、disable、enable、delete、preview、room-cards、save-preset、export、export-expert、import-expert、import-expert-workflow、skills、skill-write、skill-delete 或 skill-remove');
 }
 
@@ -2215,7 +2312,7 @@ export function expert_export_files(home, { preset: preset_name, workflow: workf
   }
   const { key, text } = expert_definition(preset);
   const id = key || platform_of(preset.name);
-  const source = preset_name ? (key ? join(experts_home(home), key) : '') : folder;
+  const source = preset_name && key ? join(experts_home(home), expert_disk_key(experts_home(home), platform_of(preset_name), key)) : folder;
   const files = { [`${id}.md`]: text };
   const skills = source ? expert_skills(source) : [];
   for (const skill of skills) {
@@ -2236,14 +2333,21 @@ const SKILL_DIGEST_LENGTH = 16;
 function skill_digest(bytes) { return createHash('sha256').update(bytes).digest('hex').slice(0, SKILL_DIGEST_LENGTH); }
 
 /** The skills folder a request names: `workflow` and `card` (a saved folder card) or `preset` (its name). */
-function skills_folder(home, { workflow, card, preset } = {}) {
+function skills_folder(home, { workflow, card, preset } = {}, writing = false) {
   if (preset) {
     const { presets, builtin_presets } = expert_presets(home);
     const found = [...presets, ...builtin_presets].find(item => item.name === preset);
     if (!found) throw new Error(`没有预设 ${preset}`);
     const { key } = expert_definition(found);
     if (!CARD_ID_PATTERN.test(key)) throw new Error(`预设 ${preset} 的名字没有“平台-编号”的编号，不能带技能`);
-    return join(experts_home(home), key, SKILLS_DIRECTORY);
+    const disk = expert_disk_key(experts_home(home), platform_of(preset), key);
+    const folder = join(experts_home(home), disk);
+    const flat = join(experts_home(home), disk + '.md');
+    if (writing && existsSync(flat)) {
+      mkdirSync(folder, { recursive: true });
+      renameSync(flat, join(folder, disk + '.md'));
+    }
+    return join(folder, SKILLS_DIRECTORY);
   }
   const folder = card_folder(load_workflow_for_cards({ api_home: home, workflow: { id: workflow, enabled: true, members: {} } }), card);
   if (!folder) throw new Error(`工作流 ${workflow} 的卡片 ${card} 没有技能；先给它添加技能并保存工作流`);
@@ -2296,14 +2400,19 @@ export function expert_skill_files(home, input) {
 
 /** Write one skill file (`skill-write`): creates the skill and folders it needs; returns the new digest. */
 export function write_skill_file(home, { path, text, digest, ...input } = {}) {
-  const root = skills_folder(home, input);
+  const root = skills_folder(home, input, true);
   const target = skill_target(root, path);
   if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > MAX_EXPERT_FILE_BYTES) throw new Error(`技能文件须为文本，最多 ${MAX_EXPERT_FILE_BYTES / 1000000} MB`);
   check_skill_digest(target, digest, path);
   mkdirSync(dirname(target), { recursive: true });
+  for (const leftover of readdirSync(dirname(target))) {
+    if (/\.[0-9a-f]{8}\.tmp$/.test(leftover)) rmSync(join(dirname(target), leftover), { force: true });
+  }
   const temporary = `${target}.${randomUUID().slice(0, 8)}.tmp`;
-  writeFileSync(temporary, text);
-  renameSync(temporary, target);
+  try {
+    writeFileSync(temporary, text);
+    renameSync(temporary, target);
+  } finally { rmSync(temporary, { force: true }); }
   return { path, digest: skill_digest(Buffer.from(text, 'utf8')) };
 }
 
@@ -2321,8 +2430,8 @@ export function remove_skill(home, { skill, ...input } = {}) {
   const target = skill_target(skills_folder(home, input), skill, false);
   if (!existsSync(target)) throw new Error(`没有技能 ${skill}`);
   const backup = `skill-${input.preset ? platform_of(input.preset) : input.workflow}-${input.card || expert_definition({ name: input.preset }).key}-${skill}-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
-  mkdirSync(join(home, 'backups'), { recursive: true });
-  cpSync(target, join(home, 'backups', backup), { recursive: true });
+  mkdirSync(join(home.service_home || home, 'backups'), { recursive: true });
+  cpSync(target, join(home.service_home || home, 'backups', backup), { recursive: true });
   rmSync(target, { recursive: true, force: true });
   return { skill, backup };
 }
@@ -2348,9 +2457,8 @@ export function import_expert(home, { files = {}, ignored: unread = [], overwrit
   const taken = current.presets.some(item => item.name === preset.name);
   if (taken && overwrite_preset !== true) throw expert_failure('expert_preset_exists', '面板上已有预设「{name}」；要用导入的替换它，请明确选择覆盖', { name: preset.name });
   // The preset is saved first: a full list or a bad field stops the import before any knowledge is written.
-  const presets = taken ? current.presets.map(item => item.name === preset.name ? preset : item) : [...current.presets, preset];
-  save_expert_presets(home, { presets });
-  const { knowledge, backup } = install_knowledge(home, key, skills, replace_knowledge === true);
+  change_project_expert(home.service_home || home, home.root, { action: 'save', preset, overwrite: overwrite_preset }, validate_preset);
+  const { knowledge, backup } = install_knowledge(home, key && expert_disk_key(experts_home(home), platform_of(preset.name), key), skills, replace_knowledge === true);
   return { preset, ...(requested ? { requested_access: requested } : {}), ...expert_readiness(home, preset), knowledge, skills: Object.keys(skills).sort(),
     ...(backup ? { backup } : {}), ignored: [...new Set(ignored)].sort() };
 }
@@ -2402,7 +2510,7 @@ function install_knowledge(home, key, skills, replace) {
     if (had && !replace) knowledge = 'kept';
     else {
       if (had) {
-        backup = join(home, 'backups', `expert-${key}-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`);
+        backup = join(home.service_home || home, 'backups', `expert-${key}-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`);
         mkdirSync(dirname(backup), { recursive: true });
         renameSync(live, backup);
       }
@@ -2412,6 +2520,11 @@ function install_knowledge(home, key, skills, replace) {
           mkdirSync(dirname(target), { recursive: true });
           writeFileSync(target, text);
         }
+      }
+      {
+        const flat = join(experts_home(home), key + '.md');
+        if (existsSync(flat)) renameSync(flat, join(live, key + '.md'));
+        else if (backup) cpSync(join(backup, key + '.md'), join(live, key + '.md'));
       }
       knowledge = had ? 'replaced' : 'added';
     }
@@ -2451,22 +2564,22 @@ export function import_expert_to_workflow(home, { files = {}, ignored: unread = 
  * holds. A folder card's skills are copied from the workflow into `experts/<card>/skills/` in the service home; one
  * already there is kept unless `replace_knowledge`, as an import does (the old one goes to backups/).
  */
-function save_card_preset(home, { id, card, overwrite, replace_knowledge } = {}) {
+function save_card_preset(home, { id, card, overwrite, replace_knowledge } = {}, destination = home) {
   const workflow = get_workflow(home, id);
   const agent = workflow_cards(workflow).find(item => item.card === card);
   if (!agent) throw new Error(`工作流 ${id} 没有卡片 ${card}`);
   const preset = Object.fromEntries(PRESET_FIELDS.filter(field => agent[field]).map(field => [field, agent[field]]));
-  const current = expert_presets(home);
+  const current = expert_presets(destination);
   const taken = current.presets.some(item => item.name === preset.name);
   if (taken && overwrite !== true) {
     const template = '面板上已有预设「{name}」；要用这张卡片替换它，请明确选择覆盖';
     throw Object.assign(new Error(template.replace('{name}', preset.name)), { code: 'preset_exists', error_text: { template, params: { name: preset.name } } });
   }
-  const presets = taken ? current.presets.map(item => item.name === preset.name ? preset : item) : [...current.presets, preset];
-  const saved = save_expert_presets(home, { presets });
+  change_project_expert(destination.service_home || destination, destination.root, { action: 'save', preset, overwrite }, validate_preset);
+  const saved = expert_presets(destination);
   const folder = card_folder(load_workflow_for_cards({ api_home: home, workflow: { id, enabled: true, members: {} } }), card);
   const skills = Object.fromEntries((folder ? expert_skills(folder) : []).map(skill => [skill, read_text_tree(join(folder, SKILLS_DIRECTORY, skill)).files]));
-  const { knowledge, backup } = install_knowledge(home, card, skills, replace_knowledge === true);
+  const { knowledge, backup } = install_knowledge(destination, expert_disk_key(experts_home(destination), platform_of(preset.name), card), skills, replace_knowledge === true);
   return { ...saved, preset, knowledge, ...(backup ? { backup } : {}) };
 }
 
@@ -2514,9 +2627,11 @@ export async function room_workflow(home, raw) {
       return { room_id: input.room_id, host_workflows: Boolean(next.host_workflows), host_permissions: host_permissions(next) };
     }
     if (input.action === 'enable') {
-      get_workflow(home, input.workflow?.id);
-      assert_workflow_enabled(home, input.workflow.id);
-      const next = bind_room_workflow(config, { ...input.workflow, enabled: true });
+      const binding = input.workflow || {};
+      const store = room_workflow_store(home, config, binding);
+      if (store.project_id && input.trust === true) trust_workflow(store, binding.id);
+      const next = bind_room_workflow(config, { ...binding, project_id: store.project_id, enabled: true });
+      bound_workflow(home, next);
       validate_config({ ...next, api_home: home }, dirname(path));
       atomic_json(path, next);
       return { room_id: input.room_id, workflow: room_workflow_status(next, home) };
@@ -2659,7 +2774,7 @@ async function join_workflow_cards(home, config, roster, workflow, members, card
  */
 async function sync_workflow_cards(home, path, config, roster, cards) {
   if (!config.workflow?.id || !config.workflow.enabled) throw new Error('本房间没有在用的工作流');
-  const workflow = get_workflow(home, config.workflow.id);
+  const workflow = bound_workflow(home, config);
   const known = workflow_cards(workflow).map(agent => agent.card);
   const unknown = (cards || []).filter(card => !known.includes(card));
   if (unknown.length) throw new Error(`工作流 ${workflow.id} 没有这些卡片：${unknown.join('、')}；现有卡片：${known.join('、') || '无'}`);
@@ -2701,7 +2816,7 @@ export async function join_workflow(home, { access_file, cards, sub, label }) {
   const mapped = Object.keys(config.workflow?.members || {});
   const taken = (cards || []).filter(card => mapped.includes(card));
   if (taken.length) throw new Error(`这些卡片已有成员：${taken.join('、')}；离开或移除的成员由用户请回`);
-  const known = config.workflow?.id && config.workflow.enabled ? get_workflow(home, config.workflow.id).agents.map(agent => agent.card) : [];
+  const known = config.workflow?.id && config.workflow.enabled ? bound_workflow(home, config).agents.map(agent => agent.card) : [];
   return sync_workflow_cards(home, path, config, roster, cards?.length ? cards : known.filter(card => !mapped.includes(card)));
 }
 
@@ -2720,7 +2835,7 @@ async function join_labeled_member(home, { path, config, roster, labels }, cards
   if (cards?.length !== 1) throw new Error('--label 须和 --card 一起用，且只写一张卡片');
   if (!label || label.length > MAX_MEMBER_LABEL || /\n/.test(label)) throw new Error(`--label 须为 1—${MAX_MEMBER_LABEL} 字、不换行的显示名`);
   const [card] = cards;
-  const workflow = get_workflow(home, config.workflow.id);
+  const workflow = bound_workflow(home, config);
   const agent = workflow_cards(workflow).find(item => item.card === card);
   if (!agent) throw new Error(`工作流 ${workflow.id} 没有卡片 ${card}`);
   const shown = member => labels[member.name] || member.name;
@@ -2759,7 +2874,7 @@ async function join_labeled_member(home, { path, config, roster, labels }, cards
 /** The cards a sub-workflow of the room's workflow in use brings; refuses one it lacks or one with no cards. */
 function sub_workflow_cards(home, config, sub) {
   if (!config.workflow?.id || !config.workflow.enabled) throw new Error('本房间没有在用的工作流');
-  const list = get_workflow(home, config.workflow.id).sub_workflows;
+  const list = bound_workflow(home, config).sub_workflows;
   const found = list.find(item => item.id === sub);
   if (!found) throw new Error(`工作流 ${config.workflow.id} 没有子工作流 ${sub}；现有子工作流：${list.map(item => item.id).join('、') || '无'}`);
   if (!found.agents.length) throw new Error(`子工作流 ${sub} 没有卡片，不需要请成员加入`);
@@ -2777,7 +2892,7 @@ export async function leave_sub_workflow(home, { access_file, sub, member: wante
   if (!config.workflow?.id || !config.workflow.enabled) throw new Error('本房间没有在用的工作流');
   // A sub-workflow's members: every member of its cards, a card's further members (`extra_members`) included.
   const sub_cards = sub ? sub_workflow_cards(home, config, sub)
-    : workflow_cards(get_workflow(home, config.workflow.id)).filter(agent => agent.sub_workflow).map(agent => agent.card);
+    : workflow_cards(bound_workflow(home, config)).filter(agent => agent.sub_workflow).map(agent => agent.card);
   let names = workflow_member_list(config.workflow).filter(item => sub_cards.includes(item.card)).map(item => item.name);
   if (wanted) {
     const member = roster.find(item => item.status !== 'removed' && (item.name === wanted || labels[item.name] === wanted || String(item.id) === String(wanted)));
@@ -3015,7 +3130,7 @@ async function host_create_room(ctx, o) {
   await site_request(config.site, `/api/rooms/${room_id}/room-link`, child.token, { relation: 'parent', room_id: config.room, host: label }, caller_only(ctx.headers));
   const first = o.text ? await host_room_post({ ...ctx, config: configuration_snapshot(parent_path).config }, { room: room_id, text: o.text, submission_id: `${submission_id}-first` }) : null;
   return { room_id, title: receipt.room.title, url: receipt.url, host: host_name, members: names, project_access: access,
-    cwd: child.cwd || null, ...(first ? { message_id: first.message_id } : {}) };
+    cwd: child.cwd || null, ...(first ? { message_id: first.message_id, ...(first.record_error ? { record_error: first.record_error } : {}) } : {}) };
 }
 
 /**
@@ -3032,10 +3147,21 @@ async function host_room_post(ctx, o) {
   if (o.interrupt && !(config.spawned_rooms || []).some(item => item.room === o.room)) throw new Error(t('仅父房间主持人可以打断子房间'));
   if (!o.text) throw new Error(t('须用 --text 或 --body-file 写明要发的消息'));
   const child = registered_room_config(home, config.site, o.room).config;
+  const submission_id = o.submission_id || randomUUID();
+  const label = ctx.labels[host] || host;
   const result = await site_request(config.site, `/api/rooms/${o.room}/messages`, child.token, { author: '用户', text: o.text,
-    submission_id: o.submission_id || randomUUID(), queue: true, ...(o.interrupt ? { interrupt: true } : {}), relay: { room_id: config.room, member: host, host: ctx.labels[host] || host,
+    submission_id, queue: true, ...(o.interrupt ? { interrupt: true } : {}), relay: { room_id: config.room, member: host, host: label,
       limit: launch_settings(home).create_preferences?.relay_rounds ?? 0 } }, caller_only(ctx.headers));
-  return { room_id: o.room, message_id: result.message?.id ?? null, queued: result.queued ?? null, interrupted: Boolean(result.interrupted), ...(result.reason ? { reason: result.reason } : {}) };
+  const receipt = { room_id: o.room, message_id: result.message?.id ?? null, queued: result.queued ?? null,
+    interrupted: Boolean(result.interrupted), ...(result.reason ? { reason: result.reason } : {}) };
+  const key = createHash('sha256').update(JSON.stringify([o.room, submission_id])).digest('hex');
+  try {
+    await ctx.call('/room-relay-sent', { target_room_id: o.room, target_message_id: receipt.message_id,
+      queued_id: receipt.queued, interrupted: receipt.interrupted, text: o.text, host: label, member: host, submission_id: 'sent-' + key });
+  } catch (error) {
+    return { ...receipt, submission_id, record_error: error.message };
+  }
+  return receipt;
 }
 
 const HOST_CONTROLS = {
@@ -3126,19 +3252,26 @@ const host_cards = agents => agents.map(agent => agent.project_access && !HOST_C
  * write access, one that left is brought back. Returns which member plays which card and where its SKILL.md is, so the
  * host can follow it and name them in the same execution.
  */
-export async function adopt_workflow(home, { access_file, draft_file, workflow_id }) {
+export async function adopt_workflow(home, { access_file, draft_file, workflow_id, scope, project_id }) {
   if (!draft_file === !workflow_id) throw new Error('须提供 --draft 草稿文件或 --id 工作流库中的工作流 ID 之一；凭据用 --access-file 或 DISCUSS_ACCESS_FILE');
   const { config, roster } = await host_room(home, access_file);
   if (!host_allowed(config, 'workflows')) throw new Error(host_refusal('workflows'));
-  const bound = config.workflow?.id;
+  if (scope && !['global', 'project'].includes(scope)) throw new Error('工作流作用域无效');
+  const roots = library_projects(home, { room_id: config.room });
+  const root = project_id ? roots.find(item => item.id === project_id) : roots.find(item => draft_file || existsSync(workflow_directory(project_store(home, item), workflow_id)));
+  if ((scope === 'project' || project_id) && !root) throw new Error('找不到房间项目目录');
+  const store = scope === 'global' || !root ? home : project_store(home, root);
+  const binding = store.project_id ? { scope: 'project', project_id: store.project_id } : { scope: 'global' };
+  if (draft_file && store.project_id && root.readonly) throw new Error('项目目录只读');
+  const bound = (config.workflow?.scope || 'global') === binding.scope && config.workflow?.project_id === binding.project_id ? config.workflow?.id : null;
   let workflow;
-  if (workflow_id) workflow = get_workflow(home, workflow_id);
+  if (workflow_id) workflow = bound_workflow(home, { ...config, workflow: { ...binding, id: workflow_id } });
   else {
     const draft = parse_workflow_draft([readFileSync(resolve(draft_file), 'utf8')]);
-    if (bound !== draft.id && list_workflows(home).some(item => item.id === draft.id)) throw new Error(`工作流库已有 ${draft.id}，主持人不能覆盖其他工作流；要启用它请用 --id ${draft.id}，新建请换一个 ID`);
+    if (bound !== draft.id && list_workflows(store).some(item => item.id === draft.id)) throw new Error(`工作流库已有 ${draft.id}，主持人不能覆盖其他工作流；要启用它请用 --id ${draft.id}，新建请换一个 ID`);
     workflow = draft;
   }
-  assert_workflow_enabled(home, workflow.id);
+  assert_workflow_enabled(store, workflow.id);
   const missing = workflow.agents.filter(agent => !card_platform_ready(home, agent.name)).map(agent => agent.name || agent.card);
   if (missing.length) {
     const ready = configured_platforms(home);
@@ -3147,26 +3280,28 @@ export async function adopt_workflow(home, { access_file, draft_file, workflow_i
   workflow = workflow_id ? { ...workflow, agents: host_cards(workflow.agents) }
     // The host's draft replaces the room's own workflow on purpose (another one is refused above); a draft carries no
     // sub-workflows or other files, so those are kept as saved.
-    : save_workflow(home, { ...workflow, agents: host_cards(workflow.agents) }, validate_preset, { overwrite: true });
+    : save_workflow(store, { ...workflow, agents: host_cards(workflow.agents) }, validate_preset, { overwrite: bound === workflow.id });
   const owner = { site: config.site, room_id: config.room, token: config.token };
   const members = await join_workflow_cards(home, config, roster, workflow, bound === workflow.id ? config.workflow.members || {} : {});
-  const enabled = await room_workflow(home, { ...owner, action: 'enable', workflow: { id: workflow.id, members } });
-  return { ...enabled, members, skill_path: join(workflow_directory(home, workflow.id), 'SKILL.md'), ...(workflow.warnings ? { warnings: workflow.warnings } : {}) };
+  const enabled = await room_workflow(home, { ...owner, action: 'enable', workflow: { ...binding, id: workflow.id, members } });
+  return { ...enabled, members, skill_path: join(workflow_directory(store, workflow.id), 'SKILL.md'), ...(workflow.warnings ? { warnings: workflow.warnings } : {}) };
 }
 
 /**
  * Check a workflow folder or one-part draft as an import would, and optionally save it. A local AI uses this outside
  * rooms with its user present, so the cards keep the project access they declare.
  */
-export function check_or_save_workflow(home, { dir, draft, revision, overwrite }, save = false) {
+export function check_or_save_workflow(home, { dir, draft, revision, overwrite, scope, project }, save = false) {
+  if (scope && !['global', 'project'].includes(scope)) throw new Error('工作流作用域无效');
   if (!dir === !draft) throw new Error('须提供 --dir 工作流文件夹或 --draft 草稿文件之一');
   const source = dir ? { folder: dir } : { parts: [readFileSync(resolve(draft), 'utf8')] };
   const preview = workflows_command(home, { action: 'preview', ...source });
+  if (scope === 'project' && !library_projects(home, { cwd: project }).length) throw new Error('找不到项目目录');
   if (!save) return preview;
   const declared = list => list.map(({ requested_access, ...agent }) => requested_access ? { ...agent, project_access: requested_access } : agent);
   const sub_workflows = preview.sub_workflows?.map(sub => ({ ...sub, agents: declared(sub.agents) }));
-  return save_workflow(home, { ...preview, agents: declared(preview.agents), ...(sub_workflows ? { sub_workflows } : {}) }, validate_preset,
-    { base_revision: revision, overwrite: overwrite === true });
+  return workflows_command(home, { action: 'save', scope, cwd: project, workflow: { ...preview, agents: declared(preview.agents), ...(sub_workflows ? { sub_workflows } : {}) },
+    base_revision: revision, overwrite: overwrite === true });
 }
 
 const WRITING_ACCESS = new Set(['write', 'auto', 'full', 'own']);
@@ -3221,7 +3356,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     file: { type: 'string' }, 'dry-run': { type: 'boolean' }, browser: { type: 'boolean' }, remote: { type: 'boolean' }, device: { type: 'string' },
     'configuration-locked': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, overwrite: { type: 'boolean' }, preset: { type: 'string' }, workflow: { type: 'string' }, from: { type: 'string' },
     'overwrite-preset': { type: 'boolean' }, 'replace-knowledge': { type: 'boolean' },
-    draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' }, card: { type: 'string' }, sub: { type: 'string' }, id: { type: 'string' },
+    'project-id': { type: 'string' }, scope: { type: 'string' }, project: { type: 'string' }, draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' }, card: { type: 'string' }, sub: { type: 'string' }, id: { type: 'string' },
     member: { type: 'string' }, order: { type: 'string' }, revision: { type: 'string' }, name: { type: 'string' }, access: { type: 'string' },
     model: { type: 'string' }, effort: { type: 'string' }, do: { type: 'string' }, execution: { type: 'string' }, text: { type: 'string' },
     'host-model': { type: 'string' }, 'host-effort': { type: 'string' }, interrupt: { type: 'boolean' }, 'body-file': { type: 'string' },
@@ -3230,9 +3365,16 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     title: { type: 'string' }, members: { type: 'string' }, host: { type: 'string' }, cwd: { type: 'string' }, room: { type: 'string' },
   } });
   if (values.help || !positionals.length) return process.stdout.write(command_help(positionals[0]));
+  if (positionals[0] === 'workflow-promote') {
+    const home = service_home();
+    const { config } = await host_room(home, values['access-file'] || process.env.DISCUSS_ACCESS_FILE);
+    if (!host_allowed(config, 'workflows')) throw new Error(host_refusal('workflows'));
+    const result = workflows_command(home, { action: 'move', room_id: config.room, scope: 'project', project_id: values['project-id'], target_scope: 'global', id: values.id });
+    return process.stdout.write(JSON.stringify(result) + '\n');
+  }
   if (positionals[0] === 'workflow-adopt') {
     const home = service_home();
-    const result = await adopt_workflow(home, { draft_file: values.draft, workflow_id: values.id, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+    const result = await adopt_workflow(home, { draft_file: values.draft, scope: values.scope, project_id: values['project-id'], workflow_id: values.id, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}\n`);
   }
   if (positionals[0] === 'host-control') {
@@ -3261,7 +3403,10 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     return process.stdout.write(`${JSON.stringify(result)}\n`);
   }
   if (['workflow-check', 'workflow-save'].includes(positionals[0])) {
-    const result = check_or_save_workflow(service_home(), { dir: values.dir, draft: values.draft, revision: values.revision, overwrite: values.overwrite === true }, positionals[0] === 'workflow-save');
+    if (values.scope === 'project' && (values.remote || account_space(service_home()).projects_root)) {
+      values.project = library_projects(service_home(), { project_id: values['project-id'], cwd: values.project }, true)[0]?.path;
+    }
+    const result = check_or_save_workflow(service_home(), { dir: values.dir, draft: values.draft, scope: values.scope, project: values.project, revision: values.revision, overwrite: values.overwrite === true }, positionals[0] === 'workflow-save');
     return process.stdout.write(`${JSON.stringify(result)}\n`);
   }
   const input = input_text === undefined ? (values.file ? JSON.parse(readFileSync(values.file, 'utf8').replace(/^\uFEFF/, '')) : null) : JSON.parse(input_text);
@@ -3271,7 +3416,13 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   // An ordinary account's instance holds every request, from any page, to that account's own folders.
   const space = account_space(home), restricted = Boolean(space.projects_root);
   if (values.remote || restricted) {
-    guard_remote_request(positionals[0], input, { projects: granted_projects(home), participants: launch_settings(home).participants, home });
+    if (positionals[0] === 'room-workflow' && input?.workflow?.scope === 'project') {
+      const roots = library_projects(home, { room_id: input.room_id }, true);
+      if (!roots.some(root => input.workflow.project_id ? root.id === input.workflow.project_id : root.primary)) throw new Error('找不到已授权的项目目录');
+    }
+    const guard_input = ['start', 'room-settings'].includes(positionals[0]) && Array.isArray(input?.extra_directories)
+      ? { ...input, extra_directories: input.extra_directories.map(item => typeof item === 'string' ? item : item?.path) } : input;
+    guard_remote_request(positionals[0], guard_input, { projects: granted_projects(home), participants: launch_settings(home).participants, home });
     if (values.remote && positionals[0] === 'room-workflow' && input?.action === 'host') throw new Error('主持人权限只能在电脑上开启');
     if (restricted && positionals[0] === 'pick-directory') throw new Error('此账号只能使用自己的项目文件夹');
     // Another device repeats the saved program locations it cannot see; keep them rather than dropping them.
@@ -3287,19 +3438,32 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   // The online site an invitation would use, so an external expert's card says before the room exists whether a link can be made.
   if (positionals[0] === 'settings') result.invite_site = await (await import('./external_gateway.mjs')).invite_site_state(home);
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
-  else if (positionals[0] === 'presets') result = input ? save_expert_presets(home, input) : expert_presets(home);
+  else if (positionals[0] === 'presets') result = presets_command(home, input || {}, values.remote || restricted);
+  else if (['expert-export', 'expert-import'].includes(positionals[0]) && values.scope === 'project') {
+    const root = library_projects(home, { cwd: values.project, project_id: values['project-id'] }, restricted || values.remote)[0];
+    if (!root || root.readonly) throw new Error('找不到可写的项目目录');
+    const store = project_store(home, root);
+    if (positionals[0] === 'expert-export') result = export_expert(store, { preset: values.preset, workflow: values.workflow, card: values.card, dir: values.dir });
+    else {
+      const source = read_expert_source(values.from || '');
+      result = values.workflow ? import_expert_to_workflow(store, { ...source, workflow: values.workflow, sub: values.sub }) :
+        import_expert(store, { ...source, overwrite_preset: values['overwrite-preset'], replace_knowledge: values['replace-knowledge'] });
+    }
+  }
   else if (positionals[0] === 'expert-export') result = export_expert(home, input || { preset: values.preset, workflow: values.workflow, card: values.card, dir: values.dir });
   else if (positionals[0] === 'expert-import' && (values.workflow || input?.workflow)) {
     result = import_expert_to_workflow(home, input || { ...read_expert_source(values.from || ''), workflow: values.workflow, sub: values.sub });
   } else if (positionals[0] === 'expert-import') result = import_expert(home, input || { ...read_expert_source(values.from || ''),
     overwrite_preset: values['overwrite-preset'] === true, replace_knowledge: values['replace-knowledge'] === true });
-  else if (positionals[0] === 'workflows') result = await workflows_command(home, input || {});
+  else if (positionals[0] === 'workflows') result = await workflows_command(home, input || {}, values.remote || restricted);
   else if (positionals[0] === 'room-workflow' && input) result = await room_workflow(home, input);
   else if (positionals[0] === 'room-settings' && input) result = await room_settings(home, input);
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, { base_url: input.base_url, api_key: input.api_key });
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);
   else if (positionals[0] === 'image-check') result = await image_check(home);
+  else if (positionals[0] === 'storage') result = await (await import('./admin_storage.mjs')).storage_details(home);
+  else if (positionals[0] === 'storage-clean') result = await (await import('./admin_storage.mjs')).clean_storage(home, input || {});
   else if (positionals[0] === 'image-settings') result = input && Object.keys(input).length ? save_image_settings(home, input) : image_settings(home);
   else if (positionals[0] === 'tts-settings') result = input && Object.keys(input).length ? save_tts_settings(home, input) : tts_settings(home);
   else if (positionals[0] === 'tts' && input) result = await tts_speak(home, input);
@@ -3307,7 +3471,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'local-speech') result = input?.stop ? await local_service_stop(home, input.stop) : await local_services(home);
   else if (positionals[0] === 'weixin') result = await weixin_command(home, input || {});
   else if (positionals[0] === 'stt' && input) result = await stt_part(home, input);
-  else if (positionals[0] === 'room-models' && input) result = await room_models(home, input);
+  else if (positionals[0] === 'room-models' && input) result = await room_models(home, input, { restricted: values.remote || restricted });
   else if (positionals[0] === 'room-skills' && input) result = await room_skills(home, input);
   else if (positionals[0] === 'share-job' && input) result = await room_share_job(home, input);
   else if (positionals[0] === 'room-files' && input) result = await room_files(home, input);

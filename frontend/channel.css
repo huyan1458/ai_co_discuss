@@ -59,6 +59,12 @@ html[data-theme^="channel"] .channel-icon-button { width: 32px; height: 32px; pa
 html[data-theme^="channel"] .channel-icon-button:hover { background: var(--channel-ghost-hover); color: #f2f3f5; }
 html[data-theme^="channel"] .channel-icon-button > [class*="icon"] { width: 19px; height: 19px; }
 html[data-theme^="channel"] .channel-panel-toggle { flex-shrink: 0; }
+html[data-theme^="channel"] .channel-workflow-skill-toggle { height: 30px; padding: 0 10px; gap: 6px; border: 1px solid #ffffff14; border-radius: 6px; background: transparent; color: #b7bec8; font-size: 12px; font-weight: 500; white-space: nowrap; transition: background .12s, border-color .12s, color .12s; }
+html[data-theme^="channel"] .channel-workflow-skill-toggle > [class*="icon"] { width: 15px; height: 15px; }
+html[data-theme^="channel"] .channel-workflow-skill-toggle:hover { background: var(--channel-ghost-hover); border-color: #ffffff24; color: #f2f3f5; }
+html[data-theme^="channel"] .channel-workflow-skill-toggle[aria-pressed="true"] { background: #5865f226; border-color: #8791ff4d; color: #dfe2ff; }
+html[data-theme^="channel"] .channel-workflow-skill-toggle[aria-pressed="true"] > [class*="icon"] { color: var(--channel-accent); }
+html[data-theme^="channel"] .channel-workflow-skill-toggle[aria-pressed="true"]:hover { background: #5865f238; border-color: #8791ff6e; color: #f2f3f5; }
 
 /* Channel navigation and a persistent current-identity footer. */
 .channel-sidebar { min-height: 0; display: flex; flex-direction: column; background: #202127; border-right: 1px solid #16171b; }
@@ -139,7 +145,10 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-room-row.active, .channel-folder-row.active { color: #f1f2f5; background: var(--channel-ghost-active); }
 .channel-room-content { display: flex; min-width: 0; align-items: center; }
 .channel-room-content > .channel-room-select { flex: 1; min-width: 0; }
-.channel-child-toggle { display: grid; place-items: center; width: 26px; min-height: 30px; flex: none; color: var(--ui-text-muted); cursor: pointer; }
+/* Out of flow in the left gutter: sits one level inside folders, or aligned with folder chevrons when unfiled. */
+.channel-child-toggle { position: absolute; left: -18px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 18px; height: 24px; border-radius: 4px; color: var(--ui-text-muted); cursor: pointer; }
+.channel-child-toggle:hover { color: var(--ui-text-toned); background: color-mix(in srgb, var(--ui-text) 7%, transparent); }
+.channel-child-toggle [class*="icon"] { width: 14px; height: 14px; }
 .channel-room-row.drag-source, .channel-folder-section.drag-source { opacity: .45; }
 .channel-room-row.is-destroying { opacity: .45; pointer-events: none; }
 .channel-destroy-final { margin: 0 0 12px; font-size: 14px; line-height: 1.6; }
@@ -205,6 +214,7 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 @media (max-width: 700px), (hover: none), (pointer: coarse) {
   .channel-room-actions .channel-room-archive { display: none; }
   .channel-room-actions { min-width: 32px; }
+  .channel-child-toggle { left: -22px; width: 22px; height: 28px; }
   :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button { width: 32px; height: 32px; padding: 9px; }
 }
 /* Sorted by recent activity a room has no place to be dragged to within its folder, so the grip gives its width back. */
@@ -216,7 +226,8 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-room-list.is-recent .channel-room-creating { order: -1; }
 .channel-room-more { display: block; width: 100%; padding: 6px 8px; border-radius: 8px; color: var(--ui-text-dimmed); font-size: var(--channel-nav-meta); text-align: left; cursor: pointer; }
 @media (hover: hover) { .channel-room-more:hover { color: var(--ui-text-toned); background: var(--channel-ghost-hover); } }
-.channel-folder-rooms { padding-left: 24px; }
+.channel-folder-rooms { padding-left: 36px; }
+.channel-root-rooms:has(.channel-child-toggle) { padding-left: 20px; }
 /* A tablet lays out the PC page with a touch row's grip and "…", so the narrow sidebar gives the indent to the name. */
 @media (min-width: 701px) and (hover: none), (min-width: 701px) and (pointer: coarse) { .channel-folder-rooms { padding-left: 8px; } }
 .channel-folder-heading { display: flex; width: 100%; min-width: 0; align-items: center; gap: 5px; padding: 7px 4px; color: var(--ui-text-muted); font-size: var(--channel-nav-text); text-align: left; user-select: none; }
@@ -345,8 +356,7 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-search-input [class*="icon"] { width: 14px; height: 14px; color: #929ba9; }
 .channel-search-input [data-slot="trailing"] > button { width: 23px; height: 23px; padding: 4px; border-radius: 3px; }
 .channel-source-filter[aria-pressed="true"] { color: #c4caff !important; background: #5865f22b; }
-.channel-work-status { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 240px; height: 29px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--ui-text-toned); font-size: 12px; white-space: nowrap; cursor: pointer; }
-.channel-work-status:hover { background: var(--ui-bg-elevated); }
+.channel-work-status { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 240px; height: 29px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--ui-text-toned); font-size: 12px; white-space: nowrap; }
 .channel-work-avatars { display: flex; }
 .channel-work-avatars > * + * { margin-left: -6px; }
 .channel-work-avatars > * { box-shadow: 0 0 0 2px var(--ui-bg); }
@@ -861,6 +871,18 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .channel-mention-option .channel-mention-disabled { color: var(--ui-text-dimmed); }
 .channel-mention-option .channel-mention-broken { color: var(--ui-warning, #e0a33a); }
 .channel-mention-tag { flex: none; padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--channel-accent) 16%, transparent); color: var(--channel-accent); font-size: 10px; font-weight: 500; }
+.channel-mention-tag.is-project { background: var(--ui-bg-accented); color: var(--ui-text-muted); }
+.channel-mention-tag.is-warn { background: color-mix(in srgb, var(--ui-warning, #e0a33a) 16%, transparent); color: var(--ui-warning, #e0a33a); }
+.workflow-trust-dialog { display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
+.workflow-trust-meta { margin: 0; color: var(--ui-text-muted); font-size: 12px; }
+.workflow-trust-section { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--ui-border-muted); border-radius: 8px; background: color-mix(in srgb, var(--ui-bg-elevated) 55%, transparent); }
+.workflow-trust-section h4 { margin: 0; font-size: 12px; font-weight: 600; color: var(--ui-text-highlighted); }
+.workflow-trust-section ul { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.workflow-trust-section li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.workflow-trust-section code { font-size: 12px; overflow-wrap: anywhere; }
+.workflow-trust-access { padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--ui-warning, #e0a33a) 16%, transparent); color: var(--ui-warning, #e0a33a); font-size: 11px; font-weight: 500; }
+.workflow-trust-note { margin: 0; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.5; }
+.workflow-trust-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .attachment-draft-ref .attachment-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* How far a file in the composer has uploaded: a thin bar along its lower edge (an image shows AttachmentUploadRing instead). */
 .attachment-draft-progress { position: absolute; left: 8px; right: 8px; bottom: 3px; height: 2px; overflow: hidden; border-radius: 1px; background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 25%, transparent); pointer-events: none; }
@@ -996,15 +1018,23 @@ html[data-theme^="channel"] .dialog-body { padding: 23px 25px; }
 html[data-theme^="channel"] .dialog-form { gap: 18px; }
 html[data-theme^="channel"] .dialog-actions { border-color: var(--ui-border-muted); }
 html[data-theme^="channel"] .dialog-form :is(input, textarea, button[role="combobox"]) { background-color: #1d1f25; border-radius: 7px; font-size: 12px; box-shadow: inset 0 1px 2px #0002, 0 0 0 1px #414651; }
+html[data-theme^="channel"] .member-text :is(input, textarea) { background-color: #1d1f25; border-radius: 7px; font-size: 13px; line-height: 1.55; box-shadow: inset 0 1px 2px #0002, 0 0 0 1px #414651; }
 /* The project field is a box drawn as one input around a borderless input, a tag and its actions. */
 html[data-theme^="channel"] .dialog-form :is(.project-box, .project-select) { border: 0; background-color: #1d1f25; border-radius: 7px; box-shadow: inset 0 1px 2px #0002, 0 0 0 1px #414651; }
 html[data-theme^="channel"] .dialog-form .project-box input { background: transparent; box-shadow: none; }
 html[data-theme^="channel"] .dialog-form.project-manager { gap: 12px; }
 html[data-theme^="channel"] .dialog-form label[data-slot="label"] { color: #c1c9d6; font-size: 12px; }
+@media (max-width: 600px) {
+  html[data-theme^="channel"] .studio-modal { width: calc(100vw - 24px); border-radius: 12px; }
+  html[data-theme^="channel"] .studio-modal [data-slot="header"] { min-height: 0; padding: 14px 16px 12px; }
+  html[data-theme^="channel"] .studio-modal [data-slot="title"] { font-size: 15px; }
+  html[data-theme^="channel"] .studio-modal [data-slot="close"] { top: 10px; inset-inline-end: 10px; }
+  html[data-theme^="channel"] .studio-modal .dialog-body { padding: 14px 16px 16px; }
+}
 html[data-theme^="channel"] .channel-folder-modal { max-width: 420px; }
 html[data-theme^="channel"] .channel-folder-modal:has(.channel-folder-directories) { max-width: 520px; }
 html[data-theme^="channel"] .channel-folder-modal.share-dialog { max-width: 560px; }
-html[data-theme^="channel"] .channel-folder-modal.share-dialog.share-dialog-wide { max-width: 720px; }
+html[data-theme^="channel"] .channel-folder-modal.share-dialog.share-dialog-wide { max-width: 760px; }
 .channel-folder-directories { display: flex; flex-direction: column; gap: 6px; }
 .channel-folder-primary { align-self: center; flex-shrink: 0; margin-inline-end: 2px; padding: 1px 6px; border-radius: 4px; background: var(--ui-bg-accented); color: var(--ui-text-muted); font-size: 11px; line-height: 18px; }
 .channel-folder-path { overflow-wrap: anywhere; font-size: 12px; }
@@ -1375,6 +1405,11 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-answer-toggle, .channel-answer-toggle:hover { color: var(--channel-accent); }
   .channel-icon-button { color: var(--ui-text-muted); }
   .channel-icon-button:hover { color: var(--ui-text-highlighted); background: var(--channel-ghost-hover); }
+  .channel-workflow-skill-toggle { color: var(--ui-text-muted); background: #fff; border-color: var(--ui-border); }
+  .channel-workflow-skill-toggle:hover { color: var(--ui-text-highlighted); background: #f6f6f6; border-color: var(--ui-border-accented); }
+  .channel-workflow-skill-toggle[aria-pressed="true"] { color: var(--channel-accent); background: #0969da12; border-color: #0969da3d; }
+  .channel-workflow-skill-toggle[aria-pressed="true"] > [class*="icon"] { color: var(--channel-accent); }
+  .channel-workflow-skill-toggle[aria-pressed="true"]:hover { color: var(--channel-accent); background: #0969da1c; border-color: #0969da59; }
   .channel-surface-button { color: var(--ui-text); background: #fff; border-color: var(--ui-border); }
   .channel-surface-button:hover { background: #f6f6f6; border-color: var(--ui-border-accented); }
   .channel-surface-button:active { background: #ededed; }
@@ -1447,7 +1482,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-topic-menu [data-slot="separator"] { background: var(--ui-border-muted); }
   :is(.channel-navigation-drawer, .progress-drawer, .glass-panel) { background: #ffffff !important; border-color: var(--ui-border); box-shadow: 0 20px 64px #00000026; }
   .studio-modal [data-slot="header"] { border-bottom-color: var(--ui-border-muted); }
-  .dialog-form :is(input, textarea, button[role="combobox"]), :is(.summary-editor, .summary-brief-editor) textarea { background: #ffffff; box-shadow: 0 0 0 1px #c9c9c9; }
+  .dialog-form :is(input, textarea, button[role="combobox"]), .member-text :is(input, textarea), :is(.summary-editor, .summary-brief-editor) textarea { background: #ffffff; box-shadow: 0 0 0 1px #c9c9c9; }
   .dialog-form :is(.project-box, .project-select) { background: #ffffff; box-shadow: 0 0 0 1px #c9c9c9; }
   .dialog-form .project-box input { background: transparent; box-shadow: none; }
   .theme-choices > button { background: #fff; border-color: var(--ui-border); }
@@ -1657,6 +1692,15 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-edit-note { margin: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.7; }
 .channel-edit-note.is-error { color: var(--ui-error); }
 .channel-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.channel-relay-sent .channel-schedule-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; cursor: pointer; }
+/* Keep the delivery reference or queue status visible at the end of narrow rows. */
+@media (max-width: 600px) {
+  .channel-relay-sent .channel-schedule-text { direction: rtl; text-align: left; }
+}
+.channel-relay-sent .channel-schedule-detail { min-width: 0; overflow-wrap: anywhere; }
+.channel-relay-sent .channel-schedule-detail .markdown-body { color: var(--ui-text); }
+.channel-relay-sent .channel-schedule-detail .markdown-body p { display: block; margin: 0 0 .55em; }
+.channel-relay-sent .channel-schedule-detail .markdown-body p:last-child { margin-bottom: 0; }
 .channel-schedule-actions { display: inline-flex; gap: 2px; }
 .channel-schedule-rate { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-text-dimmed); cursor: pointer; }
 .channel-schedule-rate [class*="icon"] { width: 13px; height: 13px; }

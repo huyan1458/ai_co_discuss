@@ -32,7 +32,7 @@ const shared = defineModel("shared", { type: Array, default: null });
 // On a phone the canvas is small: tools show icons only, and the minimap and the SKILL.md hint step aside.
 // `reserved`: card IDs the workflow's other canvases (its main flow or sub-workflows) already use; IDs are unique across them.
 // `subs`: the workflow's sub-workflows, on the main canvas only.
-const props = defineProps({ compact: Boolean, reserved: { type: Array, default: () => [] }, subs: { type: Array, default: null } });
+const props = defineProps({ compact: Boolean, readonly: Boolean, reserved: { type: Array, default: () => [] }, subs: { type: Array, default: null } });
 const { view, bridge } = inject("discussion");
 const tool_size = computed(() => (props.compact ? "xs" : "sm"));
 // The tools gather in the top-left corner (user 2026-11-21), one group per job: adding a node, editing the canvas (undo,
@@ -130,6 +130,7 @@ function press_remove(node) {
 
 /** Delete or Backspace on a selected node presses its ×; arrows are still deleted by Vue Flow. */
 function delete_key(event) {
+  if (props.readonly) return;
   if (event.key !== "Delete" && event.key !== "Backspace") return;
   if (event.target.closest?.("input, textarea, [contenteditable]")) return;
   // `instance` sits in a ref, which unwraps the store's computed getters; read either form.
@@ -249,7 +250,7 @@ const live = computed(() => {
 // but not on every frame of a drag: that is taken once the card is let go, so dragging stays smooth.
 const stored = shallowRef(live.value);
 watch(live, (value) => { if (!dragging) stored.value = value; });
-watch(stored, (value) => { flow.value = value; }, { immediate: true });
+watch(stored, (value) => { if (!props.readonly) flow.value = value; }, { immediate: true });
 const shape = computed(() => flow_shape(stored.value));
 /** Nodes with no arrow leading on (loops aside): where a new node is appended. */
 function tails() {
@@ -455,6 +456,7 @@ function add_sub_node(id) {
 function show_sub_node(id) {
   const existing = nodes.value.find((node) => node.type === "sub" && node.data.sub === id);
   const node_id = existing?.id || next_id("sub_");
+  if (!existing && props.readonly) return;
   if (!existing) add_sub_node(id);
   // Once Vue Flow has the node (a frame after it is added), centre it at the current zoom.
   nextTick(() => requestAnimationFrame(() => {
@@ -470,7 +472,7 @@ function show_sub_node(id) {
 
 /** Show a sub-workflow; this canvas, about to be replaced, hands back its latest state first. */
 function open_sub(id, fresh = false) {
-  flow.value = live.value;
+  if (!props.readonly) flow.value = live.value;
   emit("open-sub", id, fresh);
 }
 
@@ -774,7 +776,7 @@ function start_loop_drag(edge, event) {
  */
 function edge_press(event) {
   if (event.button !== 0 || !instance.value) return;
-  const loop = selected_loop(event.target);
+  const loop = props.readonly ? null : selected_loop(event.target);
   if (loop) { start_loop_drag(loop, event); return; }
   if (event.pointerType === "touch" || !pans_view(event.target)) return;
   const from = { x: event.clientX, y: event.clientY };
@@ -954,6 +956,7 @@ function redo() {
 
 /** Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes; inside a text box the box keeps its own undo. */
 function history_key(event) {
+  if (props.readonly) return;
   if (!(event.ctrlKey || event.metaKey) || event.target.closest?.("input, textarea, [contenteditable]")) return;
   const key = event.key.toLowerCase();
   if (key !== "z" && key !== "y") return;
@@ -971,7 +974,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 
 <template>
   <div ref="canvas_element" class="workflow-canvas" :class="{ 'is-layered': layered, 'is-compact': props.compact, 'is-phone': foldable }" @dblclick="pane_double_click" @pointerdown.capture="middle_press" @pointerdown="edge_press">
-    <VueFlow v-model:nodes="nodes" v-model:edges="edges" :min-zoom="ZOOM.min" :max-zoom="ZOOM.max" :delete-key-code="['Delete', 'Backspace']" :zoom-on-double-click="false"
+    <VueFlow v-model:nodes="nodes" v-model:edges="edges" :min-zoom="ZOOM.min" :max-zoom="ZOOM.max" :delete-key-code="readonly ? null : ['Delete', 'Backspace']" :nodes-draggable="!readonly" :nodes-connectable="!readonly" :zoom-on-double-click="false"
       :is-valid-connection="valid_connection" elevate-nodes-on-select @connect="connect" @connect-start="connect_start" @connect-end="connect_end"
       @node-drag-start="drag_start" @node-drag-stop="drag_stop" @pane-ready="ready" @nodes-initialized="fit_once" @move-start="view_moved" @move="view_moving" @move-end="view_settled" @node-double-click="node_double_click">
       <template #node-start>
@@ -988,12 +991,12 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <div class="workflow-host" :class="{ 'is-selected': node.selected }">
             <Handle type="target" :position="Position.Left" class="workflow-handle" />
             <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
-              <button type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次删除主持人节点') : t('删除主持人节点')"
+              <button v-if="!readonly" type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次删除主持人节点') : t('删除主持人节点')"
                 :title="removing === node.id ? t('再点一次删除主持人节点') : t('删除主持人节点')" @click.stop="press_remove(node)"><UIcon :name="removing === node.id ? 'i-lucide-trash-2' : 'i-lucide-x'" class="workflow-icon" /></button></div>
             <div class="workflow-node-body nodrag">
               <UIcon name="i-lucide-crown" class="workflow-host-icon" />
               <div class="workflow-node-text"><strong>{{ t('主持人') }}</strong>
-              <input v-if="node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input" :maxlength="MAX_HOST_LABEL" :placeholder="t('做什么')"
+              <input v-if="!readonly && node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input" :maxlength="MAX_HOST_LABEL" :placeholder="t('做什么')"
                 :aria-label="t('主持人在这里做什么')" @input="set_note('nodes', node.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
               <p v-else-if="node.data.label" class="workflow-host-note">{{ node.data.label }}</p></div>
             </div>
@@ -1006,12 +1009,12 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
           <div class="workflow-user" :class="{ 'is-selected': node.selected }">
             <Handle type="target" :position="Position.Left" class="workflow-handle" />
             <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
-              <button type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次删除用户节点') : t('删除用户节点')"
+              <button v-if="!readonly" type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次删除用户节点') : t('删除用户节点')"
                 :title="removing === node.id ? t('再点一次删除用户节点') : t('删除用户节点')" @click.stop="press_remove(node)"><UIcon :name="removing === node.id ? 'i-lucide-trash-2' : 'i-lucide-x'" class="workflow-icon" /></button></div>
             <div class="workflow-node-body nodrag">
               <UIcon name="i-lucide-user-round" class="workflow-user-icon" />
               <div class="workflow-node-text"><strong>{{ t('用户') }}</strong>
-              <input v-if="node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input" :maxlength="MAX_USER_LABEL" :placeholder="t('做什么，如“确认方案”')"
+              <input v-if="!readonly && node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input" :maxlength="MAX_USER_LABEL" :placeholder="t('做什么，如“确认方案”')"
                 :aria-label="t('用户在这里做什么')" @input="set_note('nodes', node.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
               <p v-else-if="node.data.label" class="workflow-host-note">{{ node.data.label }}</p></div>
             </div>
@@ -1023,13 +1026,13 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
         <div class="workflow-branch" :class="{ 'is-selected': node.selected }">
           <Handle type="target" :position="Position.Left" class="workflow-handle" />
           <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
-            <button type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次删除条件分支节点') : t('删除条件分支节点')"
+            <button v-if="!readonly" type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次删除条件分支节点') : t('删除条件分支节点')"
               :title="removing === node.id ? t('再点一次删除条件分支节点') : t('删除条件分支节点')" @click.stop="press_remove(node)"><UIcon :name="removing === node.id ? 'i-lucide-trash-2' : 'i-lucide-x'" class="workflow-icon" /></button></div>
           <div class="workflow-node-body workflow-branch-body nodrag">
             <div class="workflow-branch-head">
               <UIcon name="i-lucide-split" class="workflow-branch-icon" />
               <div class="workflow-node-text">
-                <input v-if="node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input" :maxlength="MAX_BRANCH_NODE_LABEL" :placeholder="t('条件名称')"
+                <input v-if="!readonly && node.selected" :value="node.data.label" class="workflow-note-input workflow-host-input" :maxlength="MAX_BRANCH_NODE_LABEL" :placeholder="t('条件名称')"
                   :aria-label="t('条件分支的名称')" @input="set_note('nodes', node.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
                 <template v-else>
                   <strong>{{ node.data.label || t('条件分支') }}</strong>
@@ -1039,7 +1042,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
             </div>
             <div class="workflow-branch-list">
               <div v-for="item in node.data.branches" :key="item.id" class="workflow-branch-row">
-                <template v-if="node.selected">
+                <template v-if="!readonly && node.selected">
                   <input :value="item.label" class="workflow-note-input workflow-branch-input" :maxlength="MAX_BRANCH_LABEL" :placeholder="t('分支条件')"
                     :aria-label="t('分支 {value1} 的条件说明', { value1: item.id })" @input="set_branch_label(node.id, item.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
                   <button v-if="node.data.branches.length > 1" type="button" class="workflow-branch-remove" :aria-label="t('删除分支 {value1}', { value1: item.label || item.id })"
@@ -1048,7 +1051,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
                 <span v-else class="workflow-branch-label" :title="item.label || item.id">{{ item.label || item.id }}</span>
                 <Handle :id="item.id" type="source" :position="Position.Right" class="workflow-handle workflow-branch-handle" />
               </div>
-              <button v-if="node.selected && node.data.branches.length < MAX_BRANCHES" type="button" class="workflow-branch-add"
+              <button v-if="!readonly && node.selected && node.data.branches.length < MAX_BRANCHES" type="button" class="workflow-branch-add"
                 @click.stop="add_branch_case(node.id)"><UIcon name="i-lucide-plus" class="workflow-icon" /><span>{{ t('添加分支') }}</span></button>
             </div>
           </div>
@@ -1058,7 +1061,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
         <div v-if="sub_of(node.data.sub)" class="workflow-sub" :class="{ 'is-selected': node.selected }" :title="sub_of(node.data.sub).description || undefined">
           <Handle type="target" :position="Position.Left" class="workflow-handle" />
           <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
-              <button type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次，从画布移除子工作流节点') : t('从画布移除子工作流节点')"
+              <button v-if="!readonly" type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次，从画布移除子工作流节点') : t('从画布移除子工作流节点')"
                 :title="removing === node.id ? t('再点一次，从画布移除子工作流节点') : t('从画布移除子工作流节点')" @click.stop="press_remove(node)"><UIcon :name="removing === node.id ? 'i-lucide-trash-2' : 'i-lucide-x'" class="workflow-icon" /></button></div>
           <div class="workflow-node-body nodrag">
             <UIcon name="i-lucide-git-branch" class="workflow-sub-icon" />
@@ -1075,10 +1078,10 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
         <div v-if="agent_of(node.data.card)" class="workflow-card" :class="{ 'is-selected': node.selected }">
           <Handle type="target" :position="Position.Left" class="workflow-handle" />
           <div class="workflow-card-grip" :title="t('按住拖动')"><UIcon name="i-lucide-grip-horizontal" class="workflow-icon" />
-              <button type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次移除 {value1}', { value1: label_of(node.data.card) }) : t('移除 {value1}', { value1: label_of(node.data.card) })"
+              <button v-if="!readonly" type="button" class="workflow-node-close nodrag" :class="{ 'is-armed': removing === node.id }" :aria-label="removing === node.id ? t('再点一次移除 {value1}', { value1: label_of(node.data.card) }) : t('移除 {value1}', { value1: label_of(node.data.card) })"
                 :title="removing === node.id ? t('再点一次，从工作流移除这位成员') : t('从工作流移除这张卡片')" @click.stop="press_remove(node)"><UIcon :name="removing === node.id ? 'i-lucide-trash-2' : 'i-lucide-x'" class="workflow-icon" /></button></div>
           <div v-for="agent in [agent_of(node.data.card)]" :key="agent.card" class="workflow-card-body nodrag" :title="agent.description || undefined"
-            @dblclick="emit('configure', agent.card)">
+            @dblclick="!readonly && emit('configure', agent.card)">
             <UAvatar :src="bridge.identities[bridge.platform_of(agent.name)]?.icon" :text="bridge.identities[bridge.platform_of(agent.name)]?.initials || '?'" size="md"
               class="channel-avatar" :class="bridge.identities[bridge.platform_of(agent.name)]?.style" />
             <div class="workflow-card-who">
@@ -1086,10 +1089,10 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
               <span>{{ bridge.default_name(bridge.platform_of(agent.name)) }}</span>
               <small>{{ agent.model || t('软件默认模型') }} · {{ access_label(agent.project_access || 'read') }}</small>
             </div>
-            <div class="workflow-card-tools">
+            <div v-if="!readonly" class="workflow-card-tools">
               <UButton icon="i-lucide-sliders-horizontal" size="xs" color="neutral" variant="ghost" :aria-label="t('配置 {value1}', { value1: agent.label || agent.card })" :title="t('配置：软件、模型、描述与专属提示词（也可双击卡片）')" @click="emit('configure', agent.card)" />
             </div>
-            <label v-if="agent_of(node.data.card).requested_access" class="workflow-card-grant">
+            <label v-if="!readonly && agent_of(node.data.card).requested_access" class="workflow-card-grant">
               <input type="checkbox" :checked="agent_of(node.data.card).project_access !== 'read'" @change="grant(agent_of(node.data.card), $event.target.checked)" /> {{ t('允许「{value1}」', { value1: access_label(agent_of(node.data.card).requested_access) }) }}</label>
           </div>
           <Handle type="source" :position="Position.Right" class="workflow-handle" />
@@ -1099,10 +1102,10 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
         <BaseEdge :id="edge.id" :path="edge_path(edge)[0]" :marker-end="edge.markerEnd" class="workflow-edge"
           :class="{ 'is-loop': shape.loops.has(edge.id), 'is-under': loops_under(edge), 'is-selected': edge.selected }" />
         <EdgeLabelRenderer>
-          <div v-if="edge.selected || edge.data?.label" class="workflow-edge-note" :class="{ 'is-loop': shape.loops.has(edge.id), 'is-selected': edge.selected, nopan: edge.selected }"
+          <div v-if="(!readonly && edge.selected) || edge.data?.label" class="workflow-edge-note" :class="{ 'is-loop': shape.loops.has(edge.id), 'is-selected': edge.selected, nopan: edge.selected }"
             @click.stop="edge.selected || select_edge(edge.id)"
             :style="{ transform: `translate(-50%, -50%) translate(${edge_path(edge)[1]}px, ${edge_path(edge)[2]}px)` }">
-            <template v-if="edge.selected">
+            <template v-if="!readonly && edge.selected">
               <input :value="edge.data?.label" class="workflow-note-input" :maxlength="MAX_EDGE_LABEL" :placeholder="t('说明，如“返工”')" :aria-label="t('这条连线的说明')"
                 :style="{ width: `${Math.max(6, (edge.data?.label || '').length + 1)}em` }" @input="set_note('edges', edge.id, $event.target.value)" @keydown.enter="$event.target.blur()" />
               <button type="button" class="workflow-edge-delete" :aria-label="t('删除这条连线')" @click="remove_edge(edge.id)"><UIcon name="i-lucide-x" class="workflow-icon" /></button>
@@ -1120,13 +1123,13 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       <!-- Top left: one group per job, side by side (zoom sits top right). -->
       <Panel position="top-left" class="workflow-canvas-tools">
         <div class="workflow-canvas-toolbar">
-          <UTooltip :text="t('添加节点：成员、主持人、用户、条件分支或子工作流（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-plus" :label="icons_only ? undefined : t('添加节点')" :aria-label="t('添加节点')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
-          <slot v-if="foldable" name="actions" :icons-only="icons_only" :arrange="arrange" />
+          <UTooltip v-if="!readonly" :text="t('添加节点：成员、主持人、用户、条件分支或子工作流（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-plus" :label="icons_only ? undefined : t('添加节点')" :aria-label="t('添加节点')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
+          <slot v-if="foldable" name="actions" :icons-only="icons_only" :arrange="readonly ? undefined : arrange" />
         </div>
         <template v-if="!foldable">
-          <div class="workflow-canvas-toolbar">
-            <UTooltip :text="t('撤销 (Ctrl+Z)')"><UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" /></UTooltip>
-            <UTooltip :text="t('重做 (Ctrl+Shift+Z)')"><UButton icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" /></UTooltip>
+          <div v-if="!readonly" class="workflow-canvas-toolbar">
+            <UTooltip :text="t('撤销 (Ctrl+Z)')"><UButton v-if="!readonly" icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" /></UTooltip>
+            <UTooltip :text="t('重做 (Ctrl+Shift+Z)')"><UButton v-if="!readonly" icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" /></UTooltip>
             <UTooltip :text="t('自动整理')"><UButton icon="i-lucide-wand-sparkles" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('自动整理')" @click="arrange" /></UTooltip>
           </div>
           <div v-if="$slots.actions" class="workflow-canvas-toolbar"><slot name="actions" :icons-only="icons_only" /></div>
@@ -1135,8 +1138,8 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       <!-- Top right: zoom, with the minimap below it on a desktop; a phone puts undo / redo here and folds zoom into one button. -->
       <Panel position="top-right" class="workflow-canvas-corner">
         <div v-if="foldable" class="workflow-canvas-toolbar">
-          <UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" />
-          <UButton icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" />
+          <UButton v-if="!readonly" icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" />
+          <UButton v-if="!readonly" icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" />
           <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 6 }" :ui="{ content: 'workflow-canvas-zoom' }">
             <UButton icon="i-lucide-scan-search" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('缩放画布')" />
             <template #content>
@@ -1160,7 +1163,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
         <button type="button" class="workflow-canvas-skill" @click="emit('open-skill')">SKILL.md</button><span>{{ t('为准') }}</span>
       </Panel>
     </VueFlow>
-    <UPopover :open="adding" :reference="add_anchor" :content="{ side: 'bottom', align: 'start', sideOffset: 8, collisionPadding: 12 }"
+    <UPopover v-if="!readonly" :open="adding" :reference="add_anchor" :content="{ side: 'bottom', align: 'start', sideOffset: 8, collisionPadding: 12 }"
       :ui="{ content: 'workflow-canvas-add' }" @update:open="(value) => { adding = value; }">
       <template #content>
         <div class="workflow-canvas-add-body">

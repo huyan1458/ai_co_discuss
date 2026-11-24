@@ -67,16 +67,39 @@ html[data-theme="channel-light"] .markdown-body {
 .markdown-body .katex-error { color: inherit; font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap; }
 
 .message-attachments { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin: 10px 0 0; max-width: 100%; }
-.attachment-image { display: block; max-width: 100%; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: none; cursor: zoom-in; }
+/* Images referenced in a paragraph or list item sit together right under it in a two-column half-width grid. */
+.attachment-reference-end { display: inline-block; white-space: nowrap; }
+.attachment-inline-grid { --inline-image-max-height: 280px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; margin: .55em 0 .85em; max-width: 100%; }
+.markdown-body > .attachment-inline-grid:last-child, .markdown-body li > .attachment-inline-grid:last-child, .markdown-body blockquote > .attachment-inline-grid:last-child { margin-bottom: 0; }
+.attachment-image { position: relative; display: block; max-width: 100%; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: none; cursor: zoom-in; }
 /* --image-width / --image-ratio (web/app.js `attachment_image_style`): the size the site measured, within the limits
    below, so the image holds its place before its bytes arrive; without them it takes its own size once loaded. */
 .attachment-image img { display: block; width: var(--image-width, auto); height: auto; aspect-ratio: var(--image-ratio, auto);
   max-width: min(360px, 100%); max-height: 320px; object-fit: contain; border-radius: inherit; }
+.attachment-inline-grid .attachment-image { justify-self: start;
+  width: min(100%, var(--image-natural-width, 100%), calc(var(--inline-image-max-height) * var(--image-ratio-num, 100)));
+  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }
+.attachment-inline-grid .attachment-image img { width: 100%; max-width: 100%; max-height: var(--inline-image-max-height); }
+.attachment-inline-grid .attachment-image:not([style*="--image-ratio"]) { width: auto; }
+.attachment-inline-grid .attachment-image:not([style*="--image-ratio"]) img { width: auto; }
+/* Number badge for multi-image messages: pseudo-element so text selection, annotations and read-aloud never see it. */
+.attachment-image[data-image-badge]::before { content: attr(data-image-badge); position: absolute; top: 6px; left: 6px; z-index: 1;
+  padding: 1px 6px; border-radius: 4px; background: rgba(15, 17, 23, .72); color: #f3f5f8; font: 600 11px/1.45 system-ui, sans-serif;
+  font-variant-numeric: tabular-nums; pointer-events: none; }
 /* An image still coming through the relay (no src yet) shows a grey box with a spinning circle instead of its bare
    file name, at the image's own size when known; a failed one keeps the box and says so. */
 .attachment-image:has(img[data-relay-src]:not([src])) { position: relative; display: grid; place-items: center;
   width: min(var(--image-width, 160px), 100%); aspect-ratio: var(--image-ratio, 4 / 3);
   color: inherit; background: color-mix(in srgb, currentColor 8%, transparent); }
+.attachment-inline-grid .attachment-image:has(img[data-relay-src]:not([src])) {
+  width: min(100%, var(--image-natural-width, 160px), calc(var(--inline-image-max-height) * var(--image-ratio-num, 100))); }
+@media (max-width: 700px) {
+  .attachment-inline-grid { --inline-image-max-height: 220px; gap: 8px; }
+  .attachment-inline-grid[data-count="1"] { --inline-image-max-height: 260px; grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 359px) {
+  .attachment-inline-grid { --inline-image-max-height: 260px; grid-template-columns: minmax(0, 1fr); }
+}
 .attachment-image img[data-relay-src]:not([src]) { display: none; }
 .attachment-image:has(img[data-relay-src]:not([src]):not([data-relay-failed]))::after { content: ""; width: 24px; height: 24px;
   border: 2px solid color-mix(in srgb, currentColor 25%, transparent); border-top-color: color-mix(in srgb, currentColor 70%, transparent);

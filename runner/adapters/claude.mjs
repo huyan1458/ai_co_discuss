@@ -13,7 +13,7 @@ import { dirname, join, resolve } from 'node:path';
 import { runs_commands } from '../expert_prompts.mjs';
 import { bind_access, carve_protected, cli_max_run_ms, cli_timeout_reason, DENIAL_FIELD, EDIT_TOOLS, edge_entries, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
   clock_reset_at, newest_record, not_sent, page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog,
-  remove_session_files, same_path, TASK_SUBCOMMANDS, tree_killable, typed_prompt, watch_events, shell_written_paths } from './common.mjs';
+  remove_session_files, report_edits, same_path, TASK_SUBCOMMANDS, track_edits, tree_killable, typed_prompt, watch_events, shell_written_paths } from './common.mjs';
 
 // A message posted to an open Claude window that has not started by then is reported, not failed.
 const INBOX_CHECK_MS = 90_000;
@@ -264,13 +264,31 @@ const events = {
     if (event.type !== 'assistant') return '';
     return (event.message?.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n').trim();
   },
-  edits(event) {
-    if (event.type !== 'assistant') return [];
-    // Edit tools name their file; a shell command that writes is taken to have written the paths it names (Claude often
-    // edits by script), else its own files would read as someone else's on the card (user 2026-11-17).
-    return (event.message?.content || []).filter(block => block.type === 'tool_use')
-      .flatMap(block => EDIT_TOOL_NAMES.test(block.name) ? [String(block.input?.file_path || block.input?.notebook_path || '')]
-        : SHELL_TOOL_NAMES.test(block.name) ? shell_written_paths(block.input?.command) : []).filter(Boolean);
+  edits(event, pending) {
+    // Edit tools name their file; a writing shell command claims only its write targets. When `pending` is given (a
+    // live stream or window log), candidate paths wait for the matching tool_result and are dropped on `is_error`.
+    const blocks = Array.isArray(event.message?.content) ? event.message.content : [];
+    if (event.type === 'assistant') {
+      const direct = [];
+      for (const block of blocks.filter(item => item?.type === 'tool_use')) {
+        const paths = (EDIT_TOOL_NAMES.test(block.name) ? [String(block.input?.file_path || block.input?.notebook_path || '')]
+          : SHELL_TOOL_NAMES.test(block.name) ? shell_written_paths(block.input?.command) : []).filter(Boolean);
+        if (!paths.length) continue;
+        if (pending && block.id) pending.set(block.id, paths);
+        else direct.push(...paths);
+      }
+      return direct;
+    }
+    if (pending && event.type === 'user') {
+      const confirmed = [];
+      for (const block of blocks.filter(item => item?.type === 'tool_result')) {
+        const paths = pending.get(block.tool_use_id);
+        pending.delete(block.tool_use_id);
+        if (paths && !block.is_error) confirmed.push(...paths);
+      }
+      return confirmed;
+    }
+    return [];
   },
   detail: claude_detail,
 };
@@ -526,7 +544,8 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
   const { interval = WINDOW_POLL_MS, unstarted_after = INBOX_CHECK_MS, chat = false, start_after = CHAT_START_MS,
     waiting_after = CHAT_WAITING_MS, turn_limit = CHAT_TURN_MS, env = process.env, on_end, stop_key,
     stop_poll = STOP_POLL_MS, stop_tool_wait = STOP_TOOL_WAIT_MS, stop_end_wait = STOP_END_WAIT_MS } = options;
-  const since = Date.now(), awaited = new Set([marker]), open_tools = new Set(), background = new Map();
+  const since = Date.now(), awaited = new Set([marker]), open_tools = new Set(), background = new Map(), pending_edits = new Map();
+  if (!chat) track_edits(claude, task);
   let pending = Buffer.alloc(0), taken = false, noted = false, error = null, done = false, waiting_since = 0;
   let stop_asked = 0, stop_sent = 0, stop_timer = null, last_message = null, idle_since = 0, waiting_noted = false;
   // `ended` says why a room task's turn ended without finishing (interrupted, window closed): it is an exit, not a
@@ -553,6 +572,7 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
       const api_error = claude_api_error(entry);
       error = api_error || error;
       if ((chat || log_path) && !api_error) report(entry);
+      if (!chat && !api_error && !entry.isSidechain) report_edits(claude, entry, task, pending_edits);
       if (!entry.isSidechain) { track_tools(entry); track_background(entry); }
       // A turn that left a background task running ends while the window waits for it; its report starts the next turn.
       if (entry.type === 'system' && entry.subtype === 'turn_duration' && !awaited.size && !background.size) return finish();
@@ -1015,6 +1035,9 @@ export const claude = {
   recover_turn,
   id: 'claude', catalog_source: 'claude-cli',
   into_window: claude_inbox_ready,
+  // An attached window's stop handle is only confirmed during delivery.
+  preflight_stoppable: (profile, binding) => !(profile.project_access === 'own' && profile.session_id
+    && (binding.session_id ?? profile.session_id) === profile.session_id),
   deliver, chat, events,
   session: { path: session_path, exists: session_exists, owns: session_exists, cwd: session_cwd, branch, settings: session_settings,
     list: list_sessions, preview: preview_session, remove: remove_session,

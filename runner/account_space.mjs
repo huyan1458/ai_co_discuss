@@ -35,6 +35,16 @@ export function account_space(home) {
   return { workspace: absolute(settings.workspace) || `${resolve(home)}-workspace`, projects_root: absolute(settings.projects_root) };
 }
 
+/** Directory containing room-keyed member drafts for this instance. */
+export function drafts_root(home) {
+  const file = join(home, SETTINGS_FILE);
+  const root = existsSync(file) && JSON.parse(readFileSync(file, 'utf8')).project_data_root;
+  if (root && (!isAbsolute(root) || relative(join(root, 'drafts'), realpathSync.native(join(root, 'drafts'))))) {
+    throw new Error('项目草稿目录路径已重定向 / Project drafts path was redirected');
+  }
+  return join(root || home, 'drafts');
+}
+
 function safe_name(text, limit) {
   const name = String(text || '').replace(UNSAFE_NAME, ' ').replace(/\s+/g, ' ').trim().replace(/[. ]+$/, '').slice(0, limit).trim();
   return RESERVED_NAME.test(name) ? '' : name;

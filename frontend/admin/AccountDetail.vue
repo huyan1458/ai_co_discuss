@@ -21,14 +21,28 @@ const { state, reload, notify } = inject("panel");
 const account = computed(() => state.value.accounts.find((item) => item.name === props.name) || null);
 const busy = ref(""), secret = ref(null), confirming = ref(null);
 const address = computed(() => entry_address(state.value.entry));
+const migration_path = ref("");
+const backups = ref(null);
+watch(() => props.name, () => { migration_path.value = ""; backups.value = null; confirming.value = null; });
+async function load_backups() {
+  const name = props.name;
+  try {
+    const rows = await call(`accounts/${name}/migration-backups`);
+    if (props.name === name) backups.value = rows;
+  } catch (error) { notify("error", error.message); }
+}
+function ask_release(row) {
+  confirming.value = { action: "release-backup", row, title: t('释放迁移备份'), label: t('确认释放'),
+    text: () => t('将停止实例，校验后删除备份 {path}（{bytes} 字节）。', { path: row.path, bytes: row.bytes }) };
+}
 // Both are needed before the account is given to someone else; until then the page opens with what is left to do.
 const secure = computed(() => Boolean(account.value?.os_user && account.value?.protected));
 
 /** Run one account action, keeping its button busy until it ends. */
-async function act(action, message) {
+async function act(action, message, body = {}) {
   busy.value = action;
   try {
-    const result = await call(`accounts/${props.name}/${action}`, {});
+    const result = await call(`accounts/${props.name}/${action}`, body);
     if (result.password) secret.value = { title: t('{value1} 的新密码', { value1: props.name }), password: result.password };
     else if (message) notify("info", typeof message === "function" ? message(result) : message);
     await reload();
@@ -58,9 +72,13 @@ watch(() => props.request, (request) => {
   else ask(request.action);
 }, { immediate: true });
 async function confirm() {
-  const { action, message } = confirming.value;
+  const { action, message, row } = confirming.value;
   confirming.value = null;
   if (action === "protect-off") return protect(false, message);
+  if (action === "release-backup") {
+    await act(action, t('已释放迁移备份'), { id: row.id, kind: row.kind, confirm: true });
+    return load_backups();
+  }
   await act(action, message);
 }
 
@@ -92,6 +110,21 @@ async function copy(text) {
     </div>
 
     <div class="panel-list">
+      <form class="panel-row" @submit.prevent="act('migrate-data', t('项目数据已迁移，实例已停止'), { project_data_root: migration_path.trim() })">
+        <label class="panel-main">{{ t('项目数据目录') }}
+          <small>{{ account.project_data_root || account.home }}</small>
+          <input v-model="migration_path" class="panel-input" :placeholder="t('新的绝对路径')" required />
+        </label>
+        <button class="panel-button is-plain is-small" :disabled="!migration_path.trim() || Boolean(busy)">{{ t('停止实例并迁移') }}</button>
+      </form>
+      <div class="panel-rows">
+        <button type="button" class="panel-button is-plain is-small" @click="load_backups">{{ t('查看迁移备份') }}</button>
+        <p v-if="backups && !backups.length" class="panel-sub">{{ t('没有已登记的迁移备份') }}</p>
+        <div v-for="row in backups" :key="row.id + row.kind" class="panel-row">
+          <div class="panel-main"><span>{{ row.path }}</span><small>{{ row.error || t('文件 {bytes} 字节，磁盘占用 {allocated} 字节', { bytes: row.bytes, allocated: row.allocated_bytes }) }}</small></div>
+          <button type="button" class="panel-button is-small" :disabled="Boolean(row.error || busy)" @click="ask_release(row)">{{ t('释放迁移备份') }}</button>
+        </div>
+      </div>
       <div v-if="!secure" class="panel-rows detail-unsafe">
         <p class="detail-unsafe-head"><UIcon name="i-lucide-triangle-alert" />{{ t('交给他人使用前，请完成以下安全设置') }}</p>
         <div v-if="!account.os_user" class="panel-row">

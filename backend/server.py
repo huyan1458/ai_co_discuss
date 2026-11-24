@@ -43,7 +43,7 @@ from .free_room import convert_suggestion, message_suggestions, save_suggestions
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
 from .private_chat import chat_action, member_chat
 from .external_members import external_api, guard_route as guard_external_route, is_external_path, owner_api as external_owner_api
-from .free_room import describe_members, execution_notes, label_members, check_relay, record_room_link, save_message_relay, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
+from .free_room import describe_members, execution_notes, label_members, check_relay, record_relay_send, record_room_link, save_message_relay, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
 from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_segments, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         host_event, host_hidden_event, room_event_log, withdrawals)
 from .room_trace import message_trace
@@ -237,6 +237,10 @@ CASE WHEN messages.author='用户' THEN (
     WHERE target.message_id=messages.id)
 ) END AS interjection_parent_id,
 EXISTS(SELECT 1 FROM proactive_messages p WHERE p.message_id=messages.id) AS proactive,
+sent.target_room_id AS relay_sent_room, sent.host AS relay_sent_host, sent.target_message_id AS relay_sent_message_id,
+sent.queued_id AS relay_sent_queued_id, sent.interrupted AS relay_sent_interrupted,
+(SELECT r.title FROM rooms r WHERE r.id=sent.target_room_id) AS relay_sent_title,
+(SELECT relation FROM room_links WHERE room_id=messages.room_id AND other_room_id=sent.target_room_id) AS relay_sent_relation,
 relay.source_room_id AS relay_room, relay.host AS relay_host,
 COALESCE(NULLIF(relay.member,''),(SELECT name FROM room_members WHERE room_id=relay.source_room_id AND role='host' AND status='active')) AS relay_member,
 (SELECT relation FROM room_links WHERE room_id=messages.room_id AND other_room_id=relay.source_room_id) AS relay_relation,
@@ -245,6 +249,8 @@ COALESCE(NULLIF(relay.member,''),(SELECT name FROM room_members WHERE room_id=re
 (SELECT r.title FROM room_links l JOIN rooms r ON r.id=l.other_room_id WHERE l.message_id=messages.id) AS link_title,
 (SELECT r.title FROM rooms r WHERE r.id=relay.source_room_id) AS relay_title
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
+LEFT JOIN (SELECT message_id,target_room_id,host,target_message_id,queued_id,interrupted FROM room_relay_sends) AS sent
+    ON sent.message_id=messages.id
 LEFT JOIN message_relays AS relay ON relay.message_id=messages.id
 LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
 LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
@@ -500,54 +506,63 @@ def init_database(database, seed=True):
     database = Path(database)
     is_new = not database.exists()
     database.parent.mkdir(parents=True, exist_ok=True)
-    with closing(connect_db(database)) as connection, connection:
-        connection.execute("PRAGMA journal_mode = WAL")
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if "room_members" in tables:
-            columns = {row[1] for row in connection.execute("PRAGMA table_info(room_members)")}
-            if "access" not in columns:
-                connection.execute("ALTER TABLE room_members ADD COLUMN access TEXT NOT NULL DEFAULT 'runner'")
-            if "session_mode" not in columns:
-                connection.execute("ALTER TABLE room_members ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'new'")
-        migrate_legacy_discussion(connection, tables)
-        # The recent-changes partial index needs this early column before schema is applied.
-        if "member_executions" in tables:
-            columns = {row[1] for row in connection.execute("PRAGMA table_info(member_executions)")}
-            if "changes" not in columns:
-                connection.execute("ALTER TABLE member_executions ADD COLUMN changes TEXT NOT NULL DEFAULT ''")
-        # The goal-changed trigger in the schema reads these columns, so they must exist before it is created.
-        if "room_goals" in tables:
-            columns = {row[1] for row in connection.execute("PRAGMA table_info(room_goals)")}
-            for name, kind in GOAL_PHASE_COLUMNS:
-                if name not in columns:
-                    connection.execute(f"ALTER TABLE room_goals ADD COLUMN {name} {kind}")
-        connection.executescript(SCHEMA)
-        if 'member' not in {row[1] for row in connection.execute('PRAGMA table_info(message_relays)')}:
-            connection.execute("ALTER TABLE message_relays ADD COLUMN member TEXT NOT NULL DEFAULT ''")
-        share_columns = {row[1] for row in connection.execute("PRAGMA table_info(room_share_links)")}
-        for name in ("card_json", "card_edits"):
-            if name not in share_columns:
-                connection.execute(f"ALTER TABLE room_share_links ADD COLUMN {name} TEXT NOT NULL DEFAULT '{{}}'")
-        directory_columns = {row[1] for row in connection.execute("PRAGMA table_info(room_directory)")}
-        if "destroy_after_days" not in directory_columns:
-            connection.execute("ALTER TABLE room_directory ADD COLUMN destroy_after_days INTEGER NOT NULL DEFAULT 0")
-        if "destroy_set_at" not in directory_columns:
-            connection.execute("ALTER TABLE room_directory ADD COLUMN destroy_set_at TEXT NOT NULL DEFAULT ''")
-        if "directories" not in {row[1] for row in connection.execute("PRAGMA table_info(topic_folders)")}:
-            connection.execute("ALTER TABLE topic_folders ADD COLUMN directories TEXT NOT NULL DEFAULT '[]'")
-        # Images stored before sizes were recorded keep NULL here and are measured when first read (with_image_sizes).
-        attachment_columns = {row[1] for row in connection.execute("PRAGMA table_info(attachments)")}
-        for name in ("width", "height"):
-            if name not in attachment_columns:
-                connection.execute(f"ALTER TABLE attachments ADD COLUMN {name} INTEGER")
-        if connection.execute("INSERT OR IGNORE INTO site_preferences (key,value) VALUES ('child_folders_migrated','1')").rowcount:
-            connection.execute("""UPDATE room_folder_assignments AS child SET folder_id=parent.folder_id
-                FROM room_links l JOIN room_folder_assignments parent ON parent.room_id=l.other_room_id
-                WHERE l.relation='parent' AND child.room_id=l.room_id
-                AND child.folder_id IS NULL AND parent.folder_id IS NOT NULL""")
-        migrate_free_tables(connection)
-        if seed and is_new:
-            seed_demo(connection)
+    with closing(connect_db(database)) as connection:
+        with connection:
+            if is_new:
+                connection.execute("PRAGMA auto_vacuum = INCREMENTAL")
+            connection.execute("PRAGMA journal_mode = WAL")
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "room_members" in tables:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(room_members)")}
+                if "access" not in columns:
+                    connection.execute("ALTER TABLE room_members ADD COLUMN access TEXT NOT NULL DEFAULT 'runner'")
+                if "session_mode" not in columns:
+                    connection.execute("ALTER TABLE room_members ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'new'")
+            migrate_legacy_discussion(connection, tables)
+            # The recent-changes partial index needs this early column before schema is applied.
+            if "member_executions" in tables:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(member_executions)")}
+                if "changes" not in columns:
+                    connection.execute("ALTER TABLE member_executions ADD COLUMN changes TEXT NOT NULL DEFAULT ''")
+            # The goal-changed trigger in the schema reads these columns, so they must exist before it is created.
+            if "room_goals" in tables:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(room_goals)")}
+                for name, kind in GOAL_PHASE_COLUMNS:
+                    if name not in columns:
+                        connection.execute(f"ALTER TABLE room_goals ADD COLUMN {name} {kind}")
+            connection.executescript(SCHEMA)
+            if 'member' not in {row[1] for row in connection.execute('PRAGMA table_info(message_relays)')}:
+                connection.execute("ALTER TABLE message_relays ADD COLUMN member TEXT NOT NULL DEFAULT ''")
+            share_columns = {row[1] for row in connection.execute("PRAGMA table_info(room_share_links)")}
+            for name in ("card_json", "card_edits"):
+                if name not in share_columns:
+                    connection.execute(f"ALTER TABLE room_share_links ADD COLUMN {name} TEXT NOT NULL DEFAULT '{{}}'")
+            directory_columns = {row[1] for row in connection.execute("PRAGMA table_info(room_directory)")}
+            if "destroy_after_days" not in directory_columns:
+                connection.execute("ALTER TABLE room_directory ADD COLUMN destroy_after_days INTEGER NOT NULL DEFAULT 0")
+            if "destroy_set_at" not in directory_columns:
+                connection.execute("ALTER TABLE room_directory ADD COLUMN destroy_set_at TEXT NOT NULL DEFAULT ''")
+            if "directories" not in {row[1] for row in connection.execute("PRAGMA table_info(topic_folders)")}:
+                connection.execute("ALTER TABLE topic_folders ADD COLUMN directories TEXT NOT NULL DEFAULT '[]'")
+            # Images stored before sizes were recorded keep NULL here and are measured when first read (with_image_sizes).
+            attachment_columns = {row[1] for row in connection.execute("PRAGMA table_info(attachments)")}
+            for name in ("width", "height"):
+                if name not in attachment_columns:
+                    connection.execute(f"ALTER TABLE attachments ADD COLUMN {name} INTEGER")
+            if connection.execute("INSERT OR IGNORE INTO site_preferences (key,value) VALUES ('child_folders_migrated','1')").rowcount:
+                connection.execute("""UPDATE room_folder_assignments AS child SET folder_id=parent.folder_id
+                    FROM room_links l JOIN room_folder_assignments parent ON parent.room_id=l.other_room_id
+                    WHERE l.relation='parent' AND child.room_id=l.room_id
+                    AND child.folder_id IS NULL AND parent.folder_id IS NOT NULL""")
+            migrate_free_tables(connection)
+            if seed and is_new:
+                seed_demo(connection)
+        if not is_new:
+            try:
+                if reclaim_database_space(connection):
+                    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.OperationalError:
+                logging.warning("Database space reclamation skipped on startup", exc_info=True)
 
 
 def room_display_texts(connection, room):
@@ -1031,19 +1046,157 @@ def save_share_link(connection, room_id, payload):
     return share_link_record(connection, room_id)
 
 
+SHARE_CARD_RECEIPT = re.compile(
+    r"^(?:(?:回答问题\s*#?\d+|Answer to question #\d+)(?:[：:]|$)"
+    r"|(?:请主持人先讨论并给推荐|交给主持人决定)（问题 #\d+）$"
+    r"|(?:Host, please discuss and recommend first|Leaving it to the host to decide) \(question #\d+\)$)",
+    re.IGNORECASE,
+)
+SHARE_CARD_SHORT_ACK = re.compile(
+    r"^/?(?:继续|好的?|行|ok|yes|收到|同意|开始|可以|确认|嗯|明白|go|continue)[。.!！,，\s]*$",
+    re.IGNORECASE,
+)
+SHARE_CARD_SLASH = re.compile(r"^/(?:goal|discuss)\b", re.IGNORECASE)
+SHARE_CARD_SENTENCE = re.compile(r"[^。！？.!?]+(?:[。！？]|[.!?](?=\s|$)|$)")
+SHARE_CARD_COPY_FENCE = re.compile(r"```share-copy[ \t]*\r?\n([\s\S]*?)\r?\n```")
+SHARE_CARD_SENSITIVE = re.compile(
+    r"\bsk[-_](?:live_)?[A-Za-z0-9_-]{20,}|\bgh[pousr]_[A-Za-z0-9]{30,}|\bAIza[0-9A-Za-z_-]{30,}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~+/-]{20,}"
+    r"|\b[\w.+-]+@[\w-]+\.[\w.-]+\b|(?<!\d)1[3-9]\d{9}(?!\d)"
+)
+
+
+def _is_share_question_receipt(text):
+    """Identify question-card receipts that should not be used as the room's opening question."""
+    heading = str(text or "").lstrip().split("\n", 1)[0].rstrip()
+    return bool(SHARE_CARD_RECEIPT.match(heading))
+
+
+def _share_card_lead(text, max_chars=160):
+    """Extract one concise lead sentence (or two short ones) from the opening paragraph."""
+    raw = str(text or "").replace("\r\n", "\n").strip()
+    if not raw or SHARE_CARD_SENSITIVE.search(raw):
+        return ""
+    first_para = re.split(r"\n\s*\n|\n\s*(?:[-*•]|\d+[.)、])\s+", raw, maxsplit=1)[0]
+    plain = re.sub(r"```[\s\S]*?```", " ", first_para)
+    plain = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", plain)
+    plain = re.sub(r"[`*_>#|~-]+", " ", plain)
+    plain = re.sub(r"\s+", " ", plain).strip()
+    plain = re.sub(r"^(?:@\S+\s+)+", "", plain).strip()
+    if not plain:
+        return ""
+    sentences = [match.group(0).strip() for match in SHARE_CARD_SENTENCE.finditer(plain) if match.group(0).strip()]
+    if not sentences:
+        return plain[:max_chars]
+    first = sentences[0]
+    if len(first) < 10 and len(sentences) > 1:
+        joiner = " " if re.search(r"[a-zA-Z0-9.!?]$", first) else ""
+        two = f"{first}{joiner}{sentences[1]}"
+        if len(two) <= max_chars:
+            return two
+    return first[:max_chars]
+
+
+def _extract_share_copy(text):
+    """Return the companion ```share-copy``` block from a room message, or empty string."""
+    match = SHARE_CARD_COPY_FENCE.search(str(text or ""))
+    return match.group(1).strip() if match else ""
+
+
+def _auto_share_card_defaults(connection, room_id):
+    """Compute fresh, clean automatic share-card text from the room's non-withdrawn public messages."""
+    room = connection.execute("SELECT title FROM rooms WHERE id=?", (room_id,)).fetchone()
+    title = room["title"] if room else ""
+    member_rows = connection.execute(
+        "SELECT name FROM room_members WHERE room_id=? AND status!='removed' ORDER BY id",
+        (room_id,),
+    ).fetchall()
+    members = [row["name"] for row in member_rows]
+    msg_rows = connection.execute(
+        """SELECT m.id, m.author, COALESCE(md.kind, 'chat') AS kind, m.text, COALESCE(ms.text, '') AS summary
+           FROM messages m
+           LEFT JOIN message_details md ON md.message_id=m.id
+           LEFT JOIN message_summaries ms ON ms.message_id=m.id
+           WHERE m.room_id=? AND COALESCE(md.kind, 'chat')!='system' AND COALESCE(m.text,'')!=''
+             AND NOT EXISTS (SELECT 1 FROM message_withdrawals w WHERE w.message_id=m.id)
+           ORDER BY m.id ASC""",
+        (room_id,),
+    ).fetchall()
+    question_msg = None
+    for msg in msg_rows:
+        if msg["author"] != "用户":
+            continue
+        body = (msg["text"] or "").strip()
+        if not body or _is_share_question_receipt(body) or SHARE_CARD_SLASH.match(body) or SHARE_CARD_SHORT_ACK.match(body):
+            continue
+        question_msg = msg
+        break
+    after_id = question_msg["id"] if question_msg else 0
+    answers = [msg for msg in msg_rows if msg["author"] not in ("用户", "系统") and msg["id"] > after_id]
+    outcome_msg = next((msg for msg in reversed(answers) if (msg["summary"] or "").strip()), None) or (answers[-1] if answers else None)
+    runs_row = connection.execute("SELECT COUNT(*) FROM member_executions WHERE room_id=?", (room_id,)).fetchone()
+    runs = int(runs_row[0]) if runs_row else 0
+    return {
+        "title": title,
+        "members": members,
+        "question": _share_card_lead(question_msg["text"], 160) if question_msg else "",
+        "outcome": _share_card_lead(outcome_msg["summary"] or outcome_msg["text"], 200) if outcome_msg else "",
+        "stats": f"{len(members)} 位 AI · {len(msg_rows)} 条消息 · {runs} 次执行",
+        "card_version": 2,
+    }
+
+
 def read_share_card(connection, room_id):
-    """Read the live link's cover and the room images the owner can choose."""
+    """Read the live link's cover, upgraded automatic defaults, active product sites and room images."""
+    now_iso = utc_iso_now()
     row = connection.execute("""SELECT share_id,url,expires_at,card_json,card_edits FROM room_share_links
-        WHERE room_id=? AND expires_at>?""", (room_id, utc_iso_now())).fetchone()
+        WHERE room_id=? AND expires_at>?""", (room_id, now_iso)).fetchone()
     if not row:
         raise LookupError(Text("分享链接已失效"))
-    images = connection.execute("""SELECT a.id,a.file_name,a.message_id,a.room_id FROM attachments a
+    saved_card = json.loads(row["card_json"]) if row["card_json"] else {}
+    saved_edits = json.loads(row["card_edits"]) if row["card_edits"] else {}
+    auto = _auto_share_card_defaults(connection, room_id)
+    base_card = dict(saved_card)
+    old_version = int(saved_card.get("card_version") or 0) < 2
+    saved_question = str(saved_card.get("question") or "").strip()
+    if auto["question"] and (old_version or not saved_question or _is_share_question_receipt(saved_question)):
+        base_card["question"] = auto["question"]
+    if auto["outcome"] and (old_version or not str(saved_card.get("outcome") or "").strip()):
+        base_card["outcome"] = auto["outcome"]
+    if auto["question"] or auto["outcome"]:
+        if not base_card.get("title") and auto["title"]:
+            base_card["title"] = auto["title"]
+        if not base_card.get("members") and auto["members"]:
+            base_card["members"] = auto["members"]
+        if not base_card.get("stats") and auto["stats"]:
+            base_card["stats"] = auto["stats"]
+    images_rows = connection.execute("""SELECT a.id,a.file_name,a.message_id,a.room_id,m.text AS message_text
+        FROM attachments a
+        LEFT JOIN messages m ON m.id=a.message_id
         WHERE a.room_id=? AND a.message_id IS NOT NULL AND a.content_type IN ('image/png','image/jpeg','image/webp')
         AND NOT EXISTS (SELECT 1 FROM message_withdrawals w WHERE w.message_id=a.message_id)
         ORDER BY a.message_id DESC,a.position""", (room_id,))
+    images = []
+    for image in images_rows:
+        item = {"id": image["id"], "file_name": image["file_name"],
+                "message_id": image["message_id"], "room_id": image["room_id"]}
+        copy_text = _extract_share_copy(image["message_text"])
+        if copy_text:
+            item["share_copy"] = copy_text
+        images.append(item)
+    site_rows = connection.execute(
+        "SELECT * FROM room_sites WHERE room_id=? ORDER BY updated_at DESC", (room_id,)
+    )
+    sites = [
+        {"site_id": s["site_id"], "title": s["title"], "url": s["url"], "expires_at": s["expires_at"]}
+        for s in (_site_public_row(r, now_iso) for r in site_rows)
+        if s["status"] == "active"
+    ]
     return {"share_id": row["share_id"], "url": row["url"], "expires_at": row["expires_at"],
-            "card": {**json.loads(row["card_json"]), **json.loads(row["card_edits"])},
-            "images": [dict(image) for image in images]}
+            "card": {**base_card, **saved_edits},
+            "defaults": {"question": auto["question"], "outcome": auto["outcome"]},
+            "sites": sites,
+            "images": images}
 
 
 def edit_share_card(connection, room_id, payload):
@@ -1051,10 +1204,13 @@ def edit_share_card(connection, room_id, payload):
     if "publication" in payload:
         return finish_share_card_upload(connection, room_id, payload)
     edits = payload.get("edits")
-    if not isinstance(edits, dict) or not edits or edits.keys() - {"question", "outcome", "cover"}:
+    if not isinstance(edits, dict) or not edits or edits.keys() - {"question", "outcome", "cover", "copy"}:
         raise ValueError(Text("分享卡格式不正确"))
     for key, value in edits.items():
-        if not isinstance(value, str) or (key != "cover" and len(value) > 2000):
+        if value is None and key in ("question", "outcome", "copy"):
+            continue
+        limit = 4000 if key == "copy" else 2000
+        if not isinstance(value, str) or (key != "cover" and len(value) > limit):
             raise ValueError(Text("分享卡格式不正确"))
         if key == "cover" and value and not re.fullmatch(r"data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+=*",
                                                          value):
@@ -1599,8 +1755,30 @@ def report_destruction(connection, room_id, token, payload):
     return destruction_view(connection, room_id)
 
 
+RECLAIM_VACUUM_MIN_BYTES = 1024 * 1024
+
+
+def reclaim_database_space(connection, min_vacuum_bytes=RECLAIM_VACUUM_MIN_BYTES):
+    """Return freed SQLite pages to the OS: incrementally when enabled, or via a one-time VACUUM upgrade."""
+    free_pages = connection.execute("PRAGMA freelist_count").fetchone()[0]
+    if not free_pages:
+        return False
+    if connection.execute("PRAGMA auto_vacuum").fetchone()[0] == 2:
+        # incremental_vacuum steps one page per row; exhausting the cursor reclaims every free page.
+        connection.execute("PRAGMA incremental_vacuum").fetchall()
+        return True
+    page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+    if free_pages * page_size < min_vacuum_bytes:
+        return False
+    # Existing databases default to auto_vacuum=0; switching to INCREMENTAL takes effect on one VACUUM,
+    # after which future room destructions reclaim pages incrementally without rewriting the whole file.
+    connection.execute("PRAGMA auto_vacuum = INCREMENTAL")
+    connection.execute("VACUUM")
+    return True
+
+
 def finish_destruction_files(database, room_id):
-    """After the records commit: remove the attachment files, check they are gone, and truncate the write-ahead log.
+    """After the records commit: remove the attachment files, reclaim freed database pages, and truncate the WAL.
 
     A file still held or a log still in use leaves its item failed; the page shows it and the service retries it.
     """
@@ -1619,6 +1797,10 @@ def finish_destruction_files(database, room_id):
                 logging.exception("Attachment cleanup failed: %s", file_id)
             if path.exists():
                 left.append(file_id)
+        try:
+            reclaim_database_space(connection)
+        except sqlite3.OperationalError:
+            logging.warning("Database space reclamation skipped: %s", room_id, exc_info=True)
         # Deleted pages are already zeroed (secure_delete); truncating the log drops its copies of the old rows.
         busy = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
         with connection:
@@ -3433,6 +3615,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         except (ValueError, TypeError) as error:
             return self.respond(self.plain_error(error) if text_mode else error_body(error), 400,
                                 "text/plain" if text_mode else "application/json")
+        except (IndexError, KeyError):
+            logging.exception("Request failed")
+            return self.respond(error_body(Text("服务器内部错误")), 500)
         except LookupError as error:
             return self.respond(self.plain_error(error) if text_mode else error_body(error), 404,
                                 "text/plain" if text_mode else "application/json")
@@ -3550,6 +3735,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond({"ok": True})
         if route == ["settings"] and method in ("GET", "POST"):
             command = "settings"
+        elif (route == ["storage"] and method in ("GET", "POST")) or (route == ["storage-clean"] and method == "POST"):
+            with closing(connect_db(self.server.database)) as connection:
+                if self.bridge_origin or self.entry_member_request() or not self.admin_session(connection):
+                    raise PermissionError(Text('需要管理员登录'))
+            command = route[0]
         elif route == ["launch"] and method == "POST":
             command = "start"
         elif route == ["room-config"] and method == "POST" and not self.bridge_origin:
@@ -3768,7 +3958,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
         The runner holds one bridge token per paired website and this site keeps only its hash. A bridged request acts
         as the administrator, so it is accepted only from this computer's loopback, on a loopback-only site, and only
-        for room, folder and revision routes.
+        for room, folder, revision and published-site routes.
         """
         credential = self.headers.get("X-CoDiscuss-Bridge")
         if credential is None:
@@ -3779,7 +3969,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if (not self.server.local_site or self.client_address[0] != "127.0.0.1" or not isinstance(expected, str)
                 or not re.fullmatch(r"[a-f0-9]{64}", credential) or not hmac.compare_digest(token_hash(credential), expected)):
             raise PermissionError(Text('本机中转凭据无效，请在电脑上重新连接网站'))
-        if parts[:1] != ["api"] or parts[1:2] not in (["rooms"], ["folders"], ["revisions"]):
+        if parts[:1] != ["api"] or parts[1:2] not in (["rooms"], ["folders"], ["revisions"], ["sites"]):
             raise PermissionError(Text('本机中转不允许访问该地址'))
         return True
 
@@ -4103,7 +4293,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = queue_action(connection, room_id, token, self.read_payload(), post_queued, check_queued, interrupt_for_message)
             connection.commit()
             return self.respond(result)
-        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"], ["dispatches"], ["host-checkin"], ["room-link"]):
+        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"], ["dispatches"], ["host-checkin"], ["room-link"], ["room-relay-sent"]):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
@@ -4462,6 +4652,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = withdraw_dispatch(connection, room_id, token, int(parts[4]))
         elif parts[3:] == ["host-checkin"] and method == "POST":
             result = set_host_checkin(connection, room_id, token, self.read_payload())
+        elif parts[3:] == ["room-relay-sent"] and method == "POST":
+            result = record_relay_send(connection, room_id, token, self.read_payload())
         elif parts[3:] == ["room-link"] and method == "POST":
             result = record_room_link(connection, room_id, token, self.read_payload())
         else:

@@ -8,7 +8,7 @@ import { computed, inject, ref } from "vue";
 import ChangelogDialog from "./ChangelogDialog.vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
 import InvitedRooms from "./InvitedRooms.vue";
-import { use_workflow_library, workflow_problem } from "./workflow-library.js";
+import { use_workflow_library, workflow_key, workflow_problem } from "./workflow-library.js";
 import { t } from "./i18n.js";
 
 /** The room sidebar, shared by the docked desktop column and the tablet and phone drawer. */
@@ -16,16 +16,26 @@ const emit = defineEmits(["select", "manage", "create", "create-folder", "manage
 const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
 const library = use_workflow_library();
-const { workflows, available, draft, saved_id, page_open, renaming, rename_text, pending_items } = library;
+const {
+  workflows, global_workflows, project_workflows, project_roots,
+  available, draft, saved_id, saved_key, active_scope, active_project_name,
+  page_open, renaming, rename_text, pending_items,
+} = library;
+
+const has_project_section = computed(() => project_roots.value.length > 0 || project_workflows.value.length > 0);
+const project_section_label = computed(() => project_roots.value.length === 1
+  ? t("当前项目 · {name}", { name: project_roots.value[0].name })
+  : t("当前项目"));
+const multi_project_roots = computed(() => project_roots.value.length > 1);
 
 /** Show a workflow on the page and close the drawer. */
-function open_workflow(id) {
-  library.select(id);
+function open_workflow(item) {
+  library.select(item);
   emit("workflows");
 }
 
 /** New or import from the heading's "+", then close the drawer once the page shows the draft. */
-const add_items = library.add_items.map((group) => group.map((item) => ({ ...item, onSelect: () => { item.onSelect(); emit("workflows"); } })));
+const add_items = computed(() => library.add_items.value.map((group) => group.map((item) => ({ ...item, onSelect: () => { item.onSelect(); emit("workflows"); } }))));
 const app_version = __APP_VERSION__;
 const changelog_open = ref(false);
 /** The footer's second line: the account call to action until signed in, then the site connection. */
@@ -36,6 +46,26 @@ const account_status = computed(() => {
   if (!admin.registered) return t("设置管理员账号");
   return admin.logged_in ? "" : t("未登录 · 点击登录");
 });
+
+function row_status(item) {
+  if (item.error) return t("无法读取");
+  if (item.disabled) return t("已停用");
+  if (item.unavailable?.length) return t("{count} 张卡片不可用", { count: item.unavailable.length });
+  if (item.needs_trust) return t("待信任");
+  if (item.readonly) return t("只读");
+  if (multi_project_roots.value && item.scope === "project" && item.project_name) return item.project_name;
+  return "";
+}
+
+function row_icon(item) {
+  const key = workflow_key(item);
+  if (pending_items.value.has(key)) return "i-lucide-loader-circle";
+  if (workflow_problem(item)) return "i-lucide-triangle-alert";
+  if (item.disabled) return "i-lucide-circle-pause";
+  if (item.needs_trust) return "i-lucide-shield-alert";
+  if (item.readonly) return "i-lucide-lock";
+  return "i-lucide-network";
+}
 </script>
 
 <template>
@@ -52,7 +82,7 @@ const account_status = computed(() => {
       <ChannelDirectory @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" @destructions="emit('destructions')" />
       <!-- Rooms on other computers this computer's AIs were invited to: their own section, opened in the middle like a room. -->
       <InvitedRooms @open="emit('invited', $event)" />
-      <!-- The workflow library belongs to this computer, not a room: its own section below the rooms; a row opens the workflow page in the middle. -->
+      <!-- The workflow library shows the current room's project workflows (when any) and global workflows. -->
       <div class="channel-directory-heading channel-tools-heading">
         <button type="button" class="channel-section-toggle" :aria-expanded="workflows_open" @click="workflows_open = !workflows_open; if (workflows_open) library.refresh_list()"><UIcon :name="workflows_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t("工作流") }}</button>
         <div v-if="available" class="channel-directory-actions">
@@ -60,22 +90,44 @@ const account_status = computed(() => {
         </div>
       </div>
       <nav v-show="workflows_open" :aria-label="t('工作流列表')" class="channel-room-list channel-workflow-list">
-        <div v-if="draft && !saved_id" class="channel-room-row" :class="{ active: page_open }">
-          <button type="button" class="channel-room-select" :aria-current="page_open ? 'page' : undefined" @click="library.page_open.value = true; emit('workflows')"><UIcon name="i-lucide-file-plus-2" /><span>{{ draft.label || t('未命名工作流') }}</span><small class="channel-room-time">{{ t("未保存") }}</small></button>
-        </div>
-        <div v-for="item in workflows" :key="item.id" class="channel-room-row" :class="{ active: page_open && saved_id === item.id, 'is-disabled': item.disabled, 'is-broken': workflow_problem(item) }">
-          <span v-if="renaming === item.id" class="channel-workflow-rename"><UIcon name="i-lucide-network" />
-            <input v-model="rename_text" data-workflow-rename :maxlength="32" :aria-label="t('新名称')" @keydown.enter.prevent="library.commit_rename" @keydown.esc.prevent="renaming = ''" @blur="library.commit_rename" /></span>
-          <button v-else type="button" class="channel-room-select" :title="workflow_problem(item) || item.description" :aria-current="page_open && saved_id === item.id ? 'page' : undefined"
-            @click="open_workflow(item.id)" @dblclick="!item.error && !pending_items.has(item.id) && library.start_rename(item)">
-            <UIcon :name="pending_items.has(item.id) ? 'i-lucide-loader-circle' : workflow_problem(item) ? 'i-lucide-triangle-alert' : item.disabled ? 'i-lucide-circle-pause' : 'i-lucide-network'" :class="{ 'animate-spin': pending_items.has(item.id) }" /><span>{{ item.label }}</span>
-            <small v-if="item.error || item.disabled || item.unavailable?.length" class="channel-room-time">{{ item.error ? t('无法读取') : item.disabled ? t('已停用') : t('{count} 张卡片不可用', { count: item.unavailable.length }) }}</small></button>
-          <div v-if="available && renaming !== item.id" class="channel-room-actions">
-            <UDropdownMenu :disabled="pending_items.has(item.id)" :items="library.item_menu(item)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :disabled="pending_items.has(item.id)" :aria-label="t('「{name}」的更多操作', { name: item.label })" :title="t('更多操作')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
+        <template v-if="available">
+          <template v-if="has_project_section">
+            <p class="channel-workflow-group" :title="project_section_label">{{ project_section_label }}</p>
+            <div v-if="draft && !saved_id && active_scope === 'project'" class="channel-room-row" :class="{ active: page_open }">
+              <button type="button" class="channel-room-select" :aria-current="page_open ? 'page' : undefined" @click="library.page_open.value = true; emit('workflows')"><UIcon name="i-lucide-file-plus-2" /><span>{{ draft.label || t('未命名工作流') }}</span><small class="channel-room-time">{{ active_project_name && multi_project_roots ? `${active_project_name} · ` : '' }}{{ t("未保存") }}</small></button>
+            </div>
+            <div v-for="item in project_workflows" :key="workflow_key(item)" class="channel-room-row" :class="{ active: page_open && saved_key === workflow_key(item), 'is-disabled': item.disabled, 'is-broken': workflow_problem(item) }">
+              <span v-if="renaming === workflow_key(item)" class="channel-workflow-rename"><UIcon name="i-lucide-network" />
+                <input v-model="rename_text" data-workflow-rename :maxlength="32" :aria-label="t('新名称')" @keydown.enter.prevent="library.commit_rename" @keydown.esc.prevent="renaming = ''" @blur="library.commit_rename" /></span>
+              <button v-else type="button" class="channel-room-select" :title="[item.project_name ? `${t('项目')}：${item.project_name}` : '', item.readonly ? t('只读目录') : '', workflow_problem(item) || item.description].filter(Boolean).join(' · ')" :aria-current="page_open && saved_key === workflow_key(item) ? 'page' : undefined"
+                @click="open_workflow(item)" @dblclick="!item.error && !item.readonly && !pending_items.has(workflow_key(item)) && library.start_rename(item)">
+                <UIcon :name="row_icon(item)" :class="{ 'animate-spin': pending_items.has(workflow_key(item)) }" /><span>{{ item.label }}</span>
+                <small v-if="row_status(item)" class="channel-room-time">{{ row_status(item) }}</small></button>
+              <div v-if="available && renaming !== workflow_key(item)" class="channel-room-actions">
+                <UDropdownMenu :disabled="pending_items.has(workflow_key(item))" :items="library.item_menu(item)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :disabled="pending_items.has(workflow_key(item))" :aria-label="t('「{name}」的更多操作', { name: item.label })" :title="t('更多操作')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
+              </div>
+            </div>
+            <p v-if="!project_workflows.length && !(draft && !saved_id && active_scope === 'project')" class="channel-workflow-empty">{{ t("暂无项目工作流") }}</p>
+            <p class="channel-workflow-group">{{ t("全局") }}</p>
+          </template>
+          <div v-if="draft && !saved_id && (!has_project_section || active_scope !== 'project')" class="channel-room-row" :class="{ active: page_open }">
+            <button type="button" class="channel-room-select" :aria-current="page_open ? 'page' : undefined" @click="library.page_open.value = true; emit('workflows')"><UIcon name="i-lucide-file-plus-2" /><span>{{ draft.label || t('未命名工作流') }}</span><small class="channel-room-time">{{ t("未保存") }}</small></button>
           </div>
-        </div>
-        <p v-if="!available" class="channel-directory-empty">{{ t("连接本机服务后管理工作流") }}</p>
-        <p v-else-if="!workflows.length && !draft" class="channel-directory-empty">{{ t("暂无工作流") }}</p>
+          <div v-for="item in global_workflows" :key="workflow_key(item)" class="channel-room-row" :class="{ active: page_open && saved_key === workflow_key(item), 'is-disabled': item.disabled, 'is-broken': workflow_problem(item) }">
+            <span v-if="renaming === workflow_key(item)" class="channel-workflow-rename"><UIcon name="i-lucide-network" />
+              <input v-model="rename_text" data-workflow-rename :maxlength="32" :aria-label="t('新名称')" @keydown.enter.prevent="library.commit_rename" @keydown.esc.prevent="renaming = ''" @blur="library.commit_rename" /></span>
+            <button v-else type="button" class="channel-room-select" :title="workflow_problem(item) || item.description" :aria-current="page_open && saved_key === workflow_key(item) ? 'page' : undefined"
+              @click="open_workflow(item)" @dblclick="!item.error && !pending_items.has(workflow_key(item)) && library.start_rename(item)">
+              <UIcon :name="row_icon(item)" :class="{ 'animate-spin': pending_items.has(workflow_key(item)) }" /><span>{{ item.label }}</span>
+              <small v-if="row_status(item)" class="channel-room-time">{{ row_status(item) }}</small></button>
+            <div v-if="available && renaming !== workflow_key(item)" class="channel-room-actions">
+              <UDropdownMenu :disabled="pending_items.has(workflow_key(item))" :items="library.item_menu(item)" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :disabled="pending_items.has(workflow_key(item))" :aria-label="t('「{name}」的更多操作', { name: item.label })" :title="t('更多操作')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
+            </div>
+          </div>
+          <p v-if="!workflows.length && !draft && !has_project_section" class="channel-directory-empty">{{ t("暂无工作流") }}</p>
+          <p v-else-if="has_project_section && !global_workflows.length && !(draft && !saved_id && active_scope !== 'project')" class="channel-workflow-empty">{{ t("暂无全局工作流") }}</p>
+        </template>
+        <p v-else class="channel-directory-empty">{{ t("连接本机服务后管理工作流") }}</p>
       </nav>
     </div>
   <footer class="channel-sidebar-footer">
@@ -96,4 +148,7 @@ const account_status = computed(() => {
 .channel-version { display: inline-flex; align-items: center; gap: 1px; margin-left: 4px; padding: 0; border: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; transition: color .12s; }
 .channel-version > :deep([class*="icon"]) { width: 11px; height: 11px; opacity: .7; }
 .channel-version:hover, .channel-version:focus-visible { color: var(--ui-text-highlighted); }
+.channel-workflow-group { margin: 8px 0 2px; padding: 0 8px; overflow: hidden; color: var(--ui-text-dimmed); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.channel-workflow-group:first-child { margin-top: 2px; }
+.channel-workflow-empty { margin: 0; padding: 4px 8px 6px; color: var(--ui-text-dimmed); font-size: 12px; }
 </style>

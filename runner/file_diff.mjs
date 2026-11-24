@@ -45,7 +45,7 @@ export function capture_base(directory, before) {
 
 /** The file as Git has it (the last commit), or missing when Git does not track it. */
 function committed(directory, path) {
-  const result = spawnSync('git', ['-C', directory, 'show', `HEAD:${path}`], { maxBuffer: MAX_DIFF_BYTES * 2, windowsHide: true, timeout: GIT_TIMEOUT_MS });
+  const result = spawnSync('git', ['-C', directory, 'show', `HEAD:./${path}`], { maxBuffer: MAX_DIFF_BYTES * 2, windowsHide: true, timeout: GIT_TIMEOUT_MS });
   if (result.status !== 0) return { missing: true };
   if (result.stdout.length > MAX_DIFF_BYTES) return { skipped: 'large' };
   return result.stdout.includes(0) ? { skipped: 'binary' } : { text: result.stdout.toString('utf8') };

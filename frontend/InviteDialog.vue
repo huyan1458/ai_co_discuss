@@ -65,6 +65,10 @@ const launch_lead = computed(() => {
 const invite_tried = ref(false);
 const invite_choices = computed(() => Object.keys(bridge.launch_clients));
 const invite_presets = computed(() => view.value && bridge.expert_presets());
+const project_presets = computed(() => {
+  const models = view.value.launch.room_models;
+  return models?.room_id === room.value?.id ? models.project_experts || [] : [];
+});
 const taken_names = computed(() => (room.value.members || []).map((member) => member.name));
 const invite_count = (platform) => taken_names.value.filter((name) => bridge.platform_of(name) === platform).length;
 // Woken members join first so a manual member that has not registered yet never holds them up.
@@ -122,16 +126,35 @@ function add_invite(name) {
 
 // The same add row as the create form: platforms first, presets and the other computer on their own rows.
 const PRESET_PREFIX = "preset:";
+const PROJECT_PRESET_PREFIX = "project-preset:";
+const project_preset = (value) => project_presets.value.find((item) => bridge.preset_key(item) === value.slice(PROJECT_PRESET_PREFIX.length));
 // A platform not set up yet stays grey at the end of its row; its chip opens the setup instead of adding a member.
 const configuring = ref("");
 const unconfigured_chip = (name) => bridge.platform_configured(name) ? {} : { unconfigured: true, title: t("未配置，点击配置"), aria_label: t("配置 {value1}", { value1: bridge.default_name(bridge.platform_of(name)) }) };
 function configure_platform(value) {
-  configuring.value = bridge.platform_of(value.startsWith(PRESET_PREFIX) ? value.slice(PRESET_PREFIX.length) : value);
+  const name = value.startsWith(PROJECT_PRESET_PREFIX) ? project_preset(value)?.name
+    : value.startsWith(PRESET_PREFIX) ? value.slice(PRESET_PREFIX.length) : value;
+  if (name) configuring.value = bridge.platform_of(name);
 }
 const library_items = computed(() => [...invite_choices.value.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
   title: invite_count(name) ? t("已在场 {count} 位 · 将添加新实例", { count: invite_count(name) }) : "", aria_label: t("添加 {name} 实例", { name }), ...unconfigured_chip(name) })),
   ...invite_presets.value.map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
     separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true, ...unconfigured_chip(preset.name) })),
+  ...project_presets.value.map((preset) => ({
+    value: PROJECT_PRESET_PREFIX + bridge.preset_key(preset),
+    name: preset.label || preset.name,
+    ...bridge.identities[bridge.platform_of(preset.name)],
+    row: t("项目预设"),
+    tag: preset.project_name || (preset.readonly ? t("只读") : ""),
+    title: [
+      preset.readonly ? t("只读目录") : "",
+      preset.requested_access && !preset.trusted ? t("未信任目录的高权限预设，加入后默认只读，可在卡片背面确认放开") : "",
+      preset.description || t("项目专家预设"),
+    ].filter(Boolean).join(" · "),
+    aria_label: t("添加项目预设 {name}", { name: preset.label || preset.name }),
+    removable: !preset.readonly,
+    ...unconfigured_chip(preset.name),
+  })),
   // Its own row: it opens the invitation panel instead of adding a card.
   { value: EXTERNAL_CHIP, name: t("外部专家"), icon: "/icons/external-expert.svg", style: "external", row: t("外部"),
     title: t("对方电脑上的 AI，只读本房间开放的内容"), aria_label: t("邀请外部专家") },
@@ -140,9 +163,21 @@ const library_items = computed(() => [...invite_choices.value.map((name) => ({ v
 /** Add the platform or preset a chip names. */
 function add_library_item(value) {
   if (value === EXTERNAL_CHIP) { external_drafts.value = [...external_drafts.value, { id: ++external_seq, draft: {} }]; return; }
+  if (value.startsWith(PROJECT_PRESET_PREFIX)) {
+    const preset = project_preset(value);
+    if (preset) add_invite_preset(preset);
+    return;
+  }
   if (!value.startsWith(PRESET_PREFIX)) return add_invite(value);
   const preset = invite_presets.value.find((item) => item.name === value.slice(PRESET_PREFIX.length));
   if (preset) add_invite_preset(preset);
+}
+function remove_library_preset(value) {
+  if (!value.startsWith(PROJECT_PRESET_PREFIX)) return bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length));
+  const preset = project_preset(value);
+  if (preset && !preset.readonly) return bridge.delete_expert_preset({
+    name: preset.name, scope: "project", project_id: preset.project_id, room_id: room.value.id,
+  });
 }
 
 /** Add a preset's card under a name no member or other pick holds, set up from the preset. */
@@ -290,7 +325,7 @@ async function refresh_after(invited_any) {
         <!-- A workflow invitation only confirms the workflow's own cards; the platform and preset rows belong to ordinary invitations. -->
         <template v-if="!invite_workflow">
           <PlatformConfigDialog v-model="configuring" />
-          <RosterAdd :label="t('选择 AI（可多选）')" :items="library_items" @add="add_library_item" @configure="configure_platform" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
+          <RosterAdd :label="t('选择 AI（可多选）')" :items="library_items" @add="add_library_item" @configure="configure_platform" @remove="remove_library_preset" />
         </template>
         <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}{{ t('：') }}{{ record(member.name)?.status === 'away' ? t('确认后请回，保留原会话') : t('已在场，沿用原成员') }}</p>
         <div v-if="invite_picks.length || external_drafts.length && !invite_workflow" class="pb-invite-cards">

@@ -9,16 +9,16 @@
  */
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { ENTRY_KEY_PATTERN, verified_connection } from '../runner/entry_client.mjs';
-import { clear_instance_flag, read_os_users } from '../runner/os_users.mjs';
+import { clear_instance_flag, read_os_users, secure_project_root } from '../runner/os_users.mjs';
 import { create_direct } from './direct.mjs';
 import { login_page } from './login_page.mjs';
 
@@ -87,12 +87,14 @@ function read_json(path) {
 }
 
 /** Give a new instance its port, its folders, and the administrator's Python and program locations. */
-function prepare_instance(data, name, port) {
+function prepare_instance(data, name, port, project_data_root) {
   const home = account_home(data, name), service = instance_home(data, name);
-  const folders = { workspace: join(home, 'workspace'), projects_root: join(home, 'projects') };
+  const root = project_data_root || home;
+  const folders = { workspace: join(root, 'workspace'), projects_root: join(root, 'projects') };
   for (const folder of Object.values(folders)) mkdirSync(folder, { recursive: true });
+  if (project_data_root) mkdirSync(join(root, 'drafts'), { recursive: true });
   const python = read_json(join(data, 'local-settings.json')).python;
-  write_json(join(service, 'local-settings.json'), { port, ...(python ? { python } : {}), ...folders });
+  write_json(join(service, 'local-settings.json'), { port, ...(python ? { python } : {}), ...folders, ...(project_data_root ? { project_data_root } : {}) });
   const participants = Object.entries(read_json(join(data, 'launch-settings.json')).participants || {}).map(([member, profile]) =>
     [member, Object.fromEntries(SOFTWARE_FIELDS.filter(field => profile?.[field]).map(field => [field, profile[field]]))]);
   if (participants.length) write_json(join(service, 'launch-settings.json'), { participants: Object.fromEntries(participants) });
@@ -105,6 +107,42 @@ function accounts_path(data) {
 export function read_accounts(data) {
   const path = accounts_path(data);
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+}
+
+/** Store migration state in the administrator's registry, outside the hosted user's write access. */
+export function set_project_migration(data, name, migration, project_data_root, backup_job) {
+  const accounts = read_accounts(data);
+  if (!accounts[name]) throw new Error('Unknown account / 账号不存在');
+  if (migration) accounts[name].project_migration = migration;
+  else delete accounts[name].project_migration;
+  if (project_data_root) accounts[name].project_data_root = project_data_root;
+  if (backup_job) accounts[name].migration_backups = [...(accounts[name].migration_backups || []), backup_job];
+  write_json(accounts_path(data), accounts);
+}
+
+/** Persist confirmed release intent before unlinking, so the same operation can resume. */
+export function mark_backup_release(data, name, id, kind, done) {
+  const accounts = read_accounts(data);
+  const job = accounts[name].migration_backups.find(row => row.id === id);
+  if (done) delete job.kinds[kind];
+  else job.kinds[kind] = 'releasing';
+  accounts[name].migration_backups = accounts[name].migration_backups.filter(row => Object.keys(row.kinds).length);
+  write_json(accounts_path(data), accounts);
+}
+
+/** Reserve an unused directory, outside the administrator's and other tenants' storage. */
+export function reserve_project_root(data, name, path, user = '') {
+  if (!isAbsolute(path)) throw new Error('项目数据目录必须为绝对路径 / Project data directory must be absolute');
+  const requested = resolve(path), parent = realpathSync.native(dirname(requested));
+  const target = resolve(parent, relative(dirname(requested), requested));
+  const protected_paths = [data, account_home(data, name), ...Object.entries(read_accounts(data)).flatMap(([id, account]) =>
+    [account_home(data, id), account.project_data_root, account.project_migration?.target].filter(Boolean))];
+  const inside = base => { const rel = relative(existsSync(base) ? realpathSync.native(base) : base, target); return !rel || (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel)); };
+  if (protected_paths.some(inside)) throw new Error('项目数据目录与账号目录重叠 / Project data directory overlaps an account directory');
+  mkdirSync(target, { mode: 0o700 });
+  try { secure_project_root(target, user); }
+  catch (error) { try { rmdirSync(target); } catch { /* Keep the original ACL error. */ } throw error; }
+  return target;
 }
 
 /** Remember an explicit start or stop for hosted instances that run as the owner. */
@@ -137,7 +175,7 @@ function new_credentials() {
  * Returns:
  *   { name, port, password }; the password is shown once and only its hash is stored.
  */
-export function add_account(data, name, port) {
+export function add_account(data, name, port, project_data_root = '') {
   if (!NAME_PATTERN.test(name || '')) throw new Error('账号须为 2–32 位小写字母、数字、下划线或短横线，且以字母或数字开头');
   if (RESERVED_NAMES.has(name)) throw new Error(`“${name}”不能作为入口账号：管理员使用这台电脑的默认实例，只能在本机或已配对的设备上访问`);
   const accounts = read_accounts(data);
@@ -148,8 +186,9 @@ export function add_account(data, name, port) {
   if (!Number.isInteger(chosen) || chosen < 1024 || chosen > 65535) throw new Error('实例端口须为 1024–65535 的整数');
   if (used.includes(chosen)) throw new Error(`端口 ${chosen} 已分配给其他账号`);
   const { password, salt, hash } = new_credentials();
-  prepare_instance(data, name, chosen);
-  write_json(accounts_path(data), { ...accounts, [name]: { salt, hash, port: chosen } });
+  if (project_data_root) project_data_root = reserve_project_root(data, name, project_data_root);
+  prepare_instance(data, name, chosen, project_data_root);
+  write_json(accounts_path(data), { ...accounts, [name]: { salt, hash, port: chosen, ...(project_data_root ? { project_data_root } : {}) } });
   return { name, port: chosen, password };
 }
 
@@ -695,6 +734,7 @@ async function main(args) {
   if (command === 'disable' || command === 'enable') return print((set_account_disabled(data, name, command === 'disable'), { name, disabled: command === 'disable' }));
   // A protected account starts only from the panel, which gives the instance its key file; started here it would run
   // without its protection.
+  if (command === 'start' && read_accounts(data)[name]?.project_migration) throw new Error('请先完成数据迁移 / Finish the pending data migration first');
   if (command === 'start' && read_accounts(data)[name]?.protected === true) throw new Error(`账号 ${name} 开启了入口保护，请从管理面板启动它的实例`);
   if (command === 'start' || command === 'stop') return run_instance(data, name, command);
   throw new Error(HELP);

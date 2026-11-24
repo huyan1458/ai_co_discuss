@@ -990,6 +990,55 @@ class DiscussionTests(unittest.TestCase):
         self.assertFalse(self.request(card_path, status)[1]["recorded"])
         self.assertEqual(self.request(card_path)[1]["card"]["publication"], {"revision": new, "done": 1, "total": 1})
 
+    def test_share_card_upgrades_stale_receipt_extracts_copy_and_lists_active_sites(self):
+        base = f"/api/rooms/{self.room['id']}"
+        card_path = base + "/share-card"
+        self.assertEqual(self.post("我们要做一个街区咖啡点单 App，到店即取。\n\n- 材料1\n- 材料2", "open-question-1")[0], 201)
+        self.assertEqual(self.post("回答问题 9：会员月费和折扣定哪一档：A", "receipt-question-9")[0], 201)
+        member_name = list(self.member_tokens)[-1]
+        member_token = self.member_tokens[member_name]
+        png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc```\x00\x00\x00\x04\x00\x01\xf6\x178U\x00\x00\x00\x00IEND\xaeB`\x82"
+        params = urlencode({"file_name": "cover.png", "content_type": "image/png", "actor": member_name, "submission_id": "att-cover"})
+        att_status, _, att_body = self.attachment_request(base + "/attachments?" + params, png)
+        self.assertEqual(att_status, 201)
+        att = json.loads(att_body)["attachment"]
+        msg_status, _ = self.request(base + "/messages", {
+            "author": member_name,
+            "text": "封面已做好。\n```share-copy\n3 个 AI 联手做完咖啡品牌官网\n\n完整协作记录：{{share_url}}\n```",
+            "summary": "整套材料已完成，官网已上线。另外三个压缩包附在这条消息里，11 月 30 日到期。",
+            "attachment_ids": [att["id"]],
+            "proactive": True,
+            "submission_id": "ai-cover-msg",
+        }, token=member_token)
+        self.assertIn(msg_status, (200, 201))
+        site_status, _ = self.request(base + "/sites", {
+            "action": "upsert",
+            "site_id": "abcdefghij", "title": "拾光咖啡官网",
+            "url": "https://abcdefghij.bimcanvas.com", "status": "active",
+            "expires_at": "2999-01-01T00:00:00.000Z",
+        })
+        self.assertEqual(site_status, 200)
+        link = {"share_id": "C" * 22, "url": "https://share.codiscuss.com/s/" + "C" * 22,
+                "manage_token": "U" * 43, "expires_at": "2999-01-01T00:00:00.000Z"}
+        # Save an old pre-v2 snapshot whose question wrongly captured the question receipt.
+        self.request(base + "/share-link", {"link": {**link, "card": {
+            "title": "拾光咖啡",
+            "question": "回答问题 9：会员月费和折扣定哪一档：A",
+            "outcome": "整套材料已完成，官网已上线。另外三个压缩包附在这条消息里，11 月 30 日到期。",
+        }}})
+        status, body = self.request(card_path)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["card"]["question"], "我们要做一个街区咖啡点单 App，到店即取。")
+        self.assertEqual(body["card"]["outcome"], "整套材料已完成，官网已上线。")
+        self.assertEqual(len(body["sites"]), 1)
+        self.assertEqual(body["sites"][0]["url"], "https://abcdefghij.bimcanvas.com")
+        self.assertIn("3 个 AI 联手做完咖啡品牌官网", body["images"][0]["share_copy"])
+        # Saving and resetting share copy via edits works cleanly.
+        self.assertEqual(self.request(card_path, {"share_id": link["share_id"], "edits": {"copy": "自定义文案"}})[0], 200)
+        self.assertEqual(self.request(card_path)[1]["card"]["copy"], "自定义文案")
+        self.assertEqual(self.request(card_path, {"share_id": link["share_id"], "edits": {"copy": None}})[0], 200)
+        self.assertNotIn("copy", self.request(card_path)[1]["card"])
+
     def test_room_backup_excludes_other_rooms_and_retains_archived_data(self):
         """Folder membership must not pull another room's messages or configuration."""
         base = f"/api/rooms/{self.room['id']}"
@@ -1425,6 +1474,44 @@ class DiscussionTests(unittest.TestCase):
         finished = self.request(base + "/destruction", report, token=self.owner)[1]
         self.assertEqual((finished["status"], finished["title"]), ("done", ""))
         self.assertIn("destructions", self.request("/api/rooms")[1])
+
+    def test_destroy_reclaims_sqlite_free_pages_for_new_and_legacy_databases(self):
+        """Destroying a room shrinks the SQLite file incrementally, and legacy auto_vacuum=0 DBs upgrade once."""
+        if self.external:
+            self.skipTest("reads the website's own database")
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("PRAGMA auto_vacuum").fetchone()[0], 2)
+        room = self.request("/api/rooms", {"title": "大消息测试房"})[1]
+        base = f"/api/rooms/{room['id']}"
+        chunk = "x" * 15000
+        for index in range(80):
+            status, body = self.request(base + "/messages", {"author": "用户", "text": f"{index}:{chunk}", "submission_id": f"reclaim-msg-{index}"})
+            self.assertEqual(status, 201, body)
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        before = os.path.getsize(self.database)
+        self.assertEqual(self.request(base + "/delete", {"actor": "用户", "confirm_title": room["title"]})[0], 200)
+        after = os.path.getsize(self.database)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("PRAGMA freelist_count").fetchone()[0], 0)
+        self.assertLess(after, before - 500_000)
+
+        with tempfile.TemporaryDirectory() as folder:
+            legacy = Path(folder) / "legacy.sqlite3"
+            with closing(sqlite3.connect(legacy)) as connection:
+                connection.execute("CREATE TABLE blob_pad (id INTEGER PRIMARY KEY, body TEXT)")
+                connection.executemany("INSERT INTO blob_pad (body) VALUES (?)", [("y" * 20000,) for _ in range(200)])
+                connection.commit()
+                connection.execute("DELETE FROM blob_pad")
+                connection.commit()
+                self.assertEqual(connection.execute("PRAGMA auto_vacuum").fetchone()[0], 0)
+                self.assertGreater(connection.execute("PRAGMA freelist_count").fetchone()[0], 256)
+            legacy_before = os.path.getsize(legacy)
+            init_database(legacy, seed=False)
+            with closing(sqlite3.connect(legacy)) as connection:
+                self.assertEqual(connection.execute("PRAGMA auto_vacuum").fetchone()[0], 2)
+                self.assertEqual(connection.execute("PRAGMA freelist_count").fetchone()[0], 0)
+            self.assertLess(os.path.getsize(legacy), legacy_before - 1_000_000)
 
     def test_auto_destroy_takes_only_rooms_idle_past_their_limit(self):
         """A room set to destroy itself goes once it has had no message for that many days; other rooms stay."""

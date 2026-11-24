@@ -344,5 +344,8 @@
   "交互式可视化 · {value1}": "Interactive visualization · {value1}",
   "可视化提交的内容超过 {value1} 字，没有放进输入框。": "The visualization's submission is over {value1} characters, so it wasn't added to the message box.",
   "已放到输入框上方，确认后发送。": "Added above the message box. Review it, then send.",
-  "已更新输入框上方的可视化结果。": "Updated the visualization's result above the message box."
+  "已更新输入框上方的可视化结果。": "Updated the visualization's result above the message box.",
+  "正在定位到 {value1}…": "Locating {value1}…",
+  "正在查找 {value1} 的最新发言…": "Finding {value1}'s latest message…",
+  "{value1} 在本房间还没有发言": "{value1} has not spoken in this room yet"
 }

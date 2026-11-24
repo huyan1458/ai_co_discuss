@@ -1,10 +1,10 @@
-# 分享卡素材与导出参考
+# 分享卡封面与配套文案参考
 
-用户请你为本房间或同站点其他房间制作一张分享卡封面时读本页。分享面板只接收成图（PNG / JPG / WebP），并在封面下方自动拼接统一的扫码底栏（二维码、分享域名与最新有效期）。
+用户请你为本房间或同站点其他房间制作图文分享素材时读本页。交付物包含两部分：**封面图（PNG）**与**配套分享文案（```` ```share-copy ```` 代码块）**。分享面板会在封面下方自动拼接统一的扫码底栏（二维码、分享域名与最新有效期），并在选中该封面时自动载入同条消息里的配套文案、补齐真实分享链接。
 
 ## 工作流程
 
-### 1. 读取可分享素材与协作指标
+### 1. 读取可分享素材、链接与协作指标
 
 ```bash
 codiscuss share-card materials [房间ID]
@@ -12,9 +12,9 @@ codiscuss share-card materials [房间ID]
 
 - 省略房间 ID 时读取当前任务绑定的房间；传入同站点其他房间的 ID 可跨房间只读取材（不发送本房间 token，仅带只读头）；带任务凭据时目标站点必须与凭据绑定站点一致。
 - 返回结果按可分享口径整理：排除已撤回消息及其关联执行和外部执行、不含私聊、把已知项目目录改写为相对路径、家目录改写为 `~`，并跳过疑似含密钥或联系方式的敏感摘录。
-- `metrics` 使用与网页“执行 → 并发全景”相同的指标定义（`busy_text` / `busy_percent`、`self_started` / `runs` / `self_started_percent`、`unattended`、`peak_concurrency`、`active_members`），但口径存在两处差异：本命令分页回溯历史，只统计关联消息可确认仍公开的执行。消息被撤回或落在读取范围以外时，相应执行也会省略。读取上限为 20 页时间线、10000 条消息。网页“并发全景”默认只加载最近 100 次且不剔除撤回执行。使用数字前先核对 `scope.truncated`（`messages_truncated` / `timeline_truncated`）与 `scope.curve_sampled`，若为 `true` 应在封面上按部分统计口径措辞、不宣称全量精确值。
+- `metrics` 使用与网页“执行 → 并发全景”相同的指标定义（`busy_text` / `busy_percent`、`self_started` / `runs` / `self_started_percent`、`unattended`、`peak_concurrency`、`active_members`），但口径存在两处差异：本命令分页回溯历史，只统计关联消息可确认仍公开的执行。消息被撤回或落在读取范围以外时，相应执行也会省略。读取上限为 20 页时间线、10000 条消息。网页“并发全景”默认只加载最近 100 次且不剔除撤回执行。使用数字前先核对 `scope.truncated`（`messages_truncated` / `timeline_truncated`）与 `scope.curve_sampled`，若为 `true` 应在封面和文案中按部分统计口径措辞、不宣称全量精确值。
 - `concurrency_curve` 给出归一化 `[0, 1]` 时间步（`steps`）、空闲区间（`idle_gaps`）与任务分段（`tasks`），可直接用内联 SVG 画并发曲线或柱状图。
-- `materials` 给出开场实质需求（`opening_request`，若房间里只有问题卡回执则为 `null`）、代表发言索引（`highlights`）、房间图片附件（`images`，含已加引号的下载命令）、附件分类统计（`attachments_by_kind`）与已上线站点（`sites`）。需要某条发言的完整原文时，用 `codiscuss message view` 补读（不要引用已撤回消息或私聊）。
+- `materials` 给出开场实质需求（`opening_request`，若房间里只有问题卡回执则为 `null`）、代表发言索引（`highlights`）、房间图片附件（`images`，含已加引号的下载命令）、附件分类统计（`attachments_by_kind`）、已上线产品网站（`sites`）与当前房间的公开分享链接（`share_link`，未发布时为 `null`）。需要某条发言的完整原文时，用 `codiscuss message view` 补读（不要引用已撤回消息或私聊）。
 
 ### 2. 创作静态 HTML 封面（或直接使用成图）
 
@@ -26,9 +26,35 @@ codiscuss share-card materials [房间ID]
 - **纯静态与离线**：`render` 在离线沙箱浏览器里渲染并启用严格 CSP（`script-src 'none'`、`connect-src 'none'`），**不执行 JavaScript、不请求外网字体或外链图片**。
   - 全部样式用内联 `<style>`，图表和图标用内联 `<svg>`；中文字体优先系统无衬线字体栈（如 `"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif`）。
   - 需要嵌入房间里的图片时，先用 `codiscuss attachment download` 下到草稿目录中与 HTML 同级（或子目录），用相对路径 `<img src="./poster.png">` 或 `data:` URL 引入。
-- **事实与脱敏**：统计数字和成员名以 `materials` 返回的真实数据为准，不编造；不放入密钥、令牌、个人联系方式、本机绝对路径或已撤回消息内容；正文口吻面向外部读者，不写“附在这条消息里”“我在浏览器点了一遍”这类内部汇报话术。
+- **事实与脱敏**：统计数字和成员名以 `materials` 返回的真实数据为准，不编造；不放入密钥、令牌、个人联系方式、本机绝对路径或已撤回消息内容；口吻面向外部读者，不写“附在这条消息里”“我在浏览器点了一遍”这类内部汇报话术。
 
-### 3. 导出为 PNG 并自查交付
+### 3. 撰写可直接发布的配套分享文案（```` ```share-copy ````）
+
+在提交封面 PNG 的**同一条回答**中，提供一个标准的 ```` ```share-copy ```` 代码块，达到可直接粘贴到小红书、即刻、朋友圈或社群的成稿水准：
+
+````markdown
+```share-copy
+1 句吸睛短标题（建议 ≤20 字，直给反差或成果）
+
+开场 1–2 句点出最初的需求或痛点，让没看过房间的人一眼懂你在做什么。
+
+中间 2–3 条短句或分点，结合真实交付物和协作数据（如几位 AI 协作、耗时/无人值守时长、做出了哪些真实成品），克制有信息量、不堆空话。
+
+官网体验：https://example.bimcanvas.com
+完整协作记录：https://share.codiscuss.com/s/xxxxx
+
+#AICoDiscuss #多AI协作 #相关主题标签
+```
+````
+
+**文案要求**：
+- **链接完整且真实**：
+  - 房间有已上线网站（`materials.sites` 非空）时，逐一带上真实 URL 并用简短中文标明用途（如 `官网体验：`、`交互演示：`）；不要编造链接。
+  - 完整协作记录链接优先使用 `materials.share_link.url`；若 `materials.share_link` 为 `null`（房间尚未发布分享链接），写 `完整协作记录：{{share_url}}`，用户在分享面板选中该封面或粘入文案框时，页面会自动将 `{{share_url}}` 替换为真实的公开分享链接。
+- **可读性与平台适配**：段落短、有呼吸感，适合手机首屏阅读；不写 Markdown 语法（如 `**加粗**`、`[文字](url)`），直接写纯文本与裸链接，粘贴到小红书/微信即可直接发。
+- **与封面互补**：封面抓第一眼视觉，文案补全故事脉络、体验入口和完整协作记录链接，避免把封面字原样复读一遍。
+
+### 4. 导出为 PNG 并与文案一起交付
 
 把静态 HTML 写在草稿目录，运行：
 
@@ -40,4 +66,4 @@ codiscuss share-card render cover.html --out cover.png
 - 命令返回 JSON 回执，含 `output`、`width_px`、`height_px`、`clipped`（内容是否超出最大高度）。若 `clipped: true`，收紧排版后重导出。
 - 持任务凭据运行时，输入 HTML 与输出 PNG 均受成员文件权限约束：只读成员须把 HTML 与导出的 PNG 放在自己的草稿目录（`draft_directory`）内；可读自己的运行时目录（任务附件副本）。（房主在本机终端不带任务凭据手动运行时，沿用当前系统账号的文件权限。）
 - `render` 经进程私有控制通道（`--remote-debugging-pipe`）驱动系统可信安装位置的沙箱浏览器，不开 TCP 调试端口，并拦截顶层跳转（如 `meta refresh`）。若系统未安装浏览器或操作系统沙箱不可用，命令会明确报错；此时如实说明，或改用房间已有成图 / 生图工具（有 `image` 字段时）。
-- 打开导出的 `cover.png` 检查文字和留白。用当前任务的 CLI 上传图片后，通过 `message post --attachment <附件ID>` 随回答交付。同房间可在分享面板点“选择房间图片”，跨房间可下载后在目标房间点“上传封面”。
+- 打开导出的 `cover.png` 检查文字和留白。用当前任务的 CLI 上传图片后，通过 `message post --attachment <附件ID>` 将封面图与 ```` ```share-copy ```` 文案块一并随回答交付。同房间可在分享面板点“选择房间图片”直接选用带“含文案”标记的封面（自动填入配套文案和真实链接），跨房间可下载后在目标房间点“上传封面”并复制文案到“分享文案”框。

@@ -9,11 +9,17 @@ On the Room tab you can update several members in succession. Access, model and 
 ### Steps
 
 1. **Add a local app.** When creating a room, open “Who takes part” and choose a configured app under “Add AI”. In an existing room, select “Invite AI” from the right sidebar or under **Room → Members and settings** in the tabs at the top of the room. Choose one or more members and select “Invite”. You can add several members from the same app. Each has its own session.
-2. **Add a role preset.** Choose a preset in the “Presets” row below “Add AI”. It adds a member with a preset description, private prompt, project access, and model. Built-in presets include `Codex-review`, `Gemini-docs`, and `OpenAI-image`. On the back of a member card, select the bookmark to “Save as preset”. Select “Manage” at the end of the presets row to delete presets.
+2. **Add a role preset.** Choose a preset from “Presets” below “Add AI”. When creating a room with a project or inviting members into a room with project folders, use “Project presets” to choose a preset from the main project or an extra folder. A preset supplies the description, private prompt, project access, and model. Select “Manage” to remove unused presets from a writable location.
 3. **Add a model API.** Under “Add AI”, choose Claude, Gemini, DeepSeek, Qwen, Grok, OpenAI, or “Custom”. If a provider offers both a local app and an API, flip the member card and select the API under “Connection”. Official presets fill in the service address. Local API members on unrestricted tasks can read an overview, messages, events and attachments from another room on the same site by room ID.
    An API member can spend up to 45 minutes on a room task. It also stops after 15 minutes without model or tool progress. The execution card shows the reason.
    To troubleshoot, open “Runs” in the room sidebar, choose “Waterfall”, and open “Run diagnostics” for the run. The room service records the last heartbeat, while the member’s software reports the last model or tool activity. Model request retries, adapter restarts, and runner redelivery have separate records. An interjection confirmation time requires a matching receipt from the software. Older runs and software without the relevant data show “Unknown”.
 4. **Configure and check the API.** Flip the card using its “Settings” area and fill in “Address”, “Protocol”, “Key”, and “Model”. If the selected model supports images and should read image attachments, enable “Images”. Select the lightning button to check the configuration. “Check passed: the model responded” means it is ready. Select “Done” to return to the front of the card.
+
+### Save and reuse project presets
+
+On the back of a member card, select the bookmark to “Save as preset”. In “Save as expert preset”, under “Save to”, choose “Global” to reuse it across projects or “Current project” to keep it with a project. If several folders are writable, choose one under “Target project”. On a card added from a preset, select “Update preset” to save changes. To edit the skills of a preset that has them, open “Advanced settings” on the card.
+
+A preset from an untrusted project that requests write access is added as read-only by default. Review the requested access before allowing it on the card. You can use presets from read-only project folders and save changes to a writable location.
 
 ## Resume an existing session
 

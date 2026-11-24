@@ -47,7 +47,7 @@ function cli_exit_error(adapter, state, code, signal) {
 
 /** Parse complete UTF-8 JSON lines while keeping raw output in the private task log. */
 function monitor_cli(adapter, child, binding, task, restart) {
-  const state = { child, session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '', responses: new Map(), denials: [] };
+  const state = { child, session_id: binding.session_id || '', initialized: false, completed: false, error: '', diagnostic: '', responses: new Map(), pending_edits: new Map(), denials: [] };
   const log_path = resolve(task.directory, `${adapter.id}-${task.id}.log`);
   state.log_path = log_path;
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
@@ -87,7 +87,7 @@ function monitor_cli(adapter, child, binding, task, restart) {
     if (phase) task.on_activity?.(phase, adapter.events.tool(event), adapter.events.call?.(event));
     const note = adapter.events.note(event, state.responses);
     if (note) task.on_note?.(note);
-    report_edits(adapter, event, task);
+    report_edits(adapter, event, task, state.pending_edits);
     try { adapter.lifecycle(state, event, task, session_id => bind_cli_session(state, session_id, task)); }
     catch (error) { state.error = error.message; child.kill(); }
   });

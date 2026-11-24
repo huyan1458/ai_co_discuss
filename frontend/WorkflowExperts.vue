@@ -21,10 +21,24 @@ import { t } from './i18n.js';
 const open = defineModel("open", { type: Boolean, default: false });
 // The card shown on the right; empty opens at the first card.
 const focus = defineModel("focus", { type: String, default: "" });
-// A panel preset's 高级配置 (`{ name, label }`): its skills only; empty for the workflow's 专家配置.
+// A panel preset's 高级配置 (`{ name, label, scope?, project_id?, room_id?, cwd?, readonly? }`): its skills only; empty for the workflow's 专家配置.
 const props = defineProps({ preset: { type: Object, default: null } });
 const { view, bridge } = inject("discussion");
-const { draft, subs, saved_id, dirty, scope, reload, save, busy } = use_workflow_library();
+const { draft, subs, saved_id, saved_scope, saved_project_id, draft_readonly, writable_roots, dirty, scope, reload, save, busy } = use_workflow_library();
+function workflow_scope_params() {
+  return {
+    scope: saved_scope.value || "global",
+    ...(saved_scope.value === "project" && saved_project_id.value ? { project_id: saved_project_id.value } : {}),
+    ...(view.value.room?.id ? { room_id: view.value.room.id } : {}),
+  };
+}
+const preset_skill_source = computed(() => !props.preset ? null : {
+  preset: props.preset.name,
+  scope: props.preset.scope || "global",
+  ...(props.preset.scope === "project" && props.preset.project_id ? { project_id: props.preset.project_id } : {}),
+  ...(props.preset.room_id ? { room_id: props.preset.room_id } : {}),
+  ...(props.preset.cwd ? { cwd: props.preset.cwd } : {}),
+});
 const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra" };
 const DEFAULT_MODEL = "__default__";
 // A select option cannot have an empty value; the card stores the default strength as "".
@@ -59,25 +73,48 @@ function pick_card(card) { focus.value = card; picked.value = true; }
 const preset_saving = ref(false), preset_taken = ref("");
 // The card whose preset was saved while this computer's skills for it were kept, until the user decides.
 const preset_kept = ref("");
+// Target scope chosen when saving a workflow card as a preset, remembered for overwrite/replace-knowledge retries.
+const preset_save_target = ref({ target_scope: "global", target_project_id: "" });
 watch(() => current.value?.agent.card, () => { preset_taken.value = ""; preset_kept.value = ""; });
+const save_preset_items = computed(() => [[
+  ...writable_roots.value.map((root) => ({
+    label: t("存为项目预设（{name}）", { name: root.name }),
+    icon: "i-lucide-folder-plus",
+    onSelect: () => save_as_preset(false, false, { target_scope: "project", target_project_id: root.id }),
+  })),
+  {
+    label: t("存为全局预设"),
+    icon: "i-lucide-globe",
+    onSelect: () => save_as_preset(false, false, { target_scope: "global", target_project_id: "" }),
+  },
+]]);
 /** Download the chosen card as an expert: its md, or with knowledge a zip of its definition and skills. */
 async function export_card() {
   const card = current.value?.agent.card;
   if (!card || !saved_id.value) return;
-  try { download_expert(await bridge.local_request("workflows", { action: "export-expert", workflow: saved_id.value, card })); }
+  try { download_expert(await bridge.local_request("workflows", { action: "export-expert", workflow: saved_id.value, card, ...workflow_scope_params() })); }
   catch (error) { bridge.notify("error", error.message); }
 }
-async function save_as_preset(overwrite = false, replace_knowledge = false) {
+async function save_as_preset(overwrite = false, replace_knowledge = false, target = null) {
   const card = current.value?.agent.card;
   if (!card || preset_saving.value) return;
+  if (target) preset_save_target.value = target;
+  const chosen = target || preset_save_target.value;
   preset_saving.value = true;
   try {
-    const { preset, knowledge } = await bridge.save_card_preset({ id: saved_id.value, card, ...(overwrite ? { overwrite: true } : {}),
-      ...(replace_knowledge ? { replace_knowledge: true } : {}) });
+    const { preset, knowledge } = await bridge.save_card_preset({
+      id: saved_id.value,
+      card,
+      ...workflow_scope_params(),
+      target_scope: chosen.target_scope || "global",
+      ...(chosen.target_scope === "project" && chosen.target_project_id ? { target_project_id: chosen.target_project_id } : {}),
+      ...(overwrite ? { overwrite: true } : {}),
+      ...(replace_knowledge ? { replace_knowledge: true } : {}),
+    });
     preset_taken.value = "";
     preset_kept.value = knowledge === "kept" ? card : "";
-    if (knowledge === "kept") bridge.notify("warning", t('已存为面板预设「{value1}」；本机已有这位专家的技能，已保留本机的', { value1: preset.label || preset.name }));
-    else bridge.notify("info", t('已存为面板预设「{value1}」', { value1: preset.label || preset.name }) + (knowledge === "replaced" ? t('；本机原来的技能已备份') : ""));
+    if (knowledge === "kept") bridge.notify("warning", t("已存为面板预设「{value1}」；本机已有这位专家的技能，已保留本机的", { value1: preset.label || preset.name }));
+    else bridge.notify("info", t("已存为面板预设「{value1}」", { value1: preset.label || preset.name }) + (knowledge === "replaced" ? t("；本机原来的技能已备份") : ""));
   } catch (error) {
     if (error.code === "preset_exists") preset_taken.value = card;
     bridge.notify(error.code === "preset_exists" ? "warning" : "error", error.message);
@@ -97,6 +134,7 @@ function add_first_skill(part, agent) {
 }
 /** Why a card's skills cannot be edited here yet. */
 function skills_blocked(agent) {
+  if (draft_readonly.value) return t("只读项目目录中的工作流技能不能修改");
   if (!saved_id.value) return t("先保存工作流");
   return agent.knowledge !== undefined ? t("保存工作流后才能编辑技能") : "";
 }
@@ -115,7 +153,7 @@ async function import_package(kind, event) {
   if (!list.length || !saved_id.value) return;
   try {
     const files = kind === "md" ? await expert_files_from_md(list[0]) : kind === "zip" ? await expert_files_from_zip(list[0]) : await expert_files_from_folder(list);
-    const result = await bridge.local_request("workflows", { action: "import-expert-workflow", files, workflow: saved_id.value, sub: package_target.value?.id || "" });
+    const result = await bridge.local_request("workflows", { action: "import-expert-workflow", files, workflow: saved_id.value, sub: package_target.value?.id || "", ...workflow_scope_params() });
     const notes = [t('已导入专家「{value1}」', { value1: result.card })];
     if (result.requested_access) notes.push(t('它要求的项目权限“{value1}”已降为只读，需要时在这里改', { value1: result.requested_access }));
     if (result.ignored?.length) notes.push(t('已忽略：{value1}', { value1: result.ignored.join("、") }));
@@ -199,7 +237,7 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
     :ui="{ content: 'glass-panel studio-modal workflow-experts-modal', body: 'dialog-body workflow-experts-body', footer: 'workflow-experts-footer' }">
     <template #body>
       <!-- 高级配置 of a panel preset: only its skills; its software, model and prompt stay on the card's back. -->
-      <ExpertSkills v-if="preset" :source="{ preset: preset.name }" />
+      <ExpertSkills v-if="preset && preset_skill_source" :source="preset_skill_source" :blocked="preset.readonly ? t('只读项目目录中的专家技能不可修改') : ''" />
       <template v-else>
         <p v-if="!view.launch.available" class="workflow-experts-note">{{ t('连接本机服务后才能读取模型列表与本机已配置的软件。') }}</p>
         <p v-if="!entries.length" class="workflow-experts-note">{{ t('这个工作流还没有成员卡片。') }}</p>
@@ -216,9 +254,9 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
                 <UIcon name="i-lucide-chevron-right" class="workflow-experts-more" />
               </button>
             </section>
-            <UTooltip :text="!saved_id ? t('先保存工作流') : dirty ? t('先保存这页的修改') : t('放进「{value1}」', { value1: package_target ? package_target.label || package_target.id : t('主线') })">
-              <UDropdownMenu :items="package_items" :disabled="!saved_id || dirty">
-                <UButton :label="t('导入专家包')" icon="i-lucide-package-plus" size="xs" color="neutral" variant="ghost" :disabled="!saved_id || dirty" />
+            <UTooltip :text="draft_readonly ? t('只读项目目录中的工作流不能修改') : !saved_id ? t('先保存工作流') : dirty ? t('先保存这页的修改') : t('放进「{value1}」', { value1: package_target ? package_target.label || package_target.id : t('主线') })">
+              <UDropdownMenu :items="package_items" :disabled="draft_readonly || !saved_id || dirty">
+                <UButton :label="t('导入专家包')" icon="i-lucide-package-plus" size="xs" color="neutral" variant="ghost" :disabled="draft_readonly || !saved_id || dirty" />
               </UDropdownMenu>
             </UTooltip>
             <input :ref="(element) => package_inputs.md.value = element" type="file" accept=".md" hidden @change="import_package('md', $event)">
@@ -238,7 +276,10 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
                 <UTooltip :text="!saved_id ? t('先保存工作流') : dirty ? t('存的是已保存的版本；先保存这页的修改') : t('存为新建房间面板上的预设专家；带技能时把技能复制到本机，之后两边各管各的')">
                   <UButton v-if="preset_kept === current.agent.card" :label="t('用工作流里的技能替换本机的（原来的会备份）')" size="xs" color="warning" variant="soft" :loading="preset_saving" @click="save_as_preset(true, true)" />
                   <UButton v-else-if="preset_taken === current.agent.card" :label="t('覆盖同名预设')" size="xs" color="error" variant="soft" :loading="preset_saving" @click="save_as_preset(true)" />
-                  <UButton v-else :label="t('存为面板预设')" icon="i-lucide-bookmark-plus" size="xs" color="neutral" variant="soft" :loading="preset_saving" :disabled="!saved_id || dirty" @click="save_as_preset()" />
+                  <UDropdownMenu v-else-if="writable_roots.length" :items="save_preset_items" :disabled="!saved_id || dirty || preset_saving" :ui="{ content: 'channel-menu' }">
+                    <UButton :label="t('存为面板预设')" icon="i-lucide-bookmark-plus" trailing-icon="i-lucide-chevron-down" size="xs" color="neutral" variant="soft" :loading="preset_saving" :disabled="!saved_id || dirty" />
+                  </UDropdownMenu>
+                  <UButton v-else :label="t('存为面板预设')" icon="i-lucide-bookmark-plus" size="xs" color="neutral" variant="soft" :loading="preset_saving" :disabled="!saved_id || dirty" @click="save_as_preset(false, false, { target_scope: 'global', target_project_id: '' })" />
                 </UTooltip>
                 <UButton :label="t('导出')" icon="i-lucide-download" size="xs" color="neutral" variant="ghost" :disabled="!saved_id || dirty"
                   :title="t('导出这位专家：没有技能是一个 md，有技能是一个压缩包（取工作流里的技能）')" @click="export_card" />
@@ -277,7 +318,7 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
                 @update:model-value="update(current.part, current.agent.card, { system_prompt: $event })" />
             </label>
             <div v-else class="workflow-experts-skills">
-              <ExpertSkills v-if="has_skills(current.agent)" :source="{ workflow: saved_id, card: current.agent.card }" :blocked="skills_blocked(current.agent)" />
+              <ExpertSkills v-if="has_skills(current.agent)" :source="{ workflow: saved_id, card: current.agent.card, ...workflow_scope_params() }" :blocked="skills_blocked(current.agent)" />
               <div v-else class="workflow-experts-skill-add">
                 <p class="workflow-experts-note">{{ t('给这位专家一组自己读写的技能；保存工作流后它变成带技能的文件夹，归到“顾问”。') }}</p>
                 <form class="workflow-experts-skill-form" @submit.prevent="add_first_skill(current.part, current.agent)">
@@ -293,8 +334,8 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
     </template>
     <!-- One save for what waits on the workflow (basic settings, prompts, a first skill); skill files save one by one. -->
     <template v-if="!preset" #footer>
-      <span class="workflow-experts-status" :class="{ 'is-dirty': dirty }">{{ dirty ? t('有未保存的修改') : t('没有未保存的修改') }}</span>
-      <UButton :label="t('保存')" icon="i-lucide-save" size="sm" class="channel-primary-button" :disabled="!dirty" :loading="busy" @click="save()" />
+      <span class="workflow-experts-status" :class="{ 'is-dirty': dirty && !draft_readonly }">{{ draft_readonly ? t('只读项目目录，不能直接保存') : dirty ? t('有未保存的修改') : t('没有未保存的修改') }}</span>
+      <UButton :label="t('保存')" icon="i-lucide-save" size="sm" class="channel-primary-button" :disabled="!dirty || draft_readonly" :loading="busy" @click="save()" />
     </template>
   </UModal>
 </template>

@@ -3,14 +3,17 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { slash_insertion } from '../runner/slash_names.mjs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { run_command } from '../runner/adapters/api_commands.mjs';
 import { open_project } from '../runner/adapters/api_files.mjs';
-import { cached_software_models, check_or_save_workflow, export_expert, import_expert, import_expert_to_workflow, launch_discussion, read_expert_source, validate_preset, workflows_command } from '../runner/discussion_launch.mjs';
-import { free_task_files, member_folders } from '../runner/free_runner.mjs';
+import { cached_software_models, check_or_save_workflow, expert_presets, presets_command, export_expert, import_expert, import_expert_to_workflow, launch_discussion, read_expert_source, validate_preset, workflows_command } from '../runner/discussion_launch.mjs';
+import { free_task_files, member_folders, named_workflows } from '../runner/free_runner.mjs';
 import { run_launch_command } from '../runner/remote_launch.mjs';
 
 /** A task file, which sits in its member's own runtime folder. */
@@ -50,14 +53,14 @@ test('a workflow saves as plain files, reads back the same, and refuses unsafe o
   // Cards come back in file-name order.
   const by_card = list => [...list].sort((a, b) => a.card.localeCompare(b.card));
   assert.deepEqual({ ...saved, directory: undefined, revision: undefined, agents: by_card(saved.agents) }, { ...NOVEL, directory: undefined, revision: undefined, agents: by_card(NOVEL.agents), resources: {}, sub_workflows: [], commands: [] });
-  const card = readFileSync(join(home, 'workflows', 'novel-serial', 'agents', 'writer.md'), 'utf8');
+  const card = readFileSync(join(home, 'workflows', 'novel-serial', 'experts', 'writer.md'), 'utf8');
   // A card file reads like an agent definition: its name is the card ID, the software is its own field, empty fields are left out.
   assert.equal(card, '---\nname: writer\nplatform: Antigravity\nlabel: 执笔\ndescription: 按骨架写正文\nproject_access: write\n---\n克制、具体。\n');
   // Cards written before `platform` existed, and quoted values, still read the same.
-  writeFileSync(join(home, 'workflows', 'novel-serial', 'agents', 'science.md'), '---\nname: DeepSeek-science\nlabel: "科学顾问"\n---\n只核对技术合理性。\n');
+  writeFileSync(join(home, 'workflows', 'novel-serial', 'experts', 'science.md'), '---\nname: DeepSeek-science\nlabel: "科学顾问"\n---\n只核对技术合理性。\n');
   assert.deepEqual(get_workflow(home, 'novel-serial').agents.find(agent => agent.card === 'science'), NOVEL.agents[1]);
   // Editing the file by hand is what the page then shows.
-  writeFileSync(join(home, 'workflows', 'novel-serial', 'agents', 'writer.md'), card.replace('克制、具体。', '更克制。'));
+  writeFileSync(join(home, 'workflows', 'novel-serial', 'experts', 'writer.md'), card.replace('克制、具体。', '更克制。'));
   assert.equal(get_workflow(home, 'novel-serial').agents.find(agent => agent.card === 'writer').system_prompt, '更克制。');
   assert.deepEqual(list_workflows(home).map(item => [item.id, item.cards]), [['novel-serial', 2]]);
   // The list names the cards whose software this computer has not set up.
@@ -141,8 +144,8 @@ test('folder import refuses directory links without reading outside the workflow
   mkdirSync(outside);
   writeFileSync(join(outside, 'writer.md'), '---\nname: Codex-writer\n---\nprivate');
   const folder = join(home, 'workflows', NOVEL.id);
-  rmSync(join(folder, 'agents'), { recursive: true });
-  symlinkSync(outside, join(folder, 'agents'), process.platform === 'win32' ? 'junction' : 'dir');
+  rmSync(join(folder, 'experts'), { recursive: true });
+  symlinkSync(outside, join(folder, 'experts'), process.platform === 'win32' ? 'junction' : 'dir');
   assert.throws(() => preview_workflow({ folder }, validate_preset), /符号链接/);
   assert.equal(readFileSync(join(outside, 'writer.md'), 'utf8'), '---\nname: Codex-writer\n---\nprivate');
 });
@@ -271,7 +274,7 @@ test('sub-workflows live in workflows/<id>/ as workflows of their own: their car
   // Each part is written the Agent Skills way: the display name under metadata, cards and canvas beside its SKILL.md.
   assert.match(readFileSync(join(folder, 'SKILL.md'), 'utf8'), /\nmetadata:\n {2}label: 连载小说\n/);
   assert.match(readFileSync(join(folder, 'workflows', 'rehearsal', 'SKILL.md'), 'utf8'), /^---\nname: rehearsal\ndescription: 请主角视角试演一场戏\nmetadata:\n {2}label: 剧情试演\n---\n/);
-  assert.match(readFileSync(join(folder, 'workflows', 'rehearsal', 'agents', 'hero.md'), 'utf8'), /platform: Claude/);
+  assert.match(readFileSync(join(folder, 'workflows', 'rehearsal', 'experts', 'hero.md'), 'utf8'), /platform: Claude/);
   const saved = get_workflow(home, 'novel-serial');
   assert.deepEqual(saved.sub_workflows.map(sub => [sub.id, sub.label, sub.agents.map(agent => agent.card), Boolean(sub.flow)]),
     [['aigc-check', 'AI 率检查', [], false], ['rehearsal', '剧情试演', ['hero'], true]]);
@@ -305,7 +308,7 @@ test('sub-workflows live in workflows/<id>/ as workflows of their own: their car
   // An import offers a sub-workflow's cards card by card, like the main flow's.
   const files = { 'SKILL.md': readFileSync(join(folder, 'SKILL.md'), 'utf8'),
     'workflows/rehearsal/SKILL.md': readFileSync(join(folder, 'workflows', 'rehearsal', 'SKILL.md'), 'utf8'),
-    'workflows/rehearsal/agents/hero.md': readFileSync(join(folder, 'workflows', 'rehearsal', 'agents', 'hero.md'), 'utf8') };
+    'workflows/rehearsal/agents/hero.md': readFileSync(join(folder, 'workflows', 'rehearsal', 'experts', 'hero.md'), 'utf8') };
   const imported = preview_workflow({ files }, validate_preset, () => true);
   assert.deepEqual(imported.sub_workflows[0].agents[0], { ...rehearsal.agents[0], project_access: 'read', requested_access: 'write' });
   assert.throws(() => preview_workflow({ files: { ...files, 'workflows/rehearsal/SKILL.md': undefined, 'workflows/orphan/agents/a.md': files['workflows/rehearsal/agents/hero.md'] } }, validate_preset, () => true), /没有 SKILL\.md/);
@@ -384,7 +387,7 @@ test('every save entry states its intent: the page names its revision or chooses
   assert.equal(get_workflow(home, NOVEL.id).skill, '导入的');
   // The command line: workflow-save into a taken ID needs --revision (checked) or --overwrite.
   const folder = join(home, 'source');
-  mkdirSync(join(folder, 'agents'), { recursive: true });
+  mkdirSync(join(folder, 'experts'), { recursive: true });
   writeFileSync(join(folder, 'SKILL.md'), `---
 name: ${NOVEL.id}
 description: 命令行版本
@@ -438,10 +441,10 @@ test('a card may be a folder with its skills, in the main flow and in a sub-work
   const home = home_fixture(t);
   const saved = advisor_library(home);
   const directory = saved.directory;
-  assert.equal(readFileSync(join(directory, 'agents', 'luke', 'luke.md'), 'utf8').includes('你是顾问。'), true);
-  assert.equal(readFileSync(join(directory, 'agents', 'luke', 'skills', 'cold', 'references', 'fire.md'), 'utf8'), '初始\n');
-  assert.ok(existsSync(join(directory, 'workflows', 'advisor', 'agents', 'kit', 'skills', 'sea', 'SKILL.md')));
-  assert.ok(existsSync(join(directory, 'agents', 'writer.md')), 'a card without skills stays a file');
+  assert.equal(readFileSync(join(directory, 'experts', 'luke', 'luke.md'), 'utf8').includes('你是顾问。'), true);
+  assert.equal(readFileSync(join(directory, 'experts', 'luke', 'skills', 'cold', 'references', 'fire.md'), 'utf8'), '初始\n');
+  assert.ok(existsSync(join(directory, 'workflows', 'advisor', 'experts', 'kit', 'skills', 'sea', 'SKILL.md')));
+  assert.ok(existsSync(join(directory, 'experts', 'writer.md')), 'a card without skills stays a file');
   // Read back, a folder card is a card naming its skills; their text stays on disk, out of what the page edits.
   const read = get_workflow(home, NOVEL.id);
   const luke = read.agents.find(agent => agent.card === 'luke');
@@ -475,8 +478,8 @@ test('a folder card member keeps its knowledge in the workflow; a panel expert i
   writeFileSync(join(home, 'experts', 'writer', 'skills', 'x', 'SKILL.md'), '---\nname: x\ndescription: x\n---\n');
   const workflow = load_room_workflow({ api_home: home, workflow: { id: NOVEL.id, enabled: true,
     members: { luke: 'Claude-luke', kit: 'Claude-kit', writer: 'Antigravity-writer' } } });
-  assert.equal(member_knowledge(home, 'Claude-luke', workflow), join(directory, 'agents', 'luke', 'skills'));
-  assert.equal(member_knowledge(home, 'Claude-kit', workflow), join(directory, 'workflows', 'advisor', 'agents', 'kit', 'skills'));
+  assert.equal(member_knowledge(home, 'Claude-luke', workflow), join(directory, 'experts', 'luke', 'skills'));
+  assert.equal(member_knowledge(home, 'Claude-kit', workflow), join(directory, 'workflows', 'advisor', 'experts', 'kit', 'skills'));
   assert.equal(member_knowledge(home, 'Antigravity-writer', workflow), '', 'a card file has no knowledge, whatever the service home holds');
   assert.equal(member_knowledge(home, 'Claude-jack', workflow), join(home, 'experts', 'jack', 'skills'), 'a panel expert by its name');
   assert.equal(member_knowledge(home, 'Claude-jack2', null), join(home, 'experts', 'jack', 'skills'));
@@ -495,7 +498,7 @@ test('a folder card member keeps its knowledge in the workflow; a panel expert i
     participants: { 'Claude-luke': { adapter: 'claude', project_access: 'read' }, Codex: { adapter: 'codex_cli' } } };
   const task = name => free_task_files(run_config, { name, role: 'member' }, { id: name.length, read_until: 0, requests: [{ id: 1, message_id: 9, purpose: 'ask' }] }, {},
     { workflow, room_members: [{ name: 'Claude-luke', status: 'active' }, { name: 'Codex', status: 'active' }] });
-  assert.equal(task('Claude-luke').knowledge_directory, join(directory, 'agents', 'luke', 'skills'));
+  assert.equal(task('Claude-luke').knowledge_directory, join(directory, 'experts', 'luke', 'skills'));
   const file = JSON.parse(readFileSync(runtime_file(runtime, `free-${'Claude-luke'.length}.task.json`), 'utf8'));
   assert.match(file.instructions, /knowledge_directory[\s\S]*SKILL\.md[\s\S]*references/);
   assert.equal(task('Codex').knowledge_directory, undefined);
@@ -504,30 +507,30 @@ test('a folder card member keeps its knowledge in the workflow; a panel expert i
 test('skills a member writes leave the revision alone and survive every ordinary save; only an import or an explicit overwrite replaces them', t => {
   const home = home_fixture(t);
   const { directory, revision } = advisor_library(home);
-  const fire = join(directory, 'agents', 'luke', 'skills', 'cold', 'references', 'fire.md');
-  const sea = join(directory, 'workflows', 'advisor', 'agents', 'kit', 'skills', 'sea', 'references', 'a.md');
+  const fire = join(directory, 'experts', 'luke', 'skills', 'cold', 'references', 'fire.md');
+  const sea = join(directory, 'workflows', 'advisor', 'experts', 'kit', 'skills', 'sea', 'references', 'a.md');
   writeFileSync(fire, '顾问补的\n');
   writeFileSync(sea, '航海补的\n');
-  mkdirSync(join(directory, 'agents', 'luke', 'skills', 'ice'));
-  writeFileSync(join(directory, 'agents', 'luke', 'skills', 'ice', 'SKILL.md'), '---\nname: ice\ndescription: 冰\n---\n');
+  mkdirSync(join(directory, 'experts', 'luke', 'skills', 'ice'));
+  writeFileSync(join(directory, 'experts', 'luke', 'skills', 'ice', 'SKILL.md'), '---\nname: ice\ndescription: 冰\n---\n');
   assert.equal(get_workflow(home, NOVEL.id).revision, revision, 'writing skills does not change the revision');
   // The page saves what it read (cards naming their skills, no skill text), with the revision it read.
   const { resources: none, commands, directory: ignored_directory, revision: base, ...page } = get_workflow(home, NOVEL.id);
   const edited = workflows_command(home, { action: 'save', workflow: { ...page, skill: '页面改过' }, base_revision: base });
   assert.equal(readFileSync(fire, 'utf8'), '顾问补的\n');
   assert.equal(readFileSync(sea, 'utf8'), '航海补的\n', 'a sub-workflow\'s agents/ is rewritten, its skills come back');
-  assert.ok(existsSync(join(directory, 'agents', 'luke', 'skills', 'ice', 'SKILL.md')));
+  assert.ok(existsSync(join(directory, 'experts', 'luke', 'skills', 'ice', 'SKILL.md')));
   // The page's explicit overwrite carries no skill text either, so it keeps them too; so does a host draft.
   workflows_command(home, { action: 'save', workflow: { ...page, skill: '覆盖' }, overwrite: true });
   save_workflow(home, parse_workflow_draft(['<!-- workflow-part: 1/1 id: novel-serial -->\n<!-- workflow-file: SKILL.md -->\n---\nname: novel-serial\n---\n草稿\n'
     + '<!-- workflow-file: agents/luke.md -->\n---\nname: luke\nplatform: Claude\n---\n草稿里的卢克\n']), validate_preset, REPLACE);
   assert.equal(readFileSync(fire, 'utf8'), '顾问补的\n');
-  assert.equal(readFileSync(join(directory, 'agents', 'luke', 'luke.md'), 'utf8').includes('草稿里的卢克'), true, 'the draft\'s card file lands in the folder');
-  assert.ok(!existsSync(join(directory, 'agents', 'luke.md')));
+  assert.equal(readFileSync(join(directory, 'experts', 'luke', 'luke.md'), 'utf8').includes('草稿里的卢克'), true, 'the draft\'s card file lands in the folder');
+  assert.ok(!existsSync(join(directory, 'experts', 'luke.md')));
   // A folder copy saved from the command line with the revision it read keeps the live skills over its stale ones...
   const copy = join(home, 'copy');
   cpSync(directory, copy, { recursive: true });
-  writeFileSync(join(copy, 'agents', 'luke', 'skills', 'cold', 'references', 'fire.md'), '旧副本\n');
+  writeFileSync(join(copy, 'experts', 'luke', 'skills', 'cold', 'references', 'fire.md'), '旧副本\n');
   check_or_save_workflow(home, { dir: copy, revision: get_workflow(home, NOVEL.id).revision }, true);
   assert.equal(readFileSync(fire, 'utf8'), '顾问补的\n');
   // ...while an explicit overwrite, like an import into an empty library, takes the folder's skills as they are.
@@ -538,19 +541,19 @@ test('skills a member writes leave the revision alone and survive every ordinary
 test('a workflow with folder cards saves, reads back, exports and imports whole, and its experts travel as the same folders', t => {
   const home = home_fixture(t), other = home_fixture(t);
   const { directory } = advisor_library(home);
-  writeFileSync(join(directory, 'agents', 'luke', 'skills', 'cold', 'references', 'fire.md'), '积累\n');
+  writeFileSync(join(directory, 'experts', 'luke', 'skills', 'cold', 'references', 'fire.md'), '积累\n');
   // The workflow folder, copied elsewhere and imported, arrives with every file.
   check_or_save_workflow(other, { dir: directory }, true);
   assert.deepEqual(list_files(join(other, 'workflows', NOVEL.id)), list_files(directory));
   // An expert exported from the workflow is its card folder as it is, the workflow's skills included.
   const out = join(home, 'out');
   const exported = export_expert(home, { workflow: NOVEL.id, card: 'luke', dir: out });
-  assert.deepEqual(list_files(exported.path), list_files(join(directory, 'agents', 'luke')));
+  assert.deepEqual(list_files(exported.path), list_files(join(directory, 'experts', 'luke')));
   // Imported into another workflow's sub-workflow, it becomes a folder card there; the same card ID is refused.
   save_workflow(other, { ...NOVEL, id: 'second', agents: [], sub_workflows: [{ ...ADVISOR, agents: [] }] }, validate_preset);
   const imported = import_expert_to_workflow(other, { ...read_expert_source(exported.path), workflow: 'second', sub: 'advisor' });
   assert.deepEqual(imported.skills, ['cold']);
-  const target = join(other, 'workflows', 'second', 'workflows', 'advisor', 'agents', 'luke');
+  const target = join(other, 'workflows', 'second', 'workflows', 'advisor', 'experts', 'luke');
   assert.equal(readFileSync(join(target, 'skills', 'cold', 'references', 'fire.md'), 'utf8'), '积累\n');
   assert.equal(imported.requested_access, undefined);
   assert.throws(() => import_expert_to_workflow(other, { ...read_expert_source(exported.path), workflow: 'second' }), error => error.code === 'expert_card_exists');
@@ -558,7 +561,7 @@ test('a workflow with folder cards saves, reads back, exports and imports whole,
   const plain = export_expert(home, { workflow: NOVEL.id, card: 'writer', dir: out });
   const bare = import_expert_to_workflow(other, { ...read_expert_source(plain.path), workflow: 'second' });
   assert.equal(bare.requested_access, 'write');
-  assert.ok(existsSync(join(other, 'workflows', 'second', 'agents', 'writer.md')));
+  assert.ok(existsSync(join(other, 'workflows', 'second', 'experts', 'writer.md')));
   assert.equal(get_workflow(other, 'second').agents.find(agent => agent.card === 'writer').project_access, 'read');
 });
 
@@ -645,33 +648,33 @@ test('the page edits an expert\'s skills file by file, only inside its skills, a
   assert.equal(fire.text, '初始\n');
   // A write names the digest it read; the file changes on disk, the workflow's revision does not.
   const written = workflows_command(home, { action: 'skill-write', ...luke, path: fire.path, text: '页面改的\n', digest: fire.digest });
-  assert.equal(readFileSync(join(directory, 'agents', 'luke', 'skills', 'cold', 'references', 'fire.md'), 'utf8'), '页面改的\n');
+  assert.equal(readFileSync(join(directory, 'experts', 'luke', 'skills', 'cold', 'references', 'fire.md'), 'utf8'), '页面改的\n');
   // The expert writes meanwhile: a write naming the old digest is refused and the expert's text stays.
-  writeFileSync(join(directory, 'agents', 'luke', 'skills', 'cold', 'references', 'fire.md'), '专家刚写的\n');
+  writeFileSync(join(directory, 'experts', 'luke', 'skills', 'cold', 'references', 'fire.md'), '专家刚写的\n');
   assert.throws(() => workflows_command(home, { action: 'skill-write', ...luke, path: fire.path, text: '旧页面\n', digest: written.digest }), error => error.code === 'skill_changed');
   assert.throws(() => workflows_command(home, { action: 'skill-delete', ...luke, path: fire.path, digest: written.digest }), error => error.code === 'skill_changed');
-  assert.equal(readFileSync(join(directory, 'agents', 'luke', 'skills', 'cold', 'references', 'fire.md'), 'utf8'), '专家刚写的\n');
+  assert.equal(readFileSync(join(directory, 'experts', 'luke', 'skills', 'cold', 'references', 'fire.md'), 'utf8'), '专家刚写的\n');
   // A new skill or file is created only where none is (digest ''); the sub-workflow's expert is reached the same way.
   workflows_command(home, { action: 'skill-write', ...luke, path: 'ice/SKILL.md', text: '---\nname: ice\ndescription: 冰\n---\n', digest: '' });
   assert.throws(() => workflows_command(home, { action: 'skill-write', ...luke, path: 'ice/SKILL.md', text: '再建\n', digest: '' }), error => error.code === 'skill_changed');
   workflows_command(home, { action: 'skill-write', workflow: NOVEL.id, card: 'kit', path: 'sea/references/b.md', text: '海图\n', digest: '' });
-  assert.ok(existsSync(join(directory, 'workflows', 'advisor', 'agents', 'kit', 'skills', 'sea', 'references', 'b.md')));
+  assert.ok(existsSync(join(directory, 'workflows', 'advisor', 'experts', 'kit', 'skills', 'sea', 'references', 'b.md')));
   // Nothing outside the expert's skills: not its definition, not another expert, not a path that climbs out.
   for (const path of ['../luke.md', 'cold/../../luke.md', '../../writer.md', 'cold', 'Bad_Name/SKILL.md', '/abs/x.md', 'cold//x.md', 'cold/.hidden']) {
     assert.throws(() => workflows_command(home, { action: 'skill-write', ...luke, path, text: 'x', digest: '' }), /技能路径不合法/, path);
   }
   assert.throws(() => workflows_command(home, { action: 'skills', workflow: NOVEL.id, card: 'writer' }), /没有技能/);
-  assert.equal(readFileSync(join(directory, 'agents', 'luke', 'luke.md'), 'utf8').includes('你是顾问。'), true);
+  assert.equal(readFileSync(join(directory, 'experts', 'luke', 'luke.md'), 'utf8').includes('你是顾问。'), true);
   assert.equal(get_workflow(home, NOVEL.id).revision, revision, 'reading and writing skills leaves the revision alone');
   // Removing a whole skill moves it into backups first.
   const removed = workflows_command(home, { action: 'skill-remove', ...luke, skill: 'cold' });
-  assert.ok(!existsSync(join(directory, 'agents', 'luke', 'skills', 'cold')));
+  assert.ok(!existsSync(join(directory, 'experts', 'luke', 'skills', 'cold')));
   assert.equal(readFileSync(join(home, 'backups', removed.backup, 'references', 'fire.md'), 'utf8'), '专家刚写的\n');
   // A panel preset's skills are its own, in the service home.
   workflows_command(home, { action: 'save-preset', id: NOVEL.id, card: 'kit' });
   workflows_command(home, { action: 'skill-write', preset: 'Claude-kit', path: 'sea/references/c.md', text: '面板的\n', digest: '' });
   assert.equal(readFileSync(join(home, 'experts', 'kit', 'skills', 'sea', 'references', 'c.md'), 'utf8'), '面板的\n');
-  assert.ok(!existsSync(join(directory, 'workflows', 'advisor', 'agents', 'kit', 'skills', 'sea', 'references', 'c.md')));
+  assert.ok(!existsSync(join(directory, 'workflows', 'advisor', 'experts', 'kit', 'skills', 'sea', 'references', 'c.md')));
   assert.deepEqual(workflows_command(home, { action: 'skills', preset: 'Claude-kit' }).skills.map(skill => skill.name), ['sea']);
 });
 
@@ -686,8 +689,8 @@ test('a first skill turns a card file into a folder through a checked save, keep
     agents: page.agents.map(agent => agent.card === 'writer' ? with_skill(agent) : agent),
     sub_workflows: page.sub_workflows.map(item => ({ ...item, agents: item.agents.map(with_skill) })) } });
   const { directory } = saved;
-  assert.ok(!existsSync(join(directory, 'agents', 'writer.md')) && existsSync(join(directory, 'agents', 'writer', 'skills', 'notes', 'SKILL.md')));
-  assert.ok(existsSync(join(directory, 'workflows', 'advisor', 'agents', 'kit', 'skills', 'notes', 'SKILL.md')));
+  assert.ok(!existsSync(join(directory, 'experts', 'writer.md')) && existsSync(join(directory, 'experts', 'writer', 'skills', 'notes', 'SKILL.md')));
+  assert.ok(existsSync(join(directory, 'workflows', 'advisor', 'experts', 'kit', 'skills', 'notes', 'SKILL.md')));
   const read = get_workflow(home, NOVEL.id);
   const writer = read.agents.find(agent => agent.card === 'writer');
   assert.deepEqual({ ...writer, skills: undefined }, { ...NOVEL.agents[0], skills: undefined }, 'the definition is kept');
@@ -698,24 +701,24 @@ test('a first skill turns a card file into a folder through a checked save, keep
 test('a folder card dropped by a save, skills replaced by an overwrite, or a workflow deleted is backed up first', t => {
   const home = home_fixture(t);
   const { directory } = advisor_library(home);
-  writeFileSync(join(directory, 'agents', 'luke', 'skills', 'cold', 'references', 'fire.md'), '积累\n');
+  writeFileSync(join(directory, 'experts', 'luke', 'skills', 'cold', 'references', 'fire.md'), '积累\n');
   const backed = name => readFileSync(join(home, 'backups', name, 'skills', 'cold', 'references', 'fire.md'), 'utf8');
   // The page drops luke from the main flow: its folder goes to backups before the save replaces the workflow.
   const { resources: none, commands, directory: ignored, revision, ...page } = get_workflow(home, NOVEL.id);
   const dropped = workflows_command(home, { action: 'save', base_revision: revision, workflow: { ...page, agents: page.agents.filter(agent => agent.card !== 'luke') } });
   assert.equal(dropped.backups.length, 1);
   assert.equal(backed(dropped.backups[0]), '积累\n');
-  assert.ok(!existsSync(join(directory, 'agents', 'luke')));
+  assert.ok(!existsSync(join(directory, 'experts', 'luke')));
   // An explicit overwrite carrying skills replaces the saved ones after backing them up.
   save_workflow(home, { ...NOVEL, agents: [...NOVEL.agents, LUKE], sub_workflows: [ADVISOR] }, validate_preset, REPLACE);
-  writeFileSync(join(directory, 'agents', 'luke', 'skills', 'cold', 'references', 'fire.md'), '又积累\n');
+  writeFileSync(join(directory, 'experts', 'luke', 'skills', 'cold', 'references', 'fire.md'), '又积累\n');
   const replaced = save_workflow(home, { ...NOVEL, agents: [...NOVEL.agents, LUKE], sub_workflows: [ADVISOR] }, validate_preset, REPLACE);
   assert.ok(replaced.backups.some(name => name.includes('-luke-') && backed(name) === '又积累\n'));
-  assert.equal(readFileSync(join(directory, 'agents', 'luke', 'skills', 'cold', 'references', 'fire.md'), 'utf8'), '初始\n');
+  assert.equal(readFileSync(join(directory, 'experts', 'luke', 'skills', 'cold', 'references', 'fire.md'), 'utf8'), '初始\n');
   // An ordinary save backs up nothing.
   assert.equal(workflows_command(home, { action: 'save', base_revision: replaced.revision, workflow: { ...page, agents: get_workflow(home, NOVEL.id).agents } }).backups, undefined);
   // Deleting the workflow backs up every folder card first.
-  writeFileSync(join(directory, 'agents', 'luke', 'skills', 'cold', 'references', 'fire.md'), '最后\n');
+  writeFileSync(join(directory, 'experts', 'luke', 'skills', 'cold', 'references', 'fire.md'), '最后\n');
   const deleted = workflows_command(home, { action: 'delete', id: NOVEL.id });
   assert.equal(deleted.backups.length, 2);
   assert.ok(deleted.backups.some(name => name.includes('-luke-') && backed(name) === '最后\n'));
@@ -733,7 +736,7 @@ test('an expert whose software or model cannot run here is imported with a notic
   assert.equal(import_expert(home, { files: definition('Antigravity', 'gemini-x') }).needs_platform, true);
   const missing = import_expert(home, { files: definition('Codex', 'gpt-zz') });
   assert.equal(missing.unknown_model, 'gpt-zz');
-  assert.ok(JSON.parse(readFileSync(join(home, 'expert-presets.json'), 'utf8')).presets.some(preset => preset.name === 'Codex-luke'));
+  assert.ok(expert_presets(home).presets.some(preset => preset.name === 'Codex-luke'));
   assert.equal(import_expert(home, { files: definition('Codex', 'gpt-a'), overwrite_preset: true }).unknown_model, undefined);
   save_workflow(home, { ...NOVEL, agents: [] }, validate_preset);
   assert.equal(import_expert_to_workflow(home, { files: definition('Codex', 'gpt-zz'), workflow: NOVEL.id }).unknown_model, 'gpt-zz');
@@ -1030,4 +1033,154 @@ test('workflow display metadata (author, source) round-trips, survives rename, c
     [{ source: 's'.repeat(201) }, /工作流出处最多 200 字/],
     [{ source: '两\n行' }, /工作流出处最多 200 字，且不能换行/],
   ]) assert.throws(() => save_workflow(home, { ...NOVEL, ...change }, validate_preset, REPLACE), pattern);
+});
+
+
+test('project and global workflow IDs are independent and project approvals expire after edits', t => {
+  const home = home_fixture(t), cwd = home_fixture(t);
+  const local = { cwd, scope: 'project' }, id = NOVEL.id;
+  workflows_command(home, { action: 'save', workflow: NOVEL });
+  workflows_command(home, { ...local, action: 'save', workflow: { ...NOVEL, label: 'Project' } });
+  const listed = workflows_command(home, { action: 'list', cwd });
+  assert.equal(listed.project_workflows[0].label, 'Project');
+  assert.equal(listed.workflows[0].label, NOVEL.label);
+  assert.deepEqual(readdirSync(join(cwd, '.codiscuss')), ['workflows']);
+  const card = join(cwd, '.codiscuss', 'workflows', id, 'experts', 'writer.md');
+  writeFileSync(card, readFileSync(card, 'utf8') + 'edited');
+  assert.equal(workflows_command(home, { ...local, action: 'get', id }).needs_trust, true);
+  assert.throws(() => workflows_command(home, { ...local, action: 'move', id, target_scope: 'global' }), { code: 'workflow_untrusted' });
+  workflows_command(home, { ...local, action: 'trust', id });
+  assert.throws(() => workflows_command(home, { ...local, action: 'move', id, target_scope: 'global' }), { code: 'workflow_exists' });
+  assert.throws(() => workflows_command(home, { ...local, action: 'delete', id }, true));
+  workflows_command(home, { action: 'delete', id });
+  workflows_command(home, { ...local, action: 'move', id, target_scope: 'global' });
+  assert.equal(get_workflow(home, id).label, 'Project');
+  assert.equal(existsSync(card), false);
+});
+
+test('external project presets start at read access and readonly roots refuse saves', t => {
+  const home = home_fixture(t), cwd = home_fixture(t), extra = home_fixture(t);
+  const local = { scope: 'project', cwd }, preset = { name: 'Codex-writer', project_access: 'write' };
+  const saved = presets_command(home, { ...local, action: 'save', preset });
+  assert.equal(saved.project_presets[0].trusted, true);
+  const file = join(cwd, '.codiscuss', 'experts', 'writer.md');
+  writeFileSync(file, readFileSync(file, 'utf8') + 'edited');
+  const list = presets_command(home, { cwd: extra, extra_directories: [{ path: cwd, access: 'read' }] });
+  const [expert] = list.project_presets;
+  assert.equal(expert.project_access, 'read');
+  assert.equal(expert.requested_access, 'write');
+  assert.throws(() => presets_command(home, { action: 'delete', scope: 'project', cwd: extra,
+    extra_directories: [{ path: cwd, access: 'read' }], project_id: expert.project_id, id: expert.id }));
+});
+
+test('global preset migration archives the source and preserves distinct identities sharing a skill directory', t => {
+  const home = home_fixture(t);
+  const presets = [{ name: 'Codex-luke', label: '评审', project_access: 'read' }, { name: 'Antigravity-luke', label: '主笔' },
+    { name: 'Claude-助手' }];
+  const original = JSON.stringify({ presets, hidden_builtins: ['Codex-review'], description_templates: { Codex: '复核' } });
+  writeFileSync(join(home, 'expert-presets.json'), original);
+  writeFileSync(join(home, 'launch-settings.json'), JSON.stringify({ participants: {}, create_preferences: { theme: 'dark' } }));
+  const skills = join(home, 'experts', 'luke', 'skills', 'notes');
+  mkdirSync(skills, { recursive: true });
+  writeFileSync(join(skills, 'SKILL.md'), 'original');
+  const first = expert_presets(home);
+  assert.deepEqual(first.presets.map(item => item.name).sort(), ['Antigravity-docs', 'Antigravity-luke', 'Claude-preset1', 'Codex-luke']);
+  assert.equal(first.presets.find(item => item.name === 'Claude-preset1').label, 'Claude-助手');
+  assert.deepEqual(first.builtin_presets, []);
+  assert.deepEqual(first.description_templates, { Codex: '复核' });
+  assert.equal(JSON.parse(readFileSync(join(home, 'launch-settings.json'))).create_preferences.theme, 'dark');
+  assert.equal(readFileSync(join(home, 'expert-presets.json.migrated'), 'utf8'), original);
+  assert.equal(readFileSync(join(home, 'backups', 'expert-presets-migration-v1.json'), 'utf8'), original);
+  assert.ok(existsSync(join(home, 'experts-migrated-v1')));
+  assert.equal(existsSync(join(home, 'expert-presets.json')), false);
+  const copy = member_knowledge(home, 'Antigravity-luke', null);
+  assert.equal(copy, join(home, 'experts', 'antigravity-luke', 'skills'));
+  assert.equal(readFileSync(join(copy, 'notes', 'SKILL.md'), 'utf8'), 'original');
+  writeFileSync(join(copy, 'notes', 'SKILL.md'), 'edited');
+  assert.equal(readFileSync(join(member_knowledge(home, 'Codex-luke', null), 'notes', 'SKILL.md'), 'utf8'), 'original');
+  assert.deepEqual(expert_presets(home), first);
+  assert.equal(readFileSync(join(copy, 'notes', 'SKILL.md'), 'utf8'), 'edited');
+  presets_command(home, { action: 'delete', name: 'Antigravity-docs' });
+  assert.ok(!expert_presets(home).presets.some(item => item.name === 'Antigravity-docs'));
+});
+
+test('platform-prefixed project experts keep their public name across writes and deletes', t => {
+  const home = home_fixture(t), cwd = home_fixture(t), selection = { cwd, scope: 'project' };
+  for (const platform of ['Codex', 'Claude']) presets_command(home, {
+    ...selection, action: 'save', preset: { name: platform + '-review', label: platform },
+  });
+  const list = presets_command(home, { ...selection, action: 'list' });
+  assert.deepEqual(list.project_presets.map(item => item.name).sort(), ['Claude-review', 'Codex-review']);
+  const folder = join(cwd, '.codiscuss', 'experts');
+  assert.match(readFileSync(join(folder, 'claude-review.md'), 'utf8'), /name: review/);
+  assert.throws(() => presets_command(home, { ...selection, action: 'delete', id: 'review' }));
+  presets_command(home, { ...selection, action: 'delete', name: 'Claude-review' });
+  assert.ok(existsSync(join(folder, 'review.md')));
+  assert.ok(!existsSync(join(folder, 'claude-review.md')));
+});
+
+
+test('workflow menu selections distinguish the current binding from a same-name workflow', () => {
+  const global = { id: 'novel', scope: 'global' };
+  const project = { ...global, scope: 'project', project_id: 'abc' };
+  for (const [current, other] of [[global, project], [project, global]]) {
+    const message = [current, other].map(item => slash_insertion(item.id, item)).join('');
+    assert.deepEqual(named_workflows([message], { current, in_library: () => true }),
+      { workflows: ['novel'], workflow_targets: [other] });
+  }
+});
+
+test('project preset skill commands identify their source and same-name knowledge stays distinct', t => {
+  const home = home_fixture(t), cwd = home_fixture(t), preset = 'Codex-scopecheck';
+  for (const scope of ['global', 'project']) {
+    presets_command(home, { cwd, scope, action: 'save', preset: { name: preset } });
+    const command = (action, options = {}) => workflows_command(home, { cwd, scope, preset, action, ...options });
+    const put = (path, text) => command('skill-write', { path, text, digest: '' });
+    const skill = put('notes/SKILL.md', scope);
+    const file = put('notes/example.md', scope);
+    for (const result of [skill, command('skills'), command('skill-delete', { path: file.path, digest: file.digest })]) {
+      assert.equal(result.scope, scope);
+      assert.equal(result.project_id, skill.project_id);
+    }
+    const read = selected => readFileSync(join(member_knowledge(home, preset, null, [cwd], selected), 'notes', 'SKILL.md'), 'utf8');
+    assert.equal(read({ preset_scope: 'global' }), 'global');
+    if (scope === 'project') {
+      assert.ok(skill.project_id);
+      assert.equal(read({ preset_scope: scope, preset_project_id: skill.project_id }), scope);
+      const removed = command('skill-remove', { skill: 'notes' });
+      assert.deepEqual([removed.scope, removed.project_id], [scope, skill.project_id]);
+    }
+  }
+});
+
+test('interrupted publication and failed atomic writes leave no temporary entries', t => {
+  const home = home_fixture(t), preset = 'Codex-scopecheck';
+  save_workflow(home, NOVEL, validate_preset, REPLACE);
+  const root = join(home, 'workflows');
+  const abandoned = join(root, '.tmp-' + NOVEL.id + '-' + randomUUID());
+  mkdirSync(abandoned);
+  list_workflows(home);
+  assert.equal(existsSync(abandoned), false);
+  const save = label => presets_command(home, { action: 'save', overwrite: true, preset: { name: preset, label } });
+  save('before');
+  const skill = (text, digest) => workflows_command(home, { action: 'skill-write', preset, path: 'notes/SKILL.md', text, digest });
+  const first = skill('old', '');
+  const rename = fs.renameSync;
+  const fault = t.mock.method(fs, 'renameSync', (from, to) => {
+    if (String(from).endsWith('.tmp') || String(from).includes('.tmp-' + NOVEL.id)) throw new Error('publication failed');
+    return rename(from, to);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => save('after'), /publication failed/);
+    assert.throws(() => skill('new', first.digest), /publication failed/);
+    assert.throws(() => save_workflow(home, NOVEL, validate_preset, REPLACE), /publication failed/);
+  } finally {
+    fault.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.deepEqual(readdirSync(home, { recursive: true }).filter(name => name.endsWith('.tmp') || name.includes('.tmp-' + NOVEL.id)), []);
+  assert.equal(get_workflow(home, NOVEL.id).id, NOVEL.id);
+  assert.equal(expert_presets(home).presets.find(item => item.name === preset).label, 'before');
+  assert.ok(skill('new', first.digest).digest);
 });

@@ -66,7 +66,8 @@ function brief_free(free) {
   const recent = executions.length - RECENT_EXECUTIONS;
   return { ...free, requests: (free.requests || []).filter(item => !TERMINAL_STATUSES.includes(item.status)),
     executions: executions.filter((item, index) => index >= recent || !TERMINAL_STATUSES.includes(item.status))
-      .map(item => Object.fromEntries(EXECUTION_FIELDS.filter(field => field in item).map(field => [field, item[field]]))) };
+      .map(item => Object.fromEntries(EXECUTION_FIELDS.filter(field => field in item)
+        .map(field => [field, field === 'changes' ? item.edited ?? [] : item[field]]))) };
 }
 
 /** Describe a room tool with an explicit input schema. */
@@ -426,7 +427,7 @@ async function run_tool(context, call) {
   }
   if (is_file_tool(call.name)) {
     const result = run_file_tool(context.project, call.name, args);
-    if (WRITE_TOOLS.includes(call.name) && typeof args.file_path === 'string') context.on_edits?.([resolve(context.project.root, args.file_path)]);
+    if (WRITE_TOOLS.includes(call.name) && !result?.error && typeof args.file_path === 'string') context.on_edits?.([resolve(context.project.root, args.file_path)]);
     return { result };
   }
   if (is_command_tool(call.name)) return { result: await run_command(context.project, context.commands, args, context.signal) };

@@ -65,15 +65,16 @@ test('an ordinary account\'s instance uses only its own projects and draft space
   const created = command(f.home, 'projects', { create: '新品方案' });
   assert.deepEqual(created.projects.map(project => project.path), [join(projects, '新品方案')]);
   assert.throws(() => command(f.home, 'projects', { create: '../elsewhere/x' }), /项目名称须为/);
-  assert.throws(() => command(f.home, 'projects', { projects: [{ name: '外面', path: outside }] }), /未允许|只能在自己的项目文件夹内新建/);
+  assert.throws(() => command(f.home, 'projects', { projects: [{ name: '外面', path: outside }] }), /未允许|只能在自己的项目文件夹内新建|常用项目/);
   const settings = command(f.home, 'settings');
   assert.equal(settings.projects_restricted, true);
   assert.equal(settings.workspace, workspace);
   assert.deepEqual(command(f.home, 'browse-directory', {}).entries.map(entry => entry.name), ['新品方案', '草稿空间']);
   for (const path of [outside, f.root, f.home, projects.slice(0, 3)]) {
-    assert.throws(() => command(f.home, 'browse-directory', { path }), /未允许/, path);
-    assert.throws(() => command(f.home, 'room-settings', { site: 'http://127.0.0.1:1', room_id: 'r', token: 't', cwd: path }), /未允许/, path);
-    assert.throws(() => command(f.home, 'room-settings', { site: 'http://127.0.0.1:1', room_id: 'r', token: 't', extra_directories: [path] }), /未允许/, path);
+    const denied = /未允许|只能使用这台电脑“常用项目”里的目录/;
+    assert.throws(() => command(f.home, 'browse-directory', { path }), denied, path);
+    assert.throws(() => command(f.home, 'room-settings', { site: 'http://127.0.0.1:1', room_id: 'r', token: 't', cwd: path }), denied, path);
+    assert.throws(() => command(f.home, 'room-settings', { site: 'http://127.0.0.1:1', room_id: 'r', token: 't', extra_directories: [path] }), denied, path);
   }
   assert.throws(() => command(f.home, 'pick-directory'), /只能使用自己的项目文件夹/);
 });

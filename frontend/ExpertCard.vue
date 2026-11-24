@@ -42,6 +42,10 @@ const props = defineProps({
   // confined to room commands.
   joining: Boolean,
   confine_reason: { type: String, default: "" },
+  // Project roots available in the enclosing form or room, for saving/updating project-scoped presets.
+  projectRoots: { type: Array, default: () => [] },
+  roomId: { type: String, default: "" },
+  cwd: { type: String, default: "" },
 });
 // Joining only: `{ wake, confined }`, edited on the back like the card's other settings.
 const trust = defineModel("trust", { type: Object, default: null });
@@ -182,7 +186,7 @@ const facts = computed(() => preset.value ? [
     : { label: t('模型'), value: profile.value.model || models.value.defaults?.model || t('软件默认模型') }] : [],
   ...configurable.value && (profile.value.adapter !== "api" || profile.value.effort) ? [{ label: t('强度'), value: effort_label.value }] : [],
   // A workflow card that may change files is pointed out before it joins.
-  ...sets_access.value && !props.joining ? [{ label: t('项目'), value: access_label(access.value), ...(props.workflow && access.value !== "read" ? { tone: "warn" } : {}) }] : [],
+  ...sets_access.value && !props.joining ? [{ label: t('项目'), value: untrusted_access.value ? t('{current}（请求{requested}，未信任）', { current: access_label(access.value), requested: access_label(preset_origin_data.value.requested_access) }) : access_label(access.value), ...(props.workflow && access.value !== "read" || untrusted_access.value ? { tone: "warn" } : {}) }] : [],
   // The crown already offers hosting and the badge names the host, so only the refusal needs a row.
   ...props.hosting && !props.host && !props.hostable ? [{ label: t('主持'), value: host_fact.value }] : [],
   ...props.joining && trust.value ? [{ label: t('本机权限'), value: scope_label(trust.value.confined), ...(trust.value.confined ? {} : { tone: "warn" }) }] : [],
@@ -301,53 +305,130 @@ function finish_rename(save) {
 }
 
 // A preset keeps this card's description, prompt, project access, model and effort under its name for later rooms.
-// A card added from a saved preset (built-in ones included) updates that preset; any other card saves a new one.
-const own_preset = computed(() => Boolean(view.value && bridge.preset_origin(props.name)) || view.value.launch.presets.some((preset) => preset.name === props.name));
-// An advisor: a member added from a saved preset named `平台-编号` that keeps skills of its own in the service home
-// (user 2026-11-22). Its back shows the same basic settings as any expert, plus 高级配置 for its skills (user 2026-11-23).
-const skills_preset = computed(() => {
-  if (!view.value?.launch.available || props.workflow || props.joining) return "";
-  const name = bridge.preset_origin(props.name) || (view.value.launch.presets.some((preset) => preset.name === props.name) ? props.name : "");
-  return (view.value.launch.skilled_presets || []).includes(name) ? name : "";
+// A card added from a saved writable preset updates that preset; any other card (or a read-only project preset) saves a new one.
+const card_room_id = computed(() => props.roomId || (!props.hosting ? view.value.room?.id || "" : ""));
+const card_cwd = computed(() => props.cwd || props.directory || (props.hosting ? view.value.launch.workspace?.cwd || "" : ""));
+const writable_projects = computed(() => {
+  const roots = props.projectRoots.length
+    ? props.projectRoots
+    : (props.hosting ? view.value.launch.create_project_roots : view.value.launch.room_models?.project_roots) || [];
+  return roots.filter((root) => !root.readonly);
+});
+const preset_origin_data = computed(() => view.value ? bridge.preset_origin_info(props.name) : null);
+const own_preset = computed(() => Boolean(preset_origin_data.value && !preset_origin_data.value.readonly)
+  || (!preset_origin_data.value && view.value.launch.presets.some((item) => item.name === props.name)));
+// An untrusted elevated project preset stays read-only until the user ticks to trust and grant its requested access.
+const untrusted_access = computed(() => Boolean(preset_origin_data.value?.scope === "project" && preset_origin_data.value?.requested_access && !preset_origin_data.value?.trusted));
+const trusting_preset = ref(false);
+async function grant_preset_access(event) {
+  if (!event.target.checked || !preset_origin_data.value || trusting_preset.value) return;
+  const requested = preset_origin_data.value.requested_access;
+  trusting_preset.value = true;
+  try {
+    await bridge.trust_expert_preset({
+      id: preset_origin_data.value.id,
+      name: preset_origin_data.value.name,
+      card_name: props.name,
+      project_id: preset_origin_data.value.project_id,
+      room_id: card_room_id.value,
+      cwd: card_cwd.value,
+    });
+    if (requested && !access_options(profile.value.adapter, full_only.value).find((option) => option.value === requested)?.disabled) {
+      write_setting("project_access", requested);
+    }
+    bridge.notify("info", t("已信任项目预设「{name}」并放开权限", { name: member_label.value }));
+  } catch (error) {
+    event.target.checked = false;
+    bridge.notify("error", error.message);
+  } finally {
+    trusting_preset.value = false;
+  }
+}
+// An advisor: a member added from a saved global or project preset that keeps skills of its own.
+const skills_preset_info = computed(() => {
+  if (!view.value?.launch.available || props.workflow || props.joining) return null;
+  const origin = preset_origin_data.value;
+  if (origin) {
+    return bridge.preset_skilled(origin) ? {
+      name: origin.name,
+      scope: origin.scope || "global",
+      project_id: origin.project_id || "",
+      room_id: card_room_id.value,
+      cwd: card_cwd.value,
+      readonly: Boolean(origin.readonly),
+    } : null;
+  }
+  if (view.value.launch.presets.some((item) => item.name === props.name) && bridge.preset_skilled({ name: props.name, scope: "global" })) {
+    return { name: props.name, scope: "global", project_id: "", room_id: "", cwd: "", readonly: false };
+  }
+  return null;
 });
 const advanced_open = ref(false);
 // A card not added from its own preset is saved under a name the user gives; the platform prefix is only a suggestion.
 const naming = ref(false), naming_draft = ref("");
+const naming_scope = ref("global"), naming_project_id = ref("");
 const saving_preset = ref(false);
 const naming_text = computed(() => naming_draft.value.trim());
 const naming_blank = computed(() => !naming_text.value || naming_text.value === `${bridge.default_name(bridge.platform_of(props.name))}-`);
-const naming_id = computed(() => view.value && !naming_blank.value ? bridge.preset_identity(props.name, naming_text.value) : "");
+const naming_pool = computed(() => {
+  if (!view.value) return [];
+  if (naming_scope.value === "project") {
+    const list = card_room_id.value ? bridge.project_presets(card_room_id.value) : bridge.project_presets();
+    return list.filter((item) => !naming_project_id.value || item.project_id === naming_project_id.value);
+  }
+  return bridge.expert_presets();
+});
+const naming_id = computed(() => view.value && !naming_blank.value ? bridge.preset_identity(props.name, naming_text.value, naming_pool.value) : "");
+const naming_project_items = computed(() => writable_projects.value.map((root) => ({ label: root.name, value: root.id })));
 const naming_note = computed(() => {
-  if (!naming_id.value) return t('预设名称会显示在“预设”行和房间里，可以不带平台前缀。');
-  const existing = bridge.expert_presets().find((preset) => preset.name === naming_id.value);
+  if (!naming_id.value) return naming_scope.value === "project"
+    ? t('预设名称会显示在“项目预设”行和房间里，可以不带平台前缀。')
+    : t('预设名称会显示在“预设”行和房间里，可以不带平台前缀。');
+  const existing = naming_pool.value.find((item) => item.name === naming_id.value);
   const id_note = naming_id.value === naming_text.value ? "" : t('成员 ID：{value1}', { value1: naming_id.value });
   return [id_note, existing ? t('将覆盖已有预设「{value1}」', { value1: existing.label || existing.name }) : ""].filter(Boolean).join(" · ") || t('预设名称即成员 ID');
 });
 
-/** Update the card's own preset in place; any other card asks for a name first. */
+/** Update the card's own preset in place; any other card asks for a name and target scope first. */
 function save_preset() {
   if (saving_preset.value) return;
   if (own_preset.value) return store_preset();
+  if (writable_projects.value.length) {
+    naming_scope.value = "project";
+    naming_project_id.value = writable_projects.value[0].id;
+  } else {
+    naming_scope.value = "global";
+    naming_project_id.value = "";
+  }
   // Suggest the first numbered name that no saved preset holds yet.
-  const taken = new Set(bridge.expert_presets().map((preset) => preset.name));
+  const taken = new Set(naming_pool.value.map((item) => item.name));
   const platform = bridge.platform_of(props.name);
   let number = 1;
   const nickname = bridge.default_name(platform);
-  while (taken.has(bridge.preset_identity(props.name, `${nickname}-${number}`))) number += 1;
+  while (taken.has(bridge.preset_identity(props.name, `${nickname}-${number}`, naming_pool.value))) number += 1;
   naming_draft.value = `${nickname}-${number}`;
   naming.value = true;
 }
 
-/** Save under the typed name and close. */
+/** Save under the typed name and chosen scope, then close. */
 async function save_named_preset() {
   if (naming_blank.value || saving_preset.value) return;
-  if (await store_preset(naming_text.value)) naming.value = false;
+  if (await store_preset(naming_text.value, { scope: naming_scope.value, project_id: naming_scope.value === "project" ? naming_project_id.value : "" })) naming.value = false;
 }
 
 /** Keep saving visible and retain the named draft on failure. */
-async function store_preset(label) {
+async function store_preset(label, target = {}) {
   saving_preset.value = true;
-  try { return await bridge.save_expert_preset(props.name, label); }
+  try {
+    const scope = target.scope || preset_origin_data.value?.scope || "global";
+    const project_id = scope === "project" ? (target.project_id ?? preset_origin_data.value?.project_id ?? "") : "";
+    return await bridge.save_expert_preset(props.name, label, {
+      scope,
+      ...(project_id ? { project_id } : {}),
+      ...(card_room_id.value ? { room_id: card_room_id.value } : {}),
+      ...(card_cwd.value ? { cwd: card_cwd.value } : {}),
+    });
+  }
   finally { saving_preset.value = false; }
 }
 
@@ -538,7 +619,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span class="expert-card-heading-tools">
           <button v-if="!joining" type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="t('编辑 {value1} 的名称与描述', { value1: name })" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="preset || profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="t('编辑 {value1} 的专属提示词', { value1: name })" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
-          <button v-if="skills_preset" type="button" class="expert-card-back-tool" :aria-label="t('{value1} 的高级配置', { value1: name })" :title="t('高级配置：这位顾问的技能')" @click="advanced_open = true"><UIcon name="i-lucide-settings-2" /></button>
+          <button v-if="skills_preset_info" type="button" class="expert-card-back-tool" :aria-label="t('{value1} 的高级配置', { value1: name })" :title="t('高级配置：这位顾问的技能')" @click="advanced_open = true"><UIcon name="i-lucide-settings-2" /></button>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="t('检查 {value1} 的 API 配置', { value1: name })" :title="t('检查配置：发送一次极短请求，核对地址、密钥、协议与模型')" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></span></div>
         <div v-if="!preset && automatic && !restricted && entry_items.length > 1" class="expert-card-field">
           <span>{{ t('接入') }}</span><USelect :model-value="profile.adapter || ''" :items="entry_items" :placeholder="t('选择 API / App / CLI')" :aria-label="t('{value1} 软件入口', { value1: name })" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />
@@ -572,9 +653,13 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <span>{{ t('项目') }}</span>
           <div class="expert-card-modes" role="radiogroup" :aria-label="t('{value1} 的项目文件权限', { value1: name })">
             <button v-for="option in access_options(profile.adapter, full_only)" :key="option.value" type="button" role="radio" :title="option.hint"
-              :disabled="access_locked || option.disabled" :aria-checked="access === option.value" @click="write_setting('project_access', option.value)">{{ option.label }}</button>
+              :disabled="access_locked || (untrusted_access && option.value !== 'read') || option.disabled" :aria-checked="access === option.value" @click="write_setting('project_access', option.value)">{{ option.label }}</button>
           </div>
         </div>
+        <label v-if="untrusted_access && !joining" class="expert-card-trust">
+          <input type="checkbox" :disabled="trusting_preset" @change="grant_preset_access" />
+          <span>{{ t('该项目预设请求“{access}”权限，未信任目录默认只读；勾选以信任并放开', { access: access_label(preset_origin_data.requested_access) }) }}</span>
+        </label>
         <ApiSettings v-if="api_mode" :name="name" />
         <template v-else-if="configurable && !connection.length">
           <div class="expert-card-field">
@@ -607,10 +692,18 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
       :placeholder="t('例如：回答先给结论，控制在三段以内。')" :max="MAX_EXPERT_PROMPT" :rows="8" :readonly="Boolean(workflow)"
       :note="workflow ? t('只读') : prompt_note" :source="prompt_source" :fixed="prompt_fixed" :changed="prompt_changed" @save="save_prompt">
     </MemberTextDialog>
-    <WorkflowExperts v-if="skills_preset" v-model:open="advanced_open" :preset="{ name: skills_preset, label: member_label }" />
-    <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="naming" :title="t('存为专家预设')" :description="t('存下描述、提示词、项目权限、模型与强度，之后在“预设”行一键加入。')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+    <WorkflowExperts v-if="skills_preset_info" v-model:open="advanced_open" :preset="{ ...skills_preset_info, label: member_label }" />
+    <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="naming" :title="t('存为专家预设')" :description="t('存下描述、提示词、项目权限、模型与强度，之后在“预设”或“项目预设”行一键加入。')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
       <template #body>
         <form class="expert-card-naming" @submit.prevent="save_named_preset">
+          <div v-if="writable_projects.length" class="expert-card-naming-scope">
+            <span>{{ t('保存位置') }}</span>
+            <div class="expert-card-modes" role="radiogroup" :aria-label="t('预设保存位置')">
+              <button type="button" role="radio" :aria-checked="naming_scope === 'project'" @click="naming_scope = 'project'; if (!naming_project_id) naming_project_id = writable_projects[0].id">{{ t('当前项目') }}</button>
+              <button type="button" role="radio" :aria-checked="naming_scope === 'global'" @click="naming_scope = 'global'">{{ t('全局') }}</button>
+            </div>
+          </div>
+          <USelect v-if="naming_scope === 'project' && writable_projects.length > 1" v-model="naming_project_id" :items="naming_project_items" :aria-label="t('目标项目')" size="sm" class="w-full" />
           <UInput v-model="naming_draft" :maxlength="32" autofocus class="w-full" :aria-label="t('预设名称')" :placeholder="t('预设名称，如 评审官')" />
           <p>{{ naming_note }}</p>
           <div class="expert-card-naming-actions">
@@ -708,8 +801,11 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-back-tool.is-own { color: var(--channel-accent); }
 .expert-card-back-tool:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
 .expert-card-naming { display: grid; gap: 8px; }
+.expert-card-naming-scope { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--ui-text-muted); }
 .expert-card-naming > p { margin: -2px 0 0; color: var(--ui-text-dimmed); font-size: 11px; }
 .expert-card-naming-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.expert-card-trust { display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--ui-warning, #e0a33a) 45%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--ui-warning, #e0a33a) 8%, transparent); color: var(--ui-warning, #e0a33a); font-size: 11px; line-height: 1.45; cursor: pointer; }
+.expert-card-trust input { flex-shrink: 0; margin-top: 2px; }
 .expert-card-note { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 /* Joining: four-character labels (本机权限, 被点名时) on both faces. */
 .expert-card.is-joining .expert-card-facts > div, .expert-card.is-joining .expert-card-field { grid-template-columns: 4.5em minmax(0, 1fr); }

@@ -13,8 +13,12 @@ const emit = defineEmits(["update:modelValue"]);
 const { view } = inject("discussion");
 const editable = computed(() => view.value.launch.available);
 
+const path_of = (item) => typeof item === "string" ? item : item.path;
 function write(index, path) {
-  emit("update:modelValue", props.modelValue.map((item, at) => at === index ? path : item));
+  emit("update:modelValue", props.modelValue.map((item, at) => {
+    if (at !== index) return item;
+    return typeof item === "string" ? path : { ...item, path };
+  }));
 }
 const remove = (index) => emit("update:modelValue", props.modelValue.filter((_, at) => at !== index));
 const add = () => emit("update:modelValue", [...props.modelValue, ""]);
@@ -23,11 +27,11 @@ const add = () => emit("update:modelValue", [...props.modelValue, ""]);
 <template>
   <div class="extra-directories">
     <template v-if="editable">
-      <ProjectDirectoryField v-for="(path, index) in props.modelValue" :key="index" :model-value="path" compact :placeholder="t('另一个项目目录的完整路径')" :disabled="props.disabled" @update:model-value="write(index, $event)">
-        <template #actions><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="self-center" :aria-label="t('移除项目目录 {value1}', { value1: path })" :disabled="props.disabled" @click="remove(index)" /></template>
+      <ProjectDirectoryField v-for="(item, index) in props.modelValue" :key="index" :model-value="path_of(item)" compact :placeholder="t('另一个项目目录的完整路径')" :disabled="props.disabled" @update:model-value="write(index, $event)">
+        <template #actions><span v-if="item.access === 'read'" class="extra-directory-note">{{ t('只读') }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="self-center" :aria-label="t('移除项目目录 {value1}', { value1: path_of(item) })" :disabled="props.disabled" @click="remove(index)" /></template>
       </ProjectDirectoryField>
     </template>
-    <code v-for="path in editable ? [] : props.modelValue" :key="path" class="extra-directory-path">{{ path }}</code>
+    <code v-for="item in editable ? [] : props.modelValue" :key="path_of(item)" class="extra-directory-path">{{ path_of(item) }}<template v-if="item.access === 'read'"> · {{ t('只读') }}</template></code>
     <button v-if="editable && props.modelValue.length < MAX_DIRECTORIES" type="button" class="extra-directory-add" :disabled="props.disabled" @click="add">
       <UIcon name="i-lucide-plus" />{{ t('添加其他项目目录') }} </button>
     <p v-if="!editable" class="extra-directory-note">{{ t('其他项目目录须在电脑上或已连接电脑的网页中设置。') }}</p>

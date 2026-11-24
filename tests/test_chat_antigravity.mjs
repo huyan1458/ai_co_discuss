@@ -212,14 +212,32 @@ test('stopping an App chat turn also stops its background command, or says it ma
 
 test('an App room task is not stopped from here but its end is heard', async t => {
   Object.assign(ROOM_TIMING, { poll_ms: 20, read_failures: 2 });
-  const f = await fake_app(t, { turn: [response('房间任务做完')] });
+  const f = await fake_app(t, { turn: [
+    response('修改中', [
+      { id: 't1', name: 'edit_file', argumentsJson: JSON.stringify({ Path: 'src/app-edit.js' }) },
+      { id: 't2', name: 'view_file', argumentsJson: JSON.stringify({ Path: 'src/read-only.js' }) },
+    ]),
+    step('RUN_COMMAND', { runCommand: { commandLine: 'cp src/read-only.js out/app-copy.js', exitCode: 0 } }),
+    step('RUN_COMMAND', { runCommand: { commandLine: 'echo x > out/app-fail.js', exitCode: 1 } }),
+    step('RUN_COMMAND', { runCommand: { commandLine: 'echo x > out/app-cancel.js', exitCode: 0 } }, 'CORTEX_STEP_STATUS_CANCELED'),
+    response('房间任务做完'),
+  ] });
   let ended;
   const heard = new Promise(resolve => { ended = resolve; });
+  const edits = [];
   const result = await deliver_task(f.config, { session_id: 'conv-1' }, { id: 'free-9', directory: f.root, access_path: f.access_path, prompt: 'room',
-    on_turn_end: () => ended(true) });
+    on_turn_end: () => ended(true), on_edits: paths => edits.push(paths) });
   assert.deepEqual(result.capabilities, { stoppable: false, progress: false, ends: true });
   assert.equal(await heard, true);
   assert.ok(f.app.steps.length > 1, 'only after the new turn added its steps and the App went idle');
+  assert.deepEqual(edits, [[], ['src/app-edit.js'], ['out/app-copy.js']]);
+  // Without language_server, the App cannot be read, so edits stay untracked instead of claiming empty.
+  const blind = await fake_app(t, { token: '' });
+  const blind_edits = [];
+  const blind_result = await deliver_task(blind.config, { session_id: 'conv-1' }, { id: 'free-10', directory: blind.root, access_path: blind.access_path, prompt: 'room',
+    on_edits: paths => blind_edits.push(paths) });
+  assert.deepEqual(blind_result.capabilities, { stoppable: false, progress: false });
+  assert.deepEqual(blind_edits, []);
 });
 
 test('agy gets the thinking level only through the model ID: a stored effort is never passed beside it', async t => {

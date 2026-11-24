@@ -1,8 +1,9 @@
 /**
  * Codex App adapter: tasks go into a chat of the running Codex desktop, through its app-tools pipe or `codex queue`.
- * The turn runs inside the App, so the runner can neither stop it nor see its progress. Threads are stored like the
- * CLI's, so sessions and models come from the Codex CLI adapter. A private chat turn is the exception: the runner
- * follows it by reading the chat, and can force it to stop.
+ * Room turns run inside the App, so the runner cannot stop them; when the chat can be read beforehand, the runner polls
+ * `read_thread` for the matched turn's progress, steps, edits and end, degrading to no progress when the App cannot be
+ * read. Threads are stored like the CLI's, so sessions and models come from the Codex CLI adapter. A private chat turn
+ * also reads the reply back and can force the turn to stop.
  */
 import { EventEmitter } from 'node:events';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -11,10 +12,11 @@ import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { CodexAppClient } from './codex_app_client.mjs';
 import { branch, codex_skills, desktop_thread, list_sessions, preview_session, remove_session, session_exists, session_path, session_settings } from './codex_cli.mjs';
-import { bind_access, CALL_TIMEOUT_MS, not_sent, read_json, run_program, same_path } from './common.mjs';
+import { bind_access, CALL_TIMEOUT_MS, not_sent, read_json, run_program, same_path, shell_written_paths } from './common.mjs';
 
-// The desktop has no stop or interrupt tool (its tool list, checked 2026-10-30), and the turn's output stays in the App.
+// The desktop has no stop or interrupt tool (its tool list, checked 2026-10-30).
 const IN_APP = { stoppable: false, progress: false };
+const IN_APP_PROGRESS = { stoppable: false, progress: true };
 
 /** Match the real saved project and its directory; a prompt cannot grant file access. */
 export async function codex_target(app, config) {
@@ -59,101 +61,212 @@ export async function creation_source(app, config, file) {
   return made.thread_id;
 }
 
-/** Whether the running App has not loaded a chat; when the App cannot tell, the queue is used as before. */
-async function unloaded(config, thread_id) {
-  const app = new CodexAppClient(config.pipe_path);
-  try { await app.open(); return await app.thread_status(thread_id) === 'notLoaded'; }
-  catch { return false; }
-  finally { app.close(); }
-}
-
 /**
  * Pass an interjection into the chat's running turn through the App itself, which takes it at the turn's next step.
  * Sent only while the chat is active: in an idle chat the same message would start a turn the room never asked for.
  */
-function app_steer(config, thread_id) {
+function app_steer(config, thread_id, task = null, connect = null) {
+  const log_path = task?.directory && task?.id ? resolve(task.directory, `codex-${task.id}.log`) : '';
   return async text => {
-    const app = new CodexAppClient(config.pipe_path);
+    const app = connect ? await connect() : await open_app(config);
     try {
-      await app.open();
-      if (await app.thread_status(thread_id) !== 'active') return false;
+      const status = typeof app.thread_status === 'function'
+        ? await app.thread_status(thread_id)
+        : (await app.read_thread(thread_id, { turnLimit: 1 })).thread.status.type;
+      if (status !== 'active') return false;
       await app.send_message(thread_id, text);
+      if (log_path) task.on_output?.(log_path, `${JSON.stringify({ type: 'codiscuss.interjection', text })}\n`);
       return true;
     } finally { app.close(); }
   };
 }
 
-// A room turn runs in the App, which the runner cannot stop; it only watches the chat for that turn to end, so a stop the
-// owner makes in the App lets the room deliver again at once.
+// A room turn runs in the App, which the runner cannot stop; when the chat can be read beforehand, it follows only the
+// turn matching this task's prompt for progress, steps, edits and end, without pulling in private turns in the same chat.
 const ROOM_POLL_MS = 2000;
-const ROOM_READ = { turnLimit: 3 };
+const ROOM_READ = { turnLimit: 3, includeOutputs: true, maxOutputCharsPerItem: 4000 };
+const ROOM_DELEGATION_NAMES = ['send_message_to_thread', 'create_thread'];
+const TOOL_ITEM_TYPES = new Set(['commandExecution', 'fileChange', 'webSearch', 'mcpToolCall']);
 
-/** The ids of the chat's latest turns before a task goes in, or null when the App cannot be read. */
-async function turns_before(config, thread_id) {
-  const app = new CodexAppClient(config.pipe_path);
-  try { await app.open(); return new Set((await app.read_thread(thread_id, ROOM_READ)).turns.map(turn => turn.id)); }
-  catch { return null; }
-  finally { app.close(); }
+/** The chat's status, latest turns and item ids before a room task goes in, or null when the App cannot be read. */
+async function room_before(config, thread_id, connect) {
+  let app;
+  try {
+    app = await connect();
+    const data = await app.read_thread(thread_id, ROOM_READ);
+    return {
+      status: data.thread.status.type,
+      turns: new Set(data.turns.map(turn => turn.id)),
+      items: new Set(data.turns.flatMap(turn => (turn.items || []).map(item => item.id)).filter(Boolean)),
+    };
+  } catch { return null; }
+  finally { app?.close(); }
+}
+
+/** Literal file paths written by one finished Codex App turn item; running, failed or declined items claim nothing. */
+function app_item_edits(item) {
+  if (!item || ['inProgress', 'failed', 'declined'].includes(item.status)) return [];
+  if (item.type === 'fileChange') return (item.changes || []).map(change => String(change?.path || '')).filter(Boolean);
+  if (item.type === 'commandExecution' && (item.exitCode ?? 0) === 0) return shell_written_paths(item.command);
+  return [];
+}
+
+/** Map one Codex App turn item to `{phase, tool}` for the execution timeline, or null when it is not an activity step. */
+function app_item_activity(item) {
+  if (!item) return null;
+  if (item.type === 'commandExecution') return { phase: 'command', tool: '' };
+  if (item.type === 'fileChange') return { phase: 'editing', tool: '' };
+  if (item.type === 'webSearch') return { phase: 'tool', tool: 'web_search' };
+  if (item.type === 'mcpToolCall') return { phase: 'tool', tool: String(item.tool || '') };
+  if (item.type === 'reasoning') return { phase: 'thinking', tool: '' };
+  if (item.type === 'agentMessage' && item.text) return { phase: 'writing', tool: '' };
+  return null;
+}
+
+/** Deduplicated `codiscuss.entry` writer shared by room turns and private chat turns. */
+function entry_logger(task) {
+  const log_path = task?.directory && task?.id ? resolve(task.directory, `codex-${task.id}.log`) : '';
+  const logged = new Map();
+  return entry => {
+    if (!log_path || !entry) return;
+    const line = JSON.stringify({ type: 'codiscuss.entry', entry });
+    if (logged.get(entry.id) !== line) { logged.set(entry.id, line); task.on_output?.(log_path, `${line}\n`); }
+  };
+}
+
+/** Find or follow the one turn matching this room task; ignores unrelated or private turns in the same chat. */
+function resolve_room_turn(snapshot, prompt, seen, matched) {
+  const turns = snapshot.turns || [];
+  if (!matched) {
+    const found = find_turn(snapshot, prompt, seen.items, { allow_user: true, names: ROOM_DELEGATION_NAMES, seen_turns: seen.turns });
+    if (!found) return null;
+    matched = { turn_id: found.turn.id, item_id: found.item_id, start_index: found.index };
+  }
+  const turn = turns.find(item => item.id === matched.turn_id);
+  if (!turn) return { matched, turn: null, items: [], ended: true };
+  const all = turn.items || [];
+  // `read_thread` keeps only the latest page of items (default 32), so once our prompt item scrolls off the front of
+  // this already-matched turn, every remaining item in `all` occurred after it.
+  const anchor = matched.item_id ? all.findIndex(item => item.id === matched.item_id) : matched.start_index;
+  const items = anchor >= 0 ? all.slice(anchor + 1) : all;
+  const ended = turn.status !== 'inProgress' && (turns[0] !== turn || snapshot.thread?.status?.type !== 'active');
+  return { matched, turn, items, ended };
+}
+
+/** Report deduplicated steps, timeline activities, progress notes and file edits for the matched room turn. */
+function report_room_items(turn, items, state, task, log) {
+  let just_finished_tool = false;
+  let last_new_kind = '';
+  for (const [index, item] of items.entries()) {
+    if (!item) continue;
+    const key = item.id || `${turn.id}:${index}`;
+    const entry = chat_entry(item, key);
+    if (entry) log(entry);
+    if (!state.activities.has(key)) {
+      const activity = app_item_activity(item);
+      if (activity) {
+        state.activities.add(key);
+        task.on_activity?.(activity.phase, activity.tool, key);
+        last_new_kind = item.status === 'inProgress' ? 'inProgress' : activity.phase;
+      }
+    }
+    if (TOOL_ITEM_TYPES.has(item.type) && item.status !== 'inProgress' && !state.finished_tools.has(key)) {
+      state.finished_tools.add(key);
+      just_finished_tool = true;
+    }
+    if (item.type === 'agentMessage' && item.phase === 'commentary' && !state.notes.has(key)) {
+      const text = String(item.text || '').trim();
+      if (text) { state.notes.add(key); task.on_note?.(text); }
+    }
+    if (item.status !== 'inProgress' && !state.edits.has(key)) {
+      state.edits.add(key);
+      const paths = app_item_edits(item);
+      if (paths.length) task.on_edits?.(paths);
+    }
+  }
+  if (!state.started && !state.activities.size && turn.status === 'inProgress') {
+    state.started = true;
+    task.on_activity?.('thinking');
+  } else if (turn.status === 'inProgress' && just_finished_tool && !['inProgress', 'writing', 'thinking'].includes(last_new_kind)) {
+    task.on_activity?.('thinking');
+  }
 }
 
 /**
- * Read the chat until a turn newer than `seen` has ended and the chat is idle, then report `on_turn_end`. Gives up quietly
- * after the private chat's ceiling or when the App stays unreadable; the room then falls back to the site's hold.
+ * Poll the chat until the turn matching `task.prompt` ends, logging its steps into `codex-${task.id}.log`, reporting
+ * deduplicated timeline activities, notes and file edits along the way, and calling `on_turn_end` when finished.
+ * Gives up quietly after the ceiling or when the App stays unreadable; the room then falls back to the site's hold.
  * `options` (`connect`, `poll_ms`, `timeout_ms`) replace the App and the timings in tests.
  */
-export async function watch_room_turn(config, thread_id, seen, task, options = {}) {
+export async function watch_room_turn(config, thread_id, before, task, options = {}) {
   const connect = options.connect || (() => open_app(config));
+  const seen = before instanceof Set ? { turns: before, items: new Set() }
+    : { turns: before?.turns || new Set(), items: before?.items || new Set() };
   const deadline = Date.now() + (options.timeout_ms ?? CHAT_TIMEOUT_MS);
-  let app = null, failures = 0;
+  const state = { activities: new Set(), finished_tools: new Set(), notes: new Set(), edits: new Set(), started: false };
+  const log = entry_logger(task);
+  task.on_edits?.([]);
+  let app = null, failures = 0, matched = null;
   try {
     while (Date.now() < deadline) {
       await sleep(options.poll_ms ?? ROOM_POLL_MS);
       let snapshot;
       try { app ||= await connect(); snapshot = await app.read_thread(thread_id, ROOM_READ); failures = 0; }
       catch { app?.close(); app = null; if (++failures >= CHAT_READ_FAILURES) return; continue; }
-      const newest = snapshot.turns[0];
-      if (newest && !seen.has(newest.id) && newest.status !== 'inProgress' && snapshot.thread.status.type !== 'active') return task.on_turn_end?.();
+      const found = resolve_room_turn(snapshot, task.prompt, seen, matched);
+      if (!found) continue;
+      matched = found.matched;
+      if (found.turn) report_room_items(found.turn, found.items, state, task, log);
+      if (found.ended) {
+        if (found.turn && found.turn.status !== 'completed') {
+          const reason = found.turn.status === 'interrupted' ? '这一轮在 Codex App 中被中断' : found.turn.error?.message || 'Codex App 中这一轮未正常结束';
+          log({ id: `turn-${found.turn.id}`, kind: 'error', title: reason, state: 'failed' });
+        }
+        return task.on_turn_end?.();
+      }
     }
   } finally { app?.close(); }
 }
 
-/** What a room delivery into this chat can do: never stopped, its end heard when the chat could be read beforehand. */
-function room_delivery(config, thread_id, seen, task) {
-  if (!seen) return IN_APP;
-  watch_room_turn(config, thread_id, seen, task).catch(() => {});
-  return { ...IN_APP, ends: true };
+/** What a room delivery into this chat can do: never stopped; progress and end reported when the chat was readable beforehand. */
+function room_delivery(config, thread_id, before, task, options = {}) {
+  if (!before) return IN_APP;
+  watch_room_turn(config, thread_id, before, task, options).catch(() => {});
+  return { ...IN_APP_PROGRESS, ends: true };
 }
 
 /** Deliver one task to Codex's real App, with the original chat reused afterward. */
-async function deliver(config, binding, task, _spawn, user_home = homedir()) {
+async function deliver(config, binding, task, _spawn, user_home = homedir(), options = {}) {
+  const connect = options.connect || (() => open_app(config));
+  const run = options.run || run_program;
   if (binding.session_id) {
     try { bind_access(task.access_path, binding.session_id); }
     catch (error) { throw not_sent(error); }
-    const seen = await turns_before(config, binding.session_id);
+    const before = await room_before(config, binding.session_id, connect);
     // `codex queue` reaches only a chat the App has loaded; a fork made after a rewind, or a chat after the App restarted,
     // is not loaded until a message is sent through the App itself (tested on App tools, 2026-10).
-    if (await unloaded(config, binding.session_id)) {
-      const app = new CodexAppClient(config.pipe_path);
-      try { await app.open(); await app.send_message(binding.session_id, task.prompt); }
+    if (before?.status === 'notLoaded') {
+      const app = await connect();
+      try { await app.send_message(binding.session_id, task.prompt); }
       finally { app.close(); }
-      return { session_id: binding.session_id, status: 'accepted', capabilities: room_delivery(config, binding.session_id, seen, task), steer: app_steer(config, binding.session_id) };
+      return { session_id: binding.session_id, status: 'accepted', capabilities: room_delivery(config, binding.session_id, before, task, options), steer: app_steer(config, binding.session_id, task, options.connect) };
     }
-    const receipt = await run_program(config.executable, ['queue', '--thread', binding.session_id, '--message', task.prompt], { timeout: CALL_TIMEOUT_MS });
-    return { session_id: binding.session_id, status: 'accepted', receipt, capabilities: room_delivery(config, binding.session_id, seen, task), steer: app_steer(config, binding.session_id) };
+    const receipt = await run(config.executable, ['queue', '--thread', binding.session_id, '--message', task.prompt], { timeout: CALL_TIMEOUT_MS });
+    return { session_id: binding.session_id, status: 'accepted', receipt, capabilities: room_delivery(config, binding.session_id, before, task, options), steer: app_steer(config, binding.session_id, task, options.connect) };
   }
-  const app = new CodexAppClient(config.pipe_path);
+  let app;
   try {
     let target, source;
     try {
-      await app.open();
+      app = await connect();
       target = await codex_target(app, config);
       source = await creation_source(app, config, source_file(process.env, user_home));
     } catch (error) { throw not_sent(error); }
     const result = await app.create_thread(source, task.prompt, `CoDiscuss · ${task.participant}`, target);
     task.on_binding(result.thread_id);
     bind_access(task.access_path, result.thread_id);
-    return { session_id: result.thread_id, status: 'accepted', capabilities: room_delivery(config, result.thread_id, new Set(), task), steer: app_steer(config, result.thread_id) };
-  } finally { app.close(); }
+    return { session_id: result.thread_id, status: 'accepted', capabilities: room_delivery(config, result.thread_id, { turns: new Set(), items: new Set() }, task, options), steer: app_steer(config, result.thread_id, task, options.connect) };
+  } finally { app?.close(); }
 }
 
 // A private chat turn is read back from the chat itself (remarks and finished steps), and archiving the chat stops it.
@@ -170,21 +283,36 @@ const UNARCHIVE_ATTEMPTS = 3;
 const XML_ENTITIES = { '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'", '&amp;': '&' };
 
 /** The text one App-delivered message carried in `<codex_delegation><input>`, or null for other items. */
-function delegated_input(item) {
-  if (item?.type !== 'functionCallOutput' || item.name !== 'send_message_to_thread') return null;
+function delegated_input(item, names = ['send_message_to_thread']) {
+  if (item?.type !== 'functionCallOutput' || !names.includes(item.name)) return null;
   const match = /<input>([\s\S]*?)(?:<\/input>|$)/.exec(item.output?.text || '');
-  return match ? match[1].replace(/&(lt|gt|quot|apos|amp);/g, entity => XML_ENTITIES[entity]).trim() : null;
+  return match ? { text: match[1].replace(/&(lt|gt|quot|apos|amp);/g, entity => XML_ENTITIES[entity]).trim(), truncated: Boolean(item.output?.truncated) } : null;
 }
 
-/** The turn that took this chat line, and the line's place in it; items read before sending are earlier lines. */
-function find_turn(snapshot, prompt, seen) {
-  const text = prompt.trim();
-  for (const turn of snapshot.turns) {
+/** The text a userMessage item carried (as `codex queue` delivers a room prompt), or null for other items. */
+function user_input(item) {
+  if (item?.type !== 'userMessage') return null;
+  const parts = Array.isArray(item.content) ? item.content : [];
+  const text = parts.filter(part => part?.type === 'text' && typeof part.text === 'string').map(part => part.text).join('\n').trim();
+  return text ? { text, truncated: Boolean(item.truncated) } : null;
+}
+
+/** Whether an extracted prompt matches the exact text this delivery sent. */
+function matches_prompt(input, prompt) {
+  return Boolean(input?.text && prompt && (input.text === prompt || (input.truncated && prompt.startsWith(input.text))));
+}
+
+/** The turn that took this prompt, and the prompt's place in it; items read before sending are earlier turns. */
+function find_turn(snapshot, prompt, seen, { allow_user = false, names = ['send_message_to_thread'], seen_turns = null } = {}) {
+  const text = String(prompt || '').trim();
+  if (!text) return null;
+  for (const turn of snapshot.turns || []) {
     const index = (turn.items || []).findIndex(item => {
-      const input = !seen.has(item.id) && delegated_input(item);
-      return input && (input === text || (item.output.truncated && text.startsWith(input)));
+      if (item?.id ? seen.has(item.id) : seen_turns?.has(turn.id)) return false;
+      const input = delegated_input(item, names) || (allow_user ? user_input(item) : null);
+      return matches_prompt(input, text);
     });
-    if (index >= 0) return { turn, index };
+    if (index >= 0) return { turn, index, item_id: (turn.items || [])[index]?.id || '' };
   }
   return null;
 }
@@ -200,9 +328,9 @@ function step_state(item) {
   return ['failed', 'declined'].includes(item.status) || (item.exitCode ?? 0) !== 0 ? 'failed' : 'done';
 }
 
-/** One finished item of the turn as a process log entry, or null for items the chat page does not show. */
-function chat_entry(item) {
-  const id = item.id;
+/** One item of the turn as a process log entry, or null for items the chat page does not show. */
+function chat_entry(item, fallback_id = item?.id) {
+  const id = item.id || fallback_id;
   if (item.type === 'agentMessage') return item.phase === 'commentary' && item.text ? { id, kind: 'message', body: item.text, state: 'done' } : null;
   if (item.type === 'commandExecution') return { id, kind: 'command', title: command_title(item.command), body: item.output?.text || '', state: step_state(item) };
   if (item.type === 'webSearch') return { id, kind: 'search', title: item.query || item.action?.query || '', state: 'done' };
@@ -238,7 +366,7 @@ function read_progress(snapshot, context, log) {
   const found = find_turn(snapshot, context.task.prompt, context.seen);
   if (!found) return null;
   const items = found.turn.items.slice(found.index + 1);
-  for (const item of items) { const entry = chat_entry(item); if (entry) log(entry); }
+  for (const [index, item] of items.entries()) { const entry = chat_entry(item, `${found.turn.id}:${index}`); if (entry) log(entry); }
   const newest = snapshot.turns[0] === found.turn;
   if (found.turn.status === 'inProgress' || (newest && snapshot.thread.status.type === 'active')) return null;
   return { turn: found.turn, items };
@@ -247,12 +375,7 @@ function read_progress(snapshot, context, log) {
 /** Poll the chat until the turn that took this line ends, it is stopped, or the wait runs out. */
 async function follow_chat(context) {
   const { task, state, thread_id } = context;
-  const log_path = resolve(task.directory, `codex-${task.id}.log`);
-  const logged = new Map();
-  const log = entry => {
-    const line = JSON.stringify({ type: 'codiscuss.entry', entry });
-    if (logged.get(entry.id) !== line) { logged.set(entry.id, line); task.on_output?.(log_path, `${line}\n`); }
-  };
+  const log = entry_logger(task);
   const deadline = Date.now() + context.timeout_ms;
   let app = context.app;
   let failures = 0;

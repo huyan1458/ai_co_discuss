@@ -105,6 +105,7 @@ test('agy skill discovery reads local manifests, filters excluded skills and pre
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-skills-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const project = join(home, 'project'), global = join(home, '.gemini', 'config');
+  mkdirSync(join(project, '.git'), { recursive: true });
   const write_skill = (directory, name, description) => {
     mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\nDo not expose this body.`);
@@ -559,11 +560,13 @@ test('a room shares extra project directories set at creation or later, and name
   writeFileSync(join(docs, '报告附录.md'), '附加目录');
   await assert.rejects(launch_discussion(f.home, { ...f.input, cwd: project, extra_directories: [join(project, 'sub')] }, f.options), /不存在/);
   await assert.rejects(launch_discussion(f.home, { ...f.input, cwd: project, extra_directories: [project] }, f.options), /互相包含/);
-  const launched = await launch_discussion(f.home, { ...f.input, cwd: project, extra_directories: [docs] }, f.options);
+  const readonly = { path: docs, access: 'read' };
+  const launched = await launch_discussion(f.home, { ...f.input, cwd: project, extra_directories: [readonly] }, f.options);
   const config = load_config(launched.config_path);
   const input = { site: f.site, room_id: config.room, token: config.token };
   const models = () => room_models(f.home, input, { read_defaults: async () => ({}), read_session: () => ({}) });
-  assert.deepEqual((await models()).extra_directories, [docs]);
+  assert.deepEqual((await models()).extra_directories, [readonly]);
+  assert.deepEqual(config.extra_directories, [readonly]);
   assert.deepEqual((await room_files(f.home, { ...input, root: 1 })).entries.map(item => item.name), ['报告附录.md']);
   assert.deepEqual((await room_files(f.home, { ...input, query: '报告' })).entries.map(item => [item.root, item.path]), [[0, '报告.md'], [1, '报告附录.md']]);
   await assert.rejects(room_files(f.home, { ...input, root: 2 }), /编号无效/);
@@ -573,6 +576,12 @@ test('a room shares extra project directories set at creation or later, and name
   mkdirSync(join(project, 'sub'));
   await assert.rejects(room_settings(f.home, { ...input, extra_directories: [join(project, 'sub')] }), /互相包含/, 'a folder inside the main one adds nothing');
   await assert.rejects(room_settings(f.home, { ...input, extra_directories: [assets], token: 'invalid-owner' }), /403/);
+  await room_settings(f.home, { ...input, extra_directories: [readonly, assets] });
+  const loaded = load_config(launched.config_path);
+  assert.deepEqual(loaded.extra_directories, [readonly, assets]);
+  assert.equal((await models()).project_roots.find(item => item.name === 'docs').readonly, true);
+  await assert.rejects(room_files(f.home, { ...input, root: 1, op: 'mkdir', path: '', name: 'denied' }), /只读/);
+  assert.equal(existsSync(join(docs, 'denied')), false);
   await room_settings(f.home, { ...input, extra_directories: [] });
   assert.deepEqual((await models()).extra_directories, []);
   assert.equal(JSON.parse(readFileSync(launched.config_path, 'utf8')).extra_directories, undefined);
@@ -1417,7 +1426,8 @@ test('a host creates a room inside its project, linked both ways, that cannot cr
   assert.deepEqual([child.participants.Codex.adapter, child.participants.Codex.project_access, child.participants.Codex.session_id], ['codex_cli', 'read', undefined]);
   assert.deepEqual(host_permissions(child).items, ['execution', 'roster']);
   assert.deepEqual(load_config(launched.config_path).spawned_rooms, [{ room: created.room_id, submission_id: 'first-room' }]);
-  const parent_card = (await api(config, '/messages?after=0')).messages.at(-1);
+  const sent = async source => (await api(source, '/messages?after=0')).messages.filter(message => message.source === 'room_relay_sent');
+  const parent_card = (await api(config, '/messages?after=0')).messages.find(message => message.source === 'room_link');
   assert.deepEqual([parent_card.source, parent_card.link_room, parent_card.link_relation], ['room_link', created.room_id, 'child']);
   const child_messages = (await api(child, '/messages?after=0')).messages;
   assert.deepEqual(child_messages.map(message => [message.source, message.link_relation, message.relay_room]),
@@ -1429,22 +1439,30 @@ test('a host creates a room inside its project, linked both ways, that cannot cr
   await assert.rejects(host_control(f.home, 'room-post', { access_file: host_access, room: 'elsewhere', text: '你好' }), /关联的房间/);
   assert.equal(child_messages.at(-1).text, '先列方案\n再给验收结果');
   assert.equal(child_messages.at(-1).relay_member, 'Codex');
+  assert.deepEqual((await sent(config)).map(m => [m.text, m.relay_sent_message_id]), [[child_messages.at(-1).text, child_messages.at(-1).id]]);
   const queued = spawnSync(process.execPath, [join(ROOT, 'runner', 'codiscuss.mjs'), 'launch', 'host-control', 'room-post',
     '--access-file', host_access, '--room', created.room_id, '--body-file', body_file], {
     encoding: 'utf8', windowsHide: true, env: { ...process.env, DISCUSS_SERVICE_HOME: f.home },
   });
   assert.equal(queued.status, 0, queued.stderr);
   assert.ok(JSON.parse(queued.stdout).queued);
+  assert.equal((await sent(config)).at(-1).relay_sent_queued_id, JSON.parse(queued.stdout).queued);
   await assert.rejects(host_control(f.home, 'room-post', { access_file: host_access, room: created.room_id,
     body_file: host_access }), /项目或草稿目录|project or drafts/);
+  const receiver = (await api(child, '')).free.members.find(member => member.name === 'Codex');
+  const running = await api(child, '/executions', { member_id: receiver.id, client_id: randomUUID() });
+  await api(child, `/executions/${running.id}`, { action: 'delivery', stoppable: true, progress: true });
   const posted = await host_control(f.home, 'room-post', { access_file: host_access, room: created.room_id, interrupt: true, text: '进展如何' });
   assert.equal((await api(child, '/messages?after=0')).messages.at(-1).id, posted.message_id);
+  assert.equal((await sent(config)).at(-1).relay_sent_message_id, posted.message_id);
+  assert.equal((await sent(config)).at(-1).relay_sent_interrupted, 1);
   // The new room's host answers back; with the owner's limit set, the two hosts pass at most that many until the owner speaks again.
   const child_access = join(f.directory, 'child.access.json');
   writeFileSync(child_access, JSON.stringify({ site: f.site, room: created.room_id, member: 'Codex', token: child.members.Codex.token }));
   await assert.rejects(host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '调整', interrupt: true }), /仅父房间|Only the parent/);
   const back = await host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '方案已列好' });
   assert.equal((await api(config, '/messages?after=0')).messages.at(-1).relay_room, created.room_id);
+  assert.equal((await sent(child)).at(-1).relay_sent_message_id, back.message_id);
   save_launch_settings(f.home, { create_preferences: { relay_rounds: 10 } });
   for (let index = 0; index < 7; index += 1) await host_control(f.home, 'room-post', { access_file: host_access, room: created.room_id, interrupt: true, text: `第 ${index} 次` });
   await assert.rejects(host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '再来' }), /上限/);
@@ -1892,6 +1910,8 @@ test('the relay channel reaches only local room routes, as the bridge, and answe
   assert.equal(calls.length, 0, 'a refused route never reaches the local website');
   const read = await room_api(home, 'https://site.test', { path: '/api/rooms/abc123/messages?after=0&limit=200' }, { fetcher });
   assert.deepEqual(read, { status: 200, body: { messages: [] } });
+  assert.equal((await room_api(home, 'https://site.test', { path: '/api/sites' }, { fetcher })).status, 200);
+  assert.equal(calls.pop().url, 'http://127.0.0.1:9876/api/sites');
   assert.equal(calls[0].url, 'http://127.0.0.1:9876/api/rooms/abc123/messages?after=0&limit=200');
   const bridge = calls[0].options.headers['X-CoDiscuss-Bridge'];
   assert.match(bridge, /^[0-9a-f]{64}$/);

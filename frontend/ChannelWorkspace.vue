@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
 import ChannelDiscussion from "./ChannelDiscussion.vue";
 import TopicPanel from "./TopicPanel.vue";
 import WorkspaceDialogs from "./WorkspaceDialogs.vue";
@@ -61,6 +61,7 @@ const created_label = computed(() => {
 const TIMELINE_VIEWS = [{ value: "waterfall", label: t("瀑布") }, { value: "events", label: t("事件") }];
 const timeline_view = ref("waterfall");
 const modal = ref("");
+const discussion_view = ref(null);
 const managed_room = ref(null);
 const target_folder = ref(null);
 const detail_id = ref(null);
@@ -234,7 +235,7 @@ const creating_tabs = computed(() => tabs.value.map((item) => ({ ...item, disabl
 /** The workflow library belongs to this computer, not a room, so it is not a room tab: the sidebar
  * has its own 工作流 section, and a workflow chosen there fills the middle in place of the room (with no room selected too). */
 const workflow_library = use_workflow_library();
-const { page_open: workflow_page, draft: workflow_draft, saved_id: workflow_saved, deleting: workflow_deleting, leaving: workflow_leaving } = workflow_library;
+const { page_open: workflow_page, draft: workflow_draft, loading: workflow_loading, saved_id: workflow_saved, deleting: workflow_deleting, leaving: workflow_leaving, skill_open: workflow_skill_open, stacked: workflow_stacked } = workflow_library;
 // Opening the mobile sidebar drawer should reflect workflows saved via CLI without a full page reload.
 watch(nav_open, (open) => { if (open) workflow_library.refresh_list(); });
 // An invited room (a room on another computer this computer's AI joined) also fills the middle in place of the room.
@@ -296,6 +297,15 @@ function choose_room(id) { nav_open.value = false; workflow_library.close_page((
 
 /** Open an exact original message without altering the transcript. */
 function open_detail(id) { detail_id.value = id; modal.value = "message"; }
+/** Jump the transcript to one member's latest message or ongoing work card. */
+async function locate_member(name, { close_drawer = false } = {}) {
+  if (close_drawer) info_open.value = false;
+  if (view.value.tab !== "discussion") {
+    await act("tab", "discussion");
+    await nextTick();
+  }
+  discussion_view.value?.locate_member(name);
+}
 /** A `#123` written in the brief or consensus opens message 123's original text through `open`. */
 function open_message_ref(event, open) {
   const reference = event.target.closest("[data-message-ref]");
@@ -501,10 +511,10 @@ function resize_nav_by_key(event) {
           <span v-if="room && !middle_page" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ t("{count} 条记录", { count: room.message_count }) }}<template v-if="created_label"><span>·</span><time :datetime="room.created_at" :title="new Date(room.created_at).toLocaleString(locale, { hour12: false })">{{ created_label }}</time></template></span>
           <span v-else-if="creating_preview && !middle_page" class="channel-header-context">{{ t("消息") }}<span>·</span>{{ t("正在创建") }}</span>
           <div class="channel-header-actions">
-            <button v-if="show_work_status" type="button" class="channel-work-status" :class="`is-${work_status.tone}`" :title="work_status.title" :aria-label="t('执行状态：{status}；{action}', { status: work_status.title.replaceAll('\n', t('，')), action: info_label })" @click="toggle_info">
+            <span v-if="show_work_status" class="channel-work-status" :class="`is-${work_status.tone}`" :title="work_status.title">
               <span v-if="work_status.members.length" class="channel-work-avatars"><UAvatar v-for="member in work_status.members" :key="member.id" :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="2xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" /></span>
               <span class="channel-work-text" role="status">{{ work_status.text }}</span><span class="pb-dot"></span>
-            </button>
+            </span>
             <form v-if="!share && !middle_page && view.tab === 'discussion'" class="channel-search" @submit.prevent="act('filter', { query: search })">
               <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" :placeholder="t('搜索消息')" :aria-label="t('搜索讨论记录')" :disabled="!room" class="channel-search-input">
                 <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="channel-search-clear" :aria-label="t('清除搜索')" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" :aria-label="t('搜索')" :disabled="!room" /></template>
@@ -513,6 +523,7 @@ function resize_nav_by_key(event) {
             <UDropdownMenu v-if="!share && !middle_page && view.tab === 'discussion'" :items="source_filter_items" :disabled="!room" :content="source_filter_content" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" :aria-label="t('筛选消息与卡片')" :title="t('筛选消息与卡片')" :disabled="!room" /></UDropdownMenu>
           </div>
           <UTooltip v-if="!workflow_page" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_toggles && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
+          <UTooltip v-else-if="!workflow_stacked && (workflow_draft || workflow_loading)" :text="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md：主持人照它派活')"><UButton icon="i-lucide-panel-right" label="SKILL.md" color="neutral" variant="ghost" size="sm" class="channel-workflow-skill-toggle channel-panel-toggle" :aria-label="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md')" :aria-expanded="workflow_skill_open" :aria-pressed="workflow_skill_open" aria-controls="workflow-skill-panel" @click="workflow_library.set_skill_open(!workflow_skill_open)" /></UTooltip>
         </header>
         <div v-if="(room || creating_preview) && !middle_page" class="channel-tabbar">
           <UTabs v-model="selected_tab" :items="room ? tabs : creating_tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" :aria-label="t('房间视图')" />
@@ -534,7 +545,7 @@ function resize_nav_by_key(event) {
       <div v-else-if="invited_page" class="channel-body"><div class="channel-content"><InvitedRoomPage /></div></div>
       <div v-if="room" v-show="!middle_page" class="channel-body" :class="{ 'channel-body-discussion': view.tab === 'discussion' }">
         <div class="channel-content">
-        <ChannelDiscussion v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" />
+        <ChannelDiscussion ref="discussion_view" v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" />
         <div v-if="share && SHARE_LOCKED[view.tab]" class="content-page channel-share-locked" role="tabpanel" :aria-label="SHARE_LOCKED[view.tab].title">
           <div class="channel-share-locked-sample" aria-hidden="true"><div v-for="row in SHARE_SAMPLE_ROWS" :key="row" class="channel-share-locked-row" :style="{ width: `${row}%` }"></div></div>
           <div class="channel-share-locked-note"><UIcon :name="SHARE_LOCKED[view.tab].icon" /><h2>{{ SHARE_LOCKED[view.tab].title }}</h2><p>{{ SHARE_LOCKED[view.tab].text }}</p>
@@ -608,7 +619,7 @@ function resize_nav_by_key(event) {
     </UModal>
     <div v-if="show_rail" class="channel-rail-resizer" role="separator" tabindex="0" :aria-label="t('调整右侧栏宽度')" aria-orientation="vertical" aria-controls="channel-member-rail" :aria-valuemin="RAIL_MIN" :aria-valuemax="RAIL_MAX" :aria-valuenow="rail_width" :aria-valuetext="t('{count} 像素', { count: rail_width })" :title="t('拖动调整右侧栏宽度，也可使用左右方向键')" @pointerdown="start_rail_resize" @pointermove="resize_rail" @pointerup="finish_rail_resize" @pointercancel="finish_rail_resize" @lostpointercapture="finish_rail_resize" @keydown="resize_rail_by_key"></div>
     <aside v-if="show_rail" id="channel-member-rail" v-keep-reading class="channel-member-rail" :inert="share ? true : undefined" :aria-label="t('当前焦点与讨论进度')">
-      <section class="channel-rail-board"><InvitedRoomRail v-if="invited_page" /><FreeBoard v-else-if="room" @history="open_consensus()" />
+      <section class="channel-rail-board"><InvitedRoomRail v-if="invited_page" /><FreeBoard v-else-if="room" @history="open_consensus()" @locate="locate_member" />
         <div v-else-if="creating_preview" class="progress-board is-docked"><header class="pb-header"><strong>{{ t("房间") }}</strong><span class="pb-mode">{{ creating_preview.host_name ? t('{value1} 主持', { value1: creating_preview.host_name }) : t('无主持人') }}</span></header>
           <section class="pb-status is-primary" :aria-label="t('房间状态')"><div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ t("正在创建") }}</strong></div><p class="pb-status-detail">{{ creating_preview.detail }}</p></section>
           <section class="pb-section" :aria-label="t('发言顺序')"><h4>{{ t('发言顺序') }}</h4><ul class="pb-members">
@@ -625,7 +636,7 @@ function resize_nav_by_key(event) {
       <template #content><ChannelSidebar :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @settings="nav_open = false; modal = 'settings'" /></template>
     </USlideover>
     <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :content="{ onInteractOutside: keep_drawer_for_file_float }" :title="invited_page ? t('外部房间') : room.title" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.host ? t('{value1} 主持', { value1: bridge.display_name(room.host) }) : ''" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
-      <template #body><InvitedRoomRail v-if="invited_page" drawer /><div v-else-if="share" inert class="channel-share-inert"><FreeBoard /></div><FreeBoard v-else @history="info_open = false; open_consensus()" /></template>
+      <template #body><InvitedRoomRail v-if="invited_page" drawer /><div v-else-if="share" inert class="channel-share-inert"><FreeBoard /></div><FreeBoard v-else @history="info_open = false; open_consensus()" @locate="(name) => locate_member(name, { close_drawer: true })" /></template>
     </USlideover>
     <FilePreview />
     <JoinInvitedDialog />

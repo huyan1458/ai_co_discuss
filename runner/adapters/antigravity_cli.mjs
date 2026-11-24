@@ -429,8 +429,15 @@ const events = {
   edits(event) {
     const step = event.step_update;
     if (step?.step_type !== 'tool' || step.state !== 'DONE') return [];
-    const parameters = step.tool_info?.parameters || {};
-    if (step.tool_name === 'run_command') return shell_written_paths(parameters.CommandLine);
+    const info = step.tool_info || {};
+    if (info.error) return [];
+    const parameters = info.parameters || {};
+    if (step.tool_name === 'run_command') {
+      // agy marks a non-zero command step DONE without tool_info.error, reporting the exit code in output.
+      const exit = String(info.output || '').match(/^Command exited with code (\d+)\./m);
+      if (exit && Number(exit[1]) !== 0) return [];
+      return shell_written_paths(parameters.CommandLine);
+    }
     if (!EDIT_TOOLS.test(step.tool_name || '')) return [];
     const path = parameters.Path ?? parameters.AbsolutePath ?? parameters.TargetFile;
     return typeof path === 'string' && path ? [path] : [];

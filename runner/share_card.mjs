@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { drafts_root } from './account_space.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 
@@ -397,6 +398,15 @@ export async function share_card_materials({
       .map((item) => ({ site_id: item.site_id, title: item.title || '', url: item.url, status: item.status, expires_at: item.expires_at || '' }));
   } catch { /* Sites endpoint is optional on older or minimal servers. */ }
 
+  let share_link = null;
+  try {
+    const directory = await room_json(resolved_site, '/api/rooms', request_headers, fetcher);
+    const listed = (directory.rooms || []).find((item) => item.id === target_room);
+    if (listed?.share_link?.url) {
+      share_link = { url: listed.share_link.url, expires_at: listed.share_link.expires_at || '' };
+    }
+  } catch { /* Directory lookup is optional when reading minimal endpoints. */ }
+
   const room_entry = find_room_config(home, target_room, resolved_site);
   const project_patterns = compile_project_patterns(collect_known_folders(room_entry, [room, [...by_exec_key.values()]], folders));
 
@@ -562,10 +572,16 @@ export async function share_card_materials({
       attachments_by_kind: [...kind_counts.values()],
       attachments,
       sites,
+      share_link,
     },
     cover_spec: {
       ...SHARE_CARD_COVER_SPEC,
       note: t('分享面板会自动在封面下方拼接统一的扫码底栏（二维码、域名和最新有效期），并可吸取封面底边颜色；封面 HTML 中请勿绘制二维码、分享链接或有效期。'),
+    },
+    copy_spec: {
+      fence: 'share-copy',
+      share_url_placeholder: '{{share_url}}',
+      note: t('在提交封面 PNG 的同一条消息里，用 ```share-copy 代码块附上配套社交平台分享文案（标题、正文亮点、已上线产品链接、完整协作记录链接和标签）。若 share_link 为空，用 {{share_url}} 占位，分享面板选中该封面时会自动填入真实分享链接。'),
     },
   };
 }
@@ -624,7 +640,7 @@ function member_hash_dir(name) {
 
 function service_drafts_dir(home, runtime_dir) {
   const key = createHash('sha256').update(resolve(runtime_dir)).digest('hex');
-  return join(home, 'drafts', key);
+  return join(drafts_root(home), key);
 }
 
 function push_real_dir(list, dir) {

@@ -42,6 +42,7 @@ html { scrollbar-gutter: stable; }
 .panel-tab:hover { color: var(--panel-text); }
 .panel-tab.is-active { background: #fff; color: var(--panel-text); box-shadow: 0 1px 3px #0000001a, 0 1px 2px #0000000d; }
 .panel-tab > [class*="icon"] { width: 16px; height: 16px; }
+.panel-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--panel-amber); flex-shrink: 0; }
 
 .panel-tools { display: flex; padding: 3px; border: 1px solid var(--panel-line); border-radius: 14px; }
 .panel-tool { display: grid; place-items: center; width: 38px; height: 36px; border-radius: 10px; color: #374151; transition: background-color .15s; }
@@ -86,6 +87,7 @@ a.panel-link:hover { text-decoration: underline; }
 .panel-tag.is-gray { background: var(--panel-tint); color: var(--panel-muted); }
 .panel-tag.is-blue { background: var(--panel-blue-soft); color: var(--panel-blue); }
 .panel-tag.is-amber { background: var(--panel-amber-soft); color: var(--panel-amber); }
+.panel-tag.is-red { background: #fef2f2; color: var(--panel-red); }
 
 .panel-icon-button { display: grid; flex-shrink: 0; place-items: center; width: 34px; height: 34px; border-radius: 10px; color: #4b5563; transition: background-color .15s, color .15s; }
 .panel-icon-button:hover:not(:disabled) { background: var(--panel-tint); color: var(--panel-text); }
@@ -105,6 +107,7 @@ a.panel-link:hover { text-decoration: underline; }
 .panel-note { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--panel-tint); color: var(--panel-muted); font-size: 13px; line-height: 1.6; }
 .panel-note > [class*="icon"] { flex-shrink: 0; width: 16px; height: 16px; margin-top: 3px; }
 .panel-note.is-amber { background: var(--panel-amber-soft); color: var(--panel-amber); }
+.panel-note.is-red { background: #fef2f2; color: var(--panel-red); }
 
 /* Full-page form, like CC Switch's "add provider" page. */
 .panel-form-head { display: flex; align-items: center; gap: 16px; height: 34px; margin: 0 0 22px; padding-bottom: 18px; box-sizing: content-box; border-bottom: 1px solid var(--panel-line); }

@@ -79,7 +79,7 @@ export function access_label(level) { return level === 'own' ? '自行决定' : 
  * Subcommands an automatic task may run; service, run, api, setup and the rest of launch stay unapproved.
  * `launch workflow-adopt`, `launch workflow-join`, `launch workflow-leave` and `launch host-control` check themselves that the caller is the room's host (adopt and host-control also need the owner's grant).
  */
-export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image', 'repo', 'site', 'share-card'];
+export const TASK_SUBCOMMANDS = ['room', 'message', 'turn', 'state', 'goal', 'mode', 'review', 'sequence', 'question', 'execution', 'health', 'schema', 'launch workflow-adopt', 'launch workflow-promote', 'launch workflow-join', 'launch workflow-leave', 'launch host-control', 'attachment', 'launch image', 'repo', 'site', 'share-card'];
 
 /**
  * The limit on a quick answer given inline with --body: a run allowed only codiscuss commands refuses a command line
@@ -189,7 +189,7 @@ export function free_task_text({ name, discussion, discussion_request, profile, 
   const extras = extra_directories.length ? 'extra_directories 是本房间的其他项目目录，access 为 read 的只读、不修改。' : '';
   // The expert's own knowledge: read its index, write what it verified; it may write there whatever its project access.
   const knowing = knowledge ? 'knowledge_directory 里每个文件夹是一条你自己的技能：先读各条 SKILL.md 开头的描述，用到哪条再读哪条的 references；查证过的新知识写进对应技能的 references；可以新建一条技能，新建时写好 SKILL.md（头信息有 name、description）；写之前先读当前内容（别的房间可能刚写过）。' : '';
-  const instructions = `${software_rules(profile, cli, extra_directories)}${scope}${project_rule(profile, '按请求', extra_directories)}${extras}${commands}草稿写在 draft_directory。${knowing}`;
+  const instructions = `${software_rules(profile, cli, extra_directories)}${scope}${project_rule(profile, '按请求', extra_directories)}${extras}${commands}草稿写在 draft_directory。小型可重建临时文件放在 scratch_directory，执行成功后会清理。大型素材和仓库在项目目录中处理，即使项目只读也禁止复制到 draft_directory 或 scratch_directory。只读时直接读取原件，确需工作副本时请用户指定可写的项目目录。交付物和未提交修改保存在临时目录之外。${knowing}`;
   if (discussion_request) {
     const role = discussion_request.purpose === 'discuss_host' ? '主持任务' : '发言请求';
     const prompt = `你（${name}）收到了讨论中的${role}。先读任务文件 ${task_path}，按其中列出的技能处理本次请求并保存结果。${read_rule}${files}`;

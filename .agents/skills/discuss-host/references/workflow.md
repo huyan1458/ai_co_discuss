@@ -18,6 +18,8 @@
 
 ## 保存与启用
 
-用户请你把本房间的做法存成工作流（或要你按某种分工新建一套流程），或消息里写了 `$workflow-creator` 时，按 [workflow-creator](../../workflow-creator/SKILL.md) 技能做；是新建还是修改已有工作流，按用户写的内容判断。任务有 `host_workflows: true` 时，房主已允许你自行保存并启用，不必等用户导入。
+用户请你把本房间的做法存成工作流（或要你按某种分工新建一套流程），或消息里写了 `$workflow-creator` 时，按 [workflow-creator](../../workflow-creator/SKILL.md) 技能做；是新建还是修改已有工作流，按用户写的内容判断。任务有 `host_workflows: true` 时，房主已允许你自行保存并启用，不必等用户导入。`workflow-adopt --draft` 有主项目时默认存入主项目，无主项目时默认存入全局。用户明确要求全局时加 `--scope global`；指定其他可写项目时加 `--scope project --project-id <项目ID>`。
 
-用户请你启用工作流库里已有的工作流（任务的 `named_workflows.workflows` 列出它，或用户用文字说明）时：任务的 `host_permissions` 含 `workflows` 就运行 `<cli> launch workflow-adopt --id <工作流 ID> …`，程序启用它、邀请缺少的卡片成员，返回 `members` 和 `skill_path`；本次要接着按它做时读 `skill_path`，下一次执行起任务里有 `workflow` 字段。用户只说了启用时，回答说明已启用和带来了谁即可。没有该字段或你是 API 主持人时不能启用，请用户在“成员与设置 → 协作设置”打开“主持人完整权限”。
+用户请你启用工作流库里已有的工作流（任务的 `named_workflows.workflows` 或 `named_workflows.workflow_targets` 列出它，或用户用文字说明）时：任务的 `host_permissions` 含 `workflows` 就运行 `<cli> launch workflow-adopt --id <工作流 ID> …`，省略 `--scope` 时，程序先匹配房间配置中的项目目录（主项目及额外目录），再查全局。若 `named_workflows.workflow_targets` 给出了 `scope`（与 `project_id`），或同 ID 有多份时，按指定归属传 `--scope project --project-id <项目ID>` 或 `--scope global`。程序启用它、邀请缺少的卡片成员，返回 `members` 和 `skill_path`；本次要接着按它做时读 `skill_path`，下一次执行起任务里有 `workflow` 字段。用户只说了启用时，回答说明已启用和带来了谁即可。没有该字段或你是 API 主持人时不能启用，请用户在“成员与设置 → 协作设置”打开“主持人完整权限”。
+
+项目工作流含登记命令或高于只读的卡片且尚未受信任时，请房主在网页核对内容并确认。用户要求把项目工作流移至全局且你有 `workflows` 权限时，运行 `<cli> launch workflow-promote --id <工作流ID> [--project-id <项目ID>]`。项目目录须可写；全局已有同 ID 时命令拒绝，成功后同步当前房间的绑定。

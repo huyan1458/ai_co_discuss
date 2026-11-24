@@ -89,7 +89,7 @@ async function send_now(item) {
   try { await act("queue_send", item.id); } finally { sending.value = null; }
 }
 
-/** The send-now button, one icon (user 2026-11-23, #7960): its tooltip and accessible name say what it will do (send, interject into a busy recipient's turn, or interrupt it first). */
+/** The send-now button says what it will do (send, interject into a busy recipient's turn, or interrupt it first); PC shows icon + label while phones hide the label and keep a wider tap target (user 2026-11-24, #10245). */
 function send_action(item) {
   if (item.failure) return { label: t('重试'), tip: t('再次尝试发送这条排队消息'), icon: "i-lucide-rotate-ccw" };
   if (item.send_mode === "steer") return { label: t('插话'), tip: t('接收者正在执行：把这条插进它这一轮，不中断已做的工作'), icon: "i-lucide-corner-down-right" };
@@ -234,7 +234,7 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
         <span v-else-if="sending === item.id || item.failure" class="queued-sending-status">{{ sending === item.id ? t('投递中') : t('失败') }}</span>
         <span class="queued-actions">
           <UTooltip v-for="action in [send_action(item)]" :key="action.label" :text="action.tip" :ui="{ content: 'queued-tooltip' }">
-            <UButton :aria-label="action.label" :icon="action.icon" size="xs" color="neutral" variant="ghost" class="queued-action queued-send-now"
+            <UButton :label="action.label" :aria-label="action.label" :icon="action.icon" size="xs" color="neutral" variant="ghost" class="queued-action queued-send-now"
               :disabled="sending !== null" @click.stop="send_now(item)" />
           </UTooltip>
           <UButton icon="i-lucide-trash-2" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('删除排队消息')" :disabled="sending === item.id" @click.stop="act('queue_delete', item.id)" />
@@ -284,8 +284,13 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
 .queued-actions { display: flex; flex-shrink: 0; align-items: center; gap: 0; }
 .queued-action { color: var(--ui-text-dimmed); }
 .queued-action:hover:not(:disabled) { color: var(--ui-text-highlighted); }
-/* Phones keep the icon alone, leaving the row's width to the message (user 2026-11-18, #4558). */
-@media (max-width: 700px) { .queued-send-now :deep([data-slot="label"]) { display: none; } }
+/* Give the primary send/interject button a wider pill-like hit area; PC shows text while phones keep the icon alone (user 2026-11-24, #10245). */
+.queued-send-now { justify-content: center; min-width: 64px; margin-right: 4px; padding-inline: 10px; border: 1px solid color-mix(in srgb, var(--ui-border) 75%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--ui-text) 6%, transparent); color: var(--ui-text-toned); }
+.queued-send-now:hover:not(:disabled) { border-color: var(--ui-border-accented); background: color-mix(in srgb, var(--ui-text) 11%, transparent); color: var(--ui-text-highlighted); }
+@media (max-width: 700px) {
+  .queued-send-now { min-width: 52px; padding-inline: 12px; }
+  .queued-send-now :deep([data-slot="label"]) { display: none; }
+}
 .queued-sending-status { padding: 0 8px; font-size: 12px; color: var(--ui-text-dimmed); }
 .queued-paused-row { cursor: default; }
 .queued-paused-row .queued-text { color: var(--ui-text-muted); }

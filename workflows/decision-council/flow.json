@@ -7,75 +7,182 @@
       "y": -30
     },
     {
+      "id": "user_question",
+      "type": "user",
+      "label": "提出要拍板的决定",
+      "x": 216,
+      "y": -48
+    },
+    {
+      "id": "facts_gate",
+      "type": "branch",
+      "label": "关键事实是否齐全",
+      "branches": [
+        {
+          "id": "missing",
+          "label": "缺钱/期限/退路"
+        },
+        {
+          "id": "ready",
+          "label": "事实齐全"
+        }
+      ],
+      "x": 576,
+      "y": -67
+    },
+    {
+      "id": "user_facts",
+      "type": "user",
+      "label": "补充关键事实",
+      "x": 970,
+      "y": -140
+    },
+    {
+      "id": "rewrite",
+      "type": "host",
+      "label": "改写中性陈述",
+      "x": 1353,
+      "y": -48
+    },
+    {
       "id": "contrarian",
       "type": "card",
       "card": "contrarian",
-      "x": 216,
+      "x": 1769,
       "y": -234
     },
     {
       "id": "outsider",
       "type": "card",
       "card": "outsider",
-      "x": 216,
+      "x": 1769,
       "y": -110
     },
     {
       "id": "alternatives",
       "type": "card",
       "card": "alternatives",
-      "x": 216,
+      "x": 1769,
       "y": 14
     },
     {
       "id": "executor",
       "type": "card",
       "card": "executor",
-      "x": 216,
+      "x": 1769,
       "y": 138
     },
     {
       "id": "disputes",
       "type": "host",
-      "label": "找分歧",
-      "x": 576,
+      "label": "挑出关键分歧",
+      "x": 2129,
       "y": -48
     },
     {
-      "id": "debate",
-      "type": "host",
-      "label": "当事人交锋",
-      "x": 936,
+      "id": "disputes_gate",
+      "type": "branch",
+      "label": "是否有关键分歧",
+      "branches": [
+        {
+          "id": "debate",
+          "label": "有分歧·仅点当事人"
+        },
+        {
+          "id": "skip",
+          "label": "无关键分歧"
+        }
+      ],
+      "x": 2489,
+      "y": -67
+    },
+    {
+      "id": "debate_contrarian",
+      "type": "card",
+      "card": "contrarian",
+      "x": 2849,
+      "y": -512
+    },
+    {
+      "id": "debate_outsider",
+      "type": "card",
+      "card": "outsider",
+      "x": 2849,
+      "y": -388
+    },
+    {
+      "id": "debate_alternatives",
+      "type": "card",
+      "card": "alternatives",
+      "x": 2849,
+      "y": -264
+    },
+    {
+      "id": "debate_executor",
+      "type": "card",
+      "card": "executor",
+      "x": 2849,
       "y": -140
     },
     {
       "id": "synthesis",
       "type": "host",
-      "label": "综合建议",
-      "x": 1296,
+      "label": "综合建议与取舍",
+      "x": 3209,
+      "y": -48
+    },
+    {
+      "id": "user_decide",
+      "type": "user",
+      "label": "自行拍板与复盘",
+      "x": 3614,
       "y": -48
     }
   ],
   "edges": [
     {
       "source": "start",
+      "target": "user_question"
+    },
+    {
+      "source": "user_question",
+      "target": "facts_gate"
+    },
+    {
+      "source": "facts_gate",
+      "branch": "missing",
+      "target": "user_facts",
+      "label": "先问清再开审"
+    },
+    {
+      "source": "user_facts",
+      "target": "rewrite",
+      "label": "补齐后改写"
+    },
+    {
+      "source": "facts_gate",
+      "branch": "ready",
+      "target": "rewrite"
+    },
+    {
+      "source": "rewrite",
       "target": "contrarian",
-      "label": "中性陈述·同时答"
+      "label": "中性陈述·独立答"
     },
     {
-      "source": "start",
+      "source": "rewrite",
       "target": "outsider",
-      "label": "中性陈述·同时答"
+      "label": "中性陈述·独立答"
     },
     {
-      "source": "start",
+      "source": "rewrite",
       "target": "alternatives",
-      "label": "中性陈述·同时答"
+      "label": "中性陈述·独立答"
     },
     {
-      "source": "start",
+      "source": "rewrite",
       "target": "executor",
-      "label": "中性陈述·同时答"
+      "label": "中性陈述·独立答"
     },
     {
       "source": "contrarian",
@@ -95,17 +202,101 @@
     },
     {
       "source": "disputes",
-      "target": "debate",
-      "label": "有会改变结论的分歧"
+      "target": "disputes_gate"
     },
     {
-      "source": "disputes",
-      "target": "synthesis",
-      "label": "无关键分歧"
+      "source": "disputes_gate",
+      "branch": "debate",
+      "target": "debate_contrarian"
     },
     {
-      "source": "debate",
+      "source": "disputes_gate",
+      "branch": "debate",
+      "target": "debate_outsider"
+    },
+    {
+      "source": "disputes_gate",
+      "branch": "debate",
+      "target": "debate_alternatives"
+    },
+    {
+      "source": "disputes_gate",
+      "branch": "debate",
+      "target": "debate_executor"
+    },
+    {
+      "source": "disputes_gate",
+      "branch": "skip",
       "target": "synthesis"
+    },
+    {
+      "source": "debate_contrarian",
+      "target": "synthesis"
+    },
+    {
+      "source": "debate_outsider",
+      "target": "synthesis"
+    },
+    {
+      "source": "debate_alternatives",
+      "target": "synthesis"
+    },
+    {
+      "source": "debate_executor",
+      "target": "synthesis"
+    },
+    {
+      "source": "synthesis",
+      "target": "user_decide",
+      "label": "建议与最小动作"
+    }
+  ],
+  "stages": [
+    {
+      "id": "rewrite",
+      "label": "改写问题",
+      "nodes": [
+        "user_question",
+        "facts_gate",
+        "user_facts",
+        "rewrite"
+      ]
+    },
+    {
+      "id": "independent",
+      "label": "独立作答",
+      "nodes": [
+        "contrarian",
+        "outsider",
+        "alternatives",
+        "executor"
+      ]
+    },
+    {
+      "id": "disputes",
+      "label": "找分歧",
+      "nodes": [
+        "disputes",
+        "disputes_gate"
+      ]
+    },
+    {
+      "id": "debate",
+      "label": "交锋·最多一轮",
+      "nodes": [
+        "debate_contrarian",
+        "debate_outsider",
+        "debate_alternatives",
+        "debate_executor"
+      ]
+    },
+    {
+      "id": "synthesis",
+      "label": "综合与拍板",
+      "nodes": [
+        "synthesis",
+        "user_decide"
+      ]
     }
   ]
 }

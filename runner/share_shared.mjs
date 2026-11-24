@@ -357,6 +357,22 @@ export function create_share_core({ t, display_name, collapse_visual_fences, is_
     return String(text || "").replace(/```[\s\S]*?```/g, " ").replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[`*_>#|~-]+/g, " ").replace(/\s+/g, " ").trim();
   }
 
+  /** One concise lead sentence (or two short ones) from the opening paragraph, leaving bullet checklists and prompt tails off the card. */
+  function share_card_lead(text, max_chars = 160) {
+    const first_para = String(text || "").replace(/\r\n/g, "\n").trim()
+      .split(/\n\s*\n|\n\s*(?:[-*•]|\d+[.)、])\s+/)[0];
+    const clean = share_plain(first_para).replace(/^(?:@\S+\s+)+/, "").trim();
+    if (!clean) return "";
+    const sentences = clean.match(/[^。！？.!?]+(?:[。！？]|[.!?](?=\s|$)|$)/gu) || [];
+    const first = sentences[0]?.trim() || "";
+    if (!first) return clean.slice(0, max_chars);
+    if (first.length < 10 && sentences[1]) {
+      const two = `${first}${/[a-zA-Z0-9.!?]$/.test(first) ? " " : ""}${sentences[1].trim()}`;
+      if (two.length <= max_chars) return two;
+    }
+    return first.slice(0, max_chars);
+  }
+
   function share_card_messages(responses) {
     return Object.entries(responses).filter(([path]) => /\/messages\?/.test(path)).flatMap(([, body]) => body.messages || [])
       .filter(message => message.kind !== "system" && message.text).sort((a, b) => a.id - b.id);
@@ -372,19 +388,20 @@ export function create_share_core({ t, display_name, collapse_visual_fences, is_
     const room = draft.responses[`/api/rooms/${draft.room_id}`] || {};
     const members = (room.members || []).filter(member => member.status !== "removed").map(member => member.label || display_name(member.name));
     const messages = share_card_messages(draft.responses);
-    const question = messages.find(message => message.author === "用户" && !is_share_question_receipt(message.text)
-      && !/^\/?(?:继续|好的?|同意|continue|ok)[。.!！\s]*$/iu.test(message.text.trim()));
+    const question = messages.find(message => {
+      if (message.author !== "用户") return false;
+      const body = String(message.text || "").trim();
+      if (!body || is_share_question_receipt(body) || /^\/(?:goal|discuss)\b/i.test(body)) return false;
+      return !/^\/?(?:继续|好的?|行|ok|yes|收到|同意|开始|可以|确认|嗯|明白|go|continue)[。.!！,，\s]*$/iu.test(body);
+    });
     const answers = messages.filter(message => message.author !== "用户" && message.author !== "系统" && message.id > (question?.id ?? 0));
     const outcome = answers.findLast(message => message.summary) || answers.at(-1);
     // Text the owner was asked to check stays off the card, which cannot be taken back once posted; it can be typed in.
     const flagged = new Set((draft.spots || []).map(spot => spot.where));
-    const text = (message, value) => message && !flagged.has(`#${message.id}`) ? share_plain(value) : "";
-    const result = text(outcome, outcome?.summary || outcome?.text);
-    const sentences = result.match(/[^。！？.!?]+(?:[。！？]|[.!?](?=\s|$)|$)/gu) || [];
-    const complete = sentences[0]?.trim();
-    return { title: draft.title, members, materials: { through: messages.at(-1)?.id ?? null, count: messages.length },
-      question: text(question, question?.text).slice(0, 600),
-      outcome: (complete && result.startsWith(complete) ? complete : result).slice(0, 600),
+    const lead = (message, value, limit) => message && !flagged.has(`#${message.id}`) ? share_card_lead(value, limit) : "";
+    return { title: draft.title, members, card_version: 2, materials: { through: messages.at(-1)?.id ?? null, count: messages.length },
+      question: lead(question, question?.text, 160),
+      outcome: lead(outcome, outcome?.summary || outcome?.text, 200),
       stats: t('{members} 位 AI · {messages} 条消息 · {runs} 次执行', { members: members.length, messages: room.message_count ?? messages.length, runs: draft.runs ?? 0 }),
       url: link.url, expires: t('{time} 前有效', { time: new Date(link.expires_at).toLocaleString(undefined, { hour12: false }) }) };
   }

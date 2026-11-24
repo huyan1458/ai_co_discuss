@@ -1535,6 +1535,39 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual((message["relay_room"], message["relay_host"], message["relay_title"]), (self.room["id"], "Claude", "自由单聊"))
         self.assertEqual([(item["member"], item["status"]) for item in self.request(child_path)[1]["free"]["requests"]], [("Claude", "pending")])
 
+    def test_outgoing_relay_receipts_survive_target_deletion_without_routing(self):
+        target = self.request("/api/rooms", {"title": "接收房", "members": [
+            {"name": "Codex", "token": uuid.uuid4().hex}]}, self.owner)[1]["id"]
+        endpoint = self.path + "/room-relay-sent"
+        payload = dict(target_room_id=target, host="主持", member="Codex", text="**完整正文**", submission_id=uuid.uuid4().hex)
+        self.assertEqual(self.request(endpoint, payload, self.owner)[0], 403)
+        self.request(self.path + "/room-link", dict(relation="child", room_id=target, host="Codex"), self.owner)
+        self.assertEqual(self.request(endpoint, payload, self.member)[0], 403)
+        self.assertEqual(self.request(endpoint, {**payload, "text": " "}, self.owner)[0], 400)
+        def last_speech():
+            rooms = self.request("/api/rooms")[1]["rooms"]
+            return next(room["latest_speech_at"] for room in rooms if room["id"] == self.room["id"])
+        previous = last_speech()
+        for message_id, queued, interrupted in [(17, None, False), (18, None, True), (None, 31, False)]:
+            data = dict(payload, target_message_id=message_id, queued_id=queued, interrupted=interrupted, submission_id=uuid.uuid4().hex)
+            status, saved = self.request(endpoint, data, self.owner)
+            self.assertEqual(status, 200, saved)
+            retry = self.request(endpoint, data, self.owner)[1]
+            self.assertEqual(retry, dict(message_id=saved["message_id"], duplicate=True))
+            url = f"{self.path}/messages/{saved['message_id']}"
+            row = self.request(url)[1]
+            self.assertEqual([row[k] for k in ("author", "source", "kind", "submitted_by", "text")],
+                             ["系统", "room_relay_sent", "notice", "系统", payload["text"]])
+            self.assertEqual([row["relay_sent_" + k] for k in ("room", "title", "relation", "host", "message_id", "queued_id", "interrupted")],
+                             [target, "接收房", "child", "主持", message_id, queued, interrupted])
+        self.assertEqual(self.request(self.path)[1]["free"]["requests"], [])
+        self.assertEqual(last_speech(), previous)
+        relay = dict(room_id=target, host="主持", limit=1)
+        self.assertEqual(self.say("第一条跨房消息", relay=relay)[0], 201)
+        self.assertEqual(self.say("达到互传上限", relay=relay)[0], 409)
+        self.assertEqual(self.request(f"/api/rooms/{target}/delete", dict(actor="用户", confirm_title="接收房"), self.owner)[0], 200)
+        self.assertIsNone(self.request(url)[1]["relay_sent_title"])
+
     def test_quoted_mention_of_the_host_wakes_nobody(self):
         """应 8: a host's name inside quotation marks is quoted, not called on."""
         self.say("请 Claude 看看", to=["Claude"])
@@ -2073,6 +2106,23 @@ class HostTests(HostRoomTests):
         relay = self.work("Codex")
         lines = {item["id"]: item["line"] for item in self.request(self.path)[1]["free"]["executions"]}
         self.assertEqual((lines[branch["id"]], lines[relay["id"]]), ({"kind": "branch", "by": "user"}, {"kind": "main", "step": 2, "by": "host"}))
+
+    def test_legacy_three_item_relay_steps_still_render_and_archive(self):
+        """Legacy free_sequences.steps rows without a 4th position element must not break room views or archiving."""
+        FreeRoomTests.say(self, "两人接力")
+        self.work("Claude", to=["Antigravity", "Codex"], sequential=True)
+        first = self.work("Antigravity")
+        second = self.work("Codex")
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            row = connection.execute("SELECT id, steps FROM free_sequences WHERE room_id=?", (self.room["id"],)).fetchone()
+            legacy = [entry[:3] for entry in json.loads(row[1])]
+            connection.execute("UPDATE free_sequences SET steps=? WHERE id=?", (json.dumps(legacy), row[0]))
+        status, view = self.request(self.path)
+        self.assertEqual(status, 200, view)
+        lines = {item["id"]: item["line"] for item in view["free"]["executions"]}
+        self.assertEqual((lines[first["id"]], lines[second["id"]]),
+                         ({"kind": "main", "step": 1, "by": "host"}, {"kind": "main", "step": 2, "by": "host"}))
+        self.assertEqual(self.request(f"{self.path}/archive", {"actor": "用户"}, self.owner)[0], 200)
 
     def test_a_member_named_while_nothing_else_runs_is_not_a_branch(self):
         """2026-11-21 (#6884): a branch works beside other work; named in an idle room, or sent by the host's own turn, it is not one."""

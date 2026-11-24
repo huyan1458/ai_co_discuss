@@ -87,3 +87,14 @@ test('a relayed command runs once, only within its time window, across restarts'
   claim_relayed_command(f.home, 'command-4', now + 3 * COMMAND_MAX_AGE_MS, now + 3 * COMMAND_MAX_AGE_MS);
   claim_relayed_command(f.home, 'command-1', now + 3 * COMMAND_MAX_AGE_MS, now + 3 * COMMAND_MAX_AGE_MS);
 });
+
+test('relayed project libraries select room and project IDs and reject supplied paths', t => {
+  const { project } = fixture(t);
+  for (const action of ['presets', 'workflows']) {
+    assert.throws(() => relayed_command('http://localhost', action, { action: 'list', cwd: project }));
+    assert.throws(() => relayed_command('http://localhost', action, { action: 'list', extra_directories: [project] }));
+    const { input } = relayed_command('http://localhost', action, { action: 'list', room_id: 'one', project_id: 'known', site: 'https://other.test' });
+    assert.equal(input.site, 'http://localhost');
+    assert.equal(input.project_id, 'known');
+  }
+});

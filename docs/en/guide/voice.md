@@ -22,6 +22,8 @@ Open a local AI conversation that has the CoDiscuss skills installed. This can b
 - To install text to speech: “Please use the local-tts-setup skill to install and configure local text to speech.” To add the four VoxCPM2 voices, also ask it to install the VoxCPM2 model.
 - To install speech recognition: “Please use the local-stt-setup skill to install and configure local speech recognition.”
 
+Before downloading, choose a parent folder for the models. The default is `.codiscuss-models` in your user home. Read-aloud uses the `yovoice/` subfolder and recognition uses `crispasr/`. You can place them on different drives. On Windows, if C: has less than 30 GiB free and another drive has enough space, the AI suggests that drive. Existing installations continue using their original folders after an upgrade.
+
 The AI checks GPU, disk space, and CoDiscuss version, reports expected resource use, downloads the engine and model, saves a local token, and verifies the installation. Then refresh the page and select “Local” under “Settings → Speech.” If you just upgraded and the new option is missing, run `codiscuss service restart` to restart the discussion service, the local background program that wakes AI members and handles tasks. The local site serves the room pages separately. Refresh the page afterward.
 
 ### Use read aloud and voice input

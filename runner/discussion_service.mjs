@@ -1,7 +1,7 @@
 /** Resident local service that dispatches registered rooms to software or configured API participants. */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -10,14 +10,17 @@ import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { cleanup_room, sweep_adapters } from './adapters/index.mjs';
 import { same_session_family } from './adapters/profiles.mjs';
+import { room_directories } from './project_files.mjs';
+import { ensure_global_experts_migrated } from './experts.mjs';
 import { atomic_json } from './files.mjs';
+import * as storage_guard from './storage_guard.mjs';
 import { relay_health_writer } from './relay_health.mjs';
 import { t } from './i18n.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
-import { FreeRoomRunner, write_proactive_access } from './free_runner.mjs';
+import { FreeRoomRunner, member_drafts, write_proactive_access } from './free_runner.mjs';
 import { can_notify, notice_sent, receive_replies, send_notice } from './weixin.mjs';
 import { answer_by_weixin } from './question_weixin.mjs';
-import { OPERATOR_EVENTS_FILE, account_space } from './account_space.mjs';
+import { OPERATOR_EVENTS_FILE, account_space, drafts_root } from './account_space.mjs';
 import { install_pi, pi_outdated } from './pi_runtime.mjs';
 import { site_fetch } from './entry_client.mjs';
 import { destroy_draft_space, destroy_room_sessions, room_bindings } from './room_destruction.mjs';
@@ -435,11 +438,37 @@ class RoomWorker {
 
 /** Keep workers aligned with the registry and tick each one per poll. */
 export class DiscussionService {
-  constructor(home, create_runner = (config, store, log) => new FreeRoomRunner(config, store, undefined, log), log = () => {}) {
+  constructor(home, create_runner, log = () => {}, guard = storage_guard) {
     this.home = home;
-    this.create_runner = create_runner;
+    this.guard = guard;
+    this.drafts_root = drafts_root(home);
+    this.create_runner = create_runner || ((config, store, write_log) => {
+      const runner = new FreeRoomRunner(config, store, undefined, write_log);
+      runner.on_drafts_finished = name => this.refresh_drafts(config, name);
+      runner.storage_reason = async stoppable => {
+        try {
+          const key = basename(config.draft_directory);
+          const disk = this.disk_space();
+          const low = this.guard.block_reason(null, key, disk);
+          if (low) return low;
+          let snapshot = await this.scan_storage(Boolean(this.guard.block_reason(this.storage, '', null)), disk);
+          if (!this.guard.block_reason(snapshot, '', null) && this.guard.block_reason(snapshot, key, null, { stoppable })) {
+            snapshot = await this.refresh_drafts(config);
+          }
+          return this.guard.block_reason(snapshot, key, this.disk_space(), { stoppable });
+        } catch (error) {
+          return this.guard.storage_error_reason ? this.guard.storage_error_reason(error) : storage_guard.storage_error_reason(error);
+        }
+      };
+      return runner;
+    });
     this.log = log;
     this.workers = new Map();
+    this.storage = null;
+    this.storage_scan = null;
+    this.storage_stops = new Map();
+    this.draft_scans = new Map();
+    this.disk_checked = -Infinity;
     // Rooms whose destruction this computer is still cleaning up; the loop leaves them to that one cleanup.
     this.cleaning = new Set();
     // How often each room is checked without a push: a local site costs nothing, a hosted one spends its database quota.
@@ -578,9 +607,107 @@ export class DiscussionService {
     })();
     this.streams.set(site, stream);
   }
-  /** Publish every room's latest state for `codiscuss status` and the website's service check. */
+  /** Concurrent deliveries and maintenance share one scan for this service home. */
+  disk_space() { return storage_guard.storage_disk(this.home, this.drafts_root, this.guard.disk_free); }
+
+  scan_storage(force = false, disk = this.disk_space()) {
+    if (this.storage_scan) return this.storage_scan;
+    const volumes = disk.volumes || [disk.available_bytes];
+    const drop = volumes.reduce((sum, available, index) => sum + Math.max(0, (this.scan_available?.[index] ?? available) - available), 0);
+    const remaining = this.storage && storage_guard.HOME_LIMIT - this.storage.total_bytes;
+    const early = remaining > 0 && drop >= remaining;
+    if (!force && !early && this.storage) return this.storage;
+    this.scan_available = volumes;
+    this.storage_disk = disk;
+    this.storage_scan = this.guard.measure(this.home, { members: true, drafts_root: this.drafts_root }).catch(error => { this.storage = null; throw error; }).then(snapshot => {
+      if (early && snapshot.unreadable > (this.storage.unreadable ?? 0)) {
+        snapshot = { ...snapshot, uncertain_growth: true };
+      }
+      this.storage = snapshot;
+      for (const { runner, config } of this.workers.values()) {
+        if (!runner?.reclaim_failed_scratch || this.closed) continue;
+        const room_bytes = snapshot.rooms[basename(config.draft_directory)] || 0;
+        if (snapshot.draft_bytes >= storage_guard.DRAFT_LIMIT * storage_guard.SCRATCH_PRESSURE_RATIO ||
+            room_bytes >= storage_guard.ROOM_DRAFT_LIMIT * storage_guard.SCRATCH_PRESSURE_RATIO) {
+          try { runner.reclaim_failed_scratch(); } catch (error) { this.log(error.message); }
+        }
+      }
+      if (!this.closed) this.enforce_storage();
+      return snapshot;
+    }).finally(() => { this.storage_scan = null; });
+    return this.storage_scan;
+  }
+
+  /** Refresh a finished member or a blocked room, sharing simultaneous reads of the same subtree. */
+  async refresh_drafts(config, member) {
+    if (this.storage_scan) await this.storage_scan;
+    const base = this.storage;
+    if (!base || base.truncated) return this.scan_storage(true);
+    const path = member ? member_drafts(config, member) : config.draft_directory;
+    if (this.draft_scans.has(path)) return this.draft_scans.get(path);
+    for (const [other, pending] of this.draft_scans) {
+      if (dirname(other) === path || dirname(path) === other) {
+        await pending;
+        return this.refresh_drafts(config, member);
+      }
+    }
+    const room = basename(config.draft_directory);
+    const parents = [dirname(config.draft_directory), config.draft_directory, path];
+    if (parents.some(dir => lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink())) return this.scan_storage(true);
+    const scan = this.guard.measure(path, { model_dirs: [], members: true, room_key: member ? '' : room }).then(async usage => {
+      if (this.storage_scan) return this.storage_scan;
+      if (this.storage !== base) return this.storage || this.scan_storage(true);
+      if (usage.shared_links || usage.truncated || usage.unreadable) return this.scan_storage(true);
+      const members = (base.members ||= {})[room] ||= {};
+      const delta = usage.total_bytes - ((member ? members[basename(path)] : base.rooms[room]) || 0);
+      if (delta && (member ? base.linked_members?.[room]?.[basename(path)] : base.shared_links)) return this.scan_storage(true);
+      if (member) members[basename(path)] = usage.total_bytes;
+      else base.members[room] = usage.members?.[room] || {};
+      base.rooms[room] = (base.rooms[room] || 0) + delta;
+      base.draft_bytes += delta;
+      base.total_bytes += delta;
+      if (!this.closed) this.enforce_storage();
+      return base;
+    }).finally(() => this.draft_scans.delete(path));
+    this.draft_scans.set(path, scan);
+    return scan;
+  }
+
+  /** Apply a sampled limit to busy rooms through their capability-aware stop operation. */
+  enforce_storage() {
+    for (const { runner, config } of this.workers.values()) {
+      if (!runner?.inbox?.executions?.length && !runner?.children?.size) continue;
+      const reason = this.guard.block_reason(this.storage, basename(config.draft_directory), this.storage_disk);
+      if (!reason || this.storage_stops.has(runner)) continue;
+      const stopping = Promise.resolve().then(() => runner.stop_for_storage(reason))
+        .catch(error => this.log(error.message)).finally(() => this.storage_stops.delete(runner));
+      this.storage_stops.set(runner, stopping);
+    }
+  }
+
+  /** Check disk space independently of any pending quota scan. */
+  monitor_storage(maintenance = false, now = Date.now()) {
+    const active = [...this.workers.values()].some(({ runner }) => runner?.inbox?.executions?.length || runner?.children?.size);
+    if (!active && !maintenance) return;
+    const disk_due = active && now - this.disk_checked >= storage_guard.DISK_CHECK_MS;
+    if (disk_due) {
+      this.disk_checked = now;
+      this.storage_disk = this.disk_space();
+      this.enforce_storage();
+    }
+    if (!this.storage_scan && (maintenance || disk_due)) {
+      const scan = this.scan_storage(maintenance, disk_due ? this.storage_disk : undefined);
+      if (!this.storage_scan) return;
+      scan.catch(error => this.log(error.message));
+    }
+  }
+
+  /** Publish every room's latest state for the status command and website. */
   write_status() {
+    const warning_reason = storage_guard.warn_reason(this.storage);
     atomic_json(join(this.home, 'status.json'), { pid: process.pid, updated_at: Math.floor(Date.now() / 1000),
+      storage: this.storage && { total_bytes: this.storage.total_bytes, local_bytes: this.storage.local_bytes || 0,
+        unreadable: this.storage.unreadable || 0, warning: Boolean(warning_reason), warning_reason },
       rooms: [...this.workers.values()].map(worker => worker.state) });
   }
   /** Tick one room; a room deleted on its website is unregistered here. */
@@ -616,7 +743,8 @@ export class DiscussionService {
     // Its runtime, task files and answer drafts serve no one now; a file still held is left to the periodic sweep.
     try { remove_room_files(this.home, path, directory); } catch (error) { this.log(`${worker.state.room || path}: 本机文件未能删除，稍后清理：${error.message}`); }
     const folder = dirname(resolve(path));
-    const leftover = (dirname(folder) === resolve(this.home, 'launches') && existsSync(folder)) || (directory && existsSync(service_drafts(this.home, directory)));
+    const draft_dirs = [directory, folder, join(folder, 'runtime')].filter(Boolean).map(dir => service_drafts(this.home, dir));
+    const leftover = (dirname(folder) === resolve(this.home, 'launches') && existsSync(folder)) || draft_dirs.some(existsSync);
     items.push({ kind: 'runtime_files', state: leftover ? 'failed' : 'deleted' });
     this.log(`${worker.state.site || ''}/${worker.state.room || path}: 房间已在网站删除，已撤销登记并删除本机文件`);
     if (record?.sessions) this.report_destruction(config, items);
@@ -684,6 +812,8 @@ export class DiscussionService {
   }
   async close() {
     this.closed = true;
+    await this.storage_scan?.catch(error => this.log(error.message));
+    await Promise.all(this.storage_stops.values());
     for (const stream of this.streams.values()) stream.controller.abort();
     await Promise.all([...this.streams.values()].map(stream => stream.done));
     this.streams.clear();
@@ -707,7 +837,7 @@ export function folders_in_use(home, except) {
     if (resolve(path) === resolve(except)) continue;
     try {
       const config = JSON.parse(readFileSync(path, 'utf8'));
-      for (const folder of [config.cwd, ...(config.extra_directories || [])]) if (typeof folder === 'string' && folder) used.add(resolve(folder));
+      for (const folder of room_directories(config)) if (typeof folder === 'string' && folder) used.add(resolve(folder));
     } catch { /* An unreadable room names no folder. */ }
   }
   return used;
@@ -753,24 +883,67 @@ export function sessions_in_use(home, except) {
   return used;
 }
 
+/**
+ * Remove a file or directory tree, clearing read-only bits on failure and continuing past locked or
+ * permission-denied entries so sibling files and later cleanup targets are still removed.
+ */
+function remove_tree(target) {
+  if (!target) return;
+  try { rmSync(target, { recursive: true, force: true }); return; }
+  catch (error) { if (error.code === 'ENOENT') return; }
+  let first_error = null;
+  const note = (error) => { if (!first_error && error.code !== 'ENOENT') first_error = error; };
+  const make_writable = (path, mode) => { try { chmodSync(path, mode); } catch { /* Best effort. */ } };
+  const walk = (path) => {
+    let entry;
+    try { entry = lstatSync(path); } catch (error) { note(error); return; }
+    if (entry.isSymbolicLink()) {
+      try { unlinkSync(path); }
+      catch (error) { try { rmdirSync(path); } catch { note(error); } }
+      return;
+    }
+    if (!entry.isDirectory()) {
+      try { unlinkSync(path); return; } catch (error) {
+        make_writable(path, 0o666);
+        try { unlinkSync(path); } catch { note(error); }
+      }
+      return;
+    }
+    make_writable(path, 0o777);
+    let children;
+    try { children = readdirSync(path); } catch (error) { note(error); return; }
+    for (const name of children) walk(join(path, name));
+    try { rmdirSync(path); } catch (error) {
+      make_writable(path, 0o777);
+      try { rmdirSync(path); } catch { note(error); }
+    }
+  };
+  walk(target);
+  if (first_error) throw first_error;
+}
+
 /** Delete one room's local files: its adapter state, answer drafts, and its launch folder when created under launches/. */
 export function remove_room_files(home, config_path, data_directory) {
   const folder = dirname(resolve(config_path));
-  for (const directory of [data_directory, folder, join(folder, 'runtime')].filter(Boolean)) {
-    cleanup_room(directory);
-    rmSync(service_drafts(home, directory), { recursive: true, force: true });
+  const directories = [...new Set([data_directory, folder, join(folder, 'runtime')].filter(Boolean).map(dir => resolve(dir)))];
+  let first_error = null;
+  const attempt = (fn) => { try { fn(); } catch (error) { if (!first_error) first_error = error; } };
+  for (const directory of directories) {
+    attempt(() => cleanup_room(directory));
+    attempt(() => remove_tree(service_drafts(home, directory)));
   }
-  if (dirname(folder) === resolve(home, 'launches')) rmSync(folder, { recursive: true, force: true });
+  if (dirname(folder) === resolve(home, 'launches')) attempt(() => remove_tree(folder));
+  if (first_error) throw first_error;
 }
 
 /** Keep only the newest part of a log that grew past the limit; writers append, so they continue at its new end. */
-function trim_log(path) {
-  if (!existsSync(path) || statSync(path).size <= LOG_LIMIT_BYTES) return false;
-  const size = statSync(path).size, tail = Buffer.alloc(LOG_KEEP_BYTES);
+function trim_log(path, limit = LOG_LIMIT_BYTES, keep = LOG_KEEP_BYTES) {
+  if (!existsSync(path) || statSync(path).size <= limit) return false;
+  const size = statSync(path).size, tail = Buffer.alloc(keep);
   const handle = openSync(path, 'r');
-  try { readSync(handle, tail, 0, LOG_KEEP_BYTES, size - LOG_KEEP_BYTES); } finally { closeSync(handle); }
+  try { readSync(handle, tail, 0, keep, size - keep); } finally { closeSync(handle); }
   // Start at a whole line so the kept part does not open mid-entry.
-  writeFileSync(path, tail.subarray(tail.indexOf(10) + 1));
+  writeFileSync(path, keep === storage_guard.LOG_TAIL ? tail : tail.subarray(tail.indexOf(10) + 1));
   return true;
 }
 
@@ -782,24 +955,32 @@ function current_executions(directory) {
   try {
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='free_deliveries'").get()) return new Set();
     return new Set(db.prepare('SELECT execution_id FROM free_deliveries').all().map(row => row.execution_id));
-  } catch { return null; } finally { db.close(); }
+  } finally { db.close(); }
 }
 
 /** Remove a room's per-execution files once they are a week old and no member's delivery still names the execution. */
-function sweep_execution_files(directory, now) {
+function sweep_execution_files(directory, now, removed_logs) {
   if (!existsSync(directory)) return 0;
   const current = current_executions(directory);
-  // An unreadable delivery table gives no proof which executions ended, so nothing is removed.
-  if (!current) return 0;
   let removed = 0;
   // Credential and task files sit in each member's runtime folder (`members/<key>`), logs in the runtime directory.
   const members = join(directory, 'members');
-  const folders = [directory, ...(existsSync(members) ? readdirSync(members).map(name => join(members, name)) : [])];
-  for (const [folder, name] of folders.flatMap(folder => { try { return readdirSync(folder).map(name => [folder, name]); } catch { return []; } })) {
+  const folders = [directory];
+  if (lstatSync(members, { throwIfNoEntry: false })?.isDirectory()) {
+    for (const entry of readdirSync(members, { withFileTypes: true })) {
+      if (entry.isDirectory()) folders.push(join(members, entry.name));
+    }
+  }
+  for (const folder of folders) for (const name of readdirSync(folder)) {
     const id = EXECUTION_FILE.exec(name)?.[1];
-    if (!id || current.has(Number(id))) continue;
+    if (!id) continue;
     const path = join(folder, name);
-    if (now - statSync(path).mtimeMs < STALE_LAUNCH_MS) continue;
+    const entry = lstatSync(path, { throwIfNoEntry: false });
+    if (!entry?.isFile() || entry.nlink > 1) continue;
+    if (current.has(Number(id)) || now - entry.mtimeMs < STALE_LAUNCH_MS) {
+      if (name.endsWith('.log') && trim_log(path, storage_guard.LOG_TAIL, storage_guard.LOG_TAIL)) removed_logs.push(path);
+      continue;
+    }
     rmSync(path, { force: true });
     removed += 1;
   }
@@ -816,17 +997,18 @@ function launch_touched(folder) {
  * never confirmed, once they are a week old and no process holds them; answer drafts whose folder is gone; registered
  * rooms' task, credential and log files of executions that ended a week ago; and the oversized part of the service's logs. Registered rooms, settings and the local website's database are never touched.
  */
-export function sweep_service_home(home, now = Date.now()) {
+export function sweep_service_home(home, now = Date.now(), log = () => {}) {
   const registered = read_registry(home).map(path => dirname(resolve(path)));
-  const launches = join(home, 'launches'), removed = { launches: [], drafts: [], logs: [], execution_files: 0, adapter_files: 0 };
+  const launches = join(home, 'launches'), removed = { launches: [], drafts: [], logs: [], execution_files: 0, adapter_files: 0, failures: 0 };
+  const failed = (path, error) => { removed.failures++; log(path + ": " + error.message); };
   const resolved_home = resolve(home);
   if (basename(resolved_home) === '.codiscuss') {
-    try { removed.adapter_files = sweep_adapters(resolved_home, dirname(resolved_home)); } catch { /* Sandboxed or held; the next sweep retries. */ }
+    try { removed.adapter_files = sweep_adapters(resolved_home, dirname(resolved_home)); } catch (error) { failed(resolved_home, error); }
   }
   for (const name of existsSync(launches) ? readdirSync(launches) : []) {
     const folder = join(launches, name);
     if (registered.includes(folder) || service_pid(folder) || service_pid(join(folder, 'runtime')) || now - launch_touched(folder) < STALE_LAUNCH_MS) continue;
-    try { remove_room_files(home, join(folder, 'config.json')); removed.launches.push(name); } catch { /* Still held; the next sweep retries. */ }
+    try { remove_room_files(home, join(folder, 'config.json')); removed.launches.push(name); } catch (error) { failed(folder, error); }
   }
   // A draft folder is keyed by its room's data directory; one matching no remaining folder or registered room is orphaned.
   const live = new Set(), runtimes = new Set();
@@ -837,21 +1019,24 @@ export function sweep_service_home(home, now = Date.now()) {
       const { directory } = validate_config(JSON.parse(readFileSync(path, 'utf8')), folder);
       live.add(service_drafts(home, directory));
       runtimes.add(resolve(directory));
-    } catch { /* Covered by the folder keys; an unreadable configuration keeps its execution files. */ }
+    } catch (error) { failed(path, error); }
   }
   for (const directory of runtimes) {
-    try { removed.execution_files += sweep_execution_files(directory, now); } catch { /* Still held; the next sweep retries. */ }
+    try { removed.execution_files += sweep_execution_files(directory, now, removed.logs); } catch (error) { failed(directory, error); }
   }
   for (const name of existsSync(launches) ? readdirSync(launches) : []) {
     for (const directory of [join(launches, name), join(launches, name, 'runtime')]) live.add(service_drafts(home, directory));
   }
-  const drafts = join(home, 'drafts');
+  const drafts = drafts_root(home);
   for (const name of existsSync(drafts) ? readdirSync(drafts) : []) {
     if (live.has(join(drafts, name))) continue;
-    rmSync(join(drafts, name), { recursive: true, force: true });
-    removed.drafts.push(name);
+    try { remove_tree(join(drafts, name)); removed.drafts.push(name); }
+    catch (error) { failed(join(drafts, name), error); }
   }
-  for (const log of SERVICE_LOGS) if (trim_log(join(home, log))) removed.logs.push(log);
+  for (const name of SERVICE_LOGS) {
+    try { if (trim_log(join(home, name))) removed.logs.push(name); }
+    catch (error) { failed(join(home, name), error); }
+  }
   return removed;
 }
 
@@ -875,6 +1060,7 @@ export function service_ready(home, pid = service_pid(home)) {
 /** Foreground service loop; `start` runs this detached in the background. */
 export async function run_service(home, output = () => {}) {
   assert_shared_home(home);
+  ensure_global_experts_migrated(home);
   const release = acquire_lock(home);
   const log_line = message => {
     const line = `${new Date().toISOString()} ${message}`;
@@ -927,10 +1113,11 @@ export async function run_service(home, output = () => {}) {
     };
     while (!stopped && !existsSync(stop_path)) {
       try { await service.tick({ wait: false }); } catch (error) { log_line(`服务检查失败：${error.message}`); }
+      try { service.monitor_storage(Date.now() - swept_at >= SWEEP_MS); } catch (error) { log_line(error.message); }
       if (Date.now() - swept_at >= SWEEP_MS) {
         swept_at = Date.now();
         try {
-          const removed = sweep_service_home(home);
+          const removed = sweep_service_home(home, Date.now(), log_line);
           if (removed.launches.length || removed.drafts.length || removed.logs.length || removed.execution_files || removed.adapter_files) {
             log_line(`清理本机文件：启动目录 ${removed.launches.length} 个，草稿 ${removed.drafts.length} 个，执行文件 ${removed.execution_files} 个，软件遗留项 ${removed.adapter_files} 个，日志 ${removed.logs.join('、') || '无'}`);
           }
@@ -1047,7 +1234,7 @@ function service_status(home) {
   const path = join(home, 'status.json');
   const saved = pid && existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
   const last = saved.pid === pid ? saved : {};
-  return { running: Boolean(pid), ready: service_ready(home, pid), pid, home, configs: read_registry(home), updated_at: last.updated_at || 0, rooms: last.rooms || [] };
+  return { running: Boolean(pid), ready: service_ready(home, pid), pid, home, drafts_root: drafts_root(home), configs: read_registry(home), updated_at: last.updated_at || 0, storage: last.storage || null, rooms: last.rooms || [] };
 }
 
 /** Open each registered site once in the default browser. */

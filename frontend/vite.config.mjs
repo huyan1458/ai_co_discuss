@@ -5,6 +5,14 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import ui from "@nuxt/ui/vite";
 
+// Nuxt UI enlarges field text below md (768px) to 14px/16px to prevent iOS focus zoom; web/index.html already locks
+// touch zoom, so keep desktop sizes on phones too (Design_UI设计说明.md).
+const FIELD_SIZES = { variants: { size: { xs: { base: "text-xs/4" }, sm: { base: "text-xs/4" }, md: { base: "text-sm/5" }, lg: { base: "text-sm/5" } } } };
+const FIELD_UI = {
+  input: FIELD_SIZES, textarea: FIELD_SIZES, select: FIELD_SIZES, selectMenu: FIELD_SIZES, inputMenu: FIELD_SIZES, inputTags: FIELD_SIZES,
+  inputNumber: { variants: { size: { xs: "text-xs/4", sm: "text-xs/4", md: "text-sm/5", lg: "text-sm/5" } } },
+};
+
 const VIDEOJS_ELEMENTS = new Set(["video-player", "video-skin", "audio-player", "audio-skin"]);
 
 // The changelog shown from the version number: each language's file, its item prefixes mapped to one set of kinds.
@@ -190,7 +198,7 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
     dts: false,
     autoImport: false,
     // Elevated panels are white in the light theme; placeholders need a distinct surface in both themes.
-    ui: { colors: { primary: "emerald", neutral: "zinc" }, skeleton: { base: "animate-pulse rounded-md bg-accented" } },
+    ui: { colors: { primary: "emerald", neutral: "zinc" }, skeleton: { base: "animate-pulse rounded-md bg-accented" }, ...FIELD_UI },
     // The scan reads only templates by default; icon names chosen in script files (file kinds in file-preview.js and
     // the like) would otherwise load from the Iconify API at run time, which a share page's CSP blocks.
     icon: { clientBundle: { scan: { globInclude: ["**/*.{vue,jsx,tsx,md,mdc,mdx,yml,yaml}", "frontend/**/*.{js,mjs}"] } } },

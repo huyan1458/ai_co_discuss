@@ -87,7 +87,11 @@ API 密钥、技能、工作流、系统提示词（目标同上）
   prompt default get  /  prompt default set --file <文件>             新托管账号的默认系统提示词
 
 结果以 JSON 输出。--data 指定管理员服务目录（默认 ~/.codiscuss）。
-`);
+`) + t('  storage [clean]                          查看存储用量，或清理已确认结束的执行临时目录') + '\n'
+  + t('  account add <名> --project-data-root <目录>   将新账号的项目、工作区和成员草稿放在指定目录') + '\n'
+  + t('  account migrate-data <名> --project-data-root <目录>   停止实例并迁移项目数据') + '\n'
+  + t('  account migration-backups <名>   查看各迁移备份的位置与字节数') + '\n'
+  + t('  account release-backup <名> <迁移编号> <目录类别> --confirm   停止实例并释放指定备份') + '\n';
 
 /** A client of the running panel: enters with the owner key and keeps the session for the requests that follow. */
 export async function panel_client(data) {
@@ -119,12 +123,15 @@ const is_owner = target => target === OWNER;
  * Create an account the way the panel's wizard does, step by step. Run again for an account that exists, it goes on
  * from the first step missing; the password is reported once created, even if a later step fails.
  */
-async function add_account(call, name, { isolate, start }) {
+async function add_account(call, name, { isolate, start, project_data_root }) {
   const steps = [];
   const existing = (await call('state')).accounts?.find(item => item.name === name);
+  if (existing && project_data_root && (!existing.project_data_root || relative(existing.project_data_root, project_data_root))) {
+    throw new Error(t('已有账号使用不同的数据目录，请用 account migrate-data 显式迁移。'));
+  }
   let password = '';
   if (existing) steps.push(t('账号已存在，从缺少的步骤接着做（密码不变；需要新密码用 account password）'));
-  else { password = (await call('accounts', { name })).password; steps.push(t('已创建账号与文件夹')); }
+  else { password = (await call('accounts', { name, ...(project_data_root ? { project_data_root } : {}) })).password; steps.push(t('已创建账号与文件夹')); }
   const report = extra => ({ name, ...(password ? { password } : {}), steps, ...extra });
   try {
     if (isolate && !existing?.os_user) {
@@ -149,10 +156,13 @@ async function add_account(call, name, { isolate, start }) {
 const ACCOUNT_ACTIONS = { start: 'start', stop: 'stop', disable: 'disable', enable: 'enable', remove: 'remove', password: 'password',
   isolate: 'os-user', unisolate: 'os-user/remove' };
 
-async function account_command(call, [action, name], values) {
+async function account_command(call, [action, name, id, kind], values) {
   if (action === 'list') return (await call('state')).accounts;
   need(name, t('account {value1} <名>', { value1: action }));
-  if (action === 'add') return add_account(call, name, { isolate: !values['no-isolate'], start: !values['no-start'] });
+  if (action === 'add') return add_account(call, name, { isolate: !values['no-isolate'], start: !values['no-start'], project_data_root: values['project-data-root'] });
+  if (action === 'migrate-data') return call(`accounts/${name}/migrate-data`, { project_data_root: need(values['project-data-root'], '--project-data-root') });
+  if (action === 'migration-backups') return call(`accounts/${name}/migration-backups`);
+  if (action === 'release-backup') return call(`accounts/${name}/release-backup`, { id, kind, confirm: values.confirm === true });
   if (action === 'protect' || action === 'unprotect') return call(`accounts/${name}/protect`, { on: action === 'protect' });
   if (!ACCOUNT_ACTIONS[action]) throw new Error(HELP);
   return call(`accounts/${name}/${ACCOUNT_ACTIONS[action]}`, {});
@@ -397,6 +407,8 @@ async function with_elevation(call, data) {
 export async function admin_cli(args, { client = panel_client, print = text => process.stdout.write(text) } = {}) {
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: {
     data: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'no-isolate': { type: 'boolean' }, 'no-start': { type: 'boolean' },
+    'project-data-root': { type: 'string' },
+    confirm: { type: 'boolean' },
     set: { type: 'string', multiple: true }, 'base-url': { type: 'string' }, key: { type: 'string' }, file: { type: 'string' }, group: { type: 'string' },
     full: { type: 'boolean' }, config: { type: 'string' }, site: { type: 'string' },
   } });
@@ -417,6 +429,11 @@ export async function admin_cli(args, { client = panel_client, print = text => p
   }
   const call = await with_elevation(await client(data), data);
   const commands = {
+    storage: () => {
+      if (!rest.length) return call('storage');
+      if (rest.length === 1 && rest[0] === 'clean') return call('storage/clean', {});
+      throw new Error(HELP);
+    },
     status: async () => {
       const { login_methods: _methods, providers: _providers, ...state } = await call('state');
       if (state.online_site) {

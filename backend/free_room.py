@@ -106,7 +106,7 @@ TIMELINE_SQL = f"""SELECT x.*,(SELECT COALESCE(NULLIF(s.text,''),substr(a.text,1
         (SELECT substr(q.text,1,160) FROM messages q WHERE q.id=(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=e.id)) AS task,
         (SELECT MAX(r.answer_id) FROM member_requests r WHERE r.execution_id=e.id) AS answer_id,
         (SELECT n.text FROM execution_notes n WHERE n.execution_id=e.id ORDER BY n.seq DESC LIMIT 1) AS last_note,
-        CASE WHEN e.changes='' THEN NULL ELSE json_array_length(e.changes) END AS changes,e.model,e.effort
+        json_array_length(NULLIF(e.edited,'')) AS changes,e.model,e.effort
     FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.id IN ({TIMELINE_FREE_IDS})) x"""
 TIMELINE_SEGMENTS_SQL = f"""SELECT source,execution_id,phase,tool,start_ms,end_ms FROM execution_segments WHERE room_id=?1
     AND source='free' AND execution_id IN ({TIMELINE_FREE_IDS}) ORDER BY source,execution_id,seq"""
@@ -407,7 +407,7 @@ def review_ready(connection, room_id, batch_id, token):
     plan = dict(plan)
     batch = connection.execute("SELECT * FROM free_batches WHERE room_id=? AND batch_id=?", (room_id, batch_id)).fetchone()
     requests = [dict(row) for row in connection.execute("""SELECT r.id,r.member_id,m.name AS member,r.status,r.answer_id,
-        a.text AS answer,e.id AS execution_id,e.status AS execution_status,e.result,e.changes
+        a.text AS answer,e.id AS execution_id,e.status AS execution_status,e.result,e.edited AS changes
         FROM member_requests r JOIN room_members m ON m.id=r.member_id LEFT JOIN messages a ON a.id=r.answer_id
         LEFT JOIN member_executions e ON e.id=r.execution_id WHERE r.room_id=? AND r.batch_id=? ORDER BY r.id""", (room_id, batch_id))]
     handoffs = review_handoffs(connection, room_id, batch_id, plan["host_id"])
@@ -2735,8 +2735,13 @@ def reaches_host(connection, room_id, payload):
 
 def relay_positions(connection, room_id):
     """Every relay step batch of the room with its step number, read once per view."""
-    return {entry[2]: entry[3] + 1 for sequence in connection.execute("SELECT steps FROM free_sequences WHERE room_id=?", (room_id,))
-            for entry in json.loads(sequence["steps"])}
+    positions = {}
+    for sequence in connection.execute("SELECT steps FROM free_sequences WHERE room_id=?", (room_id,)):
+        counted = {}
+        for entry in json.loads(sequence["steps"]):
+            counted[entry[0]] = counted.get(entry[0], 0) + 1
+            positions[entry[2]] = entry[3] + 1 if len(entry) > 3 else counted[entry[0]]
+    return positions
 
 
 def line_of(connection, request, positions=None):
@@ -4337,6 +4342,41 @@ def linked_room_values(connection, room_id, other, host):
     if not isinstance(host, str) or not 0 < len(host.strip()) <= MODEL_TEXT_LIMIT:
         raise ValueError(Text("host 须为 1–100 字的主持人名称"))
     return host.strip()
+
+
+def record_relay_send(connection, room_id, token, payload):
+    """Record one successful linked-room send in the sending room without creating a member request."""
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    target = payload.get("target_room_id")
+    host = linked_room_values(connection, room_id, target, payload.get("host"))
+    if not connection.execute("SELECT 1 FROM room_links WHERE room_id=? AND other_room_id=?", (room_id, target)).fetchone():
+        raise PermissionError(Text("只有互相关联的房间之间才能代主持人发言"))
+    text, member = payload.get("text"), payload.get("member", "")
+    if not isinstance(text, str) or not text.strip() or len(text.strip()) > 32000 or not isinstance(member, str):
+        raise ValueError(Text("发信留痕须包含有效的正文与成员名称"))
+    identifier = payload.get("submission_id")
+    if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", identifier):
+        raise ValueError(Text("submission_id 必须是 8–100 位字母、数字、下划线或连字符"))
+    sent, queued, interrupted = payload.get("target_message_id"), payload.get("queued_id"), payload.get("interrupted", False)
+    if (any(type(value) is not int or value < 1 for value in (sent, queued) if value is not None)
+            or type(interrupted) is not bool or (queued and (sent or interrupted))):
+        raise ValueError(Text("发信留痕的送达或排队状态无效"))
+    previous = connection.execute("""SELECT m.id,m.text,s.target_room_id FROM messages m
+        LEFT JOIN room_relay_sends s ON s.message_id=m.id WHERE m.room_id=? AND m.submission_id=?""",
+                                  (room_id, identifier)).fetchone()
+    if previous:
+        if previous["target_room_id"] != target or previous["text"] != text:
+            raise FileExistsError(Text("这个提交编号已被另一条内容使用，请为新发言生成新编号"))
+        return {"message_id": previous["id"], "duplicate": True}
+    message_id = connection.execute("""INSERT INTO messages(room_id,author,text,source,submission_id,created_at)
+        VALUES(?,?,?,'room_relay_sent',?,?)""", (room_id, NOTICE_AUTHOR, text, identifier,
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))).lastrowid
+    connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,'notice',?)", (message_id, NOTICE_AUTHOR))
+    connection.execute("""INSERT INTO room_relay_sends
+        (message_id,room_id,target_room_id,target_message_id,queued_id,interrupted,host,member) VALUES (?,?,?,?,?,?,?,?)""",
+                       (message_id, room_id, target, sent, queued, interrupted, host, member))
+    return {"message_id": message_id, "duplicate": False}
 
 
 def record_room_link(connection, room_id, token, payload):

@@ -1227,3 +1227,64 @@ test('a writable API member works with Pi\'s own bash, and the file its command 
   const execution = (await api(config, '')).free.executions.find(item => item.member === 'DeepSeek');
   assert.deepEqual(execution.changes, ['out/note.txt']);
 });
+
+test('Pi reports saved image edits from extension details and drops failed bash or copy-source paths', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-pi-edits-'));
+  const project = mkdtempSync(join(tmpdir(), 'codiscuss-pi-proj-'));
+  t.after(() => { rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true }); });
+  const edits = [];
+  const fake_pi = () => {
+    const child = new EventEmitter();
+    child.stdin = { writable: true, write() {}, end() {}, on() {} };
+    child.stdout = new EventEmitter(); child.stdout.setEncoding = () => {};
+    child.stderr = new EventEmitter(); child.stderr.setEncoding = () => {};
+    child.kill = () => {};
+    setImmediate(() => {
+      const emit = obj => child.stdout.emit('data', `${JSON.stringify(obj)}\n`);
+      const img = join(project, 'images', 'cover.png');
+      emit({ type: 'tool_execution_start', toolCallId: 'c1', toolName: 'generate_image', args: { prompt: 'cover', save_path: 'images/cover.png' } });
+      emit({ type: 'tool_execution_end', toolCallId: 'c1', toolName: 'generate_image', isError: false, result: { details: { codiscuss: { terminal: false, edits: [img] } } } });
+      emit({ type: 'tool_execution_start', toolCallId: 'c2', toolName: 'bash', args: { command: 'cp src/in.js out/ok.js' } });
+      emit({ type: 'tool_execution_end', toolCallId: 'c2', toolName: 'bash', isError: false, result: {} });
+      emit({ type: 'tool_execution_start', toolCallId: 'c3', toolName: 'bash', args: { command: 'echo x > out/fail.js' } });
+      emit({ type: 'tool_execution_end', toolCallId: 'c3', toolName: 'bash', isError: true, result: {} });
+      emit({ type: 'tool_execution_start', toolCallId: 'c4', toolName: 'submit_chat', args: { text: 'ok' } });
+      emit({ type: 'tool_execution_end', toolCallId: 'c4', toolName: 'submit_chat', isError: false, result: { details: { codiscuss: { terminal: true } } } });
+      emit({ type: 'agent_settled' });
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  await new Promise(resolve_done => {
+    pi_delivery({ cli: 'pi.js', profile: { model: 'm', api_protocol: 'chat' }, key: 'k', binding: {}, service_home: home,
+      project_root: project, native_shell: true, context_file: join(home, 'c.json'), system_file: join(home, 's.md'), prompt: 'hi',
+      spawn_process: fake_pi, task: { id: 'free-1', directory: home, on_edits: paths => edits.push(...paths), on_exit: resolve_done } });
+  });
+  assert.deepEqual(edits, [join(project, 'images', 'cover.png'), join(project, 'out', 'ok.js')]);
+});
+
+test('in a room with drawing on and a git project, an API member\'s saved image is attributed in execution edited changes', async t => {
+  const f = await site_fixture(t);
+  const project = mkdtempSync(join(tmpdir(), 'codiscuss-pi-img-git-'));
+  spawnSync('git', ['init', '-q', project]);
+  writeFileSync(join(project, 'other.txt'), 'concurrent\n');
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  let step = 0;
+  const mock = await model_fixture(t, call => {
+    if (call.path.endsWith('/images/generations')) return { output_format: 'png', data: [{ b64_json: PNG.toString('base64') }] };
+    return [() => tool_reply(call, 'generate_image', { prompt: '海报', save_path: 'art/poster.png' }),
+      () => tool_reply(call, 'submit_chat', { text: '已生成海报。' })][step++]();
+  });
+  const participants = { Codex: { ...profiles(f.home, mock.base_url).Codex, project_access: 'write', cwd: project } };
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
+    room: { title: '生图归属', mode: 'free', host: '用户', members: ['Codex'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const config = await enable_images(f.home, mock.base_url, started), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  await api(config, '/messages', { author: '用户', text: '画一张图存到 art/poster.png', to: ['Codex'], submission_id: randomUUID() });
+  // Simulate an unrelated concurrent file edit in the same workspace during the execution.
+  writeFileSync(join(project, 'other.txt'), 'changed-by-other\n');
+  await until(async () => (await api(config, '')).free.executions.some(item => item.edited?.length), () => runner.tick());
+  const execution = (await api(config, '')).free.executions.find(item => item.member === 'Codex');
+  assert.deepEqual(execution.edited, ['art/poster.png']);
+});

@@ -52,6 +52,12 @@ const SESSION_PATTERN = /^[0-9A-Za-z_-]{8,128}$/;
 /** The descriptor of a configured adapter, or null for a value this version does not support. */
 export function adapter_of(id) { return ADAPTERS[id] || null; }
 
+/** Return stop support for a prospective delivery using its configured profile and session binding. */
+export function preflight_stoppable(profile, binding = {}) {
+  return adapter_of(profile.adapter)?.preflight_stoppable?.(profile, binding)
+    ?? adapter_capabilities(profile.adapter).delivery.stoppable;
+}
+
 /** Read one recorded delivery's outcome without starting software; missing or unreadable evidence is unknown. */
 export async function recover_turn(adapter_id, record) {
   try {

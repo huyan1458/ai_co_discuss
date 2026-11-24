@@ -150,18 +150,96 @@ function library_description(name) {
 
 // Presets follow the platforms, after a divider; each adds a named instance already set up for its job.
 const PRESET_PREFIX = "preset:";
+const PROJECT_PRESET_PREFIX = "project-preset:";
+const project_presets = computed(() => view.value.launch.project_presets || []);
+const project_roots = computed(() => view.value.launch.create_project_roots || []);
+const writable_project_roots = computed(() => project_roots.value.filter((root) => !root.readonly));
+const multi_project_roots = computed(() => project_roots.value.length > 1);
+let project_presets_timer = 0;
+watch(
+  () => [
+    view.value.launch.available,
+    view.value.launch.workspace?.cwd || "",
+    JSON.stringify(view.value.launch.workspace?.extra_directories || []),
+    view.value.launch.workspace?.local_project || "",
+  ],
+  ([avail, cwd, extras_json, local_project]) => {
+    window.clearTimeout(project_presets_timer);
+    const trimmed = String(cwd || "").trim();
+    if (!avail || (!trimmed && !local_project)) {
+      bridge.clear_project_presets();
+      return;
+    }
+    const extras = JSON.parse(extras_json || "[]").map((path) => String(path || "").trim()).filter(Boolean);
+    const norm = (path) => String(path || "").replace(/[\\/]+$/, "").toLowerCase();
+    const matched = (view.value.launch.projects || []).find((item) => item.path && trimmed && norm(item.path) === norm(trimmed));
+    project_presets_timer = window.setTimeout(() => {
+      bridge.load_project_presets({
+        cwd: trimmed,
+        extra_directories: extras,
+        project_id: local_project || matched?.id || "",
+      }).catch(() => {});
+    }, 180);
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() => window.clearTimeout(project_presets_timer));
+
 // Experts in and out of the presets (2026-11-22): an import waits here while the user decides on a conflict.
 const expert_inputs = { md: ref(null), zip: ref(null), folder: ref(null) };
 const expert_import = ref(null);
-const expert_items = computed(() => [[
-  { label: t('导入专家（.md）'), icon: "i-lucide-file-text", onSelect: () => expert_inputs.md.value?.click() },
-  { label: t('导入专家（压缩包）'), icon: "i-lucide-file-archive", onSelect: () => expert_inputs.zip.value?.click() },
-  { label: t('导入专家（文件夹）'), icon: "i-lucide-folder-input", onSelect: () => expert_inputs.folder.value?.click() },
-], (view.value ? bridge.expert_presets() : []).map((preset) => ({ label: t('导出「{value1}」', { value1: preset.label || preset.name }), icon: "i-lucide-download",
-  onSelect: () => export_preset(preset.name) }))].filter((group) => group.length));
+const expert_import_target = ref({ scope: "global", project_id: "" });
+function trigger_expert_import(kind, target) {
+  expert_import_target.value = target || { scope: "global", project_id: "" };
+  expert_inputs[kind].value?.click();
+}
+const expert_items = computed(() => {
+  const roots = writable_project_roots.value;
+  const import_groups = roots.length
+    ? [
+      [
+        { type: "label", label: t("导入到当前项目（{name}）", { name: roots[0].name }) },
+        { label: t("导入专家（.md）"), icon: "i-lucide-file-text", onSelect: () => trigger_expert_import("md", { scope: "project", project_id: roots[0].id }) },
+        { label: t("导入专家（压缩包）"), icon: "i-lucide-file-archive", onSelect: () => trigger_expert_import("zip", { scope: "project", project_id: roots[0].id }) },
+        { label: t("导入专家（文件夹）"), icon: "i-lucide-folder-input", onSelect: () => trigger_expert_import("folder", { scope: "project", project_id: roots[0].id }) },
+      ],
+      [
+        { type: "label", label: t("导入到全局") },
+        { label: t("导入专家（.md）"), icon: "i-lucide-file-text", onSelect: () => trigger_expert_import("md", { scope: "global", project_id: "" }) },
+        { label: t("导入专家（压缩包）"), icon: "i-lucide-file-archive", onSelect: () => trigger_expert_import("zip", { scope: "global", project_id: "" }) },
+        { label: t("导入专家（文件夹）"), icon: "i-lucide-folder-input", onSelect: () => trigger_expert_import("folder", { scope: "global", project_id: "" }) },
+      ],
+    ]
+    : [[
+      { label: t("导入专家（.md）"), icon: "i-lucide-file-text", onSelect: () => trigger_expert_import("md", { scope: "global", project_id: "" }) },
+      { label: t("导入专家（压缩包）"), icon: "i-lucide-file-archive", onSelect: () => trigger_expert_import("zip", { scope: "global", project_id: "" }) },
+      { label: t("导入专家（文件夹）"), icon: "i-lucide-folder-input", onSelect: () => trigger_expert_import("folder", { scope: "global", project_id: "" }) },
+    ]];
+  const project_exports = project_presets.value.map((preset) => ({
+    label: t("导出「{value1}」（项目）", { value1: preset.label || preset.name }),
+    icon: "i-lucide-download",
+    onSelect: () => export_preset(preset),
+  }));
+  const global_exports = (view.value ? bridge.expert_presets() : []).map((preset) => ({
+    label: t("导出「{value1}」", { value1: preset.label || preset.name }),
+    icon: "i-lucide-download",
+    onSelect: () => export_preset(preset),
+  }));
+  return [...import_groups, project_exports, global_exports].filter((group) => group.length);
+});
 
-async function export_preset(name) {
-  try { download_expert(await bridge.local_request("workflows", { action: "export-expert", preset: name })); }
+async function export_preset(preset) {
+  const is_project = preset?.scope === "project";
+  const cwd = view.value.launch.workspace?.cwd || "";
+  try {
+    download_expert(await bridge.local_request("workflows", {
+      action: "export-expert",
+      preset: preset.name,
+      scope: is_project ? "project" : "global",
+      ...(is_project && preset.project_id ? { project_id: preset.project_id } : {}),
+      ...(is_project && cwd ? { cwd } : {}),
+    }));
+  }
   catch (error) { bridge.notify("error", error.message); }
 }
 
@@ -170,21 +248,29 @@ async function read_expert(kind, event) {
   const list = [...event.target.files || []];
   event.target.value = "";
   if (!list.length) return;
+  const target = expert_import_target.value;
+  const cwd = view.value.launch.workspace?.cwd || "";
   try {
     const files = kind === "md" ? await expert_files_from_md(list[0]) : kind === "zip" ? await expert_files_from_zip(list[0]) : await expert_files_from_folder(list);
-    await import_expert_files({ files });
+    await import_expert_files({
+      files,
+      scope: target.scope || "global",
+      ...(target.scope === "project" && target.project_id ? { project_id: target.project_id } : {}),
+      ...(target.scope === "project" && cwd ? { cwd } : {}),
+      ...(target.scope === "project" && view.value.launch.workspace?.extra_directories?.length ? { extra_directories: view.value.launch.workspace.extra_directories } : {}),
+    });
   } catch (error) { bridge.notify("error", error.message); }
 }
 
 async function import_expert_files(input) {
   try {
     const result = await bridge.import_expert(input);
-    const notes = [t('已导入专家「{value1}」', { value1: result.preset.label || result.preset.name })];
-    if (result.requested_access) notes.push(t('它要求的项目权限“{value1}”已降为只读，需要时在预设里改', { value1: result.requested_access }));
-    if (result.ignored?.length) notes.push(t('已忽略：{value1}', { value1: result.ignored.join("、") }));
+    const notes = [t("已导入专家「{value1}」", { value1: result.preset.label || result.preset.name })];
+    if (result.requested_access) notes.push(t("它要求的项目权限“{value1}”已降为只读，需要时在预设里改", { value1: result.requested_access }));
+    if (result.ignored?.length) notes.push(t("已忽略：{value1}", { value1: result.ignored.join("、") }));
     // Imported either way; until fixed, the preset's chip is greyed (software) or its card is marked (model).
-    if (result.needs_platform) notes.push(t('本机未配置它的软件，点它的按钮去配置后才能加入'));
-    else if (result.unknown_model) notes.push(t('本机这个软件没有模型 {value1}，加入后在卡片背面改成列表里的模型并“更新预设”', { value1: result.unknown_model }));
+    if (result.needs_platform) notes.push(t("本机未配置它的软件，点它的按钮去配置后才能加入"));
+    else if (result.unknown_model) notes.push(t("本机这个软件没有模型 {value1}，加入后在卡片背面改成列表里的模型并“更新预设”", { value1: result.unknown_model }));
     bridge.notify(result.ignored?.length || result.requested_access || result.needs_platform || result.unknown_model ? "warning" : "info", notes.join("；"));
     expert_import.value = result.knowledge === "kept" ? { input, kind: "knowledge", name: result.preset.name } : null;
   } catch (error) {
@@ -203,19 +289,65 @@ const panel_directories = computed(() => [view.value.launch.workspace?.cwd, ...(
 const configuring = ref("");
 const unconfigured_chip = (name) => bridge.platform_configured(name) ? {} : { unconfigured: true, title: t("未配置，点击配置"), aria_label: t("配置 {value1}", { value1: bridge.default_name(bridge.platform_of(name)) }) };
 function configure_platform(value) {
+  if (value.startsWith(PROJECT_PRESET_PREFIX)) {
+    const preset = project_presets.value.find((item) => bridge.preset_key(item) === value.slice(PROJECT_PRESET_PREFIX.length));
+    configuring.value = bridge.platform_of(preset?.name || value.split(":").at(-1));
+    return;
+  }
   configuring.value = bridge.platform_of(value.startsWith(PRESET_PREFIX) ? value.slice(PRESET_PREFIX.length) : value);
 }
 const library_items = computed(() => [...experts.map((name) => ({ value: name, name: bridge.default_name(name), ...bridge.identities[name],
   disabled: !bridge.launch_clients[name], title: library_description(name), aria_label: t("添加 {name} 实例", { name }), ...unconfigured_chip(name) })),
   ...view.value && bridge.expert_presets().map((preset, index) => ({ value: PRESET_PREFIX + preset.name, name: preset.label || preset.name, ...bridge.identities[bridge.platform_of(preset.name)],
     separated: index === 0, title: preset.description || t("专家预设"), aria_label: t("添加预设 {name}", { name: preset.label || preset.name }), removable: true, ...unconfigured_chip(preset.name) })),
+  ...project_presets.value.map((preset) => ({
+    value: PROJECT_PRESET_PREFIX + bridge.preset_key(preset),
+    name: preset.label || preset.name,
+    ...bridge.identities[bridge.platform_of(preset.name)],
+    row: t("项目预设"),
+    tag: multi_project_roots.value && preset.project_name ? preset.project_name : preset.readonly ? t("只读") : "",
+    title: [
+      preset.project_name ? `${t("项目")}：${preset.project_name}` : "",
+      preset.readonly ? t("只读目录") : "",
+      preset.requested_access && !preset.trusted ? t("未信任目录的高权限预设，加入后默认只读，可在卡片背面确认放开") : "",
+      preset.description || t("项目专家预设"),
+    ].filter(Boolean).join(" · "),
+    aria_label: t("添加项目预设 {name}", { name: preset.label || preset.name }),
+    removable: !preset.readonly,
+    ...unconfigured_chip(preset.name),
+  })),
   ...view.value.launch.available || view.value.launch.remote ? [{ value: EXTERNAL_CHIP, name: t("外部专家"), icon: "/icons/external-expert.svg", style: "external",
     row: t("外部"), title: t("对方电脑上的 AI，只读本房间开放的内容"), aria_label: t("邀请外部专家") }] : []]);
+
+/** Remove a global or project preset from the add row. */
+function remove_preset(value) {
+  if (value.startsWith(PROJECT_PRESET_PREFIX)) {
+    const key = value.slice(PROJECT_PRESET_PREFIX.length);
+    const preset = project_presets.value.find((item) => bridge.preset_key(item) === key);
+    if (!preset) return;
+    bridge.delete_expert_preset({
+      name: preset.name,
+      id: preset.id,
+      scope: "project",
+      project_id: preset.project_id,
+      cwd: view.value.launch.workspace?.cwd || "",
+      label: preset.label || preset.name,
+    });
+    return;
+  }
+  bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length));
+}
 
 /** Admit one library role, woken by the local service until its card says otherwise; a preset adds its own named instance. */
 function add_expert(name) {
   if (name === EXTERNAL_CHIP) { external_drafts.value = [...external_drafts.value, { id: ++external_seq, draft: {} }]; return; }
   if (!selected_names.value.length) nextTick(apply_host_access);
+  if (name.startsWith(PROJECT_PRESET_PREFIX)) {
+    const key = name.slice(PROJECT_PRESET_PREFIX.length);
+    const preset = project_presets.value.find((item) => bridge.preset_key(item) === key);
+    if (preset) bridge.add_preset(EXPERT_CONTAINER, preset, "cli");
+    return ensure_host();
+  }
   if (name.startsWith(PRESET_PREFIX)) {
     const preset = bridge.expert_presets().find((item) => item.name === name.slice(PRESET_PREFIX.length));
     if (preset) bridge.add_preset(EXPERT_CONTAINER, preset, "cli");
@@ -298,7 +430,7 @@ const summary = computed(() => {
       <section class="create-section">
         <h3><span>2</span>{{ t("谁来参与") }}</h3>
         <PlatformConfigDialog v-model="configuring" />
-        <RosterAdd ref="library" :label="t('添加 AI')" :items="library_items" @add="add_expert" @configure="configure_platform" @remove="(value) => bridge.delete_expert_preset(value.slice(PRESET_PREFIX.length))" />
+        <RosterAdd ref="library" :label="t('添加 AI')" :items="library_items" @add="add_expert" @configure="configure_platform" @remove="remove_preset" />
         <div class="create-expert-io">
           <UDropdownMenu :items="expert_items" :ui="{ content: 'channel-menu' }"><UButton :label="t('导入导出专家')" icon="i-lucide-arrow-down-up" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
           <input :ref="expert_inputs.md" type="file" accept=".md,text/markdown" hidden @change="read_expert('md', $event)" />
@@ -314,6 +446,7 @@ const summary = computed(() => {
         <div v-if="selected_names.length || external_drafts.length" class="create-experts" role="group" :aria-label="t('参与的 AI')">
           <ExpertCard v-for="name in selected_names" :key="name" :name="name" :mode="selected[name]" :choices="access_choices(name)"
             :status="expert_status(name)" :host="host === name" :hostable="host_options.includes(name)" hosting
+            :project-roots="project_roots" :cwd="view.launch.workspace?.cwd || ''"
             @host="write('host', name)" @remove="remove_expert(name)" @mode="set_expert_mode(name, $event)" />
           <ExternalExpertCard v-for="item in external_drafts" :key="`external-${item.id}`" v-model:draft="item.draft" :paths="panel_directories" @remove="external_drafts = external_drafts.filter((entry) => entry !== item)" />
         </div>

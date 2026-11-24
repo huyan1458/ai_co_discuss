@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { cli_delivery } from './cli.mjs';
 import { daemon_chat, daemon_link } from './codex_daemon.mjs';
 import { CALL_TIMEOUT_MS, edge_entries, launch_directory, log_entries, marked, model_entry, json_line, newest_record, not_sent,
-  page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog, remove_session_files, same_path, typed_prompt } from './common.mjs';
+  page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog, remove_session_files, same_path, shell_written_paths, typed_prompt } from './common.mjs';
 import { adapter_capabilities } from './profiles.mjs';
 
 /** Codex exec may linger after its final event; the finished turn is already saved, so stop it to free the session. */
@@ -103,8 +103,9 @@ export function codex_permissions(config, task, platform = process.platform) {
   const profile = `{extends=${JSON.stringify(base)},filesystem={${rules}},network={enabled=true}}`;
   // The Windows sandbox account cannot write the user's TEMP, so PowerShell starts in ConstrainedLanguage and Codex's
   // UTF-8 output setup fails silently, garbling Chinese; a TEMP inside the writable drafts keeps FullLanguage.
-  const temp = platform === 'win32' ? ['-c', `shell_environment_policy.set.TEMP=${JSON.stringify(drafts)}`,
-    '-c', `shell_environment_policy.set.TMP=${JSON.stringify(drafts)}`] : [];
+  const temp_path = task.scratch_directory ? resolve(task.scratch_directory).replaceAll('\\', '/') : drafts;
+  const temp = platform === 'win32' ? ['-c', `shell_environment_policy.set.TEMP=${JSON.stringify(temp_path)}`,
+    '-c', `shell_environment_policy.set.TMP=${JSON.stringify(temp_path)}`] : [];
   // 自动 is what `codex exec --approve-for-me` sets (that flag is missing on `exec resume`): the model asks to escalate
   // and Codex's automatic review answers instead of a person (tested 0.163).
   const approval = config.project_access === 'auto' ? ['-c', 'approval_policy="on-request"', '-c', 'approvals_reviewer="auto_review"']
@@ -231,8 +232,12 @@ const events = {
   },
   note(event) { return event.type === 'item.completed' && event.item?.type === 'agent_message' ? String(event.item.text || '').trim() : ''; },
   edits(event) {
-    if (event.type !== 'item.completed' || event.item?.type !== 'file_change') return [];
-    return (event.item.changes || []).map(change => String(change?.path || '')).filter(Boolean);
+    if (event.type !== 'item.completed') return [];
+    const item = event.item;
+    if (!item || ['failed', 'declined'].includes(item.status)) return [];
+    if (item.type === 'command_execution' && item.exit_code === 0) return shell_written_paths(item.command);
+    if (item.type !== 'file_change') return [];
+    return (item.changes || []).map(change => String(change?.path || '')).filter(Boolean);
   },
   detail: codex_detail,
 };

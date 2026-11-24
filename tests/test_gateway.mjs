@@ -499,6 +499,12 @@ test('a paired device reads, writes and uploads to a protected instance through 
   const listed = await room_api(home, paired, { method: 'GET', path: '/api/rooms' });
   assert.equal(listed.status, 200, JSON.stringify(listed.body));
   assert.ok(listed.body.rooms.some(item => item.id === room.id));
+  const published_sites = await room_api(home, paired, { method: 'GET', path: '/api/sites' });
+  assert.equal(published_sites.status, 200, JSON.stringify(published_sites.body));
+  assert.ok(Array.isArray(published_sites.body.sites));
+  const sites = await room_api(home, paired, { method: 'GET', path: '/api/sites' });
+  assert.equal(sites.status, 200, JSON.stringify(sites.body));
+  assert.ok(Array.isArray(sites.body.sites));
   const posted = await room_api(home, paired, { method: 'POST', path: `/api/rooms/${room.id}/messages`,
     body: { author: '用户', text: '经中转的发言', submission_id: 'relay-protected-message' } });
   assert.ok([200, 201].includes(posted.status), JSON.stringify(posted.body));

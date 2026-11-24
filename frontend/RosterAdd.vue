@@ -1,25 +1,28 @@
 <script setup>
-import { t } from './i18n.js';
+import { t } from "./i18n.js";
 /** The "添加" row of brand chips shared by members and the decision model; each chip emits its value. */
 import { computed, ref } from "vue";
 
 const props = defineProps({
   label: { type: String, required: true },
-  // Each item: { value, name, icon, lucide, initials, style, title, aria_label, disabled, unconfigured, selected, separated, removable, row }; unconfigured greys the chip, puts it last in its row and makes a click emit configure instead of add; separated starts a second row (the presets); row puts the item on its own row under that label, after the others; selected marks the chip filling a single slot; removable lets the row's 管理 mode show a delete button that emits remove.
+  // Each item: { value, name, icon, lucide, initials, style, title, aria_label, disabled, unconfigured, selected, separated, removable, row, tag }; unconfigured greys the chip, puts it last in its row and makes a click emit configure instead of add; separated starts a second row (the presets); row puts the item on its own row under that label, after the others; selected marks the chip filling a single slot; removable lets that row's 管理 mode show a delete button that emits remove.
   items: { type: Array, required: true },
 });
 const emit = defineEmits(["add", "remove", "configure"]);
 const row = ref(null);
-// Delete buttons show only while the user manages the row, so a stray click cannot delete a preset.
-const managing = ref(false);
+// Delete buttons show only on the row currently in 管理 mode, so a stray click cannot delete a preset.
+const managing_row = ref("");
+function toggle_manage(label) {
+  managing_row.value = managing_row.value === label ? "" : label;
+}
 /** Platforms and presets each get a labelled row, so wrapped chips line up under the first chip instead of the label. */
 const groups = computed(() => {
   const listed = props.items.filter((item) => !item.row);
   const split = listed.findIndex((item) => item.separated);
-  const rows = split < 0 ? [{ label: t('添加'), items: listed }] : [{ label: t('添加'), items: listed.slice(0, split) }, { label: t('预设'), items: listed.slice(split) }];
+  const rows = split < 0 ? [{ label: t("添加"), items: listed }] : [{ label: t("添加"), items: listed.slice(0, split) }, { label: t("预设"), items: listed.slice(split) }];
   for (const item of props.items.filter((entry) => entry.row)) {
-    const row = rows.find((group) => group.label === item.row);
-    if (row) row.items.push(item); else rows.push({ label: item.row, items: [item] });
+    const group = rows.find((existing) => existing.label === item.row);
+    if (group) group.items.push(item); else rows.push({ label: item.row, items: [item] });
   }
   return rows.filter((group) => group.items.length)
     .map((group) => ({ ...group, items: [...group.items.filter((item) => !item.unconfigured), ...group.items.filter((item) => item.unconfigured)] }));
@@ -36,13 +39,13 @@ defineExpose({ focus_first });
     <template v-for="group in groups" :key="group.label">
       <span class="roster-add-label">{{ group.label }}</span>
       <div class="roster-add-chips">
-        <span v-for="item in group.items" :key="item.value" class="roster-add-chip" :class="{ 'is-selected': item.selected, 'is-disabled': item.disabled || item.unconfigured, 'is-removable': managing && item.removable }">
+        <span v-for="item in group.items" :key="item.value" class="roster-add-chip" :class="{ 'is-selected': item.selected, 'is-disabled': item.disabled || item.unconfigured, 'is-removable': managing_row === group.label && item.removable }">
           <button type="button" class="roster-add-main" :disabled="item.disabled" :title="item.title" :aria-label="item.aria_label" :aria-pressed="item.selected === undefined ? undefined : item.selected" @click="emit(item.unconfigured ? 'configure' : 'add', item.value)">
-            <UAvatar :src="item.icon" :icon="item.lucide" :text="item.initials" :alt="item.name" size="3xs" class="channel-avatar" :class="item.style" /><span class="roster-add-name">{{ item.name }}</span><UIcon :name="item.selected ? 'i-lucide-check' : item.unconfigured ? 'i-lucide-settings-2' : 'i-lucide-plus'" class="roster-add-mark" />
+            <UAvatar :src="item.icon" :icon="item.lucide" :text="item.initials" :alt="item.name" size="3xs" class="channel-avatar" :class="item.style" /><span class="roster-add-name">{{ item.name }}</span><small v-if="item.tag" class="roster-add-tag">{{ item.tag }}</small><UIcon :name="item.selected ? 'i-lucide-check' : item.unconfigured ? 'i-lucide-settings-2' : 'i-lucide-plus'" class="roster-add-mark" />
           </button>
-          <button v-if="managing && item.removable" type="button" class="roster-add-remove" :title="t('删除预设「{value1}」', { value1: item.name })" :aria-label="t('删除预设 {value1}', { value1: item.name })" @click="emit('remove', item.value)"><UIcon name="i-lucide-x" /></button>
+          <button v-if="managing_row === group.label && item.removable" type="button" class="roster-add-remove" :title="t('删除预设「{value1}」', { value1: item.name })" :aria-label="t('删除预设 {value1}', { value1: item.name })" @click="emit('remove', item.value)"><UIcon name="i-lucide-x" /></button>
         </span>
-        <button v-if="group.items.some((item) => item.removable)" type="button" class="roster-add-manage" :aria-pressed="managing" @click="managing = !managing">{{ managing ? t('完成') : t('管理') }}</button>
+        <button v-if="group.items.some((item) => item.removable)" type="button" class="roster-add-manage" :aria-pressed="managing_row === group.label" @click="toggle_manage(group.label)">{{ managing_row === group.label ? t('完成') : t('管理') }}</button>
       </div>
     </template>
   </div>
@@ -60,6 +63,7 @@ defineExpose({ focus_first });
 .roster-add-main { display: inline-flex; align-items: center; gap: 6px; min-width: 0; height: 100%; padding: 0 9px 0 4px; border-radius: inherit; font-size: 12px; }
 .roster-add-chip.is-removable .roster-add-mark { visibility: hidden; }
 .roster-add-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.roster-add-tag { flex-shrink: 0; padding: 0 5px; border-radius: 4px; background: var(--ui-bg-accented); color: var(--ui-text-dimmed); font-size: 10px; line-height: 16px; }
 .roster-add .channel-avatar { flex-shrink: 0; width: 22px; height: 22px; font-size: 9px; }
 /* A platform without a logo shows its initials on the same round plate as the logos. */
 .roster-add .channel-avatar:not(:has(img)) { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }

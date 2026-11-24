@@ -13,7 +13,7 @@ import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { slash_insertion } from "../runner/slash_names.mjs";
 import { format_duration, replay_follow_window, snapshot_at, step_follow_window, timeline_axis, timeline_rows, timeline_segments, timeline_summary } from "../frontend/timeline-model.js";
 import { t } from "../frontend/i18n.js";
-import { encode_cover, share_card_diagnostic } from "../frontend/share-card.js";
+import { build_default_share_copy, encode_cover, resolve_share_copy, share_card_diagnostic } from "../frontend/share-card.js";
 import { VISUAL_RESULT_LIMIT, inline_visual_collapsed, inline_visual_document, inline_visual_height, remember_visual_height, remembered_visual_height, send_visual_theme, start_visual_tab, visual_result } from "../frontend/inline-visual.js";
 import { excerpts_markdown, file_preview, put_visual_result } from "../frontend/file-preview.js";
 import { declined, external_of, external_tag, invited_items, remaining_label, take_join_fragment } from "../frontend/external-members.js";
@@ -2652,6 +2652,7 @@ test("a share page carries none of what only this computer and its owner should 
         attachments: [{ name: "ATTACHMENT-MARK", submission_id: "FILE-SUBMISSION-MARK" }], submission_id: "SUBMISSION-MARK" },
       { id: 2, text: "REWOUND-MARK", withdrawn: "rewound", attachments: [{ name: "WITHDRAWN-FILE-MARK" }] },
       { id: 3, text: "RETRACTED-MARK", withdrawn: "retracted" },
+      { id: 6, source: "room_relay_sent", kind: "notice", text: "**sent**", relay_sent_title: "Child", relay_sent_message_id: 23 },
       { id: 4, text: "run failed: NOTICE-MARK", texts: { text: { template: "run failed: {reason}", params: { reason: "NOTICE-MARK" } } } },
       { id: 5, text: "quota used up, resets RESETS-MARK", texts: { text: { template: "quota used up, resets {resets}", params: { resets: "RESETS-MARK" } } } }] },
     // The runs that asked or answered a message taken back carry its text in the timeline and in their notes.
@@ -2663,6 +2664,8 @@ test("a share page carries none of what only this computer and its owner should 
     "/api/rooms/r1/executions/10/notes": { notes: [{ text: "kept note" }] },
   };
   const responses = context.share_payload(raw, "r1");
+  const outgoing = responses[history].messages.find(message => message.source === "room_relay_sent");
+  assert.deepEqual([outgoing.text, outgoing.relay_sent_title, outgoing.relay_sent_message_id], ["**sent**", "Child", 23]);
   const text = JSON.stringify(responses);
   for (const mark of ["OTHER-ROOM-MARK", "FOLDER-MARK", "BACKGROUND-MARK", "BOUNDARY-MARK", "DESCRIPTION-MARK", "SESSION-MARK", "MACHINE-MARK", "DIRECTORY-MARK",
     "QUEUED-MARK", "RECOMMEND-MARK", "DECISION-MARK", "ENDED-MARK", "QUOTA-MARK", "DENIAL-MARK", "RETRY-MARK", "ATTACHMENT-MARK", "SUBMISSION-MARK",
@@ -2673,7 +2676,7 @@ test("a share page carries none of what only this computer and its owner should 
   assert.deepEqual([run.changes, run.edited, run.background, responses["/api/rooms/r1"].members[0].external], [["src/a.txt"], ["src/a.txt"], true, true]);
   // A sibling folder that only starts with the project's name is left as written.
   assert.deepEqual(responses[history].messages.map((message) => [message.id, message.text]), [
-    [1, "see src\\b.txt, c.txt, e.txt and D:\\Work\\Secret-Project-wt\\d.txt; notes in ~\\x.md, ~/y.md and ~/z.md"], [4, "run failed: 执行失败"], [5, "quota used up, resets 未公开"]]);
+    [1, "see src\\b.txt, c.txt, e.txt and D:\\Work\\Secret-Project-wt\\d.txt; notes in ~\\x.md, ~/y.md and ~/z.md"], [6, "**sent**"], [4, "run failed: 执行失败"], [5, "quota used up, resets 未公开"]]);
   assert.deepEqual(responses["/api/rooms/r1/timeline"].executions.map((item) => item.id), [10]);
   assert.deepEqual(Object.keys(responses).filter((path) => path.endsWith("/notes")), ["/api/rooms/r1/executions/10/notes"]);
   // With attachments included, only the kept messages' files come along, still without their submission.
@@ -3038,6 +3041,30 @@ test("the share card skips question receipts when choosing the owner's question"
   const draft = { room_id: "r", responses: { "/api/rooms/r/messages?after=0": {
     messages: texts.map((text, id) => ({ id, author: "用户", text })) } } };
   assert.equal(context.share_card(draft, { expires_at: "2030-01-01" }).question, texts.at(-1));
+  const multi = { room_id: "r", responses: { "/api/rooms/r/messages?after=0": {
+    messages: [{ id: 1, author: "用户", text: "我们要为品牌做一款点单 App。\n\n- 清单 A\n- 清单 B" }] } } };
+  assert.equal(context.share_card(multi, { expires_at: "2030-01-01" }).question, "我们要为品牌做一款点单 App。");
+  assert.equal(context.share_card(multi, { expires_at: "2030-01-01" }).card_version, 2);
+});
+
+test("default share copy includes deployed sites and live share link, and companion copy resolves placeholders", () => {
+  const url = "https://share.codiscuss.com/s/FEyQ_JE1_Pn5emRPvotRnA";
+  const base = build_default_share_copy({
+    title: "拾光咖啡",
+    question: "打造一款街区咖啡点单 App。",
+    outcome: "品牌视觉与官网已上线。",
+    stats: "3 位 AI · 41 条消息 · 36 次执行",
+    url,
+    sites: [{ title: "拾光咖啡官网", url: "https://demo.bimcanvas.com" }],
+  });
+  assert.match(base, /【拾光咖啡】/);
+  assert.match(base, /拾光咖啡官网：https:\/\/demo\.bimcanvas\.com/);
+  assert.match(base, /完整协作记录：https:\/\/share\.codiscuss\.com\/s\/FEyQ_JE1_Pn5emRPvotRnA/);
+  assert.equal(
+    resolve_share_copy("标题\n\n完整协作记录：{{share_url}}", url),
+    `标题\n\n完整协作记录：${url}`,
+  );
+  assert.match(resolve_share_copy("没有链接的文案", url), new RegExp(url));
 });
 
 test("share card diagnostics distinguish eligible materials, preview source and incomplete uploads", () => {
@@ -3145,4 +3172,49 @@ test("only an inline visual offers submit, and a panel's result replaces its own
   const markdown = excerpts_markdown(file_preview.excerpts.slice(1));
   assert.match(markdown, /^注释 1：Claude 的消息 #9\n\n> @全体成员\n> \/goal clear$/);
   file_preview.excerpts = [];
+});
+
+test("referenced images group under their paragraph or list item without splitting sentences, and keep badges when multiple", () => {
+  const { context } = theme_fixture();
+  const file = (id, number, file_name, content_type, extra = {}) => ({ id, number, file_name, content_type, room_id: "room", size: 10, ...extra });
+  const single_files = [file("pic", 3, "shot.png", "image/png", { width: 1440, height: 900 }), file("doc", 4, "notes.md", "text/markdown")];
+  const inlined = new Set();
+  const html = context.link_attachment_placeholders("<p>前文 [图片 #3] 中间 [图片 #3] 后文 [文件 #4]</p>", single_files, inlined);
+  assert.deepEqual([...inlined], ["pic"]);
+  assert.equal(html.match(/class="attachment-inline-grid"/g).length, 1);
+  assert.match(html, /^<p>前文 <button type="button" class="attachment-placeholder" data-preview-attachment="pic"[^>]*>\[图片 #3\]<\/button> 中间 <button type="button" class="attachment-placeholder" data-preview-attachment="pic"[^>]*>\[图片 #3\]<\/button> 后文 <button type="button" class="attachment-placeholder" data-preview-attachment="doc"[^>]*>\[文件 #4\]<\/button><\/p><div class="attachment-inline-grid" data-count="1"><button type="button" class="attachment-image" data-preview-attachment="pic"[^>]*data-inline-image="pic"/);
+  assert.doesNotMatch(html, /data-image-badge=/, "a single-image message omits the corner badge");
+  // Multi-image list items keep sentence punctuation intact, place pairs side by side with badges, and flush before nested lists.
+  const multi_files = [file("p11", 11, "a.png", "image/png"), file("p12", 12, "b.png", "image/png"), file("p7", 7, "c.png", "image/png")];
+  const multi_inlined = new Set();
+  const list_html = context.link_attachment_placeholders(
+    "<ol><li>新建面板 [图片 #11]，邀请弹窗 [图片 #12]。<ul><li>子项 [图片 #7]</li></ul></li></ol><p>[图片 #11]</p>",
+    multi_files, multi_inlined);
+  assert.deepEqual([...multi_inlined], ["p11", "p12", "p7"]);
+  assert.match(list_html, /新建面板 <span class="attachment-reference-end"><button[^>]*>\[图片 #11\]<\/button>，<\/span>邀请弹窗 <span class="attachment-reference-end"><button[^>]*>\[图片 #12\]<\/button>。<\/span><div class="attachment-inline-grid" data-count="2">.*data-inline-image="p11" data-image-badge="#11".*data-inline-image="p12" data-image-badge="#12".*<\/div><ul><li>子项 <button[^>]*>\[图片 #7\]<\/button><div class="attachment-inline-grid" data-count="1">.*data-inline-image="p7" data-image-badge="#7".*<\/div><\/li><\/ul>/s);
+  // A paragraph containing only newly inlined image placeholders becomes the grid itself, with no redundant label line.
+  const bare_inlined = new Set();
+  const bare_html = context.link_attachment_placeholders("<p>[图片 #11] [图片 #12]</p>", multi_files, bare_inlined);
+  assert.match(bare_html, /^<div class="attachment-inline-grid" data-count="2">/);
+  assert.doesNotMatch(bare_html, /<p>|attachment-placeholder/);
+  // Without a collector the references stay links, as in places that keep their own attachment list.
+  assert.doesNotMatch(context.link_attachment_placeholders("<p>[图片 #3]</p>", single_files), /attachment-inline-grid/);
+});
+
+test("working card shows private-chat entry when progress is reported and hides it when degraded to progress=false", () => {
+  const context = vm.createContext({});
+  for (const name of ["capabilities", "shows_progress"]) {
+    const start = discussion_source.indexOf(`const ${name} =`);
+    const end = discussion_source.indexOf("\n", start);
+    vm.runInContext(discussion_source.slice(start, end), context);
+  }
+  const shows_progress = vm.runInContext("shows_progress", context);
+  const readable = { execution_id: 6186, capabilities: { stoppable: false, progress: true } };
+  const degraded = { execution_id: 6186, capabilities: { stoppable: false, progress: false } };
+  const unreported = { execution_id: 6186, capabilities: null };
+  assert.equal(shows_progress(readable), true, "Codex App delivery with progress=true exposes the working-card private chat button");
+  assert.equal(shows_progress(unreported), true, "until capabilities arrive, the page assumes progress is visible");
+  assert.equal(shows_progress(degraded), false, "when the session could not be read before delivery, progress=false hides the private chat button");
+  assert.equal(discussion_source.match(/can_manage && shows_progress\(message\) && message\.execution_id/g)?.length, 2,
+    "both touch corner and hover toolbar private-chat buttons on the working card follow shows_progress(message)");
 });

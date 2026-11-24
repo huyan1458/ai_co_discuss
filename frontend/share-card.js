@@ -197,3 +197,42 @@ export function share_card_diagnostic(draft, render) {
   }
   return summary;
 }
+
+const SHARE_URL_PLACEHOLDER = /\{\{\s*share_url\s*\}\}|\[(?:分享链接|share_url)\]/gi;
+
+/** Replace share-URL placeholders with the live link, appending the link if the copy omits it. */
+export function resolve_share_copy(text, url) {
+  const raw = String(text || "").trim();
+  const live = String(url || "").trim();
+  if (!raw) return "";
+  if (!live) return raw;
+  const filled = raw.replace(SHARE_URL_PLACEHOLDER, live);
+  if (filled.includes(live)) return filled;
+  return `${filled}\n\n${t("完整协作记录：{url}", { url: live })}`;
+}
+
+/** Build ready-to-paste baseline social copy from the card summary, live product sites and share link. */
+export function build_default_share_copy({ title = "", question = "", outcome = "", stats = "", url = "", sites = [] } = {}) {
+  const blocks = [];
+  const heading = String(title || "").trim();
+  if (heading) blocks.push(t("【{title}】", { title: heading }));
+  const q = String(question || "").trim();
+  const o = String(outcome || "").trim();
+  if (q) blocks.push(q);
+  if (o) blocks.push(t("成果：{outcome}", { outcome: o }));
+  const meta = [];
+  if (String(stats || "").trim()) meta.push(String(stats).trim());
+  const seen = new Set();
+  for (const site of sites || []) {
+    const site_url = String(site?.url || "").trim();
+    if (!site_url || seen.has(site_url)) continue;
+    seen.add(site_url);
+    const label = String(site?.title || "").trim();
+    meta.push(label ? t("{label}：{url}", { label, url: site_url }) : t("在线体验：{url}", { url: site_url }));
+  }
+  const live = String(url || "").trim();
+  if (live) meta.push(t("完整协作记录：{url}", { url: live }));
+  if (meta.length) blocks.push(meta.join("\n"));
+  blocks.push("#AICoDiscuss #多AI协作");
+  return blocks.join("\n\n");
+}

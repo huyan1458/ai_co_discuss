@@ -1,4 +1,6 @@
 {
+  "发信留痕须包含有效的正文与成员名称": "A send record requires valid text and a member name.",
+  "发信留痕的送达或排队状态无效": "Invalid delivery or queue status for the send record.",
   "无法读取 ZIP 压缩包": "Could not read the ZIP archive",
   "无法读取这个压缩包条目": "Could not read this archive entry",
   "压缩包内单个文件最多预览 64 MiB": "Individual archive entries can be previewed up to 64 MiB",

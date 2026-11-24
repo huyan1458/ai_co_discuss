@@ -116,6 +116,8 @@ Issues and pull requests are welcome. See the [contributing guide](.github/CONTR
 
 ## Security
 
+The runner warns at 8 GiB of local service data and blocks new runs above 10 GiB, excluding speech models. Drafts have separate limits of 1 GiB per room and 3 GiB across rooms. Usage is sampled, so an active write can exceed a limit before it is stopped. [Manage local storage](docs/en/guide/admin.md)
+
 The [security policy](.github/SECURITY.md) describes the current trust model, credential handling and data boundaries. The project has not undergone an independent security audit.
 
 ## License

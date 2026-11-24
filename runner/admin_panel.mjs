@@ -11,6 +11,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
+import { clean_storage, storage_details } from './admin_storage.mjs';
 import { homedir, tmpdir } from 'node:os';
 import tls from 'node:tls';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -26,6 +27,9 @@ import { ensure_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } 
 import { machine_links } from './remote_launch.mjs';
 import { read_relay_health, request_relay_reconnect } from './relay_health.mjs';
 import { instance_recovery } from './instance_recovery.mjs';
+import { mark_backup_release, reserve_project_root, set_project_migration } from '../gateway/gateway.mjs';
+import { backup_operation, migration_folders, move_project_files } from './project_migration.mjs';
+import { require_idle_os_user } from './os_users.mjs';
 import { DIRECT_ACCOUNTS_FILE } from '../gateway/direct.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
 import { clear_instance_flag, create_os_user, install_shared_runtime, restrict_other_drives, instance_flag_set, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
@@ -383,7 +387,7 @@ function instance_running(port) {
 
 async function list_accounts(data) {
   const users = read_os_users(data);
-  return Promise.all(Object.entries(read_accounts(data)).map(async ([name, account]) => ({ name, port: account.port, home: account_home(data, name), disabled: Boolean(account.disabled), protected: account.protected === true,
+  return Promise.all(Object.entries(read_accounts(data)).map(async ([name, account]) => ({ name, port: account.port, home: account_home(data, name), project_data_root: account.project_data_root || '', disabled: Boolean(account.disabled), protected: account.protected === true,
     os_user: users[name]?.user || '', running: await instance_running(account.port), keys: list_keys(instance_home(data, name)).length,
     // The AI environment is set up once account_env.mjs has run for its Windows user (it records skills in the service home).
     skills: Boolean(users[name]) && existsSync(join(instance_home(data, name), SKILL_RECORD)),
@@ -573,6 +577,7 @@ export async function protect_account(data, name, on, { place = place_instance_k
 /** Start or stop an account's instance: as its Windows user from the shared copy when it has one, otherwise as the owner. */
 function run_instance(data, name, command) {
   const account = read_accounts(data)[name];
+  if (command === 'start' && account?.project_migration) throw new Error('请先完成数据迁移 / Finish the pending data migration first');
   if (!account) throw panel_error('账号不存在：{value1}', { value1: name });
   const service = instance_home(data, name);
   // A protected instance starts knowing its key file; it then serves only callers that prove the key.
@@ -600,6 +605,104 @@ function run_instance(data, name, command) {
     child.on('exit', code => code === 0 ? done() : fail(command === 'start'
       ? panel_error('实例启动失败（退出码 {code}）', { code }) : panel_error('实例停止失败（退出码 {code}）', { code })));
   });
+}
+
+/** Stop the account and complete or resume the move recorded in the owner-only registry. */
+export async function migrate_account_data(data, name, requested, { stop = run_instance, reserve = reserve_project_root } = {}) {
+  const account = read_accounts(data)[name], service = instance_home(data, name);
+  let job = account.project_migration;
+  if (!requested || (job && resolve(requested) !== job.target)) throw new Error('请指定原迁移目标 / Specify the migration destination');
+  if (!job && account.project_data_root && resolve(requested) === account.project_data_root) return { project_data_root: account.project_data_root };
+  const user = read_os_users(data)[name]?.user || '';
+  if (!job) {
+    const target = reserve(data, name, requested, user);
+    job = { target, previous: account.project_data_root || '', id: randomBytes(8).toString('hex') };
+    set_project_migration(data, name, job);
+  }
+  try {
+    await stop(data, name, 'stop');
+    const state = local_status(service);
+    if (state.pid || state.service_pid || await instance_state(account.port) !== 'down') throw new Error('实例仍在运行 / Instance is still running');
+    if (user) require_idle_os_user(user);
+  } catch (error) {
+    if (!account.project_migration) set_project_migration(data, name, null);
+    throw error;
+  }
+  const request = { ...job, service };
+  let receipts;
+  try { receipts = await migration_worker(data, name, request, user); } catch (error) {
+    if (error.rolled_back) set_project_migration(data, name, null);
+    throw error;
+  }
+  const kinds = {};
+  for (const kind of ['workspace', 'projects', 'drafts']) {
+    if (!receipts[kind]) continue;
+    const path = receipt_path(data, job.id, kind);
+    mkdirSync(dirname(path), { recursive: true });
+    const temp = path + '.' + randomBytes(8).toString('hex');
+    writeFileSync(temp, JSON.stringify(receipts[kind]), { flag: 'wx', mode: 0o600 });
+    renameSync(temp, path);
+    kinds[kind] = 'ready';
+  }
+  set_project_migration(data, name, null, job.target, Object.keys(kinds).length ? { ...job, kinds } : null);
+  return { project_data_root: job.target, backup_suffix: '.before-' + job.id };
+}
+
+function receipt_path(data, id, kind) {
+  return join(data, 'project-migration-receipts', id + '-' + kind + '.json');
+}
+
+/** Report current bytes for each registered backup, or why its identity could not be verified. */
+export async function list_migration_backups(data, name) {
+  const account = read_accounts(data)[name], rows = [], service = instance_home(data, name);
+  const user = read_os_users(data)[name]?.user;
+  for (const job of account.migration_backups || []) {
+    for (const folder of migration_folders({ ...job, service })) {
+      const kind = folder.name;
+      if (!job.kinds[kind]) continue;
+      const row = { id: job.id, kind, path: folder.backup, state: job.kinds[kind] };
+      try {
+        const record = JSON.parse(readFileSync(receipt_path(data, job.id, kind), 'utf8'));
+        Object.assign(row, await migration_worker(data, name, { ...job, service, kind, record, action: 'list', releasing: row.state === 'releasing' }, user));
+      } catch (error) { row.error = error.message; }
+      rows.push(row);
+    }
+  }
+  return rows;
+}
+
+/** Release one confirmed backup, keeping its junction and active target in place. */
+export async function release_migration_backup(data, name, body, stop = run_instance) {
+  const account = read_accounts(data)[name], { id, kind } = body;
+  const job = account.migration_backups?.find(item => item.id === id);
+  if (body.confirm !== true || !job || !['projects', 'workspace', 'drafts'].includes(kind) || !job.kinds[kind]) {
+    throw new Error('请选择已登记的备份并确认 / Select and confirm a registered backup');
+  }
+  const service = instance_home(data, name), user = read_os_users(data)[name]?.user;
+  const record = JSON.parse(readFileSync(receipt_path(data, id, kind), 'utf8'));
+  await stop(data, name, 'stop');
+  const state = local_status(service);
+  if (state.pid || state.service_pid || await instance_state(account.port) !== 'down') throw new Error('实例仍在运行 / Instance is still running');
+  if (user) require_idle_os_user(user);
+  const request = { ...job, kind, service, record, releasing: job.kinds[kind] === 'releasing' };
+  await migration_worker(data, name, { ...request, action: 'verify' }, user);
+  mark_backup_release(data, name, id, kind, false);
+  await migration_worker(data, name, { ...request, releasing: true, action: 'release' }, user);
+  mark_backup_release(data, name, id, kind, true);
+  rmSync(receipt_path(data, id, kind), { force: true });
+  return { released: kind, id };
+}
+
+async function migration_worker(data, name, request, user) {
+  if (user) {
+    const code = readFileSync(new URL('./project_migration.mjs', import.meta.url), 'utf8');
+    const output = run_as_user(data, name, `& ${ps_quote(process.execPath)} (Join-Path $Job 'move.mjs') (Join-Path $Job 'request.json')`,
+      { files: { 'move.mjs': code, 'request.json': JSON.stringify(request) }, timeout: 3600_000 });
+    const reply = JSON.parse(output);
+    if (!reply.result) throw Object.assign(new Error(reply.error || 'Migration incomplete'), { rolled_back: reply.rolled_back === true });
+    return reply.result;
+  }
+  return request.action ? backup_operation(request) : move_project_files(request);
 }
 
 // ---- API keys an account's instance holds ----
@@ -674,7 +777,7 @@ function wanted_port(data, name, flag_set) {
   const job = update_job(data);
   if (job && job.status !== 'done' && Date.now() - job.started_at < UPDATE_STALE_MS) return;
   const account = read_accounts(data)[name];
-  if (!account || account.disabled) return;
+  if (!account || account.disabled || account.project_migration) return;
   if (read_os_users(data)[name]) return flag_set(name) ? account.port : undefined;
   if (account.instance_wanted === undefined && local_status(instance_home(data, name)).website_running) {
     set_instance_wanted(data, name, true);
@@ -709,6 +812,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // Accounts follow the way external members can reach them, in the background (#5660).
     const after_change = () => { op.reconcile_external(data).catch(() => {}); };
     const hosting = hosting_enabled(data);
+    if (path === '/api/storage' && method === 'GET') return storage_details(data);
+    if (path === '/api/storage/clean' && method === 'POST') return clean_storage(data, body);
     if (method === 'GET' && section === 'state') {
       const windows = process.platform === 'win32';
       const service = op.service_overview(data), bound = bound_site(data);
@@ -792,7 +897,9 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && section === 'clis' && name === 'install') return op.install_runtime(data);
     // Hosted accounts' Windows users kept off every drive but the system drive; what they run must already lie there.
     if (method === 'POST' && section === 'drives' && name === 'restrict') {
-      return op.restrict_other_drives(data, Object.keys(read_os_users(data)).filter(account => read_accounts(data)[account]).map(account => account_home(data, account)));
+      const accounts = read_accounts(data);
+      return op.restrict_other_drives(data, Object.entries(accounts).flatMap(([id, account]) =>
+        [account_home(data, id), account.project_data_root, account.project_migration?.target].filter(Boolean)));
     }
     // The account entry customers sign in at: started and stopped here, and started again with the panel if it was left on.
     if (method === 'POST' && section === 'entry' && (name === 'start' || name === 'stop')) {
@@ -825,8 +932,14 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (method === 'POST') { save_hosted_prompt(data, body.text); return { ok: true }; }
     }
     if (section !== 'accounts') throw panel_error('接口不存在');
-    if (method === 'POST' && !name) { const added = await op.add_account(data, String(body.name || '').trim()); after_change(); return added; }
+    if (method === 'POST' && !name) { const added = await op.add_account(data, String(body.name || '').trim(), undefined, body.project_data_root); after_change(); return added; }
     account();
+    if (method === 'POST' && action === 'migrate-data') return recovery.manage(name, action,
+      () => migrate_account_data(data, name, body.project_data_root, { stop: op.run_instance }));
+    if (method === 'POST' && read_accounts(data)[name].project_migration && action !== 'stop') throw new Error('请先完成数据迁移 / Finish the pending data migration first');
+    if (method === 'GET' && action === 'migration-backups') return list_migration_backups(data, name);
+    if (method === 'POST' && action === 'release-backup') return recovery.manage(name, action,
+      () => release_migration_backup(data, name, body, op.run_instance));
     if (method === 'POST' && action === 'password') return { password: op.reset_password(data, name) };
     if (method === 'POST' && action === 'protect') return recovery.manage(name, action, () => op.protect_account(data, name, body.on !== false));
     if (method === 'POST' && (action === 'disable' || action === 'enable')) { op.set_account_disabled(data, name, action === 'disable'); return { disabled: action === 'disable' }; }
@@ -847,7 +960,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && action === 'os-user') await change_external(data, name, false);
     if (method === 'POST' && action === 'os-user' && extra === 'remove') { set_instance_wanted(data, name, false); op.remove_os_user(data, name); after_change(); return { ok: true }; }
     if (method === 'POST' && action === 'os-user') {
-      const result = op.create_os_user(data, name, account_home(data, name));
+      const result = op.create_os_user(data, name, account_home(data, name), { project_data_root: read_accounts(data)[name].project_data_root });
       op.use_shared_programs(data, name);
       after_change();
       return result;

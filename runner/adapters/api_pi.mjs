@@ -292,15 +292,16 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
       state.tools.delete(event.toolCallId);
       const outcome = event.result?.details?.codiscuss || {};
       if (outcome.fatal) fail(outcome.fatal);
+      if (Array.isArray(outcome.edits) && outcome.edits.length) task.on_edits?.(outcome.edits);
       if (outcome.terminal && !state.terminal) {
         state.terminal = true;
         // An interjection still queued would make the model answer again after its answer was saved.
         send({ type: 'clear_queue' });
       }
-      // Our write tools name `file_path`, Pi's own `path`; a bash command that writes claims the paths it names, as for Claude.
+      // Our write tools name `file_path`, Pi's own `path`; a bash command that writes claims only its write targets when it succeeded.
       const path = call?.args?.file_path ?? call?.args?.path;
       if (call && WRITE_TOOLS.includes(call.name) && !event.isError && typeof path === 'string' && project_root) task.on_edits?.([resolve(project_root, path)]);
-      if (call?.name === 'bash' && project_root) {
+      if (call?.name === 'bash' && !event.isError && project_root) {
         const written = shell_written_paths(call.args?.command).map(item => resolve(project_root, item));
         if (written.length) task.on_edits?.(written);
       }

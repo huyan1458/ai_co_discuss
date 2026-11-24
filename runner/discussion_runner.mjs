@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { drafts_root } from './account_space.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -43,8 +44,12 @@ export function load_config(path) {
 
 /** Keep service-managed answers outside all room credentials, logs and databases. */
 export function service_drafts(home, directory) {
-  const key = createHash('sha256').update(resolve(directory)).digest('hex');
-  return join(home, 'drafts', key);
+  return join(drafts_root(home), room_draft_key(directory));
+}
+
+/** Stable room key across project data directory changes. */
+export function room_draft_key(directory) {
+  return createHash('sha256').update(resolve(directory)).digest('hex');
 }
 
 /** Validate a launch draft with the same rules as a registered room configuration. */
@@ -70,6 +75,8 @@ export function validate_config(input, base_directory) {
       if (!adapter_profile(participant.adapter).efforts.includes(participant.effort)) delete participant.effort;
     }
     participant.cwd = participant.cwd ?? config.cwd;
+    if (participant.cwd && Array.isArray(config.extra_directories) && config.extra_directories.some(item =>
+      item?.access === 'read' && typeof item.path === 'string' && overlapping_directories(item.path, participant.cwd))) participant.project_access = 'read';
     participant.project_name = participant.project_name ?? config.discussion_project;
     participant.project_access = participant.project_access || config.project_access || 'read';
     // `own` is set only when the service takes over a manual member: it keeps its own session's permissions.
@@ -116,7 +123,9 @@ export function check_extra_directories(cwd, directories, { exists = true } = {}
   if (!Array.isArray(directories) || directories.length > MAX_EXTRA_DIRECTORIES) throw new Error(`extra_directories 须为最多 ${MAX_EXTRA_DIRECTORIES} 个目录的列表`);
   if (directories.length && !cwd) throw new Error('添加其他项目目录前须先指定房间的项目目录');
   const seen = cwd ? [cwd] : [];
-  for (const directory of directories) {
+  for (const entry of directories) {
+    const directory = typeof entry === 'string' ? entry : entry?.path;
+    if (typeof entry !== 'string' && !['read', 'write'].includes(entry?.access)) throw new Error('项目目录权限须为 read 或 write');
     if (typeof directory !== 'string' || !isAbsolute(directory)) throw new Error('项目目录须为完整绝对路径');
     if (exists && (!existsSync(directory) || !statSync(directory).isDirectory())) throw new Error(`项目目录 ${directory} 在本机不存在或不是文件夹`);
     const overlap = seen.find(other => overlapping_directories(other, directory));

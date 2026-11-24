@@ -75,7 +75,42 @@ let frame = 0;
 let last_frame = 0;
 const cut = computed(() => position.value ?? Infinity);
 const until = (end) => Math.min(end, cut.value);
-const place = (start, end) => ({ left: `${x(start) * 100}%`, width: `${(x(until(end)) - x(start)) * 100}%` });
+const chart_width = ref(0);
+const chart_height = ref(139);
+let resize_observer = null;
+onMounted(() => {
+  resize_observer = new ResizeObserver(([entry]) => {
+    chart_width.value = entry.contentRect.width;
+    chart_height.value = entry.contentRect.height;
+  });
+  resize_observer.observe(chart.value);
+});
+onBeforeUnmount(() => resize_observer?.disconnect());
+/**
+ * Map a time interval to integer CSS pixels on a shared grid so adjacent steps never split by 1px during zoom/pan
+ * (#9505). When `seal_right` is set (covered by the next busy step painted after this one), extend 1px right so
+ * fractional DPR / browser zoom still cannot expose a dark background seam.
+ */
+function place_x(start, end, { clamp = false, seal_right = false } = {}) {
+  const w = chart_width.value;
+  const x0 = x(start);
+  const x1 = x(until(end));
+  if (!w) return { left: `${x0 * 100}%`, width: `${Math.max(0, x1 - x0) * 100}%` };
+  const raw_left = Math.round(x0 * w);
+  const raw_right = Math.round(x1 * w);
+  const left = clamp ? Math.max(0, raw_left) : raw_left;
+  const right = clamp ? Math.min(w, raw_right) : raw_right;
+  const width = Math.max(1, right - left) + (seal_right && right < w ? 1 : 0);
+  return { left: `${left}px`, width: `${width}px` };
+}
+function place_y(below, count, peak, seal_top = false) {
+  const h = chart_height.value;
+  if (!h) return { bottom: `${below / peak * 100}%`, height: `${count / peak * 100}%` };
+  const bottom = Math.round((below / peak) * h);
+  const top = Math.round(((below + count) / peak) * h);
+  const height = Math.max(1, top - bottom) + (seal_top && top < h ? 1 : 0);
+  return { bottom: `${bottom}px`, height: `${height}px` };
+}
 const wide = (start, end) => x(until(end)) - x(start) >= LABEL_MIN_SHARE;
 /** A task band drawn only where it is in view, so its text always begins on screen and zooming in reveals more of it. */
 const band = (task) => {
@@ -83,25 +118,36 @@ const band = (task) => {
   return { left, width: Math.max(0, right - left) };
 };
 const band_text = (task) => (task.task || t('（没有记录起因）')).replace(MARKDOWN_MARKS, "").replace(/\s+/g, " ").trim();
-const chart_width = ref(0);
-let resize_observer = null;
-onMounted(() => {
-  resize_observer = new ResizeObserver(([entry]) => { chart_width.value = entry.contentRect.width; });
-  resize_observer.observe(chart.value);
-});
-onBeforeUnmount(() => resize_observer?.disconnect());
 const seen = (items) => items.filter((item) => item.start < cut.value);
-/** Each working step as stacked blocks, one per member, bottom up; heights are shares of the peak. */
-const blocks = computed(() => seen(model.value.steps.filter((step) => step.total)).flatMap((step) => {
-  let below = 0;
-  return step.members.map((entry) => {
-    // A member running twice at once stands for the one that began last.
-    const block = { key: `${step.start}:${entry.member}`, tone: props.tones.get(entry.member), row: entry.keys.at(-1),
-      style: { ...place(step.start, step.end), bottom: `${below / model.value.peak * 100}%`, height: `${entry.count / model.value.peak * 100}%` } };
-    below += entry.count;
-    return block;
-  });
-}));
+const visible = (items) => items.filter((item) => item.start < cut.value && x(until(item.end)) > 0 && x(item.start) < 1);
+/** Each visible working step as stacked blocks, one per member, bottom up; shared edges are sealed under later blocks. */
+const blocks = computed(() => {
+  const steps = model.value.steps;
+  const peak = model.value.peak;
+  const out = [];
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    if (!step.total || step.start >= cut.value || x(until(step.end)) <= 0 || x(step.start) >= 1) continue;
+    const next = steps[index + 1];
+    const next_total = next && next.start === step.end && step.end < cut.value ? next.total : 0;
+    let below = 0;
+    for (const entry of step.members) {
+      const top_level = below + entry.count;
+      const seal_right = top_level <= next_total;
+      const seal_top = top_level < step.total && (!seal_right || top_level < next_total);
+      // A member running twice at once stands for the one that began last.
+      out.push({
+        key: `${step.start}:${entry.member}`, tone: props.tones.get(entry.member), row: entry.keys.at(-1),
+        style: {
+          ...place_x(step.start, step.end, { clamp: true, seal_right }),
+          ...place_y(below, entry.count, peak, seal_top),
+        },
+      });
+      below = top_level;
+    }
+  }
+  return out;
+});
 // The two figures this view is opened for (#8279) lead: how much of the span the room worked by itself, and how many of
 // its executions started without the owner; idle shows in the chart as hatching.
 const percent = (part, whole) => (whole ? Math.round(part / whole * 100) : 0);
@@ -279,12 +325,12 @@ onBeforeUnmount(pause);
       @mousedown="stop_autoscroll" @pointerdown="on_drag_start" @pointermove="on_drag_move" @pointerup="on_drag_end" @pointercancel="on_drag_end">
       <span class="rt-scale">{{ model.peak }}</span>
       <div ref="chart" class="rt-chart">
-        <i v-for="task in seen(model.tasks)" :key="`line:${task.key}`" class="rt-divider" :style="{ left: `${x(task.start) * 100}%` }"></i>
-        <span v-for="gap in seen(model.idle)" :key="`idle:${gap.start}`" class="rt-idle" :style="place(gap.start, gap.end)" :title="t('空闲 {value1}', { value1: format_duration(gap.end - gap.start) })">
+        <i v-for="task in visible(model.tasks)" :key="`line:${task.key}`" class="rt-divider" :style="{ left: `${x(task.start) * 100}%` }"></i>
+        <span v-for="gap in visible(model.idle)" :key="`idle:${gap.start}`" class="rt-idle" :style="place_x(gap.start, gap.end)" :title="t('空闲 {value1}', { value1: format_duration(gap.end - gap.start) })">
           <small v-if="wide(gap.start, gap.end)">{{ t('空闲 {value1}', { value1: format_duration(until(gap.end) - gap.start) }) }}</small></span>
         <i v-for="block in blocks" :key="block.key" class="rt-block" :data-tone="block.tone" :style="block.style"
           @mouseenter="emit('hover', block.row, $event)" @mouseleave="emit('leave', $event)" @click="pick(block, $event)"></i>
-        <i v-if="position != null" class="rt-cursor" :style="{ left: `${x(position) * 100}%` }"></i>
+        <i v-if="position != null" class="rt-cursor" :style="{ left: chart_width ? `${Math.round(x(position) * chart_width)}px` : `${x(position) * 100}%` }"></i>
       </div>
       <div class="rt-axis" aria-hidden="true">
         <span v-for="tick in ticks" :key="tick.at" class="rt-tick" :class="{ 'is-end': tick.end }" :style="{ left: `${tick.x * 100}%` }">{{ tick_label(tick) }}</span>

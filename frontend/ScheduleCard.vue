@@ -14,6 +14,7 @@ const props = defineProps({
   expandable: { type: Boolean, default: true },
   /** Keep the text to one line; the toggle only appears when that line is cut off. */
   fold: Boolean,
+  toggleLine: Boolean,
 });
 const open = ref(false);
 const line = ref(null);
@@ -39,7 +40,8 @@ onBeforeUnmount(() => observer?.disconnect());
 <template>
   <div class="channel-schedule-card" :class="{ 'is-skipped': skipped || plain, 'is-open': open }" :title="title" :aria-label="label">
     <UIcon :name="icon" class="channel-schedule-icon" />
-    <span class="channel-schedule-text"><span v-if="fold" ref="line" class="channel-checkin-line"><slot name="text" /></span><slot v-else name="text" /></span>
+    <button v-if="toggleLine" type="button" class="channel-schedule-text" :aria-expanded="open" :aria-label="toggleLabel" @click="open = !open"><slot name="text" /></button>
+    <span v-else class="channel-schedule-text"><span v-if="fold" ref="line" class="channel-checkin-line"><slot name="text" /></span><slot v-else name="text" /></span>
     <span class="channel-schedule-actions"><slot name="actions" /></span>
     <button v-if="can_open" type="button" class="channel-schedule-toggle" :aria-expanded="open" :aria-label="toggleLabel" @click="open = !open"><UIcon name="i-lucide-chevron-down" /></button>
     <div v-if="open" class="channel-schedule-detail"><slot /></div>

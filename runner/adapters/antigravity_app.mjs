@@ -14,7 +14,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { atomic_json } from '../files.mjs';
 import { agy_skills, antigravity_project, conversation_history, database_settings, remove_conversation } from './antigravity_cli.mjs';
-import { bind_access, EDIT_TOOLS, not_sent } from './common.mjs';
+import { bind_access, EDIT_TOOLS, not_sent, shell_written_paths } from './common.mjs';
 
 const IN_APP = { stoppable: false, progress: false };
 const FOLLOWED = { stoppable: true, progress: true };
@@ -70,13 +70,33 @@ function language_server(ready) {
 // the App lets the room deliver again at once. Tests shorten these.
 export const ROOM_TIMING = { poll_ms: 2000, wait_ms: 2 * 60 * 60 * 1000, read_failures: 10 };
 
+/** Extract written file paths from one finished Antigravity App step; running, failed or canceled steps claim nothing. */
+function app_step_edits(step) {
+  if (!step || step.status !== 'CORTEX_STEP_STATUS_DONE') return [];
+  if (step.type === 'CORTEX_STEP_TYPE_RUN_COMMAND') {
+    const command = step.runCommand || {};
+    return (command.exitCode ?? 0) === 0 ? shell_written_paths(command.commandLine) : [];
+  }
+  if (step.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') return [];
+  const paths = [];
+  for (const call of step.plannerResponse?.toolCalls || []) {
+    if (!EDIT_TOOLS.test(call.name || '')) continue;
+    let args = null;
+    try { args = JSON.parse(call.argumentsJson || '{}'); } catch { continue; }
+    const path = args?.Path ?? args?.AbsolutePath ?? args?.TargetFile ?? args?.file_path ?? args?.path;
+    if (typeof path === 'string' && path) paths.push(path);
+  }
+  return paths;
+}
+
 /**
  * Wait for the Sidecar's receipt (a new conversation's id), then read the conversation until it goes idle with new steps
- * and nothing pending, and report `on_turn_end`. Gives up quietly on a refused delivery, an unreadable App or the
- * ceiling; the room then falls back to the site's hold.
+ * and nothing pending, reporting finished step edits along the way and `on_turn_end` when done. Gives up quietly on a
+ * refused delivery, an unreadable App or the ceiling; the room then falls back to the site's hold.
  */
 export async function watch_room_turn(config, server, { session_id, start }, task) {
-  const finished = new Map(), until = Date.now() + ROOM_TIMING.wait_ms;
+  const finished = new Map(), reported = new Set(), until = Date.now() + ROOM_TIMING.wait_ms;
+  task.on_edits?.([]);
   let failures = 0;
   while (Date.now() < until) {
     await sleep(ROOM_TIMING.poll_ms);
@@ -90,6 +110,13 @@ export async function watch_room_turn(config, server, { session_id, start }, tas
     try { conversation = await read_conversation(server, session_id); failures = 0; }
     catch { if (++failures >= ROOM_TIMING.read_failures) return; continue; }
     const steps = conversation.steps.slice(start);
+    for (const [offset, step] of steps.entries()) {
+      const index = start + offset;
+      if (step?.status !== 'CORTEX_STEP_STATUS_DONE' || reported.has(index)) continue;
+      reported.add(index);
+      const paths = app_step_edits(step);
+      if (paths.length) task.on_edits?.(paths);
+    }
     if (steps.length && conversation.idle && !turn_pending(steps, finished)) return task.on_turn_end?.();
   }
 }

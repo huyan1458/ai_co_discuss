@@ -19,15 +19,417 @@ export function cli_timeout_reason(milliseconds) {
   return t('CLI 运行超过 {seconds} 秒仍未结束，已终止', { seconds: Math.round(milliseconds / 1000) });
 }
 /** Tool names that edit files, across the softwares' event streams. */
-// A shell command that may write files: a redirect into a file, an in-place edit, a script writing, a copy, move or
-// delete. Only such a command claims the paths it names; reading commands (cat, grep, git diff) claim none.
-const SHELL_WRITES = /(?<![=\-<>])>{1,2}(?!=)\s*(?!&|\/dev\/null|\$null|nul\b)|\bsed\s+-i|\.write\w*\(|write_text|writeFileSync|\b(?:Set|Add)-Content\b|\bOut-File\b|\btee\b|\b(?:mv|cp|rm)\s|\b(?:Move|Copy|Remove|Rename)-Item\b|\bgit\s+(?:checkout|restore|apply|mv|rm)\b/i;
+const SHELL_WRAPPER_PREFIX = /^"?[^"]*?(?:powershell|pwsh|cmd|bash|sh)(?:\.exe)?"?\s+(?:(?:-[A-Za-z]+(?:\s+(?!-Command\b|\/c\b|-lc\b|-c\b)[^\s'"]+)?)\s+)*(?:-Command|\/c|-lc|-c)\s+([\s\S]*)$/i;
+const NULL_DEVICES = new Set(['/dev/null', '$null', 'nul', 'con', 'prn', 'aux']);
+const PS_SWITCH_FLAGS = new Set(['-force', '-nonewline', '-passthru', '-append', '-noclobber', '-whatif', '-confirm', '-asbytestream', '-raw', '-recurse']);
+const PS_PATH_FLAGS = new Set(['-path', '-literalpath', '-filepath']);
 
-/** The paths a file-writing shell command names (with a folder or an extension), so files it wrote count as the agent's own. */
+/** Decode a shlex-style single/double-quoted shell argument string back into its inner script text. */
+function unquote_shell_arg(raw) {
+  const text = raw.trim();
+  if (!text || !['\'', '"'].includes(text[0])) return text;
+  let result = '', i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '\'') {
+      const end = text.indexOf('\'', i + 1);
+      if (end < 0) return text;
+      result += text.slice(i + 1, end);
+      i = end + 1;
+    } else if (ch === '"') {
+      i += 1;
+      let closed = false;
+      while (i < text.length) {
+        if (text[i] === '\\' && i + 1 < text.length && ['"', '\\', '$', '`'].includes(text[i + 1])) {
+          result += text[i + 1];
+          i += 2;
+        } else if (text[i] === '"') {
+          i += 1;
+          closed = true;
+          break;
+        } else {
+          result += text[i++];
+        }
+      }
+      if (!closed) return text;
+    } else {
+      return text;
+    }
+  }
+  return result;
+}
+
+/** Strip an outer shell wrapper (`powershell -Command …`, `bash -lc …`, `cmd /c …`) to inspect the real command. */
+function unwrap_shell_command(command) {
+  const text = String(command || '').trim();
+  const match = text.match(SHELL_WRAPPER_PREFIX);
+  return match ? unquote_shell_arg(match[1]) : text;
+}
+
+/** Keep only plausible literal target file paths; reject options, variables, globs, URLs and null devices. */
+function clean_target_path(raw) {
+  let value = String(raw || '').trim();
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith('\'') && value.endsWith('\''))) value = value.slice(1, -1).trim();
+  if (!value || value.startsWith('-') || value.startsWith('&') || NULL_DEVICES.has(value.toLowerCase())) return '';
+  if (/[\r\n\t*?`$%]|^[a-z][a-z0-9+.-]*:\/\//i.test(value) || value === '.' || value === '..') return '';
+  return value;
+}
+
+/** Add one cleaned literal path into a target set. */
+function collect_path(targets, raw) {
+  const cleaned = clean_target_path(raw);
+  if (cleaned) targets.add(cleaned);
+}
+
+/** Resolve a variable or literal argument against literal path bindings. */
+function collect_bound(targets, literal, variable, bindings) {
+  if (literal) return collect_path(targets, literal);
+  for (const item of bindings.get(variable) || []) collect_path(targets, item);
+}
+
+/** Extract literal write targets from an embedded Python snippet in statement order; reads claim nothing. */
+// Ignore write-like examples inside strings and comments.
+function* script_calls(stmt, pattern, syntax) {
+  const spans = [...stmt.matchAll(syntax)];
+  for (const match of stmt.matchAll(pattern)) {
+    if (!spans.some(span => span.index <= match.index && match.index < span.index + span[0].length)) yield match;
+  }
+}
+const PYTHON_DATA = /'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|#.*/g;
+const NODE_DATA = /'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|\x60(?:\\.|[^\x60\\])*\x60|\/\/.*/g;
+
+function python_written_paths(script) {
+  const bindings = new Map(), targets = new Set();
+  for (const raw_line of String(script || '').split(/\r?\n/)) {
+    if (/^\s*#/.test(raw_line)) continue;
+    const loop = raw_line.match(/^\s*for\s+(\w+)(\s*,\s*\w+)*\s+in\s+\[([\s\S]*?)\]\s*:/);
+    if (loop) {
+      const pattern = loop[2] ? /\(\s*r?(['"])([^'"]+)\1/g : /(?:^|,)\s*r?(['"])([^'"]+)\1/g;
+      const items = [...loop[3].matchAll(pattern)].map(item => item[2]);
+      if (items.length) bindings.set(loop[1], items);
+      else bindings.delete(loop[1]);
+    }
+    for (const stmt of raw_line.split(';')) {
+      const assign = stmt.match(/^\s*(\w+)\s*=(?!=)\s*(.*)$/);
+      if (assign) {
+        const rhs = assign[2].trim();
+        const literal = rhs.match(/^(?:(?:pathlib\.)?Path\(\s*)?r?(['"])([^'"]+)\1\s*\)?\s*(?:#.*)?$/)?.[2];
+        const ref = !literal && rhs.match(/^(?:(?:pathlib\.)?Path\(\s*)?(\w+)\s*\)?\s*(?:#.*)?$/)?.[1];
+        if (literal) bindings.set(assign[1], [literal]);
+        else if (ref && bindings.has(ref)) bindings.set(assign[1], bindings.get(ref));
+        else bindings.delete(assign[1]);
+      }
+      for (const m of script_calls(stmt, /(?:pathlib\.)?Path\(\s*(?:r?(['"])([^'"]+)\1|(\w+))\s*\)\.(?:write_text|write_bytes|unlink)\(/g, PYTHON_DATA)) {
+        collect_bound(targets, m[2], m[3], bindings);
+      }
+      for (const m of script_calls(stmt, /\b(\w+)\.(?:write_text|write_bytes|unlink)\(/g, PYTHON_DATA)) {
+        collect_bound(targets, '', m[1], bindings);
+      }
+      for (const m of script_calls(stmt, /\bopen\(\s*(?:r?(['"])([^'"]+)\1|(\w+))\s*,\s*(?:mode\s*=\s*)?['"](?=[rwbta+x]*[wax+])[rwbta+x]+['"]/g, PYTHON_DATA)) {
+        collect_bound(targets, m[2], m[3], bindings);
+      }
+      for (const m of script_calls(stmt, /\b(\w+)\.open\(\s*(?:mode\s*=\s*)?['"][^'"]*[wax+][^'"]*['"]/g, PYTHON_DATA)) {
+        collect_bound(targets, '', m[1], bindings);
+      }
+      for (const m of script_calls(stmt, /\bshutil\.(?:copy|copy2|copyfile)\(\s*[^,\n]+,\s*(?:r?(['"])([^'"]+)\1|(\w+))\s*[,)]/g, PYTHON_DATA)) {
+        collect_bound(targets, m[2], m[3], bindings);
+      }
+      for (const m of script_calls(stmt, /\bos\.(?:remove|unlink)\(\s*(?:r?(['"])([^'"]+)\1|(\w+))\s*\)/g, PYTHON_DATA)) {
+        collect_bound(targets, m[2], m[3], bindings);
+      }
+      for (const m of script_calls(stmt, /\bos\.(?:replace|rename)\(\s*(?:r?(['"])([^'"]+)\1|(\w+))\s*,\s*(?:r?(['"])([^'"]+)\4|(\w+))\s*\)/g, PYTHON_DATA)) {
+        collect_bound(targets, m[2], m[3], bindings);
+        collect_bound(targets, m[5], m[6], bindings);
+      }
+    }
+  }
+  return [...targets];
+}
+
+/** Extract literal write targets from an embedded Node snippet (`node -e` / `node -`); imports and reads claim nothing. */
+function node_written_paths(script) {
+  const bindings = new Map(), targets = new Set();
+  for (const line of String(script || '').split(/\r?\n/)) {
+    for (const stmt of line.split(';')) {
+      const assign = stmt.match(/^\s*(?:(?:const|let|var)\s+)?(\w+)\s*=(?!=)\s*(.*)$/);
+      if (assign) {
+        const literal = assign[2].trim().match(/^(['"])([^'"]+)\1\s*(?:\/\/.*)?$/)?.[2];
+        if (literal) bindings.set(assign[1], [literal]);
+        else bindings.delete(assign[1]);
+      }
+      for (const m of script_calls(stmt, /(?:\bfs(?:\.promises)?\.)?(?:writeFileSync|appendFileSync|writeFile|appendFile|rmSync|unlinkSync|unlink)\(\s*(?:(['"])([^'"]+)\1|(\w+))\s*[,)]/g, NODE_DATA)) {
+        collect_bound(targets, m[2], m[3], bindings);
+      }
+      for (const m of script_calls(stmt, /(?:\bfs(?:\.promises)?\.)?copyFileSync\(\s*[^,\n]+,\s*(?:(['"])([^'"]+)\1|(\w+))\s*[,)]/g, NODE_DATA)) {
+        collect_bound(targets, m[2], m[3], bindings);
+      }
+      for (const m of script_calls(stmt, /(?:\bfs(?:\.promises)?\.)?renameSync\(\s*(?:(['"])([^'"]+)\1|(\w+))\s*,\s*(?:(['"])([^'"]+)\4|(\w+))\s*\)/g, NODE_DATA)) {
+        collect_bound(targets, m[2], m[3], bindings);
+        collect_bound(targets, m[5], m[6], bindings);
+      }
+    }
+  }
+  return [...targets];
+}
+
+/** Extract embedded PowerShell here-strings and bash heredocs so their bodies never pollute shell command parsing. */
+function extract_embedded_scripts(text, targets) {
+  let rest = text.replace(/@(['"])\r?\n([\s\S]*?)\r?\n\1@([ \t]*\|[ \t]*[^\r\n;]*)?/g, (full, _q, body, pipe = '') => {
+    if (/^\s*\|\s*(?:python(?:3)?|py)(?:\.exe)?\b(?![^\r\n]*\s-c\b)/i.test(pipe)) {
+      python_written_paths(body).forEach(path => targets.add(path));
+      return '';
+    }
+    if (/^\s*\|\s*node(?:\.exe)?\b(?![^\r\n]*\s(?:-e|--eval)\b)/i.test(pipe)) {
+      node_written_paths(body).forEach(path => targets.add(path));
+      return '';
+    }
+    return pipe ? `''${pipe}` : '\'\'';
+  });
+  rest = rest.replace(/^([^\r\n]*<<-?\s*(['"]?)([A-Za-z_]\w*)\2[^\r\n]*)\r?\n([\s\S]*?)\r?\n[ \t]*\3(?=\r?\n|$)/gm, (_full, header, _q, _tag, body) => {
+    if (/^\s*(?:[A-Za-z_]\w*=\S+\s+)*(?:python(?:3)?|py)(?:\.exe)?\b/i.test(header)) {
+      python_written_paths(body).forEach(path => targets.add(path));
+      return '';
+    }
+    if (/^\s*(?:[A-Za-z_]\w*=\S+\s+)*node(?:\.exe)?\b/i.test(header)) {
+      node_written_paths(body).forEach(path => targets.add(path));
+      return '';
+    }
+    return header.replace(/<<-?\s*(['"]?)[A-Za-z_]\w*\1/, '');
+  });
+  return rest;
+}
+
+/** Extract PowerShell `[IO.File]::Write*` targets bound to literal paths or simple `$var = 'path'` assignments. */
+function powershell_io_writes(text, targets) {
+  const bindings = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    const assign = line.match(/^\s*(\$\w+)\s*=\s*(.*)$/);
+    if (assign) {
+      const literal = assign[2].match(/^(?:Resolve-Path\s+)?(['"])([^'"]+)\1\s*;?\s*$/i)?.[2];
+      if (literal) bindings.set(assign[1], [literal]);
+      else bindings.delete(assign[1]);
+    }
+    for (const m of line.matchAll(/^\s*\[(?:System\.)?IO\.File\]::(?:WriteAllText|WriteAllBytes|WriteAllLines|AppendAllText|AppendAllLines)\(\s*(?:(['"])([^'"]+)\1|(\$\w+))\s*,/gi)) {
+      collect_bound(targets, m[2], m[3], bindings);
+    }
+  }
+}
+
+/** Split a shell script into top-level command segments on `&&`, `||`, `;`, `|` and newlines, respecting quotes. */
+function split_shell_segments(text) {
+  const segments = [];
+  let current = '', quote = '', depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i], next = text[i + 1];
+    if (quote) {
+      current += ch;
+      if (ch === '\\' && quote === '"' && next !== undefined) { current += next; i++; }
+      else if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '\'' || ch === '"') { quote = ch; current += ch; continue; }
+    if (ch === '(') { depth++; current += ch; continue; }
+    if (ch === ')' && depth > 0) { depth--; current += ch; continue; }
+    if (!depth && (ch === '\n' || ch === '\r' || ch === ';' || ch === '|')) {
+      if (current.trim()) segments.push(current.trim());
+      current = '';
+      if (ch === '|' && next === '|') i++;
+      continue;
+    }
+    if (!depth && ch === '&' && next === '&') {
+      if (current.trim()) segments.push(current.trim());
+      current = '';
+      i++;
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) segments.push(current.trim());
+  return segments;
+}
+
+/** Tokenize one shell segment while preserving quoted arguments and separating redirection operators. */
+function tokenize_segment(segment) {
+  const tokens = [];
+  let current = '', quote = '';
+  const flush = () => { if (current) { tokens.push(current); current = ''; } };
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i], next = segment[i + 1];
+    if (quote) {
+      if (ch === '\\' && quote === '"' && next !== undefined) { current += next; i++; }
+      else if (ch === quote) quote = '';
+      else current += ch;
+      continue;
+    }
+    if (ch === '\'' || ch === '"') { quote = ch; continue; }
+    if (/\s/.test(ch)) { flush(); continue; }
+    const redir = segment.slice(i).match(/^(?:[12&]?>>?|<<<?|<<)/);
+    if (redir && (!current || /^[12&]$/.test(current))) {
+      const op = current ? current + redir[0] : redir[0];
+      current = '';
+      if (/^(?:[12&]?>>?|<<<?|<<)$/.test(op)) { tokens.push({ redir: op }); i += redir[0].length - 1; continue; }
+    }
+    current += ch;
+  }
+  flush();
+  return tokens;
+}
+
+/** Strip redirections from a tokenized segment, collecting only stdout/combined output targets (`>`, `>>`, `1>`, `&>`). */
+function strip_redirections(tokens, targets) {
+  const argv = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (typeof token === 'object' && token.redir) {
+      const target = typeof tokens[i + 1] === 'string' ? tokens[++i] : '';
+      if (/^(?:1|&)?>>?$/.test(token.redir) && target && !target.startsWith('&')) collect_path(targets, target);
+    } else if (typeof token === 'string') {
+      argv.push(token);
+    }
+  }
+  return argv;
+}
+
+/** Extract write targets from one simple command's argv (already stripped of redirections). */
+function command_written_paths(argv, targets) {
+  let index = 0;
+  while (index < argv.length && (/^[A-Za-z_]\w*=/.test(argv[index]) || argv[index] === '&')) index++;
+  if (index >= argv.length) return;
+  const cmd = argv[index].split(/[\\/]/).at(-1).replace(/\.exe$/i, '').toLowerCase();
+  const args = argv.slice(index + 1);
+  if (['python', 'python3', 'py'].includes(cmd)) {
+    const c = args.indexOf('-c');
+    if (c >= 0 && args[c + 1]) python_written_paths(args[c + 1]).forEach(path => targets.add(path));
+    return;
+  }
+  if (cmd === 'node') {
+    const e = args.findIndex(arg => arg === '-e' || arg === '--eval');
+    if (e >= 0 && args[e + 1]) node_written_paths(args[e + 1]).forEach(path => targets.add(path));
+    return;
+  }
+  if (cmd === 'cp' || cmd === 'copy') {
+    const positional = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-t' || args[i] === '--target-directory') { i++; return; }
+      if (args[i].startsWith('--target-directory=')) return;
+      if (!args[i].startsWith('-')) positional.push(args[i]);
+    }
+    if (positional.length >= 2 && !/[\\/]$/.test(positional.at(-1))) collect_path(targets, positional.at(-1));
+    return;
+  }
+  if (cmd === 'copy-item' || cmd === 'cpi') {
+    const dest = args.findIndex(arg => arg.toLowerCase() === '-destination');
+    if (dest >= 0 && args[dest + 1]) return collect_path(targets, args[dest + 1]);
+    const positional = args.filter((arg, i) => !arg.startsWith('-') && !(i > 0 && args[i - 1].startsWith('-') && !PS_SWITCH_FLAGS.has(args[i - 1].toLowerCase())));
+    if (positional.length >= 2 && !/[\\/]$/.test(positional.at(-1))) collect_path(targets, positional.at(-1));
+    return;
+  }
+  if (cmd === 'mv' || cmd === 'move' || cmd === 'move-item' || cmd === 'mi') {
+    const positional = [];
+    for (let i = 0; i < args.length; i++) {
+      const lower = args[i].toLowerCase();
+      if (['-path', '-literalpath', '-destination'].includes(lower) && args[i + 1]) { positional.push(args[++i]); continue; }
+      if (args[i].startsWith('-')) { if (!PS_SWITCH_FLAGS.has(lower) && cmd.includes('-')) i++; continue; }
+      positional.push(args[i]);
+    }
+    if (positional.length >= 2) positional.forEach(item => { if (!/[\\/]$/.test(item)) collect_path(targets, item); });
+    return;
+  }
+  if (cmd === 'rename-item' || cmd === 'rni') {
+    const path_flag = args.findIndex(arg => PS_PATH_FLAGS.has(arg.toLowerCase()));
+    const positional = args.filter((arg, i) => !arg.startsWith('-') && !(i > 0 && args[i - 1].startsWith('-') && !PS_SWITCH_FLAGS.has(args[i - 1].toLowerCase())));
+    const source = path_flag >= 0 ? args[path_flag + 1] : positional[0];
+    if (source) collect_path(targets, source);
+    const name_flag = args.findIndex(arg => arg.toLowerCase() === '-newname');
+    const renamed = name_flag >= 0 ? args[name_flag + 1] : positional[1];
+    if (source && renamed && !/[\\/]/.test(renamed)) {
+      const prefix = source.includes('/') ? source.slice(0, source.lastIndexOf('/') + 1)
+        : source.includes('\\') ? source.slice(0, source.lastIndexOf('\\') + 1) : '';
+      collect_path(targets, `${prefix}${renamed}`);
+    }
+    return;
+  }
+  if (['rm', 'del', 'erase', 'remove-item', 'ri', 'touch', 'tee'].includes(cmd)) {
+    for (let i = 0; i < args.length; i++) {
+      const lower = args[i].toLowerCase();
+      if (PS_PATH_FLAGS.has(lower) && args[i + 1]) { collect_path(targets, args[++i]); continue; }
+      if (args[i].startsWith('-')) continue;
+      collect_path(targets, args[i]);
+    }
+    return;
+  }
+  if (cmd === 'new-item' || cmd === 'ni') {
+    const path_flag = args.findIndex(arg => PS_PATH_FLAGS.has(arg.toLowerCase()));
+    const name_flag = args.findIndex(arg => arg.toLowerCase() === '-name');
+    const positional = args.filter((arg, i) => !arg.startsWith('-') && !(i > 0 && args[i - 1].startsWith('-') && !PS_SWITCH_FLAGS.has(args[i - 1].toLowerCase())));
+    const base = path_flag >= 0 ? args[path_flag + 1] : positional[0];
+    const name = name_flag >= 0 ? args[name_flag + 1] : '';
+    if (base && name) collect_path(targets, `${base.replace(/[\\/]+$/, '')}/${name}`);
+    else if (base || name) collect_path(targets, base || name);
+    return;
+  }
+  if (['set-content', 'add-content', 'out-file', 'sc', 'ac'].includes(cmd)) {
+    const path_flag = args.findIndex(arg => PS_PATH_FLAGS.has(arg.toLowerCase()));
+    if (path_flag >= 0 && args[path_flag + 1]) return collect_path(targets, args[path_flag + 1]);
+    for (let i = 0; i < args.length; i++) {
+      const lower = args[i].toLowerCase();
+      if (lower.startsWith('-')) { if (!PS_SWITCH_FLAGS.has(lower)) i++; continue; }
+      return collect_path(targets, args[i]);
+    }
+    return;
+  }
+  if (cmd === 'sed') {
+    let in_place = false, has_script_flag = false;
+    const positional = [];
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '-i' || arg.startsWith('-i') || arg === '--in-place' || arg.startsWith('--in-place=')) {
+        in_place = true;
+        if (arg === '-i' && args[i + 1] === '') i++;
+        continue;
+      }
+      if (arg === '-e' || arg === '-f' || arg === '--expression' || arg === '--file') { has_script_flag = true; i++; continue; }
+      if (arg.startsWith('-')) continue;
+      positional.push(arg);
+    }
+    if (!in_place) return;
+    (has_script_flag ? positional : positional.slice(1)).forEach(item => collect_path(targets, item));
+    return;
+  }
+  if (cmd === 'git') {
+    let i = 0;
+    while (i < args.length && args[i].startsWith('-')) i += ['-c', '-C', '--git-dir', '--work-tree'].includes(args[i]) ? 2 : 1;
+    const sub = args[i]?.toLowerCase(), rest = args.slice(i + 1);
+    if (sub === 'restore' || sub === 'rm') {
+      for (let j = 0; j < rest.length; j++) {
+        if (rest[j] === '--') { rest.slice(j + 1).forEach(item => collect_path(targets, item)); return; }
+        if (rest[j] === '-s' || rest[j] === '--source') { j++; continue; }
+        if (!rest[j].startsWith('-')) collect_path(targets, rest[j]);
+      }
+    } else if (sub === 'checkout') {
+      const dash = rest.indexOf('--');
+      if (dash >= 0) rest.slice(dash + 1).forEach(item => collect_path(targets, item));
+    } else if (sub === 'mv') {
+      rest.filter(item => !item.startsWith('-')).forEach(item => collect_path(targets, item));
+    }
+  }
+}
+
+/**
+ * The literal target file paths a shell command writes to, parsed per segment and by write-target position so copy
+ * sources, redirected inputs and read-only commands in compound lines are never blamed; unknown targets stay empty.
+ */
 export function shell_written_paths(command) {
-  const text = String(command || '');
-  if (!SHELL_WRITES.test(text)) return [];
-  return text.split(/[\s'"`;|&<>(),=]+/).filter(token => /[\\/]/.test(token) && /\.[\w-]+$/.test(token));
+  const text = unwrap_shell_command(command);
+  if (!text) return [];
+  const targets = new Set();
+  const remaining = extract_embedded_scripts(text, targets);
+  powershell_io_writes(remaining, targets);
+  for (const segment of split_shell_segments(remaining)) {
+    const argv = strip_redirections(tokenize_segment(segment), targets);
+    command_written_paths(argv, targets);
+  }
+  return [...targets];
 }
 export const EDIT_TOOLS = /^(Edit|MultiEdit|Write|NotebookEdit|write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content)$/;
 /** A refused operation's detail and rule are cut to this length; a run reports at most this many. */
@@ -138,8 +540,9 @@ export function tree_killable(child) {
  * lines are left to the caller's own parsing.
  */
 export function watch_events(adapter, stream, task) {
-  if (!task.on_activity && !task.on_note) return;
+  if (!task.on_activity && !task.on_note && !task.on_edits) return;
   track_edits(adapter, task);
+  const pending_edits = new Map();
   createInterface({ input: stream, crlfDelay: Infinity }).on('line', line => {
     let event;
     try { event = JSON.parse(line); } catch { return; }
@@ -147,7 +550,7 @@ export function watch_events(adapter, stream, task) {
     if (phase) task.on_activity?.(phase, adapter.events.tool(event), adapter.events.call?.(event));
     const note = adapter.events.note(event);
     if (note) task.on_note?.(note);
-    report_edits(adapter, event, task);
+    report_edits(adapter, event, task, pending_edits);
   });
 }
 
@@ -160,8 +563,8 @@ export function track_edits(adapter, task) {
 }
 
 /** Pass on the files one event says the agent edited with its own edit tools. */
-export function report_edits(adapter, event, task) {
-  const paths = adapter.events.edits?.(event) || [];
+export function report_edits(adapter, event, task, pending) {
+  const paths = adapter.events.edits?.(event, pending) || [];
   if (paths.length) task.on_edits?.(paths);
 }
 

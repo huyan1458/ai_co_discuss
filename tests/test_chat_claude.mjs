@@ -373,3 +373,30 @@ test('a room task in a window whose console is reachable is stoppable and takes 
   assert.equal(seen.exits, 1);
   assert.equal(closed, true, 'the handle closes with the turn, so the runner reports the stop');
 });
+
+test('a room task in an open Claude window reports confirmed tool edits and ignores failed or sidechain calls', async t => {
+  const session_id = randomUUID();
+  const { log, home } = claude_home(t, session_id);
+  const { task, seen } = chat_task(mkdtempSync(join(tmpdir(), 'room-edits-')));
+  const edits = [];
+  Object.assign(task, { id: 'free-30', chat: false, on_edits: paths => edits.push(paths) });
+  watch_window_turn({ file: log, offset: readFileSync(log).length, pid: process.pid, marker: 'free-30.task.json' }, task, { interval: 10, env: { CLAUDE_CONFIG_DIR: home } });
+  appendFileSync(log,
+    line({ type: 'user', message: { role: 'user', content: '请处理 free-30.task.json' } })
+    + line({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'w1', name: 'Edit', input: { file_path: 'src/window-ok.js' } },
+      { type: 'tool_use', id: 'w2', name: 'Write', input: { file_path: 'src/window-fail.js' } },
+      { type: 'tool_use', id: 'w3', name: 'Bash', input: { command: 'cp src/in.js out/window-out.js' } },
+    ] } })
+    + line({ type: 'assistant', isSidechain: true, message: { content: [
+      { type: 'tool_use', id: 's1', name: 'Edit', input: { file_path: 'src/sidechain.js' } },
+    ] } })
+    + line({ type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 'w1', content: 'ok', is_error: false },
+      { type: 'tool_result', tool_use_id: 'w2', content: 'denied', is_error: true },
+      { type: 'tool_result', tool_use_id: 'w3', content: '', is_error: false },
+    ] } })
+    + line({ type: 'system', subtype: 'turn_duration', durationMs: 20 }));
+  await settled(seen);
+  assert.deepEqual(edits, [[], ['src/window-ok.js', 'out/window-out.js']]);
+});

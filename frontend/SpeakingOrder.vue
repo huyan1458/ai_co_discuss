@@ -8,8 +8,8 @@ import { computed, inject, nextTick, ref, watch } from "vue";
 
 // `round` numbers this round so later rounds of a plan can be labelled; the discussion board knows it.
 const props = defineProps({ away: { type: Array, default: () => [] }, round: { type: Number, default: 0 } });
-// The pointer entering, leaving or pressing a member's row, with the member ID: the board floats that member's card.
-const emit = defineEmits(["enter", "leave", "press"]);
+// The pointer entering, leaving, pressing or selecting a member's row, with the member ID.
+const emit = defineEmits(["enter", "leave", "press", "select"]);
 const { view, bridge, act } = inject("discussion");
 // One order change at a time; other board actions do not block it.
 const saving = ref(false);
@@ -141,6 +141,13 @@ function step(event, index, direction) {
   if (saving.value) return;
   commit(moved(order.value.movable, index, to), order.value.movable[index], true);
 }
+/** Clicking a member row locates its latest speech; ignore clicks on controls or double-click rename. */
+function select_row(name, event) {
+  if (drag.value || event.defaultPrevented) return;
+  if (event.target.closest?.("button, input, textarea, select, a, [role='menuitem']")) return;
+  if (event.detail > 1 && event.target.closest?.(".member-name-text.is-editable")) return;
+  emit("select", name);
+}
 </script>
 
 <template>
@@ -152,7 +159,7 @@ function step(event, index, direction) {
         <li v-if="item.outside" class="speaking-order-divider" aria-hidden="true"><span>{{ OUTSIDE_LABELS[order.kind] }}</span></li>
         <li class="pb-member speaking-order-row" :class="[`is-${item.state}`, drop_class(index), { 'is-movable': item.state === movable_state && can_reorder }]"
           :data-key="item.key" :data-movable="item.state === movable_state ? '' : undefined"
-          @mouseenter="emit('enter', item.name, $event)" @mouseleave="emit('leave')" @pointerdown="emit('press')">
+          @mouseenter="emit('enter', item.name, $event)" @mouseleave="emit('leave')" @pointerdown="emit('press')" @click="select_row(item.name, $event)">
           <button v-if="item.state === movable_state && can_reorder" type="button" class="speaking-order-grip" :aria-disabled="saving"
             :aria-label="t('{value1}，第 {value2} 位；拖动或用上下方向键调整发言顺序', { value1: item.name, value2: item.place })" :title="grip_title"
             @pointerdown="start($event, movable_index(index))" @pointermove="move" @pointerup="finish" @pointercancel="finish($event, true)" @lostpointercapture="finish($event, true)"
@@ -182,7 +189,7 @@ function step(event, index, direction) {
         </button>
       </li>
       <li v-for="name in away_open ? props.away : []" :key="`away-${name}`" class="pb-member speaking-order-row is-away"
-        @mouseenter="emit('enter', name, $event)" @mouseleave="emit('leave')" @pointerdown="emit('press')">
+        @mouseenter="emit('enter', name, $event)" @mouseleave="emit('leave')" @pointerdown="emit('press')" @click="select_row(name, $event)">
         <span class="speaking-order-place"></span>
         <slot :item="{ name, state: 'away' }" :place="0" />
       </li>
@@ -192,7 +199,7 @@ function step(event, index, direction) {
 </template>
 
 <style scoped>
-.speaking-order-row { position: relative; grid-template-columns: 18px auto minmax(0, 1fr) auto; gap: 8px; min-height: 0; padding: 4px 8px; }
+.speaking-order-row { position: relative; grid-template-columns: 18px auto minmax(0, 1fr) auto; gap: 8px; min-height: 0; padding: 4px 8px; cursor: pointer; }
 .speaking-order-row.is-done, .speaking-order-row.is-away { opacity: .6; }
 .speaking-order-row.is-speaking { background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 10%, transparent); }
 .speaking-order-place, .speaking-order-grip { display: grid; place-items: center; align-self: center; width: 18px; height: 24px; color: var(--ui-text-dimmed); font-size: 11px; font-variant-numeric: tabular-nums; }

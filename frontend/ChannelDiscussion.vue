@@ -399,9 +399,34 @@ function estimated_table_rows(table, width) {
     + Math.max(MESSAGE_LINE_PX, ...row.map((cell, index) => Math.ceil(cell / share(index)) * MESSAGE_LINE_PX)));
 }
 
+/** Estimate one inline image grid's height (2 columns on desktop and multi-image phones, 1 column for a single phone image). */
+function estimated_inline_grid_height(grid, width) {
+  const items = [...grid.children];
+  if (!items.length) return 0;
+  const phone = narrow_query.matches;
+  const cols = phone && items.length === 1 ? 1 : 2;
+  const gap = phone ? 8 : 10;
+  const max_height = phone ? (items.length === 1 ? 260 : 220) : 280;
+  const column = Math.max(120, (width - gap * (cols - 1)) / cols);
+  let total = 22;
+  for (let index = 0; index < items.length; index += cols) {
+    let row = 0;
+    for (const item of items.slice(index, index + cols)) {
+      const style = item.getAttribute("style") || "";
+      const ratio = Number(/--image-ratio-num:\s*([0-9.]+)/.exec(style)?.[1]);
+      const natural = Number(/--image-natural-width:\s*([0-9.]+)px/.exec(style)?.[1]);
+      const height = ratio > 0 ? Math.min(max_height, Math.min(column, natural || column) / ratio) : Math.min(max_height, column * 0.65);
+      row = Math.max(row, height);
+    }
+    total += row + (index > 0 ? gap : 0);
+  }
+  return total;
+}
+
 /** The height of one block element, margins included. */
 function estimated_block_height(block, width) {
   const tag = block.tagName;
+  if (block.classList?.contains("attachment-inline-grid")) return estimated_inline_grid_height(block, width);
   if (tag === "PRE") return block.textContent.trimEnd().split("\n").length * MESSAGE_LINE_PX + 54;
   if (tag === "TABLE") return estimated_table_height(block, width) + MESSAGE_FONT_PX;
   if (tag === "HR") return 42;
@@ -1424,15 +1449,86 @@ const can_pick_workflow = computed(() => free.value && !room.value?.archived && 
 const workflow_blocked = computed(() => !free_members.value.some((member) => member.role === "host" && member.access === "runner")
   ? t('需要一位由本机唤醒的 AI 主持人')
   : !host_allowed(room_models.value, 'workflows') ? t('需先在电脑上的“成员与设置 → 协作设置”勾选主持人权限“工作流”') : "");
+const project_workflows = computed(() => room_models.value?.project_workflows || view.value.launch.project_workflows || []);
+const global_workflows = computed(() => view.value.launch.workflows || []);
+function workflow_insertion(workflow) {
+  const matching = [...project_workflows.value, ...global_workflows.value].filter((item) => item.id === workflow.id);
+  return slash_insertion(workflow.id, matching.length > 1 ? workflow : undefined);
+}
 const workflow_options = computed(() => {
   const query = mention_context.value?.query.toLocaleLowerCase() || "";
+  const project_list = project_workflows.value.map((item) => ({ scope: "project", ...item }));
+  const global_list = global_workflows.value.map((item) => ({ scope: "global", ...item }));
+  const multi_roots = (room_models.value?.project_roots?.length || view.value.launch.project_roots?.length || 0) > 1;
+  const is_enabled = (item) => {
+    const active = room_workflow.value;
+    if (!active || active.id !== item.id) return false;
+    const active_scope = active.scope || "global";
+    const item_scope = item.scope || "global";
+    if (active_scope !== item_scope) return false;
+    return item_scope !== "project" || active.project_id === item.project_id;
+  };
+  const matches = (item) => !item.disabled && `${item.id} ${item.label} ${item.description || ""} ${item.project_name || ""}`.toLocaleLowerCase().includes(query);
   // A workflow that cannot run here stays listed with its reason, but cannot be picked.
-  return (view.value.launch.workflows || []).filter((item) => !item.disabled && `${item.id} ${item.label} ${item.description || ""}`.toLocaleLowerCase().includes(query))
-    .map((item) => {
-      const problem = workflow_problem(item);
-      return { key: `workflow:${item.id}`, workflow: item, group: t('工作流'), enabled: room_workflow.value?.id === item.id, broken: Boolean(problem), disabled: problem || workflow_blocked.value };
-    });
+  const to_option = (item, group) => {
+    const problem = workflow_problem(item);
+    const key = item.scope === "project" ? `workflow:project:${item.project_id || ""}:${item.id}` : `workflow:global:${item.id}`;
+    return {
+      key,
+      workflow: item,
+      group,
+      project_badge: item.scope === "project" && multi_roots && item.project_name ? item.project_name : "",
+      needs_trust: Boolean(item.needs_trust),
+      enabled: is_enabled(item),
+      broken: Boolean(problem),
+      disabled: problem || workflow_blocked.value,
+    };
+  };
+  return [
+    ...project_list.filter(matches).map((item) => to_option(item, t("本项目工作流"))),
+    ...global_list.filter(matches).map((item) => to_option(item, t("全局工作流"))),
+  ];
 });
+// Pending trust confirmation when selecting an untrusted project workflow from "/" or when enable returns workflow_untrusted.
+const slash_trust = ref(null);
+const trust_submitting = ref(false);
+const active_trust_prompt = computed(() => {
+  if (slash_trust.value) return { kind: "slash", ...slash_trust.value.workflow };
+  const prompt = view.value.launch.workflow_trust_prompt;
+  return prompt?.room_id === room.value?.id ? { kind: "enable", ...prompt } : null;
+});
+const TRUST_ACCESS_LABELS = { read: t("只读"), write: t("可写"), auto: t("自动"), full: t("全放开") };
+function close_trust_prompt() {
+  if (trust_submitting.value) return;
+  if (slash_trust.value) slash_trust.value = null;
+  else bridge.dismiss_workflow_trust();
+}
+async function confirm_trust_prompt() {
+  const prompt = active_trust_prompt.value;
+  if (!prompt || trust_submitting.value) return;
+  trust_submitting.value = true;
+  try {
+    if (prompt.kind === "slash") {
+      const { workflow, start, end } = slash_trust.value;
+      await bridge.trust_project_workflow({ id: workflow.id, project_id: workflow.project_id, room_id: room.value?.id || "" });
+      slash_trust.value = null;
+      const insertion = workflow_insertion(workflow);
+      const current_text = text.value || "";
+      if (start <= current_text.length && end <= current_text.length && current_text[start] === "/") {
+        await replace_draft(start, replace_end(end, " "), insertion);
+      } else {
+        await replace_draft(current_text.length, current_text.length, current_text && !current_text.endsWith(" ") ? ` ${insertion}` : insertion);
+      }
+      bridge.notify("info", t("已信任项目工作流「{name}」", { name: workflow.label || workflow.id }));
+    } else {
+      await bridge.confirm_workflow_trust();
+    }
+  } catch (error) {
+    bridge.notify("error", error.message);
+  } finally {
+    trust_submitting.value = false;
+  }
+}
 /**
  * Platform skills a user may call with an unaddressed "/". Picking one only inserts `$id` (rendered as a skill tag, see markdown.mjs) and adds no
  * wording of its own: what to do is the user's to write. It brings no member.
@@ -1629,7 +1725,11 @@ async function pick_workflow(option, start, end) {
   mention_context.value = null;
   if (option.enabled) return bridge.notify("info", t('本房间已启用工作流「{value1}」', { value1: option.workflow.label }));
   if (option.disabled) return bridge.notify("warning", option.disabled);
-  await replace_draft(start, replace_end(end, " "), slash_insertion(option.workflow.id));
+  if (option.workflow.needs_trust) {
+    slash_trust.value = { workflow: option.workflow, start, end };
+    return;
+  }
+  await replace_draft(start, replace_end(end, " "), workflow_insertion(option.workflow));
   mention_context.value = null;
 }
 
@@ -1892,28 +1992,88 @@ async function locate(item) {
   // card to the top, and without a mark the jump looked like it had only gone to the bottom.
   located_id = target;
   if (target == null) return;
+  locating_label.value = "";
   locating.value = target;
   clearTimeout(locating_timer);
-  locating_timer = setTimeout(() => { locating.value = null; }, LOCATE_GIVE_UP_MS);
+  locating_timer = setTimeout(() => { locating.value = null; locating_label.value = ""; }, LOCATE_GIVE_UP_MS);
   jump_to(target);
 }
+const QUIET_MEMBER_SOURCES = new Set(["goal", "room_link", "room_relay_sent", "notice"]);
+/** Latest card representing one member's speech in the full layout: ongoing execution first, then latest speech or wake-up, else fallback card. */
+function latest_member_card(name) {
+  const items = free_layout.value;
+  const live = items.findLast((item) => item.slot_card && item.author === name && !item.queued && !item.failure && !item.cancelled_turn && !item.cancelled_execution && !item.arrangement);
+  if (live) return live;
+  const speech = items.findLast((item) => (!item.slot_card && item.author === name && !item.withdrawn && !item.relay_room && !QUIET_MEMBER_SOURCES.has(item.source))
+    || (item.slot_card && item.author === name && item.queued && !item.compact_queue));
+  if (speech) return speech;
+  return items.findLast((item) => item.slot_card && item.author === name && !item.arrangement) || null;
+}
+/** Jump to one member's latest speech (including an ongoing work card), clearing any active filter first. */
+async function locate_member(name) {
+  if (!name) return;
+  if (view.value.query || view.value.source_filter) {
+    await act("filter", { query: "", mention: false, host: false, authors: [], kinds: [] });
+    await nextTick();
+  }
+  awaiting_member_locate = null;
+  const target = latest_member_card(name);
+  if (!target) {
+    if (!view.value.query && (room.value?.message_count || 0) > view.value.messages.length) {
+      awaiting_member_locate = name;
+      locating_label.value = t('正在查找 {value1} 的最新发言…', { value1: bridge.display_name(name) });
+      locating.value = name;
+      clearTimeout(locating_timer);
+      locating_timer = setTimeout(() => { awaiting_member_locate = null; locating.value = null; locating_label.value = ""; }, LOCATE_GIVE_UP_MS);
+      return;
+    }
+    bridge.notify("info", t('{value1} 在本房间还没有发言', { value1: bridge.display_name(name) }));
+    return;
+  }
+  if (reader_scrolling.value) release_reader();
+  glide.stop();
+  moved_by_hand = true;
+  follow_tail.value = false;
+  located_id = target.id;
+  locating_label.value = typeof target.id === "number" ? "" : t('正在定位到 {value1}…', { value1: bridge.display_name(name) });
+  locating.value = target.id;
+  clearTimeout(locating_timer);
+  locating_timer = setTimeout(() => { locating.value = null; locating_label.value = ""; }, LOCATE_GIVE_UP_MS);
+  jump_to(target.id);
+}
+defineExpose({ locate_member });
 let located_id = null;
+let awaiting_member_locate = null;
 // The message a locate is still heading for, shown over the transcript until it lands; a jump that never lands stops covering it after a while.
 const locating = ref(null);
+const locating_label = ref("");
 const LOCATE_GIVE_UP_MS = 30000;
 let locating_timer = 0;
 onBeforeUnmount(() => clearTimeout(locating_timer));
 const LOCATE_FLASH_MS = 1600;
+let located_flash_timer = 0;
 /** Briefly outline the card a locate landed on; an attribute, so the card's memoized render does not reset it. */
 function flash_located(card) {
-  card.removeAttribute("data-located");
+  clearTimeout(located_flash_timer);
+  for (const previous of transcript.value?.querySelectorAll("[data-located]") || []) previous.removeAttribute("data-located");
   void card.offsetWidth;
   card.setAttribute("data-located", "");
-  setTimeout(() => card.removeAttribute("data-located"), LOCATE_FLASH_MS);
+  located_flash_timer = setTimeout(() => card.removeAttribute("data-located"), LOCATE_FLASH_MS);
 }
 /** Whether the message renders as an ordinary message card, which carries its own locate button. */
+function sent_summary(message) {
+  const relation = message.relay_sent_relation === 'child' ? t('子房间') : message.relay_sent_relation === 'parent' ? t('父房间') : t('关联房间');
+  const args = { host: message.relay_sent_host, relation, title: message.relay_sent_title ?? t('已删除的房间'), id: message.relay_sent_message_id };
+  if (message.relay_sent_queued_id) return t('主持人 {host} 向{relation}「{title}」发送了消息（已排队）', args);
+  if (message.relay_sent_interrupted) return args.id ? t('主持人 {host} 向{relation}「{title}」立即发送了消息 #{id}', args) : t('主持人 {host} 向{relation}「{title}」立即发送了消息', args);
+  return args.id ? t('主持人 {host} 向{relation}「{title}」发送了消息 #{id}', args) : t('主持人 {host} 向{relation}「{title}」发送了消息', args);
+}
+async function open_sent_room(message) {
+  await act('room', message.relay_sent_room);
+  if (view.value.room?.id === message.relay_sent_room && message.relay_sent_message_id) await locate({ id: message.relay_sent_message_id });
+}
 function plain_card(message) {
-  return !message.arrangement && !["room_link", "notice"].includes(message.source) && !message.cancelled_turn && !message.cancelled_execution
+  return !message.arrangement && !["room_link", "room_relay_sent", "notice"].includes(message.source) && !message.cancelled_turn && !message.cancelled_execution
     && !(message.slot_card && !message.failure) && !message.withdrawn;
 }
 /** The header filter: a card shows when any checked speaker or card kind matches it. */
@@ -2127,6 +2287,20 @@ let pending_jump = null;
 // A jump to a message older than any read yet waits here for the earlier messages (jump_to).
 let awaiting_jump = null;
 watch(() => transcript_messages.value.length, () => {
+  if (awaiting_member_locate != null) {
+    const name = awaiting_member_locate;
+    const target = latest_member_card(name);
+    if (target) {
+      awaiting_member_locate = null;
+      nextTick(() => locate_member(name));
+    } else if (view.value.messages.length >= (room.value?.message_count || 0)) {
+      awaiting_member_locate = null;
+      locating.value = null;
+      locating_label.value = "";
+      clearTimeout(locating_timer);
+      bridge.notify("info", t('{value1} 在本房间还没有发言', { value1: bridge.display_name(name) }));
+    }
+  }
   if (awaiting_jump == null || !transcript_messages.value.some((message) => message.id === awaiting_jump)) return;
   const id = awaiting_jump;
   nextTick(() => jump_to(id));
@@ -2380,7 +2554,7 @@ const sending_day_label = computed(() => {
 const navigation_groups = computed(() => {
   const groups = [];
   for (const message of transcript_messages.value) {
-    if (message.slot_card || message.arrangement || message.author === "系统" || ["goal", "room_link", "notice"].includes(message.source)) continue;
+    if (message.slot_card || message.arrangement || message.author === "系统" || ["goal", "room_link", "room_relay_sent", "notice"].includes(message.source)) continue;
     const candidate = bridge.round_groups(room.value)?.findLast((item) => item.start_id <= message.id);
     const round = candidate && (candidate.end_id == null || message.id <= candidate.end_id) ? candidate : null;
     const number = round?.number || 0;
@@ -2605,11 +2779,12 @@ watch([() => view.value.room?.id, () => view.value.query, () => view.value.sourc
   jump_target.value = null;
   active_message.value = null;
   locating.value = null;
+  locating_label.value = "";
   reset_preview();
   follow_tail.value = true;
   sent_position = null;
   render_floor.value = null;
-  pending_jump = preload_wanted = awaiting_jump = null;
+  pending_jump = preload_wanted = awaiting_jump = awaiting_member_locate = null;
   settle_until = performance.now() + ROOM_SETTLE_MS;
   moved_by_hand = false;
   // Another room or filter starts from its end with its first slice small; nothing of the last one's scrolling holds it.
@@ -2639,6 +2814,16 @@ async function toggle_answer(message, event) {
   track_scroll();
 }
 
+/** Locate either a normal message card or a slot card (working, queued, failed, stopped) in the rendered transcript. */
+function card_element(element, id) {
+  if (!element || id == null) return null;
+  if (typeof id === "string") {
+    const escaped = CSS.escape(id);
+    return element.querySelector(`[id="execution-${escaped}"], [id="${escaped}"]`);
+  }
+  return element.querySelector(`[data-message-id="${id}"]`);
+}
+
 /**
  * Jump anywhere in the history while preserving the shared composer draft; a message still being rendered is jumped to
  * once it is, and one older than any read yet (a room opened first shows its latest messages, then reads the earlier ones,
@@ -2648,7 +2833,7 @@ function jump_to(id) {
   awaiting_jump = null;
   const messages = transcript_messages.value;
   const first = messages.find((message) => !message.slot_card);
-  if (id != null && first && Number(id) < Number(first.id) && !messages.some((message) => message.id === id)) {
+  if (typeof id === "number" && first && id < Number(first.id) && !messages.some((message) => message.id === id)) {
     debug_log?.("jump", { message: id, phase: "waiting-history" });
     close_preview();
     awaiting_jump = id;
@@ -2663,21 +2848,38 @@ function jump_to(id) {
   }
   pending_jump = null;
   const element = transcript.value;
-  const message = element?.querySelector(`[data-message-id="${id}"]`);
-  if (locating.value === id) { locating.value = null; clearTimeout(locating_timer); }
+  const message = card_element(element, id);
+  if (locating.value === id) { locating.value = null; locating_label.value = ""; clearTimeout(locating_timer); }
   if (!message) { debug_log?.("jump", { message: id, phase: "missing" }); return; }
   close_preview();
   reader.state.following = false;
   // Clearing a filter turns on following the end; left on, the next re-render pulled the transcript back to the bottom.
   follow_tail.value = false;
-  jump_target.value = id;
-  active_message.value = id;
-  write_scroll(element, element.scrollTop + message.getBoundingClientRect().top - reading_top(element) - READING_OFFSET);
+  jump_target.value = typeof id === "number" ? id : null;
+  if (typeof id === "number") active_message.value = id;
+  const align = () => {
+    const target_top = reading_top(element) + READING_OFFSET;
+    const max_scroll = Math.max(0, element.scrollHeight - element.clientHeight);
+    const next = Math.max(0, Math.min(max_scroll, element.scrollTop + message.getBoundingClientRect().top - target_top));
+    if (Math.abs(next - element.scrollTop) > 1) write_scroll(element, next);
+  };
+  align();
+  // Cards above the viewport use content-visibility: auto with estimated heights; their real heights can settle a few
+  // frames after scrolling into view, so re-align briefly if the reader has not scrolled meanwhile.
+  const token = ++jump_align_token;
+  const realign = (remaining) => requestAnimationFrame(() => {
+    if (token !== jump_align_token || !message.isConnected || reader_busy()) return;
+    align();
+    track_scroll();
+    if (remaining > 1) realign(remaining - 1);
+  });
+  realign(4);
   debug_log?.("jump", { message: id, phase: "landed", actual: element.scrollTop });
-  message.focus({ preventScroll: true });
+  if (typeof id === "number") message.focus({ preventScroll: true });
   if (located_id === id) { located_id = null; flash_located(message); }
   track_scroll();
 }
+let jump_align_token = 0;
 
 // A share page's reader starts from how the room began, not from its latest message.
 let share_opened = false;
@@ -2723,7 +2925,8 @@ function resume_tracking(event) {
   touch_scroll = touch_active = event.type === "touchstart";
   if (touch_active) { touch_at = performance.now(); touch_scrolled = false; }
   // Scrolling by hand drops a jump still waiting for its card.
-  pending_jump = awaiting_jump = null;
+  pending_jump = awaiting_jump = awaiting_member_locate = null;
+  jump_align_token += 1;
   if (is_scroll_input) jump_target.value = null;
 }
 
@@ -3344,9 +3547,11 @@ function message_card(message) {
   const preview = answer_preview(message);
   const body_html = expanded ? message.rendered_text : preview?.html ?? message.rendered_text;
   const visuals = expanded || !preview?.truncated ? message.visual_blocks : null;
+  // Images drawn in the text are left out of the list below, unless a folded preview has cut off their grid.
+  const shown_inline = message.inline_images?.filter((id) => body_html.includes(`data-inline-image="${id}"`)) || [];
   const card = {
     message, identity_version: view.value.admin?.identity_version, narrow: narrow.value, reading: reader.state.message_id === message.id,
-    attachments: message.attachments, body_html, visuals,
+    attachments: shown_inline.length ? message.attachments.filter((file) => !shown_inline.includes(file.id)) : message.attachments, body_html, visuals,
     can_branch: can_branch(message), can_take_back: can_take_back(message), can_retract: can_retract(message), retracting: retracting_id.value === message.id, private_chat: has_private_chat(message),
     editing: edited, editing_plan: edited && editing.value.plan, editing_error: edited && editing.value.error, editing_pending: edited && is_running("rewind_and_send"),
     round_label: message_round_labels.value.get(message.id), expanded, preview,
@@ -3587,7 +3792,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     </form>
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :removable="!mark_editing.touch" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? docked_sheet_style() : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
     <!-- A locate far back waits for the earlier cards to render; the end of the room stays covered meanwhile so it is not taken for the result. -->
-    <div v-if="locating !== null" class="channel-locating" role="status"><UIcon name="i-lucide-loader" class="animate-spin" />{{ t('正在定位到 #{value1}…', { value1: locating }) }}</div>
+    <div v-if="locating !== null" class="channel-locating" role="status"><UIcon name="i-lucide-loader" class="animate-spin" />{{ locating_label || t('正在定位到 #{value1}…', { value1: locating }) }}</div>
     <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, message_groups,view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, is_running('rewind_and_send'), is_running('skip_turn'), is_running('pause_discussion'), is_running('retry_delivery'), open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view_query && !view_source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
@@ -3601,6 +3806,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <p v-for="turn in message.arrangement.turns" :key="`${message.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
         </ScheduleCard>
         <GoalNoticeCard v-else-if="message.source === 'goal'" :message="message" />
+        <ScheduleCard v-else-if="message.source === 'room_relay_sent'" class="channel-relay-sent" icon="i-lucide-send" plain toggle-line :label="t('跨房发送')" :toggle-label="t('展开或收起发出的消息正文')">
+          <template #text><bdi dir="auto" :title="sent_summary(message)">{{ sent_summary(message) }}</bdi></template>
+          <template #actions><small v-if="!message.relay_sent_title">{{ t('该房间已删除') }}</small><UButton v-else-if="!view.share" size="xs" variant="link" :label="t('打开房间')" @click.stop="open_sent_room(message)" /></template>
+          <div class="markdown-body" v-html="message.rendered_text"></div>
+        </ScheduleCard>
         <ScheduleCard v-else-if="message.source === 'room_link'" icon="i-lucide-link" plain :expandable="false" :label="t('关联房间')">
           <template #text>{{ message.text }}<UButton v-if="message.link_title !== null" size="xs" variant="link" :label="t('打开房间')" @click="act('room', message.link_room)" /><small v-else>{{ t('该房间已删除') }}</small></template>
         </ScheduleCard>
@@ -3964,10 +4174,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 <small :title="option.mode.description">{{ option.mode.description }}</small>
               </template>
               <template v-else-if="option.workflow">
-                <UIcon :name="option.broken ? 'i-lucide-triangle-alert' : 'i-lucide-network'" class="channel-mention-file-icon" :class="{ 'channel-mention-broken': option.broken }" />
+                <UIcon :name="option.broken ? 'i-lucide-triangle-alert' : option.needs_trust ? 'i-lucide-shield-alert' : 'i-lucide-network'" class="channel-mention-file-icon" :class="{ 'channel-mention-broken': option.broken || option.needs_trust }" />
                 <span :class="{ 'channel-mention-disabled': option.disabled && !option.enabled }">{{ option.workflow.label }}</span>
+                <b v-if="option.project_badge" class="channel-mention-tag is-project">{{ option.project_badge }}</b>
                 <small class="channel-mention-brief" :class="{ 'channel-mention-broken': option.broken }" :title="!option.enabled && option.disabled || option.workflow.description">{{ !option.enabled && option.disabled || option.workflow.description }}</small>
                 <b v-if="option.enabled" class="channel-mention-tag">{{ t('已启用') }}</b>
+                <b v-else-if="option.needs_trust" class="channel-mention-tag is-warn">{{ t('待信任') }}</b>
               </template>
               <template v-else-if="option.skill">
                 <UIcon name="i-lucide-sparkles" class="channel-mention-file-icon" />
@@ -4067,6 +4279,36 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </UChatPrompt>
       <div class="channel-composer-note"><span>{{ recipient_hint }}</span><span class="channel-draft-length"><span v-if="text_length" :class="{ 'is-near-limit': near_length_limit }">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span></span><span class="channel-key-hint"><kbd>Enter</kbd> {{ t('发送') }}<span class="channel-note-divider">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> {{ t('换行') }}</span></span></div>
     </div></div>
+    <UModal :open="Boolean(active_trust_prompt)" :title="active_trust_prompt ? t('信任项目工作流「{name}」', { name: active_trust_prompt.label || active_trust_prompt.id }) : ''"
+      :description="t('这个项目工作流来自项目目录，尚未在这台电脑上确认信任。启用前请核对以下权限与命令：')"
+      :content="{ onInteractOutside: (event) => event.preventDefault() }"
+      :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }" @update:open="(open) => { if (!open) close_trust_prompt(); }">
+      <template #body>
+        <div v-if="active_trust_prompt" class="workflow-trust-dialog">
+          <p v-if="active_trust_prompt.project_name" class="workflow-trust-meta">{{ t('所属项目：{name}', { name: active_trust_prompt.project_name }) }}</p>
+          <div v-if="active_trust_prompt.untrusted_reasons?.elevated_cards?.length" class="workflow-trust-section">
+            <h4>{{ t('高权限成员卡片') }}</h4>
+            <ul>
+              <li v-for="card in active_trust_prompt.untrusted_reasons.elevated_cards" :key="card.card">
+                <strong>{{ card.label || card.card }}</strong>
+                <span class="workflow-trust-access">{{ TRUST_ACCESS_LABELS[card.project_access] || card.project_access }}</span>
+              </li>
+            </ul>
+          </div>
+          <div v-if="active_trust_prompt.untrusted_reasons?.commands?.length" class="workflow-trust-section">
+            <h4>{{ t('登记的命令（commands.json）') }}</h4>
+            <ul>
+              <li v-for="(cmd, idx) in active_trust_prompt.untrusted_reasons.commands" :key="idx"><code>{{ cmd }}</code></li>
+            </ul>
+          </div>
+          <p class="workflow-trust-note">{{ t('确认后将记录在这台电脑的信任清单中；若工作流内容发生变更，会再次要求确认。') }}</p>
+          <div class="workflow-trust-actions">
+            <UButton :label="t('取消')" color="neutral" variant="ghost" :disabled="trust_submitting" @click="close_trust_prompt" />
+            <UButton :label="active_trust_prompt.kind === 'slash' ? t('信任并继续') : t('信任并启用')" icon="i-lucide-shield-check" class="channel-primary-button" :loading="trust_submitting" @click="confirm_trust_prompt" />
+          </div>
+        </div>
+      </template>
+    </UModal>
   </section>
 </template>
 

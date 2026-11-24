@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { speech_directory } from './speech_directories.mjs';
 
 const TTS_TIMEOUT_MS = 45_000;
 const VOLC_ENDPOINT = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
@@ -45,7 +46,7 @@ const OPENAI_FORMAT = 'aac';
 const SILENT_AAC_FRAME = Buffer.from([0xff, 0xf1, 0x58, 0x40, 0x01, 0x7f, 0xfc, 0x00, 0x00, 0x00, 0x07]);
 const SILENT_AAC_FRAME_MS = 1024 / 24;
 // Local speech: yovoice serving Qwen3-TTS CustomVoice on this computer, installed by the local-tts-setup skill into
-// `<service home>/yovoice` (CLI in `cli/`, engine and model in `data/`). Like voice input's local service, the runner
+// its configured installation directory (CLI in `cli/`, engine and model in `data/`). Like voice input's local service, the runner
 // starts it through a supervisor (`local_speech_service.mjs`) and renews its lease on every request; five minutes without
 // one (or an explicit release) stops it, so the model does not hold graphics memory between uses, even when the
 // runner has crashed.
@@ -65,7 +66,7 @@ const LOCAL_DESIGNED_VOICES = {
   voxcpm2_elderly_male: '六十多岁的老年男性，嗓音低沉略带沙哑，说话很慢，像老人在家里平平淡淡地回忆往事，朴素自然，没有播音腔',
   voxcpm2_middle_aged_male: '五十岁左右的普通中年男性，声音低沉厚实，说话很慢，语气平淡朴实，像和熟人闲聊，没有播音腔，不像短视频解说',
 };
-const LOCAL_DIR = 'yovoice';
+
 const LOCAL_START_MS = 30_000;
 const LOCAL_POLL_MS = 500;
 const LOCAL_CONVERT_MS = 30_000;
@@ -75,11 +76,11 @@ const LOCAL_EXE = process.platform === 'win32' ? '.exe' : '';
 const run_file = promisify(execFile);
 const LOCAL_SUPERVISOR = fileURLToPath(new URL('./local_speech_service.mjs', import.meta.url));
 // Voice input on this computer: CrispASR serving Qwen3-ASR 0.6B, installed by the local-stt-setup skill into
-// `<service home>/crispasr` (program in `cli/`, model in `models/`), started, renewed and stopped like the read-aloud
+// its configured installation directory (program in `cli/`, model in `models/`), started, renewed and stopped like the read-aloud
 // service. Measured 2026-11-10 (RTX 5060, cuda13): about 35× realtime once loaded, a 5-minute recording in 8.5 s.
 const LOCAL_STT_KEY_URL = 'http://127.0.0.1/crispasr';
 const LOCAL_STT_LEGACY_KEY_URL = 'http://127.0.0.1:18766';
-const LOCAL_STT_DIR = 'crispasr';
+
 const LOCAL_STT_MODEL = 'qwen3-asr-0.6b-q8_0.gguf';
 const LOCAL_STT_TIMEOUT_MS = 120_000;
 // The local services the settings page shows, by the program each runs; a stuck one (its supervisor killed) is found by
@@ -88,8 +89,8 @@ const LOCAL_STT_TIMEOUT_MS = 120_000;
 // does not take it; when the port is taken anyway, on a free one the system gives. The port of the running service is
 // recorded in `<service dir>/port`, which its supervisor removes when the service ends.
 const LOCAL_SERVICES = {
-  tts: { directory: LOCAL_DIR, port: 37641, program: 'yovoice' },
-  stt: { directory: LOCAL_STT_DIR, port: 37642, program: 'crispasr' },
+  tts: { port: 37641, program: 'yovoice' },
+  stt: { port: 37642, program: 'crispasr' },
 };
 const PORT_FILE = 'port';
 const LOCAL_PROBE_MS = 1000;
@@ -362,7 +363,7 @@ function local_release(directory) {
  * instead of reaching whatever else may listen on its preferred port (with the token).
  */
 function local_port(home, id) {
-  try { return Number(readFileSync(join(home, LOCAL_SERVICES[id].directory, PORT_FILE), 'utf8')) || 0; } catch { return 0; }
+  try { return Number(readFileSync(join(speech_directory(home, id), PORT_FILE), 'utf8')) || 0; } catch { return 0; }
 }
 
 const local_url = (home, id) => `http://${LOCAL_HOST}:${local_port(home, id)}`;
@@ -378,10 +379,10 @@ function try_listen(port) {
 
 /** Pick the port a local service starts on, its preferred one when free, and record it for the requests that follow. */
 async function local_choose_port(home, id) {
-  const { directory, port } = LOCAL_SERVICES[id];
+  const { port } = LOCAL_SERVICES[id];
   const chosen = await try_listen(port) || await try_listen(0);
   if (!chosen) throw new Error('找不到可用的本机端口');
-  writeFileSync(join(home, directory, PORT_FILE), String(chosen));
+  writeFileSync(join(speech_directory(home, id), PORT_FILE), String(chosen));
   return chosen;
 }
 
@@ -391,7 +392,7 @@ async function local_choose_port(home, id) {
  * setup skill to point at when it is missing.
  */
 async function local_supervise(home, id, { executable, args, env, ready, key, skill, wait_ms = LOCAL_START_MS }, request) {
-  const directory = join(home, LOCAL_SERVICES[id].directory);
+  const directory = speech_directory(home, id);
   if (!existsSync(executable)) throw new Error(`本机服务尚未安装：请让本机 AI 按 ${skill} 技能安装`);
   local_renew(directory);
   const port = await local_choose_port(home, id);
@@ -406,7 +407,7 @@ async function local_supervise(home, id, { executable, args, env, ready, key, sk
 
 /** Start the read-aloud service (yovoice). */
 function local_start(home, key, request) {
-  const directory = join(home, LOCAL_DIR);
+  const directory = speech_directory(home, 'tts');
   return local_supervise(home, 'tts', { executable: join(directory, 'cli', `yovoice${LOCAL_EXE}`), key, skill: 'local-tts-setup',
     args: port => ['serve', '--listen', `${LOCAL_HOST}:${port}`, '--data-dir', join(directory, 'data')], env: { YOVOICE_API_TOKEN: key },
     ready: '/v1/status' }, request);
@@ -420,7 +421,7 @@ async function local_convert(home, wav) {
   const work = mkdtempSync(join(tmpdir(), 'codiscuss-tts-'));
   try {
     writeFileSync(join(work, 'in.wav'), wav);
-    await run_file(join(home, LOCAL_DIR, 'cli', 'tools', `ffmpeg${LOCAL_EXE}`), ['-hide_banner', '-loglevel', 'error', '-i', join(work, 'in.wav'),
+    await run_file(join(speech_directory(home, 'tts'), 'cli', 'tools', `ffmpeg${LOCAL_EXE}`), ['-hide_banner', '-loglevel', 'error', '-i', join(work, 'in.wav'),
       '-c:a', 'aac', '-b:a', LOCAL_BIT_RATE, '-movflags', '+faststart', '-f', 'ipod', join(work, 'out.m4a')], { windowsHide: true, timeout: LOCAL_CONVERT_MS })
       .catch(() => { throw new Error('本机语音转码失败：请重新运行 local-tts-setup 技能修复安装'); });
     return readFileSync(join(work, 'out.m4a'));
@@ -439,7 +440,7 @@ async function local_once({ home, key, text, speaker, context, silence }, { requ
     try { response = await local_generate({ home, key, text, speaker, context }, request); }
     catch (error) {
       if (error.name === 'TimeoutError') throw new Error('本机语音合成超时，请稍后再试');
-      if (started) throw new Error(`本机语音服务已启动但连接失败，请查看 ${join(home, LOCAL_DIR, 'serve.log')}`);
+      if (started) throw new Error(`本机语音服务已启动但连接失败，请查看 ${join(speech_directory(home, 'tts'), 'serve.log')}`);
       await start(home, key, request);
       started = true;
       continue;
@@ -452,7 +453,7 @@ async function local_once({ home, key, text, speaker, context, silence }, { requ
   if (!response.ok) {
     const code = (await response.json().catch(() => ({}))).error?.code;
     if (code === '@yovoice.error.modelRequired') throw new Error('这个音色的模型尚未安装：请让本机 AI 按 local-tts-setup 技能安装');
-    throw new Error(`本机语音合成失败（HTTP ${response.status}${code ? ` ${code}` : ''}），请查看 ${join(home, LOCAL_DIR, 'data', 'logs')}`);
+    throw new Error(`本机语音合成失败（HTTP ${response.status}${code ? ` ${code}` : ''}），请查看 ${join(speech_directory(home, 'tts'), 'data', 'logs')}`);
   }
   const audio = await convert(home, wav_with_silence(Buffer.from(await response.arrayBuffer()), silence));
   return { audio: audio.toString('base64'), format: 'm4a', marks: [] };
@@ -460,7 +461,7 @@ async function local_once({ home, key, text, speaker, context, silence }, { requ
 
 /** Queue this process's local requests; each renews the lease when it arrives and, unless reading was stopped, when it ends. */
 function local_speak(input, transport) {
-  const directory = join(input.home, LOCAL_DIR);
+  const directory = speech_directory(input.home, 'tts');
   local_renew(directory);
   const result = local_queue.then(() => local_once(input, transport));
   local_queue = result.catch(() => {}).then(() => local_renew(directory, { keep_release: true }));
@@ -479,7 +480,7 @@ export const STT_PROVIDERS = [
 
 /** Start the voice-input service (CrispASR); its token comes in the environment, never on the command line. */
 function local_stt_start(home, key, request) {
-  const directory = join(home, LOCAL_STT_DIR);
+  const directory = speech_directory(home, 'stt');
   return local_supervise(home, 'stt', { executable: join(directory, 'cli', `crispasr${LOCAL_EXE}`), key, skill: 'local-stt-setup',
     args: port => ['--server', '--host', LOCAL_HOST, '--port', String(port), '--backend', 'qwen3', '-m', join(directory, 'models', LOCAL_STT_MODEL), '-l', 'zh'],
     env: { CRISPASR_API_KEYS: key }, ready: '/health' }, request);
@@ -501,7 +502,7 @@ function local_stt_send(home, key, wav, request) {
  * @returns {Promise<string>} The recognized text.
  */
 export async function local_transcribe({ home, key, wav }, { request = fetch, start = local_stt_start } = {}) {
-  const directory = join(home, LOCAL_STT_DIR);
+  const directory = speech_directory(home, 'stt');
   local_renew(directory);
   try {
     let response, started = false;
@@ -544,7 +545,7 @@ export function provider_speak(provider, input, { request = fetch, open = (url, 
  * @param {string} home The service home.
  */
 export function provider_release(provider, home) {
-  if (provider === 'local') local_release(join(home, LOCAL_DIR));
+  if (provider === 'local') local_release(speech_directory(home, 'tts'));
 }
 
 /** The process listening on a local TCP port as `{ pid, name }`, or null when none or it cannot be looked up. */
@@ -586,8 +587,8 @@ async function kill_tree(pid) {
  * records one, so another program on its preferred port only makes the next start pick another port.
  */
 async function local_service_status(home, id, { find, probe }) {
-  const { directory, program } = LOCAL_SERVICES[id];
-  const installed = existsSync(join(home, directory, 'cli', `${program}${LOCAL_EXE}`));
+  const { program } = LOCAL_SERVICES[id];
+  const installed = existsSync(join(speech_directory(home, id), 'cli', `${program}${LOCAL_EXE}`));
   const port = local_port(home, id);
   if (!port) return { installed, port: LOCAL_SERVICES[id].port, pid: null, name: '', state: 'stopped' };
   const owner = await find(port);
@@ -622,7 +623,7 @@ export async function local_service_stop(home, id, { find = find_listener, probe
   if (status.state === 'other') throw new Error(`端口 ${status.port} 被其他程序（${status.name}，PID ${status.pid}）占用，未结束它`);
   if (status.state !== 'running') return local_services(home, { find, probe });
   if (!status.pid) {
-    local_release(join(home, LOCAL_SERVICES[id].directory));
+    local_release(speech_directory(home, id));
     return local_services(home, { find, probe });
   }
   // It may have ended meanwhile (its lease ran out); whether it still runs afterwards is what counts.

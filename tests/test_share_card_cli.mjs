@@ -188,6 +188,13 @@ test('share_card_materials filters withdrawn items, rewrites project paths, skip
         ],
       });
     }
+    if (parsed.pathname === '/api/rooms') {
+      return reply({
+        rooms: [
+          { id: 'r1', title: '拾光咖啡', share_link: { url: 'https://share.codiscuss.com/s/FEyQ_JE1_Pn5emRPvotRnA', expires_at: '2026-11-30T17:17:00Z' } },
+        ],
+      });
+    }
     return reply({ error: 'not found' }, 404);
   };
 
@@ -225,6 +232,9 @@ test('share_card_materials filters withdrawn items, rewrites project paths, skip
   assert.equal(data.materials.images[0].suggested_file_name, 'final poster 100_.png');
   assert.ok(data.materials.images[0].download_command.includes('--dest "./final poster 100_.png"'));
   assert.equal(data.materials.sites.length, 1);
+  assert.equal(data.materials.share_link?.url, 'https://share.codiscuss.com/s/FEyQ_JE1_Pn5emRPvotRnA');
+  assert.equal(data.copy_spec?.fence, 'share-copy');
+  assert.equal(data.copy_spec?.share_url_placeholder, '{{share_url}}');
   assert.ok(calls.some((path) => path.includes('before=19')));
 
   const partial = await share_card_materials({ site: 'http://room.test', room_id: 'r1', max_message_pages: 1, fetcher });

@@ -3,13 +3,13 @@
  * Websites in the room directory: the "Published" entry listing every live site with copy, open, renew and revoke, and
  * the deploy dialog every answer card opens (frontend/sites.js). Shown only while the directory's rooms are open.
  */
-import { computed, inject, onMounted, ref, watch } from "vue";
+import { computed, inject, ref, watch } from "vue";
 import { locale, t } from "./i18n.js";
 import { close_deploy, confirm_deploy, load_all_sites, site_command, sites_state } from "./sites.js";
 import ConfirmDialog from "./ConfirmDialog.vue";
 
 defineProps({ visible: { type: Boolean, default: true } });
-const { bridge } = inject("discussion");
+const { view, bridge } = inject("discussion");
 
 // A site lives seven days from its last deploy or renewal; under a day left is marked.
 const LIFETIME_MS = 7 * 24 * 3600 * 1000;
@@ -57,7 +57,9 @@ async function copy_new() {
   setTimeout(() => { copied.value = false; }, 1500);
 }
 
-onMounted(() => load_all_sites(bridge));
+// Online pages connect to the computer's relay after mount: wait until local or relayed rooms are ready, then load.
+const sites_ready = computed(() => !view.value.room_source?.computer || Boolean(view.value.room_source?.remote));
+watch(sites_ready, (ready) => { if (ready) load_all_sites(bridge); }, { immediate: true });
 </script>
 
 <template>

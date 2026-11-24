@@ -5,6 +5,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { drafts_root } from './account_space.mjs';
 import { parseArgs } from 'node:util';
 
 import { configuration_snapshot, read_registry, service_home } from './discussion_service.mjs';
@@ -219,7 +220,7 @@ function room_allowed_roots(config, home) {
     // Not `config.directory`: that is the launch's runtime folder, holding task files and member credentials.
   }
   // Draft directory for member-generated HTML files
-  add(join(home, 'drafts'));
+  add(drafts_root(home));
   return roots;
 }
 

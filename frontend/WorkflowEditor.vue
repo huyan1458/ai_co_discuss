@@ -11,12 +11,12 @@ const workflow = defineModel("workflow", { type: Object, required: true });
 const commands_allowed = defineModel("commandsAllowed", { type: Boolean, default: false });
 // `compact`: the stacked page (phone, upright tablet), where the panel is one of two views and cannot fold away.
 // `sub`: a sub-workflow of the open workflow, named here (the page title names the workflow) and carrying no commands.
-const props = defineProps({ saved: Boolean, compact: Boolean, sub: Boolean });
-const emit = defineEmits(["collapse"]);
+const props = defineProps({ saved: Boolean, compact: Boolean, sub: Boolean, readonly: Boolean });
 const { view } = inject("discussion");
 const MAX_SKILL = 20000;
 // A workflow with no SKILL.md text yet opens in editing; otherwise the rendered text comes first.
-const editing = ref(!workflow.value.skill?.trim());
+const editing = ref(!props.readonly && !workflow.value.skill?.trim());
+watch(() => props.readonly, (readonly) => { if (readonly) editing.value = false; });
 const source = ref(null);
 const commands = computed(() => props.sub ? [] : workflow.value.commands || []);
 // An import carrying an ID already in the library replaces that workflow when saved.
@@ -25,6 +25,7 @@ const rendered = computed(() => editing.value ? "" : window.discuss_markdown.ren
 
 /** Switch to editing the source, with the cursor in it. */
 function edit() {
+  if (props.readonly) return;
   editing.value = true;
   nextTick(() => source.value?.focus());
 }
@@ -44,35 +45,34 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
   <aside class="workflow-skill" :class="{ 'is-compact': compact }" :aria-label="t('工作流（SKILL.md）')">
     <header class="workflow-skill-head">
       <h3><UIcon :name="sub ? 'i-lucide-git-branch' : 'i-lucide-file-text'" class="workflow-skill-icon" />{{ sub ? t('子工作流') : t('工作流') }}<small>SKILL.md · {{ sub ? t('主持人按需照它做') : t('主持人照它派活') }}</small></h3>
-      <UButton :icon="editing ? 'i-lucide-eye' : 'i-lucide-pencil'" :label="editing ? t('预览') : t('编辑')" size="xs" color="neutral" variant="soft"
+      <UButton v-if="!readonly" :icon="editing ? 'i-lucide-eye' : 'i-lucide-pencil'" :label="editing ? t('预览') : t('编辑')" size="xs" color="neutral" variant="soft"
         @click="editing ? (editing = false) : edit()" />
-      <UTooltip v-if="!compact" :text="t('收起 SKILL.md')"><UButton icon="i-lucide-panel-right-close" size="xs" color="neutral" variant="ghost" :aria-label="t('收起 SKILL.md')" @click="emit('collapse')" /></UTooltip>
     </header>
     <div class="workflow-skill-body">
       <label v-if="sub" class="workflow-skill-description">
         <span>{{ t('名称') }}</span>
-        <input v-model="workflow.label" :maxlength="32" :placeholder="t('子工作流的名称')" />
+        <input v-model="workflow.label" :readonly="readonly" :maxlength="32" :placeholder="t('子工作流的名称')" />
       </label>
       <label class="workflow-skill-description">
         <span>{{ t('一句话描述') }} <small>{{ t('主持人凭它判断何时使用') }}</small></span>
-        <textarea v-model="workflow.description" class="workflow-description-text" rows="1" :maxlength="500" :placeholder="sub ? t('做什么、什么时候用（必填）') : t('做什么、什么时候用')" />
+        <textarea v-model="workflow.description" :readonly="readonly" class="workflow-description-text" rows="1" :maxlength="500" :placeholder="sub ? t('做什么、什么时候用（必填）') : t('做什么、什么时候用')" />
       </label>
       <div v-if="!sub" class="workflow-skill-meta">
         <div class="workflow-skill-meta-row">
           <label class="workflow-skill-description">
             <span>{{ t('作者') }}</span>
-            <input v-model="workflow.author" :maxlength="64" :placeholder="t('原作者或整理者（可选）')" />
+            <input v-model="workflow.author" :readonly="readonly" :maxlength="64" :placeholder="t('原作者或整理者（可选）')" />
           </label>
           <label class="workflow-skill-description">
             <span>{{ t('出处') }}</span>
-            <input v-model="workflow.source" :maxlength="200" :placeholder="t('来源文章、链接或实践（可选）')" />
+            <input v-model="workflow.source" :readonly="readonly" :maxlength="200" :placeholder="t('来源文章、链接或实践（可选）')" />
           </label>
         </div>
         <small class="workflow-skill-meta-hint">{{ t('作者与出处仅用于展示，不发给主持人') }}</small>
       </div>
       <textarea v-if="editing" ref="source" v-model="workflow.skill" :maxlength="MAX_SKILL" class="workflow-skill-source" spellcheck="false" :aria-label="t('SKILL.md 正文')" />
       <div v-else-if="workflow.skill?.trim()" class="workflow-skill-preview markdown-body" v-html="rendered" @dblclick="edit"></div>
-      <button v-else type="button" class="workflow-skill-empty" @click="edit"><UIcon name="i-lucide-pencil" class="workflow-skill-icon" />{{ t('写下主持人怎么组织这个{value1}', { value1: sub ? t('子工作流') : t('工作流') }) }}</button>
+      <button v-else-if="!readonly" type="button" class="workflow-skill-empty" @click="edit"><UIcon name="i-lucide-pencil" class="workflow-skill-icon" />{{ t('写下主持人怎么组织这个{value1}', { value1: sub ? t('子工作流') : t('工作流') }) }}</button>
     </div>
     <p v-if="editing" class="workflow-skill-count">{{ (workflow.skill || '').length }} / {{ MAX_SKILL }}</p>
     <details v-if="commands.length" class="workflow-skill-commands" :open="!saved">
@@ -82,7 +82,7 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
           <UBadge :label="command.access === 'read' ? t('只读') : t('会改文件')" size="sm" variant="soft" :color="command.access === 'read' ? 'neutral' : 'warning'" />
           <code>{{ command.run.join(' ') }}</code></li>
       </ul>
-      <label v-if="!saved" class="workflow-skill-grant"><input v-model="commands_allowed" type="checkbox" />{{ t('允许这些命令在本机运行') }}</label>
+      <label v-if="!saved && !readonly" class="workflow-skill-grant"><input v-model="commands_allowed" type="checkbox" />{{ t('允许这些命令在本机运行') }}</label>
     </details>
     <p v-if="replaced" class="workflow-skill-warn"><UIcon name="i-lucide-triangle-alert" class="workflow-skill-icon" />{{ t('保存会覆盖库里的「{value1}」', { value1: replaced.label }) }}</p>
   </aside>

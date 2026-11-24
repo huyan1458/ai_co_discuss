@@ -12,6 +12,7 @@ const emit = defineEmits(["cancel", "done"]);
 const { state, reload, notify } = inject("panel");
 const name = ref(""), isolate = ref(state.value.platform === "win32"), start = ref(true);
 const steps = ref([]), running = ref(false), password = ref("");
+const project_data_root = ref("");
 const valid = computed(() => /^[a-z0-9][a-z0-9_-]{1,16}$/.test(name.value.trim()));
 
 function plan() {
@@ -28,7 +29,7 @@ function plan() {
 }
 
 async function run_step(step, account) {
-  if (step.key === "account") { const result = await call("accounts", { name: account }); password.value = result.password; return; }
+  if (step.key === "account") { const result = await call("accounts", { name: account, project_data_root: project_data_root.value.trim() }); password.value = result.password; return; }
   if (step.key === "runtime") { const result = await call("clis/install", {}); if (result.warnings?.length) throw new Error(result.warnings.join("；")); return; }
   await call(`accounts/${account}/${step.key}`, {});
 }
@@ -62,7 +63,10 @@ const ICONS = { pending: "i-lucide-circle", running: "i-lucide-loader", done: "i
 
     <form v-if="!steps.length" class="panel-form" @submit.prevent="valid && go()">
       <label class="panel-field">{{ t('账号名') }} <input v-model="name" class="panel-input" :placeholder="t('例如 zhang')" autocomplete="off" spellcheck="false" maxlength="17" autofocus />
-        <small>{{ t('2–17 位小写字母、数字、下划线或短横线，对方用它登录。会建立文件夹 ~\\.codiscuss-账号名，里面是它的项目、草稿和数据。') }}</small>
+        <small>{{ t('使用 2–17 位小写字母、数字、下划线或短横线，对方用这个账号名登录。') }}</small>
+      </label>
+      <label class="panel-field">{{ t('项目数据目录（可选）') }}<input v-model="project_data_root" class="panel-input" spellcheck="false" />
+        <small>{{ t('填写尚未创建的账号专用目录的绝对路径，父目录须已存在。项目、工作区和成员草稿存入此处。') }}</small>
       </label>
       <label v-if="state.platform === 'win32'" class="new-check"><input v-model="isolate" type="checkbox" />
         <span><strong>{{ t('隔离（推荐）') }}</strong><small>{{ t('给它建一个独立的 Windows 用户：它的 AI 读不到你的个人文件，命令行登录和技能也和你分开。') }}</small></span></label>

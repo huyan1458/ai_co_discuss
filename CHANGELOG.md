@@ -2,6 +2,11 @@
 
 Versions match the npm package, listing only changes you will notice (with key milestones recorded before 0.5.0). The Chinese version is `CHANGELOG.zh-CN.md`; on the website, click the version number at the top left to read it.
 
+## 0.5.23 (2026-11-24 08:11)
+
+- New: Save workflows with a project and select them from rooms using that project.
+- New: Rooms pause assignments when storage limits are reached. After freeing space, retry the failed assignment.
+
 ## 0.5.22 (2026-11-24 00:12)
 
 - New: Child rooms created by the host group under their parent room, collapse and expand, and auto-expand on activity.

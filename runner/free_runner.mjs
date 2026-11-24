@@ -1,19 +1,19 @@
 /** Free-room delivery: one live execution per member, carrying all of that member's open requests. */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
-import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, chosen_settings, cleanup_room, deliver_task, delivery_receipt, recover_turn, session_exists, session_settings, stored_delivery, takes_images } from './adapters/index.mjs';
-import { api as raw_api, overlapping_directories, read_rule } from './discussion_runner.mjs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, posix, relative, resolve, win32 } from 'node:path';
+import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, chosen_settings, cleanup_room, deliver_task, delivery_receipt, preflight_stoppable, recover_turn, session_exists, session_settings, stored_delivery, takes_images } from './adapters/index.mjs';
+import { api as raw_api, overlapping_directories, read_rule, room_draft_key } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
 import { capture_base, file_diffs } from './file_diff.mjs';
 import { correctable_refusals, free_task_text, MAX_REFUSAL_RETRIES, refusal_retry_prompt, restart_resume_prompt, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
 import { entry_access, site_fetch } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
 import { image_settings } from './image_service.mjs';
-import { outside_directory, room_directories } from './project_files.mjs';
+import { outside_directory, room_directories, room_directory_entries } from './project_files.mjs';
 import { SessionDriver } from './session_driver.mjs';
-import { slash_names } from './slash_names.mjs';
+import { parse_slash_workflow, slash_names } from './slash_names.mjs';
 import { effective_profile, load_room_workflow, member_knowledge, workflow_directory, workflow_execution_binding, workflow_in_use, workflow_task_field } from './workflows.mjs';
 import { GOAL_CONFIDENCE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_GUIDED_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, SCHEDULER_MODE, decide_review_completion, route_free_message, some_members } from './scheduler.mjs';
 import { room_text, room_payload } from './room_text.mjs';
@@ -53,7 +53,7 @@ const RESTART_REASON = room_text("重启后无法确认上次执行结果");
 // Recognize older versions' pending restart retries so upgrading cannot redeliver them.
 const RESTART_REASON_CODE = 'runner_restarted';
 const MAX_RETRY_REASON = 500;
-const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait'];
+const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait', 'storage_stopping'];
 // The longest private chat reply the site keeps.
 const CHAT_REPLY_LIMIT = 20000;
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
@@ -86,6 +86,38 @@ export function review_capability_version(profile, member, config) {
 export function member_drafts(config, name) {
   const base = config.draft_directory || `${config.directory}-drafts`;
   return join(base, createHash('sha256').update(String(name)).digest('hex').slice(0, 16));
+}
+
+/** Remove only the execution subdirectory, refusing redirected ancestors. */
+function remove_scratch(config, { member, id }) {
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Invalid scratch execution id');
+  const directory = resolve(member_drafts(config, member), '.scratch', String(id));
+  try {
+    const root = config.draft_directory && resolve(config.draft_directory, '..', '..');
+    let expected = directory;
+    if (root && config.directory && !relative(join(root, 'drafts', room_draft_key(config.directory)), config.draft_directory)) {
+      expected = resolve(realpathSync.native(root), relative(root, directory));
+      for (let part = directory; relative(root, part); part = dirname(part)) {
+        if (lstatSync(part, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error(`Redirected scratch path: ${part}`);
+      }
+    }
+    if (relative(realpathSync.native(directory), expected)) throw new Error(`Redirected scratch path: ${directory}`);
+    rmSync(directory, { recursive: true });
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
+/** Claim and retire the oldest confirmed failed scratch record under the same database lock as other cleaners. */
+export function reclaim_failed_scratch(db, config, key = null) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const row = db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'failed-scratch:%' AND (? IS NULL OR key=?) ORDER BY json_extract(value,'$.ended'),key LIMIT 1").get(key, key);
+    if (row) {
+      remove_scratch(config, JSON.parse(row.value));
+      db.prepare('DELETE FROM metadata WHERE key=?').run(row.key);
+    }
+    db.exec('COMMIT');
+    return Boolean(row);
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
 // The file name of a taken-over member's proactive credential inside its runtime folder; mirrored in runner/discuss.py.
@@ -125,14 +157,20 @@ export function cwd_key(directory) {
  */
 export function workspace_snapshot(directory) {
   if (!directory) return null;
-  const result = spawnSync('git', ['-C', directory, 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+  const options = { encoding: 'utf8', windowsHide: true, timeout: GIT_TIMEOUT_MS };
+  const prefix = spawnSync('git', ['-C', directory, 'rev-parse', '--show-prefix'], options);
+  if (prefix.status !== 0) return null;
+  const folder = prefix.stdout.replace(/[\r\n]+$/, '');
+  const result = spawnSync('git', ['-C', directory, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'],
     { encoding: 'utf8', windowsHide: true, timeout: GIT_TIMEOUT_MS });
   if (result.status !== 0) return null;
   const entries = new Map();
   const fields = result.stdout.split('\0').filter(Boolean);
   for (let index = 0; index < fields.length; index++) {
-    const status = fields[index].slice(0, 2), path = fields[index].slice(3);
+    const status = fields[index].slice(0, 2), name = fields[index].slice(3);
     if (status[0] === 'R' || status[0] === 'C') index++; // The original path of a rename follows.
+    if (!name.startsWith(folder)) continue;
+    const path = name.slice(folder.length);
     let content = 'missing';
     try {
       const file = join(directory, path);
@@ -152,16 +190,16 @@ export function changed_between(before, after) {
 
 /**
  * The changed paths (relative, as git lists them) that the agent edited with its own tools, given the paths those tools
- * named (absolute or relative to the working directory). Matched by path suffix, so a working directory below the
- * repository root still matches; Windows paths compare case-insensitively.
+ * named, resolved against the execution working directory.
  */
-export function edited_changes(changes, claimed, platform = process.platform) {
+export function edited_changes(changes, claimed, directory, platform = process.platform) {
+  const paths = platform === 'win32' ? win32 : posix;
   const normal = path => {
-    const text = `/${String(path).replaceAll('\\', '/').replace(/^\.\//, '')}`;
-    return platform === 'win32' ? text.toLowerCase() : text;
+    const absolute = paths.resolve(directory, path);
+    return platform === 'win32' ? absolute.toLowerCase() : absolute;
   };
-  const named = [...claimed].map(normal);
-  return changes.filter(path => named.some(item => item.endsWith(normal(path))));
+  const named = new Set([...claimed].map(normal));
+  return changes.filter(path => named.has(normal(path)));
 }
 
 /**
@@ -174,11 +212,16 @@ export function member_extra_directories(config, profile) {
   // '' marks a member that joined before the room had a project: it reaches every room directory at its own access.
   const cwd = profile.cwd ?? config.cwd;
   const access = outside_directory(config, profile) || profile.project_access === 'read' ? 'read' : 'write';
-  return room_directories(config).filter(path => !(cwd && overlapping_directories(path, cwd)) && existsSync(path))
-    .map(path => ({ path, access }));
+  return room_directory_entries(config).filter(({ path }) => !(cwd && overlapping_directories(path, cwd)) && existsSync(path))
+    .map(item => ({ path: item.path, access: item.access === 'read' ? 'read' : access }));
 }
 
 /** A changed path in an extra directory, reported in full so it cannot be mistaken for one in the main directory. */
+function extra_snapshot(directory) {
+  const before = workspace_snapshot(directory);
+  return { directory, before, base: capture_base(directory, before) };
+}
+
 function extra_change(directory, path) {
   return `${cwd_key(directory)}/${path}`;
 }
@@ -215,18 +258,37 @@ export async function user_request_texts(config, execution) {
  */
 export function named_workflows(texts, { sub_workflows = [], current = '', in_library = () => false } = {}) {
   const named = { workflows: [], sub_workflows: [] };
-  for (const name of new Set(texts.flatMap(slash_names))) {
-    if (sub_workflows.includes(name)) named.sub_workflows.push(name);
-    else if (name !== current && in_library(name)) named.workflows.push(name);
+  const binding = typeof current === 'string' ? { id: current } : current;
+  for (const token of new Set(texts.flatMap(slash_names))) {
+    const target = parse_slash_workflow(token);
+    if (!target.scope && sub_workflows.includes(target.id)) {
+      named.sub_workflows.push(target.id);
+      continue;
+    }
+    const found = in_library(target.id, target);
+    if (!found) continue;
+    const selected = typeof found === 'object' ? found : target;
+    if (binding?.id === selected.id && (!selected.scope || ((binding.scope || 'global') === selected.scope
+      && (binding.project_id || '') === (selected.project_id || '')))) continue;
+    if (!named.workflows.includes(target.id)) named.workflows.push(target.id);
+    if (target.scope) (named.workflow_targets ||= []).push({ id: target.id, scope: target.scope,
+      ...(target.project_id ? { project_id: target.project_id } : {}) });
   }
   const kept = Object.fromEntries(Object.entries(named).filter(([, names]) => names.length));
   return Object.keys(kept).length ? kept : null;
 }
 
 /** Whether this computer's workflow library has a workflow with this ID. */
-function library_has(config, id) {
-  try { return Boolean(config.api_home) && existsSync(join(workflow_directory(config.api_home, id), 'SKILL.md')); }
-  catch { return false; }
+function library_has(config, id, target) {
+  try {
+    if (target.scope !== 'global') for (const path of room_directories(config)) {
+      const project_id = createHash('sha256').update(resolve(path).toLowerCase()).digest('hex').slice(0, 16);
+      if (target.project_id && target.project_id !== project_id) continue;
+      if (existsSync(join(workflow_directory(join(path, '.codiscuss'), id), 'SKILL.md'))) return { id, scope: 'project', project_id };
+    }
+    if (target.scope !== 'project' && config.api_home && existsSync(join(workflow_directory(config.api_home, id), 'SKILL.md'))) return { id, scope: 'global' };
+  } catch { /* Invalid workflow name. */ }
+  return false;
 }
 
 /**
@@ -308,7 +370,8 @@ export function free_task_files(config, member, execution, binding, { session = 
   workflow = null, room_members = [], goal = null, attachments = [], room = null, model_change = null, request_texts = [], linked_rooms = null } = {}) {
   const id = `free-${execution.id}`;
   const draft_directory = member_drafts(config, member.name);
-  mkdirSync(draft_directory, { recursive: true });
+  const scratch_directory = join(draft_directory, '.scratch', String(execution.id));
+  const scratch_created = mkdirSync(scratch_directory, { recursive: true }) !== undefined;
   const member_directory = member_runtime(config, member.name);
   const access_path = join(member_directory, `${id}.access.json`);
   const task_path = join(member_directory, `${id}.task.json`);
@@ -321,7 +384,9 @@ export function free_task_files(config, member, execution, binding, { session = 
   const adapter = adapter_of(profile.adapter);
   const extra_directories = member_extra_directories(config, profile);
   // The expert this member plays keeps its own knowledge, which only it may write (its project access stays as set).
-  const knowledge_directory = member_knowledge(config.api_home, member.name, workflow);
+  const knowledge_directory = member_knowledge(config.api_home, member.name, workflow, room_directories(config), profile);
+  const readonly_knowledge = knowledge_directory && (config.extra_directories || []).some(item =>
+    item.access === 'read' && overlapping_directories(item.path, knowledge_directory));
   const cli = process.platform === 'win32' ? adapter?.windows_command || 'codiscuss.cmd' : 'codiscuss';
   const inbox = Boolean(adapter?.into_window?.(profile, binding));
   const bound_access = process_access && !inbox && Boolean(adapter?.capabilities.access_env);
@@ -333,7 +398,7 @@ export function free_task_files(config, member, execution, binding, { session = 
     discussion_request, profile, cli,
     room: config.room, messages, read_after: execution.read_until, execution_id: execution.id, task_path,
     access_file: bound_access ? '' : access_path, read_rule: read_rule(profile.adapter), inbox, extra_directories, attachments, requests, workflow: Boolean(host_workflow),
-    knowledge: Boolean(knowledge_directory) });
+    knowledge: Boolean(knowledge_directory && !readonly_knowledge) });
   // Software that declares it takes images gets them with the prompt, like a screenshot pasted into its own window.
   const images = takes_images(profile) && !inbox
     ? attachments.filter(item => item.path && IMAGE_TYPES.has(item.content_type)).map(item => ({ path: item.path, content_type: item.content_type, size: item.size }))
@@ -373,7 +438,7 @@ export function free_task_files(config, member, execution, binding, { session = 
   // Relay, question and image rules are read only when the task carries them, keeping the everyday path short.
   if (image || requests.some(item => item.sequence || item.question || item.question_needed)) skills.push('discuss-participant/references/situations.md');
   const named = member.role === 'host' ? named_workflows(request_texts, { sub_workflows: host_workflow?.sub_workflows.map(sub => sub.id) || [],
-    current: host_workflow?.id || '', in_library: id => library_has(config, id) }) : null;
+    current: host_workflow ? config.workflow : '', in_library: (id, target) => library_has(config, id, target) }) : null;
   // The host's occasional pages likewise: relays and question cards, room control on a notice, the workflow (also when
   // the user named one to enable), pre-set reviews.
   if (member.role === 'host') {
@@ -407,6 +472,7 @@ export function free_task_files(config, member, execution, binding, { session = 
     // Only where the adapter declares capture: without it, only a submitted answer is saved, as the skill already says.
     ...(adapter?.capabilities.capture ? { answer_capture: '正常结束且本次没有提交时，你最后一段文字收为本次回答（标自动收录，不派活）；已提交或被拒则不收录' } : {}),
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
+    scratch_directory,
     ...(knowledge_directory ? { knowledge_directory } : {}),
     ...(extra_directories.length ? { extra_directories } : {}),
     skills: skills.map(file => join(config.project, '.agents/skills', file)),
@@ -417,12 +483,12 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(image ? { image: { model: image.model, command: `${cli} launch image --file REQUEST.json` } } : {}),
     cli, subcommands: TASK_SUBCOMMANDS,
     ...(bound_access ? { access_env: 'DISCUSS_ACCESS_FILE' } : { access_file: access_path }), instructions });
-  return { id, participant: member.name, directory: config.directory, member_directory, task_path, draft_directory, extra_directories,
-    ...(knowledge_directory ? { knowledge_directory } : {}), ...(goal_field ? { goal: goal_field } : {}),
+  return { id, participant: member.name, directory: config.directory, member_directory, task_path, draft_directory, scratch_directory, scratch_created, extra_directories,
+    ...(knowledge_directory && !readonly_knowledge ? { knowledge_directory } : {}), ...(goal_field ? { goal: goal_field } : {}),
     ...(goal_of_room ? { room_goal: goal_of_room } : {}),
     // Every member may read the folder of the room's workflow (templates, tools, a review of the workflow itself), also
     // while its members are away and the host no longer follows it; only the host's task names it.
-    skill_directories: [skills_directory, ...(workflow && !workflow.error ? [workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox, images,
+    skill_directories: [skills_directory, ...(readonly_knowledge ? [knowledge_directory] : []), ...(workflow && !workflow.error ? [workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox, images,
     profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill, ...api_sub_workflows(workflow_field, host_workflow) } } : {}) };
 }
 
@@ -511,6 +577,8 @@ function route_host_label(decision, host, members) {
 export class FreeRoomRunner {
   constructor(config, store, deliver = deliver_task, log = () => {}, fetch_impl = fetch, session_driver = null) {
     this.config = config;
+    this.storage_reports = new Map();
+    this.storage_reason = null; // Managed rooms share the service's asynchronous storage check.
     this.store = store;
     this.deliver = deliver;
     this.log = log;
@@ -1096,13 +1164,20 @@ export class FreeRoomRunner {
       catch (error) { return this.reject_review(member, execution, error.message); }
     }
     if (!adapter) return this.fail(member.name, execution.id, room_text("未配置 {value1} 的本机接入", { value1: member.name }));
+    let reason;
+    try {
+      const stoppable = preflight_stoppable(adapter, this.store.binding(member.name));
+      reason = await this.storage_reason?.(stoppable);
+    }
+    catch (error) { reason = error.message; }
+    if (reason) return this.fail(member.name, execution.id, reason);
     if (this.context_errors.has(member.name)) return this.fail(member.name, execution.id, this.context_errors.get(member.name));
     const directory = capabilities_of(adapter.adapter).project ? adapter.cwd ?? this.config.cwd : undefined;
     // A read-only member's software cannot write the project, so files changing meanwhile were written by someone else.
     const before = adapter.project_access === 'read' ? null : workspace_snapshot(directory);
     // The room's other directories this member may write are watched as well; their changes are reported with full paths.
     const extras = member_extra_directories(this.config, adapter).filter(item => item.access === 'write')
-      .map(item => ({ directory: item.path, before: workspace_snapshot(item.path) })).filter(item => item.before);
+      .map(item => extra_snapshot(item.path)).filter(item => item.before);
     // A resumed execution keeps the snapshot of its first delivery, so changes made before the pause are reported too.
     // One with nothing to watch (read-only, no git) is still tracked, so its end reports an empty list and the page stops
     // waiting for one (user 2026-11-20, #5956).
@@ -1149,6 +1224,8 @@ export class FreeRoomRunner {
         goal: this.room?.goal_state?.goal || null, attachments, room: this.room, model_change, request_texts, linked_rooms,
       });
       this.store.db.prepare('DELETE FROM metadata WHERE key IN (?,?)').run(`recovery:${execution.id}`, `recovery-denied:${execution.id}`);
+      if (task.scratch_created) this.store.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)')
+        .run(`scratch:${execution.id}`, JSON.stringify({ member: member.name, id: execution.id }));
       invoked = true;
       this.segments.start(execution.id);
       this.record_diagnostics(execution.id, { workflow: workflow_execution_binding(workflow, member, Boolean(task.workflow)) });
@@ -1367,6 +1444,7 @@ export class FreeRoomRunner {
       this.stop_member(member.name);
       return this.save(member.name, { status: 'idle', error: '' });
     }
+    if (row.status === 'storage_stopping') return this.report_storage_stop(row);
     if (row.status === 'retry_wait') {
       const reason_code = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`retry-reason:${execution.id}`)?.value;
       if (reason_code === RESTART_REASON_CODE) return this.recover_orphan(member, row, execution);
@@ -1465,7 +1543,7 @@ export class FreeRoomRunner {
     const moved_before = snapshot?.before ? workspace_snapshot(snapshot.directory) : null;
     if (snapshot) this.snapshots.set(id, { member: snapshot.member, directory: snapshot.directory,
       before: moved_before, base: capture_base(snapshot.directory, moved_before),
-      extras: (snapshot.extras || []).map(item => ({ directory: item.directory, before: workspace_snapshot(item.directory) })),
+      extras: (snapshot.extras || []).map(item => extra_snapshot(item.directory)),
       ...(snapshot.edited ? { edited: new Set() } : {}) });
     for (const prefix of ['owner', 'delivery']) {
       const value = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`${prefix}:${old}`)?.value;
@@ -1473,11 +1551,12 @@ export class FreeRoomRunner {
       this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`${prefix}:${id}`, value);
       this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`${prefix}:${old}`);
     }
+    this.store.db.prepare('UPDATE metadata SET key=? WHERE key=?').run(`scratch:${id}`, `scratch:${old}`);
     const workflow = this.diagnostics.get(old)?.workflow;
     await this.report_segments(old, true);
     if (workflow) this.record_diagnostics(id, { workflow });
     this.segments.start(id);
-    this.save(name, { execution_id: id, last_renew: 0 });
+    this.save(name, { execution_id: id, last_renew: 0, ...(this.row(name)?.status === 'storage_stopping' ? { status: 'running', error: '' } : {}) });
   }
   /**
    * An execution the owner paused from the private chat, or that takes an interjection only by a pause: stop its
@@ -1515,6 +1594,8 @@ export class FreeRoomRunner {
   async report_delivery(execution_id, { stoppable, progress, ends = false, steer = false, resume = false }, member) {
     // `ends`: the adapter cannot stop or follow this turn but reports when it ends (`on_turn_end`); kept locally only.
     this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`delivery:${execution_id}`, JSON.stringify({ stoppable, progress, ends, member }));
+    this.store.db.prepare("UPDATE metadata SET value=json_set(value,'$.stoppable',?) WHERE key=?")
+      .run(stoppable ? 1 : 0, `scratch:${execution_id}`);
     await api(this.config, `/executions/${execution_id}`, { action: 'delivery', stoppable, progress, steer, resume,
       diagnostics: this.diagnostics.get(execution_id) })
       .catch(error => this.log(`执行 #${execution_id} 的投递能力未能上报：${error.message}`));
@@ -1553,6 +1634,9 @@ export class FreeRoomRunner {
     const seen_end = ended || this.turn_ended.has(execution_id);
     const result = delivery.pending_result && !['unconfirmed', 'unstoppable'].includes(delivery.pending_result) ? delivery.pending_result
       : !delivery.stoppable ? (followed && seen_end ? 'stopped' : 'unstoppable') : ended ? 'stopped' : 'unconfirmed';
+    if (this.turn_ended.has(execution_id) || this.exited.has(execution_id) || (delivery.stoppable && ended)) {
+      this.store.db.prepare("UPDATE metadata SET value=json_set(value,'$.closed',1) WHERE key=?").run(`scratch:${execution_id}`);
+    }
     if (delivery.stop_result === result) {
       // Past the site's hold (HOLD_SECONDS in backend/free_room.py) an unstoppable turn's end changes nothing.
       if (result === 'unstoppable' && Date.now() - (delivery.reported_at || 0) > UNSTOPPABLE_FOLLOW_MS) this.forget_stop(execution_id);
@@ -1561,7 +1645,8 @@ export class FreeRoomRunner {
     // An execution that left the inbox by finishing normally has no stop to report; only a voided one does.
     if (['completed', 'failed'].includes((await api(this.config, `/executions/${execution_id}`)).status)) {
       this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
-      this.execution_processes.delete(execution_id);
+      this.release_process_tracking(execution_id);
+      this.forget_owner(execution_id);
       return;
     }
     // Keep the observed outcome before sending: a restart after a lost response must retry the same fact.
@@ -1574,7 +1659,8 @@ export class FreeRoomRunner {
       // A conflict is not necessarily normal completion: keep cancelled reports until an idempotent receipt arrives.
       if (!['completed', 'failed'].includes(latest.status)) throw error;
       this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
-      this.execution_processes.delete(execution_id);
+      this.release_process_tracking(execution_id);
+      this.forget_owner(execution_id);
       return;
     }
     this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)')
@@ -1590,7 +1676,7 @@ export class FreeRoomRunner {
   /** Drop what this runner keeps for one voided execution's stop report. */
   forget_stop(execution_id) {
     this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`delivery:${execution_id}`);
-    this.execution_processes.delete(execution_id);
+    this.release_process_tracking(execution_id);
     this.turn_ended.delete(execution_id);
     this.forget_owner(execution_id);
   }
@@ -1612,9 +1698,16 @@ export class FreeRoomRunner {
     if (Number.isInteger(pid) && !pids.includes(pid)) pids.push(pid);
     this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(key, JSON.stringify({ instance: this.instance, pids }));
   }
+  /** Retain process handles while scratch still needs a close observation. */
+  release_process_tracking(id) {
+    if (!this.store.db.prepare('SELECT 1 FROM metadata WHERE key=?').get(`scratch:${id}`)) this.execution_processes.delete(id);
+  }
+
   /** Drop the records an ended execution leaves: its process owners and whether a restart already resumed it. */
   forget_owner(execution_id) {
-    this.store.db.prepare('DELETE FROM metadata WHERE key IN (?,?,?)').run(`owner:${execution_id}`, `restart-resumed:${execution_id}`, `retry-reason:${execution_id}`);
+    this.store.db.prepare('DELETE FROM metadata WHERE key IN (?,?)').run(`restart-resumed:${execution_id}`, `retry-reason:${execution_id}`);
+    this.store.db.prepare('DELETE FROM metadata WHERE key=? AND NOT EXISTS (SELECT 1 FROM metadata WHERE key=?)')
+      .run(`owner:${execution_id}`, `scratch:${execution_id}`);
   }
   /** Once a new task received the stop reminders, retire acknowledged unconfirmed reports for its old turns. */
   clear_stopped(name) {
@@ -1622,7 +1715,7 @@ export class FreeRoomRunner {
       const key = `delivery:${id}`, value = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
       if (value && stored_delivery(value).stop_result === 'unconfirmed') {
         this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
-        this.execution_processes.delete(id);
+        this.release_process_tracking(id);
       }
     }
     this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`stopped:${name}`);
@@ -1701,6 +1794,7 @@ export class FreeRoomRunner {
    * card to list without the wait (user 2026-11-19, #5669); the report after its processes have exited replaces it.
    */
   async report_finished(active) {
+    await this.finish_scratch(active);
     for (const [execution_id, snapshot] of this.snapshots) {
       if (active.has(execution_id)) continue;
       const running = this.execution_processes.get(execution_id)?.size > 0;
@@ -1721,15 +1815,24 @@ export class FreeRoomRunner {
       });
       if (!workspace_observed) continue;
       const own = after ? changed_between(snapshot.before, after) : [];
-      const changes = [...own, ...extra].slice(0, 200);
+      const observed = [...new Set([...own, ...extra])];
+      const attributed = new Set(edited_changes(observed, snapshot.edited || [], snapshot.directory));
+      const changes = [...attributed, ...observed.filter(path => !attributed.has(path))].slice(0, 200);
       // `edited` is sent only when the adapter tracked edits; without it the site cannot tell who wrote a shared file.
-      const edited = snapshot.edited ? { edited: edited_changes(changes, snapshot.edited) } : {};
+      const edited = snapshot.edited ? { edited: changes.filter(path => attributed.has(path)) } : {};
       const diagnostics = { ...(this.diagnostics.get(execution_id) || snapshot.diagnostics),
         file_attribution: { tracked: Boolean(snapshot.edited), provisional: running,
           omitted: Math.max(0, own.length + extra.length - changes.length) } };
       // Line counts and patches of the files in the member's own working tree, for the card's "edited N files".
       let diffs = [];
-      if (own.length) try { diffs = file_diffs(snapshot.directory, own.slice(0, 200), snapshot.base); } catch { /* The card then lists names only. */ }
+      const files = edited.edited || [];
+      for (const tree of [snapshot, ...(snapshot.extras || [])]) {
+        const prefix = tree === snapshot ? '' : extra_change(tree.directory, '');
+        const paths = files.filter(path => prefix ? path.startsWith(prefix) : own.includes(path)).map(path => path.slice(prefix.length));
+        try {
+          diffs.push(...file_diffs(tree.directory, paths, tree.base).map(item => ({ ...item, path: prefix + item.path })));
+        } catch { /* The card then lists names only. */ }
+      }
       try { await api(this.config, `/executions/${execution_id}`, { action: 'report', ...(running ? { provisional: true } : {}),
         changes, ...edited, ...(diffs.length ? { diffs } : {}), diagnostics }); }
       catch (error) { if (!/HTTP (404|409)/.test(error.message)) throw error; }
@@ -1822,7 +1925,66 @@ export class FreeRoomRunner {
     catch (error) { if (!/HTTP 409/.test(error.message)) throw error; }
     this.save(name, { status: 'idle', error: '' });
   }
-  async fail(name, execution_id, reason) {
+  /** Only stop handles of still-running executions with a confirmed stoppable delivery. */
+  async stop_for_storage(reason) {
+    if (!reason) return;
+    const stopped = [];
+    for (const row of this.store.db.prepare("SELECT * FROM free_deliveries WHERE status='running'").all()) {
+      const id = row.execution_id;
+      const delivery = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`delivery:${id}`);
+      const children = this.execution_processes.get(id);
+      if (!delivery || !stored_delivery(delivery.value).stoppable || !children?.size) continue;
+      stopped.push(this.save(row.member, { status: 'storage_stopping', error: reason }));
+      for (const child of children) this.request_stop(child);
+    }
+    const reports = await Promise.allSettled(stopped.map(row => this.report_storage_stop(row)));
+    const failed = reports.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  }
+
+  /** Retry only the bound failure report, including after a restart or lost response. */
+  report_storage_stop(row) {
+    const id = row.execution_id;
+    if (!this.storage_reports.has(id)) {
+      const report = this.fail(row.member, id, row.error, true).finally(() => this.storage_reports.delete(id));
+      this.storage_reports.set(id, report);
+    }
+    return this.storage_reports.get(id);
+  }
+
+  /** Classify finished tasks from the site's receipt. Unregistered draft directories are never candidates. */
+  async finish_scratch(active) {
+    for (const { key, value } of this.store.db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'scratch:%'").all()) {
+      const id = Number(key.slice('scratch:'.length));
+      const record = JSON.parse(value);
+      if (active.has(id) || this.execution_processes.get(id)?.size || this.orphan(id)?.alive) continue;
+      try {
+        const latest = await api(this.config, `/executions/${id}`);
+        if (latest.status === 'completed') remove_scratch(this.config, record);
+        else if (['failed', 'cancelled'].includes(latest.status)) {
+          const delivery = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`delivery:${id}`);
+          const stoppable = record.stoppable || (delivery && stored_delivery(delivery.value).stoppable);
+          const closed = stoppable && (this.execution_processes.get(id)?.size === 0 || this.orphan(id)?.alive === false);
+          if (!record.closed && !closed && !this.exited.has(id) && !this.turn_ended.has(id)) continue;
+          this.store.db.prepare('UPDATE OR REPLACE metadata SET key=?,value=? WHERE key=?')
+            .run(`failed-scratch:${id}`, JSON.stringify({ ...record, ended: latest.finished_at * 1000 || Date.now() }), key);
+        } else continue;
+        this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
+        await this.on_drafts_finished?.(record.member);
+        if (!this.store.db.prepare('SELECT 1 FROM metadata WHERE key=?').get(`delivery:${id}`)) {
+          this.execution_processes.delete(id);
+          this.forget_owner(id);
+        }
+      } catch (error) { this.log(`scratch #${id}: ${error.message}`); }
+    }
+  }
+
+  /** Recover the oldest confirmed failed directory in this room per pressure check. */
+  reclaim_failed_scratch() {
+    return reclaim_failed_scratch(this.store.db, this.config);
+  }
+
+  async fail(name, execution_id, reason, locally_stopped = false) {
     const diagnostics = this.diagnostics.get(execution_id);
     this.activity.delete(execution_id);
     this.not_started.delete(execution_id);
@@ -1837,8 +1999,9 @@ export class FreeRoomRunner {
       try { this.on_failed({ member: name, execution_id, reason, room: this.config.room, title: this.room_title || '' }); }
       catch (error) { this.log(`失败通知未记录：${error.message}`); }
     }
-    this.save(name, { status: 'idle', error: reason });
-    this.stop_member(name);
+    if (locally_stopped && !recorded) return;
+    if (!locally_stopped || this.row(name)?.execution_id === execution_id) this.save(name, { status: 'idle', error: reason });
+    if (!locally_stopped) this.stop_member(name);
     this.forget_owner(execution_id);
   }
   /**

@@ -71,8 +71,8 @@ function save() {
         <slot name="below" />
         <div class="member-text-footer">
           <div><slot name="extra" /></div>
-          <UButton :label="t('取消')" color="neutral" variant="ghost" @click="open = false" />
-          <UButton v-if="!readonly" type="submit" :label="t('保存')" class="channel-primary-button" :loading="saving" :disabled="!changed" />
+          <UButton size="sm" :label="t('取消')" color="neutral" variant="ghost" class="member-text-cancel" @click="open = false" />
+          <UButton v-if="!readonly" size="sm" type="submit" :label="t('保存')" class="channel-primary-button" :loading="saving" :disabled="!changed" />
         </div>
       </form>
     </template>
@@ -103,4 +103,5 @@ function save() {
 .member-text-meta > .is-near { color: var(--ui-warning, #e0a33a); }
 .member-text-footer { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .member-text-footer > div { flex: 1; min-width: 0; }
+.member-text-cancel { min-height: 32px; font-size: 13px; }
 </style>

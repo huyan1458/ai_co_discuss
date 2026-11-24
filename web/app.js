@@ -365,6 +365,22 @@ function create_share_core({ t, display_name, collapse_visual_fences, is_text_at
     return String(text || "").replace(/```[\s\S]*?```/g, " ").replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[`*_>#|~-]+/g, " ").replace(/\s+/g, " ").trim();
   }
 
+  /** One concise lead sentence (or two short ones) from the opening paragraph, leaving bullet checklists and prompt tails off the card. */
+  function share_card_lead(text, max_chars = 160) {
+    const first_para = String(text || "").replace(/\r\n/g, "\n").trim()
+      .split(/\n\s*\n|\n\s*(?:[-*•]|\d+[.)、])\s+/)[0];
+    const clean = share_plain(first_para).replace(/^(?:@\S+\s+)+/, "").trim();
+    if (!clean) return "";
+    const sentences = clean.match(/[^。！？.!?]+(?:[。！？]|[.!?](?=\s|$)|$)/gu) || [];
+    const first = sentences[0]?.trim() || "";
+    if (!first) return clean.slice(0, max_chars);
+    if (first.length < 10 && sentences[1]) {
+      const two = `${first}${/[a-zA-Z0-9.!?]$/.test(first) ? " " : ""}${sentences[1].trim()}`;
+      if (two.length <= max_chars) return two;
+    }
+    return first.slice(0, max_chars);
+  }
+
   function share_card_messages(responses) {
     return Object.entries(responses).filter(([path]) => /\/messages\?/.test(path)).flatMap(([, body]) => body.messages || [])
       .filter(message => message.kind !== "system" && message.text).sort((a, b) => a.id - b.id);
@@ -380,19 +396,20 @@ function create_share_core({ t, display_name, collapse_visual_fences, is_text_at
     const room = draft.responses[`/api/rooms/${draft.room_id}`] || {};
     const members = (room.members || []).filter(member => member.status !== "removed").map(member => member.label || display_name(member.name));
     const messages = share_card_messages(draft.responses);
-    const question = messages.find(message => message.author === "用户" && !is_share_question_receipt(message.text)
-      && !/^\/?(?:继续|好的?|同意|continue|ok)[。.!！\s]*$/iu.test(message.text.trim()));
+    const question = messages.find(message => {
+      if (message.author !== "用户") return false;
+      const body = String(message.text || "").trim();
+      if (!body || is_share_question_receipt(body) || /^\/(?:goal|discuss)\b/i.test(body)) return false;
+      return !/^\/?(?:继续|好的?|行|ok|yes|收到|同意|开始|可以|确认|嗯|明白|go|continue)[。.!！,，\s]*$/iu.test(body);
+    });
     const answers = messages.filter(message => message.author !== "用户" && message.author !== "系统" && message.id > (question?.id ?? 0));
     const outcome = answers.findLast(message => message.summary) || answers.at(-1);
     // Text the owner was asked to check stays off the card, which cannot be taken back once posted; it can be typed in.
     const flagged = new Set((draft.spots || []).map(spot => spot.where));
-    const text = (message, value) => message && !flagged.has(`#${message.id}`) ? share_plain(value) : "";
-    const result = text(outcome, outcome?.summary || outcome?.text);
-    const sentences = result.match(/[^。！？.!?]+(?:[。！？]|[.!?](?=\s|$)|$)/gu) || [];
-    const complete = sentences[0]?.trim();
-    return { title: draft.title, members, materials: { through: messages.at(-1)?.id ?? null, count: messages.length },
-      question: text(question, question?.text).slice(0, 600),
-      outcome: (complete && result.startsWith(complete) ? complete : result).slice(0, 600),
+    const lead = (message, value, limit) => message && !flagged.has(`#${message.id}`) ? share_card_lead(value, limit) : "";
+    return { title: draft.title, members, card_version: 2, materials: { through: messages.at(-1)?.id ?? null, count: messages.length },
+      question: lead(question, question?.text, 160),
+      outcome: lead(outcome, outcome?.summary || outcome?.text, 200),
       stats: t('{members} 位 AI · {messages} 条消息 · {runs} 次执行', { members: members.length, messages: room.message_count ?? messages.length, runs: draft.runs ?? 0 }),
       url: link.url, expires: t('{time} 前有效', { time: new Date(link.expires_at).toLocaleString(undefined, { hour12: false }) }) };
   }
@@ -601,7 +618,7 @@ const RELAY_CIPHER_INFO = "codiscuss-relay-v1";
 // The rooms kept on the paired computer are read and written through its relay connection; only room routes go there.
 const RELAY_PROTOCOL = "codiscuss-relay";
 const RELAY_PING_MS = 25000;
-const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions)(\/|\?|$)/;
+const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions|sites)(\/|\?|$)/;
 // One part is base64-encoded, encrypted and base64-encoded again (about 16/9 of its size), and the sealed request
 // must stay inside the hosted site's 512 KiB request limit (backend/worker.mjs MAX_BODY_BYTES). Parts stay small enough
 // for a slow phone network to carry one well inside its wait: 256 KiB parts took 3.4 s each on a phone, and one that ran
@@ -662,7 +679,7 @@ const MANUAL_TRIGGER_INSTRUCTION = "首次复制后，可由人工或软件原�
 const MANAGEMENT_LOGIN_HINT = t('需要登录管理员账号或使用创建该房间的浏览器');
 const THEMES = ["channel", "channel-light"];
 // proxy and host_proxy label answers relayed for the retired web chatbot members.
-const SOURCE_LABELS = { demo: t('示例'), user: t('本人发言'), proxy: t('用户代发'), cli: t('CLI 发言'), api: t('API 发言'), url: t('历史 URL 发言'), host_proxy: t('主持人代发'), goal: "Goal" };
+const SOURCE_LABELS = { room_relay_sent: t('跨房发送'), demo: t('示例'), user: t('本人发言'), proxy: t('用户代发'), cli: t('CLI 发言'), api: t('API 发言'), url: t('历史 URL 发言'), host_proxy: t('主持人代发'), goal: "Goal" };
 const TURN_LABELS = { pending: t('待处理'), notified: t('已通知，待回答'), answered: t('已回答'), cancelled: t('已取消') };
 const PLATFORM_IDENTITIES = {
   "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: t('发起与协助') },
@@ -815,7 +832,7 @@ state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
 // needs: "" | "pairing" | "renew"; pairing_code arrives from a scanned link (#pair=CODE); prompt waits for the user's tap.
 state.device = { id: "", needs: "", pairing_code: "", pairing_fp: "", prompt: null };
-state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], builtin_presets: [], hidden_builtins: [], skilled_presets: [], workflows: [], description_templates: {}, workspace: {}, scheduler: {}, create_preferences: {}, error: "", recoveries: [] };
+state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], project_presets: [], create_project_roots: [], builtin_presets: [], hidden_builtins: [], skilled_presets: [], skilled_project_presets: [], workflows: [], project_workflows: [], project_roots: [], workflow_trust_prompt: null, description_templates: {}, workspace: {}, scheduler: {}, create_preferences: {}, storage: null, storage_loading: false, storage_error: "", storage_read_at: 0, storage_cleaning: [], error: "", recoveries: [] };
 state.create_host_workflows = false;
 state.create_host_permissions = null;
 // Mirrors DEFAULT_API_MAX_REQUESTS in runner/adapters/profiles.mjs; this classic script cannot import it.
@@ -2002,6 +2019,7 @@ function rendered_on_read(shown, message) {
   return Object.defineProperties(shown, {
     rendered_text: { enumerable: true, configurable: true, get: () => read_body().rendered_text },
     visual_blocks: { enumerable: true, configurable: true, get: () => read_body().visual_blocks },
+    inline_images: { enumerable: true, configurable: true, get: () => read_body().inline_images },
     rendered_summary: { enumerable: true, configurable: true, get: () => summary ??= render_room_markdown(message.summary || "", { visual_label: t('交互式可视化') }) },
   });
 }
@@ -2390,7 +2408,10 @@ async function select_room(room_id) {
   for (const stashed of state.stashed_drafts) release_files(stashed.drafts);
   state.stashed_drafts = [];
   state.launch.repair = null;
+  state.launch.workflow_trust_prompt = null;
   state.launch.room_models = listed && recent_room_models.get(room_id) || null;
+  state.launch.project_workflows = state.launch.room_models?.project_workflows || [];
+  state.launch.project_roots = state.launch.room_models?.project_roots || [];
   if (state.launch.room_models && Date.now() - (state.launch.room_models.read_at || 0) >= ROOM_MODELS_FRESH_MS) {
     state.launch.room_models.revision = "";
   }
@@ -2516,9 +2537,10 @@ function render_room_markdown(text, options = {}) {
 function render_message_body(message) {
   const visual_blocks = [];
   const visual_label = message.author !== "用户" && message.kind !== "receipt" || SHARE ? t('交互式可视化') : "";
+  const inlined = new Set();
   const rendered_text = link_attachment_placeholders(render_room_markdown(message.text,
-    { visual_label, visual_blocks: SHARE ? undefined : visual_blocks }), message.attachments);
-  return { rendered_text, visual_blocks };
+    { visual_label, visual_blocks: SHARE ? undefined : visual_blocks }), message.attachments, inlined);
+  return { rendered_text, visual_blocks, inline_images: [...inlined] };
 }
 
 /**
@@ -2701,10 +2723,94 @@ async function move_browser_description_templates() {
   } catch (error) { console.warn("Moving description templates failed:", error.message); }
 }
 
+/** Composite key for a workflow across global and project scopes. */
+function workflow_key(item) {
+  if (!item) return "";
+  return item.scope === "project" ? `project:${item.project_id || ""}:${item.id}` : `global:${item.id}`;
+}
+
+/** Composite key for an expert preset across global and project scopes. */
+function preset_key(item) {
+  if (!item) return "";
+  return item.scope === "project" ? `project:${item.project_id || ""}:${item.name}` : `global:${item.name}`;
+}
+
+/** Merge a presets/workflows response back into local launch state and active room models when applicable. */
+function apply_presets_result(result, context = {}) {
+  if (!result || typeof result !== "object") return;
+  const patch = {};
+  if (Array.isArray(result.presets)) patch.presets = result.presets.map(item => ({ scope: "global", ...item }));
+  if (result.description_templates) patch.description_templates = result.description_templates;
+  if (Array.isArray(result.builtin_presets)) patch.builtin_presets = result.builtin_presets;
+  if (Array.isArray(result.hidden_builtins)) patch.hidden_builtins = result.hidden_builtins;
+  if (Array.isArray(result.skilled_presets)) patch.skilled_presets = result.skilled_presets;
+  if (Array.isArray(result.skilled_project_presets)) patch.skilled_project_presets = result.skilled_project_presets;
+  if (Array.isArray(result.project_presets)) {
+    const project_list = result.project_presets.map(item => ({ scope: "project", ...item }));
+    if (context.room_id && state.launch.room_models?.room_id === context.room_id) {
+      state.launch.room_models.project_experts = project_list;
+      if (Array.isArray(result.project_roots)) state.launch.room_models.project_roots = result.project_roots;
+    } else if (!context.room_id) {
+      patch.project_presets = project_list;
+      if (Array.isArray(result.project_roots)) patch.create_project_roots = result.project_roots;
+    }
+  } else if (!context.room_id && Array.isArray(result.project_roots)) {
+    patch.create_project_roots = result.project_roots;
+  }
+  Object.assign(state.launch, patch);
+  publish_view();
+}
+
+/** Load global + project presets for the given directory/project/room context. */
+async function load_project_presets({ cwd = "", extra_directories = [], project_id = "", room_id = "" } = {}) {
+  if (!state.launch.available) return null;
+  const extras = (extra_directories || []).map(item => typeof item === "string" ? { path: item.trim() } : item).filter(item => item?.path);
+  const payload = { action: "list", ...(room_id ? { room_id } : {}), ...(project_id ? { project_id } : {}),
+    ...(cwd ? { cwd } : {}), ...(extras.length ? { extra_directories: extras } : {}) };
+  const result = await local_launch_request("presets", payload);
+  apply_presets_result(result, { room_id });
+  return result;
+}
+
+/** Clear new-room project presets when the form's project directory is cleared. */
+function clear_project_presets() {
+  if (!state.launch.project_presets.length && !state.launch.create_project_roots.length) return;
+  state.launch.project_presets = [];
+  state.launch.create_project_roots = [];
+  publish_view();
+}
+
+/** Project presets for the active context: the room's project experts, or the create form's project presets. */
+function project_presets(room_id = "") {
+  if (room_id) {
+    const models = state.launch.room_models?.room_id === room_id ? state.launch.room_models : null;
+    return models?.project_experts || [];
+  }
+  return state.launch.project_presets || [];
+}
+
+/** Whether a preset (global or project) has its own skills directory. */
+function preset_skilled(preset) {
+  if (!preset) return false;
+  if (Array.isArray(preset.skills) && preset.skills.length) return true;
+  if (preset.scope === "project") {
+    return (state.launch.skilled_project_presets || []).includes(preset_key(preset));
+  }
+  return (state.launch.skilled_presets || []).includes(preset.name);
+}
+
 /** Import an expert as a preset (`import_expert` in the local service) and keep the presets it leaves; the result says the rest. */
 async function import_expert(input) {
   const result = await local_launch_request("workflows", { action: "import-expert", ...input });
-  await load_launch_settings();
+  if (result.presets || result.project_presets) {
+    apply_presets_result(result, { room_id: input?.room_id || "" });
+  } else {
+    await load_launch_settings();
+  }
+  if (input?.scope === "project") {
+    if (input.room_id && state.room?.id === input.room_id) await reload_room_models().catch(() => {});
+    else if (input.cwd || input.project_id) await load_project_presets({ cwd: input.cwd, extra_directories: input.extra_directories, project_id: input.project_id }).catch(() => {});
+  }
   return result;
 }
 
@@ -2715,22 +2821,21 @@ async function import_expert(input) {
  */
 async function save_card_preset(input) {
   const result = await local_launch_request("workflows", { action: "save-preset", ...input });
-  Object.assign(state.launch, { presets: result.presets, builtin_presets: result.builtin_presets || [], hidden_builtins: result.hidden_builtins || [], skilled_presets: result.skilled_presets || [] });
-  publish_view();
+  apply_presets_result(result, { room_id: input?.room_id || "" });
+  if (input?.target_scope === "project" && state.room?.id) await reload_room_models().catch(() => {});
   return { preset: result.preset, knowledge: result.knowledge };
 }
 
 /** Save the user's presets, default descriptions and/or deleted built-ins in the local service and keep its answer. */
-async function save_presets(input) {
+async function save_presets(input, context = {}) {
   const result = await local_launch_request("presets", input);
-  Object.assign(state.launch, { presets: result.presets, description_templates: result.description_templates,
-    builtin_presets: result.builtin_presets || [], hidden_builtins: result.hidden_builtins || [], skilled_presets: result.skilled_presets || [] });
-  publish_view();
+  apply_presets_result(result, context);
+  return result;
 }
 
 // Expert presets: a named instance with its description, prompt and project access, added in one click.
 // The user's own preset replaces a built-in one of the same name.
-/** Every preset the add row offers: built-in ones first, then the user's. */
+/** Every global preset the add row offers: built-in ones first, then the user's. */
 function expert_presets() {
   const own = new Set(state.launch.presets.map(preset => preset.name));
   return [...state.launch.builtin_presets.filter(preset => !own.has(preset.name)), ...state.launch.presets];
@@ -2749,19 +2854,47 @@ function apply_expert_preset(name, preset) {
   const { session_id, system_prompt, ...base } = state.launch.profiles[platform_of(name)] || {};
   const profile = { ...structuredClone(base), project_access: full_only_hint(base.adapter) ? "full" : preset.project_access || "read" };
   for (const field of ["model", "effort", "system_prompt"]) if (Object.hasOwn(preset, field)) profile[field] = preset[field];
+  if (!preset._from_workflow && preset.scope === "project") {
+    profile.preset_scope = "project";
+    if (preset.project_id) profile.preset_project_id = preset.project_id;
+  } else {
+    if (preset._from_workflow) delete profile.preset_scope;
+    else profile.preset_scope = "global";
+    delete profile.preset_project_id;
+  }
   state.launch.profiles[name] = profile;
   description_drafts[name] = preset.description || "";
   // A second copy of a preset keeps the number its instance name got: 评审官 → 评审官2.
   if (preset.label) label_drafts[name] = preset.label + name.slice(preset.name.length);
   // A workflow's card is built for that workflow alone and never updates a saved preset.
-  if (expert_presets().includes(preset)) preset_origins[name] = preset.name;
-  else delete preset_origins[name];
+  const is_saved = !preset._from_workflow && (preset.scope === "project" || expert_presets().some(item => item.name === preset.name));
+  if (is_saved) {
+    preset_origins[name] = {
+      name: preset.name,
+      id: preset.id || "",
+      scope: preset.scope || "global",
+      project_id: preset.project_id || "",
+      project_name: preset.project_name || "",
+      readonly: Boolean(preset.readonly),
+      requested_access: preset.requested_access || "",
+      trusted: preset.trusted,
+      skills: Array.isArray(preset.skills) ? [...preset.skills] : undefined,
+    };
+  } else delete preset_origins[name];
   publish_view();
 }
 
-/** The saved preset a card was added from, or "" for a card of its own. */
+/** The saved preset name a card was added from, or "" for a card of its own. */
 function preset_origin(name) {
-  return preset_origins[name] || "";
+  const origin = preset_origins[name];
+  return typeof origin === "string" ? origin : origin?.name || "";
+}
+
+/** Full origin metadata (`{ name, id, scope, project_id, project_name, readonly, requested_access, trusted, skills }`) or null. */
+function preset_origin_info(name) {
+  const origin = preset_origins[name];
+  if (!origin) return null;
+  return typeof origin === "string" ? { name: origin, scope: "global", project_id: "", readonly: false } : origin;
 }
 
 /** Rename one card before the room or invitation is submitted; empty goes back to its default name. */
@@ -2783,7 +2916,7 @@ function member_label(name) {
 }
 
 /** The instance a preset of this platform is saved under for a free name: the name itself when it is already one, else platform-name. */
-function preset_identity(name, label) {
+function preset_identity(name, label, pool = null) {
   const platform = platform_of(name), text = label.trim();
   // A name typed with the platform's nickname (Gemini-1) maps to the platform's ID (Antigravity-1).
   const nickname = default_name(platform);
@@ -2792,7 +2925,7 @@ function preset_identity(name, label) {
   // An ID keeps only English letters, digits and underscores; a Chinese name becomes the label of a numbered ID.
   const suffix = text.replace(/[^0-9A-Za-z_]/g, "").slice(0, 16);
   if (suffix && suffix !== platform) return `${platform}-${suffix}`;
-  const taken = new Set(expert_presets().map(preset => preset.name));
+  const taken = new Set((pool || expert_presets()).map(preset => preset.name));
   let number = 1;
   while (taken.has(`${platform}-preset${number}`)) number++;
   return `${platform}-preset${number}`;
@@ -2806,32 +2939,87 @@ function add_preset_instance(container_id, preset, value) {
   return name;
 }
 
-/** Save one card as the user's preset, under a new display label or, without one, updating the preset of its own name. */
-async function save_expert_preset(name, label) {
+/** Save one card as a global or project preset, under a new display label or updating its own origin preset. */
+async function save_expert_preset(name, label, options = {}) {
   const profile = state.launch.profiles[name] || {};
-  const id = label === undefined ? preset_origins[name] || name : preset_identity(name, label);
-  const shown = label === undefined ? expert_presets().find(item => item.name === id)?.label || "" : label.trim();
+  const origin = preset_origin_info(name);
+  const scope = options.scope || (label === undefined ? origin?.scope : "") || "global";
+  const project_id = scope === "project" ? (options.project_id ?? (label === undefined ? origin?.project_id : "") ?? "") : "";
+  const room_id = options.room_id || "";
+  const cwd = scope === "project" ? (options.cwd || "") : "";
+  const pool = scope === "project"
+    ? (room_id ? project_presets(room_id) : state.launch.project_presets).filter(item => !project_id || item.project_id === project_id)
+    : expert_presets();
+  const id = label === undefined ? origin?.name || name : preset_identity(name, label, pool);
+  const shown = label === undefined ? (pool.find(item => item.name === id)?.label || label_drafts[name] || "") : label.trim();
   const preset = { name: id, ...shown && shown !== id ? { label: shown } : {}, description: description_draft(name).trim(), project_access: profile.project_access || "read" };
   // Model and effort are always kept, "" meaning the software's own default, so a card added from the preset never
   // takes whatever the platform's card was last set to.
   for (const field of ["model", "effort"]) preset[field] = profile[field] || "";
   if (Object.hasOwn(profile, "system_prompt") && profile.system_prompt !== "") preset.system_prompt = profile.system_prompt;
   try {
-    await save_presets({ presets: [...state.launch.presets.filter(item => item.name !== id), preset] });
-    show_toast(t('已存为预设「{value1}」', { value1: preset.label || id }));
+    const payload = { action: "save", scope, ...(project_id ? { project_id } : {}), ...(room_id ? { room_id } : {}),
+      ...(cwd ? { cwd } : {}), preset, overwrite: options.overwrite !== false };
+    const result = await save_presets(payload, { room_id });
+    const saved_list = scope === "project" ? (result?.project_presets || []) : (result?.presets || []);
+    const saved = saved_list.find(item => item.name === id && (scope !== "project" || !project_id || item.project_id === project_id));
+    preset_origins[name] = {
+      name: saved?.name || id,
+      id: saved?.id || origin?.id || "",
+      scope,
+      project_id: saved?.project_id || project_id,
+      project_name: saved?.project_name || origin?.project_name || "",
+      readonly: false,
+      requested_access: "",
+      trusted: true,
+      skills: saved?.skills || origin?.skills,
+    };
+    if (scope === "project") {
+      profile.preset_scope = "project";
+      if (preset_origins[name].project_id) profile.preset_project_id = preset_origins[name].project_id;
+    } else {
+      profile.preset_scope = "global";
+      delete profile.preset_project_id;
+    }
+    if (scope === "project" && room_id && state.room?.id === room_id) await reload_room_models().catch(() => {});
+    publish_view();
+    show_toast(scope === "project" ? t('已存为项目预设「{value1}」', { value1: preset.label || id }) : t('已存为预设「{value1}」', { value1: preset.label || id }));
     return true;
   } catch (error) { show_toast(t('预设未保存：{value1}', { value1: error.message }), true); return false; }
 }
 
-/** Remove the preset of this name from the add row: the user's own one, and a built-in one of the same name with it. */
-async function delete_expert_preset(name) {
-  const builtin = state.launch.builtin_presets.some(item => item.name === name);
-  const shown = expert_presets().find(item => item.name === name)?.label || name;
+/** Remove a global or project preset from the add row. Accepts a name string (global) or an options object. */
+async function delete_expert_preset(target, options = {}) {
+  const spec = typeof target === "string" ? { name: target, ...options } : { ...target, ...options };
+  const scope = spec.scope || "global";
+  const project_id = scope === "project" ? (spec.project_id || "") : "";
+  const room_id = spec.room_id || "";
+  const cwd = scope === "project" ? (spec.cwd || "") : "";
+  const list = scope === "project" ? (room_id ? project_presets(room_id) : state.launch.project_presets) : expert_presets();
+  const matched = list.find(item => item.name === spec.name && (scope !== "project" || !project_id || item.project_id === project_id));
+  const shown = spec.label || matched?.label || spec.name;
   try {
-    await save_presets({ presets: state.launch.presets.filter(item => item.name !== name),
-      ...builtin ? { hidden_builtins: [...state.launch.hidden_builtins, name] } : {} });
+    const payload = { action: "delete", scope, ...(project_id ? { project_id } : {}), ...(room_id ? { room_id } : {}),
+      ...(cwd ? { cwd } : {}), ...(spec.id || matched?.id ? { id: spec.id || matched?.id } : {}), name: spec.name };
+    await save_presets(payload, { room_id });
+    if (scope === "project" && room_id && state.room?.id === room_id) await reload_room_models().catch(() => {});
     show_toast(t('已删除预设「{value1}」', { value1: shown }));
   } catch (error) { show_toast(t('预设未删除：{value1}', { value1: error.message }), true); }
+}
+
+/** Record local trust for an elevated project expert preset and refresh its status. */
+async function trust_expert_preset({ id = "", name = "", card_name = "", project_id = "", room_id = "", cwd = "" } = {}) {
+  const payload = { action: "trust", ...(project_id ? { project_id } : {}), ...(room_id ? { room_id } : {}),
+    ...(cwd ? { cwd } : {}), ...(id ? { id } : {}), ...(name ? { name } : {}) };
+  const result = await local_launch_request("presets", payload);
+  if (card_name && preset_origins[card_name]) {
+    preset_origins[card_name] = { ...preset_origins[card_name], trusted: true, requested_access: "" };
+  }
+  apply_presets_result(result, { room_id });
+  if (room_id && state.room?.id === room_id) await reload_room_models().catch(() => {});
+  else if (cwd || project_id) await load_project_presets({ cwd, extra_directories: state.launch.workspace?.extra_directories || [], project_id }).catch(() => {});
+  publish_view();
+  return result;
 }
 
 /** The description a card currently shows: its own draft, else its platform's template. */
@@ -3218,7 +3406,9 @@ async function finish_message(result, job) {
     ...(job.payload.attachment_start ? { attachment_start: job.payload.attachment_start } : {}), source: "user", just_sent: true };
   // The card draws `rendered_text`, which only render_messages prepares; a receipt shown before the transcript read
   // needs it too, or the card shows its header with an empty body.
-  sent_message.rendered_text = link_attachment_placeholders(render_room_markdown(sent_message.text), attachments);
+  const inlined = new Set();
+  sent_message.rendered_text = link_attachment_placeholders(render_room_markdown(sent_message.text), attachments, inlined);
+  sent_message.inline_images = [...inlined];
   sent_message.rendered_summary = render_room_markdown(sent_message.summary || "");
   const members = predicted_recipients(job.payload, state.room, state.launch?.room_models);
   if (members.length) {
@@ -3944,8 +4134,20 @@ function attachment_download_attributes(file) {
 /**
  * Turn `[图片 #n]` / `[文件 #n]` in a rendered message into a link to its n-th attachment: a preview for what the page
  * can show, a download for the rest. Text outside the attachment count stays as written.
+ * When `inlined` is passed, each image's first reference also places that image in a two-column grid right after its
+ * paragraph or list item (so mid-sentence references never split a line and adjacent screenshots sit side by side);
+ * a paragraph holding only newly inlined images becomes that grid itself.
  */
-function link_attachment_placeholders(html, files = []) {
+const INLINE_FLUSH_AFTER = /^<\/(?:p|h[1-6])>$/i;
+const INLINE_FLUSH_BEFORE = /^(?:<\/(?:li|td|th|blockquote|div|dd|dt)>|<(?:ul|ol|p|blockquote|pre|table|hr|div|h[1-6])(?:\s|>))/i;
+const PLACEHOLDER_PATTERN = /\[(图片|文件) #(\d{1,4}|[0-9a-f]{32})\]/g;
+
+function inline_image_grid(items, show_badge) {
+  const cards = items.map(({ file, number }) => attachment_image_markup(file, { inline: true, badge: show_badge ? `#${number}` : "" })).join("");
+  return `<div class="attachment-inline-grid" data-count="${items.length}">${cards}</div>`;
+}
+
+function link_attachment_placeholders(html, files = [], inlined = null) {
   // A share page made without its attachments says so, rather than showing a tag that looks like it should open.
   const omitted = (kind, number) => `<span class="attachment-placeholder is-omitted" title="${escape_html(t("分享时未包含附件"))}">${escape_html(kind === "图片"
     ? t("[图片 #{number} · 未包含在分享中]", { number }) : t("[文件 #{number} · 未包含在分享中]", { number }))}</span>`;
@@ -3954,18 +4156,79 @@ function link_attachment_placeholders(html, files = []) {
   // in the message, which shows as every placeholder fitting a place while not every one fits a number.
   const numbers = [...html.matchAll(/\[(?:图片|文件) #(\d{1,4})\]/g)].map(([, number]) => Number(number));
   const by_number = numbers.every(number => files.some(file => file.number === number)) || !numbers.every(number => number <= files.length);
-  // A member may name a file by the attachment ID its upload returned; it shows as the file's number.
-  return html.replace(/\[(图片|文件) #(\d{1,4}|[0-9a-f]{32})\]/g, (match, kind, reference) => {
+  const show_badge = files.filter(file => file.content_type.startsWith("image/")).length > 1;
+  const resolve_placeholder = (match, kind, reference, pending = null) => {
     const by_id = reference.length === 32;
     const file = by_id ? files.find(item => item.id === reference) : by_number ? files.find(item => item.number === Number(reference)) : files[Number(reference) - 1];
     const number = by_id ? file?.number ?? (files.indexOf(file) + 1) : reference;
     if (!file) return SHARE && !by_id ? omitted(kind, number) : match;
+    if (pending && kind === "图片" && file.content_type.startsWith("image/") && !inlined.has(file.id)) {
+      inlined.add(file.id);
+      pending.push({ file, number });
+    }
     const previewable = file.content_type.startsWith("image/") || file.content_type === "application/pdf" || is_text_attachment(file);
     // The stored `[图片 #n]` / `[文件 #n]` is protocol text; only the shown label follows the page language.
     const label = escape_html(kind === "图片" ? t("[图片 #{number}]", { number }) : t("[文件 #{number}]", { number }));
     return previewable ? `<button type="button" class="attachment-placeholder" ${attachment_preview_attributes(file)} title="${escape_html(file.file_name)}">${label}</button>`
       : `<a class="attachment-placeholder" ${attachment_download_attributes(file)} download title="${escape_html(t("下载 {name}", { name: file.file_name }))}">${label}</a>`;
-  });
+  };
+  if (!inlined) return html.replace(PLACEHOLDER_PATTERN, (match, kind, reference) => resolve_placeholder(match, kind, reference));
+  const output = [];
+  let pending = [], code_depth = 0, paragraph_start = -1, paragraph_only_images = false;
+  for (const token of html.match(/<[^>]+>|[^<]+/g) || []) {
+    if (token[0] === "<") {
+      if (/^<(?:pre|code)(?:\s|>)/i.test(token)) code_depth += 1;
+      else if (/^<\/(?:pre|code)>$/i.test(token)) code_depth = Math.max(0, code_depth - 1);
+      if (code_depth === 0 && /^<p(?:\s|>)/i.test(token)) {
+        if (pending.length) { output.push(inline_image_grid(pending, show_badge)); pending = []; }
+        paragraph_start = output.length;
+        paragraph_only_images = true;
+        output.push(token);
+      } else if (code_depth === 0 && INLINE_FLUSH_AFTER.test(token)) {
+        if (pending.length && /^<\/p>$/i.test(token) && paragraph_start >= 0 && paragraph_only_images) {
+          output.length = paragraph_start;
+          output.push(inline_image_grid(pending, show_badge));
+        } else {
+          output.push(token);
+          if (pending.length) output.push(inline_image_grid(pending, show_badge));
+        }
+        pending = [];
+        paragraph_start = -1;
+        paragraph_only_images = false;
+      } else if (code_depth === 0 && INLINE_FLUSH_BEFORE.test(token)) {
+        if (pending.length) { output.push(inline_image_grid(pending, show_badge)); pending = []; }
+        paragraph_start = -1;
+        paragraph_only_images = false;
+        output.push(token);
+      } else {
+        if (paragraph_start >= 0 && !/^<br\s*\/?>$/i.test(token)) paragraph_only_images = false;
+        output.push(token);
+      }
+      continue;
+    }
+    if (code_depth > 0) { output.push(token); continue; }
+    let last_index = 0, built = "";
+    PLACEHOLDER_PATTERN.lastIndex = 0;
+    for (let match; (match = PLACEHOLDER_PATTERN.exec(token));) {
+      const gap = token.slice(last_index, match.index);
+      if (paragraph_only_images && gap.trim()) paragraph_only_images = false;
+      const before = pending.length;
+      const link = resolve_placeholder(match[0], match[1], match[2], pending);
+      last_index = match.index + match[0].length;
+      const punctuation = link !== match[0] && token.slice(last_index).match(/^[，。！？、；：,.!?;:]+/)?.[0];
+      built += gap + (punctuation ? `<span class="attachment-reference-end">${link}${punctuation}</span>` : link);
+      if (punctuation) {
+        last_index += punctuation.length;
+        paragraph_only_images = false;
+      }
+      if (paragraph_only_images && pending.length === before) paragraph_only_images = false;
+    }
+    const tail = token.slice(last_index);
+    if (paragraph_only_images && tail.trim()) paragraph_only_images = false;
+    output.push(built + tail);
+  }
+  if (pending.length) output.push(inline_image_grid(pending, show_badge));
+  return output.join("");
 }
 
 // The largest box a message image shows in (frontend/markdown.css `.attachment-image img`).
@@ -3980,10 +4243,21 @@ function attachment_image_style(file) {
   const width = Number(file.width), height = Number(file.height);
   if (!(width > 0 && height > 0)) return "";
   const shown = Math.max(1, Math.floor(Math.min(width, ATTACHMENT_IMAGE_MAX_WIDTH, ATTACHMENT_IMAGE_MAX_HEIGHT * width / height)));
-  return ` style="--image-width: ${shown}px; --image-ratio: ${width} / ${height}"`;
+  return ` style="--image-width: ${shown}px; --image-natural-width: ${width}px; --image-ratio: ${width} / ${height}; --image-ratio-num: ${(width / height).toFixed(4)}"`;
 }
 
 /** Render immutable file cards shared by messages, original-message dialogs, and themes. */
+/** A message image as its preview button, shown in the list or where the answer refers to it. */
+function attachment_image_markup(file, { inline = false, badge = "" } = {}) {
+  const url = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
+  const local_preview = relay_files.get(url);
+  const source = typeof local_preview === "string" ? `src="${escape_html(local_preview)}"` : files_by_blob() ? `data-relay-src="${url}"` : `src="${url}"`;
+  const inline_attr = inline ? ` data-inline-image="${escape_html(file.id)}"` : "";
+  const badge_attr = badge ? ` data-image-badge="${escape_html(badge)}"` : "";
+  return `<button type="button" class="attachment-image" ${attachment_preview_attributes(file)}${inline_attr}${badge_attr}${attachment_image_style(file)}>
+      <img ${source} alt="${escape_html(file.file_name)}" loading="lazy"></button>`;
+}
+
 function attachment_markup(files = []) {
   if (!files.length) return "";
   return `<div class="message-attachments">${files.map(file => {
@@ -3994,8 +4268,7 @@ function attachment_markup(files = []) {
     const local_preview = file.content_type.startsWith("image/") && relay_files.get(url);
     const source = typeof local_preview === "string" ? `src="${escape_html(local_preview)}"` : files_by_blob() ? `data-relay-src="${url}"` : `src="${url}"`;
     const download = attachment_download_attributes(file);
-    if (file.content_type.startsWith("image/")) return `<button type="button" class="attachment-image" ${preview_attributes}${attachment_image_style(file)}>
-      <img ${source} alt="${name}" loading="lazy"></button>`;
+    if (file.content_type.startsWith("image/")) return attachment_image_markup(file);
     // Audio and video play in place with the browser's own controls; a format it cannot decode still has its download.
     if (/^(audio|video)\//.test(file.content_type)) {
       const tag = file.content_type.startsWith("video/") ? "video" : "audio";
@@ -4556,7 +4829,7 @@ async function local_launch_request(action, payload) {
   catch { throw new Error(t('本机服务返回了无法识别的内容（HTTP {status}）：{excerpt}', { status: response.status, excerpt: raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) })); }
   // `code` names a refusal the page acts on (e.g. a workflow changed since it was loaded); the text alone is for people.
   // `files` and `spots` list what a website deploy refused (runner/site_deploy.mjs).
-  if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('本机启动请求失败')), { status: response.status, launch: result.launch, code: result.code, files: result.files, spots: result.spots });
+  if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('本机启动请求失败')), { status: response.status, launch: result.launch, code: result.code, files: result.files, spots: result.spots, untrusted_reasons: result.untrusted_reasons });
   return result;
 }
 
@@ -4950,7 +5223,7 @@ async function relay_command_once(action, payload) {
   try { answer = await relay_exchange(action, payload, limit); }
   catch (error) { if (computer_rooms_only() || (error.status !== 404 && !error.offline)) throw error; }
   const { status, body } = answer ?? await queued_relay_command(action, payload, limit);
-  if (status >= 400) throw Object.assign(new Error(server_text(body.error_text, body.error) || t('本机操作失败')), { status, launch: body.launch, need: body.need, room_id: body.room_id, code: body.code });
+  if (status >= 400) throw Object.assign(new Error(server_text(body.error_text, body.error) || t('本机操作失败')), { status, launch: body.launch, need: body.need, room_id: body.room_id, code: body.code, untrusted_reasons: body.untrusted_reasons });
   return body;
 }
 
@@ -5473,7 +5746,7 @@ async function load_launch_settings({ relay_known = () => {} } = {}) {
     state.launch.saved_profiles = JSON.parse(JSON.stringify(settings.participants || {}));
     state.launch.create_preferences = { ...settings.create_preferences, ...create_preferences_pending };
     Object.assign(state.launch, { available: true, profiles: settings.participants, projects: settings.projects || [], projects_restricted: settings.projects_restricted === true, user_home: settings.user_home || "", api_providers: settings.api_providers || {}, api_keys: settings.api_keys || {}, managed_api_keys: settings.managed_api_keys || [],
-      presets: settings.presets || [], builtin_presets: settings.builtin_presets || [], hidden_builtins: settings.hidden_builtins || [], skilled_presets: settings.skilled_presets || [], workflows: settings.workflows || [], card_platforms: settings.platforms || [], description_templates: settings.description_templates || {},
+      presets: (settings.presets || []).map(item => ({ scope: "global", ...item })), builtin_presets: settings.builtin_presets || [], hidden_builtins: settings.hidden_builtins || [], skilled_presets: settings.skilled_presets || [], skilled_project_presets: settings.skilled_project_presets || [], workflows: (settings.workflows || []).map(item => ({ scope: "global", ...item })), card_platforms: settings.platforms || [], description_templates: settings.description_templates || {},
       scheduler_providers: settings.scheduler_providers || {}, invite_site: settings.invite_site || null, error: "",
       notice: relay_machine ? t('经电脑「{value1}」执行本机操作', { value1: relay_machine.name }) : local_connection ? t('已连接本机服务，讨论保存在当前网站') : "" });
     Object.values(state.launch.profiles).forEach(fill_api_key);
@@ -5481,6 +5754,7 @@ async function load_launch_settings({ relay_known = () => {} } = {}) {
     apply_create_preferences();
     flush_create_preferences();
     load_room_models();
+    load_storage();
   } catch (error) {
     // An unpaired or expired device keeps its way to the computer: pairing and renewal go through it.
     // A website without rooms of its own reaches the computer only through the relay, so one failed request keeps it.
@@ -5552,9 +5826,16 @@ let members_seen = null;
 /** Read saved choices for the active room without using drafts or delaying discussion refreshes. */
 /** The parts of the computer's room-models answer the page keeps. */
 function room_models_fields(result) {
+  const extra_directory_entries = result.extra_directories || [];
   return { participants: result.participants, registered: result.registered,
-    scheduler: result.scheduler || null, project_directory: result.project_directory || "", extra_directories: result.extra_directories || [],
-    workflow: result.workflow || null, host_workflows: Boolean(result.host_workflows), host_permissions: result.host_permissions || null, api_max_requests: result.api_max_requests,
+    scheduler: result.scheduler || null, project_directory: result.project_directory || "",
+    extra_directory_entries, extra_directories: extra_directory_entries.map(extra_directory_path),
+    workflow: result.workflow || null,
+    project_workflows: (result.project_workflows || []).map(item => ({ scope: "project", ...item })),
+    project_experts: (result.project_experts || []).map(item => ({ scope: "project", ...item })),
+    project_roots: result.project_roots || [],
+    host_workflows: Boolean(result.host_workflows), host_permissions: result.host_permissions || null, api_max_requests: result.api_max_requests,
+    draft_key: result.draft_key || "",
     image_generation: Boolean(result.image_generation), image_configured: Boolean(result.image_configured) };
 }
 
@@ -5571,11 +5852,13 @@ async function load_room_models(force = false) {
     && (previous.loading || previous.participants)) return;
   // The last answer stays on screen while the new one is read.
   const same_room = previous?.room_id === room.id;
-  const current = { participants: null, project_directory: "", extra_directories: [], ...(same_room ? previous : {}), room_id: room.id, revision, loading: true, error: "" };
+  const current = { participants: null, project_directory: "", extra_directories: [], project_workflows: [], project_experts: [], project_roots: [], ...(same_room ? previous : {}), room_id: room.id, revision, loading: true, error: "" };
   const preloaded = preloaded_room_models.get(room.id);
   preloaded_room_models.delete(room.id);
   if (preloaded) Object.assign(current, room_models_fields(preloaded), { loading: false });
   state.launch.room_models = current;
+  state.launch.project_workflows = current.project_workflows || [];
+  state.launch.project_roots = current.project_roots || [];
   publish_view();
   const live = () => state.launch.room_models === current && state.room?.id === room.id;
   // agy is run to name its default model, which takes seconds; everything else is shown first and agy follows.
@@ -5590,6 +5873,8 @@ async function load_room_models(force = false) {
         }
       }
       Object.assign(current, room_models_fields(result), { read_at: Date.now() });
+      state.launch.project_workflows = current.project_workflows || [];
+      state.launch.project_roots = current.project_roots || [];
       // Compared with the last answer for this room, which a reload clears from the state but not from here.
       if (members_seen?.room_id === room.id) warn_outside_members(members_seen.participants, result.participants);
       members_seen = { room_id: room.id, participants: result.participants };
@@ -5614,7 +5899,114 @@ async function load_room_models(force = false) {
 
 /** Read this computer's saved choices again, as after a failed read. */
 function reload_room_models() {
+  load_storage();
   return load_room_models(true);
+}
+
+const STORAGE_FRESH_MS = 30000;
+const STORAGE_GIB = 1024 ** 3;
+const STORAGE_MIB = 1024 ** 2;
+const STORAGE_KIB = 1024;
+let storage_request_seq = 0;
+let storage_warn_announced = false;
+const storage_cleaning_keys = new Set();
+
+function format_storage_size(bytes) {
+  const safe = Math.max(0, Number(bytes) || 0);
+  for (const [unit, label] of [[STORAGE_GIB, "GiB"], [STORAGE_MIB, "MiB"], [STORAGE_KIB, "KiB"]]) {
+    if (safe >= unit) {
+      const value = safe / unit;
+      return `${Number.isInteger(value) ? value : value.toFixed(2).replace(/\.?0+$/, "")} ${label}`;
+    }
+  }
+  return `${Math.round(safe)} B`;
+}
+
+function apply_storage_snapshot(result) {
+  state.launch.storage = result;
+  state.launch.storage_read_at = Date.now();
+  state.launch.storage_error = "";
+  const limits = result?.limits || result?.thresholds || {};
+  const warn_bytes = Number(limits.warn_bytes ?? limits.home_warn_bytes ?? limits.home_warn ?? result?.home_warn) || 8 * STORAGE_GIB;
+  const limit_bytes = Number(limits.home_bytes ?? limits.home_limit_bytes ?? limits.home_limit ?? result?.home_limit) || 10 * STORAGE_GIB;
+  const total_bytes = Number(result?.total_bytes || 0);
+  const warning = Boolean(result?.warning || total_bytes >= warn_bytes);
+  if (!warning) { storage_warn_announced = false; return; }
+  if (storage_warn_announced) return;
+  storage_warn_announced = true;
+  notify("warning", result?.warning_reason || t("本机 .codiscuss 数据已占 {used}（不含语音模型），接近 {limit} 上限，请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或清理临时文件。",
+    { used: format_storage_size(total_bytes), limit: format_storage_size(limit_bytes) }));
+}
+
+/** Read local or paired-computer storage usage without blocking room actions; late answers are ignored. */
+async function load_storage(force = false) {
+  if (SHARE || !state.launch.available) return null;
+  if (!force && state.launch.storage && Date.now() - (state.launch.storage_read_at || 0) < STORAGE_FRESH_MS) return state.launch.storage;
+  const seq = ++storage_request_seq;
+  state.launch.storage_loading = true;
+  publish_view();
+  try {
+    const result = await local_launch_request("storage");
+    if (seq !== storage_request_seq) return null;
+    apply_storage_snapshot(result);
+    return result;
+  } catch (error) {
+    if (seq === storage_request_seq) state.launch.storage_error = error.message || "";
+    return null;
+  } finally {
+    if (seq === storage_request_seq) {
+      state.launch.storage_loading = false;
+      publish_view();
+    }
+  }
+}
+
+/** Clean finished execution temp files on the local or paired computer, refreshing the snapshot afterwards. */
+async function clean_storage(target = {}) {
+  if (SHARE || !state.launch.available) return false;
+  const payload = target && typeof target === "object"
+    ? Object.fromEntries(Object.entries(target).filter(([, value]) => Boolean(value)))
+    : {};
+  const key = payload.room_id || payload.room_key || "__all__";
+  if (storage_cleaning_keys.has(key)) return false;
+  storage_cleaning_keys.add(key);
+  state.launch.storage_cleaning = [...storage_cleaning_keys];
+  publish_view();
+  try {
+    const result = await local_launch_request("storage-clean", payload);
+    const freed = Number(result?.freed_bytes ?? result?.removed_bytes ?? 0) || 0;
+    const removed = Number(result?.removed_dirs ?? result?.removed ?? result?.cleaned ?? 0) || 0;
+    const skipped = Number(result?.skipped ?? result?.failed ?? 0) || 0;
+    if (result?.storage) {
+      storage_request_seq += 1;
+      apply_storage_snapshot(result.storage);
+    } else {
+      await load_storage(true);
+    }
+    if (removed > 0 || freed > 0) {
+      if (freed > 0) {
+        notify(skipped ? "warning" : "info", skipped
+          ? t("已清理 {count} 个临时目录，释放 {size}；另有 {skipped} 项暂无法清理", { count: removed, size: format_storage_size(freed), skipped })
+          : t("已清理 {count} 个临时目录，释放 {size}", { count: removed, size: format_storage_size(freed) }));
+      } else {
+        notify(skipped ? "warning" : "info", skipped
+          ? t("已清理 {count} 个临时目录；另有 {skipped} 项暂无法清理", { count: removed, skipped })
+          : t("已清理 {count} 个临时目录", { count: removed }));
+      }
+    } else if (skipped > 0) {
+      notify("warning", t("没有可立即清理的已结束临时目录；有 {skipped} 项暂无法清理", { skipped }));
+    } else {
+      notify("info", t("没有可清理的已结束执行临时文件"));
+    }
+    return true;
+  } catch (error) {
+    notify("error", error.message);
+    return false;
+  } finally {
+    storage_cleaning_keys.delete(key);
+    state.launch.storage_cleaning = [...storage_cleaning_keys];
+    publish_view();
+  }
 }
 
 /** Read a directory or file from the room's saved project through the authenticated local connection. */
@@ -6110,7 +6502,7 @@ function restore_launch_profile(name, profile) {
 function launch_options() {
   const { local_project, extra_directories, ...workspace } = state.launch.workspace;
   // Extra project directories go with a main one only, and rows left blank are dropped.
-  const extras = workspace.cwd ? (extra_directories || []).map(path => path.trim()).filter(Boolean) : [];
+  const extras = workspace.cwd ? normalized_extra_directories(extra_directories) : [];
   // The paired computer resolves a project id to its own folder; a browser with the local service sends the folder itself.
   return JSON.parse(JSON.stringify({ participants: state.launch.profiles, ...workspace, ...(extras.length ? { extra_directories: extras } : {}),
     ...(!state.launch.available && local_project ? { local_project } : {}), entry: "web" }));
@@ -6171,15 +6563,29 @@ async function set_room_project_directory(cwd) {
   try { await local_launch_request("room-settings", { room_id, token, cwd }); }
   catch (error) { notify("error", error.message); throw error; }
   await reload_room_models();
+  reload_workflows().catch(() => {});
+}
+
+function extra_directory_path(item) {
+  return typeof item === "string" ? item : item.path;
+}
+
+function normalized_extra_directories(directories = []) {
+  return directories.flatMap((item) => {
+    const path = extra_directory_path(item).trim();
+    if (!path) return [];
+    return [typeof item === "string" ? path : { ...item, path }];
+  });
 }
 
 /** Replace this room's extra project directories (the main one never changes); applies from each member's next execution. */
 async function set_room_extra_directories(directories) {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
-  try { await local_launch_request("room-settings", { room_id, token, extra_directories: directories }); }
+  try { await local_launch_request("room-settings", { room_id, token, extra_directories: normalized_extra_directories(directories) }); }
   catch (error) { notify("error", error.message); throw error; }
   await reload_room_models();
+  reload_workflows().catch(() => {});
 }
 
 /** Change how many model requests one execution of this room's API members may make; applies from the next one. */
@@ -6245,10 +6651,21 @@ async function set_room_host_workflows({ room_id, permissions }) {
 
 // Workflows: a host's SKILL.md plus agent cards, kept on this computer and enabled per room.
 
-/** Read the workflow library again after it changed. */
-async function reload_workflows() {
-  const result = await local_launch_request("workflows", { action: "list" });
-  state.launch.workflows = result.workflows || [];
+/** Read the global and current room's project workflow lists again after they changed. */
+async function reload_workflows(options = {}) {
+  const room_id = options.room_id !== undefined ? options.room_id : (state.room?.id || "");
+  const payload = { action: "list", ...(room_id ? { room_id } : {}), ...(options.project_id ? { project_id: options.project_id } : {}),
+    ...(options.cwd ? { cwd: options.cwd } : {}), ...(options.extra_directories?.length ? { extra_directories: options.extra_directories } : {}) };
+  const result = await local_launch_request("workflows", payload);
+  state.launch.workflows = (result.workflows || []).map(item => ({ scope: "global", ...item }));
+  if (!room_id || state.room?.id === room_id) {
+    state.launch.project_workflows = (result.project_workflows || []).map(item => ({ scope: "project", ...item }));
+    state.launch.project_roots = result.project_roots || [];
+    if (room_id && state.launch.room_models?.room_id === room_id) {
+      state.launch.room_models.project_workflows = state.launch.project_workflows;
+      state.launch.room_models.project_roots = state.launch.project_roots;
+    }
+  }
   // The platforms cards may name on that computer; a card naming another cannot join until its platform changes.
   state.launch.card_platforms = result.platforms || [];
   publish_view();
@@ -6257,16 +6674,61 @@ async function reload_workflows() {
 
 /** A workflow card as an expert preset: the card ID is only the workflow's own handle. */
 function workflow_preset({ card, requested_access, needs_platform, ...preset }) {
-  return preset;
+  return { ...preset, _from_workflow: true };
 }
 
 /** Bind a workflow to this room after its cards were invited (or brought back); the host reads it from the next task. */
-async function enable_room_workflow({ id, members }) {
+async function enable_room_workflow({ id, scope = "", project_id = "", members, trust = false, label = "", project_name = "" }) {
   const room_id = state.room.id;
   const token = localStorage.getItem(`discuss-access:${room_id}`) || "";
-  await local_launch_request("room-workflow", { room_id, token, action: "enable", workflow: { id, members } });
+  const wf = { id, ...(scope ? { scope } : {}), ...(project_id ? { project_id } : {}), members };
+  try {
+    await local_launch_request("room-workflow", { room_id, token, action: "enable", workflow: wf, ...(trust ? { trust: true } : {}) });
+  } catch (error) {
+    if (error.code === "workflow_untrusted") {
+      const matched = (state.launch.project_workflows || []).find(item => item.id === id && (!project_id || item.project_id === project_id));
+      state.launch.workflow_trust_prompt = {
+        room_id, id, scope: scope || "project", project_id: project_id || matched?.project_id || "",
+        label: label || matched?.label || id, project_name: project_name || matched?.project_name || "",
+        members, untrusted_reasons: error.untrusted_reasons || matched?.untrusted_reasons || {}, error: error.message,
+      };
+      publish_view();
+      error.notified = true;
+    }
+    throw error;
+  }
+  state.launch.workflow_trust_prompt = null;
   notify("info", t('工作流已启用，主持人下一次任务起按它组织工作'));
   await reload_room_models();
+  reload_workflows().catch(() => {});
+}
+
+/** Trust a project workflow on this computer and refresh the workflow lists. */
+async function trust_project_workflow({ id, project_id = "", room_id = "", cwd = "" }) {
+  const target_room = room_id || state.room?.id || "";
+  await local_launch_request("workflows", { action: "trust", id, ...(project_id ? { project_id } : {}), ...(target_room ? { room_id: target_room } : {}), ...(cwd ? { cwd } : {}) });
+  await reload_workflows();
+  if (target_room && state.room?.id === target_room) await reload_room_models();
+}
+
+/** Confirm the pending untrusted workflow prompt by enabling it with `trust: true`. */
+async function confirm_workflow_trust() {
+  const prompt = state.launch.workflow_trust_prompt;
+  if (!prompt) return false;
+  try {
+    await enable_room_workflow({ id: prompt.id, scope: prompt.scope, project_id: prompt.project_id, members: prompt.members, trust: true, label: prompt.label, project_name: prompt.project_name });
+    return true;
+  } catch (error) {
+    if (!error.notified) notify("error", error.message);
+    return false;
+  }
+}
+
+/** Dismiss the pending untrusted workflow confirmation prompt. */
+function dismiss_workflow_trust() {
+  if (!state.launch.workflow_trust_prompt) return;
+  state.launch.workflow_trust_prompt = null;
+  publish_view();
 }
 
 /**
@@ -7832,7 +8294,7 @@ function view_snapshot() {
         kinds: share_draft.files ? share_file_kinds(share_draft) : [], carried: share_carried_files(share_draft, false).reduce((total, file) => total + file.size, 0),
         carried_count: share_carried_files(share_draft, false).length,
         site_left_out: (share_draft.files || []).filter(file => !file.site_type).map(file => file.file_name) },
-      days: share_draft.days || SHARE_DEFAULT_DAYS, linked: Boolean(share_draft.linked || share_link(share_draft.room_id)), link: share_draft.link || null, cover_images: share_draft.cover_images || [], upload: share_draft.upload ? { ...share_draft.upload } : null } : null,
+      days: share_draft.days || SHARE_DEFAULT_DAYS, linked: Boolean(share_draft.linked || share_link(share_draft.room_id)), link: share_draft.link || null, cover_images: share_draft.cover_images || [], sites: share_draft.sites || [], card_defaults: share_draft.card_defaults || null, upload: share_draft.upload ? { ...share_draft.upload } : null } : null,
     share_links: SHARE ? {} : share_links(), share_days: SHARE_DAYS,
     tab: state.tab, snapshot_id: state.snapshot_id, context_dirty: state.context_dirty,
     theme: document.documentElement.dataset.theme, fields, experts, launch: shown_launch(), named_followup: state.named_followup, create_discussion: state.create_discussion, create_goal: state.create_goal, create_chain_rounds: state.create_chain_rounds, create_host_workflows: state.create_host_workflows, create_host_permissions: state.create_host_permissions, create_api_max_requests: state.create_api_max_requests, create_auto_destroy: state.create_auto_destroy || 0, create_relay_rounds: state.create_relay_rounds ?? 0, create_image_generation: state.create_image_generation };
@@ -8349,14 +8811,15 @@ async function open_share_card(room_id, fallback) {
   share_draft = loading;
   publish_view();
   try {
-    await Promise.allSettled(["question", "outcome", "cover"].map(field => share_card_writes.get(room_id + "/" + field)));
+    await Promise.allSettled(["question", "outcome", "cover", "copy"].map(field => share_card_writes.get(room_id + "/" + field)));
     const saved = await request_json(`/api/rooms/${encodeURIComponent(room_id)}/share-card`);
     if (share_draft !== loading) return;
     const job = shown_share_jobs().find(item => item.result?.url === saved.url);
     const previous = fallback?.url === saved.url ? fallback : job?.result;
-    const card = { title, members: [], stats: "", question: "", outcome: "", ...previous?.card, ...saved.card };
+    const card = { title, members: [], stats: "", question: "", outcome: "", copy: "", ...previous?.card, ...saved.card };
     const link = { ...previous, url: saved.url, expires_at: saved.expires_at, share_id: saved.share_id, card };
-    share_draft = { room_id, title: card.title, phase: "published", link, cover_images: saved.images };
+    share_draft = { room_id, title: card.title, phase: "published", link, cover_images: saved.images,
+      sites: saved.sites || [], card_defaults: saved.defaults || null };
   } catch (error) {
     if (share_draft === loading) { share_draft = null; notify("error", error.message); }
   } finally { publish_view(); }
@@ -8370,15 +8833,16 @@ async function edit_share_card({ field, value, room_id, share_id }) {
   const key = room_id + "/" + field;
   const prior = share_card_writes.get(key);
   draft.saved_card ||= { ...card };
-  draft.link = { ...draft.link, card: { ...card, [field]: value } };
+  const shown = value === null ? (field === "copy" ? "" : (draft.card_defaults?.[field] ?? "")) : value;
+  draft.link = { ...draft.link, card: { ...card, [field]: shown } };
   const versions = draft.card_versions ||= {};
   const version = versions[field] = (versions[field] || 0) + 1;
   publish_view();
-  const delay = field === "cover" ? undefined : share_card_text_delay(draft, field);
+  const delay = (field === "cover" || value === null) ? undefined : share_card_text_delay(draft, field);
   const write = Promise.allSettled([prior, delay]).then(async () => {
     if (versions[field] !== version) return;
     await request_json(`/api/rooms/${encodeURIComponent(room_id)}/share-card`, { share_id, edits: { [field]: value } });
-    draft.saved_card[field] = value;
+    draft.saved_card[field] = shown;
   });
   share_card_writes.set(key, write);
   try { await write; }
@@ -8402,7 +8866,7 @@ async function browser_share_data(room_id, models) {
   const exported_at = new Date().toISOString();
   const [recorded, configuration] = await Promise.all([record_share_reads(room_id), models || ((state.launch.available || state.remote_rooms)
     ? local_launch_request("room-models", { room_id, quick: true, token: localStorage.getItem(`discuss-access:${room_id}`) }).catch(() => null) : null)]);
-  const folders = [configuration?.project_directory, ...(configuration?.extra_directories || [])];
+  const folders = [configuration?.project_directory, ...(configuration?.extra_directories || []).map(extra_directory_path)];
   const responses = share_payload(recorded.responses, room_id, folders);
   // The same page with its messages' attachments listed, used when the owner chooses to include them.
   const responses_with_files = share_payload(recorded.responses, room_id, folders, { attachments: true });
@@ -8779,6 +9243,8 @@ async function backup_rooms({ ids, name }) {
     notify("info", t('已生成 {value1} 个频道的备份，请查看浏览器下载。', { value1: snapshots.length }));
   } catch (error) {
     notify("error", t('导出失败，未生成备份：{value1}', { value1: error.message }));
+    error.notified = true;
+    throw error;
   } finally {
     state.backup_pending = false;
     publish_view();
@@ -8915,19 +9381,19 @@ function change_view_theme(theme) {
 }
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input, upload_progress,
-  write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, clear_card_drafts, preset_origin, describe_member, set_chain_rounds, continue_chain, expert_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
+  write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, clear_card_drafts, preset_origin, preset_origin_info, preset_skilled, describe_member, set_chain_rounds, continue_chain, expert_presets, project_presets, load_project_presets, clear_project_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, trust_expert_preset, workflow_key, preset_key, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, remove_launch_projects, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, write_create_relay_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
   attachment_markup, attachment_download_link, attachment_size, attachment_file_icon, add_attachments, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url, read_zip_directory,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
-  reload_workflows, save_card_preset, import_expert, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_auto_destroy, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,
+  reload_workflows, trust_project_workflow, confirm_workflow_trust, dismiss_workflow_trust, save_card_preset, import_expert, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_auto_destroy, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },
   device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, platform_identity: name => PLATFORM_IDENTITIES[name], display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

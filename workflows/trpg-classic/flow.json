@@ -9,57 +9,116 @@
     {
       "id": "prepare",
       "type": "host",
-      "label": "开团准备",
+      "label": "问席位与团名",
       "x": 216,
+      "y": -48
+    },
+    {
+      "id": "user_setup",
+      "type": "user",
+      "label": "选席位·团名·批轮数",
+      "x": 576,
       "y": -48
     },
     {
       "id": "dm",
       "type": "card",
       "card": "dm",
-      "x": 576,
+      "x": 1003,
       "y": -48
     },
     {
       "id": "fighter",
       "type": "card",
       "card": "fighter",
-      "x": 936,
+      "x": 1386,
       "y": -48
     },
     {
       "id": "rogue",
       "type": "card",
       "card": "rogue",
-      "x": 1296,
+      "x": 1758,
       "y": -48
     },
     {
       "id": "wizard",
       "type": "card",
       "card": "wizard",
-      "x": 1656,
+      "x": 2130,
       "y": -48
+    },
+    {
+      "id": "turn_route",
+      "type": "branch",
+      "label": "玩家声明结束后",
+      "branches": [
+        {
+          "id": "user_seat",
+          "label": "用户坐第四席"
+        },
+        {
+          "id": "ai_only",
+          "label": "AI三人自跑"
+        }
+      ],
+      "x": 2490,
+      "y": -67
+    },
+    {
+      "id": "user_cleric",
+      "type": "user",
+      "label": "扮演牧师声明行动",
+      "x": 2895,
+      "y": -140
     },
     {
       "id": "check",
       "type": "host",
-      "label": "每轮检查",
-      "x": 2016,
+      "label": "每轮检查与答疑",
+      "x": 3300,
       "y": -48
+    },
+    {
+      "id": "check_gate",
+      "type": "branch",
+      "label": "检查后决定",
+      "branches": [
+        {
+          "id": "next_round",
+          "label": "继续下一轮"
+        },
+        {
+          "id": "table_talk",
+          "label": "战斗外桌边商量"
+        },
+        {
+          "id": "end_game",
+          "label": "结束·叫停·轮尽"
+        }
+      ],
+      "x": 3660,
+      "y": -82
     },
     {
       "id": "dm_wrap",
       "type": "card",
       "card": "dm",
-      "x": 2376,
+      "x": 4043,
       "y": -48
     },
     {
       "id": "wrap",
       "type": "host",
-      "label": "收团答疑",
-      "x": 2736,
+      "label": "收团复盘",
+      "x": 4437,
+      "y": -48
+    },
+    {
+      "id": "user_wrap",
+      "type": "user",
+      "label": "交流体验与续跑",
+      "x": 4797,
       "y": -48
     }
   ],
@@ -70,8 +129,12 @@
     },
     {
       "source": "prepare",
+      "target": "user_setup"
+    },
+    {
+      "source": "user_setup",
       "target": "dm",
-      "label": "开场"
+      "label": "建档开场·依次接力"
     },
     {
       "source": "dm",
@@ -90,32 +153,99 @@
     },
     {
       "source": "wizard",
-      "target": "check"
+      "target": "turn_route"
     },
     {
-      "source": "check",
+      "source": "turn_route",
+      "branch": "user_seat",
+      "target": "user_cleric",
+      "label": "停下等用户发言"
+    },
+    {
+      "source": "user_cleric",
       "target": "dm",
-      "label": "下一轮·带上用户行动"
+      "label": "直接下轮·不经主持人"
+    },
+    {
+      "source": "user_cleric",
+      "target": "check",
+      "label": "场外提问或叫停"
+    },
+    {
+      "source": "turn_route",
+      "branch": "ai_only",
+      "target": "check",
+      "label": "交回主持人"
     },
     {
       "source": "check",
+      "target": "check_gate"
+    },
+    {
+      "source": "check_gate",
+      "branch": "next_round",
+      "target": "dm",
+      "label": "下一轮·附修正提示"
+    },
+    {
+      "source": "check_gate",
+      "branch": "table_talk",
       "target": "fighter",
-      "label": "桌边商量·不带DM"
+      "label": "仅三玩家·不带DM"
     },
     {
-      "source": "check",
+      "source": "check_gate",
+      "branch": "end_game",
       "target": "dm_wrap",
-      "label": "结束或叫停"
+      "label": "写收团总结"
     },
     {
       "source": "dm_wrap",
       "target": "wrap",
-      "label": "收团总结"
+      "label": "写入日志末尾"
     },
     {
-      "source": "wizard",
-      "target": "dm",
-      "label": "用户坐席·等你发言"
+      "source": "wrap",
+      "target": "user_wrap"
+    }
+  ],
+  "stages": [
+    {
+      "id": "prepare",
+      "label": "开团准备",
+      "nodes": [
+        "prepare",
+        "user_setup"
+      ]
+    },
+    {
+      "id": "round",
+      "label": "跑一轮",
+      "nodes": [
+        "dm",
+        "fighter",
+        "rogue",
+        "wizard",
+        "turn_route",
+        "user_cleric"
+      ]
+    },
+    {
+      "id": "check",
+      "label": "每轮检查",
+      "nodes": [
+        "check",
+        "check_gate"
+      ]
+    },
+    {
+      "id": "wrap",
+      "label": "收团",
+      "nodes": [
+        "dm_wrap",
+        "wrap",
+        "user_wrap"
+      ]
     }
   ]
 }

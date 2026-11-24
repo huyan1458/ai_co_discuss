@@ -74,10 +74,11 @@ watch(() => saved.value?.api_max_requests, (value) => { requests_shown.value = v
 // The project directories being edited: the main one only while the room has none (it is set once), and the extra
 // ones, saved as a whole; blank rows are dropped when saving.
 const saving_directories = ref(false), directories_draft = ref([]), main_draft = ref("");
-watch(() => saved.value?.extra_directories, (value) => { directories_draft.value = [...(value || [])]; }, { immediate: true });
+const saved_extra_directories = computed(() => saved.value?.extra_directory_entries || saved.value?.extra_directories || []);
+watch(saved_extra_directories, (value) => { directories_draft.value = [...value]; }, { immediate: true });
 watch(() => saved.value?.project_directory, () => { main_draft.value = ""; });
 const directories_changed = computed(() => Boolean(main_draft.value.trim())
-  || JSON.stringify(directories_draft.value) !== JSON.stringify(saved.value?.extra_directories || []));
+  || JSON.stringify(directories_draft.value) !== JSON.stringify(saved_extra_directories.value));
 const directories_editable = computed(() => view.value.access?.can_manage && !room.value.archived && view.value.launch.available);
 
 /** Save the room's main project directory (once) or its extra ones; members work with them from their next execution. */
@@ -85,7 +86,7 @@ async function save_directories() {
   saving_directories.value = true;
   try {
     if (main_draft.value.trim()) await bridge.set_room_project_directory(main_draft.value.trim());
-    else await bridge.set_room_extra_directories(directories_draft.value.map((path) => path.trim()).filter(Boolean));
+    else await bridge.set_room_extra_directories(directories_draft.value);
     bridge.notify("info", t("项目目录已保存，从各成员下一次执行起生效"));
   } catch { /* The error is shown; the draft stays for another try. */ } finally { saving_directories.value = false; }
 }
@@ -93,7 +94,7 @@ async function save_directories() {
 /** Put the directories back as saved. */
 function reset_directories() {
   main_draft.value = "";
-  directories_draft.value = [...(saved.value?.extra_directories || [])];
+  directories_draft.value = [...saved_extra_directories.value];
 }
 
 /** Save a new API request limit for this room; it applies from each API member's next execution. */
@@ -351,6 +352,18 @@ async function narrow_external(member, level) {
 const inviting = ref(false);
 const invite_workflow_id = ref("");
 const describing = ref(""), describing_saving = ref(false);
+const trust_submitting = ref(false);
+const trust_prompt = computed(() => {
+  const prompt = view.value.launch.workflow_trust_prompt;
+  return prompt?.room_id === room.value.id ? prompt : null;
+});
+const TRUST_ACCESS_LABELS = { read: t("只读"), write: t("可写"), auto: t("自动"), full: t("全放开") };
+async function confirm_trust() {
+  if (!trust_prompt.value || trust_submitting.value) return;
+  trust_submitting.value = true;
+  try { await bridge.confirm_workflow_trust(); }
+  finally { trust_submitting.value = false; }
+}
 watch(() => room.value.id, () => { inviting.value = false; describing.value = ""; });
 
 /** Save one member's description in this room, and optionally as its platform's default for later rooms. */
@@ -498,7 +511,8 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
           <ImageService compact :enabled="Boolean(saved.image_generation)" :disabled="!view.access?.can_manage || room.archived" @update:enabled="bridge.set_room_image_generation($event).catch(() => {})" /></dd></div>
         <div><dt>{{ t("工作流") }}</dt><dd class="overview-workflow">
           <WorkflowControl v-if="workflow" :workflow="workflow" />
-          <span v-else class="overview-muted">{{ t("没有进行中的工作流；在输入框打 / 或邀请成员时选择") }}</span>
+          <UBadge v-if="workflow?.scope === 'project'" color="neutral" variant="subtle" size="sm">{{ workflow.project_name ? t('项目 · {name}', { name: workflow.project_name }) : t('项目') }}</UBadge>
+          <span v-else-if="!workflow" class="overview-muted">{{ t("没有进行中的工作流；在输入框打 / 或邀请成员时选择") }}</span>
         </dd></div>
         <div v-if="saved?.registered"><dt>{{ t("主持人权限") }}</dt><dd>
           <HostWorkflowSwitch :key="room.id" :room-id="room.id" :save="payload => bridge.execute('set_room_host_workflows', payload)" :model-value="Boolean(saved.host_workflows)" :permissions="saved.host_permissions" :disabled="!view.access?.can_manage || room.archived" />
@@ -540,6 +554,36 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
     <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
       :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
       @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
+    <UModal :open="Boolean(trust_prompt)" :title="trust_prompt ? t('信任项目工作流「{name}」', { name: trust_prompt.label || trust_prompt.id }) : ''"
+      :description="t('这个项目工作流来自项目目录，尚未在这台电脑上确认信任。启用前请核对以下权限与命令：')"
+      :content="{ onInteractOutside: (event) => event.preventDefault() }"
+      :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }" @update:open="(open) => { if (!open && !trust_submitting) bridge.dismiss_workflow_trust(); }">
+      <template #body>
+        <div v-if="trust_prompt" class="workflow-trust-dialog">
+          <p v-if="trust_prompt.project_name" class="workflow-trust-meta">{{ t('所属项目：{name}', { name: trust_prompt.project_name }) }}</p>
+          <div v-if="trust_prompt.untrusted_reasons?.elevated_cards?.length" class="workflow-trust-section">
+            <h4>{{ t('高权限成员卡片') }}</h4>
+            <ul>
+              <li v-for="card in trust_prompt.untrusted_reasons.elevated_cards" :key="card.card">
+                <strong>{{ card.label || card.card }}</strong>
+                <span class="workflow-trust-access">{{ TRUST_ACCESS_LABELS[card.project_access] || card.project_access }}</span>
+              </li>
+            </ul>
+          </div>
+          <div v-if="trust_prompt.untrusted_reasons?.commands?.length" class="workflow-trust-section">
+            <h4>{{ t('登记的命令（commands.json）') }}</h4>
+            <ul>
+              <li v-for="(cmd, idx) in trust_prompt.untrusted_reasons.commands" :key="idx"><code>{{ cmd }}</code></li>
+            </ul>
+          </div>
+          <p class="workflow-trust-note">{{ t('确认后将记录在这台电脑的信任清单中；若工作流内容发生变更，会再次要求确认。') }}</p>
+          <div class="workflow-trust-actions">
+            <UButton :label="t('取消')" color="neutral" variant="ghost" :disabled="trust_submitting" @click="bridge.dismiss_workflow_trust()" />
+            <UButton :label="t('信任并启用')" icon="i-lucide-shield-check" class="channel-primary-button" :loading="trust_submitting" @click="confirm_trust" />
+          </div>
+        </div>
+      </template>
+    </UModal>
   </section>
 </template>
 

@@ -195,7 +195,7 @@ function secure_secret(secret) {
  * The user is an ordinary member of Users. It gets modify rights on the account's folder only; the owner's own profile
  * stays closed to it, and Windows lets it reach its folder inside that profile without listing anything on the way.
  */
-export function create_os_user(data, account, account_folder, { run = run_powershell } = {}) {
+export function create_os_user(data, account, account_folder, { run = run_powershell, project_data_root = '' } = {}) {
   const user = os_user_name(account);
   if (read_os_users(data)[account]) throw new Error(`账号 ${account} 已有 Windows 用户 ${user}`);
   const password = `Cd!${randomBytes(18).toString('base64url')}`;
@@ -208,6 +208,9 @@ if (-not (Get-LocalGroupMember -Group 'Users' -Member ${quote(user)} -ErrorActio
 # Once the other drives are closed to hosted accounts (restrict_other_drives), a new account is closed out too.
 if ((Get-LocalGroup -Name ${quote(HOSTED_GROUP)} -ErrorAction SilentlyContinue) -and -not (Get-LocalGroupMember -Group ${quote(HOSTED_GROUP)} -Member ${quote(user)} -ErrorAction SilentlyContinue)) { Add-LocalGroupMember -Group ${quote(HOSTED_GROUP)} -Member ${quote(user)} }
 icacls ${quote(account_folder)} /grant ${quote(`${user}:(OI)(CI)M`)} /T /C /Q | Out-Null
+${project_data_root ? `if ((Get-Item -LiteralPath ${quote(project_data_root)} -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Invalid project root' }
+icacls ${quote(project_data_root)} /grant:r ${quote(`${user}:(OI)(CI)M`)} /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { throw '无法设置项目目录权限 / Failed to grant project access' }` : ''}
 ${register_task_script(account, user, '$secure', owner_sid({ run }))}
 'ok'`, { elevated: true });
   write_os_users(data, { ...read_os_users(data), [account]: { user, secret } });
@@ -386,6 +389,7 @@ while ($parent) {
   if (-not $next -or $next -eq $parent) { break }
   $parent = $next
 }
+
 if (Test-Path -LiteralPath $path) {
   if ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "受保护目录 $path 是一个链接，已停止" }
 } else { New-Item -ItemType Directory -Path $path | Out-Null }
@@ -417,6 +421,34 @@ foreach ($rule in $read.Access) {
   if (($rights -band (-bnot $allowed)) -ne 0) { throw "受保护目录 $path 上 $($rule.IdentityReference) 有超出读取的权限" }
 }
 'ok'`);
+}
+
+function project_acl(script) {
+  const encoded = Buffer.from(`[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$ErrorActionPreference = 'Stop'
+try { ${script} } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }`, 'utf16le').toString('base64');
+  const result = spawnSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { windowsHide: true, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(result.error?.message || result.stderr || 'Project ACL failed');
+}
+
+/** Refuse to copy while a detached editor, AI CLI or any other process still runs as the tenant. */
+export function require_idle_os_user(user, { run = run_powershell } = {}) {
+  run(`$account = "$env:COMPUTERNAME\\" + ${quote(user)}
+$active = @(Get-Process -IncludeUserName -ErrorAction Stop | Where-Object UserName -eq $account)
+if ($active.Count) { throw ("请先结束账号进程 / Close tenant processes: " + ($active.ProcessName -join ', ')) }`, { elevated: true });
+}
+
+/** Seal a newly allocated project directory before creating any account files in it. */
+export function secure_project_root(path, user = '', { run = project_acl } = {}) {
+  if (process.platform !== 'win32') return;
+  run(`$drive = [IO.Path]::GetPathRoot(${quote(path)})
+$denied = (Get-Acl -LiteralPath $drive).Access | Where-Object {
+  $_.AccessControlType -eq 'Deny' -and ($_.IdentityReference.Value -split '\\\\')[-1] -eq ${quote(HOSTED_GROUP)}
+}
+if ($denied) { throw '托管账号已被禁止访问该卷 / Hosted accounts are blocked on this volume' }`);
+  secure_folder(path, [], { run });
+  if (user) run(`icacls ${quote(path)} /grant:r ${quote(`${user}:(OI)(CI)M`)} /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { throw '无法设置项目目录权限 / Failed to grant project access' }`);
 }
 
 /** The shared folder, made one that only the owner can change: every account may read and run what is in it. */

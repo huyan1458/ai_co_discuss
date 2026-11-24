@@ -118,6 +118,17 @@ CREATE TABLE IF NOT EXISTS room_links (
     host TEXT NOT NULL,
     UNIQUE(room_id, other_room_id)
 );
+-- Sender-side receipts survive deletion of the destination room.
+CREATE TABLE IF NOT EXISTS room_relay_sends (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    target_room_id TEXT NOT NULL,
+    target_message_id INTEGER,
+    queued_id INTEGER,
+    interrupted INTEGER NOT NULL DEFAULT 0,
+    host TEXT NOT NULL,
+    member TEXT NOT NULL DEFAULT ''
+);
 -- An owner-credential message the host of another room sent here through `host-control room-post`: where it came from.
 -- Only a label; the write itself is the owner's, so it routes and wakes like the owner's own message.
 CREATE TABLE IF NOT EXISTS message_relays (

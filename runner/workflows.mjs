@@ -5,6 +5,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { atomic_json } from './files.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { flow_in_use, normalize_flow } from './workflow_flow.mjs';
 
@@ -31,14 +32,14 @@ const CARD_FIELDS = ['name', 'label', 'description', 'project_access', 'model', 
 const CARD_FILE_FIELDS = ['name', 'platform', 'label', 'description', 'project_access', 'model', 'effort', 'image_model'];
 const PART_LINE = /^<!-- workflow-part: (\d+)\/(\d+) id: ([a-z0-9_-]{1,40}) -->$/;
 const FILE_LINE = /^<!-- workflow-file: (\S+) -->$/;
-const CARD_PATH = /^agents\/([A-Za-z0-9_]{1,16})\.md$/;
+const CARD_PATH = /^(?:experts|agents)\/([A-Za-z0-9_]{1,16})\.md$/;
 // A card may instead be a folder (user 2026-11-22): `agents/<card>/<card>.md` is its definition, shaped like a card file,
 // and `agents/<card>/skills/<skill>/` its skills (SKILL.md plus references), which the member playing it maintains. Only
 // the skills differ, so the folder is also the expert's export package. One card ID is either a file or a folder.
 const SKILLS_FOLDER = 'skills';
 // A folder card's skills, relative to the workflow folder: the main flow's or a sub-workflow's. A save keeps them as they
 // are on disk and the folder's revision leaves them out, since the member writes them while the workflow is in use.
-const CARD_SKILLS_PATH = /^(?:workflows\/[^/]+\/)?agents\/[^/]+\/skills$/;
+const CARD_SKILLS_PATH = /^(?:workflows\/[^/]+\/)?(?:experts|agents)\/[^/]+\/skills$/;
 // Like a skill folder, a workflow carries any other text files beside SKILL.md (templates, references, examples).
 const MAX_RESOURCE_FILES = 100;
 const MAX_RESOURCE_BYTES = 1000000;
@@ -116,7 +117,7 @@ function workflow_commands(resources) {
 }
 
 /** The folder holding every workflow of this computer. */
-export function workflows_home(home) { return join(home, 'workflows'); }
+export function workflows_home(home) { return join(home.project_dir ? join(home.project_dir, '.codiscuss') : home, 'workflows'); }
 
 /** A workflow's folder, built from a checked ID and never from a caller's path. */
 // Built-in room modes own these "/" commands, so no workflow may take their names.
@@ -272,7 +273,7 @@ function split_sub_workflows(resources, ignored = []) {
     if (!match || (typeof text !== 'string' && match[3] === undefined)) { rest[path] = text; continue; }
     const [, id, file, card] = match;
     if (!found.has(id)) found.set(id, { cards: {} });
-    if (card !== undefined) found.get(id).cards[card] = text;
+    if (card !== undefined) add_card_file(found.get(id).cards, card, text);
     else found.get(id)[file] = text;
   }
   const sub_workflows = [...found.keys()].sort().map(id => {
@@ -381,7 +382,7 @@ export function workflow_cards(workflow) {
 // used on demand beside the main flow, its cards join the room only when it is used. It has no sub-workflows of its own.
 const SUB_DIRECTORY = 'workflows';
 // A sub-workflow's cards are everything under its agents/: card files, folder cards and their skills.
-const SUB_FILE = /^workflows\/([^/]+)\/(SKILL\.md|flow\.json|agents\/(.+))$/;
+const SUB_FILE = /^workflows\/([^/]+)\/(SKILL\.md|flow\.json|(?:experts|agents)\/(.+))$/;
 const MAX_SUB_WORKFLOWS = 10;
 // A stage ID a sub-workflow attaches to follows the canvas's node ID rule.
 const STAGE_ID = /^[A-Za-z0-9_-]{1,40}$/;
@@ -427,14 +428,14 @@ function write_sub_workflows(staging, list, carry) {
     for (const name of readdirSync(root)) {
       const folder = join(root, name);
       if (!keep.has(name)) { rmSync(folder, { recursive: true, force: true }); continue; }
-      for (const own of ['SKILL.md', FLOW_FILE, 'agents']) rmSync(join(folder, own), { recursive: true, force: true });
+      for (const own of ['SKILL.md', FLOW_FILE, 'agents', 'experts']) rmSync(join(folder, own), { recursive: true, force: true });
     }
   }
   for (const sub of list) {
     const folder = join(root, sub.id);
-    mkdirSync(join(folder, 'agents'), { recursive: true });
+    mkdirSync(join(folder, 'experts'), { recursive: true });
     writeFileSync(join(folder, 'SKILL.md'), serialize_markdown(skill_fields(sub.id, sub.label, sub.description, sub.attach), sub.skill));
-    write_cards(join(folder, 'agents'), sub.agents, carry);
+    write_cards(join(folder, 'experts'), sub.agents, carry);
     if (sub.flow) writeFileSync(join(folder, FLOW_FILE), `${JSON.stringify(sub.flow, null, 2)}\n`);
   }
 }
@@ -471,8 +472,8 @@ function write_cards(directory, agents, carry = { folders: new Map(), replace: t
  */
 function backup_card(home, id, card, folder) {
   const name = `workflow-${id}-${card}-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
-  mkdirSync(join(home, 'backups'), { recursive: true });
-  cpSync(folder, join(home, 'backups', name), { recursive: true });
+  mkdirSync(join(home.service_home || home, 'backups'), { recursive: true });
+  cpSync(folder, join(home.service_home || home, 'backups', name), { recursive: true });
   return name;
 }
 
@@ -486,15 +487,15 @@ function card_folders(directory) {
       if (CARD_ID_PATTERN.test(name) && lstatSync(join(agents, name)).isDirectory()) found.set(name, join(agents, name));
     }
   };
-  scan(join(directory, 'agents'));
+  for (const name of ['agents', 'experts']) scan(join(directory, name));
   const subs = join(directory, SUB_DIRECTORY);
-  if (existsSync(subs)) for (const name of readdirSync(subs)) scan(join(subs, name, 'agents'));
+  if (existsSync(subs)) for (const name of readdirSync(subs)) for (const layout of ['agents', 'experts']) scan(join(subs, name, layout));
   return found;
 }
 
 /** A path, relative to the workflow folder, that a resource may take: inside it, not SKILL.md and not under agents/. */
 function resource_path_allowed(path) {
-  return path !== 'SKILL.md' && path !== FLOW_FILE && !path.startsWith('agents/') && path.split('/').every(segment => RESOURCE_SEGMENT.test(segment));
+  return path !== 'SKILL.md' && path !== FLOW_FILE && !/^(?:experts|agents)\//.test(path) && path.split('/').every(segment => RESOURCE_SEGMENT.test(segment));
 }
 
 /** Check resource files `{ "relative/path": text }`. */
@@ -519,7 +520,7 @@ function validate_resources(resources) {
 function read_resource_folder(directory, prefix, resources, ignored) {
   for (const name of readdirSync(directory).sort()) {
     const relative = `${prefix}${name}`;
-    if (relative === 'SKILL.md' || relative === 'agents') continue;
+    if (relative === 'SKILL.md' || ['agents', 'experts'].includes(relative)) continue;
     // The canvas is read as a resource here and taken out as `flow` with the rest of the folder.
     if (relative === FLOW_FILE) { resources[relative] = readFileSync(join(directory, name), 'utf8'); continue; }
     const path = join(directory, name);
@@ -545,7 +546,7 @@ function write_resources(directory, resources) {
 /** Copy a saved folder's files other than SKILL.md and agents/, for a save that carries none of its own. */
 function keep_resources(directory, staging) {
   for (const name of readdirSync(directory)) {
-    if (name === 'SKILL.md' || name === 'agents') continue;
+    if (name === 'SKILL.md' || ['agents', 'experts'].includes(name)) continue;
     cpSync(join(directory, name), join(staging, name), { recursive: true });
   }
 }
@@ -595,26 +596,47 @@ function assert_no_links(directory) {
   }
 }
 
+const RENAME_TIMEOUT_MS = 1000;
+const RENAME_WAIT_MS = 50;
+const rename_wait = new Int32Array(new SharedArrayBuffer(4));
+
+function rename_directory(source, target) {
+  const deadline = Date.now() + RENAME_TIMEOUT_MS;
+  for (;;) {
+    try { return renameSync(source, target); }
+    catch (error) {
+      if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || Date.now() >= deadline) throw error;
+      Atomics.wait(rename_wait, 0, 0, RENAME_WAIT_MS);
+    }
+  }
+}
+
 /** Recover an interrupted replacement before any reader can observe a missing workflow. Called under the library lock. */
 function recover_workflows(home) {
   const root = workflows_home(home);
   for (const name of readdirSync(root)) {
+    if (/^\.tmp-[a-z0-9_-]{1,40}-[0-9a-f-]{36}$/.test(name)) {
+      rmSync(join(root, name), { recursive: true, force: true });
+      continue;
+    }
     const match = BACKUP_DIRECTORY.exec(name);
     if (!match) continue;
     const backup = join(root, name), directory = workflow_directory(home, match[1]);
     assert_no_links(backup);
     if (existsSync(directory)) rmSync(backup, { recursive: true, force: true });
-    else renameSync(backup, directory);
+    else rename_directory(backup, directory);
   }
 }
 
 /** Serialize publication, recovery and reads across processes; SQLite releases the lock even if its owner exits. */
-function with_workflow_lock(home, action) {
-  mkdirSync(workflows_home(home), { recursive: true });
-  const lock = new DatabaseSync(join(home, 'workflows-lock.sqlite3'));
+function with_workflow_lock(home, action, writing = false) {
+  check_library_root(home);
+  mkdirSync(home.service_home || home, { recursive: true });
+  if (writing || !home.project_dir) mkdirSync(workflows_home(home), { recursive: true });
+  const lock = new DatabaseSync(join(home.service_home || home, 'workflows-lock.sqlite3'));
   try {
     lock.exec(`PRAGMA busy_timeout=${WORKFLOW_LOCK_WAIT_MS}; BEGIN IMMEDIATE`);
-    recover_workflows(home);
+    if (!home.root?.readonly && !home.readonly && existsSync(workflows_home(home))) recover_workflows(home);
     return action();
   } finally { lock.close(); }
 }
@@ -623,13 +645,18 @@ function with_workflow_lock(home, action) {
 export function read_workflow_folder(directory) {
   if (!existsSync(join(directory, 'SKILL.md'))) throw new Error('文件夹里没有 SKILL.md');
   assert_no_links(directory);
-  const agents = join(directory, 'agents');
+  const layouts = ['agents', 'experts'].map(name => join(directory, name));
   const cards = {};
   const resources = {}, ignored = [];
   read_resource_folder(directory, '', resources, ignored);
-  if (existsSync(agents)) read_text_files(agents, '', cards);
+  for (const agents of layouts) if (existsSync(agents)) read_text_files(agents, '', cards);
   const workflow = workflow_from_files(readFileSync(join(directory, 'SKILL.md'), 'utf8'), cards, resources, ignored);
   return { workflow, ignored: [...new Set(ignored)].sort() };
+}
+
+function add_card_file(cards, path, text) {
+  if (Object.hasOwn(cards, path)) throw new Error(`experts/ 与 agents/ 重复定义了 ${path}`);
+  cards[path] = text;
 }
 
 /** Every file below a folder as `{relative path: UTF-8 text, or null when it is not text}`. */
@@ -637,7 +664,9 @@ function read_text_files(directory, prefix, files) {
   for (const name of readdirSync(directory).sort()) {
     const path = join(directory, name);
     if (lstatSync(path).isDirectory()) { read_text_files(path, `${prefix}${name}/`, files); continue; }
-    try { files[`${prefix}${name}`] = utf8.decode(readFileSync(path)); } catch { files[`${prefix}${name}`] = null; }
+    let text = null;
+    try { text = utf8.decode(readFileSync(path)); } catch { /* binary file */ }
+    add_card_file(files, `${prefix}${name}`, text);
   }
 }
 
@@ -652,7 +681,7 @@ export function read_workflow_files(files) {
   const cards = {}, resources = {}, ignored = [];
   for (const path of Object.keys(files).sort()) {
     if (path === 'SKILL.md') continue;
-    if (path.startsWith('agents/')) cards[path.slice('agents/'.length)] = typeof files[path] === 'string' ? files[path] : null;
+    if (/^(?:experts|agents)\//.test(path)) add_card_file(cards, path.slice(path.indexOf('/') + 1), typeof files[path] === 'string' ? files[path] : null);
     else if (SUB_FILE.test(path) && SUB_FILE.exec(path)[3] !== undefined) resources[path] = typeof files[path] === 'string' ? files[path] : null;
     else if (typeof files[path] === 'string' && (path === FLOW_FILE || resource_path_allowed(path))) resources[path] = files[path];
     else ignored.push(path);
@@ -664,9 +693,10 @@ export function read_workflow_files(files) {
 /** Summaries for the library list; a broken folder is listed with its error instead of hiding it. */
 export function list_workflows(home, card_ready = null) {
   return with_workflow_lock(home, () => {
+    if (!existsSync(workflows_home(home))) return [];
     const disabled = disabled_workflows(home);
     return readdirSync(workflows_home(home)).filter(name => WORKFLOW_ID_PATTERN.test(name)).sort().map(id => {
-      const flag = disabled.includes(id) ? { disabled: true } : {};
+      const flag = disabled.includes(disabled_key(home, id)) ? { disabled: true } : {};
       try {
         const workflow = read_saved_workflow(home, id);
         // Cards whose software this computer has not set up: the workflow cannot bring them until they change platform.
@@ -676,7 +706,7 @@ export function list_workflows(home, card_ready = null) {
         return { id, label: workflow.label || id, description: workflow.description,
           ...(workflow.author ? { author: workflow.author } : {}),
           ...(workflow.source ? { source: workflow.source } : {}),
-          cards: workflow.agents.length, directory: workflow.directory,
+          cards: workflow.agents.length, directory: workflow.directory, ...project_trust(home, workflow),
           ...(unavailable.length ? { unavailable } : {}), ...flag };
       } catch (error) { return { id, label: id, description: '', cards: 0, error: error.message, ...flag }; }
     });
@@ -685,7 +715,9 @@ export function list_workflows(home, card_ready = null) {
 
 // IDs of workflows the user switched off on this computer: kept in the library, but no room may use them. It is this
 // computer's choice, so it lives beside the library and never travels with a workflow folder.
-function disabled_path(home) { return join(home, 'workflows-disabled.json'); }
+function disabled_key(home, id) { return home.project_id ? `project:${home.project_id}:${id}` : id; }
+
+function disabled_path(home) { return join(home.service_home || home, 'workflows-disabled.json'); }
 
 /** The disabled workflow IDs. */
 function disabled_workflows(home) {
@@ -703,15 +735,15 @@ function write_disabled(home, list) {
 export function set_workflow_disabled(home, id, disabled) {
   return with_workflow_lock(home, () => {
     if (!existsSync(workflow_directory(home, id))) throw new Error(`工作流不存在：${id}`);
-    const others = disabled_workflows(home).filter(item => item !== id);
-    write_disabled(home, disabled ? [...others, id] : others);
+    const others = disabled_workflows(home).filter(item => item !== disabled_key(home, id));
+    write_disabled(home, disabled ? [...others, disabled_key(home, id)] : others);
     return { id, disabled: Boolean(disabled) };
   });
 }
 
 /** Refuse a workflow the user disabled, before a room starts using it. */
 export function assert_workflow_enabled(home, id) {
-  if (disabled_workflows(home).includes(id)) throw new Error(`工作流 ${id} 已停用；请先在“工作流”页启用`);
+  if (disabled_workflows(home).includes(disabled_key(home, id))) throw new Error(`工作流 ${id} 已停用；请先在“工作流”页启用`);
 }
 
 /** Change only a workflow's display name; its cards, canvas and files stay as they are. */
@@ -721,7 +753,9 @@ export function rename_workflow(home, id, label) {
   if (text.length > MAX_WORKFLOW_LABEL) throw new Error(`工作流显示名最多 ${MAX_WORKFLOW_LABEL} 字`);
   return with_workflow_lock(home, () => {
     const workflow = read_saved_workflow(home, id);
+    const was_trusted = home.project_dir && !project_trust(home, workflow).needs_trust;
     writeFileSync(join(workflow.directory, 'SKILL.md'), serialize_markdown(skill_fields(id, text, workflow.description, [], workflow), workflow.skill));
+    if (was_trusted) project_trust(home, read_saved_workflow(home, id), true);
     return { id, label: text };
   });
 }
@@ -731,12 +765,12 @@ export function rename_workflow(home, id, label) {
  * their files, templates, scripts), by relative path and bytes, except folder cards' skills, which their members write
  * while the workflow is in use and a save keeps as they are. Any other change anywhere changes it. Call under the lock.
  */
-export function folder_revision(directory) {
+export function folder_revision(directory, include_skills = false) {
   const hash = createHash('sha256');
   const walk = relative => {
     for (const name of readdirSync(join(directory, relative)).sort()) {
       const path = relative ? `${relative}/${name}` : name;
-      if (lstatSync(join(directory, path)).isDirectory()) { if (!CARD_SKILLS_PATH.test(path)) walk(path); }
+      if (lstatSync(join(directory, path)).isDirectory()) { if (include_skills || !CARD_SKILLS_PATH.test(path)) walk(path); }
       else hash.update(`${path}\0`).update(readFileSync(join(directory, path))).update('\0');
     }
   };
@@ -779,9 +813,70 @@ function check_save_base(directory, id, { base_revision, overwrite } = {}) {
   if (exists) throw workflow_failure('workflow_exists', '工作流库里已有「{id}」；要整份覆盖它，请明确选择覆盖', { id });
 }
 
+/** Read the local approval for the exact project workflow revision. */
+function project_trust(home, workflow, approve = false) {
+  if (!home.project_id) return {};
+  const commands = workflow.commands.map(command => command.id);
+  const elevated_cards = workflow_cards(workflow).filter(card => card.project_access && card.project_access !== 'read')
+    .map(({ card, label, project_access }) => ({ card, label: label || card, project_access }));
+  const path = join(home.service_home, 'project-trust.json');
+  const records = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+  const key = `workflow:${home.project_id}:${workflow.id}`;
+  const digest = folder_revision(workflow.directory, true);
+  if (approve) {
+    records[key] = digest;
+    atomic_json(path, records);
+  }
+  if ((!commands.length && !elevated_cards.length) || records[key] === digest) return { needs_trust: false };
+  return { needs_trust: true, untrusted_reasons: { commands, elevated_cards } };
+}
+
+/** Read and approve the same revision under the local publication lock. */
+export function trust_workflow(home, id) {
+  return with_workflow_lock(home, () => project_trust(home, read_saved_workflow(home, id), true));
+}
+
+function check_library_root(home) {
+  if (home.project_dir) {
+    for (const path of [join(home.project_dir, '.codiscuss'), workflows_home(home)]) {
+      if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('项目工作流目录不能是符号链接');
+    }
+  }
+}
+
+/** Publish the complete destination before removing a moved source. */
+export function transfer_workflow(source, target, id, { move, overwrite, after_publish }) {
+  check_library_root(source);
+  if (resolve(workflows_home(source)).toLowerCase() === resolve(workflows_home(target)).toLowerCase()) throw new Error('来源和目标项目相同');
+  return with_workflow_lock(target, () => {
+    const flow = read_saved_workflow(source, id);
+    const trust = project_trust(source, flow);
+    if (trust.needs_trust) throw Object.assign(new Error('项目工作流需要确认信任'), { code: 'workflow_untrusted', details: trust });
+    const destination = workflow_directory(target, id);
+    check_save_base(destination, id, { overwrite });
+    const backups = [];
+    if (existsSync(destination)) {
+      assert_no_links(destination);
+      backups.push(backup_card(target, id, 'workflow', destination));
+    }
+    publish_directory(target, id, staging => cpSync(flow.directory, staging, { recursive: true }));
+    project_trust(target, read_saved_workflow(target, id), true);
+    after_publish?.();
+    if (move) {
+      rmSync(flow.directory, { recursive: true, force: true });
+      const key = disabled_key(source, id), disabled = disabled_workflows(source);
+      if (disabled.includes(key)) write_disabled(source, [...disabled.filter(item => item !== key), disabled_key(target, id)]);
+    }
+    return { id, ...(backups.length ? { backups } : {}) };
+  }, true);
+}
+
 /** One workflow in full, as the editor shows it. */
 export function get_workflow(home, id) {
-  return with_workflow_lock(home, () => read_saved_workflow(home, id));
+  return with_workflow_lock(home, () => {
+    const workflow = read_saved_workflow(home, id);
+    return { ...workflow, ...project_trust(home, workflow) };
+  });
 }
 
 /** Fill a staging folder, then swap it in for the library entry, recoverable if the process dies midway. Call under the lock. */
@@ -790,12 +885,14 @@ function publish_directory(home, id, fill) {
   if (existsSync(directory)) assert_no_links(directory);
   const staging = join(workflows_home(home), `.tmp-${id}-${randomUUID()}`);
   mkdirSync(staging, { recursive: true });
-  fill(staging, directory);
-  const old = existsSync(directory) ? join(workflows_home(home), `.old-${id}-${randomUUID()}`) : '';
-  if (old) renameSync(directory, old);
-  try { renameSync(staging, directory); }
-  catch (error) { if (old) renameSync(old, directory); throw error; }
-  if (old) rmSync(old, { recursive: true, force: true });
+  try {
+    fill(staging, directory);
+    const old = existsSync(directory) ? join(workflows_home(home), `.old-${id}-${randomUUID()}`) : '';
+    if (old) rename_directory(directory, old);
+    try { rename_directory(staging, directory); }
+    catch (error) { if (old) rename_directory(old, directory); throw error; }
+    if (old) rmSync(old, { recursive: true, force: true });
+  } finally { rmSync(staging, { recursive: true, force: true }); }
 }
 
 /** Copy a distributed workflow folder into the library as it is, replacing any entry of that ID. */
@@ -818,9 +915,9 @@ export function save_workflow(home, input, validate_card, base = {}) {
       // A folder card whose skills are replaced or that the save drops is backed up first.
       const carry = { folders: card_folders(directory), replace: base.overwrite === true || !existsSync(directory),
         backup: (card, folder) => backups.push(backup_card(home, workflow.id, card, folder)) };
-      mkdirSync(join(staging, 'agents'), { recursive: true });
+      mkdirSync(join(staging, 'experts'), { recursive: true });
       writeFileSync(join(staging, 'SKILL.md'), serialize_markdown(skill_fields(workflow.id, workflow.label, workflow.description, [], workflow), workflow.skill));
-      write_cards(join(staging, 'agents'), workflow.agents, carry);
+      write_cards(join(staging, 'experts'), workflow.agents, carry);
       if (workflow.resources) write_resources(staging, workflow.resources);
       else if (existsSync(directory)) keep_resources(directory, staging);
       if (workflow.flow) writeFileSync(join(staging, FLOW_FILE), `${JSON.stringify(workflow.flow, null, 2)}
@@ -835,8 +932,8 @@ export function save_workflow(home, input, validate_card, base = {}) {
     });
     const saved = read_saved_workflow(home, workflow.id);
     const warnings = workflow_warnings(saved);
-    return { ...saved, ...(warnings.length ? { warnings } : {}), ...(backups.length ? { backups } : {}) };
-  });
+    return { ...saved, ...project_trust(home, saved, true), ...(warnings.length ? { warnings } : {}), ...(backups.length ? { backups } : {}) };
+  }, true);
 }
 
 /**
@@ -868,7 +965,7 @@ export function delete_workflow(home, id) {
     assert_no_links(directory);
     const backups = [...card_folders(directory)].map(([card, folder]) => backup_card(home, id, card, folder));
     rmSync(directory, { recursive: true, force: true });
-    if (disabled_workflows(home).includes(id)) write_disabled(home, disabled_workflows(home).filter(item => item !== id));
+    if (disabled_workflows(home).includes(disabled_key(home, id))) write_disabled(home, disabled_workflows(home).filter(item => item !== disabled_key(home, id)));
     return { deleted: id, ...(backups.length ? { backups } : {}) };
   });
 }
@@ -899,7 +996,7 @@ export function parse_workflow_draft(parts) {
   for (const line of pieces.flatMap(piece => piece.lines)) {
     const marker = FILE_LINE.exec(line);
     if (!marker) { current?.push(line); continue; }
-    const path = marker[1];
+    const path = marker[1].replace(/^experts\//, 'agents/');
     if (path !== 'SKILL.md' && path !== FLOW_FILE && !CARD_PATH.test(path)) throw new Error(`草稿只能包含 SKILL.md、${FLOW_FILE} 和 agents/卡片ID.md：${path}`);
     if (files.has(path)) throw new Error(`草稿里 ${path} 出现了两次`);
     current = [];
@@ -948,12 +1045,34 @@ export function preview_workflow(input, validate_card, known_platform) {
  * What a room's runner needs from its enabled workflow, read fresh for each execution.
  * Returns null when no workflow is enabled; an unreadable one returns its error so members fall back to room settings.
  */
+export function room_workflow_store(home, config, binding = config.workflow) {
+  if (binding?.scope !== 'project') return home;
+  const roots = [config.cwd, ...(config.extra_directories || [])];
+  for (const item of roots) {
+    const path = typeof item === 'string' ? item : item?.path;
+    if (!path) continue;
+    const project_id = createHash('sha256').update(resolve(path).toLowerCase()).digest('hex').slice(0, 16);
+    if (binding.project_id === project_id || (!binding.project_id && path === config.cwd)) {
+      return { service_home: home, project_id, project_dir: path, readonly: item?.access === 'read' };
+    }
+  }
+  throw new Error('工作流不属于本房间的项目目录');
+}
+
+/** Read a bound workflow only while its current revision is trusted. */
+export function bound_workflow(home, config) {
+  const store = room_workflow_store(home, config);
+  assert_workflow_enabled(store, config.workflow.id);
+  const flow = get_workflow(store, config.workflow.id);
+  if (flow.needs_trust) throw Object.assign(new Error('项目工作流需要确认信任'), { code: 'workflow_untrusted', details: { untrusted_reasons: flow.untrusted_reasons } });
+  return flow;
+}
+
 export function load_room_workflow(config) {
   const binding = config.workflow;
   if (!binding?.enabled || !config.api_home) return null;
   try {
-    assert_workflow_enabled(config.api_home, binding.id);
-    const workflow = get_workflow(config.api_home, binding.id);
+    const workflow = bound_workflow(config.api_home, config);
     const { directory } = workflow;
     // A sub-workflow's cards play members like the main flow's, so they are looked up in one map.
     const cards = Object.fromEntries(workflow_cards(workflow).map(agent => [agent.card, agent]));
@@ -963,7 +1082,7 @@ export function load_room_workflow(config) {
       attach: sub.attach || [] }));
     // The canvas is for the user to see; the host works from SKILL.md alone, plus the steps' names its sub-workflows attach to.
     const stages = (workflow.flow?.stages || []).map(stage => ({ id: stage.id, label: stage.label || stage.id }));
-    return { id: binding.id, label: workflow.label || binding.id, description: workflow.description || '', directory, skill_path: join(directory, 'SKILL.md'), skill: workflow.skill,
+    return { ...(binding.scope === 'project' ? { readonly: room_workflow_store(config.api_home, config).readonly } : {}), id: binding.id, label: workflow.label || binding.id, description: workflow.description || '', directory, skill_path: join(directory, 'SKILL.md'), skill: workflow.skill,
       revision: revision_of(workflow.skill), members: binding.members || {}, extra_members: binding.extra_members || {}, cards, sub_workflows, stages,
       commands: workflow.commands, content_revision: workflow.revision };
   } catch (error) { return { id: binding.id, error: error.message }; }
@@ -1001,7 +1120,23 @@ export const SKILL_FILE = 'SKILL.md';
 export const SKILL_NAME_PATTERN = WORKFLOW_ID_PATTERN;
 
 /** The folder holding panel experts' knowledge on this computer. */
-export function experts_home(home) { return join(home, 'experts'); }
+export function experts_home(home) { return join(home.project_dir ? join(home.project_dir, '.codiscuss') : home, 'experts'); }
+
+/** Resolve a physical expert key without giving another platform its skill directory. */
+export function expert_disk_key(directory, platform, id) {
+  if (!/^[A-Za-z]+$/.test(platform) || !/^[A-Za-z0-9_]{1,16}$/.test(id)) throw new Error('无效的专家编号');
+  const qualified = platform.toLowerCase() + '-' + id;
+  for (const key of [qualified, id]) {
+    const folder = join(directory, key);
+    const file = existsSync(folder) ? join(folder, key + '.md') : folder + '.md';
+    for (const part of [directory, folder, file]) if (lstatSync(part, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('专家路径不能包含符号链接');
+    if (existsSync(file)) {
+      if (parse_markdown(readFileSync(file, 'utf8'), file).fields.platform === platform) return key;
+      if (key === id) return qualified;
+    }
+  }
+  return id;
+}
 
 /** The skill names under an expert folder's skills/ that have a SKILL.md; none when the folder is missing. */
 export function expert_skills(directory) {
@@ -1014,12 +1149,13 @@ export function expert_skills(directory) {
 export function card_folder(workflow, card) {
   const source = workflow?.cards?.[card];
   if (!source || !Array.isArray(source.skills) || !workflow.directory) return '';
-  return join(workflow.directory, ...(source.sub_workflow ? [SUB_DIRECTORY, source.sub_workflow] : []), 'agents', card);
+  const root = join(workflow.directory, ...(source.sub_workflow ? [SUB_DIRECTORY, source.sub_workflow] : []));
+  return join(root, existsSync(join(root, 'experts', card)) ? 'experts' : 'agents', card);
 }
 
 /** The expert key a member's name gives (`平台-后缀`, as a preset names it; an instance number after it is tried without). */
 function name_keys(member_name) {
-  const match = /^[A-Za-z]+-([a-z0-9_]{1,16})$/.exec(member_name);
+  const match = /^[A-Za-z]+-([A-Za-z0-9_]{1,16})$/.exec(member_name);
   return match ? [...new Set([match[1], match[1].replace(/\d+$/, '')])].filter(Boolean) : [];
 }
 
@@ -1028,18 +1164,36 @@ function name_keys(member_name) {
  * in the workflow folder (created when missing, so it can write its first skill); one playing a card file has none.
  * Any other member gets `experts/<suffix>/skills/` in the service home when it has a skill there.
  */
-export function member_knowledge(home, member_name, workflow) {
+export function member_knowledge(home, member_name, workflow, project_dirs = [], profile = {}) {
   if (!member_name) return '';
   const card = workflow && !workflow.error ? card_of_member(workflow, member_name) : '';
   if (card) {
     const folder = card_folder(workflow, card);
     if (!folder) return '';
+    if (workflow.readonly) return existsSync(join(folder, SKILLS_DIRECTORY)) ? join(folder, SKILLS_DIRECTORY) : '';
     mkdirSync(join(folder, SKILLS_DIRECTORY), { recursive: true });
     return join(folder, SKILLS_DIRECTORY);
   }
   if (!home) return '';
-  for (const key of name_keys(member_name)) {
-    const directory = join(experts_home(home), key);
+  const roots = project_dirs.map(item => typeof item === 'string' ? item : item.path).filter(Boolean);
+  for (const path of profile.preset_scope === 'global' ? [] : roots) {
+    const id = createHash('sha256').update(resolve(path).toLowerCase()).digest('hex').slice(0, 16);
+    if (profile.preset_project_id && profile.preset_project_id !== id) continue;
+    for (const key of name_keys(member_name)) {
+      const base = join(path, '.codiscuss');
+      const parent = join(base, 'experts');
+      if (lstatSync(base, { throwIfNoEntry: false })?.isSymbolicLink()) continue;
+      const disk = expert_disk_key(parent, member_name.split('-')[0], key);
+      const folder = join(parent, disk), definition = join(folder, disk + '.md');
+      if ([base, parent, folder, definition].some(part => lstatSync(part, { throwIfNoEntry: false })?.isSymbolicLink()) || !existsSync(definition)) continue;
+      if (parse_markdown(readFileSync(definition, 'utf8'), definition).fields.platform !== member_name.split('-')[0]) continue;
+      assert_no_links(folder);
+      if (expert_skills(folder).length) return join(folder, SKILLS_DIRECTORY);
+    }
+  }
+  if (profile.preset_scope !== 'project') for (const key of name_keys(member_name)) {
+    const root = experts_home(home);
+    const directory = join(root, expert_disk_key(root, member_name.split('-')[0], key));
     if (expert_skills(directory).length) return join(directory, SKILLS_DIRECTORY);
   }
   return '';
@@ -1096,7 +1250,7 @@ export function workflow_in_use(workflow, room_members) {
 }
 
 /** Write a room's workflow binding into its configuration object (the caller saves it). */
-export function bind_room_workflow(config, { id, enabled, members, extra_members }) {
+export function bind_room_workflow(config, { id, enabled, members, extra_members, scope, project_id }) {
   workflow_directory('.', id);
   if (members && (typeof members !== 'object' || Array.isArray(members)
     || Object.entries(members).some(([card, name]) => !CARD_ID_PATTERN.test(card) || typeof name !== 'string' || !name))) {
@@ -1108,8 +1262,8 @@ export function bind_room_workflow(config, { id, enabled, members, extra_members
   }
   // Further members of a card (`extra_members`, {member name: card ID}) come only from the host's workflow-join --label;
   // rebinding the same workflow keeps them.
-  const same = config.workflow?.id === id;
+  const same = config.workflow?.id === id && (config.workflow.scope || 'global') === (scope || 'global') && config.workflow.project_id === project_id;
   const extra = extra_members ?? (same ? config.workflow.extra_members : undefined);
-  return { ...config, workflow: { id, enabled: Boolean(enabled), members: { ...(same ? config.workflow.members : {}), ...(members || {}) },
+  return { ...config, workflow: { id, ...(scope === 'project' ? { scope, project_id } : {}), enabled: Boolean(enabled), members: { ...(same ? config.workflow.members : {}), ...(members || {}) },
     ...(extra && Object.keys(extra).length ? { extra_members: { ...extra } } : {}) } };
 }

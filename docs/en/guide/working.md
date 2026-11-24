@@ -18,7 +18,7 @@ Message a member or host, understand main and branch work and assignment labels,
 
 Once the site returns a message number, known recipients appear below the message. If an automatically connected member is busy and the request must wait for its current task to finish, a one-line notice with a clock shows the member’s name and the queued message number. Hover over the notice to see how long the request has waited. The working card takes its place when the member starts. If smart scheduling needs to choose the recipient, the page shows scheduling progress.
 
-Quick navigation on the left lists messages from users and members. Hover over a mark to preview the message or click to jump to its card.
+Quick navigation on the left lists messages from users and members. Hover over a mark to preview the message or click to jump to its card. Click a member row in the right sidebar's “Speaking order” (or “Jump to latest message” in its hover card) to jump straight to that member's latest message or ongoing work card.
 
 ### 2. Understand main lines, branches, and assignment labels
 
@@ -28,7 +28,7 @@ Room work can run on several lines in parallel. Labels at the top of a card show
   - A directly mentioned member starts immediately when idle. If busy, its request waits in the queue until it is free. If one message mentions both idle and busy members, idle members start at once while the busy members’ work waits.
   - When a main-line member’s turn arrives, it waits for that member to finish its active branch work.
   - Your unmentioned messages, `@all`, and `@all-seq` wait until the room is idle, then go out in order. Background work assigned by the host does not hold up your new messages.
-- **Where things sit on a card.** Every member card has, from top to bottom: the header, the body, what it delivers (answer summary, attachments, delivered files) and the run’s record (progress notes with step count, file changes, refused operations). File changes list only files the member was recorded writing during that run. The left of the header says who: the name, labels, and the model and effort this run used. The right says how this one went: status, time, number and duration, with the duration always last. A coloured status only means something went wrong (red for failed; amber for stopped, voided or skipped), and nothing is shown when all is well; on your own messages, the right shows how each member is handling it. On a phone, the buttons for retracting, editing, private chat and the like sit at the top right of the card, level with the name; the model, status, time, number and duration run from the left under the name. Stop and retry sit at the right end of the line they act on. When an answer first appears, pending project files reserve their card space. You can open them once verified.
+- **Where things sit on a card.** Every member card has, from top to bottom: the header, the body, what it delivers (answer summary, attachments, delivered files) and the run’s record (progress notes with step count, file changes, refused operations). File changes list only files the member was recorded writing during that run. Git files in the main project and additional writable projects support diff previews. The execution timeline counts the same files. The left of the header says who: the name, labels, and the model and effort this run used. The right says how this one went: status, time, number and duration, with the duration always last. A coloured status only means something went wrong (red for failed; amber for stopped, voided or skipped), and nothing is shown when all is well; on your own messages, the right shows how each member is handling it. On a phone, the buttons for retracting, editing, private chat and the like sit at the top right of the card, level with the name; the model, status, time, number and duration run from the left under the name. Stop and retry sit at the right end of the line they act on. Project files mentioned in an answer appear as clickable cards once verified as deliverables for that execution.
 - **Card labels.** Where the card came from comes first, then where the work goes next. The usual channels (own message, CLI, API) are no longer labelled; only rare sources such as sent on someone’s behalf, proactive messages and auto-captured answers are.
   - “Host” identifies a message from the current host, host notes included.
   - “Main line · step {n}” is a host-arranged order. “Main line · #{n} in turn” is `@all-seq`.
@@ -46,7 +46,7 @@ Room work can run on several lines in parallel. Labels at the top of a card show
 
 New messages wait above the composer while the intended member or room is busy. They are sent when the recipient or room becomes available. Your answers on an answer card work the same way: while the member who asked is still busy, the answer is recorded, but the share for that member waits in the queue, marked “#N is posted; it goes to … once free”.
 
-- **Not waiting.** Select the arrow button on a queued item; hover over it to see what it will do:
+- **Not waiting.** Select the send button on a queued item (on desktop it shows “Send now”, “Steer”, or “Interrupt and send”; on phones it shows the arrow icon alone); hover over it to see what it will do:
   - The recipient is free: it goes at once.
   - The recipient is working and its software takes interjections: this joins its current turn; it sees it right away and the work done so far stays. A message steered directly into the same task appears indented below the original user message with a “Steer” label. A message that interrupts work first keeps its own card.
   - The recipient is working and cannot take an interjection: its turn is stopped first, and it takes this together with the interrupted work.
@@ -68,7 +68,7 @@ New messages wait above the composer while the intended member or room is busy. 
 Open private chat to see what a member is doing, redirect it midway through a run, or ask it something privately without adding it to the room.
 
 - **Open private chat.** Select “Private chat” in the sidebar, then choose a member at the top. To inspect a specific run, use the chat-bubble icon on its in-progress or answer card.
-- **See execution details.** The private-chat page shows execution records received by the local service. Which commands, tool calls, and output are visible depends on the member’s connection.
+- **See execution details.** The private-chat page shows execution records received by the local service. Which commands, tool calls, and output are visible depends on the member’s connection. When the local service can read a Codex App member’s session before delivery, its in-progress card shows the private-chat button and the timeline and private-chat view record only the steps and outputs from that room task without pulling in unrelated messages from the same App chat; if the session cannot be read before delivery, it falls back to no progress.
 - **Interrupt a run.** While a member works on a room task, enter a message in the private-chat composer, which prompts “Steer the current work…”. Check the page feedback to confirm the addition was delivered or queued. If the connection supports pause and resume, you can pause the run first. The page shows “Paused; send a follow-up to resume this task” Add your instructions and resume it.
 - **Chat while idle.** When the member is idle, a private-chat message is only between you and that member. It does not appear in the public room and does not wake other members.
 
@@ -102,6 +102,8 @@ To have a member put its work online directly, say “deploy” or “publish as
 Addresses without an extension (such as `/about`) opened in a browser return the home page for the site's own front-end routing; missing files with an extension return 404. Reference assets with paths starting with `/`.
 
 ## Notes
+
+- Local members use `.scratch/<execution ID>` inside their drafts for reproducible test copies. Before cleanup, verify that the run has ended and its deliverables are saved. Review older drafts individually because they may contain the only copy of a file.
 
 - **A regular member’s `@` mention does not assign work.** When members mention one another, it is only a reference and does not wake the other member. When a regular member mentions the host, the host is woken after other room work finishes.
 - **Private chat and interruptions have limits.** They accept text only, not attachments or drawings. Manual and external members, and connections without visible output, do not support private chat.

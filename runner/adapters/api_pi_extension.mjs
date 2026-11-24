@@ -34,12 +34,14 @@ export default function codiscuss_room(pi) {
       // Room writes and file edits keep the order the model gave them, as the in-runner loop ran them.
       executionMode: 'sequential',
       async execute(_id, params, signal, _on_update, ctx) {
-        context.signal = signal || NEVER;
+        const edits = [];
+        const call_context = { ...context, signal: signal || NEVER, on_edits: paths => edits.push(...paths) };
         try {
-          const outcome = await execute_tool(context, { name: definition.name, arguments: params }, definitions);
+          const outcome = await execute_tool(call_context, { name: definition.name, arguments: params }, definitions);
           const terminal = Boolean(outcome.terminal);
           // An image read on demand goes with the result, through the same image input as the task's images.
-          return { content: [{ type: 'text', text: redact(result_text(outcome.result)) }, ...(outcome.images || [])], details: { codiscuss: { terminal } },
+          return { content: [{ type: 'text', text: redact(result_text(outcome.result)) }, ...(outcome.images || [])],
+            details: { codiscuss: { terminal, ...(edits.length ? { edits } : {}) } },
             isError: Boolean(outcome.result?.error), terminate: terminal };
         } catch (error) {
           if (signal?.aborted) throw error;
