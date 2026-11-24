@@ -2,6 +2,12 @@
 
 Versions match the npm package. Recorded from 0.5.0 on, listing only the changes you will notice. The Chinese version is `CHANGELOG.zh-CN.md`; on the website, click the version number at the top left to read it.
 
+## 0.5.19 (2026-11-23)
+
+- Fixed: Background share uploads failed immediately on brief network drops instead of retrying automatically.
+- Fixed: After a share failed, its card under "Shared" still showed upload progress and pushed buttons off screen.
+- Changed: Unticking attachments while sharing updates the selected count and size live, with a single scroll list and no extra sort buttons.
+
 ## 0.5.18 (2026-11-23)
 
 - New: Sharing prepares and uploads in the background even if you lock or leave the page, and "Filter files" supports preview and sorting.

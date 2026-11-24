@@ -2656,10 +2656,6 @@ test("share attachment filters open above the cap, sort without changing selecti
   assert.equal(vm.runInContext("filters_open.value", context), true);
   const files = [{ message_id: 2, size: 5, selected: true }, { message_id: 1, size: 12, selected: false, project: { path: "report.md", root: 1 } }];
   context.files = files;
-  assert.deepEqual(vm.runInContext("sorted_files(files)", context), files);
-  const sizes = vm.runInContext('sort_by.value = "size"; sorted_files(files)', context);
-  assert.deepEqual(Array.from(sizes, item => item.message_id), [1, 2]);
-  assert.deepEqual(files.map(item => item.selected), [true, false]);
   vm.runInContext("files.forEach(preview)", context);
   assert.equal(opened[0][0], "preview_attachment");
   assert.equal(opened[0][1].from_share, true);

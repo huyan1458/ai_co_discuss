@@ -2,11 +2,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, watch } from 'node:fs';
-import https from 'node:https';
 import { runInNewContext } from 'node:vm';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { site_fetch } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
@@ -120,23 +118,45 @@ function snapshot(job, payload, selection) {
   return { draft, files, bytes, body };
 }
 
-async function send_snapshot(path, method, body, token, signal) {
-  return (await checked(await fetch(SHARE_SITE + path, { method, body: JSON.stringify(body), redirect: 'error', signal,
-    headers: { 'Content-Type':'application/json', ...(token ? { Authorization:'Bearer ' + token } : {}) } }))).json();
+const UPLOAD_ATTEMPTS = 3;
+const UPLOAD_RETRY_BASE_MS = 250;
+
+function format_network_error(error) {
+  const cause = error?.cause?.message;
+  if (!cause || String(error.message || '').includes(cause)) return error;
+  return Object.assign(new Error(`${error.message}: ${cause}`), { status: error.status, permanent: error.permanent });
 }
 
-/** Pipe one selected file with backpressure; completion requires both the outgoing stream and its HTTP receipt. */
+function is_retryable(error, signal) {
+  return !signal.aborted && !error?.permanent && (!error?.status || error.status === 429 || error.status >= 500);
+}
+
+async function send_snapshot(path, method, body, token, signal) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await fetch(SHARE_SITE + path, { method, body: JSON.stringify(body), redirect: 'error', signal,
+        headers: { 'Content-Type':'application/json', ...(token ? { Authorization:'Bearer ' + token } : {}) } });
+      return (await checked(response)).json();
+    } catch (raw) {
+      const error = format_network_error(raw);
+      if (attempt >= 2 || !is_retryable(error, signal)) throw error;
+      await delay(attempt * UPLOAD_RETRY_BASE_MS, undefined, { signal });
+    }
+  }
+}
+
+/** Stream one selected file via fetch (reusing undici's pooled TLS/proxy transport). */
 async function send_file(url, headers, source, signal) {
-  const req = https.request(url, { method:'PUT', headers, signal });
-  const receipt = new Promise((resolve, reject) => {
-    req.once('error', reject);
-    req.once('response', response => {
-      response.resume();
-      if (response.statusCode >= 200 && response.statusCode < 300) resolve();
-      else reject(new Error(t('上传分享附件失败（HTTP {status}）', { status: response.statusCode })));
-    });
-  });
-  await Promise.all([receipt, pipeline(Readable.from(source), req, { signal })]);
+  const normalized = Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, String(value)]));
+  let response;
+  try {
+    response = await fetch(url, { method: 'PUT', headers: normalized, body: Readable.toWeb(Readable.from(source)),
+      duplex: 'half', redirect: 'error', signal });
+  } catch (error) {
+    throw format_network_error(error);
+  }
+  await response.body?.cancel().catch(() => {});
+  if (!response.ok) throw Object.assign(new Error(t('上传分享附件失败（HTTP {status}）', { status: response.status })), { status: response.status });
 }
 
 async function publish(config, job, plan, signal, transport, update) {
@@ -154,22 +174,31 @@ async function publish(config, job, plan, signal, transport, update) {
   await local_read(config, route, signal, { link }).then(r => r.json());
   const group = new AbortController(), active = AbortSignal.any([signal, group.signal]);
   await core.share_parallel(plan.files, SHARE_UPLOAD_CONCURRENCY, async file => {
-    try {
-      const input = await file_source(config, file, active);
-      async function* measured() {
-        let size = 0;
-        for await (const chunk of input) {
-          active.throwIfAborted(); size += chunk.length;
-          if (size > file.size) throw new Error(t('附件大小已变化，请重新整理分享'));
-          yield chunk;
-          update(0, chunk.length);
+    for (let attempt = 1; ; attempt++) {
+      let sent = 0;
+      try {
+        const input = await file_source(config, file, active);
+        async function* measured() {
+          let size = 0;
+          for await (const chunk of input) {
+            active.throwIfAborted(); size += chunk.length;
+            if (size > file.size) throw Object.assign(new Error(t('附件大小已变化，请重新整理分享')), { permanent: true });
+            yield chunk;
+            sent += chunk.length;
+            update(0, chunk.length);
+          }
+          if (size !== file.size) throw Object.assign(new Error(t('附件大小已变化，请重新整理分享')), { permanent: true });
         }
-        if (size !== file.size) throw new Error(t('附件大小已变化，请重新整理分享'));
+        await transport.file(SHARE_SITE + '/api/shares/' + link.share_id + '/files/' + file.id + '?revision=' + result.revision,
+          { Authorization: 'Bearer ' + link.manage_token, 'Content-Type': file.site_type, 'Content-Length': file.size }, measured(), active);
+        update(1, 0);
+        break;
+      } catch (error) {
+        if (sent) update(0, -sent);
+        if (attempt >= UPLOAD_ATTEMPTS || !is_retryable(error, active)) { group.abort(error); throw error; }
+        await delay(attempt * UPLOAD_RETRY_BASE_MS, undefined, { signal: active });
       }
-      await transport.file(SHARE_SITE + '/api/shares/' + link.share_id + '/files/' + file.id + '?revision=' + result.revision,
-        { Authorization: 'Bearer ' + link.manage_token, 'Content-Type': file.site_type, 'Content-Length': file.size }, measured(), active);
-      update(1, 0);
-    } catch (error) { group.abort(error); throw error; }
+    }
   });
   const card = core.share_card(plan.draft, link);
   return { url: link.url, expires_at: link.expires_at, updated, card: { ...card, question: card.question.slice(0, 600), outcome: card.outcome.slice(0, 600) } };

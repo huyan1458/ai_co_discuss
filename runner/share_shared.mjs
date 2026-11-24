@@ -257,9 +257,10 @@ export function create_share_core({ t, display_name, collapse_visual_fences, is_
       entry.files.push({ ...file, name: file.file_name, included: !draft.left_files?.has(file.route) });
     }
     return [...SHARE_FILE_KINDS.map(([kind]) => kind), "text"].filter(kind => kinds.has(kind)).map(kind => {
-      const entry = kinds.get(kind), taken = entry.files.filter(file => file.included).length;
+      const entry = kinds.get(kind), chosen = entry.files.filter(file => file.included);
+      const selected_count = chosen.length, selected_bytes = chosen.reduce((sum, file) => sum + file.size, 0);
       entry.files.sort((a, b) => b.message_id - a.message_id);
-      return { ...entry, included: taken === entry.count ? true : taken ? "indeterminate" : false };
+      return { ...entry, selected_count, selected_bytes, included: selected_count === entry.count ? true : selected_count ? "indeterminate" : false };
     });
   }
 

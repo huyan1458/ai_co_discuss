@@ -55,14 +55,10 @@ async function copy_share_link() {
 // Attachment kinds unfolded to their files in the share dialog; a new page starts folded.
 const open_kinds = ref(new Set());
 const filters_open = ref(false);
-const sort_by = ref("message");
-watch(() => share_draft.value?.room_id, () => { open_kinds.value = new Set(); sort_by.value = "message"; });
+watch(() => share_draft.value?.room_id, () => { open_kinds.value = new Set(); });
 watch(() => share_draft.value?.files.included, included => {
   filters_open.value = Boolean(included && share_draft.value.files.bytes > SHARE_SITE_FILES_MAX_BYTES);
 });
-function sorted_files(files) {
-  return sort_by.value === "size" ? [...files].sort((a, b) => b.size - a.size || b.message_id - a.message_id) : files;
-}
 function preview(file) {
   if (file.project) file_preview.open?.(file.project.path, "", file.project.root, file);
   else act("preview_attachment", { ...file, from_share: true });
@@ -131,26 +127,26 @@ function close_share(open) {
         <!-- Attachments go in only when the owner ticks this (user 2026-11-21): every kind of file, as it was sent. -->
         <section v-if="share_draft.files?.count" class="share-dialog-section">
           <div class="share-dialog-kind-head"><UCheckbox :model-value="share_draft.files.included" :disabled="share_phase !== 'ready'"
-            :label="t('包含附件（{count} 个，共 {size}）', { count: share_draft.files.count, size: bridge.attachment_size(share_draft.files.bytes) })" @update:model-value="act('share_include_files', $event)" />
+            :label="share_draft.files.included && share_draft.files.carried_count < share_draft.files.count
+              ? t('包含附件（已选 {selected}/{count} 个，共 {size}）', { selected: share_draft.files.carried_count, count: share_draft.files.count, size: bridge.attachment_size(share_draft.files.carried) })
+              : t('包含附件（{count} 个，共 {size}）', { count: share_draft.files.count, size: bridge.attachment_size(share_draft.files.bytes) })" @update:model-value="act('share_include_files', $event)" />
             <UButton v-if="share_draft.files.included" :icon="filters_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
               :label="filters_open ? t('收起') : t('筛选附件')" :aria-expanded="filters_open" size="xs" color="neutral" variant="ghost" @click="filters_open = !filters_open" />
           </div>
           <!-- Kinds of attachment the owner can leave out, as when a room's zips take it past what a link carries. -->
           <div v-if="share_draft.files.included && filters_open" class="share-dialog-kinds">
-            <div class="share-dialog-sort" role="group" :aria-label="t('附件排序')">
-              <UButton v-for="option in ['message', 'size']" :key="option" :label="option === 'message' ? t('最新在前') : t('按大小')"
-                :aria-pressed="sort_by === option" :variant="sort_by === option ? 'soft' : 'ghost'" size="xs" color="neutral" @click="sort_by = option" />
-            </div>
             <div v-for="kind in share_draft.files.kinds" :key="kind.kind" class="share-dialog-kind">
               <div class="share-dialog-kind-head">
                 <UCheckbox :model-value="kind.included" :disabled="share_phase !== 'ready'"
-                  :label="t('{kind} {count} 个 · {size}', { kind: kind.label, count: kind.count, size: bridge.attachment_size(kind.bytes) })"
+                  :label="kind.selected_count < kind.count
+                    ? t('{kind} {selected}/{count} 个 · {size}', { kind: kind.label, selected: kind.selected_count, count: kind.count, size: bridge.attachment_size(kind.selected_bytes) })
+                    : t('{kind} {count} 个 · {size}', { kind: kind.label, count: kind.count, size: bridge.attachment_size(kind.bytes) })"
                   @update:model-value="act('share_toggle_kind', { kind: kind.kind, include: $event === true })" />
                 <UButton :icon="open_kinds.has(kind.kind) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" color="neutral" variant="ghost" size="xs"
                   :label="open_kinds.has(kind.kind) ? t('收起') : t('逐个选择')" :aria-expanded="open_kinds.has(kind.kind)" @click="toggle_kind_open(kind.kind)" />
               </div>
               <ul v-if="open_kinds.has(kind.kind)" class="share-dialog-files">
-                <li v-for="file in sorted_files(kind.files)" :key="file.route">
+                <li v-for="file in kind.files" :key="file.route">
                   <UCheckbox :aria-label="file.name" :model-value="file.included" :disabled="share_phase !== 'ready'"
                     @update:model-value="act('share_toggle_file', { route: file.route, include: $event === true })" />
                   <div class="share-dialog-file-info">

@@ -47,7 +47,7 @@ test('managed shares preserve the reviewed snapshot, selections and room boundar
   const port = server.address().port, site = 'http://127.0.0.1:'+port;
   const config = join(home,'room.json'), json = (path, value) => writeFileSync(path, JSON.stringify(value));
   json(config,{ room, site, token, cwd:project }); json(join(home,'rooms.json'), { configs:[config] }); json(join(home,'local-settings.json'),{port});
-  let active = 0, peak = 0, fail = false, slow = true, gone = true;
+  let active = 0, peak = 0, fail = false, transient = 0, slow = true, gone = true;
   const methods = [], bodies = [];
   const transport = {
     snapshot: async (path, method, body) => {
@@ -63,6 +63,7 @@ test('managed shares preserve the reviewed snapshot, selections and room boundar
         for await (const chunk of source) transferred+=chunk.length;
         assert.equal(transferred,headers['Content-Length']);
         await delay(slow ? 2000 : 20,undefined,{signal});
+        if (transient > 0) { transient--; throw new Error('Client network socket disconnected before secure TLS connection was established'); }
         if (fail) throw new Error('receipt unavailable');
       } finally { active--; }
     }
@@ -93,8 +94,8 @@ test('managed shares preserve the reviewed snapshot, selections and room boundar
     fail=false; slow=true; op('retry'); await wait_for(()=>active,v=>v===6); manager.close();
     await wait_for(()=>active,v=>v===0); manager=start_share_manager(home,{transport}); assert.equal(op('get').phase,'failed');
     assert.equal(op('get').error,'服务已重启，请重试');
-    slow=false; op('retry'); const done=await wait_for(()=>op('get'),j=>j.phase==='published');
-    assert.equal(peak,6); assert.equal(done.progress.done,7); assert.equal(done.progress.bytes_done,done.progress.bytes_total);
+    slow=false; transient=1; op('retry'); const done=await wait_for(()=>op('get'),j=>j.phase==='published');
+    assert.equal(transient,0); assert.equal(peak,6); assert.equal(done.progress.done,7); assert.equal(done.progress.bytes_done,done.progress.bytes_total);
     assert.ok(done.result.updated); assert.equal(done.result.card.url,link.url); assert.ok(!JSON.stringify(done).includes(link.manage_token)); assert.equal(secret_read,false);
     op('dismiss'); assert.deepEqual(manager.command({op:'list'}).jobs,[]);
 

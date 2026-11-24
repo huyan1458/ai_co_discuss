@@ -265,9 +265,10 @@ function create_share_core({ t, display_name, collapse_visual_fences, is_text_at
       entry.files.push({ ...file, name: file.file_name, included: !draft.left_files?.has(file.route) });
     }
     return [...SHARE_FILE_KINDS.map(([kind]) => kind), "text"].filter(kind => kinds.has(kind)).map(kind => {
-      const entry = kinds.get(kind), taken = entry.files.filter(file => file.included).length;
+      const entry = kinds.get(kind), chosen = entry.files.filter(file => file.included);
+      const selected_count = chosen.length, selected_bytes = chosen.reduce((sum, file) => sum + file.size, 0);
       entry.files.sort((a, b) => b.message_id - a.message_id);
-      return { ...entry, included: taken === entry.count ? true : taken ? "indeterminate" : false };
+      return { ...entry, selected_count, selected_bytes, included: selected_count === entry.count ? true : selected_count ? "indeterminate" : false };
     });
   }
 
@@ -7723,11 +7724,12 @@ function view_snapshot() {
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
     share: SHARE ? { exported_at: SHARE.exported_at, home: SHARE_HOME } : null,
     managed_share_jobs: [...managed_share_jobs.values()].sort((a,b) => b.created_at.localeCompare(a.created_at)),
-    share_tasks: Object.fromEntries([...share_tasks].map(([id, draft]) => [id, { phase: draft.phase, upload: draft.upload ? { ...draft.upload } : null }])),
+    share_tasks: Object.fromEntries([...share_tasks].filter(([, draft]) => !draft.managed_id).map(([id, draft]) => [id, { phase: draft.phase, upload: draft.upload ? { ...draft.upload } : null }])),
     share_draft: share_draft ? { room_id: share_draft.room_id, title: share_draft.title, phase: share_draft.phase || "ready",
       spots: [...share_draft.spots || [], ...share_draft.include_files ? share_draft.file_spots || [] : []],
       files: { count: share_draft.files?.length || 0, bytes: (share_draft.files || []).reduce((total, file) => total + file.size, 0), included: Boolean(share_draft.include_files),
         kinds: share_draft.files ? share_file_kinds(share_draft) : [], carried: share_carried_files(share_draft, false).reduce((total, file) => total + file.size, 0),
+        carried_count: share_carried_files(share_draft, false).length,
         site_left_out: (share_draft.files || []).filter(file => !file.site_type).map(file => file.file_name) },
       days: share_draft.days || SHARE_DEFAULT_DAYS, linked: Boolean(share_draft.linked || share_link(share_draft.room_id)), link: share_draft.link || null, upload: share_draft.upload ? { ...share_draft.upload } : null } : null,
     share_links: SHARE ? {} : share_links(), share_days: SHARE_DAYS,
@@ -8093,8 +8095,9 @@ function remember_share_job(job, announce) {
   managed_share_jobs.set(job.id, job);
   if (job.result && job.phase === "published") show_share_link(job.room_id, job.result);
   const draft = share_tasks.get(job.room_id);
-  if (draft?.managed_id === job.id && !["failed","cancelled"].includes(job.phase)) {
-    draft.phase = job.phase; draft.upload = job.progress; draft.link = job.result;
+  if (draft?.managed_id === job.id) {
+    if (["failed", "cancelled"].includes(job.phase)) share_tasks.delete(job.room_id);
+    else { draft.phase = job.phase; draft.upload = job.progress; draft.link = job.result; }
   }
   if (announce && prior?.phase !== job.phase) {
     const open = { label: job.phase === "published" ? t("查看分享卡") : t("打开分享"), onClick: () => share_job_action({ op: "open", job }) };

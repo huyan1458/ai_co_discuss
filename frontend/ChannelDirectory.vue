@@ -390,7 +390,7 @@ function actions(room, index, folder_id, folder_room_count) {
             <div class="shared-room-side">
               <span class="shared-room-expiry"><UIcon name="i-lucide-clock" />{{ expiry_label(room.share_link) }}</span>
               <div class="shared-room-actions">
-                <UButton v-if="view.share_tasks?.[room.id]?.phase === 'publishing'" color="primary" size="xs" variant="soft"
+                <UButton v-if="!jobs.some(job => job.room_id === room.id) && view.share_tasks?.[room.id]?.phase === 'publishing'" color="primary" size="xs" variant="soft"
                   :label="view.share_tasks[room.id].upload ? t('正在上传附件 {done}/{total}', view.share_tasks[room.id].upload) : t('正在上传…')"
                   @click="shares_open = false; emit('manage', { room, action: 'share_open' })" />
                 <UTooltip :text="t('复制链接')"><UButton icon="i-lucide-copy" size="xs" color="neutral" variant="ghost" :aria-label="t('复制「{name}」的分享链接', { name: room.title })" @click="act('share_copy', room.id)" /></UTooltip>
