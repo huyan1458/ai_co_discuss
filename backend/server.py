@@ -3447,6 +3447,8 @@ ADMIN_COOKIE_SECONDS = 30 * 86400
 RELAY_READ_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
 RELAY_READ_HEADER = "X-CoDiscuss-Relay-Request-Id"
 SLOW_RELAY_READ_MS = 500
+# A request taking this long is logged with its duration, so a stalled site shows which requests it was stuck on.
+SLOW_REQUEST_MS = 3000
 FULL_RELAY_READ_TIMING = os.getenv("CODISCUSS_RELAY_READ_TIMING") == "1"
 
 
@@ -3560,6 +3562,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         self.api_record = None
         self.deferred_response = None
         self.started_ms = int(time.time() * 1000)
+        self.streaming = False
+        started = time.perf_counter()
         parsed = urlsplit(self.path)
         params = {key: values[-1] for key, values in parse_qs(parsed.query).items()}
         self.request_params = params
@@ -3574,6 +3578,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 self.api_record = None
             if self.deferred_response:
                 self.send_payload(*self.deferred_response)
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            if elapsed_ms >= SLOW_REQUEST_MS and not self.streaming:
+                logging.warning("slow request %s %s %d ms", method, parsed.path, elapsed_ms)
 
     def entry_refused(self, method, parsed):
         """Under entry protection: answer a hello, or refuse a request that is neither public nor proven on its connection."""
@@ -3689,6 +3696,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
     def stream_updates(self):
         """Stream invalidations without holding a database connection or exposing records."""
+        self.streaming = True
         self.close_connection = True
         self.connection.settimeout(5)
         hub = self.server.hub

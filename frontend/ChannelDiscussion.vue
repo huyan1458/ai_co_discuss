@@ -676,6 +676,20 @@ const ACTIVITY_LABELS = { thinking: t('正在执行'), command: t('正在运行�
 const free_members = computed(() => (room.value.free?.members || []).filter((member) => member.status === "active" && !awaiting_member(member)));
 /** Declared before `free_busy` too: its cards' line marks (line_marks) read the host. */
 const free_host = computed(() => free_members.value.find((member) => member.role === "host"));
+/**
+ * Who hosted when message `at` was posted (user 2026-11-25, #10406: the host changes over a long task). The site lists
+ * each host's term from the event log; live cards (no message ID) and rooms without recorded terms use today's host.
+ */
+function host_at(at) {
+  const terms = room.value.free?.host_terms || [];
+  if (typeof at !== "number" || !terms.length) return free_host.value?.name;
+  let name = null;
+  for (const term of terms) {
+    if (term.from != null && term.from > at) break;
+    name = term.name;
+  }
+  return name ?? free_host.value?.name;
+}
 /** All room work uses member executions; queued requests stay in the side panel. */
 const free_busy = computed(() => {
   if (room.value.archived) return [];
@@ -912,9 +926,9 @@ function answer_execution(message) {
  * owner set (relay steps, members in turn); a branch is work the owner or host named a member for directly, alongside it.
  * The host's own cards are marked as the host's. Returns the badges for the card header and the class for its edge.
  */
-function line_marks(author, execution, kind = "") {
+function line_marks(author, execution, kind = "", at = null) {
   // One way to say "the host" on every card (user 2026-11-21): a host note is marked 主持 as well.
-  const host = free_host.value?.name === author || kind === "moderation";
+  const host = host_at(at) === author || kind === "moderation";
   const line = execution?.line;
   const badges = [];
   if (host) badges.push({ key: "host", label: t('主持'), title: t('主持人：接收未点名的消息并分派工作') });
@@ -2081,7 +2095,8 @@ function matches_filter(item) {
   if (view.value.card_kinds.some((kind) => CARD_KINDS[kind]?.(item))) return true;
   // A speaker filter also keeps that member's own working, failed and stopped cards.
   if (view.value.authors.includes(item.author)) return true;
-  const host = room.value.members?.find((member) => member.role === "host")?.name;
+  // The host view follows whoever hosted at that point; a failed card sits under the message its work began at.
+  const host = host_at(item.slot_card ? item.layout_after : item.id);
   if (view.value.host_only && host && item.author === host) return true;
   if (item.slot_card) return false;
   // The host view also carries the program's notices to the host and Goal progress.
@@ -2130,7 +2145,7 @@ const free_failures = computed(() => {
     .map((execution) => ({ id: `failed-${execution.id}`, author: execution.member || names.get(execution.member_id) || t('成员'), slot_card: true, created_at: execution.created_at,
       execution_id: execution.id, request_message_id: execution.request_message_id, layout_after: execution.layout_after,
       layout_at: execution.layout_at, discussion_request: execution.requests?.find((request) => request.discussion_session_id),
-      marks: line_marks(execution.member || names.get(execution.member_id), execution),
+      marks: line_marks(execution.member || names.get(execution.member_id), execution, "", execution.layout_after),
       failure: { ...execution, followed: followed.has(execution.id), elapsed_seconds: execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null } }))
     .concat(undeliverable_requests());
 });
@@ -2157,6 +2172,22 @@ const rewound_runs = stable_computed(() => {
   }
   return { runs, hidden };
 });
+/**
+ * Consecutive program notices to the host share one card at the first of them (user 2026-11-25, #10413): they each only
+ * say a batch came back, and the host is woken once for them anyway. Timed checks folded with their answer, notices
+ * hidden behind a host failure and any other message break a run; a lone notice keeps its own card.
+ */
+const notice_runs = stable_computed(() => {
+  const runs = new Map(), hidden = new Set();
+  let start = null;
+  for (const message of view.value.messages) {
+    if (message.source !== "notice" || quiet_checkins.value.has(message.id) || failure_wakes.value.has(message.id)) { start = null; continue; }
+    if (start === null) { start = message.id; runs.set(start, []); }
+    runs.get(start).push(message);
+    if (start !== message.id) hidden.add(message.id);
+  }
+  return { runs, hidden };
+});
 function toggle_rewound(id) {
   const next = new Set(expanded_rewinds.value);
   if (!next.delete(id)) next.add(id);
@@ -2173,7 +2204,7 @@ function toggle_rewound(id) {
 /** Slot card id → id of the message it shows under; filled with the layout, read when locating a filtered card. */
 const layout_anchors = new Map();
 const free_layout = computed(() => {
-  const messages = view.value.messages.filter((message) => !rewound_runs.value.hidden.has(message.id)
+  const messages = view.value.messages.filter((message) => !rewound_runs.value.hidden.has(message.id) && !notice_runs.value.hidden.has(message.id)
     && !(message.source === "notice" && failure_wakes.value.has(message.id)) && !folded_checkin_answers.value.has(message.id));
   // Work on a taken-back message is no longer shown; a failure there is dropped too.
   const taken_back = new Set(view.value.messages.filter((message) => message.withdrawn).map((message) => message.id));
@@ -3564,7 +3595,7 @@ function message_card(message) {
     armed: armed_cards.has(message.id), menu_open: menu_open_id.value === message.id, locate: view_source_filter.value,
   };
   // Set after the dependencies are read: a fresh object each time would re-render every card; its text and edge stand in for it.
-  const line = line_marks(message.author, execution, message.kind);
+  const line = line_marks(message.author, execution, message.kind, message.id);
   line.badges.push(...dispatch_badges(message.id));
   card.deps = [...Object.values(card), ...line.badges.map((badge) => badge.label), line.edge];
   card.line = line;
@@ -3793,7 +3824,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :removable="!mark_editing.touch" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? docked_sheet_style() : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
     <!-- A locate far back waits for the earlier cards to render; the end of the room stays covered meanwhile so it is not taken for the result. -->
     <div v-if="locating !== null" class="channel-locating" role="status"><UIcon name="i-lucide-loader" class="animate-spin" />{{ locating_label || t('正在定位到 #{value1}…', { value1: locating }) }}</div>
-    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, message_groups,view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, is_running('rewind_and_send'), is_running('skip_turn'), is_running('pause_discussion'), is_running('retry_delivery'), open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, notice_runs, message_groups,view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, is_running('rewind_and_send'), is_running('skip_turn'), is_running('pause_discussion'), is_running('retry_delivery'), open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view_query && !view_source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -3818,6 +3849,15 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #text><span class="channel-checkin-line">{{ t('定时检查 · {value1}：{value2}', { value1: bridge.display_name(quiet_checkins.get(message.id).author), value2: quiet_checkins.get(message.id).text.replace(/^定时检查[：:]\s*/, '') }) }}</span></template>
           <p>{{ message.text }}</p>
           <p class="channel-checkin-answer">{{ quiet_checkins.get(message.id).text }}</p>
+        </ScheduleCard>
+        <ScheduleCard v-else-if="message.source === 'notice' && notice_runs.runs.get(message.id)?.length > 1" icon="i-lucide-bell" plain :label="t('程序通知主持人')" :toggle-label="t('展开或收起各条程序通知')">
+          <template #text><span class="channel-checkin-line">{{ t('{value1} 条程序通知：{value2}', { value1: notice_runs.runs.get(message.id).length, value2: notice_runs.runs.get(message.id).map((item) => item.text).join('；') }) }}</span></template>
+          <ul class="channel-withdrawn-list">
+            <li v-for="item in notice_runs.runs.get(message.id)" :key="item.id" :data-message-id="item.id">
+              <span class="channel-withdrawn-text" :title="item.text">{{ item.text }}</span>
+              <UButton :label="`#${item.id}`" size="xs" variant="link" color="neutral" :aria-label="t('查看程序通知原文 #{value1}', { value1: item.id })" @click="emit('detail', item.id)" />
+            </li>
+          </ul>
         </ScheduleCard>
         <ScheduleCard v-else-if="message.source === 'notice'" icon="i-lucide-bell" plain fold :label="t('程序通知主持人')">
           <template #text>{{ message.text }}</template>

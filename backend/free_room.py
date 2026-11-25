@@ -41,6 +41,13 @@ REVIEW_STATE_SQL = """SELECT json_object(
  'withdrawn',(SELECT json_group_array(message_id) FROM message_withdrawals WHERE message_id IN (SELECT id FROM messages WHERE room_id=rooms.id))
 ) AS state FROM rooms WHERE id=?"""
 RECENT_REQUESTS = 100
+# When the website or the local service stalls, every lease lapses together though no member failed: a lapsed lease
+# fails its execution only once renewals have been reaching this site again for this long (a gap this long is a stall).
+STALL_GRACE_SECONDS = 60
+# With no renewal reaching the site at all for this long, the runner is taken as gone and lapsed leases fail anyway.
+STALL_CAP_SECONDS = 600
+# When this process last took a renewal, and when renewals resumed after a gap; process start counts as both.
+renewal_clock = {"last": int(time.time()), "resumed": int(time.time())}
 ADOPT_REASON_LIMIT = 500
 RECENT_EXECUTIONS = 100
 # Upper bound for an open-ended message id range.
@@ -1180,6 +1187,38 @@ def room_quiet_checkins(connection, room_id, span=None):
     return [dict(row) for row in rows]
 
 
+# Every time a member became host or stopped being host, with the first message posted after it (NULL when none yet).
+HOST_CHANGES_SQL = """SELECT m.name, json_extract(e.data,'$.role')='host' AS took,
+    (SELECT json_extract(p.data,'$.message_id') FROM room_events p WHERE p.room_id=e.room_id AND p.kind='message.posted'
+        AND p.id>e.id ORDER BY p.id LIMIT 1) AS first
+    FROM room_events e JOIN room_members m ON m.id=json_extract(e.data,'$.member_id')
+    WHERE e.room_id=? AND e.kind IN ('member.joined','member.changed')
+        AND (json_extract(e.data,'$.role')='host') <> (json_extract(e.data,'$.from_role') IS 'host')
+    ORDER BY e.id"""
+
+
+def host_terms(connection, room_id):
+    """Who hosted the room over time, so the page marks and filters each message by the host of its moment.
+
+    Returns:
+        A list of ``{"name", "from"}`` in order: ``name`` hosted from message ``from`` (inclusive) until the next term;
+        ``from`` is None for the first term when it covers the room's start. Empty when the event log records no change.
+    """
+    terms = []
+    next_id = None
+    for row in connection.execute(HOST_CHANGES_SQL, (room_id,)):
+        if not row["took"]:
+            # A host leaving before any recorded arrival hosted from the room's start (rooms older than the event log).
+            if not terms:
+                terms.append({"name": row["name"], "from": None})
+            continue
+        if row["first"] is None and next_id is None:
+            next_id = connection.execute("SELECT COALESCE(MAX(id),0)+1 FROM messages WHERE room_id=?", (room_id,)).fetchone()[0]
+        start = row["first"] if row["first"] is not None else next_id
+        terms.append({"name": row["name"], "from": None if not terms else start})
+    return terms
+
+
 def free_view(connection, room_id):
     """Summarize members, their live execution, recent requests and possible file conflicts."""
     now = int(time.time())
@@ -1242,7 +1281,7 @@ def free_view(connection, room_id):
     # A timed check the host answered without dispatching folds its answer into the check's own line.
     quiet_checkins = room_quiet_checkins(connection, room_id)
     return {"failure_wakes": failure_wakes, "quiet_checkins": quiet_checkins, "host_checkin": {"minutes": checkin["interval_seconds"] // 60, "due_at": checkin["due_at"]} if checkin else None,
-            "members": members, "ended_externals": external_members.ended_view(connection, room_id),
+            "members": members, "host_terms": host_terms(connection, room_id), "ended_externals": external_members.ended_view(connection, room_id),
             "requests": requests[::-1], "executions": recent_executions(connection, room_id),
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_rounds": max_rounds,
             "chain_rounds": progress, "recommendations": recent_recommendations(connection, room_id, now)[::-1],
@@ -1537,7 +1576,7 @@ def check_answer(connection, room_id, member, payload):
     revived = revive_failed(connection, room_id, row) if row["status"] == "failed" else None
     if revived:
         row = revived
-    elif row["status"] not in ACTIVE or row["lease_until"] <= int(time.time()):
+    elif row["status"] not in ACTIVE or lease_expired(row["lease_until"], int(time.time())):
         if row["status"] == "cancelled":
             # Kept apart from the transcript: the page shows it folded, and it marks the end of a turn the runner could not stop.
             connection.execute("INSERT OR IGNORE INTO late_answers (execution_id,room_id,text,created_at) VALUES (?,?,?,?)",
@@ -2896,11 +2935,35 @@ def queued_requests(connection, member_id):
         AND NOT EXISTS (SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id) ORDER BY r.id""", (member_id,))]
 
 
+def record_renewal(now):
+    """Note a renewal reaching the site; the first after a gap of STALL_GRACE_SECONDS marks renewals resuming."""
+    if now - renewal_clock["last"] > STALL_GRACE_SECONDS:
+        renewal_clock["resumed"] = now
+    renewal_clock["last"] = now
+
+
+def lease_expired(lease_until, now):
+    """Whether a lapsed lease means its runner stopped renewing, rather than the site or the local service stalling.
+
+    A stall (user 2026-11-25, #10420: 48 executions failed while the site was unresponsive and their members kept
+    working) lapses every lease at once. So a lapse counts only while renewals reach the site and have done so for
+    STALL_GRACE_SECONDS since both the lapse and their last gap, which gives each runner a renewal after the site
+    recovers; or once the lease lapsed STALL_CAP_SECONDS ago, when its runner is taken as gone.
+    """
+    if lease_until > now:
+        return False
+    if now - lease_until >= STALL_CAP_SECONDS:
+        return True
+    flowing = now - renewal_clock["last"] <= STALL_GRACE_SECONDS
+    return flowing and now - max(renewal_clock["resumed"], lease_until) >= STALL_GRACE_SECONDS
+
+
 def expire_executions(connection, room_id):
     """Fail executions whose lease lapsed; their requests stay visible as failed, never silently retried."""
     now = int(time.time())
-    stale = connection.execute(
-        "SELECT id FROM member_executions WHERE room_id=? AND status IN ('dispatched','started') AND lease_until<=?", (room_id, now)).fetchall()
+    stale = [row for row in connection.execute(
+        "SELECT id,lease_until FROM member_executions WHERE room_id=? AND status IN ('dispatched','started') AND lease_until<=?",
+        (room_id, now)).fetchall() if lease_expired(row["lease_until"], now)]
     for row in stale:
         finish_execution(connection, row["id"], "failed", Text("执行租约到期，接入程序未续租"), "failed")
     if stale:
@@ -3864,8 +3927,9 @@ def execution_action(connection, room_id, execution_id, token, payload, member=N
         raise FileExistsError(Text("执行已结束"))
     elif action == "renew":
         # No time limit on one execution: it runs while the runner keeps renewing.
-        if row["lease_until"] <= now:
+        if lease_expired(row["lease_until"], now):
             raise FileExistsError(Text("执行租约已到期，不能续租"))
+        record_renewal(now)
         # Older runners renew without activity; the last reported one is kept.
         activity, activity_at = renewed_activity(payload, row, now) if "activity" in payload else (row["activity"], row["activity_at"])
         notes = renewed_notes(payload)

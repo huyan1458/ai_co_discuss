@@ -2,6 +2,12 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.26 (2026-11-24 20:25)
+
+- Fixed: When the website or the local service stalled briefly, members' work in progress was wrongly marked as failed.
+- Changed: Several program notices to the host in a row now share one card instead of flooding the room.
+- Changed: In rooms where the host changed partway, each message shows the host at that time.
+
 ## 0.5.25 (2026-11-24 10:58)
 
 - Changed: When the host is woken automatically after a failed run, the failed card stays visible with the new run right below it.

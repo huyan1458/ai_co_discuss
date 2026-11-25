@@ -75,9 +75,17 @@ const EFFECT_OPTIONS = [{ value: "full", label: t("完整") }, { value: "reduced
 // How readily long answers fold; ChannelDiscussion.vue MESSAGE_FOLD_LEVELS gives each level's heights.
 // Text size inside message cards; channel.css maps each value to --card-text-scale.
 const CARD_TEXT_OPTIONS = [{ value: "small", label: t("小") }, { value: "medium", label: t("中") }, { value: "large", label: t("大") }];
-const FOLD_OPTIONS = [{ value: "loose", label: t("宽松") }, { value: "standard", label: t("标准") }, { value: "compact", label: t("紧凑") }];
+const FOLD_OPTIONS = [
+  { value: "loose", label: t("宽松"), title: t("回答超过约 1.2 屏时收起。") },
+  { value: "standard", label: t("标准"), title: t("回答超过约 0.7 屏时收起。") },
+  { value: "compact", label: t("紧凑"), title: t("回答超过约 0.5 屏时收起。") },
+];
 // How much a folded answer keeps; ChannelDiscussion.vue MESSAGE_FOLD_KEEP_SHARES gives each level's share of the screen.
-const FOLD_KEEP_OPTIONS = [{ value: "short", label: t("少") }, { value: "medium", label: t("中") }, { value: "long", label: t("多") }];
+const FOLD_KEEP_OPTIONS = [
+  { value: "short", label: t("少"), title: t("保留开头约 0.35 屏。") },
+  { value: "medium", label: t("中"), title: t("保留开头约 0.6 屏。") },
+  { value: "long", label: t("多"), title: t("保留开头约 0.9 屏。") },
+];
 const READING_WIDTHS = { narrow: { label: t("窄"), width: 720 }, default: { label: t("默认"), width: 960 }, wide: { label: t("宽"), width: 1240 } };
 const RAIL_MIN = 220;
 const RAIL_MAX = 440;
@@ -144,8 +152,8 @@ const CARD_FILTERS = [
 const source_filter_items = computed(() => {
   const keep_open = (event) => event.preventDefault();
   const toggle_author = (name, checked) => act("filter", { authors: checked ? [...view.value.authors, name] : view.value.authors.filter((item) => item !== name) });
-  const host = (room.value?.members || []).find((member) => member.role === "host")?.name;
-  const members = (room.value?.members || []).filter((member) => member.name !== host).map((member) => ({
+  // Every member is listed, the current host too: "主持人" picks whoever hosted at each point, a name picks that member.
+  const members = (room.value?.members || []).map((member) => ({
     type: "checkbox", label: bridge.display_name(member.name), checked: view.value.authors.includes(member.name),
     onUpdateChecked: (checked) => toggle_author(member.name, checked), onSelect: keep_open,
   }));
@@ -159,7 +167,6 @@ const source_filter_items = computed(() => {
     type: "checkbox", label: kind.label, icon: kind.icon, checked: view.value.card_kinds.includes(kind.value), onSelect: keep_open,
     onUpdateChecked: (checked) => act("filter", { kinds: checked ? [...view.value.card_kinds, kind.value] : view.value.card_kinds.filter((item) => item !== kind.value) }),
   }))]);
-  if (view.value.source_filter) groups.push([{ label: t("清除筛选"), icon: "i-lucide-x", onSelect: () => act("filter", { host: false, mention: false, authors: [], kinds: [] }) }]);
   return groups;
 });
 // On phones the filter menu hugs the screen's right edge: an oversized offset is clamped back by the collision padding.
@@ -520,7 +527,8 @@ function resize_nav_by_key(event) {
                 <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="channel-search-clear" :aria-label="t('清除搜索')" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" :aria-label="t('搜索')" :disabled="!room" /></template>
               </UInput>
             </form>
-            <UDropdownMenu v-if="!share && !middle_page && view.tab === 'discussion'" :items="source_filter_items" :disabled="!room" :content="source_filter_content" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" :aria-label="t('筛选消息与卡片')" :title="t('筛选消息与卡片')" :disabled="!room" /></UDropdownMenu>
+            <!-- Not modal: a modal menu blocks taps outside it, so on phones the filter icon could not close it again (user 2026-11-25, #10412). -->
+            <UDropdownMenu :modal="false" v-if="!share && !middle_page && view.tab === 'discussion'" :items="source_filter_items" :disabled="!room" :content="source_filter_content" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" :aria-label="t('筛选消息与卡片')" :title="t('筛选消息与卡片')" :disabled="!room" /></UDropdownMenu>
           </div>
           <UTooltip v-if="!workflow_page" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_toggles && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
           <UTooltip v-else-if="!workflow_stacked && (workflow_draft || workflow_loading)" :text="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md：主持人照它派活')"><UButton icon="i-lucide-panel-right" label="SKILL.md" color="neutral" variant="ghost" size="sm" class="channel-workflow-skill-toggle channel-panel-toggle" :aria-label="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md')" :aria-expanded="workflow_skill_open" :aria-pressed="workflow_skill_open" aria-controls="workflow-skill-panel" @click="workflow_library.set_skill_open(!workflow_skill_open)" /></UTooltip>

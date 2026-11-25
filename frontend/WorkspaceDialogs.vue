@@ -442,12 +442,12 @@ const keep_open = (event) => event.preventDefault();
             <div class="channel-reading-options" role="group" aria-labelledby="channel-card-text-label"><UButton v-for="option in cardTextOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: card_text === option.value }" :aria-pressed="card_text === option.value" @click="card_text = option.value" /></div>
           </section>
           <section class="channel-setting-row">
-            <h3 id="channel-fold-label">{{ t("长回答折叠") }}</h3>
-            <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-label"><UButton v-for="option in foldOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_level === option.value }" :aria-pressed="fold_level === option.value" @click="fold_level = option.value" /></div>
+            <h3 id="channel-fold-label" :title="t('按回答占几屏来判断。')">{{ t("回答超过多长就收起？") }}</h3>
+            <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-label"><UButton v-for="option in foldOptions" :key="option.value" :label="option.label" :title="option.title" color="neutral" variant="ghost" :class="{ chosen: fold_level === option.value }" :aria-pressed="fold_level === option.value" @click="fold_level = option.value" /></div>
           </section>
           <section class="channel-setting-row">
-            <h3 id="channel-fold-keep-label">{{ t("折叠后显示") }}</h3>
-            <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-keep-label"><UButton v-for="option in foldKeepOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_keep === option.value }" :aria-pressed="fold_keep === option.value" @click="fold_keep = option.value" /></div>
+            <h3 id="channel-fold-keep-label" :title="t('收起后保留多少开头内容？')">{{ t("折叠后显示") }}</h3>
+            <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-keep-label"><UButton v-for="option in foldKeepOptions" :key="option.value" :label="option.label" :title="option.title" color="neutral" variant="ghost" :class="{ chosen: fold_keep === option.value }" :aria-pressed="fold_keep === option.value" @click="fold_keep = option.value" /></div>
           </section>
         </div>
         <h3 class="account-appearance-heading">{{ t("房间偏好") }}</h3>

@@ -5,6 +5,7 @@ import { LEVELS, LEVEL_SHORT, awaiting_member, copy_seat_link, external_ai, exte
  * entry to the same actions, so nothing here hides behind a menu.
  */
 import { computed, inject, onBeforeUnmount, ref, shallowRef, watch } from "vue";
+import { find_room_storage, format_storage_bytes, normalize_storage_snapshot, storage_ratio, storage_tone } from "./storage-format.js";
 import ApiRequestsField from "./ApiRequestsField.vue";
 import AutoDestroyField from "./AutoDestroyField.vue";
 import ImageService from "./ImageService.vue";
@@ -390,6 +391,43 @@ const destroy_left = computed(() => {
   return hours >= 24 ? t("还剩 {count} 天", { count: Math.ceil(hours / 24) }) : t("还剩 {count} 小时", { count: hours });
 });
 const created = computed(() => room.value.created_at ? new Date(room.value.created_at).toLocaleString("zh-CN", { hour12: false }) : "");
+/** Current room draft usage and service-wide storage status from the local or paired computer. */
+const storage_snapshot = computed(() => normalize_storage_snapshot(view.value.launch.storage));
+const room_storage = computed(() => {
+  const snap = storage_snapshot.value;
+  if (!snap || !view.value.launch.available || room.value.archived) return null;
+  const entry = find_room_storage(snap, room.value.id, view.value.launch.room_models?.draft_key || "");
+  const used = entry ? entry.bytes : 0;
+  const limit = snap.limits.room_draft_bytes;
+  const room_tone = storage_tone(used, limit, snap.limits.warn_ratio);
+  const global_tone = snap.truncated || snap.over_limit ? "error" : snap.warning ? "warning" : "normal";
+  const tone = room_tone === "error" || global_tone === "error" ? "error" : room_tone === "warning" || global_tone === "warning" ? "warning" : "normal";
+  return {
+    entry,
+    used,
+    limit,
+    ratio: storage_ratio(used, limit),
+    room_tone,
+    global_tone,
+    tone,
+    scratch_bytes: entry ? entry.scratch_bytes : 0,
+    total_bytes: snap.total_bytes,
+    local_bytes: snap.local_bytes,
+    unreadable: snap.unreadable,
+    home_limit: snap.limits.home_limit_bytes,
+    home_warning: snap.warning || snap.over_limit,
+  };
+});
+const cleaning_storage = computed(() => {
+  const list = view.value.launch.storage_cleaning || [];
+  const entry = room_storage.value?.entry;
+  return list.includes(room.value.id) || list.includes("__all__") || Boolean(entry?.key && list.includes(entry.key));
+});
+function clean_room_temp() {
+  const entry = room_storage.value?.entry;
+  if (entry?.key && room.value.id) bridge.clean_storage({ room_key: entry.key, room_id: room.value.id });
+}
+watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_storage?.(); }, { immediate: true });
 </script>
 
 <template>
@@ -477,8 +515,10 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
             <div v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="bridge.display_path(saved.participants[member.name].outside_directory)">
               <UIcon name="i-lucide-triangle-alert" /><span>{{ t('在 {path} 工作，房间目录{access}', { path: bridge.display_path(saved.participants[member.name].outside_directory), access: saved.participants[member.name].outside_enforced ? t('只读') : t('只读（仅任务要求，程序拦不住）') }) }}</span></div>
             <!-- A host that keeps failing stalls the room; the owner is told how to hand the role to someone else (应 18). -->
-            <div v-if="free && member.role === 'host' && live(member).execution?.status === 'failed'" class="overview-outside" role="status">
-              <UIcon name="i-lucide-triangle-alert" /><span>{{ t('主持人最近一次执行失败：{reason}。若它长期不可用（如额度用尽），在另一位成员卡片右上角点“设为主持人”换人。', { reason: live(member).execution.result || t('原因未知') }) }}</span></div>
+            <!-- One line with the reason only; the full reason and how to change host show on hover (user 2026-11-25, #10424). -->
+            <div v-if="free && member.role === 'host' && live(member).execution?.status === 'failed'" class="overview-outside" role="status"
+              :title="t('主持人最近一次执行失败：{reason}。若它长期不可用（如额度用尽），在另一位成员卡片右上角点“设为主持人”换人。', { reason: live(member).execution.result || t('原因未知') })">
+              <UIcon name="i-lucide-triangle-alert" /><span>{{ t('主持人最近一次执行失败：{reason}', { reason: live(member).execution.result || t('原因未知') }) }}</span></div>
           </dl>
           <footer class="member-card-actions" :aria-label="t('{name} 的操作', { name: member.name })">
             <div><UButton v-for="item in actions(member).taking_part" :key="item.label" class="member-card-tool" :icon="item.icon" :label="item.label" size="xs" variant="ghost" color="neutral" :disabled="item.disabled" @click="item.onSelect()" />
@@ -534,6 +574,33 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
         <div v-if="created"><dt>{{ t("创建时间") }}</dt><dd>{{ created }}</dd></div>
       </dl>
     </section>
+    <details v-if="room_storage" :key="room.id" class="pb-storage" :class="`is-${room_storage.tone}`" :aria-label="t('草稿空间')">
+      <summary>{{ t('草稿空间') }}</summary>
+      <div class="pb-meter" :title="t('本房间成员草稿与临时文件占用；按周期采样检查，并非写入层硬拦截，达到 80% 时提示，超过上限将停止派活')">
+        <div class="pb-meter-label">
+          <b>{{ format_storage_bytes(room_storage.used) }} / {{ format_storage_bytes(room_storage.limit) }}</b>
+        </div>
+        <div class="pb-bar"><i :style="{ width: `${Math.round(room_storage.ratio * 100)}%` }"></i></div>
+      </div>
+      <p v-if="room_storage.room_tone === 'error'" class="pb-storage-note">
+        {{ t('本房间草稿已超限，派活已暂停；请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup，或点击下方清理临时文件。') }}
+      </p>
+      <p v-else-if="room_storage.room_tone === 'warning'" class="pb-storage-note">
+        {{ t('本房间草稿已达 80% 以上，接近上限时将停止派活。') }}
+      </p>
+      <p v-else-if="room_storage.home_warning" class="pb-storage-note">
+        {{ room_storage.local_bytes > 0
+          ? t('本机数据已占 {used} / {limit}（含房间记录与附件 {local}），建议清理临时文件或销毁旧房间。', { used: format_storage_bytes(room_storage.total_bytes), limit: format_storage_bytes(room_storage.home_limit), local: format_storage_bytes(room_storage.local_bytes) })
+          : t('本机数据已占 {used} / {limit}，建议清理临时文件或在房间外运行 $codiscuss-draft-cleanup。', { used: format_storage_bytes(room_storage.total_bytes), limit: format_storage_bytes(room_storage.home_limit) }) }}
+      </p>
+      <p v-if="room_storage.unreadable > 0" class="pb-storage-note pb-storage-unreadable">
+        {{ t('另有 {count} 处因权限无法读取，未计入配额。', { count: room_storage.unreadable }) }}
+      </p>
+      <div v-if="view.access?.can_manage && (room_storage.scratch_bytes > 0 || room_storage.tone !== 'normal')" class="pb-storage-actions">
+        <UButton icon="i-lucide-trash-2" :label="room_storage.scratch_bytes > 0 ? t('清理临时文件（{size}）', { size: format_storage_bytes(room_storage.scratch_bytes) }) : t('清理临时文件')" :title="t('仅删除已确认结束执行的 .scratch 临时目录，不删除房间记录、成品或旧草稿')" size="xs" color="neutral" variant="outline" class="pb-action"
+          :loading="cleaning_storage" :disabled="cleaning_storage" @click="clean_room_temp" />
+      </div>
+    </details>
     <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" @update:open="(value) => { if (!value) invite_workflow_id = ''; }" :description="free ? t('新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。') : t('新专家由程序按本机软件配置启动，或由你手动启动，加入本轮发言队列。')" />
     <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" :open="Boolean(model_edit)" :title="model_edit ? t('{name} 的模型与强度', { name: bridge.display_name(model_edit.name) }) : ''" :description="t('下次处理请求起生效，保留原会话。')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }" @update:open="(open) => { if (!open) model_edit = null; }">
       <template #body>
@@ -723,4 +790,14 @@ const created = computed(() => room.value.created_at ? new Date(room.value.creat
 }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
 .member-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }
+.pb-storage { color: var(--ui-text-dimmed); font-size: 12px; }
+.pb-storage summary { cursor: pointer; }
+.pb-storage[open] summary { margin-bottom: 8px; }
+.pb-storage.is-warning .pb-meter-label b, .pb-storage.is-warning .pb-storage-note { color: #e5a50a; }
+.pb-storage.is-warning .pb-bar > i { background: #e5a50a; }
+.pb-storage.is-error .pb-meter-label b, .pb-storage.is-error .pb-storage-note { color: #f05252; }
+.pb-storage.is-error .pb-bar > i { background: #f05252; }
+.pb-storage-note { margin: 6px 0 0; color: var(--ui-text-dimmed); font-size: 11px; line-height: 1.5; }
+.pb-storage-unreadable { color: #e5a50a; }
+.pb-storage-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 </style>

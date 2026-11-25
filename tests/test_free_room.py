@@ -15,6 +15,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from backend import free_room
 from backend.server import DiscussionServer, init_database
 
 
@@ -856,6 +857,28 @@ class SingleMemberTests(FreeRoomTests):
         self.assertEqual(inbox["executions"], [])
         self.assertEqual(self.request(self.path)[1]["free"]["requests"][0]["status"], "failed")
         self.assertEqual(self.request(self.path)[1]["free"]["members"][0]["execution"]["result"], "执行租约到期，接入程序未续租")
+
+    def test_site_stall_keeps_lapsed_leases_until_renewals_resume(self):
+        """A stalled site lapses every lease at once: the execution survives, renews and answers once the site recovers."""
+        self.say("一")
+        execution = self.reserve()[1]
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE member_executions SET lease_until=unixepoch()-200 WHERE id=?", (execution["id"],))
+        now = int(time.time())
+        # The site took no renewal for five minutes; renewals resumed just now.
+        with mock.patch.dict(free_room.renewal_clock, {"last": now - 300, "resumed": now - 300}):
+            self.assertEqual(self.request(f"{self.path}/inbox", token=self.owner)[1]["executions"][0]["id"], execution["id"])
+            free_room.record_renewal(now)
+            renewed = self.request(f"{self.path}/executions/{execution['id']}", {"action": "renew"}, self.owner)
+            self.assertEqual(renewed[0], 200, renewed)
+        self.assertEqual(self.answer(execution["id"])[0], 201)
+        # While renewals keep reaching the site, a runner that stopped renewing still fails its execution.
+        self.say("二")
+        stopped = self.reserve()[1]
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE member_executions SET lease_until=unixepoch()-90 WHERE id=?", (stopped["id"],))
+        with mock.patch.dict(free_room.renewal_clock, {"last": now, "resumed": now - 600}):
+            self.assertEqual(self.request(f"{self.path}/inbox", token=self.owner)[1]["executions"], [])
 
     def test_runner_endpoints_need_the_owner_credential(self):
         """Inbox, reservation and lifecycle actions refuse member and missing credentials."""

@@ -182,6 +182,10 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-room-running { flex-shrink: 0; width: 7px; height: 7px; margin: 0 4px 0 auto; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e99; animation: channel-room-breathe 2s ease-in-out infinite; }
 @keyframes channel-room-breathe { 50% { opacity: .35; box-shadow: 0 0 2px #22c55e33; } }
 .channel-room-select > span:not([class*="icon"]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+/* The message count stays visible after a long title, hinting when a room has grown long (user 2026-11-25, #10417). */
+.channel-room-name { display: flex; align-items: baseline; }
+.channel-room-name > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.channel-room-count { flex-shrink: 0; color: var(--ui-text-dimmed); font-weight: 400; font-size: .9em; font-variant-numeric: tabular-nums; }
 .channel-directory-count, .channel-room-time { flex-shrink: 0; margin-left: auto; padding-left: 6px; color: var(--ui-text-dimmed); font-size: var(--channel-nav-meta); font-weight: 400; font-variant-numeric: tabular-nums; }.channel-room-actions, .channel-folder-actions { display: flex; align-items: center; justify-content: flex-end; min-width: 48px; opacity: 0; pointer-events: none; }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button { display: grid; place-items: center; width: 24px; height: 26px; padding: 5px; border-radius: 4px; color: color-mix(in srgb, var(--ui-text-muted) 75%, transparent); background: transparent; box-shadow: none; }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button:hover, :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button[data-state="open"] { color: var(--ui-text-toned); background: color-mix(in srgb, var(--ui-text) 7%, transparent); }

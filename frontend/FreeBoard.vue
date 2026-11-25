@@ -23,7 +23,7 @@ import { busy, member_actions } from "./member-actions.js";
 import MemoBlock from "./memo-block.js";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import { copy_seat_link, declined, external_of, external_tag, revoke_member } from "./external-members.js";
-import { find_room_storage, format_storage_bytes, normalize_storage_snapshot, storage_ratio, storage_tone } from "./storage-format.js";
+
 
 const { view, bridge, act, is_running } = inject("discussion");
 const LIVE = ["dispatched", "started"];
@@ -384,43 +384,6 @@ const starting = ref(false);
 const can_start = computed(() => Boolean(host.value && host.value.access === "runner") && view.value.launch.available);
 watch(() => room.value.id, () => { starting.value = false; });
 
-/** Current room draft usage and service-wide storage status from the local or paired computer. */
-const storage_snapshot = computed(() => normalize_storage_snapshot(view.value.launch.storage));
-const room_storage = computed(() => {
-  const snap = storage_snapshot.value;
-  if (!snap || !view.value.launch.available || room.value.archived) return null;
-  const entry = find_room_storage(snap, room.value.id, view.value.launch.room_models?.draft_key || "");
-  const used = entry ? entry.bytes : 0;
-  const limit = snap.limits.room_draft_bytes;
-  const room_tone = storage_tone(used, limit, snap.limits.warn_ratio);
-  const global_tone = snap.truncated || snap.over_limit ? "error" : snap.warning ? "warning" : "normal";
-  const tone = room_tone === "error" || global_tone === "error" ? "error" : room_tone === "warning" || global_tone === "warning" ? "warning" : "normal";
-  return {
-    entry,
-    used,
-    limit,
-    ratio: storage_ratio(used, limit),
-    room_tone,
-    global_tone,
-    tone,
-    scratch_bytes: entry ? entry.scratch_bytes : 0,
-    total_bytes: snap.total_bytes,
-    local_bytes: snap.local_bytes,
-    unreadable: snap.unreadable,
-    home_limit: snap.limits.home_limit_bytes,
-    home_warning: snap.warning || snap.over_limit,
-  };
-});
-const cleaning_storage = computed(() => {
-  const list = view.value.launch.storage_cleaning || [];
-  const entry = room_storage.value?.entry;
-  return list.includes(room.value.id) || list.includes("__all__") || Boolean(entry?.key && list.includes(entry.key));
-});
-function clean_room_temp() {
-  const entry = room_storage.value?.entry;
-  if (entry?.key && room.value.id) bridge.clean_storage({ room_key: entry.key, room_id: room.value.id });
-}
-watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_storage?.(); });
 </script>
 
 <template>
@@ -446,33 +409,6 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
       <div v-if="status.continue_chain && view.access?.can_manage" class="pb-chain-actions">
         <UButton v-for="rounds in continue_choices" :key="rounds" :label="rounds === status.asked_rounds ? t('批准 {value1} 轮', { value1: rounds }) : t('继续 {value1} 轮', { value1: rounds })" icon="i-lucide-play" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="success"
           :loading="continuing === rounds" :disabled="Boolean(continuing)" @click="continue_chain(status.continue_chain, rounds)" />
-      </div>
-    </section>
-    <section v-if="room_storage" class="pb-section pb-storage" :class="`is-${room_storage.tone}`" :aria-label="t('草稿空间')">
-      <div class="pb-meter" :title="t('本房间成员草稿与临时文件占用；按周期采样检查，并非写入层硬拦截，达到 80% 时提示，超过上限将停止派活')">
-        <div class="pb-meter-label">
-          <span>{{ t('草稿空间') }}</span>
-          <b>{{ format_storage_bytes(room_storage.used) }} / {{ format_storage_bytes(room_storage.limit) }}</b>
-        </div>
-        <div class="pb-bar"><i :style="{ width: `${Math.round(room_storage.ratio * 100)}%` }"></i></div>
-      </div>
-      <p v-if="room_storage.room_tone === 'error'" class="pb-storage-note">
-        {{ t('本房间草稿已超限，派活已暂停；请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup，或点击下方清理临时文件。') }}
-      </p>
-      <p v-else-if="room_storage.room_tone === 'warning'" class="pb-storage-note">
-        {{ t('本房间草稿已达 80% 以上，接近上限时将停止派活。') }}
-      </p>
-      <p v-else-if="room_storage.home_warning" class="pb-storage-note">
-        {{ room_storage.local_bytes > 0
-          ? t('本机数据已占 {used} / {limit}（含房间记录与附件 {local}），建议清理临时文件或销毁旧房间。', { used: format_storage_bytes(room_storage.total_bytes), limit: format_storage_bytes(room_storage.home_limit), local: format_storage_bytes(room_storage.local_bytes) })
-          : t('本机数据已占 {used} / {limit}，建议清理临时文件或在房间外运行 $codiscuss-draft-cleanup。', { used: format_storage_bytes(room_storage.total_bytes), limit: format_storage_bytes(room_storage.home_limit) }) }}
-      </p>
-      <p v-if="room_storage.unreadable > 0" class="pb-storage-note pb-storage-unreadable">
-        {{ t('另有 {count} 处因权限无法读取，未计入配额。', { count: room_storage.unreadable }) }}
-      </p>
-      <div v-if="view.access?.can_manage && (room_storage.scratch_bytes > 0 || room_storage.tone !== 'normal')" class="pb-storage-actions">
-        <UButton icon="i-lucide-trash-2" :label="room_storage.scratch_bytes > 0 ? t('清理临时文件（{size}）', { size: format_storage_bytes(room_storage.scratch_bytes) }) : t('清理临时文件')" :title="t('仅删除已确认结束执行的 .scratch 临时目录，不删除房间记录、成品或旧草稿')" size="xs" color="neutral" variant="outline" class="pb-action"
-          :loading="cleaning_storage" :disabled="cleaning_storage" @click="clean_room_temp" />
       </div>
     </section>
     <section v-if="goal" class="pb-section pb-goal" aria-label="Goal">
@@ -614,11 +550,5 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
 .pb-card-chip:hover { border-color: color-mix(in oklab, var(--ui-text) 14%, transparent); background: var(--channel-ghost-hover, color-mix(in oklab, var(--ui-text) 4%, transparent)); }
 .pb-card-chip :deep(svg) { width: 14px; height: 14px; }
 .pb-member-model { margin: 1px 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
-.pb-storage.is-warning .pb-meter-label b, .pb-storage.is-warning .pb-storage-note { color: #e5a50a; }
-.pb-storage.is-warning .pb-bar > i { background: #e5a50a; }
-.pb-storage.is-error .pb-meter-label b, .pb-storage.is-error .pb-storage-note { color: #f05252; }
-.pb-storage.is-error .pb-bar > i { background: #f05252; }
-.pb-storage-note { margin: 6px 0 0; color: var(--ui-text-dimmed); font-size: 11px; line-height: 1.5; }
-.pb-storage-unreadable { color: #e5a50a; }
-.pb-storage-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
 </style>
