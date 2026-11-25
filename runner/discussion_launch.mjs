@@ -38,7 +38,7 @@ import { acquire_lock, api, check_extra_directories, DiscussionStore, service_dr
 import { FreeRoomRunner, free_task_files, member_drafts, member_extra_directories } from './free_runner.mjs';
 import { transfer_workflow, bound_workflow, room_workflow_store, trust_workflow, assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, workflow_member_list, WORKFLOW_ID_PATTERN,
   card_folder, expert_disk_key, CARD_ID_PATTERN, expert_skills, experts_home, load_room_workflow as load_workflow_for_cards, parse_markdown, serialize_markdown, SKILL_FILE,
-  SKILL_NAME_PATTERN, SKILLS_DIRECTORY } from './workflows.mjs';
+  SKILL_NAME_PATTERN, SKILLS_DIRECTORY, workflow_part_files, write_workflow_part_file, delete_workflow_part_file } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 import { site_fetch } from './entry_client.mjs';
 import { t } from './i18n.mjs';
@@ -77,7 +77,7 @@ const LOCAL_MEMBERS_FORMAT = 'ai-codiscuss-local-members';
 // Reading the inbox proves the owner credential without transferring any messages.
 const CONFIG_APPLY_TIMEOUT_MS = 6000;
 const CONFIG_APPLY_POLL_MS = 100;
-const HELP = `用法：codiscuss launch settings [--file FILE]
+const help_text = () => `用法：codiscuss launch settings [--file FILE]
       codiscuss launch start --file FILE [--dry-run]
       codiscuss launch room-config --file FILE
       codiscuss launch room-models --file FILE
@@ -115,12 +115,13 @@ const HELP = `用法：codiscuss launch settings [--file FILE]
       codiscuss launch devices [--file FILE]
       codiscuss launch projects [--file FILE]
       codiscuss launch presets [--file FILE]
+      codiscuss launch prompts [list | get program|平台 | set program|平台 --file FILE]
       codiscuss launch machine-link --file FILE
       codiscuss launch workflow-adopt (--draft FILE | --id WORKFLOW) [--scope project|global] [--project-id ID] [--access-file FILE]
       codiscuss launch workflow-promote --id ID [--project-id ID] [--access-file FILE]
       codiscuss launch workflow-join [--card ID[,ID] | --sub SUB | --card ID --label 显示名] [--access-file FILE]
       codiscuss launch workflow-leave (--sub SUB | --member 成员) [--access-file FILE]
-      codiscuss launch host-control ACTION [选项] [--access-file FILE]
+      ${t("codiscuss launch host-control ACTION [选项] [--access-file FILE]")}
       codiscuss launch expert-export (--preset NAME | --workflow ID --card CARD) --dir DIR
       codiscuss launch expert-import --from PATH [--overwrite-preset] [--replace-knowledge]
       codiscuss launch expert-import --from PATH --workflow ID [--sub SUB]
@@ -158,12 +159,13 @@ ${t("room-invite 创建待签到席位并签发邀请；提供 member_id 时重�
 room-invites 列出房间未兑换的邀请（不含配对码）；须提供 room_id、token。
 room-invite-revoke 撤销一条未兑换的邀请；须提供 room_id、token、invite_id。
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
+prompts 查看或修改本机为所有成员（program）与各平台（Claude、Codex、Antigravity、DeepSeek、Qwen、Grok、OpenAI、Custom）设置的系统提示词；set 读 UTF-8 文件，空文件即清除；下次投递起生效，手动启动与外部成员不带。
 presets 读取本机的专家预设（含未删除的内置预设）与各平台默认描述；提供 JSON（presets 列表、description_templates 和/或 hidden_builtins 已删除的内置预设名）时替换对应部分。
 machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
 room-member 为房间邀请、请回一位成员；须提供 site、room_id、token、action（add/rejoin）、name。
 room-member-access 修改一位本机唤醒成员的项目权限（project_access 为 read/write/auto/full），下次投递起生效、保留原会话；须提供 site、room_id、token、name、project_access。
 room-member-allow 把被拒绝的操作加入一位本机唤醒的 Claude Code 或 agy 成员的 allowed_tools，下次投递起生效；须提供 site、room_id、token、name、rules。
-room-member-model 修改一位本机唤醒 CLI 或 API 成员的模型与思考强度（空值恢复软件默认；API 成员空模型保留原模型），下次投递起生效、保留原会话；须提供 site、room_id、token、name、model、effort。
+room-member-model 修改一位本机唤醒 CLI 或 API 成员的模型与思考强度（空值恢复软件默认；API 成员空模型保留原模型），下次投递起生效、保留原会话；须提供 site、room_id、token、name、model、effort。；带 system_prompt（文字，空为不设）时只修改该成员的专属提示词，下次投递起生效
 room-member-adapter 把自由房间里空闲的 Codex 成员在 App（codex）与 CLI（codex_cli）间切换，保留原会话；须提供 site、room_id、token、name、adapter。
 room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含凭据），供备份附带；须提供 site、room_id、token。
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
@@ -172,23 +174,24 @@ workflow-promote 将本房间的项目工作流移到全局，房主须允许主
 workflow-adopt 主持人在本房间启用工作流：--draft 把自己的草稿（一段，分段头 1/1）保存进工作流库后启用，--id 启用工作流库里已有的工作流（不改动它）；缺的卡片成员由本机服务邀请，项目权限最高可写；须房主已为本房间打开“主持人完整权限”。凭据为本次任务的 access_file（或 DISCUSS_ACCESS_FILE）。
 workflow-join 主持人为本房间在用工作流里还没有成员的卡片（启用后才新增的）邀请成员，不填 --card 即全部主线卡片；无需额外授权，离开或移除的成员由用户请回。--sub 改为请进该子工作流的卡片成员（离开的请回原会话）。凭据同上。 --card 一张卡片加 --label 显示名：按这个显示名请一位扮演该卡片的成员（同一张卡可请多位，各有自己的会话；显示名只在本房间、不能和别的成员重复；该卡片已有同名的离开成员就请回它的原会话）。
 workflow-leave 主持人用完子工作流后，把 --sub 子工作流卡片的成员设为离开（会话保留，下次 workflow-join --sub 请回）；主线成员不能这样请离。凭据同上。 --member 成员（成员 ID 或显示名）只请离子工作流卡片的这一位成员。
-host-control 主持人代房主控制房间，须房主已为本房间勾选对应的主持人权限（任务的 host_permissions 列出已勾选的项），凭据同上；成员用 --member（成员 ID 或显示名），除 retry、model、label 外不能是主持人自己：
-  诊断：details --execution N 读取该执行的本机过程日志（服务端详情与事件记录用 execution / room events 读取）；
-  恢复：stop --member 打断；stop-all 停止全部执行、请求与接力；steer --member --text 话 [--submission-id ID] 向它进行中的执行插话；
-        retry --execution N 重试失败的执行（含你自己的）；model --member [--model M] [--effort E] 改 CLI 或 API 成员的模型与强度（空值恢复默认；API 成员不填模型则保留原模型；换后房间留一条系统记录，成员下次任务带 model_change）；model --member M --list 列出该成员软件的可用模型；
-        adapter --member --adapter ID 在同一软件的 App 与 CLI 间切换；access --member --access read|write 调整项目权限；
-  成员：invite --name 平台 [--access read|write] [--model M] [--effort E] 用本机已配置的软件邀请，项目权限默认只读、最高可写，离开中的同名成员改为请回；
-        away / remove / back --member 暂离、移除、请回（暂离与移除会取消仍在等它的请求，返回 cancelled_pending 条数）；label --member [--label 显示名] [--description 描述]；
-  撤回：withdraw --message N 撤回自己的一次派活：接力或循环停下，未开始的请求取消，进行中的停止，不再交回；
-  兜底：checkin --minutes N 房间有进行中的工作时每 N 分钟（5–120）给你发一次定时检查，房间空闲、停止全部或换主持人后自动结束；checkin --off 关闭；
-  推进：order 读取发言顺序，order --order 甲,乙 --revision REV 调整尚未发言的部分；
-        discussion 读取讨论，discussion --do start --goal 目标 --revision REV 开启（上限用房间默认值），--do pause|resume|end --revision REV；
-        goal 读取 Goal，goal --do start --goal 目标 --revision REV 开启（预算用房主默认值，默认不限时为 8 次续跑、90 分钟），--do pause|resume|end --revision REV。
+${t("host-control 主持人代房主控制房间，须房主已为本房间勾选对应的主持人权限（任务的 host_permissions 列出已勾选的项），凭据同上；成员用 --member（成员 ID 或显示名），除 retry、model、label 外不能是主持人自己：")}
+  ${t("诊断：details --execution N 读取该执行的本机过程日志（服务端详情与事件记录用 execution / room events 读取）；")}
+  ${t("恢复：stop --member 打断；stop-all 停止全部执行、请求与接力；steer --member --text 话 [--submission-id ID] 向它进行中的执行插话；")}
+        ${t("retry --execution N 重试失败的执行（含你自己的）；model --member [--model M] [--effort E] 改 CLI 或 API 成员的模型与强度（空值恢复默认；API 成员不填模型则保留原模型；换后房间留一条系统记录，成员下次任务带 model_change）；model --member M --list 列出该成员软件的可用模型；")}
+        ${t("adapter --member --adapter ID 在同一软件的 App 与 CLI 间切换；access --member --access read|write 调整项目权限；")}
+  ${t("成员：invite --name 平台 [--access read|write] [--model M] [--effort E] 用本机已配置的软件邀请，项目权限默认只读、最高可写，离开中的同名成员改为请回；")}
+        ${t("away / remove / back --member 暂离、移除、请回（暂离与移除会取消仍在等它的请求，返回 cancelled_pending 条数）；label --member [--label 显示名] [--description 描述]；")}
+  ${t("撤回：withdraw --message N 撤回自己的一次派活：接力或循环停下，未开始的请求取消，进行中的停止，不再交回；")}
+  ${t("兜底：checkin --minutes N 房间有进行中的工作时每 N 分钟（5–120）给你发一次定时检查，房间空闲、停止全部或换主持人后自动结束；checkin --off 关闭；")}
+  ${t("推进：order 读取发言顺序，order --order 甲,乙 --revision REV 调整尚未发言的部分；")}
+        ${t("discussion 读取讨论，discussion --do start --goal 目标 --revision REV 开启（上限用房间默认值），--do pause|resume|end --revision REV；")}
+        ${t("goal 读取 Goal，goal --do start --goal 目标 --revision REV 开启（预算用房主默认值，默认不限时为 8 次续跑、90 分钟），--do pause|resume|end --revision REV。")}
   ${t("房间：create-room --title 标题 [--goal 目标] [--members 甲,乙] [--host 平台] [--host-model 模型] [--host-effort 档位] [--cwd 子目录] [--access read|write] [--text 首条消息 | --body-file FILE] [--submission-id ID]")}
-        新建一个房间分担工作：成员用本机已配置的软件，项目权限默认只读、最高可写，目录只能是本房间项目目录或其子目录；不填 --host 时由与你同款的专家主持；
-        新房间复制本房间的智能调度、生图、API 上限、连续派活上限与主持人权限（不含新建房间），本房间可新建的数量有上限；两边各留一张链接卡片；重试沿用同一 --submission-id；
-        ${t("room-post --room 房间编号 (--text 话 | --body-file FILE) [--interrupt] [--submission-id ID] 在关联房间（你新建的，或新建本房间的）发言，空闲时直达主持人，忙时排队；仅父房间可用 --interrupt 打断子房间；自用户上次发言起两边互传的条数受本机“关联房间互传上限”限制（默认不限）；读它用平常的读取命令、房间编号写新房间的（跨房间只能读）。")}
-  不开放：批准超出上限的轮数、项目权限高于可写或放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己的其他操作。
+        ${t("新建一个房间分担工作：成员用本机已配置的软件，项目权限默认只读、最高可写，目录只能是本房间项目目录或其子目录；不填 --host 时由与你同款的专家主持；")}
+        ${t("新房间复制本房间的智能调度、生图、API 上限、连续派活上限与主持人权限（不含新建房间），本房间可新建的数量有上限；两边各留一张链接卡片；重试沿用同一 --submission-id；")}
+        ${t("rooms 查看已关联房间；link-request --room 编号 --reason 理由 请房主批准关联。")}
+        ${t("room-post --room 房间编号 (--text 正文 | --body-file FILE) [--expect reply|none] [--reply-to 消息编号] [--interrupt] [--submission-id ID] 向关联房间发言；只有父房间可打断子房间。")}
+  ${t("不开放：批准超出上限的轮数、项目权限高于可写或放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己的其他操作。")}
 workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库，卡片按声明的项目权限保存；库里已有同 ID 的工作流时须表明来意：--revision 写读取时的修订号（库在那之后被改过就拒绝，什么都不写），或 --overwrite 明确整份覆盖，两样都没有就拒绝。写法见 workflow-creator 技能。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
@@ -459,7 +462,7 @@ export async function room_models(home, raw, { read_defaults = profile => cached
     const model_pending = card_model && Number(profile.model_changed_at) > (applied[name] || 0);
     const in_window = model_pending && Boolean(adapter_of(profile.adapter)?.into_window?.(profile, { session_id: sessions[name] || profile.session_id }));
     return [name, { ...(pending ? { defaults_pending: true } : {}), ...(model_pending ? { model_pending: in_window ? 'window' : 'next' } : {}),
-      adapter: profile.adapter, model: card_model ? profile.model || '' : '',
+      adapter: profile.adapter, model: card_model ? profile.model || '' : '', system_prompt: profile.system_prompt || '',
       effort: facts?.efforts ? profile.effort || '' : '', default_model: defaults.model, default_effort: defaults.effort,
       ...(actual.model ? { actual_model: actual.model } : {}), ...(actual.effort ? { actual_effort: actual.effort } : {}),
       project_access: !facts?.capabilities.project ? 'read' : profile.project_access || config.project_access || 'read',
@@ -893,6 +896,7 @@ export function save_launch_settings(home, input) {
     patch.create_preferences = input.create_preferences;
   }
   const choices = Object.hasOwn(input, 'participant_choices') ? validate_participant_choices(input.participant_choices) : null;
+  const prompts = Object.hasOwn(input, 'system_prompts') ? validate_system_prompts(input.system_prompts) : null;
   mkdirSync(home, { recursive: true, mode: 0o700 });
   const lock = new DatabaseSync(join(home, 'launch-settings-lock.sqlite3'));
   try {
@@ -901,9 +905,64 @@ export function save_launch_settings(home, input) {
     const settings = { ...previous, ...patch };
     if (patch.create_preferences) settings.create_preferences = { ...previous.create_preferences, ...patch.create_preferences };
     if (choices) settings.participants = merge_participant_choices(settings.participants, choices);
+    if (prompts) settings.system_prompts = merge_system_prompts(previous.system_prompts, prompts);
     atomic_json(join(home, 'launch-settings.json'), settings);
     lock.exec('COMMIT');
     return settings;
+  } finally { lock.close(); }
+}
+
+/**
+ * The owner's prompts for every member (`program`) and for each platform (`platforms`, by platform ID), as a patch: a
+ * key given replaces that text, an empty one removes it, and keys not given are kept, so one edit never resets another.
+ */
+function validate_system_prompts(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('system_prompts 须为对象');
+  const text = (label, item) => {
+    if (typeof item !== 'string') throw new Error(`${label} 的提示词须为文字`);
+    if (item.length > MAX_EXPERT_PROMPT) throw new Error(`${label} 的提示词最多 ${MAX_EXPERT_PROMPT} 字`);
+    return item.trim();
+  };
+  const patch = {};
+  if (Object.hasOwn(value, 'program')) patch.program = text('所有成员', value.program);
+  if (Object.hasOwn(value, 'platforms')) {
+    if (!value.platforms || typeof value.platforms !== 'object' || Array.isArray(value.platforms)) throw new Error('platforms 须为对象');
+    patch.platforms = {};
+    for (const [platform, item] of Object.entries(value.platforms)) {
+      if (!Object.hasOwn(API_PROVIDERS, platform)) throw new Error(`未知平台：${platform}`);
+      patch.platforms[platform] = text(platform, item);
+    }
+  }
+  return patch;
+}
+
+function merge_system_prompts(previous = {}, patch) {
+  // The hosted-account administrator's layer (`managed`) is written only by save_managed_prompt, never by this patch.
+  const merged = { ...(Object.hasOwn(previous, 'managed') ? { managed: previous.managed } : {}),
+    ...(previous.program ? { program: previous.program } : {}), platforms: { ...(previous.platforms || {}) } };
+  if (Object.hasOwn(patch, 'program')) { if (patch.program) merged.program = patch.program; else delete merged.program; }
+  for (const [platform, item] of Object.entries(patch.platforms || {})) { if (item) merged.platforms[platform] = item; else delete merged.platforms[platform]; }
+  if (!Object.keys(merged.platforms).length) delete merged.platforms;
+  return merged;
+}
+
+/**
+ * Save the prompt a hosted account's administrator sets for every member of the account (management panel, `codiscuss
+ * admin prompt`), apart from the account user's own layers so neither overwrites the other. An empty text is kept as
+ * empty, so a cleared prompt is not written back with the default on the next setup.
+ */
+export function save_managed_prompt(home, text) {
+  const value = String(text ?? '').trim();
+  if (value.length > MAX_EXPERT_PROMPT) throw new Error(`管理员提示词最多 ${MAX_EXPERT_PROMPT} 字`);
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  const lock = new DatabaseSync(join(home, 'launch-settings-lock.sqlite3'));
+  try {
+    lock.exec(`PRAGMA busy_timeout=${SETTINGS_LOCK_WAIT_MS}; BEGIN IMMEDIATE`);
+    const settings = launch_settings(home);
+    settings.system_prompts = { ...(settings.system_prompts || {}), managed: value };
+    atomic_json(join(home, 'launch-settings.json'), settings);
+    lock.exec('COMMIT');
+    return value;
   } finally { lock.close(); }
 }
 
@@ -1406,6 +1465,7 @@ export async function room_member_access(home, raw) {
 export async function room_member_model(home, raw, headers = {}) {
   const { input, path } = await member_room_context(home, raw);
   const { name } = input;
+  if (Object.hasOwn(input, 'system_prompt')) return room_member_prompt(input, path);
   const model = typeof input.model === 'string' ? input.model.trim() : '';
   const effort = typeof input.effort === 'string' ? input.effort.trim() : '';
   const release = acquire_lock(join(dirname(path), 'configuration-edit'));
@@ -1442,6 +1502,29 @@ export async function room_member_model(home, raw, headers = {}) {
   } finally { release(); }
   const recorded = before === after ? null : await record_model_change(input, name, before, after, headers);
   return recorded ? { ...saved, notice_id: recorded } : saved;
+}
+
+/**
+ * Change a woken member's own prompt in the room (its card's 专属提示词), from its next delivery on: a session that
+ * already started is sent the new text in its next task (free_runner.mjs `expert_prompt_delivery`). An empty text means
+ * none. A manually started member keeps its own conversation's prompts and has none to set.
+ */
+function room_member_prompt(input, path) {
+  const { name } = input;
+  if (typeof input.system_prompt !== 'string') throw new Error('system_prompt 须为文字');
+  const text = input.system_prompt.trim();
+  if (text.length > MAX_EXPERT_PROMPT) throw new Error(`${name} 的专属提示词最多 ${MAX_EXPERT_PROMPT} 字`);
+  const release = acquire_lock(join(dirname(path), 'configuration-edit'));
+  try {
+    const config = configuration_snapshot(path).config;
+    const profile = config.participants?.[name];
+    if (!profile || profile.project_access === 'own') throw new Error(`${name} 不由本机唤醒，提示词由它自己的会话决定`);
+    const next = { ...profile, system_prompt: text };
+    const updated = { ...config, participants: { ...config.participants, [name]: next } };
+    validate_config(updated, dirname(path));
+    atomic_json(path, updated);
+    return { room_id: input.room_id, member: name, system_prompt: text };
+  } finally { release(); }
 }
 
 /**
@@ -2160,7 +2243,7 @@ export function workflows_command(home, input = {}, restricted = false) {
   const root = input.scope === 'project' ? roots.find(item => input.project_id ? item.id === input.project_id : item.primary) : null;
   if (input.scope === 'project' && !root) throw new Error('找不到已授权的项目目录');
   const store = root ? project_store(home, root) : home;
-  if (root?.readonly && !['get', 'export', 'preview', 'skills', 'export-expert', 'trust', 'copy'].includes(action)) throw new Error('项目目录只读');
+  if (root?.readonly && !['get', 'export', 'preview', 'skills', 'files', 'export-expert', 'trust', 'copy'].includes(action)) throw new Error('项目目录只读');
   const fields = scope_fields(root);
   const present = workflow => {
     const result = { ...workflow, ...fields };
@@ -2225,7 +2308,11 @@ export function workflows_command(home, input = {}, restricted = false) {
   if (action === 'skill-write') return { ...write_skill_file(store, input), ...fields };
   if (action === 'skill-delete') return { ...delete_skill_file(store, input), ...fields };
   if (action === 'skill-remove') return { ...remove_skill(store, input), ...fields };
-  throw new Error('action 须为 list、get、save、rename、disable、enable、delete、preview、room-cards、save-preset、export、export-expert、import-expert、import-expert-workflow、skills、skill-write、skill-delete 或 skill-remove');
+  // A workflow part's other files, file by file, outside the workflow's save (see workflow_part_files).
+  if (action === 'files') return { ...workflow_part_files(store, input), ...fields };
+  if (action === 'file-write') return { ...write_workflow_part_file(store, input), ...fields };
+  if (action === 'file-delete') return { ...delete_workflow_part_file(store, input), ...fields };
+  throw new Error('action 须为 list、get、save、rename、disable、enable、delete、preview、room-cards、save-preset、export、export-expert、import-expert、import-expert-workflow、skills、skill-write、skill-delete、skill-remove、files、file-write 或 file-delete');
 }
 
 // Exporting and importing an expert (user 2026-11-22): a definition `<id>.md` in the card format (front matter, prompt
@@ -3055,6 +3142,28 @@ function spawned_directory(parent, wanted) {
   return target;
 }
 
+/**
+ * Folders a request from another device may keep using though they lie outside the saved projects: the room's own
+ * directories, and with `folders` the paths of the group a new room is created in. Both were set on this computer
+ * (another device cannot add such a path to either), so they may stay in use or be removed, never widened from afar.
+ */
+async function kept_directories(home, command, input, { folders }) {
+  if (!['start', 'room-settings', 'room-member', 'room-member-access'].includes(command) || !input || typeof input !== 'object') return [];
+  const kept = [];
+  if (typeof input.room_id === 'string' && input.room_id) {
+    for (const path of read_registry(home)) {
+      if (registered_identity(path)?.room !== input.room_id) continue;
+      try { kept.push(...room_directories(configuration_snapshot(path).config)); } catch { /* An unreadable room keeps nothing. */ }
+    }
+  }
+  const folder_id = input.room?.folder_id;
+  if (folders && command === 'start' && !input.room_id && typeof folder_id === 'string' && folder_id) {
+    const response = await site_fetch(`http://127.0.0.1:${local_settings(home).port || 8765}/api/rooms`, { redirect: 'error', signal: AbortSignal.timeout(10000) });
+    if (response.ok) kept.push(...((await response.json()).folders || []).find(folder => folder.id === folder_id)?.directories || []);
+  }
+  return kept;
+}
+
 /** The registered configuration of a room this computer launched; throws when there is none. */
 function registered_room_config(home, site, room_id) {
   const path = registered_room_path(home, site, room_id);
@@ -3137,30 +3246,31 @@ async function host_create_room(ctx, o) {
 }
 
 /**
- * Speak in a linked room (`room-post`): one this room created, or the room that created this one. It goes with that
+ * Speak in a linked room (`room-post`): a room linked by the owner or by an authorized room creation. It goes with that
  * room's owner credential, so it routes and wakes as the owner's message there, labelled with this room and host. The
  * site counts how many messages two hosts pass each other before the owner speaks again, against this computer's
- * `relay_rounds` preference (0, the default, is unlimited; set in the new-room form's advanced settings).
+ * `relay_rounds` preference (0, the default, is unlimited; set in Settings).
  */
 async function host_room_post(ctx, o) {
   const { home, config, host } = ctx;
-  if (!o.room || (o.room !== config.spawned_from && !(config.spawned_rooms || []).some(item => item.room === o.room))) {
-    throw new Error('只能在与本房间关联的房间里发言（本房间新建的房间，或新建本房间的房间）；用 --room 指定其房间编号');
-  }
-  if (o.interrupt && !(config.spawned_rooms || []).some(item => item.room === o.room)) throw new Error(t('仅父房间主持人可以打断子房间'));
+  const { links } = await ctx.call('/room-links');
+  const target = links.find(item => item.room_id === o.room);
+  if (!target) throw new Error(t('请先用 link-request 申请关联的房间，再发送消息'));
+  if (o.interrupt && target.relation !== 'child') throw new Error(t('仅父房间主持人可以打断子房间'));
   if (!o.text) throw new Error(t('须用 --text 或 --body-file 写明要发的消息'));
   const child = registered_room_config(home, config.site, o.room).config;
   const submission_id = o.submission_id || randomUUID();
   const label = ctx.labels[host] || host;
   const result = await site_request(config.site, `/api/rooms/${o.room}/messages`, child.token, { author: '用户', text: o.text,
     submission_id, queue: true, ...(o.interrupt ? { interrupt: true } : {}), relay: { room_id: config.room, member: host, host: label,
+      expect: o.expect || (o.reply_to ? 'none' : 'reply'), ...(o.reply_to !== undefined ? { reply_to: Number(o.reply_to) } : {}),
       limit: launch_settings(home).create_preferences?.relay_rounds ?? 0 } }, caller_only(ctx.headers));
   const receipt = { room_id: o.room, message_id: result.message?.id ?? null, queued: result.queued ?? null,
     interrupted: Boolean(result.interrupted), ...(result.reason ? { reason: result.reason } : {}) };
   const key = createHash('sha256').update(JSON.stringify([o.room, submission_id])).digest('hex');
   try {
     await ctx.call('/room-relay-sent', { target_room_id: o.room, target_message_id: receipt.message_id,
-      queued_id: receipt.queued, interrupted: receipt.interrupted, text: o.text, host: label, member: host, submission_id: 'sent-' + key });
+      target_submission_id: submission_id, queued_id: receipt.queued, interrupted: receipt.interrupted, text: o.text, host: label, member: host, submission_id: 'sent-' + key });
   } catch (error) {
     return { ...receipt, submission_id, record_error: error.message };
   }
@@ -3168,6 +3278,12 @@ async function host_room_post(ctx, o) {
 }
 
 const HOST_CONTROLS = {
+  rooms: async ctx => {
+    const limit = launch_settings(ctx.home).create_preferences?.relay_rounds || 0;
+    return ctx.call(`/room-links?limit=${limit}`);
+  },
+  'link-request': (ctx, o) => site_request(ctx.config.site, `/api/rooms/${ctx.config.room}/room-link-requests`,
+    ctx.config.members[ctx.host].token, { room_id: o.room, reason: o.reason, submission_id: o.submission_id || randomUUID() }, caller_only(ctx.headers)),
   'create-room': host_create_room,
   'room-post': host_room_post,
   stop: (ctx, o) => {
@@ -3241,7 +3357,50 @@ export async function host_control(home, action, options, launch_options = {}) {
   const headers = { 'User-Agent': `AI-CoDiscuss-host:${host}`, 'X-Acting-Member-Token': config.members[host].token };
   const owner = { site: config.site, room_id: config.room, token: config.token };
   const call = (path, body) => site_request(config.site, `/api/rooms/${config.room}${path}`, config.token, body, headers);
-  return HOST_CONTROLS[action]({ home, config, roster, labels, host, headers, owner, call, launch_options, folder_id, max_rounds }, options);
+  const ctx = { home, config, roster, labels, host, headers, owner, call, launch_options, folder_id, max_rounds };
+  const result = await HOST_CONTROLS[action](ctx, options);
+  await record_host_action(ctx, action, options, result);
+  return result;
+}
+
+/** What a host control changed, as the site's host-action record wants it; null for reads and controls that leave their own card. */
+function host_action_record(ctx, action, o, result) {
+  const label = wanted => {
+    const member = ctx.roster.find(item => item.name === wanted || ctx.labels[item.name] === wanted);
+    return member ? ctx.labels[member.name] || member.name : wanted;
+  };
+  if (['stop', 'away', 'remove', 'back'].includes(action)) return { action, member: label(o.member) };
+  if (action === 'stop-all') return { action };
+  if (action === 'steer') return { action, member: label(o.member), detail: o.text };
+  if (action === 'retry') return { action, detail: execution_number(o.execution) };
+  if (action === 'withdraw') return { action, detail: Number(o.message) };
+  if (action === 'order') return o.order ? { action, detail: o.order } : null;
+  if (action === 'invite') return { action: result?.rejoined ? 'back' : 'invite', member: label(result?.member || o.name) };
+  if (action === 'access') return { action: `access:${o.access}`, member: label(o.member) };
+  if (action === 'adapter') return { action, member: label(o.member), detail: o.adapter };
+  if (action === 'label') return o.label ? { action, member: label(o.member), detail: o.label } : { action: 'description', member: label(o.member) };
+  if (action === 'checkin') return o.off ? { action: 'checkin:off' } : { action, detail: Number(o.minutes) };
+  if (['discussion', 'goal'].includes(action) && ['start', 'pause', 'resume', 'end'].includes(o.do)) {
+    return { action: `${action}:${o.do}`, ...(o.do === 'start' ? { detail: o.goal } : {}) };
+  }
+  // Model changes leave their own record (record_model_change), created and linked rooms their room-link card.
+  return null;
+}
+
+/**
+ * Leave the owner a line in the message flow for a control the host just ran, so what it did to members shows where it
+ * happened. The control already took effect, so a failed record is only said in the log, never undone.
+ */
+async function record_host_action(ctx, action, options, result) {
+  const record = host_action_record(ctx, action, options, result);
+  if (!record) return;
+  try {
+    // A steer retried with the same --submission-id leaves one record; every other control is recorded once per run.
+    const submission_id = action === 'steer' && options.submission_id ? `steer-${options.submission_id}`.slice(0, 100) : randomUUID();
+    await ctx.call('/host-actions', { ...record, submission_id });
+  } catch (error) {
+    console.error(t('主持人操作已生效，但留痕失败：{error}', { error: error.message }));
+  }
 }
 
 /** Cards as the host may bring them: any access above writing is lowered to it. */
@@ -3320,7 +3479,7 @@ function room_config_by_id(home, room_id) {
  * The folders a request without this computer owner's standing may use: for an ordinary account, its own projects and
  * draft space; for another device of the owner, the saved projects.
  */
-function granted_projects(home) {
+export function granted_projects(home) {
   const { projects_root, workspace } = account_space(home);
   if (!projects_root) return launch_projects(home).projects;
   mkdirSync(workspace, { recursive: true });
@@ -3342,6 +3501,7 @@ function keep_saved_locations(home, participants) {
  * does not answer with the whole launch usage (K16); an action without an entry, or none, gets the full text.
  */
 export function command_help(action) {
+  const HELP = help_text();
   if (!action) return HELP;
   const lines = HELP.split('\n');
   const start = lines.findIndex(line => line.startsWith(`${action} `));
@@ -3350,7 +3510,7 @@ export function command_help(action) {
     .map(line => line.replace(/^用法：/, '').trim());
   let end = start + 1;
   while (end < lines.length && /^\s/.test(lines[end])) end += 1;
-  return [...usage.map(line => `用法：${line}`), ...lines.slice(start, end), ''].join('\n');
+  return [...usage.map(line => action === 'host-control' ? t("用法：{command}", { command: line }) : `用法：${line}`), ...lines.slice(start, end), ''].join('\n');
 }
 
 /** CLI and local HTTP bridge use the same commands and configuration validation. */
@@ -3362,7 +3522,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     'project-id': { type: 'string' }, scope: { type: 'string' }, project: { type: 'string' }, draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' }, card: { type: 'string' }, sub: { type: 'string' }, id: { type: 'string' },
     member: { type: 'string' }, order: { type: 'string' }, revision: { type: 'string' }, name: { type: 'string' }, access: { type: 'string' },
     model: { type: 'string' }, effort: { type: 'string' }, do: { type: 'string' }, execution: { type: 'string' }, text: { type: 'string' },
-    'host-model': { type: 'string' }, 'host-effort': { type: 'string' }, interrupt: { type: 'boolean' }, 'body-file': { type: 'string' },
+    reason: { type: 'string' }, expect: { type: 'string' }, 'reply-to': { type: 'string' }, 'host-model': { type: 'string' }, 'host-effort': { type: 'string' }, interrupt: { type: 'boolean' }, 'body-file': { type: 'string' },
     goal: { type: 'string' }, label: { type: 'string' }, description: { type: 'string' }, adapter: { type: 'string' }, 'submission-id': { type: 'string' },
     message: { type: 'string' }, minutes: { type: 'string' }, off: { type: 'boolean' }, list: { type: 'boolean' },
     title: { type: 'string' }, members: { type: 'string' }, host: { type: 'string' }, cwd: { type: 'string' }, room: { type: 'string' },
@@ -3384,7 +3544,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     const { member, order, revision, name, access, model, effort, execution, text, goal, label, description, adapter } = values;
     const result = await host_control(service_home(), positionals[1], { member, order, revision, name, access, model, effort, execution, text, goal,
       label, description, adapter, message: values.message, minutes: values.minutes, off: values.off, list: values.list, do: values.do, submission_id: values['submission-id'],
-      title: values.title, members: values.members, host: values.host, cwd: values.cwd, room: values.room, interrupt: values.interrupt, body_file: values['body-file'], host_model: values['host-model'], host_effort: values['host-effort'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+      title: values.title, members: values.members, host: values.host, cwd: values.cwd, room: values.room, reason: values.reason, expect: values.expect, reply_to: values['reply-to'], interrupt: values.interrupt, body_file: values['body-file'], host_model: values['host-model'], host_effort: values['host-effort'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}
 `);
   }
@@ -3398,6 +3558,19 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     const result = await leave_sub_workflow(service_home(), { sub: values.sub, member: values.member, access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}
 `);
+  }
+  if (positionals[0] === 'prompts') {
+    const home = service_home();
+    const [, op = 'list', key = ''] = positionals;
+    const layers = launch_settings(home).system_prompts || {};
+    const read = name => name === 'program' ? layers.program || '' : layers.platforms?.[name] || '';
+    if (op === 'list') return process.stdout.write(`${JSON.stringify({ program: read('program'), platforms: layers.platforms || {} })}\n`);
+    if (!key || (key !== 'program' && !Object.hasOwn(API_PROVIDERS, key))) throw new Error(`须指定 program 或平台：${Object.keys(API_PROVIDERS).join('、')}`);
+    if (op === 'get') return process.stdout.write(`${read(key)}\n`);
+    if (op !== 'set' || !values.file) throw new Error('用法：codiscuss launch prompts set program|平台 --file FILE');
+    const text = readFileSync(values.file, 'utf8').replace(/^\uFEFF/, '');
+    const saved = save_launch_settings(home, { system_prompts: key === 'program' ? { program: text } : { platforms: { [key]: text } } });
+    return process.stdout.write(`${JSON.stringify({ program: saved.system_prompts?.program || '', platforms: saved.system_prompts?.platforms || {} })}\n`);
   }
   if (positionals[0] === 'image') {
     if (!values.file) throw new Error('用 --file 指定请求 JSON：{"action":"generate"|"edit","prompt":"…",…}');
@@ -3425,7 +3598,8 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     }
     const guard_input = ['start', 'room-settings'].includes(positionals[0]) && Array.isArray(input?.extra_directories)
       ? { ...input, extra_directories: input.extra_directories.map(item => typeof item === 'string' ? item : item?.path) } : input;
-    guard_remote_request(positionals[0], guard_input, { projects: granted_projects(home), participants: launch_settings(home).participants, home });
+    const kept = await kept_directories(home, positionals[0], input, { folders: Boolean(values.remote) && !restricted });
+    guard_remote_request(positionals[0], guard_input, { projects: granted_projects(home), participants: launch_settings(home).participants, home, kept });
     if (values.remote && positionals[0] === 'room-workflow' && input?.action === 'host') throw new Error('主持人权限只能在电脑上开启');
     if (restricted && positionals[0] === 'pick-directory') throw new Error('此账号只能使用自己的项目文件夹');
     // Another device repeats the saved program locations it cannot see; keep them rather than dropping them.
@@ -3530,7 +3704,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (['site-stage', 'site-publish', 'site-list', 'site-diagnose', 'site-renew', 'site-rollback', 'site-revoke'].includes(positionals[0])) {
     result = await (await import('./site_deploy.mjs')).site_command(home, positionals[0], input || {});
   }
-  else throw new Error(HELP);
+  else throw new Error(help_text());
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 

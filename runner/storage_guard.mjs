@@ -63,13 +63,19 @@ export function format_bytes(bytes) {
 }
 
 /** Safely lstat one path, skipping missing entries and counting unreadable ones. */
-async function safe_lstat(path, state, lstat_fn) {
+async function safe_lstat(path, state, lstat_fn, room_key = '') {
   try {
     return await lstat_fn(path, { bigint: true });
   } catch (error) {
-    if (error?.code !== 'ENOENT') state.unreadable += 1;
+    if (error?.code !== 'ENOENT') count_unreadable(state, room_key);
     return null;
   }
+}
+
+/** Count one unreadable entry, also attributing it to the room draft directory that holds it. */
+function count_unreadable(state, room_key = '') {
+  state.unreadable += 1;
+  if (room_key && state.room_unreadable) state.room_unreadable[room_key] = (state.room_unreadable[room_key] || 0) + 1;
 }
 
 /** Resolve the service root itself through a symlink or Windows junction without following nested links later. */
@@ -143,7 +149,7 @@ async function scan_directory(frame, queue, state, config) {
   try {
     entries = await config.readdir(frame.path, { withFileTypes: true });
   } catch (error) {
-    if (error?.code !== 'ENOENT') state.unreadable += 1;
+    if (error?.code !== 'ENOENT') count_unreadable(state, frame.room_key);
     return;
   }
   // Scan `drafts/` first at the top level so room sizes are captured even if another folder later truncates.
@@ -157,7 +163,8 @@ async function scan_directory(frame, queue, state, config) {
       const full_path = join(frame.path, entry.name);
       if (frame.depth === 0 && config.excluded_names.has(path_key(entry.name))) return null;
       if (config.excluded_paths.has(path_key(resolve(full_path)))) return null;
-      const stat = await safe_lstat(full_path, state, config.lstat);
+      const stat = await safe_lstat(full_path, state, config.lstat,
+        frame.room_key || (frame.in_drafts && frame.depth === 1 ? entry.name : ''));
       return stat && !stat.isSymbolicLink() ? { entry, full_path, stat } : null;
     }));
     for (const item of items) {
@@ -196,7 +203,7 @@ async function scan_directory(frame, queue, state, config) {
  * Resolves the service root itself through a symlink or Windows junction so redirected roots still enforce quotas.
  * @param {string} home Service home directory (e.g. `~/.codiscuss`).
  * @param {object} [options] Optional overrides (`max_files`, `model_dirs`, `exclude_paths`, `readdir`, `lstat`, `realpath`).
- * @returns {Promise<{total_bytes: number, draft_bytes: number, local_bytes: number, rooms: Record<string, number>, unreadable: number, truncated: boolean}>}
+ * @returns {Promise<{total_bytes: number, draft_bytes: number, local_bytes: number, rooms: Record<string, number>, unreadable: number, room_unreadable: Record<string, number>, truncated: boolean}>}
  */
 export async function measure(home, options = {}) {
   const max_files = options.max_files ?? MAX_SCAN_FILES;
@@ -211,6 +218,7 @@ export async function measure(home, options = {}) {
     member_links: new Set(),
     linked_members: Object.create(null),
     unreadable: 0,
+    room_unreadable: Object.create(null),
     truncated: false,
     files: 0,
     seen_total: new Set(),
@@ -252,6 +260,7 @@ export async function measure(home, options = {}) {
     rooms: { ...state.rooms },
     ...(options.members ? { members: state.members, linked_members: state.linked_members, shared_links: state.seen_total.size > 0 } : {}),
     unreadable: state.unreadable,
+    room_unreadable: { ...state.room_unreadable },
     truncated: state.truncated,
   };
 }

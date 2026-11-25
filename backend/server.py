@@ -44,7 +44,7 @@ from .free_room import convert_suggestion, message_suggestions, save_suggestions
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
 from .private_chat import chat_action, member_chat
 from .external_members import external_api, guard_route as guard_external_route, is_external_path, owner_api as external_owner_api
-from .free_room import describe_members, execution_notes, label_members, check_relay, record_relay_send, record_room_link, save_message_relay, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
+from .free_room import describe_members, execution_notes, label_members, check_relay, record_host_action, record_relay_send, record_room_link, save_message_relay, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
 from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_segments, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         host_event, host_hidden_event, room_event_log, withdrawals)
 from .room_trace import message_trace
@@ -56,6 +56,7 @@ from .visual_fences import fold_message_visuals
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label_text, is_ai, is_participant
 from .message_queue import drain as drain_queue, enqueue, enqueue_share, queue_action, queue_split, queue_view
 from .room_import import import_room, imported_attachment
+from .room_links import handle_links, request_view
 from .runtime import (begin_write, limit_values, owner_proxy_token, require_owner, token_hash,
                      enforce_session_limits, room_limits_view, session_limits_view)
 from .goal_room import goal_action, goal_view
@@ -88,7 +89,7 @@ CONNECT_LOCK = threading.Lock()  # see connect_db
 LOCAL_LAUNCH_TIMEOUT = 60
 MACHINE_COMMAND_POLL_SECONDS = 0.5
 # Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
-DIRECTORY_OPERATIONS = ("move", "folder")
+DIRECTORY_OPERATIONS = ("move", "folder", "detach")
 # Local entry commands for external members: the owner's invites (room credential) and this computer's invited records.
 INVITE_COMMANDS = ("room-invite", "room-invites", "room-invite-revoke")
 INVITED_COMMANDS = ("invited-list", "invited-join", "invited-trust", "invited-ai", "invited-pause", "invited-approve", "invited-refuse",
@@ -240,7 +241,10 @@ CASE WHEN messages.author='用户' THEN (
     WHERE target.message_id=messages.id)
 ) END AS interjection_parent_id,
 EXISTS(SELECT 1 FROM proactive_messages p WHERE p.message_id=messages.id) AS proactive,
+(SELECT f.source_id FROM execution_followups f WHERE f.execution_id=answered.execution_id) AS followup_of,
+EXISTS(SELECT 1 FROM execution_schedules s WHERE s.execution_id=answered.execution_id) AS scheduled,
 sent.target_room_id AS relay_sent_room, sent.host AS relay_sent_host, sent.target_message_id AS relay_sent_message_id,
+sent.state AS relay_sent_state, relay.expect AS relay_expect, relay.reply_to AS relay_reply_to,
 sent.queued_id AS relay_sent_queued_id, sent.interrupted AS relay_sent_interrupted,
 (SELECT r.title FROM rooms r WHERE r.id=sent.target_room_id) AS relay_sent_title,
 (SELECT relation FROM room_links WHERE room_id=messages.room_id AND other_room_id=sent.target_room_id) AS relay_sent_relation,
@@ -250,9 +254,11 @@ COALESCE(NULLIF(relay.member,''),(SELECT name FROM room_members WHERE room_id=re
 (SELECT l.other_room_id FROM room_links l WHERE l.message_id=messages.id) AS link_room,
 (SELECT l.relation FROM room_links l WHERE l.message_id=messages.id) AS link_relation,
 (SELECT r.title FROM room_links l JOIN rooms r ON r.id=l.other_room_id WHERE l.message_id=messages.id) AS link_title,
-(SELECT r.title FROM rooms r WHERE r.id=relay.source_room_id) AS relay_title
+(SELECT r.title FROM rooms r WHERE r.id=relay.source_room_id) AS relay_title,
+CASE WHEN relay.message_id IS NOT NULL THEN (SELECT m.name FROM member_requests q JOIN room_members m ON m.id=q.member_id
+    WHERE q.message_id=messages.id ORDER BY q.id LIMIT 1) END AS relay_to
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
-LEFT JOIN (SELECT message_id,target_room_id,host,target_message_id,queued_id,interrupted FROM room_relay_sends) AS sent
+LEFT JOIN (SELECT message_id,target_room_id,host,target_message_id,queued_id,interrupted,state FROM room_relay_sends) AS sent
     ON sent.message_id=messages.id
 LEFT JOIN message_relays AS relay ON relay.message_id=messages.id
 LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
@@ -536,6 +542,21 @@ def init_database(database, seed=True):
             connection.executescript(SCHEMA)
             if 'member' not in {row[1] for row in connection.execute('PRAGMA table_info(message_relays)')}:
                 connection.execute("ALTER TABLE message_relays ADD COLUMN member TEXT NOT NULL DEFAULT ''")
+            links_schema = connection.execute("SELECT sql FROM sqlite_master WHERE name='room_links'").fetchone()[0]
+            if "'peer'" not in links_schema:
+                begin_write(connection)
+                connection.execute("ALTER TABLE room_links RENAME TO old_room_links")
+                connection.execute(links_schema.replace("'child','parent'", "'child','parent','peer'"))
+                connection.execute("INSERT INTO room_links SELECT * FROM old_room_links")
+                connection.execute("DROP TABLE old_room_links")
+            relay_columns = {row[1] for row in connection.execute("PRAGMA table_info(message_relays)")}
+            if "expect" not in relay_columns:
+                connection.execute("ALTER TABLE message_relays ADD COLUMN expect TEXT NOT NULL DEFAULT 'reply'")
+            if "reply_to" not in relay_columns:
+                connection.execute("ALTER TABLE message_relays ADD COLUMN reply_to INTEGER")
+            if "state" not in {row[1] for row in connection.execute("PRAGMA table_info(room_relay_sends)")}:
+                connection.execute("ALTER TABLE room_relay_sends ADD COLUMN state TEXT NOT NULL DEFAULT 'delivered'")
+                connection.execute("UPDATE room_relay_sends SET state='queued' WHERE queued_id IS NOT NULL AND target_message_id IS NULL")
             share_columns = {row[1] for row in connection.execute("PRAGMA table_info(room_share_links)")}
             for name in ("card_json", "card_edits"):
                 if name not in share_columns:
@@ -545,6 +566,12 @@ def init_database(database, seed=True):
                 connection.execute("ALTER TABLE room_directory ADD COLUMN destroy_after_days INTEGER NOT NULL DEFAULT 0")
             if "destroy_set_at" not in directory_columns:
                 connection.execute("ALTER TABLE room_directory ADD COLUMN destroy_set_at TEXT NOT NULL DEFAULT ''")
+            # A child room the user lifted out of its parent in the directory; the parent link itself is kept.
+            if "detached" not in directory_columns:
+                connection.execute("ALTER TABLE room_directory ADD COLUMN detached INTEGER NOT NULL DEFAULT 0")
+            # A pinned room keeps its place but can be neither archived nor destroyed, by hand or automatically.
+            if "pinned" not in directory_columns:
+                connection.execute("ALTER TABLE room_directory ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
             if "directories" not in {row[1] for row in connection.execute("PRAGMA table_info(topic_folders)")}:
                 connection.execute("ALTER TABLE topic_folders ADD COLUMN directories TEXT NOT NULL DEFAULT '[]'")
             # Images stored before sizes were recorded keep NULL here and are measured when first read (with_image_sizes).
@@ -592,7 +619,8 @@ def require_room(connection, room_id):
             FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id WHERE rooms.id=? GROUP BY rooms.id""", (room_id,)).fetchone()
     room = dict(row)
     room["texts"] = room_display_texts(connection, room)
-    room["archived"] = bool(connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0])
+    directory = connection.execute("SELECT archived,detached,pinned FROM room_directory WHERE room_id=?", (room_id,)).fetchone()
+    room["archived"], room["detached"], room["pinned"] = bool(directory[0]), bool(directory[1]), bool(directory[2])
     room["folder_id"] = connection.execute("SELECT folder_id FROM room_folder_assignments WHERE room_id=?", (room_id,)).fetchone()[0]
     # The number the next sent file takes, so the composer shows `[图片 #n]` as it will be saved. Queued messages post
     # first and take the numbers before it, so a new draft does not repeat a queued message's `[图片 #n]`.
@@ -993,7 +1021,8 @@ def list_rooms(connection, params=None):
     # Only the public part of a live share link; the manage token stays behind the owner-only share-link read.
     links = {row["room_id"]: {"url": row["url"], "expires_at": row["expires_at"]} for row in connection.execute(
         "SELECT room_id,url,expires_at FROM room_share_links WHERE expires_at>?", (utc_iso_now(),))}
-    rooms = [{**dict(row), "archived": bool(directory[row["id"]]["archived"]), "running": bool(row["running"]),
+    rooms = [{**dict(row), "archived": bool(directory[row["id"]]["archived"]), "detached": bool(directory[row["id"]]["detached"]),
+              "pinned": bool(directory[row["id"]]["pinned"]), "running": bool(row["running"]),
               "destroy_after_days": directory[row["id"]]["destroy_after_days"], "destroy_from": destroy_from(connection, dict(row), directory[row["id"]]) if directory[row["id"]]["destroy_after_days"] else None,
               "destroy_blocked": destroy_blocked(connection, row["id"]) if directory[row["id"]]["destroy_after_days"] else False,
               "folder_id": assignments[row["id"]], "texts": room_display_texts(connection, dict(row)),
@@ -1529,10 +1558,12 @@ def move_folder(connection, folder_id, payload):
 
 
 def manage_room(connection, room_id, action, payload):
-    """Move, rename, archive, restore or permanently delete one declared host's room."""
+    """Move, rename, pin, archive, restore or permanently delete one declared host's room."""
     begin_write(connection)
     room = require_room(connection, room_id)
     require_host(room, payload)
+    if action in ("archive", "delete") and room["pinned"]:
+        raise FileExistsError(Text('已固定的房间不能存档或销毁，请先取消固定'))
     if action == "move":
         rooms = [item["id"] for item in list_rooms(connection)["rooms"] if item["id"] != room_id]
         before = payload.get("before_id")
@@ -1547,6 +1578,24 @@ def manage_room(connection, room_id, action, payload):
         if folder_id is not None and connection.execute("SELECT 1 FROM topic_folders WHERE id=?", (folder_id,)).fetchone() is None:
             raise ValueError(Text('文件夹不存在'))
         connection.execute("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?", (folder_id, room_id))
+    elif action == "detach":
+        # Display only: the parent link stays, so relay cards and `parent_room_id` keep working either way.
+        detached = payload.get("detached")
+        if type(detached) is not bool:
+            raise ValueError(Text('detached 须为 true 或 false'))
+        if detached and not room["parent_room_id"]:
+            raise ValueError(Text('这个房间没有父房间'))
+        connection.execute("UPDATE room_directory SET detached=? WHERE room_id=?", (int(detached), room_id))
+        if detached:
+            # A lifted room lands right after its parent rather than at the end of the folder.
+            rooms = [item["id"] for item in list_rooms(connection)["rooms"] if item["id"] != room_id]
+            rooms.insert(rooms.index(room["parent_room_id"]) + 1, room_id)
+            connection.executemany("UPDATE room_directory SET position=? WHERE room_id=?", enumerate(rooms, 1))
+    elif action == "pin":
+        pinned = payload.get("pinned")
+        if type(pinned) is not bool:
+            raise ValueError(Text('pinned 须为 true 或 false'))
+        connection.execute("UPDATE room_directory SET pinned=? WHERE room_id=?", (int(pinned), room_id))
     elif action == "rename":
         # The title is display-only, so renaming never touches phase, turns or members.
         title = str(payload.get("title", "")).strip()
@@ -1843,11 +1892,11 @@ def destroy_blocked(connection, room_id, now=None):
 
 
 def expired_rooms(connection, now=None):
-    """Rooms past their auto-destroy limit with nothing still owed: not archived, no work running or queued, no open
+    """Rooms past their auto-destroy limit with nothing still owed: not archived or pinned, no work running or queued, no open
     question, no published share page (only the owner's page can take that down)."""
     now = now or datetime.now(timezone.utc)
     rows = connection.execute("""SELECT r.id,r.created_at,d.* FROM rooms r JOIN room_directory d ON d.room_id=r.id
-        WHERE d.destroy_after_days>0 AND d.archived=0""").fetchall()
+        WHERE d.destroy_after_days>0 AND d.archived=0 AND d.pinned=0""").fetchall()
     return [row["room_id"] for row in rows if not destroy_blocked(connection, row["room_id"], now)
             if now - datetime.fromisoformat(destroy_from(connection, {"id": row["room_id"], "created_at": row["created_at"]}, row))
             >= timedelta(days=row["destroy_after_days"])]
@@ -2331,6 +2380,8 @@ def message_with_attachments(connection, row):
     if message["withdrawn"] == "retracted":
         # The owner retracted it before anyone handled it: only the page that retracted it keeps the text.
         return {**message, "text": "", "summary": "", "suggestions": [], "attachments": []}
+    if message["source"] == "room_link_request":
+        message["link_request"] = request_view(connection, message["room_id"], message["id"])
     message["texts"] = load_texts(connection, "message", message["id"])
     message["suggestions"] = message_suggestions(connection, message["id"])
     files = with_image_sizes(connection, connection.execute("SELECT * FROM attachments WHERE message_id=? ORDER BY position,id",
@@ -2691,7 +2742,7 @@ def answers_direct_question(payload):
 ACTING_MEMBER_HEADER = "X-Acting-Member-Token"
 READ_ONLY_HEADER = "X-Discussion-Read-Only"
 # Reads that change the room: the runner's inbox fires timers and expiries, the external list ends expired members.
-READ_ONLY_CLOSED = (["inbox"], ["external-members"])
+READ_ONLY_CLOSED = (["inbox"], ["external-members"], ["room-links"])
 
 # How much of a summary a receipt keeps; the full summary stays one `message view` away.
 RECEIPT_SUMMARY_CHARS = 200
@@ -3473,7 +3524,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             self.server.hub.notify_update(parts[2] if parts[:2] == ["api", "rooms"] and len(parts) > 3 else None)
         # Every room write, accepted or rejected, goes to the room's event log once the request's connection is closed.
         created = parts == ["api", "rooms"] and status == 201 and isinstance(body, dict) and body.get("id")
-        if self.command == "POST" and parts[:2] == ["api", "rooms"] and (len(parts) > 3 or created) and not quiet_renewal:
+        if self.command in ("POST", "DELETE") and parts[:2] == ["api", "rooms"] and (len(parts) > 3 or created) and not quiet_renewal:
             self.api_record = {"room_id": parts[2] if len(parts) > 3 else body["id"], "at": getattr(self, "started_ms", int(time.time() * 1000)),
                                "method": self.command, "path": "/" + "/".join(parts[3:]), "status": status,
                                "client": self.headers.get("User-Agent", "").split(" ")[0][:60], "bridged": bool(getattr(self, "bridged", False)),
@@ -3689,6 +3740,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         """Handle read-only GET requests."""
         self.dispatch("GET")
+
+    def do_DELETE(self):
+        """Remove an existing peer link."""
+        self.dispatch("DELETE")
 
     def do_POST(self):
         """Handle JSON mutations and explicit binary attachment uploads."""
@@ -4210,12 +4265,24 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         self.refuse_read_only(parts, method)
+        supplied_room_token = self.headers.get("X-Discussion-Token")
         self.admin_as_owner(connection, room_id)
         token = self.headers.get("X-Discussion-Token", "")
         if self.headers.get("X-Discussion-Session"):
             record_reported_session(connection, room_id, token, {"session_id": self.headers.get("X-Discussion-Session"),
                                                                  "session_client": self.headers.get("X-Discussion-Session-Client")})
             connection.commit()
+        if parts[3:4] in (["room-links"], ["room-link-requests"]):
+            site_owner = (self.bridged or session_valid(connection, self.admin_token()) or
+                          (not supplied_room_token and self.local_visitor()))
+            body = self.read_payload() if method == "POST" else {}
+            result = handle_links(connection, room_id, token, parts[3:], method, body, site_owner,
+                                  body.get("other_token") or self.headers.get("X-Target-Room-Token", token),
+                                  int(params.get("limit", 0)))
+            connection.commit()
+            if method != "GET":
+                self.server.hub.notify_update()
+            return self.respond(result)
         if parts[3:4] == ["external-members"]:
             result, status = external_owner_api(connection, room_id, parts[4:], params, method, token, self.read_payload)
             # Revoking (or finding expired) the member that held the room frees it: messages queued behind it go now.
@@ -4347,7 +4414,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = queue_action(connection, room_id, token, self.read_payload(), post_queued, check_queued, interrupt_for_message)
             connection.commit()
             return self.respond(result)
-        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"], ["dispatches"], ["host-checkin"], ["room-link"], ["room-relay-sent"]):
+        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"], ["dispatches"], ["host-checkin"], ["room-link"], ["room-relay-sent"], ["host-actions"]):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
@@ -4397,7 +4464,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if session_read_boundary(connection, room_id, token) is not None:
                 raise PermissionError(Text('独立观点阶段需房主凭据导出'))
             return self.respond(room_backup(connection, room_id))
-        if len(parts) == 4 and parts[3] in ("move", "folder", "rename", "archive", "restore", "delete", "auto-destroy") and method == "POST":
+        if len(parts) == 4 and parts[3] in ("move", "folder", "detach", "pin", "rename", "archive", "restore", "delete", "auto-destroy") and method == "POST":
             result = manage_room(connection, room_id, parts[3], self.read_payload())
             connection.commit()
             if parts[3] == "delete":
@@ -4710,6 +4777,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = record_relay_send(connection, room_id, token, self.read_payload())
         elif parts[3:] == ["room-link"] and method == "POST":
             result = record_room_link(connection, room_id, token, self.read_payload())
+        elif parts[3:] == ["host-actions"] and method == "POST":
+            result = record_host_action(connection, room_id, token, self.acting_host(connection, room_id), self.read_payload())
         else:
             raise LookupError(Text('地址不存在'))
         if not self.read_only_request():

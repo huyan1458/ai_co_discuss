@@ -8,7 +8,26 @@
  *     `capabilities` `{stoppable, progress, ends?}` says what this one delivery can do (`ends`: a turn it can neither stop
  *     nor follow is still watched, and `task.on_turn_end()` reports when it ended, saying nothing about an answer; the
  *     runner uses it only to tell the site a voided turn is over), and `steer(text)` (when the running
- *     software can take an interjection without ending its turn) passes one in, resolving false once the turn is over;
+ *     software can take an interjection without ending its turn) passes one in, resolving false once the turn is over.
+ *     Follow-ups (续报): when background work the turn launched (a sub-agent, a background command, a monitor) reports and
+ *     the software starts a new turn on it, the adapter calls `task.on_followup(reports, handle, {steer})` (`reports`
+ *     `[{id, status, summary}]`, `handle` the one it passed to `on_process`, or null; `steer`: whether that turn can still
+ *     take an interjection) and holds that turn's output until it resolves to one of three answers: `true`, the turn
+ *     belongs to a live execution (the same one, or a follow-up the runner opened for a completed one) and is followed as
+ *     usual through the same callbacks; `'keep'` (truthy, so compare exactly), this report opens nothing (it only says
+ *     work was stopped or killed, or the site could not be reached) but the rest of the listed work is still followed:
+ *     neither the process nor the watch ends; `false`, stop following and release (the execution was stopped, or the
+ *     member works on something else). A follow-up whose turn ends unanswered is ended quietly by the runner. A handle that can outlive a completed execution only for such
+ *     work has `lingers()` (pure: only background work keeps it going) and `linger()` (the runner, once it knows the
+ *     execution completed, asks this instead of stopping it; true keeps it, now following only the reports of the work
+ *     already listed); its `kill()` then ends that following (and a process with it). The runner counts a kept handle
+ *     as a writer of the member's session and stops it, waiting for `close`, before anything resumes that session. An
+ *     adapter that does neither does not support follow-ups, and such reports are lost. Schedules: where a schedule the
+ *     member set in its own software is seen to fire (profile `schedule_reports`), the adapter calls
+ *     `task.on_schedule({id, schedule, prompt, set_at}, handle)` (`set_at`: when the schedule was set, ms) with the latest
+ *     room task's callbacks and follows that turn only on `true` (the runner opened a scheduled execution for a host);
+ *     `'drop'` forgets that schedule (set before the owner's last stop), `'stop'` ends its listening, anything else
+ *     leaves the turn unfollowed. A fire while a room turn is followed belongs to that execution and is not asked about;
  *   - `session`: `{path, exists, branch, settings}` for the software's own session store, or null; with `list(options)`
  *     and `preview(session_id, options)` when its stored conversations can be browsed (see `software_sessions`);
  *   - `models`: `{list, effort?, defaults}` read from the installed software, or null when it is chosen inside the App;

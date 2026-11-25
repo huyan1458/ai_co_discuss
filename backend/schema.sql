@@ -114,9 +114,15 @@ CREATE TABLE IF NOT EXISTS room_links (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
     room_id TEXT NOT NULL REFERENCES rooms(id),
     other_room_id TEXT NOT NULL,
-    relation TEXT NOT NULL CHECK(relation IN ('child','parent')),
+    relation TEXT NOT NULL CHECK(relation IN ('child','parent','peer')),
     host TEXT NOT NULL,
     UNIQUE(room_id, other_room_id)
+);
+CREATE TABLE IF NOT EXISTS room_link_requests (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    target_room_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending','approved','declined'))
 );
 -- Sender-side receipts survive deletion of the destination room.
 CREATE TABLE IF NOT EXISTS room_relay_sends (
@@ -126,6 +132,7 @@ CREATE TABLE IF NOT EXISTS room_relay_sends (
     target_message_id INTEGER,
     queued_id INTEGER,
     interrupted INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'delivered' CHECK(state IN ('queued','delivered','replied')),
     host TEXT NOT NULL,
     member TEXT NOT NULL DEFAULT ''
 );
@@ -134,6 +141,8 @@ CREATE TABLE IF NOT EXISTS room_relay_sends (
 CREATE TABLE IF NOT EXISTS message_relays (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
     source_room_id TEXT NOT NULL,
+    expect TEXT NOT NULL DEFAULT 'reply',
+    reply_to INTEGER,
     host TEXT NOT NULL,
     member TEXT NOT NULL DEFAULT ''
 );
@@ -534,6 +543,15 @@ CREATE TABLE IF NOT EXISTS scheduler_routing (
     PRIMARY KEY (room_id, message_id)
 );
 -- Older development databases may retain execution_deliveries; it is no longer read or written.
+-- The background work an execution's software left running or finished (sub-agents, background commands, monitors,
+-- schedules), as its adapter last listed it: a JSON list of {id, kind, title, state, started_at, ended_at, next_at,
+-- schedule}. A side table so older databases need no column change; executions are not backed up, so neither is this.
+CREATE TABLE IF NOT EXISTS execution_background_tasks (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL,
+    tasks TEXT NOT NULL DEFAULT '[]',
+    updated_at INTEGER NOT NULL
+);
 -- What the runner's adapter reported each execution can do (stop it, see its progress), and whether its software stopped
 -- once the execution was voided: the page describes a stop as it really went (a window or App the runner cannot stop
 -- keeps generating). A side table so older databases need no column change; executions are not backed up, so neither is this.
@@ -875,6 +893,32 @@ CREATE TABLE IF NOT EXISTS free_direct_batches (
 CREATE TABLE IF NOT EXISTS execution_continuations (
     execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
     next_id INTEGER NOT NULL REFERENCES member_executions(id) ON DELETE CASCADE
+);
+-- A follow-up execution (续报): background work (a sub-agent, a background command, a monitor) that the ended execution
+-- `source_id` left running reported, and the member's software started a new turn on it; the runner opened this one
+-- for that turn, so its answer has a source (red line 4, user 2026-11-25). One per source: a later report follows the
+-- follow-up. `reports`: what the software said reported, as [{id, status, summary}].
+CREATE TABLE IF NOT EXISTS execution_followups (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    source_id INTEGER NOT NULL UNIQUE REFERENCES member_executions(id) ON DELETE CASCADE,
+    reports TEXT NOT NULL DEFAULT '[]'
+);
+-- A scheduled execution (定时回报): a schedule the host set in its own software (Claude Code's CronCreate) fired, and the
+-- runner opened this one for the turn it started, so its answer has a source (user 2026-11-25 #10925, option B: the
+-- host's only). `source_id`: the member's latest execution then, whose credential its software still holds, so an
+-- answer bound to that one comes here (NULL when it had none). `task_id`, `schedule`: the schedule as the software named it.
+-- When the owner last stopped a member (its own stop, stop-all, archiving), in milliseconds: a schedule its software
+-- had set before that no longer comes into the room as a scheduled report (user 2026-11-25 #10989), so the owner's
+-- stop also stops the host waking itself; one it sets afterwards does.
+CREATE TABLE IF NOT EXISTS member_schedule_stops (
+    member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
+    stopped_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS execution_schedules (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    source_id INTEGER UNIQUE REFERENCES member_executions(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL DEFAULT '',
+    schedule TEXT NOT NULL DEFAULT ''
 );
 -- What the program handed to the host once (a failure, a possible conflict, its own continue): `key` keeps it to one
 -- wake-up per event, `chain_id` counts it as a round of that chain, `message_id` is the notice its request hangs on.
@@ -1242,6 +1286,10 @@ BEGIN
     UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
     INSERT INTO room_revisions (room_id,revision) SELECT NEW.room_id,(SELECT COALESCE(MAX(revision),0)+1 FROM room_revisions)
         WHERE NOT EXISTS (SELECT 1 FROM room_revisions WHERE room_id=NEW.room_id);
+END;
+CREATE TRIGGER IF NOT EXISTS revision_relay_send_update AFTER UPDATE ON room_relay_sends
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
 END;
 DROP TRIGGER IF EXISTS revision_message_withdrawal;
 CREATE TRIGGER revision_message_withdrawal AFTER INSERT ON message_withdrawals
@@ -1779,6 +1827,18 @@ CREATE TRIGGER event_execution_changed AFTER UPDATE OF status ON member_executio
 BEGIN
     INSERT INTO room_events (room_id,at,kind,data) VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'execution.changed',
         json_object('execution_id',NEW.id,'member_id',NEW.member_id,'status',NEW.status,'from_status',OLD.status,'result',substr(NEW.result,1,200)));
+END;
+CREATE TRIGGER IF NOT EXISTS event_execution_scheduled AFTER INSERT ON execution_schedules
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) SELECT e.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'execution.scheduled',
+        json_object('execution_id',NEW.execution_id,'source_id',NEW.source_id,'member_id',e.member_id,'task_id',NEW.task_id,'schedule',NEW.schedule)
+        FROM member_executions e WHERE e.id=NEW.execution_id;
+END;
+CREATE TRIGGER IF NOT EXISTS event_execution_followup AFTER INSERT ON execution_followups
+BEGIN
+    INSERT INTO room_events (room_id,at,kind,data) SELECT e.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'execution.followup',
+        json_object('execution_id',NEW.execution_id,'source_id',NEW.source_id,'member_id',e.member_id,'reports',json(NEW.reports))
+        FROM member_executions e WHERE e.id=NEW.execution_id;
 END;
 DROP TRIGGER IF EXISTS event_execution_retry;
 CREATE TRIGGER event_execution_retry AFTER INSERT ON execution_retries

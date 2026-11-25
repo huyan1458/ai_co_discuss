@@ -43,6 +43,9 @@ const lookup_key = computed(() => {
   if (!directories.value.length && (models.loading || models.error)) return "";
   return JSON.stringify([props.roomId, props.message.id, props.startedAt, candidates.value, directories.value]);
 });
+// The same answer without its directories: right after a room switch they are not read yet, so the cards found on the
+// last visit show at once instead of popping in half a second later and moving the cards below (user 2026-11-24).
+const message_key = computed(() => JSON.stringify([props.roomId, props.message.id, props.startedAt, candidates.value]));
 const files = ref([]);
 const nearby = ref(false);
 const shown_files = computed(() => {
@@ -87,14 +90,14 @@ async function delivered(named) {
 // A successful miss (null) can be reused. A failed read (undefined) must retry on the next visit.
 watch([lookup_key, nearby], async ([key, visible], _, on_cleanup) => {
   const cached = found_files.get(key);
-  files.value = cached ?? [];
+  files.value = cached ?? found_files.get(message_key.value) ?? [];
   if (!key || cached || !visible) return;
   let active = true;
   on_cleanup(() => { active = false; });
   const results = await Promise.all(candidates.value.map(delivered));
   if (!active) return;
   files.value = results.filter(Boolean);
-  if (!results.includes(undefined)) found_files.set(key, files.value);
+  if (!results.includes(undefined)) { found_files.set(key, files.value); found_files.set(message_key.value, files.value); }
 }, { immediate: true });
 
 // A page the answer delivered can go public as a website, after the owner confirms what it holds.

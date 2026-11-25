@@ -879,6 +879,103 @@ export function get_workflow(home, id) {
   });
 }
 
+// A workflow part's other files (references, templates, scripts), read and written one at a time from the SKILL.md
+// panel (user 2026-11-24), like an expert's skills. The rest of the folder has fields of its own and is not one of them.
+const PART_FILE_DIGEST_LENGTH = 16;
+const PART_FILES_LOCKED = new Set(['SKILL.md', FLOW_FILE, COMMANDS_FILE]);
+const part_digest = bytes => createHash('sha256').update(bytes).digest('hex').slice(0, PART_FILE_DIGEST_LENGTH);
+
+/** The main flow's folder (`sub` empty) or a sub-workflow's, refused when it does not exist. Call under the lock. */
+function part_directory(home, id, sub) {
+  const directory = workflow_directory(home, id);
+  if (!existsSync(directory)) throw new Error(`工作流不存在：${id}`);
+  if (!sub) return directory;
+  if (!WORKFLOW_ID_PATTERN.test(String(sub)) || !existsSync(join(directory, SUB_DIRECTORY, sub, 'SKILL.md'))) throw new Error(`子工作流不存在：${sub}`);
+  return join(directory, SUB_DIRECTORY, sub);
+}
+
+/** Whether a path relative to a part's folder is one of its other files (not SKILL.md, the canvas, cards or sub-workflows). */
+function part_file_allowed(path, sub) {
+  const parts = String(path || '').split('/');
+  if (!path || !parts.every(part => RESOURCE_SEGMENT.test(part)) || PART_FILES_LOCKED.has(path)) return false;
+  return !['agents', 'experts'].includes(parts[0]) && !(parts.length > 1 && !sub && parts[0] === SUB_DIRECTORY);
+}
+
+/**
+ * A part's other files (`files`) as `{ path, text, digest }` relative to its folder, SKILL.md and the folders the
+ * workflow reads as fields left out; `text` is null for a file that is not text or is over the size limit.
+ * `commands.json` is listed read-only (`locked`): the commands it registers were allowed on import.
+ */
+export function workflow_part_files(home, { id, sub = '' } = {}) {
+  return with_workflow_lock(home, () => {
+    const root = part_directory(home, id, sub), files = [];
+    const walk = relative => {
+      for (const name of readdirSync(join(root, relative)).sort()) {
+        const path = relative ? `${relative}/${name}` : name, full = join(root, path), stat = lstatSync(full);
+        if (stat.isSymbolicLink() || !RESOURCE_SEGMENT.test(name)) continue;
+        if (stat.isDirectory()) {
+          if (!relative && (['agents', 'experts'].includes(name) || (!sub && name === SUB_DIRECTORY))) continue;
+          walk(path); continue;
+        }
+        if (path === 'SKILL.md' || path === FLOW_FILE) continue;
+        const bytes = readFileSync(full);
+        let text = null;
+        if (bytes.length <= MAX_RESOURCE_BYTES) try { text = utf8.decode(bytes); } catch { /* not text */ }
+        files.push({ path, text, digest: part_digest(bytes), ...(path === COMMANDS_FILE ? { locked: true } : {}) });
+      }
+    };
+    walk('');
+    return { files, revision: folder_revision(workflow_directory(home, id)) };
+  });
+}
+
+/** Refuse a change to a part file whose bytes are no longer the ones read (`digest`, '' for a new file). */
+function check_part_digest(target, digest, path) {
+  const now = existsSync(target) ? part_digest(readFileSync(target)) : '';
+  if ((digest || '') !== now) throw workflow_failure('file_changed', '文件 {path} 在你读取之后变了，请重新载入后再改', { path });
+}
+
+/** The full path of a part file the page may change, refused for anything else or a link on the way. */
+function part_target(root, path, sub) {
+  if (!part_file_allowed(path, sub)) throw new Error(`不能在这里修改：${path || '（空）'}`);
+  let current = root;
+  for (const part of path.split('/')) {
+    current = join(current, part);
+    if (existsSync(current) && lstatSync(current).isSymbolicLink()) throw new Error(`路径含链接：${path}`);
+  }
+  return current;
+}
+
+/**
+ * Write one part file (`file-write`), creating its folders; returns its digest and the workflow's revision before and
+ * after, so a page that had read the revision before can keep saving without reloading.
+ */
+export function write_workflow_part_file(home, { id, sub = '', path, text, digest } = {}) {
+  return with_workflow_lock(home, () => {
+    const root = part_directory(home, id, sub), target = part_target(root, path, sub);
+    if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > MAX_RESOURCE_BYTES) throw new Error(`文件须为文本，最多 ${MAX_RESOURCE_BYTES / 1000000} MB`);
+    check_part_digest(target, digest, path);
+    const before = folder_revision(workflow_directory(home, id));
+    mkdirSync(dirname(target), { recursive: true });
+    const temporary = `${target}.${randomUUID().slice(0, 8)}.tmp`;
+    try { writeFileSync(temporary, text); renameSync(temporary, target); }
+    finally { rmSync(temporary, { force: true }); }
+    return { path, digest: part_digest(Buffer.from(text, 'utf8')), revision_before: before, revision: folder_revision(workflow_directory(home, id)) };
+  }, true);
+}
+
+/** Delete one part file (`file-delete`) the page read as `digest`; returns the revision before and after. */
+export function delete_workflow_part_file(home, { id, sub = '', path, digest } = {}) {
+  return with_workflow_lock(home, () => {
+    const root = part_directory(home, id, sub), target = part_target(root, path, sub);
+    if (!existsSync(target) || !lstatSync(target).isFile()) throw workflow_failure('file_changed', '文件 {path} 在你读取之后变了，请重新载入后再改', { path });
+    check_part_digest(target, digest, path);
+    const before = folder_revision(workflow_directory(home, id));
+    rmSync(target);
+    return { path, deleted: true, revision_before: before, revision: folder_revision(workflow_directory(home, id)) };
+  }, true);
+}
+
 /** Fill a staging folder, then swap it in for the library entry, recoverable if the process dies midway. Call under the lock. */
 function publish_directory(home, id, fill) {
   const directory = workflow_directory(home, id);

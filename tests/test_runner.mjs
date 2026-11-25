@@ -24,7 +24,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { listen_local } from './local_port.mjs';
 import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
 import { slash_insertion } from '../runner/slash_names.mjs';
-import { cwd_key, edited_changes, free_task_files, FreeRoomRunner, named_workflows, request_attachments, member_drafts, member_extra_directories, member_folders, review_capability_version, room_goal, workspace_snapshot } from '../runner/free_runner.mjs';
+import { cwd_key, edited_changes, expert_prompt_delivery, free_task_files, FreeRoomRunner, process_started, named_workflows, request_attachments, member_drafts, member_extra_directories, member_folders, review_capability_version, room_goal, workspace_snapshot } from '../runner/free_runner.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
 import { capture_base } from '../runner/file_diff.mjs';
 
@@ -252,6 +252,19 @@ test('the occasional skill page is listed only when a request carries a relay or
   const relay = free_task_files(config, { name: 'Codex', role: 'member' }, { id: 2, read_until: 0,
     requests: [{ id: 8, message_id: 10, purpose: 'ask', sequence: { id: 3, step: 2, steps: 3 } }] }, {}, {});
   assert.ok(read(relay).some(path => path.endsWith('discuss-participant/references/situations.md')));
+});
+
+test("a read-only member's credential names the folders its codiscuss file arguments may use; a writable one has none", () => {
+  const project = mkdtempSync(join(tmpdir(), 'scope-project-'));
+  const config = { site: 'http://127.0.0.1:1', room: 'r', directory: mkdtempSync(join(tmpdir(), 'scope-')), project: resolve('.'),
+    members: { Claude: { token: 'c'.repeat(32) } }, participants: { Claude: { adapter: 'claude', project_access: 'read', cwd: project } } };
+  const access = task => JSON.parse(readFileSync(task.access_path, 'utf8'));
+  const execution = id => ({ id, read_until: 0, requests: [{ id, message_id: 9, purpose: 'ask' }] });
+  const scope = access(free_task_files(config, { name: 'Claude', role: 'member' }, execution(1), {}, {})).file_scope;
+  assert.ok(scope.read.includes(project) && scope.read.some(path => path.endsWith(join('.agents', 'skills'))));
+  assert.ok(!scope.write.includes(project), 'the read-only project is not a download target');
+  config.participants.Claude.project_access = 'write';
+  assert.equal(access(free_task_files(config, { name: 'Claude', role: 'member' }, execution(2), {}, {})).file_scope, undefined);
 });
 
 test('a workflow or sub-workflow the "/" menu inserts reaches the host task as named_workflows', () => {
@@ -526,6 +539,7 @@ async function fixture(t) {
       }
       result = { archived: false, members: [member], observers, executions: active_executions(), execution_minutes: 60 };
     } else if (route === '/' || route === '') result = { ...room, limits: { ...limits, ...room.limits } };
+    else if (route === '/room-links') result = { links: [] };
     else if (route.startsWith('/messages?after=')) result = { messages: [] };
     else if (route === '/executions' && request.method === 'POST') {
       calls.push('reserve');
@@ -653,6 +667,101 @@ test('Codex bridge confirms an interjection only on the matching completed user 
     [{ type: 'codiscuss.interjection_confirmed', interjection_id: 42 }]);
   assert.doesNotMatch(output, /private text/);
 });
+
+for (const outcome of ['accept', 'refuse', 'interrupted', 'keep', 'same-turn', 'list-timeout']) {
+  test(`Codex bridge gates late background reports on the runner: ${outcome}`, { timeout: 10000 }, async t => {
+    const directory = mkdtempSync(join(tmpdir(), 'codex-background-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    writeFileSync(join(directory, 'app-server'), `
+      const send = data => console.log(JSON.stringify(data));
+      let turns = 0;
+      const notify = (method, extra) => send({ method, params: { threadId: 'thread', turnId: 'one', ...extra } });
+      const item = (method, item, extra) => notify(method, { item, ...extra });
+      const agent = { type: 'subAgentActivity', agentThreadId: 'agent', agentPath: 'review' };
+      require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+        const { id, method, params } = JSON.parse(line);
+        if (!id) return;
+        if (method === 'initialize' && !params.capabilities.experimentalApi) process.exit(2);
+        if (method === 'thread/backgroundTerminals/list') {
+          if ('${outcome}' === 'list-timeout') return;
+          send({ id, result: { data: [{ itemId: 'cmd', command: 'sleep 30' }, { itemId: 'unrelated' }] } });
+          return;
+        }
+        const turnId = turns ? 'two' : 'one';
+        const result = method === 'thread/start' ? { thread: { id: 'thread' } }
+          : method === 'turn/start' ? { turn: { id: turnId } } : {};
+        send({ id, result });
+        if (method !== 'turn/start') return;
+        turns++;
+        if (turns > 1 && (params.threadId !== 'thread' || !params.input[0].text.includes('rootTurnId'))) process.exit(3);
+        notify('turn/started', { turnId, turn: { id: turnId } });
+        if (turns === 1) {
+          if ('${outcome}' === 'list-timeout') {
+            item('item/started', { type: 'commandExecution', id: 'cmd' });
+            notify('turn/completed', { turnId, turn: { id: turnId, status: 'completed' } });
+            return;
+          }
+          item('item/completed', { ...agent, kind: 'started' });
+          if ('${outcome}' === 'same-turn') {
+            setTimeout(() => {
+              item('item/completed', { ...agent, kind: 'completed' });
+              notify('turn/completed', { turnId, turn: { id: turnId, status: 'completed' } });
+            }, 100);
+            return;
+          }
+          item('item/started', { type: 'commandExecution', id: 'cmd' });
+          item('item/completed', { ...agent, kind: 'interrupted' }, { turnId: 'foreign' });
+          setTimeout(() => {
+            item('item/completed', { ...agent, kind: '${outcome === 'interrupted' ? 'interrupted' : 'completed'}' });
+            setTimeout(() => item('item/completed', { type: 'commandExecution', id: 'cmd', exitCode: ${outcome === 'keep' ? 1 : 0}, status: '${outcome === 'keep' ? 'failed' : outcome === 'interrupted' ? 'interrupted' : 'completed'}' }), ${outcome === 'keep' ? 200 : 0});
+          }, 100);
+        }
+        notify('turn/completed', { turnId, turn: { id: turnId, status: 'completed' } });
+      });`);
+    const child = spawn(process.execPath, [fileURLToPath(new URL('../runner/adapters/codex_bridge.mjs', import.meta.url)), process.execPath],
+      { cwd: directory, stdio: ['pipe', 'pipe', 'pipe'] });
+    t.after(() => { if (child.exitCode === null) child.kill(); });
+    const lists = [], batches = [], phases = [], turns = [];
+    const state = { child };
+    const task = { on_background_tasks: list => lists.push(list), on_activity: phase => phases.push(phase),
+      on_followup: async reports => { batches.push(reports); return outcome === 'keep' ? (batches.length === 1 ? 'keep' : true) : outcome === 'accept'; } };
+    let partial = '';
+    child.stdout.on('data', chunk => {
+      const lines = (partial + chunk).split('\n');
+      partial = lines.pop();
+      for (const line of lines) {
+        const event = JSON.parse(line);
+        if (event.type === 'turn.started') turns.push(event);
+        adapter_of('codex_cli').lifecycle(state, event, task, () => {});
+        if (outcome === 'same-turn' && event.type === 'background.started') assert.equal(child.linger(), true);
+        if (event.type === 'turn.completed' && event.waiting) assert.equal(child.linger(), true);
+      }
+    });
+    child.stdin.write(JSON.stringify({ prompt: 'start', cwd: directory, background: true }) + '\n');
+    const [code] = await once(child, 'close');
+    clearTimeout(state.finish_timer);
+    assert.equal(code, 0);
+    if (outcome === 'same-turn' || outcome === 'list-timeout') {
+      assert.deepEqual(batches, []);
+      assert.equal(turns.length, 1);
+      assert.deepEqual(lists.at(-1)?.map(item => item.state) || [], outcome === 'same-turn' ? ['done'] : []);
+      return;
+    }
+    if (outcome === 'keep') {
+      assert.deepEqual(batches.map(batch => batch.map(item => [item.id, item.status])), [[['agent', 'completed']], [['cmd', 'failed']]]);
+      assert.equal(turns.length, 2);
+      return;
+    }
+    assert.ok(phases.length && phases.every(phase => phase === 'waiting'));
+    if (outcome !== 'refuse') assert.deepEqual(lists.at(-1).map(({ id, state }) => [id, state]),
+      [['agent', outcome === 'interrupted' ? 'stopped' : 'done'], ['cmd', outcome === 'interrupted' ? 'stopped' : 'done']]);
+    const reported = batches.flat().map(({ id, rootTurnId }) => [id, rootTurnId]);
+    if (outcome === 'accept') assert.deepEqual(reported, [['agent', 'one'], ['cmd', 'one']]);
+    else if (outcome === 'interrupted') assert.deepEqual(reported, []);
+    else assert.deepEqual(reported[0], ['agent', 'one']);
+    assert.equal(turns.length, outcome === 'accept' ? 1 + batches.length : 1);
+  });
+}
 
 test('a backup carries local member sessions, and restoring it resumes them while Claude Code stays manual', async t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-restore-'));
@@ -1175,7 +1284,7 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
   mkdirSync(draft_directory);
   const access_path = join(directory, 'access.json');
   writeFileSync(access_path, JSON.stringify({ token: 'test-only', session_id: '' }));
-  const bindings = []; const errors = []; const failure_options = []; const denials = []; const activities = []; let exits = 0;
+  const bindings = []; const errors = []; const failure_options = []; const denials = []; const activities = []; const background_lists = []; let exits = 0;
   const process_fixture = fake_cli(options.events || cli_events(adapter), options);
   t.after(async () => {
     for (const call of [...process_fixture.calls, ...process_fixture.config_calls]) {
@@ -1189,12 +1298,40 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
   const task = { id: 'event-1', participant: 'Antigravity', directory, member_directory, draft_directory, access_path, prompt: '讨论中文 "quotes"\n$(literal); `literal`',
     skill_directories: [join(directory, 'skills')],
     on_binding: session => bindings.push(session), on_process: () => {},
-    on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: (error, options) => { errors.push(error); failure_options.push(options); }, on_exit: () => { exits++; }, on_denials: list => denials.push(...list), on_activity: phase => activities.push(phase) };
+    on_output: (path, chunk) => appendFileSync(path, chunk), on_failure: (error, options) => { errors.push(error); failure_options.push(options); }, on_exit: () => { exits++; }, on_denials: list => denials.push(...list), on_activity: phase => activities.push(phase), on_background_tasks: list => background_lists.push(list),
+    ...(options.on_followup ? { on_followup: options.on_followup } : {}) };
   const config = { adapter, executable: process.execPath, ...options.config };
   const result = await deliver_task(config, options.binding || {}, task, process_fixture.spawn_process, user_home);
   await process_fixture.calls[0].closed;
-  return { directory, user_home, config, access_path, task, result, bindings, errors, failure_options, denials, exits, activities, ...process_fixture };
+  return { directory, user_home, config, access_path, task, result, bindings, errors, failure_options, denials, exits, activities, background_lists, ...process_fixture };
 }
+
+test('agy lists the background work its tool steps show and ends it as the steps and the result say (1.5.16 shapes)', async t => {
+  const step = (index, state, tool_name, extra = {}) => ({ event: 'step_update', step_update: { step_index: index, state, step_type: tool_name === 'invoke_subagent' ? 'subagent' : 'tool', tool_name, ...extra } });
+  const tool = (parameters, output) => ({ tool_info: { parameters, ...(output === undefined ? {} : { output }) } });
+  const agent = (role, conversation_id) => ({ subagent_info: { subagents: [{ type_name: 'research', role, conversation_id }] } });
+  const f = await cli_delivery_fixture(t, 'antigravity_cli', { events: [
+    { event: 'init', conversation_id: 'actual-cli-session' },
+    // A command that finishes in the foreground is no background work.
+    step(1, 'ACTIVE', 'run_command', tool({ CommandLine: 'codiscuss room view' })),
+    step(1, 'DONE', 'run_command', tool({ CommandLine: 'codiscuss room view' }, 'Command exited with code 0.')),
+    step(2, 'DONE', 'invoke_subagent', agent('Readonly Probe', 'sub-1')),
+    step(3, 'DONE', 'invoke_subagent', agent('Echo Probe', 'sub-2')),
+    step(4, 'ACTIVE', 'schedule', tool({ CronExpression: '0 0 1 1 *', Prompt: 'CRON_PROBE' })),
+    step(4, 'DONE', 'schedule', tool({ CronExpression: '0 0 1 1 *', Prompt: 'CRON_PROBE' }, 'Cron schedule cancelled after 0 iterations.')),
+    step(5, 'DONE', 'manage_subagents', tool({ Action: 'kill', ConversationIds: ['sub-1'] }, 'Successfully killed 1 subagent(s) and their descendants.')),
+    { event: 'result', result: { conversation_id: 'actual-cli-session', status: 'SUCCESS', response: '中文' } },
+  ] });
+  assert.deepEqual(f.errors, []);
+  const last = f.background_lists.at(-1).map(({ id, kind, title, state, schedule }) => ({ id, kind, title, state, schedule }));
+  assert.deepEqual(last, [
+    { id: 'task-4', kind: 'schedule', title: 'CRON_PROBE', state: 'stopped', schedule: 'cron (0 0 1 1 *)' },
+    { id: 'sub-1', kind: 'agent', title: 'Readonly Probe', state: 'stopped', schedule: '' },
+    // Still listed when the result came: -p prints it only after the reports it waited for.
+    { id: 'sub-2', kind: 'agent', title: 'Echo Probe', state: 'done', schedule: '' },
+  ]);
+  assert.ok(f.background_lists.some(list => list.some(item => item.id === 'task-4' && item.state === 'running')), 'the schedule shows while its step runs');
+});
 
 test('Codex classifies software error codes without interpreting prose or retrying the delivery', async t => {
   for (const [info, expected] of [
@@ -1653,12 +1790,195 @@ test('claude allows only codiscuss website subcommands and draft writes, then us
 
 test('claude says it waits for background tasks its process left running after its result', async t => {
   // Shapes recorded by Claude Code 2.1.326 (2026-11-20, -p stream-json): the process outlives its result until they report.
-  const started = { type: 'system', subtype: 'task_started', task_id: 'b1', tool_use_id: 'toolu_1', is_backgrounded: true };
+  const started = { type: 'system', subtype: 'task_started', task_id: 'b1', tool_use_id: 'toolu_1', is_backgrounded: true, task_type: 'local_agent', description: '调研' };
+  const progress = { type: 'system', subtype: 'task_progress', task_id: 'b1', tool_use_id: 'toolu_1' };
+  // A sub-agent's own steps carry the call that started it; they are not the member's phases or remarks.
+  const inner = { type: 'assistant', parent_tool_use_id: 'toolu_1', message: { content: [{ type: 'text', text: 'pong' }] } };
   const reported = { type: 'system', subtype: 'task_notification', task_id: 'b1', tool_use_id: 'toolu_1', status: 'completed' };
-  const f = await cli_delivery_fixture(t, 'claude', { events: [started, { type: 'result', is_error: false, result: '已开始' }, reported,
+  const f = await cli_delivery_fixture(t, 'claude', { events: [started, { type: 'result', is_error: false, result: '已开始' }, progress, inner, reported,
     { type: 'result', is_error: false, result: '完成' }] });
   assert.deepEqual(f.errors, []);
-  assert.deepEqual(f.activities.filter(phase => phase === 'waiting'), ['waiting'], 'only the result left waiting says so');
+  assert.deepEqual(f.activities.filter(phase => ['waiting', 'writing', 'thinking'].includes(phase)).slice(-1), ['waiting'], 'only the result left waiting says so');
+  assert.deepEqual(f.background_lists.map(list => list.map(({ id, kind, title, state }) => ({ id, kind, title, state }))),
+    [[{ id: 'b1', kind: 'agent', title: '调研', state: 'running' }], [{ id: 'b1', kind: 'agent', title: '调研', state: 'done' }]]);
+});
+
+test('claude puts a background report after its result to the runner as a follow-up, not one inside the turn', async t => {
+  const started = id => ({ type: 'system', subtype: 'task_started', task_id: id, tool_use_id: `toolu_${id}`, is_backgrounded: true, task_type: 'local_bash', description: '跑测试' });
+  const reported = id => ({ type: 'system', subtype: 'task_notification', task_id: id, tool_use_id: `toolu_${id}`, status: 'completed', summary: '测试通过' });
+  const asked = [];
+  const f = await cli_delivery_fixture(t, 'claude', { events: [started('b1'), started('b2'), reported('b1'), { type: 'result', is_error: false, result: '已提交' },
+    reported('b2'), { type: 'assistant', message: { content: [{ type: 'text', text: '后台测试通过了' }] } }, { type: 'result', is_error: false, result: '续报' }],
+  on_followup: async (reports, handle) => { asked.push({ reports, handle: Boolean(handle?.linger) }); return true; } });
+  assert.deepEqual(asked, [{ reports: [{ id: 'b2', status: 'completed', summary: '测试通过' }], handle: true }],
+    'only the report after the result starts a new turn');
+  assert.deepEqual([f.errors, f.exits], [[], 1]);
+  assert.equal(f.calls[0].child.linger(), false, 'an exited process is not kept');
+});
+
+test('a Claude window kept past a completed execution follows only its listed background work\'s report as a follow-up', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-followup-')); t.after(() => rmSync(home, { recursive: true, force: true }));
+  const line = entry => `${JSON.stringify(entry)}\n`;
+  const prompt = line({ type: 'user', message: { role: 'user', content: 'Another Claude session sent a message: 读取 free-9.task.json' } });
+  const bash = id => line({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'npm test', run_in_background: true } }] } })
+    + line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'running in background' }] },
+      toolUseResult: { stdout: '', stderr: '', backgroundTaskId: `task-${id}` } });
+  const remark = text => line({ type: 'assistant', timestamp: new Date().toISOString(), message: { content: [{ type: 'text', text }] } });
+  const report = id => line({ type: 'user', message: { role: 'user', content: `<task-notification>\n<task-id>task-${id}</task-id>\n<tool-use-id>${id}</tool-use-id>\n<status>completed</status>\n<summary>测试通过</summary>\n</task-notification>` } });
+  const turn_end = line({ type: 'system', subtype: 'turn_duration', durationMs: 900 });
+  mkdirSync(join(home, 'sessions'), { recursive: true });
+  writeFileSync(join(home, 'sessions', `${process.pid}.json`), JSON.stringify({ status: 'idle', updatedAt: Date.now() + 60_000 }));
+  const follow = () => {
+    const file = join(home, `${randomUUID()}.jsonl`), seen = [], asked = [], handle = { kill() {} };
+    writeFileSync(file, '');
+    const answers = [];
+    const watch = watch_window_turn({ file, offset: 0, pid: process.pid, marker: 'free-9.task.json', log_path: join(home, 'window.log') }, {
+      on_output: () => {}, on_exit: reason => seen.push(reason || 'exit'), on_note: text => seen.push(text),
+      on_followup: async (reports, from, options) => { asked.push([reports.map(item => item.id), from === handle, options]); return answers.shift() ?? true; },
+    }, { interval: 10, env: { CLAUDE_CONFIG_DIR: home }, handle, on_end: () => seen.push('end') });
+    return { file, seen, asked, answers, watch };
+  };
+  const wait_for = async (check) => { for (let waited = 0; !check() && waited < 2000; waited += 20) await delay(20); await delay(50); };
+  for (const accepted of [true, false]) {
+    const { file, seen, asked, answers, watch } = follow();
+    answers.push(accepted);
+    appendFileSync(file, prompt + bash('toolu_t') + remark('已提交') + turn_end);
+    await wait_for(() => seen.length);
+    assert.equal(watch.lingers(), true);
+    assert.equal(watch.linger(), true, 'the runner keeps it once the execution completed');
+    // A later task in the same window launches its own work: the kept watch does not take that on.
+    appendFileSync(file, bash('toolu_new') + report('toolu_new') + report('toolu_t') + remark('后台测试通过了') + turn_end);
+    await wait_for(() => seen.includes('end'));
+    assert.deepEqual(asked, [[['toolu_t'], true, { steer: true }]], 'only the listed work\'s report is put to the runner');
+    assert.deepEqual(seen, accepted ? ['已提交', '后台测试通过了', 'exit', 'end'] : ['已提交', 'end']);
+  }
+  // The runner stopping a kept watch only ends the following; with nothing left, or a stop on a voided turn, nothing lingers.
+  const kept = follow();
+  appendFileSync(kept.file, prompt + bash('toolu_t') + remark('已提交') + turn_end);
+  await wait_for(() => kept.seen.length);
+  kept.watch.linger();
+  assert.equal(kept.watch.stop(), true);
+  assert.deepEqual([kept.seen, kept.watch.lingers()], [['已提交', 'end'], false]);
+  const voided = follow();
+  appendFileSync(voided.file, prompt + bash('toolu_t') + remark('还在跑') + turn_end);
+  await wait_for(() => voided.seen.length);
+  voided.watch.stop();
+  await wait_for(() => voided.seen.includes('end'));
+  appendFileSync(voided.file, report('toolu_t'));
+  await delay(100);
+  assert.deepEqual([voided.seen.slice(1), voided.asked, voided.watch.linger()], [['停止时原窗口在等后台任务，后台任务仍在运行', 'end'], [], false]);
+});
+
+test('a kept Claude window goes on following the rest of its background work when a report is answered keep', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-keep-')); t.after(() => rmSync(home, { recursive: true, force: true }));
+  const line = entry => `${JSON.stringify(entry)}\n`;
+  const prompt = line({ type: 'user', message: { role: 'user', content: 'Another Claude session sent a message: 读取 free-9.task.json' } });
+  const bash = id => line({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'npm test', run_in_background: true } }] } })
+    + line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'running in background' }] },
+      toolUseResult: { stdout: '', stderr: '', backgroundTaskId: `task-${id}` } });
+  const remark = text => line({ type: 'assistant', timestamp: new Date().toISOString(), message: { content: [{ type: 'text', text }] } });
+  const report = (id, status) => line({ type: 'user', message: { role: 'user', content: `<task-notification>\n<task-id>task-${id}</task-id>\n<tool-use-id>${id}</tool-use-id>\n<status>${status}</status>\n</task-notification>` } });
+  const turn_end = line({ type: 'system', subtype: 'turn_duration', durationMs: 900 });
+  mkdirSync(join(home, 'sessions'), { recursive: true });
+  writeFileSync(join(home, 'sessions', `${process.pid}.json`), JSON.stringify({ status: 'idle', updatedAt: Date.now() + 60_000 }));
+  const file = join(home, 'keep.jsonl'), seen = [], asked = [], answers = ['keep', true];
+  writeFileSync(file, '');
+  const watch = watch_window_turn({ file, offset: 0, pid: process.pid, marker: 'free-9.task.json', log_path: join(home, 'window.log') }, {
+    on_output: () => {}, on_exit: reason => seen.push(reason || 'exit'), on_note: text => seen.push(text),
+    on_followup: async reports => { asked.push(reports.map(item => `${item.id}:${item.status}`)); return answers.shift(); },
+  }, { interval: 10, env: { CLAUDE_CONFIG_DIR: home }, handle: { kill() {} }, on_end: () => seen.push('end') });
+  appendFileSync(file, prompt + bash('toolu_server') + bash('toolu_test') + remark('已提交') + turn_end);
+  for (let waited = 0; !seen.length && waited < 2000; waited += 20) await delay(20);
+  assert.equal(watch.linger(), true);
+  // The server Claude Code ended at its timeout brings nothing new; the long test still runs and is still followed.
+  appendFileSync(file, report('toolu_server', 'killed') + remark('服务被结束了') + turn_end);
+  await delay(150);
+  assert.deepEqual([asked, seen, watch.lingers()], [[['toolu_server:killed']], ['已提交'], true]);
+  appendFileSync(file, report('toolu_test', 'completed') + remark('测试全部通过') + turn_end);
+  for (let waited = 0; !seen.includes('end') && waited < 2000; waited += 20) await delay(20);
+  assert.deepEqual(asked, [['toolu_server:killed'], ['toolu_test:completed']]);
+  assert.deepEqual(seen, ['已提交', '测试全部通过', 'exit', 'end']);
+});
+
+test('a schedule a Claude window host set comes back as a scheduled execution when it fires, unless a turn is followed', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-schedule-')); t.after(() => rmSync(home, { recursive: true, force: true }));
+  const line = entry => `${JSON.stringify(entry)}\n`;
+  const prompt = marker => line({ type: 'user', message: { role: 'user', content: `Another Claude session sent a message: 读取 ${marker}` } });
+  const remark = text => line({ type: 'assistant', timestamp: new Date().toISOString(), message: { content: [{ type: 'text', text }] } });
+  const turn_end = line({ type: 'system', subtype: 'turn_duration', durationMs: 900 });
+  // Shapes recorded by Claude Code 2.1.325 (2026-11-14, session 5b0d3be0, lines 4366-4382).
+  const cron = (id, recurring = true) => line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `toolu_${id}`, name: 'CronCreate',
+    input: { cron: '*/5 * * * *', prompt: '用 npm view 查线上版本', recurring } }] } })
+    + line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `toolu_${id}`, content: 'Scheduled' }] },
+      toolUseResult: { id, humanSchedule: 'Every 5 minutes', recurring, durable: false, nextFireAt: 1_794_681_548_326 } });
+  const fire = id => line({ type: 'system', subtype: 'scheduled_task_fire', content: 'Running scheduled task (Nov 14 10:39am)', isMeta: false,
+    taskId: id, cron: '*/5 * * * *', prompt: '用 npm view 查线上版本' }) + line({ type: 'user', isMeta: true, message: { role: 'user', content: '用 npm view 查线上版本' } });
+  const cron_delete = id => line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_del', name: 'CronDelete', input: { id } }] } })
+    + line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_del', content: 'Deleted' }] } });
+  const wait_for = async check => { for (let waited = 0; !check() && waited < 2000; waited += 20) await delay(20); await delay(60); };
+  const room_task = (file, marker, seen, answers) => watch_window_turn({ file, offset: 0, pid: process.pid, marker, log_path: join(home, 'window.log') }, {
+    on_output: () => {}, on_note: text => seen.push(text), on_exit: reason => seen.push(reason || 'exit'),
+    on_schedule: async (schedule, handle) => { seen.push(`schedule:${schedule.id}:${schedule.schedule}:${schedule.prompt}:${typeof handle.kill}`); return answers.shift(); },
+  }, { interval: 10, env: { CLAUDE_CONFIG_DIR: home } });
+  // Idle host: the fire opens a scheduled execution and its turn is followed there, through the same callbacks.
+  const idle = join(home, 'idle.jsonl'), seen = [];
+  writeFileSync(idle, '');
+  room_task(idle, 'free-9.task.json', seen, [true]);
+  appendFileSync(idle, prompt('free-9.task.json') + cron('7ba9b755') + remark('已设定时') + turn_end);
+  await wait_for(() => seen.includes('exit'));
+  appendFileSync(idle, fire('7ba9b755') + remark('线上还是 0.4.52') + turn_end);
+  await wait_for(() => seen.length >= 5);
+  assert.deepEqual(seen, ['已设定时', 'exit', 'schedule:7ba9b755:Every 5 minutes:用 npm view 查线上版本:function', '线上还是 0.4.52', 'exit']);
+  // A fire while a room task's turn is followed belongs to that execution: nothing is asked.
+  appendFileSync(idle, prompt('free-10.task.json'));
+  const busy = [];
+  room_task(idle, 'free-10.task.json', busy, []);
+  await delay(60);
+  appendFileSync(idle, fire('7ba9b755') + remark('顺便查了版本'));
+  await wait_for(() => busy.length);
+  assert.deepEqual([busy, seen.length], [['顺便查了版本'], 5]);
+  appendFileSync(idle, turn_end);
+  await wait_for(() => busy.includes('exit'));
+  // Deleting the schedule ends the listener: a later fire (as if set again elsewhere) is not asked.
+  appendFileSync(idle, cron_delete('7ba9b755'));
+  await delay(80);
+  appendFileSync(idle, fire('7ba9b755') + remark('不该被收') + turn_end);
+  await delay(120);
+  assert.equal(seen.length, 5);
+  // The member is no longer the host: 'stop' ends the listener too.
+  const stopped = join(home, 'stopped.jsonl'), told = [];
+  writeFileSync(stopped, '');
+  room_task(stopped, 'free-11.task.json', told, ['stop']);
+  appendFileSync(stopped, prompt('free-11.task.json') + cron('ac6ebfd2') + remark('已设定时') + turn_end);
+  await wait_for(() => told.includes('exit'));
+  appendFileSync(stopped, fire('ac6ebfd2') + remark('第一次') + turn_end);
+  await wait_for(() => told.length >= 3);
+  appendFileSync(stopped, fire('ac6ebfd2') + remark('第二次') + turn_end);
+  await delay(120);
+  assert.deepEqual(told, ['已设定时', 'exit', 'schedule:ac6ebfd2:Every 5 minutes:用 npm view 查线上版本:function']);
+  // 'drop' forgets that one schedule (set before the owner's stop); one the host sets again in a later room task is asked about.
+  const dropped = join(home, 'dropped.jsonl'), asked = [], times = [];
+  writeFileSync(dropped, '');
+  const dropping_task = marker => watch_window_turn({ file: dropped, offset: readFileSync(dropped).length, pid: process.pid, marker, log_path: join(home, 'window.log') }, {
+    on_output: () => {}, on_note: () => {}, on_exit: () => asked.push('exit'),
+    on_schedule: async schedule => { asked.push(schedule.id); times.push(schedule.set_at); return schedule.id === 'old00001' ? 'drop' : false; },
+  }, { interval: 10, env: { CLAUDE_CONFIG_DIR: home } });
+  dropping_task('free-12.task.json');
+  const stamped = text => text.split('\n').filter(Boolean).map(item => JSON.stringify({ ...JSON.parse(item), timestamp: new Date().toISOString() })).join('\n') + '\n';
+  appendFileSync(dropped, prompt('free-12.task.json') + stamped(cron('old00001')) + remark('已设定时') + turn_end);
+  await wait_for(() => asked.includes('exit'));
+  appendFileSync(dropped, fire('old00001') + turn_end);
+  await wait_for(() => asked.length >= 2);
+  // Nothing is left to wait for: the listener ended, and the same schedule firing again is not asked about.
+  appendFileSync(dropped, fire('old00001') + turn_end);
+  await delay(80);
+  dropping_task('free-13.task.json');
+  appendFileSync(dropped, prompt('free-13.task.json') + cron('new00002') + remark('重新设好') + turn_end);
+  await wait_for(() => asked.filter(item => item === 'exit').length >= 2);
+  appendFileSync(dropped, fire('new00002') + turn_end);
+  await wait_for(() => asked.includes('new00002'));
+  assert.deepEqual(asked, ['exit', 'old00001', 'exit', 'new00002']);
+  assert.ok(times[0] > 0, 'the schedule says when it was set');
 });
 
 test('claude background runtime limit ends a hung process without retrying or capturing success', async t => {
@@ -1853,16 +2173,32 @@ ${id ? `<tool-use-id>${id}</tool-use-id>
   mkdirSync(join(home, 'sessions'), { recursive: true });
   writeFileSync(join(home, 'sessions', `${process.pid}.json`), JSON.stringify({ status: 'idle', updatedAt: Date.now() + 60_000 }));
   for (const stopped of [true, false]) {
-    const task_file = join(home, `${randomUUID()}.jsonl`), task_seen = [], phases = [];
+    const task_file = join(home, `${randomUUID()}.jsonl`), task_seen = [], phases = [], lists = [];
     writeFileSync(task_file, '');
     const watch = watch_window_turn({ file: task_file, offset: 0, pid: process.pid, marker: 'free-9.task.json' },
-      { on_exit: reason => task_seen.push(reason || 'exit'), on_activity: phase => phases.push(phase) }, { interval: 10, env: { CLAUDE_CONFIG_DIR: home } });
+      { on_exit: reason => task_seen.push(reason || 'exit'), on_activity: phase => phases.push(phase), on_background_tasks: list => lists.push(list) },
+      { interval: 10, env: { CLAUDE_CONFIG_DIR: home } });
     appendFileSync(task_file, prompt + bash + (stopped ? task_stop : '') + line({ type: 'assistant', timestamp: new Date().toISOString(), message: { content: [{ type: 'text', text: '好' }] } }) + turn_end);
     await delay(100);
     if (!stopped) { assert.deepEqual([task_seen, phases], [[], ['waiting']], 'a window resting on its background tasks says so once'); watch.stop(); }
     for (let waited = 0; !task_seen.length && waited < 2000; waited += 20) await delay(20);
     assert.deepEqual(task_seen, [stopped ? 'exit' : '停止时原窗口在等后台任务，后台任务仍在运行']);
+    assert.deepEqual(lists.at(-1).map(({ id, kind, state }) => ({ id, kind, state })), [{ id: 'toolu_t', kind: 'command', state: stopped ? 'stopped' : 'running' }]);
   }
+  // A schedule the turn set is listed with when it fires next, and ends when the turn cancels it (2.1.326 shapes).
+  const cron = line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_c', name: 'CronCreate', input: { cron: '*/5 * * * *', prompt: '查版本' } }] } })
+    + line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_c', content: 'Scheduled' }] },
+      toolUseResult: { id: '7ba9b755', humanSchedule: 'Every 5 minutes', recurring: true, durable: false, nextFireAt: 1_800_000_000_000 } })
+    + line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_d', name: 'CronDelete', input: { id: '7ba9b755' } }] } })
+    + line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_d', content: 'Deleted' }] } });
+  const cron_file = join(home, `${randomUUID()}.jsonl`), cron_lists = [];
+  writeFileSync(cron_file, '');
+  watch_window_turn({ file: cron_file, offset: 0, pid: process.pid, marker: 'free-9.task.json' }, { on_exit: () => {}, on_background_tasks: list => cron_lists.push(list) }, { interval: 10 });
+  appendFileSync(cron_file, prompt + cron + turn_end);
+  for (let waited = 0; cron_lists.length < 2 && waited < 2000; waited += 20) await delay(20);
+  assert.deepEqual(cron_lists.map(list => list.map(({ kind, title, schedule, next_at, state }) => ({ kind, title, schedule, next_at, state }))), [
+    [{ kind: 'schedule', title: '查版本', schedule: 'Every 5 minutes', next_at: 1_800_000_000_000, state: 'running' }],
+    [{ kind: 'schedule', title: '查版本', schedule: 'Every 5 minutes', next_at: 1_800_000_000_000, state: 'stopped' }]]);
 });
 
 test('a Claude window turn reports its own work as activity, so its last remark can be captured', async t => {
@@ -2667,10 +3003,23 @@ async function free_fixture(t) {
     else if (url === '/inbox') {
       result = { archived: state.archived, execution_minutes: 20,
         members: [{ id: 7, name: 'Claude', role: state.claude_role || 'member', pending: state.pending, held_until: state.held_until || 0,
+          ...(state.schedule_stopped_at ? { schedule_stopped_at: state.schedule_stopped_at } : {}),
           ...(state.rewind === undefined ? {} : { rewind: state.rewind }) }, ...state.others],
         executions: state.executions.filter(item => ['dispatched', 'started'].includes(item.status)) };
     } else if (url === '/executions') {
       let execution = state.executions.find(item => item.client_id === body.client_id);
+      // Like the website: the host's fired schedule opens one with a request on a notice of its own.
+      if (!execution && body.scheduled) {
+        execution = { id: state.executions.length + 1, client_id: body.client_id, status: 'dispatched', member: 'Claude', scheduled: body.scheduled,
+          requests: [{ id: 60, message_id: 98, purpose: 'scheduled', status: 'delivering' }] };
+        state.executions.push(execution);
+      }
+      // Like the website: a follow-up (续报) of an ended execution carries one request hung on its answer.
+      if (!execution && body.follows) {
+        execution = { id: state.executions.length + 1, client_id: body.client_id, status: 'dispatched', member: 'Claude', follows: body.follows, followup_of: body.follows,
+          reports: body.reports, requests: [{ id: 50, message_id: 99, purpose: 'followup', status: 'delivering' }] };
+        state.executions.push(execution);
+      }
       if (!execution) {
         const other = state.others.find(item => item.id === body.member_id);
         const queue = other ? other.pending : state.pending;
@@ -2918,6 +3267,160 @@ test('storage stops all eligible processes before reporting and retries the orig
   assert.equal(state.executions[0].result, 'quota exceeded');
   assert.ok(['started', 'dispatched'].includes(state.executions[2].status));
   assert.deepEqual(killed.sort(), [1, 2]);
+});
+
+test('software kept for background work after a completed answer brings its report back as a follow-up', async t => {
+  const { state, store, config } = await free_fixture(t);
+  config.participants.Claude = { ...config.participants.Claude, adapter: 'claude' };
+  const killed = [];
+  let delivered, child;
+  const runner = new FreeRoomRunner(config, store, async (_, binding, task) => {
+    delivered = task;
+    child = Object.assign(new EventEmitter(), { lingers: () => true, linger: () => true,
+      kill() { killed.push(task.api_context.execution_id); this.emit('close'); } });
+    task.on_process(child);
+    return { status: 'accepted', capabilities: { stoppable: true, progress: true }, steer: () => true };
+  });
+  await runner.tick();
+  assert.equal(await delivered.on_followup([{ id: 'b1' }], child), true, 'a report while the execution runs belongs to it');
+  assert.equal(state.executions.length, 1);
+  state.executions[0].status = 'completed';
+  await runner.tick();
+  assert.deepEqual([killed, runner.row('Claude').status], [[], 'idle'], 'kept for its background work, the member is free');
+  assert.equal(await delivered.on_followup([{ id: 'b1', status: 'completed', summary: '测试通过' }], child, { steer: false }), true);
+  const followup = state.executions[1];
+  assert.deepEqual([followup.follows, followup.reports], [1, [{ id: 'b1', status: 'completed', summary: '测试通过' }]]);
+  assert.deepEqual([runner.row('Claude').execution_id, runner.row('Claude').status], [2, 'running']);
+  assert.ok(state.calls.includes('POST /executions/2 delivery'), 'the follow-up reports what the delivery can do');
+  assert.deepEqual([runner.delivery_caps.get(2).steer, runner.steers.has(2)], [false, false], 'a turn that takes no interjection offers none');
+  // The report's turn goes on through the first delivery's callbacks, now bound to the follow-up.
+  delivered.on_activity('writing');
+  delivered.on_note('后台测试通过了');
+  delivered.on_exit();
+  child.emit('close');
+  await runner.tick();
+  assert.deepEqual([state.posts?.at(-1).body.execution_id, state.posts?.at(-1).body.text], [2, '后台测试通过了']);
+  // New work for the member first stops software kept for background reports, and starts once it closed.
+  state.pending = [{ id: 3, message_id: 13 }];
+  await runner.tick();
+  state.executions.at(-1).status = 'completed';
+  await runner.tick();
+  assert.deepEqual(killed, []);
+  const before = state.executions.length;
+  state.pending = [{ id: 4, message_id: 14 }];
+  await runner.tick();
+  assert.deepEqual([killed, state.executions.length], [[3], before], 'the session is not resumed beside the kept process');
+  await runner.tick();
+  assert.equal(state.executions.length, before + 1);
+  // A stopped execution is not carried on; a report that only says work was stopped or killed keeps following the rest.
+  state.executions.at(-1).status = 'cancelled';
+  assert.equal(await delivered.on_followup([{ id: 'b2', status: 'completed' }], child), false);
+  assert.equal(await delivered.on_followup([{ id: 'b3', status: 'killed' }, { id: 'b4', status: 'stopped' }], child), 'keep');
+});
+
+test('a follow-up whose turn ends without an answer ends quietly, whether the adapter reports an exit or only the turn end', async t => {
+  for (const ending of ['exit', 'turn_end', 'restarted', 'orphaned', 'refused']) {
+    const { state, store, config } = await free_fixture(t);
+    config.participants.Claude = { ...config.participants.Claude, adapter: 'claude' };
+    let delivered, child;
+    let runner = new FreeRoomRunner(config, store, async (_, binding, task) => {
+      delivered = task;
+      // The restart case stands for an App turn: only the owner may stop it, so a later runner does not take it for a dead process.
+      child = Object.assign(new EventEmitter(), { lingers: () => true, linger: () => true, kill() { this.emit('close'); },
+        ...(ending === 'restarted' ? { stop_on_shutdown: false } : {}) });
+      task.on_process(child);
+      return { status: 'accepted', capabilities: { stoppable: true, progress: true } };
+    });
+    await runner.tick();
+    state.executions[0].status = 'completed';
+    await runner.tick();
+    assert.equal(await delivered.on_followup([{ id: 'b1', status: 'completed' }], child), true);
+    if (ending === 'refused') {
+      // A refused operation in that turn is reported, so the room sees what was refused.
+      delivered.on_exit('有操作被拒绝'); child.emit('close');
+      await runner.tick();
+      assert.deepEqual([state.executions[1].status, state.calls.includes('POST /executions/2 quiet')], ['failed', false]);
+      assert.match(state.executions[1].result, /有操作被拒绝/);
+      continue;
+    }
+    // A runner restarted meanwhile knows the follow-up from the site, not from its memory.
+    if (ending === 'restarted') {
+      const previous = delivered;
+      runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }));
+      await runner.tick();
+      runner.turn_ended.add(2);
+      delivered = previous;
+    } else if (ending === 'orphaned') {
+      // The software's turn died with the runner: a later runner neither resumes nor fails the follow-up.
+      runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }));
+      await runner.tick();
+    } else if (ending === 'exit') { delivered.on_exit(); child.emit('close'); } else delivered.on_turn_end();
+    await runner.tick();
+    assert.equal(state.executions[1].status, 'completed', ending);
+    assert.ok(state.calls.includes('POST /executions/2 quiet'), ending);
+    assert.ok(!state.calls.includes('POST /executions/2 fail'), `${ending}: no failure card and no host wake-up`);
+    assert.equal(runner.row('Claude').status, 'idle');
+  }
+});
+
+test('only the host\'s schedule fire opens a scheduled execution, and a busy host keeps it in the execution it runs', async t => {
+  const { state, store, config } = await free_fixture(t);
+  config.participants.Claude = { ...config.participants.Claude, adapter: 'claude' };
+  let delivered;
+  const runner = new FreeRoomRunner(config, store, async (_, binding, task) => {
+    delivered = task;
+    task.on_process(Object.assign(new EventEmitter(), { kill() { this.emit('close'); } }));
+    return { status: 'accepted', capabilities: { stoppable: true, progress: true }, steer: () => true };
+  });
+  await runner.tick();
+  const schedule = { id: '7ba9b755', schedule: 'Every 5 minutes', prompt: '查线上版本', set_at: Date.now() - 60_000 };
+  const handle = () => Object.assign(new EventEmitter(), { kill() { this.emit('close'); } });
+  assert.equal(await delivered.on_schedule(schedule, handle()), 'stop', 'a member\'s schedule is only shown');
+  state.claude_role = 'host';
+  await runner.tick();
+  assert.equal(await delivered.on_schedule(schedule, handle()), 'stop', 'a host not granted "推进方式" is treated as a member');
+  config.host_permissions = { items: ['pacing'] };
+  runner.adopt(config);
+  assert.equal(await delivered.on_schedule(schedule, handle()), false, 'a busy host keeps the fire in the execution it runs');
+  state.executions[0].status = 'completed';
+  state.posts = [];
+  // The owner stopped the host after this schedule was set: it no longer comes in; one set afterwards does.
+  state.schedule_stopped_at = Date.now() - 30_000;
+  await runner.tick();
+  assert.equal(await delivered.on_schedule(schedule, handle()), 'drop');
+  assert.equal(state.executions.length, 1);
+  schedule.set_at = Date.now();
+  const fired = handle();
+  assert.equal(await delivered.on_schedule(schedule, fired), true);
+  const run = state.executions.at(-1);
+  assert.deepEqual([run.scheduled, runner.row('Claude').execution_id, runner.row('Claude').status], [schedule, run.id, 'running']);
+  assert.deepEqual([runner.delivery_caps.get(run.id).steer, runner.steers.has(run.id)], [false, false]);
+  // Its turn found nothing to do: it ends quietly.
+  delivered.on_turn_end();
+  fired.emit('close');
+  await runner.tick();
+  assert.ok(state.calls.includes(`POST /executions/${run.id} quiet`));
+  assert.equal(run.status, 'completed');
+});
+
+test('a later runner ends software an earlier one kept for background reports and could not stop', async t => {
+  const { store, config } = await free_fixture(t);
+  const kept = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+  t.after(() => { try { kept.kill(); } catch { /* Already ended. */ } });
+  // Another live process under a recorded pid whose start time differs (the pid was reused) is left alone.
+  const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+  t.after(() => { try { other.kill(); } catch { /* Already ended. */ } });
+  const started = process_started(kept.pid);
+  assert.ok(started, 'the start time can be read');
+  const record = (pid, fields) => store.db.prepare('INSERT INTO metadata VALUES (?,?)')
+    .run(`lingering:${pid}`, JSON.stringify({ instance: 'crashed-runner', member: 'Claude', execution_id: 1, ...fields }));
+  record(kept.pid, { started });
+  record(other.pid, { started: 'an earlier process' });
+  const closed = new Promise(resolve => kept.once('exit', resolve));
+  await new FreeRoomRunner(config, store, async () => ({ status: 'accepted' })).tick();
+  await closed;
+  for (const pid of [kept.pid, other.pid]) assert.equal(store.db.prepare('SELECT 1 FROM metadata WHERE key=?').get(`lingering:${pid}`), undefined);
+  assert.equal(other.exitCode, null, 'a reused pid is not ended');
 });
 
 test('a completion racing the storage failure remains completed', async t => {
@@ -3715,6 +4218,43 @@ test("an expert prompt is only the member's own text, and the API file rule is f
   // An API expert's own prompt cannot drop the rule about local files.
   const api = system_prompt({ participant: 'DeepSeek', role: 'member', mode: 'free', expert_prompt: '只读不写' });
   assert.match(api, /本地文件你读不到；消息附件用 read_attachment 按 ID 读取.*读不到的以其他成员贴出的为准，不凭文件名猜测.*缺信息就写明缺什么/);
+});
+
+test("a member's own prompt goes into the system prompt of a new session where possible, else once into each session's task text", () => {
+  const profile = adapter => ({ adapter, system_prompt: '只看测试' });
+  const fresh = expert_prompt_delivery('任务', profile('claude'), adapter_of('claude'), {}, false, null);
+  const record = { session_id: 's1', hash: fresh.expert_prompt_hash };
+  assert.match(fresh.system_text, /只看测试/);
+  assert.equal(fresh.prompt, '任务');
+  // A resumed session keeps the prompt it started with, and is given the current text again for after a compaction.
+  const resumed = expert_prompt_delivery('任务', profile('claude'), adapter_of('claude'), { session_id: 's1' }, false, record);
+  assert.equal(resumed.prompt, '任务');
+  assert.match(resumed.system_text, /只看测试/);
+  // A changed prompt reaches it through the task text, saying it replaces the earlier one, also the system prompt's.
+  assert.match(expert_prompt_delivery('任务', { adapter: 'claude', system_prompt: '只改文档' }, adapter_of('claude'), { session_id: 's1' }, false, record).prompt,
+    /替换此前给你的同类提示（包括系统提示词里的旧版本）[\s\S]*只改文档/);
+  // Clearing everything is said once to a session that had some; a session that never had any is told nothing.
+  const cleared = expert_prompt_delivery('任务', { adapter: 'claude', system_prompt: '' }, adapter_of('claude'), { session_id: 's1' }, false, record);
+  assert.match(cleared.prompt, /已全部撤销/);
+  assert.equal(cleared.expert_prompt_hash, '');
+  assert.equal(expert_prompt_delivery('任务', { adapter: 'claude', system_prompt: '' }, adapter_of('claude'), { session_id: 's1' }, false, { session_id: 's1', hash: '' }).prompt, '任务');
+  // A software without a system prompt slot, or a member's own open window, gets it in the first task of each session.
+  const agy = expert_prompt_delivery('任务', profile('antigravity_cli'), adapter_of('antigravity_cli'), { session_id: 'a1' }, false, null);
+  assert.equal(agy.system_text, undefined);
+  assert.match(agy.prompt, /只看测试/);
+  assert.match(expert_prompt_delivery('任务', profile('claude'), adapter_of('claude'), {}, true, null).prompt, /只看测试/);
+  // The owner's prompts for every member and for the platform come first, in the same block and fingerprint.
+  const layers = { program: '先给结论', platforms: { Antigravity: '用浏览器前先截图', Claude: '不发给别家' } };
+  const layered = expert_prompt_delivery('任务', profile('antigravity_cli'), adapter_of('antigravity_cli'), { session_id: 'a1' }, false, null, { layers, platform: 'Antigravity' });
+  assert.match(layered.prompt, /所有成员[\s\S]*先给结论[\s\S]*Gemini 平台[\s\S]*用浏览器前先截图[\s\S]*只看测试/);
+  // A hosted account administrator's layer comes first, apart from the account user's own.
+  assert.match(expert_prompt_delivery('任务', profile('claude'), adapter_of('claude'), {}, false, null, { layers: { ...layers, managed: '不外传凭据' }, platform: 'Claude' }).system_text,
+    /管理员[\s\S]*不外传凭据[\s\S]*所有成员[\s\S]*先给结论/);
+  assert.doesNotMatch(layered.prompt, /不发给别家/);
+  assert.notEqual(layered.expert_prompt_hash, agy.expert_prompt_hash, 'a changed layer is sent again');
+  assert.match(expert_prompt_delivery('任务', { adapter: 'claude' }, adapter_of('claude'), {}, false, null, { layers, platform: 'Claude' }).system_text, /不发给别家/);
+  // A manually started member takes none, even one left in its settings.
+  assert.equal(expert_prompt_delivery('任务', { ...profile('claude'), project_access: 'own' }, adapter_of('claude'), { session_id: 's1' }, false, null).prompt, '任务');
 });
 
 test('the agy command limit comes from the runner, so clearing the expert prompt cannot drop it', () => {

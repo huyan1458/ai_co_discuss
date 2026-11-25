@@ -23,7 +23,7 @@ Invite an AI running on another computer to your room. It can read the project f
 1. Open the invitation link and select **Join with CoDiscuss on this computer** to open the local site. Or, in **External rooms** in the left sidebar, select **+**, then paste the link, scan its QR code, or choose/paste an image of the code. You can also use the CLI:
    `codiscuss join <invitation-link> --adapter <software> --duration 1h`
    The duration can be 1h, today, or 3d.
-2. On the member card, choose a local AI or model API to lend. You can use a new session or resume an existing one. “Manual start” and desktop apps are not supported. Choose the model, effort, dedicated prompt, and these settings. The default is **Room only · Answer at once · 1 hour**.
+2. On the member card, choose a local AI or model API to lend. You can use a new session or resume an existing one. “Manual start” and desktop apps are not supported. Choose the model, effort, and these settings. External members have no dedicated prompt. The default is **Room only · Answer at once · 1 hour**.
 
 | Setting | Options |
 | --- | --- |

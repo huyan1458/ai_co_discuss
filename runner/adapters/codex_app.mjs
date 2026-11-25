@@ -6,13 +6,13 @@
  * also reads the reply back and can force the turn to stop.
  */
 import { EventEmitter } from 'node:events';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { CodexAppClient } from './codex_app_client.mjs';
 import { branch, codex_skills, desktop_thread, list_sessions, preview_session, remove_session, session_exists, session_path, session_settings } from './codex_cli.mjs';
-import { bind_access, CALL_TIMEOUT_MS, not_sent, read_json, run_program, same_path, shell_written_paths } from './common.mjs';
+import { BackgroundTasks, bind_access, CALL_TIMEOUT_MS, not_sent, read_json, run_program, same_path, shell_written_paths } from './common.mjs';
 
 // The desktop has no stop or interrupt tool (its tool list, checked 2026-10-30).
 const IN_APP = { stoppable: false, progress: false };
@@ -193,10 +193,51 @@ function report_room_items(turn, items, state, task, log) {
 }
 
 /**
+ * The top-level `key = value` pairs of one automation file the App writes (`~/.codex/automations/<id>/automation.toml`,
+ * App 26.1120, not a public format): only single-line values JSON can read; a multi-line string is skipped whole.
+ */
+function automation_fields(path) {
+  let text;
+  try { text = readFileSync(path, 'utf8'); } catch { return null; }
+  const fields = {};
+  let open = '';
+  for (const line of text.split(/\r?\n/)) {
+    if (open) { if (line.includes(open)) open = ''; continue; }
+    const match = /^([A-Za-z_]+)\s*=\s*(.+?)\s*$/.exec(line);
+    if (!match) continue;
+    const quote = match[2].slice(0, 3);
+    if (['"""', "'''"].includes(quote) && !match[2].slice(3).includes(quote)) { open = quote; continue; }
+    try { fields[match[1]] = JSON.parse(match[2]); } catch { /* Another TOML value; not needed. */ }
+  }
+  return fields;
+}
+
+/**
+ * Show the schedules (App automations) set for this chat since `since`: those whose `target_thread_id` is this chat,
+ * running while their status is ACTIVE, stopped once paused or removed. They are shown, never waited for.
+ */
+function report_automations(listed, home, thread_id, since) {
+  const root = join(home, '.codex', 'automations');
+  let names;
+  try { names = readdirSync(root); } catch { names = []; }
+  const active = new Set();
+  for (const name of names) {
+    const item = automation_fields(join(root, name, 'automation.toml'));
+    if (!item?.id || item.target_thread_id !== thread_id || !(Number(item.created_at) >= since) || item.status !== 'ACTIVE') continue;
+    const key = `automation:${item.id}`;
+    active.add(key);
+    listed.set(key, { kind: 'schedule', title: item.name, schedule: item.rrule, state: 'running', ended_at: 0, started_at: Number(item.created_at) });
+  }
+  for (const item of listed.list()) if (!active.has(item.id)) listed.end(item.id, 'stopped');
+}
+
+/**
  * Poll the chat until the turn matching `task.prompt` ends, logging its steps into `codex-${task.id}.log`, reporting
  * deduplicated timeline activities, notes and file edits along the way, and calling `on_turn_end` when finished.
+ * Each poll also lists the schedules the turn set for this chat (`report_automations`); the App's sub-agents and
+ * background terminals are not readable through its tool pipe, so they are not listed.
  * Gives up quietly after the ceiling or when the App stays unreadable; the room then falls back to the site's hold.
- * `options` (`connect`, `poll_ms`, `timeout_ms`) replace the App and the timings in tests.
+ * `options` (`connect`, `poll_ms`, `timeout_ms`, `home`) replace the App, the timings and the user folder in tests.
  */
 export async function watch_room_turn(config, thread_id, before, task, options = {}) {
   const connect = options.connect || (() => open_app(config));
@@ -205,11 +246,13 @@ export async function watch_room_turn(config, thread_id, before, task, options =
   const deadline = Date.now() + (options.timeout_ms ?? CHAT_TIMEOUT_MS);
   const state = { activities: new Set(), finished_tools: new Set(), notes: new Set(), edits: new Set(), started: false };
   const log = entry_logger(task);
+  const schedules = new BackgroundTasks(task), since = Date.now();
   task.on_edits?.([]);
   let app = null, failures = 0, matched = null;
   try {
     while (Date.now() < deadline) {
       await sleep(options.poll_ms ?? ROOM_POLL_MS);
+      report_automations(schedules, options.home || homedir(), thread_id, since);
       let snapshot;
       try { app ||= await connect(); snapshot = await app.read_thread(thread_id, ROOM_READ); failures = 0; }
       catch { app?.close(); app = null; if (++failures >= CHAT_READ_FAILURES) return; continue; }
@@ -237,6 +280,7 @@ function room_delivery(config, thread_id, before, task, options = {}) {
 
 /** Deliver one task to Codex's real App, with the original chat reused afterward. */
 async function deliver(config, binding, task, _spawn, user_home = homedir(), options = {}) {
+  options = { home: user_home, ...options };
   const connect = options.connect || (() => open_app(config));
   const run = options.run || run_program;
   if (binding.session_id) {

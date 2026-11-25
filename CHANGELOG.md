@@ -2,6 +2,14 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.27 (2026-11-25 05:21)
+
+- New: Link existing rooms so their hosts can pass messages; rooms the host creates sit under their parent room.
+- New: Subtasks, timers and other background work a member starts are listed under its run card, and their results arrive as a "Follow-up".
+- New: "Pin room" keeps a room from being archived, destroyed or auto-destroyed.
+- New: Write a "System prompt" in Settings for all members or for one platform's members.
+- Changed: Click any #number to jump to that message, then "Back to where you were".
+
 ## 0.5.26 (2026-11-24 20:25)
 
 - Fixed: When the website or the local service stalled briefly, members' work in progress was wrongly marked as failed.

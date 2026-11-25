@@ -15,6 +15,8 @@ const LONG_PRESS_MS = 350;
 const MOUSE_DRAG_THRESHOLD_PX = 4;
 const TOUCH_SLOP_PX = 8;
 const HAPTIC_MS = 10;
+// A device whose main pointer is a finger: its long press is the reorder gesture, so the row gets no context menu there.
+const TOUCH_ONLY = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 const TRAY_RISE_MS = 200;
 const TRAY_RISE_EASING = "cubic-bezier(.2, .8, .2, 1)";
 const sending = ref(null);
@@ -40,6 +42,11 @@ const reorderable = computed(() => items.value.length > 1);
 
 /** Short text for the row: the message, else what it carries. */
 function summary(item) {
+  // A linked room's host message goes to this room's current host, so it reads as naming them.
+  const host = item.relay_room && item.to?.length ? `@${bridge.display_name(item.to[0])} ` : "";
+  return host + body(item);
+}
+function body(item) {
   const text = item.text.replace(/\s+/g, " ").trim();
   if (text) return text;
   const images = item.attachments.filter((file) => file.content_type?.startsWith("image/")).length;
@@ -211,6 +218,8 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
       <div v-for="(item, index) in items" :key="item.id" role="listitem" :data-queued-id="item.id" class="queued-row"
         :class="{ 'is-dimmed': sending === item.id || view.queue_reading === item.id, 'is-lifted': drag?.id === item.id, 'is-failed': item.failure, 'is-reorderable': reorderable }"
         :style="shift(item)" @pointerdown="press_row(item, $event)" @contextmenu="drag && $event.preventDefault()">
+        <!-- Right-click opens the same menu as "…" (user 2026-11-25, #10549); not on touch, where a long press lifts the row to reorder. -->
+        <UContextMenu :disabled="TOUCH_ONLY || !!drag || sending === item.id || !menu(item)[0].length" :items="menu(item)" :ui="{ content: 'channel-menu' }"><div class="queued-context">
         <UTooltip :disabled="!reorderable || !!drag" :text="t('拖动调整顺序（手机上长按）')" :delay-duration="PREVIEW_DELAY_MS">
           <span class="queued-leading" aria-hidden="true">
             <UIcon v-if="sending === item.id || view.queue_reading === item.id" name="i-lucide-loader-circle" class="animate-spin" />
@@ -243,6 +252,7 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
             <UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('排队消息操作')" :disabled="sending === item.id" />
           </UDropdownMenu>
         </span>
+        </div></UContextMenu>
       </div>
     </TransitionGroup>
     <div v-for="{ card, upload } in pending_rows" :key="card.id" role="listitem" class="queued-row">
@@ -258,6 +268,7 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
 </template>
 
 <style scoped>
+.queued-context { display: contents; }
 /* A tray tucked behind the composer's top edge, a little narrower than it, as in Codex. */
 .queued-messages { position: relative; display: flex; flex-direction: column; max-height: 30dvh; margin: 0 12px -12px; padding: 2px 4px 14px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
   border: 1px solid var(--ui-border); border-bottom: 0; border-radius: 12px 12px 0 0; background: var(--ui-bg-elevated); }

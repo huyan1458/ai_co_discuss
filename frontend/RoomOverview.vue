@@ -413,7 +413,7 @@ const room_storage = computed(() => {
     scratch_bytes: entry ? entry.scratch_bytes : 0,
     total_bytes: snap.total_bytes,
     local_bytes: snap.local_bytes,
-    unreadable: snap.unreadable,
+    unreadable: entry ? entry.unreadable : 0,
     home_limit: snap.limits.home_limit_bytes,
     home_warning: snap.warning || snap.over_limit,
   };
@@ -574,7 +574,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
         <div v-if="created"><dt>{{ t("创建时间") }}</dt><dd>{{ created }}</dd></div>
       </dl>
     </section>
-    <details v-if="room_storage" :key="room.id" class="pb-storage" :class="`is-${room_storage.tone}`" :aria-label="t('草稿空间')">
+    <details v-if="room_storage" :key="room.id" open class="pb-storage" :class="`is-${room_storage.tone}`" :aria-label="t('草稿空间')">
       <summary>{{ t('草稿空间') }}</summary>
       <div class="pb-meter" :title="t('本房间成员草稿与临时文件占用；按周期采样检查，并非写入层硬拦截，达到 80% 时提示，超过上限将停止派活')">
         <div class="pb-meter-label">

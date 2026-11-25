@@ -301,17 +301,16 @@ test('a newly joined computer wakes when named, without asking again', async t =
   assert.deepEqual(read_store(home).records[record.id].approvals, []);
 });
 
-test('joining can resume a conversation this computer holds and carries its own prompt into each run', async t => {
+test('joining can resume a conversation this computer holds, and an external member takes no prompt of its own', async t => {
   const b = fake_b(), delivery = fake_deliver();
   const { home, record } = await joined(t, b, { session_id: 'old-session', system_prompt: '在对方房间里说话谨慎些。' });
+  assert.ok(!Object.hasOwn(read_store(home).records[record.id].ai, 'system_prompt'), 'a prompt given at joining is not kept');
   b.state.pending = [{ id: 7, message_id: 40, purpose: 'host_ask', created_by: 'host' }];
   await poll_record(home, record.id, deps(b, delivery));
   const [run] = delivery.runs;
   assert.equal(run.binding.session_id, 'old-session', 'the first run resumes the picked conversation');
-  assert.equal(run.profile.system_prompt, '在对方房间里说话谨慎些。');
-  assert.ok(run.task.prompt.endsWith('在对方房间里说话谨慎些。'), 'the prompt follows the fixed task text');
-  await invited_command(home, 'invited-ai', { id: record.id, system_prompt: null });
-  assert.ok(!Object.hasOwn(read_store(home).records[record.id].ai, 'system_prompt'), 'null drops the own prompt');
+  assert.equal(run.profile.system_prompt, '');
+  assert.doesNotMatch(run.task.prompt, /在对方房间里说话谨慎些/);
 });
 
 test('default trust waits for consent; approving lets the service wake a locked-down run bound to its execution', async t => {

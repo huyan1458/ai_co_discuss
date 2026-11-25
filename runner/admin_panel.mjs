@@ -20,7 +20,7 @@ import { parseArgs } from 'node:util';
 
 import { account_home, add_account, data_home, entry_settings, entry_status, instance_home as plain_instance_home, read_accounts, remove_account, reset_password, save_entry_settings,
   instance_key, set_account_disabled, set_account_protected, set_instance_wanted, start_entry, stop_entry, ENTRY_WAYS } from '../gateway/gateway.mjs';
-import { signed_site_url, verified_connection } from './entry_client.mjs';
+import { signed_site_url, site_fetch, verified_connection } from './entry_client.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
 import { ensure_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } from './hosting_tunnel.mjs';
@@ -36,6 +36,7 @@ import { clear_instance_flag, create_os_user, install_shared_runtime, restrict_o
   start_instance_as_user } from './os_users.mjs';
 import { install_workflows, outdated_workflows, shipped_workflows } from './discussion_skills.mjs';
 import { list_workflows, workflows_home } from './workflows.mjs';
+import { launch_settings, save_managed_prompt } from './discussion_launch.mjs';
 import { hosted_prompt, import_skill, library_root, list_library, remove_library_skill, save_hosted_prompt } from './skill_library.mjs';
 import { local_status, save_site_connection } from './discussion_local.mjs';
 import { autostart_enabled, launcher_path, set_autostart } from './launcher.mjs';
@@ -447,6 +448,8 @@ function prepare_account(data, name) {
   const service = instance_home(data, name);
   if (!read_os_users(data)[name]) {
     const missing = shipped_workflows().map(item => item.name).filter(item => !existsSync(join(service, 'workflows', item)));
+    // It shares the owner's software files, which CoDiscuss leaves alone; its own members get the default prompt instead.
+    if (!Object.hasOwn(launch_settings(service).system_prompts || {}, 'managed')) save_managed_prompt(service, hosted_prompt(data));
     return { skills: [], workflows: (missing.length ? install_workflows(service, missing) : []).map(({ name: item, status }) => ({ name: item, status })) };
   }
   return account_env(data, name, 'init', { home: service, prompt: hosted_prompt(data) });
@@ -484,46 +487,6 @@ function owner_env(action, request = {}, folders = {}) {
     if (parsed.error) throw Object.assign(new Error(parsed.error), { error_text: parsed.error_text });
     return parsed;
   } finally { rmSync(job, { recursive: true, force: true }); }
-}
-
-// The owner's system prompts: one file per program, often hard links to one file (the layout account_env.mjs sets up).
-const OWNER_PROMPTS = [['claude', 'Claude Code', ['.claude', 'CLAUDE.md']], ['codex', 'Codex', ['.codex', 'AGENTS.md']],
-  ['agy', 'Antigravity', ['.gemini', 'config', 'AGENTS.md']]];
-
-/** A file's identity, the same for its hard links; '' when it does not exist. */
-function file_id(path) {
-  try { const stat = statSync(path, { bigint: true }); return `${stat.dev}:${stat.ino}`; } catch { return ''; }
-}
-
-/**
- * The owner's system prompts, grouped by file: hard links to one file form one group, edited once. Each group is
- * { key, programs: [{ key, label, path }], exists, text }; `key` is the first program's, for saving.
- */
-export function owner_prompts(home = homedir()) {
-  const groups = [];
-  for (const [key, label, parts] of OWNER_PROMPTS) {
-    const path = join(home, ...parts), id = file_id(path);
-    const group = id && groups.find(item => item.id === id);
-    const shown = join('~', ...parts);
-    if (group) { group.programs.push({ key, label, path: shown }); continue; }
-    groups.push({ id, key, programs: [{ key, label, path: shown }], exists: Boolean(id), text: id ? readFileSync(path, 'utf8') : '' });
-  }
-  return groups.map(({ id: _id, ...group }) => group);
-}
-
-/**
- * Save one of the owner's system prompts in place, which keeps its hard links. `original` is the text the page read: a
- * file changed since (edited elsewhere) is refused rather than overwritten.
- */
-export function save_owner_prompt(key, text, original, home = homedir()) {
-  const entry = OWNER_PROMPTS.find(([name]) => name === key);
-  if (!entry) throw panel_error('未知程序：{value1}', { value1: key });
-  const path = join(home, ...entry[2]);
-  const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
-  if (current !== String(original ?? '')) throw Object.assign(panel_error('文件已在别处被修改，请重新读取后再编辑'), { status: 409 });
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, String(text ?? ''));
-  return owner_prompts(home);
 }
 
 /**
@@ -797,7 +760,7 @@ function wanted_port(data, name, flag_set) {
  */
 export function create_panel({ data, key, port, ops = {}, sessions = new Set() }) {
   const op = { list_accounts, add_account, reset_password, set_account_disabled, remove_account, run_instance, create_os_user, remove_os_user, restrict_other_drives,
-    login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, owner_prompts, save_owner_prompt, shared_cli_state,
+    login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, check_package, begin_update,
     set_account_external, reconcile_external, autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_way, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
@@ -812,6 +775,19 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // Accounts follow the way external members can reach them, in the background (#5660).
     const after_change = () => { op.reconcile_external(data).catch(() => {}); };
     const hosting = hosting_enabled(data);
+    if (section === 'room-links' && method === 'POST') {
+      const { room, target } = body;
+      const verbs = new Map([['room-link', 'POST'], ['room-unlink', 'DELETE'], ['room-links', 'GET']]);
+      const verb = verbs.get(name);
+      if (!verb || typeof room !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(room)
+          || (verb !== 'GET' && (typeof target !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(target)))) throw panel_error('房间编号无效');
+      const url = new URL(`api/rooms/${room}/room-links${verb === 'DELETE' ? '/' + target : ''}`, site_url(data));
+      const response = await site_fetch(url.href, { method: verb, redirect: 'error', signal: AbortSignal.timeout(10000),
+        headers: { 'Content-Type': 'application/json' }, body: verb === 'POST' ? JSON.stringify({ room_id: target }) : undefined });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      return result;
+    }
     if (path === '/api/storage' && method === 'GET') return storage_details(data);
     if (path === '/api/storage/clean' && method === 'POST') return clean_storage(data, body);
     if (method === 'GET' && section === 'state') {
@@ -864,8 +840,6 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (section === 'owner') {
       if (method === 'GET' && name === 'env') return op.owner_env('status');
       if (method === 'POST' && name === 'env' && action === 'skills') return op.owner_skills(data, { install: body.install || [], remove: body.remove || [] });
-      if (method === 'GET' && name === 'prompts') return op.owner_prompts();
-      if (method === 'POST' && name === 'prompts') return op.save_owner_prompt(String(body.key || ''), body.text, body.original);
       if (method === 'GET' && name === 'workflows') return op.account_workflows(data);
       // Only the shipped workflows the owner's library lacks: an existing one, edited or not, is kept.
       if (method === 'POST' && name === 'workflows' && action === 'install') { install_workflows(data, op.account_workflows(data).missing); return op.account_workflows(data); }
@@ -967,9 +941,9 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     }
     // Its AI environment: set up (safe to repeat), what is installed, chosen library skills, its system prompt.
     if (method === 'POST' && action === 'env' && extra === 'init') return op.prepare_account(data, name);
-    if (method === 'GET' && action === 'env') return op.account_env(data, name, 'status');
+    if (method === 'GET' && action === 'env') return op.account_env(data, name, 'status', { home: instance_home(data, name) });
     if (method === 'POST' && action === 'env' && extra === 'skills') return op.account_skills(data, name, { install: body.install || [], remove: body.remove || [] });
-    if (method === 'POST' && action === 'env' && extra === 'prompt') return op.account_env(data, name, 'prompt', { prompt: String(body.text ?? '') });
+    if (method === 'POST' && action === 'env' && extra === 'prompt') return op.account_env(data, name, 'prompt', { home: instance_home(data, name), prompt: String(body.text ?? '') });
     const service = instance_home(data, name);
     if (method === 'GET' && action === 'workflows') return op.account_workflows(service);
     // Set up again (safe to repeat): it installs the shipped workflows the account lacks and keeps the rest.

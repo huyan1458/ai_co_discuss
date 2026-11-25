@@ -9,6 +9,9 @@ whole room: no open request, turn waiting or running discussion. Each release of
 message path with its own submission_id, so a repeated drain finds the posted message and only moves on. A failed post
 keeps the row with its reason and holds the queue; the owner's stop pauses it. The owner may send one at once, edit,
 delete, reorder or resume the queue.
+
+A linked room's host message (`relay`) names the room's host as it stands when the queue is read (user 2026-11-25, #10464):
+it waits only for that host, not for the whole room, and a host replaced meanwhile is not waited for.
 """
 
 import json
@@ -58,8 +61,8 @@ def queue_view(connection, room_id):
                 COALESCE(NULLIF(?,''),(SELECT name FROM room_members WHERE room_id=? AND role='host' AND status='active')) AS relay_member""",
                 (source, room_id, source, relay.get("member", ""), source)).fetchone()
             item.update(relay_room=source, relay_host=relay["host"], **dict(details))
-        if named_members(connection, room_id, payload) is not None:
-            item["to"] = payload["to"]
+        if (named := named_members(connection, room_id, payload)) is not None:
+            item["to"] = list(named)
         if payload.get("message_id"):
             item.update(message_id=payload["message_id"], waiting_for=payload.get("to", []))
         item["send_mode"] = send_mode(connection, room_id, payload)
@@ -93,7 +96,13 @@ def send_mode(connection, room_id, payload):
 
 
 def named_members(connection, room_id, payload):
-    """The present members a side question names, as {name: id}; None for a message the whole room waits for."""
+    """The present members a side question names, as {name: id}; None for a message the whole room waits for.
+
+    A relay without its own names names the current active host, so it waits for that host alone."""
+    if payload.get("relay") and not payload.get("to"):
+        host = connection.execute("SELECT id,name FROM room_members WHERE room_id=? AND role='host' AND status='active'",
+                                  (room_id,)).fetchone()
+        return {host["name"]: host["id"]} if host else None
     named = payload.get("to")
     if not isinstance(named, list) or not named or payload.get("sequential") is True or payload.get("order") == "auto":
         return None
@@ -132,9 +141,7 @@ def waiting_names(connection, room_id, named, before=None):
     for row in connection.execute("SELECT id,payload FROM queued_messages WHERE room_id=? ORDER BY position,id", (room_id,)):
         if row["id"] == before:
             break
-        queued = json.loads(row["payload"])
-        if named_members(connection, room_id, queued) is not None:
-            earlier.update(queued.get("to") or [])
+        earlier.update(named_members(connection, room_id, json.loads(row["payload"])) or {})
     return [name for name, member_id in named.items() if name in earlier or member_busy(connection, member_id)]
 
 
@@ -231,7 +238,7 @@ def post_item(connection, room_id, row, post, names=None):
     """
     payload = json.loads(row["payload"])
     present = list(named_members(connection, room_id, payload) or {})
-    names = list(payload.get("to") or []) if names is None else names
+    names = list(payload.get("to") or present) if names is None else names
     waiting = [name for name in present if name not in names]
     if payload.get("message_id"):
         message_id = give_share(connection, room_id, payload, names)
@@ -248,6 +255,9 @@ def post_item(connection, room_id, row, post, names=None):
         save_text(connection, "queued_message", row["id"], "failure", failure)
         return None
     connection.execute("RELEASE queued_post")
+    if payload.get("relay"):
+        connection.execute("""UPDATE room_relay_sends SET target_message_id=?,state='delivered'
+            WHERE target_room_id=? AND queued_id=? AND state='queued'""", (result["message"]["id"], room_id, row["id"]))
     keep_rest(connection, row, payload, waiting, result["message"]["id"])
     return result
 

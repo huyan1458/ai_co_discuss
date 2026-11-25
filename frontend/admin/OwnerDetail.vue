@@ -7,7 +7,6 @@ import AccountEnv from "./AccountEnv.vue";
 import AccountKeys from "./AccountKeys.vue";
 import AccountWorkflows from "./AccountWorkflows.vue";
 import LoginCard from "./LoginCard.vue";
-import OwnerPrompt from "./OwnerPrompt.vue";
 </script>
 
 <template>
@@ -24,7 +23,6 @@ import OwnerPrompt from "./OwnerPrompt.vue";
       <article class="panel-card is-tall"><AccountKeys account="" /></article>
       <article class="panel-card is-tall"><AccountEnv account="" /></article>
       <article class="panel-card is-tall"><AccountWorkflows account="" /></article>
-      <article class="panel-card is-tall"><OwnerPrompt /></article>
     </div>
   </section>
 </template>

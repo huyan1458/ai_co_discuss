@@ -11,11 +11,11 @@ import { join, resolve } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { api_base_url, api_generate, api_history, api_tool_results, read_api_key } from '../discussion_api.mjs';
-import { access_label, expert_prompt } from '../expert_prompts.mjs';
+import { access_label, expert_prompt, runs_commands } from '../expert_prompts.mjs';
 import { command_tools, is_command_tool, run_command, runs_write_commands } from './api_commands.mjs';
 import { file_tools, is_file_tool, open_project, run_file_tool, WRITE_TOOLS } from './api_files.mjs';
 import { forget_sent_images, image_tools, is_image_tool, MAX_MESSAGE_ATTACHMENTS, run_image_tool, unsent_images } from './api_images.mjs';
-import { events as pi_events, pi_delivery, session as pi_session } from './api_pi.mjs';
+import { BASH_MISSING, events as pi_events, find_bash, pi_delivery, pi_home, session as pi_session } from './api_pi.mjs';
 import { is_web_tool, run_web_tool, web_search_key, web_tools } from './api_web.mjs';
 import { ensure_pi } from '../pi_runtime.mjs';
 import { execution_marker, not_sent } from './common.mjs';
@@ -634,7 +634,9 @@ ${project_text(context.project, context.commands, context.image_input, context.n
       .map(file => skill_text('discuss-host', `references/${file}`)) : []),
     ...(goal_host(context) ? [skill_text('discuss-goal'), skill_text('discuss-goal', 'references/start.md'), skill_text('discuss-goal', 'references/finish.md')] : []),
     ...(host && context.workflow ? [workflow_text(context.workflow)] : []),
-    ...(context.expert_prompt ? [`用户为你单独设置的提示（补充做法与偏好，不改变权限与技能规则）：\n${context.expert_prompt}`] : [])].join('\n\n---\n\n');
+    // The runner composes the owner's prompts (all members, this platform, this member); without it, the member's own.
+    ...(context.system_text !== undefined ? (context.system_text ? [context.system_text] : [])
+      : context.expert_prompt ? [`用户为你单独设置的提示（补充做法与偏好，不改变权限与技能规则）：\n${context.expert_prompt}`] : [])].join('\n\n---\n\n');
 }
 
 /** Model requests this execution may make: the room's setting, else the default; 0 means no limit. */
@@ -725,7 +727,8 @@ export async function api_delivery(profile, binding, task, spawn_process) {
     key = read_api_key(task.api_context.home, profile);
     cli = await ensure_pi(task.api_context.home);
     context = { ...task.api_context, participant: task.participant, directory: task.directory, task_id: task.id,
-      signal: AbortSignal.timeout(SITE_TIMEOUT_MS), expert_prompt: expert_prompt(profile), image: room_image(task.api_context.home, task.api_context),
+      signal: AbortSignal.timeout(SITE_TIMEOUT_MS), expert_prompt: expert_prompt(profile),
+      ...(task.system_text !== undefined ? { system_text: task.system_text } : {}), image: room_image(task.api_context.home, task.api_context),
       // The service home holds API keys and the task directory holds room credentials; neither is a project file.
       project: open_project(task.api_context, [task.api_context.home, task.directory]) };
     if (context.image) context.unsent_images = unsent_images(context);
@@ -753,6 +756,52 @@ export async function api_delivery(profile, binding, task, spawn_process) {
   if (context.project && (context.native_shell || !runs_write_commands(context.commands, context.project))) task.on_edits?.([]);
   return pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt, images, max_requests: max_requests(context),
     project_root: context.project?.root || '', native_shell: context.native_shell, service_home: task.api_context.home, ...(spawn_process ? { spawn_process } : {}) });
+}
+
+/**
+ * A model API member run as Pi itself, the way a CLI member runs its software (user 2026-11-25: no special treatment):
+ * Pi's own system prompt, tools (read, bash, edit, write), context files and skills, plus the room's skills and the
+ * owner's prompts (`task.system_text`, appended). It gets the same task text as a CLI member and reaches the room with
+ * codiscuss in its shell, the credential bound through DISCUSS_ACCESS_FILE; the runner then looks for its submitted
+ * answer or takes its last remark. A private chat (`task.chat`) is a turn of the same session, its reply the last
+ * remark. Pi has no sandbox; a read-only member is held by the extension's tool_call check (writes only in its drafts,
+ * commands only codiscuss subcommands). Only web reading is added as tools.
+ */
+async function native_delivery(profile, binding, task, spawn_process) {
+  let key, cli, project_root = '';
+  try {
+    key = read_api_key(task.api_context.home, profile);
+    cli = await ensure_pi(task.api_context.home);
+    // Pi runs shell commands, and with them every codiscuss call, through Git Bash on Windows.
+    if (!find_bash(pi_home(task.api_context.home).agent)) throw new Error(BASH_MISSING);
+    project_root = open_project(task.api_context, [task.api_context.home, task.directory])?.root || '';
+  } catch (error) {
+    const message = String(error.message || error);
+    throw not_sent(new Error(key ? message.replaceAll(key, '[已隐藏]') : message));
+  }
+  // Read-only is enforced in the extension, as Claude's read-only level is by its permission rules (user 2026-11-25).
+  const extras = task.extra_directories || [];
+  const confine = runs_commands(profile, extras) ? null : { cli: 'codiscuss',
+    readable: [project_root, task.member_directory, task.draft_directory, task.knowledge_directory, ...(task.skill_directories || []),
+      ...extras.map(item => item.path)].filter(Boolean),
+    writable: [task.draft_directory, task.knowledge_directory, ...extras.filter(item => item.access === 'write').map(item => item.path)].filter(Boolean) };
+  const setup = { ...task.api_context, participant: task.participant, directory: task.directory, task_id: task.id, native: true,
+    ...(confine ? { confine } : {}),
+    base_url: api_base_url(profile.base_url), profile: Object.fromEntries(PROFILE_FIELDS.filter(field => profile[field] !== undefined).map(field => [field, profile[field]])) };
+  const context_file = join(task.directory, `${task.id}-pi-context.json`);
+  writeFileSync(context_file, JSON.stringify(setup), { mode: 0o600 });
+  let system_file = '';
+  if (task.system_text) {
+    system_file = join(task.directory, `${task.id}-pi-append.md`);
+    writeFileSync(system_file, task.system_text, { mode: 0o600 });
+  }
+  const images = (task.images || []).filter(image => image.size <= MAX_INLINE_IMAGE_BYTES)
+    .map(image => ({ type: 'image', data: readFileSync(image.path).toString('base64'), mimeType: image.content_type }));
+  // Its write and edit calls are tracked by path and its shell commands by the paths they write, as Claude's are.
+  if (project_root) task.on_edits?.([]);
+  return pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt: task.prompt, images, native: true,
+    max_requests: max_requests(task.api_context), project_root, skill_directories: task.skill_directories || [],
+    service_home: task.api_context.home, ...(spawn_process ? { spawn_process } : {}) });
 }
 
 // The call is the runner's own, so it can be aborted and its tool steps are seen.
@@ -841,8 +890,10 @@ export function api_lockdown(task) {
 /** The model API's behaviour; its static facts are in profiles.mjs. */
 export const api = {
   id: 'api',
-  deliver: (profile, binding, task, spawn_process) => api_delivery(profile, binding, api_lockdown(task), spawn_process),
-  chat: (profile, binding, task) => api_chat(profile, binding, api_lockdown(task)),
+  // Only a run confined to the codiscuss subcommands (a member lent to another computer's room) keeps our own tools.
+  deliver: (profile, binding, task, spawn_process) => task.tool_lockdown ? api_delivery(profile, binding, api_lockdown(task), spawn_process)
+    : native_delivery(profile, binding, task, spawn_process),
+  chat: (profile, binding, task) => task.tool_lockdown ? api_chat(profile, binding, api_lockdown(task)) : native_delivery(profile, binding, task),
   session: pi_session,
   events: pi_events,
   models: null,

@@ -34,10 +34,29 @@ export function expert_prompt(profile = {}) {
 /** The line that introduces the member's own prompt after the fixed task text; the prompt dialog shows the same line. */
 export const EXPERT_PROMPT_HEADING = '用户为你单独设置的提示（补充做法与偏好，不改变权限与技能规则）：';
 
-/** Append the member's prompt to a task prompt, marked as the user's own guidance for this member. */
-export function with_expert_prompt(prompt, profile) {
-  const extra = expert_prompt(profile);
-  return extra ? `${prompt}\n\n${EXPERT_PROMPT_HEADING}\n${extra}` : prompt;
+/** Headings of the layers the owner writes for every member and for one platform's members. */
+export const PROGRAM_PROMPT_HEADING = '用户为本机所有成员设置的提示（补充做法与偏好，不改变权限与技能规则）：';
+/** A hosted account's administrator writes a layer of its own, which the account's user cannot change or clear. */
+export const MANAGED_PROMPT_HEADING = '托管账号的管理员为本账号所有成员设置的提示（不改变权限与技能规则）：';
+/** Leads a changed set sent into a session that may still hold an earlier one, also in its system prompt. */
+export const PROMPTS_REPLACED = '以下用户提示替换此前给你的同类提示（包括系统提示词里的旧版本），以此为准。';
+/** Sent once when every layer was cleared after a session had received some. */
+export const PROMPTS_REVOKED = '此前给你的用户提示（包括系统提示词里的）已全部撤销，不再适用。';
+export const PLATFORM_PROMPT_HEADING = '用户为 {platform} 平台的成员设置的提示（补充做法与偏好，不改变权限与技能规则）：';
+
+/**
+ * The prompts the owner set for a member, general to particular: a hosted account administrator's (`managed`), for every member (`program`), for its platform
+ * (`platforms[platform]`, `platform` being the member's platform ID) and for this member (its card, preset or workflow
+ * card), as one block with a heading each; '' when none is set. `layers` is `system_prompts` of launch-settings.json.
+ */
+export function system_text(profile, layers = {}, platform = '', platform_label = platform) {
+  const managed = String(layers?.managed || '').trim();
+  const program = String(layers?.program || '').trim();
+  const shared = String(layers?.platforms?.[platform] || '').trim();
+  const own = expert_prompt(profile);
+  return [managed && `${MANAGED_PROMPT_HEADING}\n${managed}`, program && `${PROGRAM_PROMPT_HEADING}\n${program}`,
+    shared && `${PLATFORM_PROMPT_HEADING.replace('{platform}', platform_label)}\n${shared}`,
+    own && `${EXPERT_PROMPT_HEADING}\n${own}`].filter(Boolean).join('\n\n');
 }
 
 /*

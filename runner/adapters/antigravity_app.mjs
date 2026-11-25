@@ -14,9 +14,10 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { atomic_json } from '../files.mjs';
 import { agy_skills, antigravity_project, conversation_history, database_settings, remove_conversation } from './antigravity_cli.mjs';
-import { bind_access, EDIT_TOOLS, not_sent, shell_written_paths } from './common.mjs';
+import { BackgroundTasks, bind_access, EDIT_TOOLS, not_sent, shell_written_paths } from './common.mjs';
 
 const IN_APP = { stoppable: false, progress: false };
+const SYSTEM_STEP = 'CORTEX_STEP_TYPE_SYSTEM_MESSAGE';
 const FOLLOWED = { stoppable: true, progress: true };
 const SERVICE = 'exa.language_server_pb.LanguageServerService';
 const UNPUBLISHED = 'App 内部接口未公开，App 版本可能已变';
@@ -54,6 +55,7 @@ async function deliver(config, binding, task) {
   // Steps already in the conversation belong to earlier turns; an unreadable one is simply not watched.
   let start = server ? 0 : null;
   if (server && binding.session_id) start = await read_conversation(server, binding.session_id).then(item => item.steps.length, () => null);
+  if (start !== null && binding.session_id) mark_next_input(binding.session_id, start);
   queue_request(config, { id: task.id, event_id: Number(task.id.replace(/^free-/, '')), prompt: task.prompt,
     session_id: binding.session_id || '', access_path: task.access_path });
   if (start === null) return { session_id: binding.session_id || '', status: 'sidecar_pending', capabilities: IN_APP };
@@ -89,15 +91,173 @@ function app_step_edits(step) {
   return paths;
 }
 
+/** Who sent an App system message: a background task (`<conversation>/task-N`), a sub-agent's conversation, or `system`. */
+function message_sender(step) {
+  const message = step?.systemMessage || {};
+  return String(message.agentMessage?.sender || /\bsender=(\S+)/.exec(String(message.message || ''))?.[1] || '');
+}
+
+/** A step's tool-call arguments (App 2.35 links each tool's step to the call that made it), or {}. */
+function step_arguments(step) {
+  try { return JSON.parse(step.metadata?.toolCall?.argumentsJson || '{}') || {}; } catch { return {}; }
+}
+
+/** Whether a background task step is a schedule (a timer or a cron): it is shown, never waited for or followed up. */
+function schedule_step(step) {
+  return step.metadata?.toolCall?.name === 'schedule' || /^(Timer|Cron):/.test(String(step.taskDetails?.description || ''));
+}
+
+/** The sub-agents an `invoke_subagent` step started, each a conversation of its own: `[{id, title}]` (App 2.35.1). */
+function subagents(step) {
+  if (step?.type !== 'CORTEX_STEP_TYPE_INVOKE_SUBAGENT') return [];
+  const invoke = step.invokeSubagent || {};
+  return (invoke.results || []).map((result, index) => {
+    const agent = invoke.subagents?.[index] || {};
+    return { id: String(result?.conversationId || ''), title: String(agent.role || agent.typeName || agent.initialPrompt || '') };
+  }).filter(item => item.id);
+}
+
+/**
+ * The sub-agents a finished `manage_subagents` kill or kill_all ended, by conversation ID; such a sub-agent never
+ * reports. The step's result names them (`generic.result.payload.conversationIds`, App 2.35.1, 2026-11-25); without a
+ * result a kill names them in its arguments and a kill_all ends all of them ('*').
+ */
+function killed_subagents(steps) {
+  const killed = new Map();
+  steps.forEach((step, index) => {
+    if (step.metadata?.toolCall?.name !== 'manage_subagents' || step.status !== 'CORTEX_STEP_STATUS_DONE') return;
+    const args = step_arguments(step), payload = step.generic?.result?.payload;
+    const action = String(payload?.action || args.Action || '');
+    if (!/^kill/.test(action)) return;
+    let ids = payload ? payload.conversationIds : args.ConversationIds;
+    if (typeof ids === 'string') { try { ids = JSON.parse(ids); } catch { ids = [ids]; } }
+    for (const id of Array.isArray(ids) ? ids : []) if (!killed.has(String(id))) killed.set(String(id), index);
+    if (!payload && action === 'kill_all' && !killed.has('*')) killed.set('*', index);
+  });
+  return killed;
+}
+
+/** The first step at which each sender's message came: a background task's or sub-agent's report. */
+function first_reports(steps) {
+  const reports = new Map();
+  steps.forEach((step, index) => {
+    const sender = step.type === SYSTEM_STEP ? message_sender(step) : '';
+    if (sender && !reports.has(sender)) reports.set(sender, index);
+  });
+  return reports;
+}
+
+/**
+ * How the sub-agent `id` launched at step `launched` ended, by whichever came first: 'done' (it reported), 'stopped'
+ * (a kill ended it; a killed sub-agent was once seen to send a message after it, 2026-11-25), '' while it runs.
+ */
+function subagent_end(id, launched, reports, killed) {
+  const report = reports.get(id) ?? Infinity;
+  const all = killed.get('*') ?? -1;
+  const kill = Math.min(killed.get(id) ?? Infinity, all > launched ? all : Infinity);
+  return report === Infinity && kill === Infinity ? '' : report < kill ? 'done' : 'stopped';
+}
+
+/**
+ * The background work `steps` launched, by the id its report comes from (`sender`): sub-agents (their conversation),
+ * commands moved to the background and schedules (`<conversation>/task-N`), as `BackgroundTasks` fields. Their reports
+ * and kills are read from `all` (the conversation since the delivery). `reports`: whether its report may bring a result
+ * to follow up; a schedule's firing does not.
+ */
+function background_work(steps, all = steps) {
+  const reported = first_reports(all), killed = killed_subagents(all);
+  const work = new Map();
+  for (const [index, step] of steps.entries()) {
+    const at = Date.parse(step.metadata?.createdAt) || 0;
+    for (const agent of subagents(step)) {
+      work.set(agent.id, { kind: 'agent', title: agent.title, started_at: at, state: subagent_end(agent.id, index, reported, killed) || 'running', reports: true });
+    }
+    const task = step.taskDetails;
+    if (!task?.id) continue;
+    const started_at = Date.parse(task.movedToBackgroundAt) || at;
+    const ended = /CANCELED/.test(step.status || '') ? 'stopped' : /ERROR/.test(step.status || '') ? 'failed' : '';
+    const done = step.status === 'CORTEX_STEP_STATUS_DONE';
+    if (schedule_step(step)) {
+      const args = step_arguments(step);
+      work.set(task.id, { kind: 'schedule', title: String(args.Prompt || task.description || ''), schedule: String(args.CronExpression || task.title || ''),
+        started_at, state: ended || (done ? 'done' : 'running'), reports: false });
+      continue;
+    }
+    const command = step.runCommand || {};
+    work.set(task.id, { kind: 'command', title: String(task.title || task.description || command.commandLine || ''), started_at,
+      state: ended || (done ? ((command.exitCode ?? 0) === 0 ? 'done' : 'failed') : 'running'), reports: true });
+  }
+  // Still to report: work whose report may bring a result, not yet in, and not stopped (a stopped one never reports).
+  for (const [id, item] of work) item.awaiting = item.reports && !reported.has(id) && item.state !== 'stopped';
+  return work;
+}
+
+/**
+ * The reports `[{id, status, summary}]` when the step at `index` is the report of background work this delivery
+ * launched that started a new App run, else null. Such a run may be a follow-up (续报) once the execution completed.
+ * A new run's report follows the last run's final remark (a response calling no tool, other messages aside); one inside
+ * a running turn follows a tool step. The step's `executionId` does not tell: App 2.35.1 kept the last run's for a
+ * sub-agent's report that came 46 s after it went idle, and recorded that report twice (2026-11-25).
+ */
+function new_run_report(steps, index, work) {
+  const step = steps[index];
+  if (step?.type !== SYSTEM_STEP) return null;
+  let before = index - 1;
+  while (before >= 0 && steps[before]?.type === SYSTEM_STEP) before--;
+  const last = steps[before];
+  if (last?.type !== 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' || last.plannerResponse?.toolCalls?.length) return null;
+  const id = message_sender(step), item = work.get(id);
+  if (!item?.reports) return null;
+  const message = step.systemMessage || {};
+  return [{ id, status: item.state === 'failed' ? 'failed' : item.state === 'stopped' ? 'stopped' : 'completed',
+    summary: String(message.renderInfo?.title || message.agentMessage?.renderDetails?.messageTitle || item.title || '') }];
+}
+
+// Room watches by conversation, each with `next`: where the next delivery or chat line into that conversation begins
+// (the step count read before sending it), -1 until one is sent.
+const watching = new Map();
+
+/** A delivery or chat line goes into `session_id` from step `index` on: the watches still following it end their own steps there. */
+function mark_next_input(session_id, index) {
+  for (const watch of watching.get(session_id) || []) if (watch.next < 0) watch.next = index;
+}
+
+/**
+ * Where this delivery's own steps end (offset into `steps`, which begin at `start`): at the next delivery or chat line
+ * sent into the conversation, or a line the owner typed in the App (a user input after the first step), else -1. Not
+ * by a `system` message's sender: the Sidecar's `send-message` and the App's own notices share it (App 2.35.1).
+ */
+function own_end(steps, start, watch) {
+  const typed = steps.findIndex((step, offset) => offset > 0 && step.type === 'CORTEX_STEP_TYPE_USER_INPUT');
+  const sent = watch.next >= 0 ? Math.max(watch.next - start, 0) : -1;
+  return [typed, sent].filter(offset => offset >= 0).reduce((first, offset) => first < 0 ? offset : Math.min(first, offset), -1);
+}
+
 /**
  * Wait for the Sidecar's receipt (a new conversation's id), then read the conversation until it goes idle with new steps
- * and nothing pending, reporting finished step edits along the way and `on_turn_end` when done. Gives up quietly on a
- * refused delivery, an unreadable App or the ceiling; the room then falls back to the site's hold.
+ * and nothing pending, reporting finished step edits, the background work the turn launched (`on_background_tasks`;
+ * `waiting` while the App is idle for it) and `on_turn_end` when done. A report of that work that starts a new App run
+ * goes to the runner first (`on_followup`, no handle: the App runs on whatever the runner decides): true, the run is
+ * followed as the execution's (a follow-up once it completed); 'keep', no follow-up but the rest of the work is still
+ * followed; false, no further report is put to it. Once the next input arrives in the conversation, only the work
+ * listed before it is followed, for its reports alone (as a Claude window kept past its execution), and the watch ends
+ * when that work has nothing left to report. Gives up quietly on a refused delivery, an unreadable App or the ceiling;
+ * the room then falls back to the site's hold.
  */
 export async function watch_room_turn(config, server, { session_id, start }, task) {
-  const finished = new Map(), reported = new Set(), until = Date.now() + ROOM_TIMING.wait_ms;
+  const watch = { next: -1 };
+  const follow = id => { if (!watching.has(id)) watching.set(id, new Set()); watching.get(id).add(watch); };
+  if (session_id) follow(session_id);
+  try { return await follow_room_turn(config, server, { session_id, start }, task, watch, follow); }
+  finally { if (session_id || watch.session_id) watching.get(session_id || watch.session_id)?.delete(watch); }
+}
+
+/** `watch_room_turn` itself, its watch registered for the conversation (`follow`) once the conversation is known. */
+async function follow_room_turn(config, server, { session_id, start }, task, watch, follow) {
+  const finished = new Map(), reported = new Set(), asked = new Set(), until = Date.now() + ROOM_TIMING.wait_ms;
+  const listed = new BackgroundTasks(task), shown = new Map();
   task.on_edits?.([]);
-  let failures = 0;
+  let failures = 0, waiting = false, declined = false;
   while (Date.now() < until) {
     await sleep(ROOM_TIMING.poll_ms);
     if (!session_id) {
@@ -105,19 +265,55 @@ export async function watch_room_turn(config, server, { session_id, start }, tas
       if (result && result.status !== 'accepted') return;
       session_id = result?.session_id || '';
       if (!session_id) continue;
+      watch.session_id = session_id;
+      follow(session_id);
     }
     let conversation;
     try { conversation = await read_conversation(server, session_id); failures = 0; }
     catch { if (++failures >= ROOM_TIMING.read_failures) return; continue; }
-    const steps = conversation.steps.slice(start);
+    // Work a later task launched in the same conversation is that task's, not this execution's.
+    const steps = conversation.steps.slice(start), cut = own_end(steps, start, watch);
+    const work = background_work(cut < 0 ? steps : steps.slice(0, cut), steps);
     for (const [offset, step] of steps.entries()) {
       const index = start + offset;
+      // Each piece of work is put to the runner once, by its first report (the App may record one twice).
+      const reports = typeof task.on_followup === 'function' ? new_run_report(conversation.steps, index, work) : null;
+      if (reports && !asked.has(reports[0].id)) {
+        asked.add(reports[0].id);
+        // A report that only says the work was stopped brings nothing new (as the website holds).
+        if (!declined && reports.some(item => item.status !== 'stopped')) {
+          declined = (await Promise.resolve().then(() => task.on_followup(reports, null, { steer: false })).catch(() => false)) === false;
+          // The list goes again to whichever execution the run now belongs to.
+          listed.sent = '';
+          listed.report();
+        }
+      }
       if (step?.status !== 'CORTEX_STEP_STATUS_DONE' || reported.has(index)) continue;
       reported.add(index);
       const paths = app_step_edits(step);
       if (paths.length) task.on_edits?.(paths);
     }
-    if (steps.length && conversation.idle && !turn_pending(steps, finished)) return task.on_turn_end?.();
+    // Only a changed item is set again: setting one moves it to the end of the list.
+    for (const [id, { reports, awaiting, ...item }] of work) {
+      const text = JSON.stringify(item);
+      if (shown.get(id) !== text) { shown.set(id, text); listed.set(id, item); }
+    }
+    // Past the next input this turn is over; only the listed work's reports are still awaited.
+    if (cut >= 0) {
+      // A finished command's report is awaited as long as `turn_pending` would (`report_ms`).
+      const now = Date.now(), awaited = [...work].some(([id, item]) => {
+        if (!item.awaiting || item.state === 'running') return item.awaiting;
+        if (!finished.has(id)) finished.set(id, now);
+        return now - finished.get(id) < CHAT_TIMING.report_ms;
+      });
+      if (declined || !awaited) return task.on_turn_end?.();
+      continue;
+    }
+    const pending = steps.length > 0 && turn_pending(steps, finished);
+    if (steps.length && conversation.idle && !pending) return task.on_turn_end?.();
+    // Idle but not done, with no message about to start a run: the App waits for background work to report.
+    const idle_waiting = Boolean(conversation.idle && pending && steps.at(-1)?.type !== SYSTEM_STEP);
+    if (idle_waiting !== waiting) { waiting = idle_waiting; task.on_activity?.(waiting ? 'waiting' : 'thinking'); }
   }
 }
 
@@ -182,18 +378,20 @@ function step_entries(step, index) {
 /**
  * Whether an idle App is still inside this turn. A command moved to the background leaves the App idle with an interim
  * remark; when it finishes, the App reports it as a message from `<conversation>/task-N` and runs again for the reply.
- * So the turn goes on while a command or task step runs, while a finished task has not reported back (up to
- * `report_ms` after it was first seen finished, as a report may never come), or while the last step is an unanswered
- * message. `finished` remembers when each task was first seen finished.
+ * A sub-agent reports the same way, as a message from its own conversation. So the turn goes on while a command or task
+ * step runs, while a sub-agent has not reported (unless the turn killed it), while a finished task has not reported back (up to `report_ms` after it
+ * was first seen finished, as a report may never come), or while the last step is an unanswered message. A schedule is
+ * not waited for: a cron may never end. `finished` remembers when each task was first seen finished.
  */
 function turn_pending(steps, finished, now = Date.now()) {
-  if (steps.at(-1)?.type === 'CORTEX_STEP_TYPE_SYSTEM_MESSAGE') return true;
-  const messages = steps.filter(step => step.type === 'CORTEX_STEP_TYPE_SYSTEM_MESSAGE').map(step => String(step.systemMessage?.message || ''));
+  if (steps.at(-1)?.type === SYSTEM_STEP) return true;
+  const reported = first_reports(steps), killed = killed_subagents(steps);
+  if (steps.some((step, index) => subagents(step).some(agent => !subagent_end(agent.id, index, reported, killed)))) return true;
   return steps.some(step => {
-    if (!['CORTEX_STEP_TYPE_GENERIC', 'CORTEX_STEP_TYPE_RUN_COMMAND'].includes(step.type)) return false;
+    if (!['CORTEX_STEP_TYPE_GENERIC', 'CORTEX_STEP_TYPE_RUN_COMMAND'].includes(step.type) || (step.taskDetails && schedule_step(step))) return false;
     if (/RUNNING|GENERATING|PENDING/.test(step.status || '')) return true;
     const task = step.taskDetails?.id;
-    if (!task || /CANCELED|ERROR/.test(step.status || '') || messages.some(message => message.includes(`sender=${task} `))) return false;
+    if (!task || /CANCELED|ERROR/.test(step.status || '') || reported.has(task)) return false;
     if (!finished.has(task)) finished.set(task, now);
     return now - finished.get(task) < CHAT_TIMING.report_ms;
   });
@@ -264,6 +462,7 @@ async function chat(config, binding, task) {
     catch (error) { throw not_sent(error); }
     if (conversation.running) throw not_sent(new Error('这个 Antigravity App 对话正在运行，等它结束再私聊，或直接在 App 里对话'));
     start = conversation.steps.length;
+    mark_next_input(binding.session_id, start);
   }
   const session_id = await send_chat(config, { id: task.id, prompt: task.prompt, session_id: binding.session_id || '', access_path: task.access_path });
   if (!server) {

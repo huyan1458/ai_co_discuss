@@ -13,11 +13,11 @@ import { gzipSync } from 'node:zlib';
 import { atomic_json } from './files.mjs';
 import { network_failure, reconnect_reader } from './relay_health.mjs';
 import { t } from './i18n.mjs';
-import { room_share_job, remote_execution_details, remote_room_files, remote_room_media, remote_room_page } from './discussion_launch.mjs';
+import { granted_projects, room_share_job, remote_execution_details, remote_room_files, remote_room_media, remote_room_page } from './discussion_launch.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { local_settings } from './discussion_setup.mjs';
 import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, sync_remote_launches, unseal } from './remote_launch.mjs';
-import { claim_relayed_command } from './remote_policy.mjs';
+import { claim_relayed_command, guard_remote_directories } from './remote_policy.mjs';
 import { audit, DEVICE_ACTIONS, device_command, open_signed_request } from './device_auth.mjs';
 import { answer_external, INVITE_COMMANDS, is_external_request } from './external_gateway.mjs';
 import { site_fetch } from './entry_client.mjs';
@@ -130,6 +130,7 @@ export async function room_api(home, site, payload, { fetcher = site_fetch, devi
     return { status: 400, body: { error: '中转请求地址无效' } };
   }
   const headers = bridge_headers(home, site);
+  await guard_folder_directories(home, path, method, body, { fetcher, headers });
   if (typeof token === 'string' && token) headers['X-Discussion-Token'] = token;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   // A read the device already holds is asked conditionally; unchanged, the answer is a bare 304 with no body.
@@ -154,6 +155,22 @@ export async function room_api(home, site, payload, { fetcher = site_fetch, devi
   }
   return { status: response.status, content_type: type, offset, total: bytes.length,
     body_base64: bytes.subarray(offset, offset + RESPONSE_MAX_BYTES).toString('base64') };
+}
+
+/**
+ * A group's project paths set from another device: a new one must lie inside the saved projects, while the paths the
+ * group already has may stay or be removed. Room creation from the group relies on this (`kept_directories`).
+ */
+async function guard_folder_directories(home, path, method, body, { fetcher, headers }) {
+  const target = /^\/api\/folders(?:\/([A-Za-z0-9_-]+)\/rename)?$/.exec(path.split('?', 1)[0]);
+  if (method !== 'POST' || !target || !Array.isArray(body?.directories)) return;
+  let kept = [];
+  if (target[1]) {
+    const response = await fetcher(`${local_origin(home)}/api/rooms`, { headers, redirect: 'error', signal: AbortSignal.timeout(LOCAL_TIMEOUT_MS) });
+    if (!response.ok) throw new Error(t('无法读取分组的项目路径'));
+    kept = ((await response.json()).folders || []).find(folder => folder.id === target[1])?.directories || [];
+  }
+  guard_remote_directories(body.directories, { projects: granted_projects(home), home, kept });
 }
 
 /** The local website this computer runs. */
@@ -284,7 +301,7 @@ export async function answer_request(home, site, link, frame, { run = run_launch
       : action === 'room-upload' ? await room_upload(home, site, payload, { fetcher })
         : await run_command(home, { ...(target === 'computer' ? computer_command(home, site, action, payload) : relayed_command(site, action, payload)), device }, run);
     if (timing?.local_request_at !== undefined) timing.local_response_at = performance.now();
-  } catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}) } }; }
+  } catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}), ...(error.error_text ? { error_text: error.error_text } : {}) } }; }
   // Remote writes go to this computer's audit log: kind, route, device and outcome, never content. Reads are not logged.
   if (request.action && !(request.action === 'room-api' && (request.payload?.method || 'GET') === 'GET') && !DEVICE_ACTIONS.has(request.action) && request.action !== 'computer-site') {
     audit(home, { event: 'command', action: request.action, route: typeof request.payload?.path === 'string' ? request.payload.path.split('?')[0] : '',

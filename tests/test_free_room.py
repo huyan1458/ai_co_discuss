@@ -776,6 +776,44 @@ class SingleMemberTests(FreeRoomTests):
         queue = self.request(f"{self.path}/queue", {"action": "send", "id": fourth_id}, self.owner)[1]
         self.assertEqual((queue["items"], texts()), ([], ["一", "答一", "二", "三", "四"]))
 
+    def test_peer_link_requires_both_owners_and_tracks_queue_and_reply(self):
+        """Approve one host request, track its round trip, and revoke future delivery."""
+        self.review_member_id()
+        other_owner = uuid.uuid4().hex
+        other = self.request("/api/rooms", {"title": "测试房", "host": "Codex", "members": [
+            {"name": "Codex", "token": uuid.uuid4().hex}]}, other_owner)[1]["id"]
+        peer = f"/api/rooms/{other}"
+        links = self.path + "/room-links"
+        self.assertEqual(self.request(links, {"room_id": other}, self.owner)[0], 403)
+        request = {"room_id": other, "reason": "协作测试", "submission_id": uuid.uuid4().hex}
+        status, pending = self.request(self.path + "/room-link-requests", request, self.member)
+        self.assertEqual(status, 200, pending)
+        decide = self.path + f"/room-link-requests/{pending['id']}/decide"
+        self.assertEqual(self.request(decide, {"approve": True}, self.member)[0], 403)
+        self.assertEqual(self.request(decide, {"approve": True}, self.owner)[0], 403)
+        self.assertEqual(self.request(decide, {"approve": True, "other_token": other_owner}, self.owner)[1]["state"], "approved")
+        self.assertEqual(self.request(links, token=self.member)[1]["links"][0]["relation"], "peer")
+        relay = {"room_id": other, "host": "Codex", "expect": "reply"}
+        self.assertEqual(self.say("打断", relay=relay, interrupt=True)[0], 403)
+        execution = self.reserve()[1]["id"]
+        queued = self.say("请给结果", relay=relay, queue=True)[1]["queued"]
+        receipt = self.request(peer + "/room-relay-sent", {"target_room_id": self.room["id"], "host": "Codex",
+            "text": "请给结果", "queued_id": queued, "submission_id": uuid.uuid4().hex}, other_owner)[1]
+        receipt_path = peer + "/messages/" + str(receipt["message_id"])
+        self.assertEqual(self.request(receipt_path)[1]["relay_sent_state"], "queued")
+        self.assertEqual(self.answer(execution)[0], 201)
+        delivered = self.request(receipt_path)[1]
+        self.assertEqual(delivered["relay_sent_state"], "delivered")
+        reply = {"room_id": self.room["id"], "host": "Claude", "expect": "none", "reply_to": delivered["relay_sent_message_id"]}
+        status, result = self.request(peer + "/messages", {"author": "用户", "text": "完成", "submission_id": uuid.uuid4().hex,
+                                                          "relay": reply}, other_owner)
+        self.assertEqual(status, 201, result)
+        self.assertEqual(self.request(receipt_path)[1]["relay_sent_state"], "replied")
+        unlink = {"action": "delete", "room_id": other}
+        self.assertEqual(self.request(links, unlink, self.owner)[0], 403)
+        self.assertEqual(self.request(links, {**unlink, "other_token": other_owner}, self.owner)[0], 200)
+        self.assertEqual(self.say("再发送", relay=relay)[0], 403)
+
     def test_linked_host_queue_interrupt_and_identity(self):
         """Both directions queue, but only the parent may steer or stop a running host."""
         parent = self.request("/api/rooms", {"title": "父房间", "members": [
@@ -791,7 +829,7 @@ class SingleMemberTests(FreeRoomTests):
         url = f"{self.path}/executions/{running['id']}"
         self.request(url, {"action": "delivery", "stoppable": False, "progress": True}, self.owner)
         queued = self.say("跟进", relay={**relay, "member": "Codex"}, queue=True)[1]
-        self.assertEqual(queued["queue"]["items"][0]["relay_host"], "父主持")
+        self.assertEqual((queued["queue"]["items"][0]["relay_host"], queued["queue"]["items"][0]["to"]), ("父主持", ["Claude"]))
         blocked = self.say("变更", relay=relay, interrupt=True)[1]
         self.assertTrue(blocked["queued"])
         self.assertFalse(blocked["interrupted"])
@@ -1530,6 +1568,28 @@ class MultiMemberTests(FreeRoomTests):
             self.assertEqual(self.messages()[-1][1], "主持人 Claude 把自己的模型从 sonnet 换为 opus，下次执行起生效。")
         self.assertEqual(self.request(self.path)[1]["free"]["requests"], [])
 
+    def test_a_host_control_leaves_a_record_only_under_the_hosts_credential(self):
+        """host-control leaves a line naming the host by its own credential; the owner alone cannot, nobody is woken."""
+        path = f"{self.path}/host-actions"
+        record = {"action": "steer", "member": "Claude", "detail": "先跑测试", "submission_id": "steer-record-1"}
+        self.assertEqual(self.request(path, record, self.owner)[0], 403)
+
+        def acting(payload):
+            request = Request(self.base + path, headers={"Content-Type": "application/json", "X-Discussion-Token": self.owner,
+                                                         "X-Acting-Member-Token": self.codex}, data=json.dumps(payload).encode())
+            try:
+                with urlopen(request) as response:
+                    return response.status, json.loads(response.read())
+            except HTTPError as error:
+                return error.code, json.loads(error.read())
+        self.assertEqual(acting({**record, "action": "nope"})[0], 400)
+        status, first = acting(record)
+        self.assertEqual((status, first["duplicate"]), (200, False), first)
+        self.assertTrue(acting(record)[1]["duplicate"])
+        card = self.request(f"{self.path}/messages?after=0")[1]["messages"][-1]
+        self.assertEqual((card["source"], card["text"]), ("host_action", "主持人 Codex 向 Claude 插话：先跑测试"))
+        self.assertEqual(self.request(self.path)[1]["free"]["requests"], [])
+
     def test_rooms_a_host_created_link_both_ways_and_its_relayed_message_wakes_the_child_host(self):
         """create-room leaves a link card on each side (owner credential, idempotent); room-post labels where it came from."""
         child_owner, child_member = uuid.uuid4().hex, uuid.uuid4().hex
@@ -1555,7 +1615,7 @@ class MultiMemberTests(FreeRoomTests):
         status, saved = self.request(f"{child_path}/messages", payload, child_owner)
         self.assertEqual(status, 201, saved)
         message = self.request(f"{child_path}/messages?after=0")[1]["messages"][-1]
-        self.assertEqual((message["relay_room"], message["relay_host"], message["relay_title"]), (self.room["id"], "Claude", "自由单聊"))
+        self.assertEqual((message["relay_room"], message["relay_host"], message["relay_title"], message["relay_to"]), (self.room["id"], "Claude", "自由单聊", "Claude"))
         self.assertEqual([(item["member"], item["status"]) for item in self.request(child_path)[1]["free"]["requests"]], [("Claude", "pending")])
 
     def test_outgoing_relay_receipts_survive_target_deletion_without_routing(self):
@@ -1963,6 +2023,17 @@ class HostTests(HostRoomTests):
         self.assertEqual(status, 201, saved)
         return saved["message"]["id"]
 
+    def test_a_linked_rooms_message_goes_to_the_idle_host_while_members_work(self):
+        """2026-11-25 #10958: a linked room's message names this room's host; an idle host takes it though Codex works."""
+        other = self.request("/api/rooms", {"title": "父房间", "members": [{"name": "Codex", "token": uuid.uuid4().hex}],
+                                            "host": "Codex"}, self.owner)[1]["id"]
+        self.request(f"{self.path}/room-link", {"relation": "parent", "room_id": other, "host": "Codex"}, self.owner)
+        FreeRoomTests.say(self, "写第一集")
+        self.host_dispatch(to=["Codex"])
+        status, sent = FreeRoomTests.say(self, "父房间转达", relay={"room_id": other, "host": "Codex"}, queue=True)
+        self.assertEqual((status, "queued" in sent), (201, False), sent)
+        self.assertIn(("Claude", "ask", "pending"), self.requests())
+
     def test_timeline_names_who_wrote_the_message_each_execution_started_from(self):
         """Only the owner's messages read as the owner's; the host's dispatch and hand-back are the host's own."""
         FreeRoomTests.say(self, "写第一集")
@@ -1993,6 +2064,22 @@ class HostTests(HostRoomTests):
         read = self.request(f"{self.path}/timeline/segments?ids={execution['id']},999999")[1]["segments"]
         self.assertEqual(list(read), [str(execution["id"])])
         self.assertEqual(len(read[str(execution["id"])]), len(full["segments"]))
+
+    def test_background_work_list_replaces_the_last_and_shows_on_the_execution(self):
+        """The runner's list of a member's background work is checked, replaces the earlier one, and reaches the room view."""
+        FreeRoomTests.say(self, "写第一集")
+        execution = self.reserve_for("Claude")[1]
+        path = f"{self.path}/executions/{execution['id']}"
+        agent = {"id": "toolu_1", "kind": "agent", "title": "调研", "state": "running", "started_at": 1000, "ended_at": 0, "next_at": 0, "schedule": ""}
+        for bad in ([{**agent, "kind": "workflow"}], [{**agent, "state": "lost"}], [agent] * 21, "toolu_1"):
+            self.assertEqual(self.request(path, {"action": "background_tasks", "tasks": bad}, self.owner)[0], 400, bad)
+        self.assertEqual(self.request(path, {"action": "background_tasks", "tasks": [agent]}, self.owner)[0], 200)
+        done = {**agent, "state": "done", "ended_at": 2000}
+        self.assertEqual(self.request(path, {"action": "background_tasks", "tasks": [done]}, self.owner)[0], 200)
+        free = self.request(self.path)[1]["free"]
+        shown = next(item for item in free["executions"] if item["id"] == execution["id"])
+        self.assertEqual(shown["background_tasks"], [done])
+        self.assertEqual(next(member for member in free["members"] if member["name"] == "Claude")["execution"]["background_tasks"], [done])
 
     def test_timeline_pages_back_to_the_first_execution(self):
         """The latest page says older executions exist, and `before` pages reach the rest without overlap."""
@@ -2813,6 +2900,169 @@ class HostTests(HostRoomTests):
         self.assertGreater(held(), 0, "an interrupted turn the runner cannot stop holds the next delivery")
         self.assertEqual(post(text="改完了")[0], 409)
         self.assertEqual(held(), 0, "the late answer shows the turn ended")
+
+    def followup(self, name, source, **extra):
+        """Open a follow-up (续报) execution of `source` for a member, as the runner does on a background report."""
+        return self.request(f"{self.path}/executions", {"member_id": self.member_id(name), "client_id": uuid.uuid4().hex,
+            "cwd": "d:/project", "follows": source, "reports": [{"id": "toolu_1", "status": "completed", "summary": "跑完了"}], **extra}, self.owner)
+
+    def test_a_background_report_after_the_answer_comes_in_as_a_followup(self):
+        """Background work a member left reports after its answer: the runner opens a follow-up on the same chain, hung on
+        that answer; the answer the software submits with its first credential binds to it and is marked as a follow-up."""
+        FreeRoomTests.say(self, "让 Codex 查一下")
+        self.work("Claude", to=["Codex"])
+        first = self.work("Codex")["id"]
+        answer = next(item for item in self.request(f"{self.path}/messages?after=0")[1]["messages"] if item["execution_id"] == first)
+        self.assertEqual(self.followup("Codex", first, reports="x")[0], 400)
+        status, followup = self.followup("Codex", first)
+        self.assertEqual(status, 200, followup)
+        self.assertEqual([(item["purpose"], item["message_id"], item["status"]) for item in followup["requests"]],
+                         [("followup", answer["id"], "delivering")])
+        self.assertEqual(self.followup("Codex", first)[0], 409, "one follow-up per execution; later reports follow it")
+        status, saved = self.request(f"{self.path}/messages", {"author": "Codex", "text": "后台跑完了", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": first}, self.tokens["Codex"])
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(saved["message"]["execution_id"], followup["id"], "the first credential's answer goes to the follow-up")
+        view = self.request(self.path)[1]
+        self.assertEqual(next(item for item in self.request(f"{self.path}/messages?after=0")[1]["messages"] if item["id"] == saved["message"]["id"])["followup_of"], first)
+        self.assertEqual(next(item for item in view["free"]["executions"] if item["id"] == followup["id"])["followup_of"], first)
+        self.assertNotIn(("Claude", "handoff", "pending"), self.requests()[-1:], "a follow-up hands nothing back by itself")
+        events = self.request(f"{self.path}/events", token=self.owner)[1]["events"]
+        recorded = next(event for event in events if event["kind"] == "execution.followup")
+        self.assertEqual((recorded["data"]["source_id"], recorded["data"]["execution_id"]), (first, followup["id"]))
+        status, again = self.followup("Codex", followup["id"])
+        self.assertEqual(status, 200, "a later report follows the follow-up")
+        self.assertEqual(again["requests"][0]["message_id"], saved["message"]["id"])
+
+    def test_only_a_completed_execution_with_something_new_gets_a_followup(self):
+        """A report while the execution still runs belongs to it; a stopped execution is not carried on; reports that only
+        say the work was stopped or killed bring nothing new."""
+        FreeRoomTests.say(self, "让 Codex 查一下")
+        self.work("Claude", to=["Codex"])
+        running = self.reserve_for("Codex")[1]["id"]
+        self.assertEqual(self.followup("Codex", running)[0], 409)
+        self.assertEqual(self.followup("Antigravity", running)[0], 404, "only the member's own execution")
+        self.assertEqual(self.request(f"{self.path}/members/{self.member_id('Codex')}/interrupt", {}, self.owner)[0], 200)
+        self.assertEqual(self.followup("Codex", running)[0], 409, "a stopped execution gets no follow-up")
+        FreeRoomTests.say(self, "Codex 再查一次", to=["Codex"])
+        done = self.work("Codex")["id"]
+        killed = {"id": "toolu_2", "status": "killed", "summary": "超时被结束"}
+        self.assertEqual(self.followup("Codex", done, reports=[killed, {**killed, "status": "stopped"}])[0], 409)
+        self.assertEqual(self.followup("Codex", done, reports=[killed, {"id": "toolu_3", "status": "completed", "summary": "跑完了"}])[0], 200)
+
+    def test_a_followup_that_brought_nothing_ends_quietly(self):
+        """The runner ends an unanswered follow-up with `quiet`: completed, no message, no failure; other work may not."""
+        FreeRoomTests.say(self, "让 Codex 查一下")
+        self.work("Claude", to=["Codex"])
+        first = self.work("Codex")["id"]
+        followup = self.followup("Codex", first)[1]
+        FreeRoomTests.say(self, "Antigravity 也看看", to=["Antigravity"])
+        asked = self.reserve_for("Antigravity")[1]["id"]
+        self.assertEqual(self.request(f"{self.path}/executions/{asked}", {"action": "quiet"}, self.owner)[0], 400)
+        status, ended = self.request(f"{self.path}/executions/{followup['id']}", {"action": "quiet"}, self.owner)
+        self.assertEqual(status, 200, ended)
+        view = self.request(self.path)[1]["free"]
+        run = next(item for item in view["executions"] if item["id"] == followup["id"])
+        self.assertEqual((run["status"], run["result"]), ("completed", "后台回报这一轮没有交来新内容，未发消息"))
+        self.assertNotIn(("Claude", "notice", "pending"), self.requests(), "no failure reaches the host")
+
+    def scheduled(self, name, set_at=None, **extra):
+        """Open a scheduled execution for a member, as the runner does when a schedule it set fires."""
+        schedule = {"id": "7ba9b755", "schedule": "Every 5 minutes", "prompt": "查线上版本", **({"set_at": set_at} if set_at is not None else {})}
+        return self.request(f"{self.path}/executions", {"member_id": self.member_id(name), "client_id": uuid.uuid4().hex, "cwd": "d:/project",
+            "scheduled": schedule, **extra}, self.owner)
+
+    def test_a_recurring_schedule_dispatches_within_the_hosts_chain_until_the_owner_approves_more(self):
+        """Each fire continues the chain of the host's latest work, so a recurring schedule cannot dispatch past the limit."""
+        from backend import free_room
+        original = free_room.CHAIN_ROUNDS
+        free_room.CHAIN_ROUNDS = 1
+        try:
+            FreeRoomTests.say(self, "盯一下线上版本")
+            last = self.work("Claude")["id"]
+            post = lambda execution, to: self.request(f"{self.path}/messages", {"author": "Claude", "text": "版本还没生效，派人看看", "source": "cli",
+                "submission_id": uuid.uuid4().hex, "execution_id": execution, "to": [to]}, self.member)
+            self.assertEqual(self.scheduled("Claude")[0], 200)
+            self.assertEqual(post(last, "Codex")[0], 201)
+            self.assertEqual(self.request(self.path)[1]["free"]["halted_chains"], [], "the first fire's dispatch is within the limit")
+            self.work("Codex")
+            last = self.work("Claude")["id"]
+            self.assertEqual(self.scheduled("Claude")[0], 200)
+            self.assertEqual(post(last, "Antigravity")[0], 201)
+            self.assertEqual([item["reason"] for item in self.request(self.path)[1]["free"]["halted_chains"]], ["budget"],
+                             "the next fire's dispatch counts against the same chain and waits for the owner")
+        finally:
+            free_room.CHAIN_ROUNDS = original
+
+    def test_the_owners_stop_keeps_schedules_set_before_it_out(self):
+        """After the owner stops the host (or everything), a schedule set before that no longer comes in; one set after does."""
+        FreeRoomTests.say(self, "盯一下线上版本")
+        self.work("Claude")
+        before = int(time.time() * 1000) - 1000
+        self.assertEqual(self.request(f"{self.path}/members/{self.member_id('Claude')}/interrupt", {}, self.owner)[0], 200)
+        status, refused = self.scheduled("Claude", set_at=before)
+        self.assertEqual((status, refused.get("code")), (409, "schedule_stopped"), refused)
+        self.assertEqual(self.scheduled("Claude")[0], 409, "a schedule of unknown age is not taken after a stop")
+        stopped = next(item for item in self.request(f"{self.path}/inbox", token=self.owner)[1]["members"] if item["name"] == "Claude")
+        self.assertGreater(stopped["schedule_stopped_at"], before)
+        status, run = self.scheduled("Claude", set_at=int(time.time() * 1000) + 1000)
+        self.assertEqual(status, 200, run)
+        self.request(f"{self.path}/executions/{run['id']}", {"action": "quiet"}, self.owner)
+        earlier = int(time.time() * 1000) - 1
+        self.assertEqual(self.request(f"{self.path}/stop", {}, self.owner)[0], 200)
+        self.assertEqual(self.scheduled("Claude", set_at=earlier)[1].get("code"), "schedule_stopped", "stop-all stops it too")
+
+    def test_only_the_hosts_schedule_comes_in_as_a_scheduled_report_on_a_chain_of_its_own(self):
+        """The host's schedule fired: a scheduled execution on a notice that starts its own chain; the answer bound to the
+        host's last execution comes here, marked, and may dispatch. A member's schedule is only shown; a busy host's turn
+        belongs to the execution it runs."""
+        FreeRoomTests.say(self, "让 Codex 查一下")
+        last = self.work("Claude", to=["Codex"])["id"]
+        self.work("Codex")
+        self.assertEqual(self.scheduled("Codex")[0], 409, "a member's schedule is only shown")
+        self.assertEqual(self.scheduled("Claude", scheduled="x")[0], 400)
+        status, run = self.scheduled("Claude")
+        self.assertEqual(status, 200, run)
+        notice = next(item for item in self.request(f"{self.path}/messages?after=0")[1]["messages"] if item["id"] == run["requests"][0]["message_id"])
+        self.assertEqual((notice["author"], run["requests"][0]["purpose"]), ("系统", "scheduled"))
+        self.assertEqual(self.scheduled("Claude")[0], 409, "a busy host's turn belongs to the execution it runs")
+        status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "版本还没生效，再派 Antigravity 盯一下", "source": "cli",
+            "submission_id": uuid.uuid4().hex, "execution_id": last, "to": ["Antigravity"]}, self.member)
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(saved["message"]["execution_id"], run["id"], "the answer bound to the last execution comes here")
+        shown = next(item for item in self.request(f"{self.path}/messages?after=0")[1]["messages"] if item["id"] == saved["message"]["id"])
+        self.assertTrue(shown["scheduled"])
+        self.assertTrue(next(item for item in self.request(self.path)[1]["free"]["executions"] if item["id"] == run["id"])["scheduled"])
+        dispatched = next(item for item in self.request(self.path)[1]["free"]["requests"] if item["member"] == "Antigravity")
+        self.assertEqual(dispatched["status"], "pending", "the host's scheduled report may dispatch")
+        events = self.request(f"{self.path}/events", token=self.owner)[1]["events"]
+        self.assertTrue(any(event["kind"] == "execution.scheduled" and event["data"]["execution_id"] == run["id"] for event in events))
+        # A schedule that found nothing to do ends quietly.
+        self.work("Antigravity")
+        self.work("Claude")
+        quiet = self.scheduled("Claude")[1]
+        status, ended = self.request(f"{self.path}/executions/{quiet['id']}", {"action": "quiet"}, self.owner)
+        self.assertEqual(status, 200, ended)
+
+    def test_a_host_followup_may_dispatch_within_the_original_chain(self):
+        """A host's follow-up may dispatch, on the chain of the work it follows, so the chain's round limit still applies."""
+        from backend import free_room
+        original = free_room.CHAIN_ROUNDS
+        free_room.CHAIN_ROUNDS = 1
+        try:
+            FreeRoomTests.say(self, "上限")
+            self.work("Claude", to=["Antigravity"])
+            self.work("Antigravity")
+            first = self.work("Claude")["id"]
+            status, followup = self.followup("Claude", first)
+            self.assertEqual(status, 200, followup)
+            status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "后台结果出来了，再派 Codex", "source": "cli",
+                "submission_id": uuid.uuid4().hex, "execution_id": first, "to": ["Codex"]}, self.member)
+            self.assertEqual(status, 201, saved)
+            self.assertEqual([item["reason"] for item in self.request(self.path)[1]["free"]["halted_chains"]], ["budget"],
+                             "the follow-up's dispatch counts against the original chain's rounds")
+        finally:
+            free_room.CHAIN_ROUNDS = original
 
     def test_a_held_dispatch_keeps_its_detached_members(self):
         """At the round limit a dispatch is held with its detached members; continuing the chain sends them all."""

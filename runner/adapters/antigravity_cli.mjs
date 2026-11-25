@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { atomic_json } from '../files.mjs';
 import { cli_delivery } from './cli.mjs';
-import { carve_protected, DENIAL_FIELD, EDIT_TOOLS, json_line, launch_directory, MAX_DENIALS, model_entry, MODEL_PATTERN, not_sent, page_sessions, project_directory,
+import { BackgroundTasks, carve_protected, DENIAL_FIELD, EDIT_TOOLS, json_line, launch_directory, MAX_DENIALS, model_entry, MODEL_PATTERN, not_sent, page_sessions, project_directory,
   prompt_title, query_catalog, read_json, remove_session_files, same_path, shell_written_paths, TASK_SUBCOMMANDS, trim_preview } from './common.mjs';
 
 // agy stores its generation settings as protobuf; field 28 (tag bytes 0xe2 0x01) holds the model actually used.
@@ -368,8 +368,105 @@ function invocation(config, binding, task, user_home) {
   return { args, ...(env ? { env } : {}), ...(project ? { on_session: project.bind } : {}) };
 }
 
+// A run_command step still running after this long has gone to the background: agy moves a command there after its
+// WaitMsBeforeAsync, at most 10 s (1.5.15 tool declaration; the App moved a 30 s request at 10.07 s).
+const AGY_BACKGROUND_AFTER_MS = 12_000;
+// agy's own stderr line once its turn rests on background work (1.5.16): "root agent idle; waiting for 2 background task(s) to finish".
+const AGY_BACKGROUND_WAIT = /^root agent idle; waiting for \d+ background task/;
+
+/** List the command step that has been running in the background, unless the process is already gone. */
+function list_held_command(state) {
+  const held = state.held_command;
+  if (!held || state.stopped || state.child?.exitCode !== null || state.child?.signalCode !== null) return;
+  state.background.set(held.key, { kind: 'command', title: held.title, started_at: held.at });
+}
+
+/** How a finished command step ended: its exit code, or stopped when it carries no output (killed by manage_task). */
+function command_state(step) {
+  if (step.state === 'ERROR') return 'failed';
+  const output = step.tool_info?.output;
+  if (typeof output !== 'string') return 'stopped';
+  const exit = output.match(/^Command exited with code (\d+)\./m);
+  return exit && Number(exit[1]) !== 0 ? 'failed' : 'done';
+}
+
+/**
+ * The background work an agy turn started, from its stream-json tool steps (agy 1.5.16; it has no task events of its
+ * own). agy prints the steps in order and holds every later one back while a step runs on in the background, so a
+ * background command shows from the time it is seen to outlast `AGY_BACKGROUND_AFTER_MS` or agy says its turn waits
+ * for background work; a timer or sub-agent behind it shows only once it is printed, usually already finished.
+ * - `run_command`: one per step (`task-<step>`, agy's own task ID); its end is the step's DONE (exit code, or stopped).
+ * - `schedule`: listed while its step runs, which lasts until the timer fires or the schedule is cancelled.
+ * - `invoke_subagent`: its DONE means launched; each sub-agent is keyed by its conversation ID and ends when
+ *   `manage_subagents` lists it idle or kills it, or when the turn's result comes (`-p` prints that only after the
+ *   reports it waits for).
+ * `manage_task kill` stops a task by ID.
+ */
+function track_background(state, event, task) {
+  const listed = state.background ||= new BackgroundTasks(task);
+  if (event.event === 'result') {
+    clearTimeout(state.held_command?.timer);
+    state.held_command = null;
+    for (const item of listed.list()) listed.end(item.id, event.result?.status === 'SUCCESS' ? 'done' : 'stopped');
+    return;
+  }
+  const step = event.step_update;
+  if (!step?.tool_name) return;
+  const key = `task-${step.step_index}`, parameters = step.tool_info?.parameters || {};
+  const finished = ['DONE', 'ERROR'].includes(step.state);
+  if (step.tool_name === 'run_command' && !finished && state.held_command?.key !== key) {
+    clearTimeout(state.held_command?.timer);
+    state.held_command = { key, title: parameters.CommandLine, at: Date.now() };
+    state.held_command.timer = setTimeout(() => list_held_command(state), AGY_BACKGROUND_AFTER_MS);
+    state.held_command.timer.unref?.();
+  }
+  if (step.tool_name === 'run_command' && finished) {
+    if (state.held_command?.key === key) { clearTimeout(state.held_command.timer); state.held_command = null; }
+    listed.end(key, command_state(step));
+  }
+  if (step.tool_name === 'schedule' && !finished && !listed.has(key)) {
+    const seconds = Number(parameters.DurationSeconds) || 0, at = Date.now();
+    listed.set(key, { kind: 'schedule', title: parameters.Prompt, started_at: at, next_at: seconds ? at + seconds * 1000 : 0,
+      schedule: parameters.CronExpression ? `cron (${parameters.CronExpression})` : seconds ? `timer (${seconds}s)` : '' });
+  }
+  if (step.tool_name === 'schedule' && finished) {
+    listed.end(key, step.state === 'ERROR' ? 'failed' : /\bcancel/i.test(step.tool_info?.output || '') ? 'stopped' : 'done');
+  }
+  if (step.tool_name === 'invoke_subagent' && step.state === 'DONE') {
+    for (const agent of step.subagent_info?.subagents || []) {
+      if (agent?.conversation_id) listed.set(agent.conversation_id, { kind: 'agent', title: agent.role || agent.type_name, started_at: Date.now() });
+    }
+  }
+  if (step.state !== 'DONE') return;
+  if (step.tool_name === 'manage_task' && parameters.Action === 'kill') {
+    const index = /\/task-(\d+)$/.exec(String(parameters.TaskId || ''))?.[1];
+    if (index) listed.end(`task-${index}`, 'stopped');
+  }
+  if (step.tool_name === 'manage_subagents') track_subagents(listed, parameters, step.tool_info?.output);
+}
+
+/** What `manage_subagents` says of the listed sub-agents: killed ones stopped, and those its list shows idle done. */
+function track_subagents(listed, parameters, output) {
+  const agents = listed.list().filter(item => item.kind === 'agent').map(item => item.id);
+  if (parameters.Action === 'kill_all') agents.forEach(id => listed.end(id, 'stopped'));
+  if (parameters.Action === 'kill') (parameters.ConversationIds || []).forEach(id => listed.end(id, 'stopped'));
+  if (parameters.Action !== 'list' || typeof output !== 'string' || !output.includes('[')) return;
+  let shown;
+  try { shown = JSON.parse(output.slice(output.indexOf('['))); } catch { return; }
+  for (const agent of Array.isArray(shown) ? shown : []) if (agent?.state === 'idle') listed.end(agent.conversationId, 'done');
+}
+
+/** Read agy's structured diagnostic and its note that the turn only waits for background work. */
+function agy_stderr_line(state, line) {
+  agy_error_line(state, line);
+  if (!AGY_BACKGROUND_WAIT.test(line) || !state.background) return;
+  list_held_command(state);
+  state.background.task.on_activity?.('waiting');
+}
+
 /** Consume only documented lifecycle events, and remember refused operations so the page can name and allow them. */
 function lifecycle(state, event, task, bind) {
+  track_background(state, event, task);
   if (event.event === 'init') bind(event.conversation_id);
   const step = event.step_update;
   // Headless agy ends its turn when an operation needs approval; remember which ones so the page can name and allow them.
@@ -772,7 +869,7 @@ export const antigravity_cli = {
   // A deleted room's session records and any legacy private agy projects are removed with it.
   cleanup: remove_agy_projects, sweep: sweep_legacy_agy_projects,
   deliver,
-  invocation, lifecycle, events, on_stderr: abandon_sign_in, stderr_line: agy_error_line,
+  invocation, lifecycle, events, on_stderr: abandon_sign_in, stderr_line: agy_stderr_line,
   failure_class(reason, state) {
     if (state.network_error === reason && state.retryable_error && !state.stopped && !state.denial) {
       return { resume_session: state.session_id };

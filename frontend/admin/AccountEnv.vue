@@ -71,7 +71,7 @@ async function change(name, install) {
 
 async function save_prompt() {
   busy.value = "prompt";
-  try { await call(`${base.value}/prompt`, { text: prompt.value }); notify("info", t('系统提示词已保存，三家同时生效')); await load(); }
+  try { await call(`${base.value}/prompt`, { text: prompt.value }); notify("info", t('系统提示词已保存，下次唤醒成员起生效')); await load(); }
   catch (failure) { notify("error", failure.message); }
   finally { busy.value = ""; }
 }
@@ -124,7 +124,7 @@ function close_library() { library_open.value = false; load(); }
 
       <div v-if="!owner" class="env-block">
         <button type="button" class="env-toggle" @click="prompt_open = !prompt_open">
-          <strong>{{ t('系统提示词') }}</strong><small>{{ t('三家共用一份（~\\.codex\\AGENTS.md，另两份是它的硬链接）') }}</small>
+          <strong>{{ t('系统提示词') }}</strong><small>{{ t('发给该账号由共议唤醒的所有成员，不写入 CLAUDE.md、AGENTS.md') }}</small>
           <UIcon :name="prompt_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" /></button>
         <template v-if="prompt_open">
           <textarea v-model="prompt" class="panel-input env-prompt" spellcheck="false" />

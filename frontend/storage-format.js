@@ -55,6 +55,7 @@ function normalize_rooms(raw) {
       title: String(item.title || item.room_title || item.name || ""),
       bytes: Math.max(0, Number(item.bytes ?? item.draft_bytes ?? item.total_bytes ?? 0) || 0),
       scratch_bytes: Math.max(0, Number(item.scratch_bytes ?? item.temp_bytes ?? item.cleanable_bytes ?? 0) || 0),
+      unreadable: Math.max(0, Number(item.unreadable ?? 0) || 0),
       members: normalize_members(item.members),
     }))
     : Object.entries(raw).map(([key, value]) => ({
@@ -63,6 +64,7 @@ function normalize_rooms(raw) {
       title: typeof value === "object" ? String(value?.title || "") : "",
       bytes: Math.max(0, Number(typeof value === "object" ? (value?.bytes ?? value?.draft_bytes ?? 0) : value) || 0),
       scratch_bytes: Math.max(0, Number(typeof value === "object" ? (value?.scratch_bytes ?? value?.temp_bytes ?? 0) : 0) || 0),
+      unreadable: Math.max(0, Number(typeof value === "object" ? (value?.unreadable ?? 0) : 0) || 0),
       members: typeof value === "object" ? normalize_members(value?.members) : [],
     }));
   return list.sort((a, b) => b.bytes - a.bytes);

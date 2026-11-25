@@ -18,6 +18,7 @@ import DiscussionEndCard from "./DiscussionEndCard.vue";
 import GoalNoticeCard from "./GoalNoticeCard.vue";
 import ExecutionDenials from "./ExecutionDenials.vue";
 import ExecutionNotes from "./ExecutionNotes.vue";
+import BackgroundTaskList from "./BackgroundTaskList.vue";
 import WorkingText from "./WorkingText.vue";
 import UploadPercent from "./UploadPercent.vue";
 import AttachmentUploadRing from "./AttachmentUploadRing.vue";
@@ -713,6 +714,7 @@ const free_busy = computed(() => {
           : execution.paused_at ? t('已在私聊中暂停，等你补充后接着做') : ACTIVITY_LABELS[execution.activity] || t('正在处理'),
         paused: Boolean(execution.paused_at), working: !execution.stale && !retry, created_at: execution.created_at, adapter: member.adapter, capabilities: execution.capabilities,
         activity: execution.activity, activity_at: execution.activity_at, model: execution.model || "", effort: execution.effort || "", notes: execution.notes || 0, steps: execution.steps || 0, tools: execution.tools || [],
+        background_tasks: execution.background_tasks || [],
         execution_id: execution.id, request_message_id: report?.request_message_id, work_message_id, layout_after: report?.layout_after,
         layout_at: report?.layout_at ?? execution.created_at, background: Boolean(report?.background),
         discussion_request: report?.requests?.find((request) => request.discussion_session_id),
@@ -932,6 +934,12 @@ function line_marks(author, execution, kind = "", at = null) {
   const line = execution?.line;
   const badges = [];
   if (host) badges.push({ key: "host", label: t('主持'), title: t('主持人：接收未点名的消息并分派工作') });
+  if (execution?.followup_of) {
+    badges.push({ key: "followup", label: t('续报'), title: t('执行 #{value1} 留下的后台任务在它结束后才回报，这是成员接着交来的结果', { value1: execution.followup_of }) });
+  }
+  if (execution?.scheduled) {
+    badges.push({ key: "scheduled", label: t('定时回报'), title: t('主持人在自己的软件里设的定时到点后，自己起了一轮交来的结果') });
+  }
   if (line?.kind === "main") {
     badges.push({ key: "main", label: line.by === "user" ? t('主线 · 第 {value1} 位', { value1: line.step }) : t('主线 · 第 {value1} 棒', { value1: line.step }),
       title: t('按发言顺序推进的主线') });
@@ -1690,6 +1698,22 @@ async function replace_draft(start, end, insertion) {
   editor?.setSelectionRange(start + insertion.length, start + insertion.length);
 }
 
+// A room dragged from the sidebar onto the messages or the composer puts a reference to it at the composer's caret, with
+// its id so the host can send to it directly. The sidebar's pointer drag announces itself (web/app.js announce_room_drag).
+const conversation = ref(null);
+const room_drop = ref(null);
+function room_drag({ detail }) {
+  const editor = prompt.value?.textareaRef;
+  const over = detail.phase !== "cancel" && !detail.touch && detail.id !== room.value?.id && editor && !editor.disabled
+    && Boolean(conversation.value?.contains(document.elementFromPoint(detail.x, detail.y)));
+  room_drop.value = over && detail.phase === "move" ? { id: detail.id, title: detail.title } : null;
+  if (!over || detail.phase !== "drop") return;
+  const insertion = `${t("「{title}」（房间 {id}）", { title: detail.title, id: detail.id })} `;
+  replace_draft(editor.selectionStart, editor.selectionEnd, insertion);
+}
+onMounted(() => window.addEventListener("codiscuss:room-drag", room_drag));
+onBeforeUnmount(() => window.removeEventListener("codiscuss:room-drag", room_drag));
+
 /** Where the replacement ends: also swallow one space after the token when the insertion already ends with one. */
 const replace_end = (end, insertion) => insertion.endsWith(" ") && text.value[end] === " " ? end + 1 : end;
 
@@ -2012,7 +2036,7 @@ async function locate(item) {
   locating_timer = setTimeout(() => { locating.value = null; locating_label.value = ""; }, LOCATE_GIVE_UP_MS);
   jump_to(target);
 }
-const QUIET_MEMBER_SOURCES = new Set(["goal", "room_link", "room_relay_sent", "notice"]);
+const QUIET_MEMBER_SOURCES = new Set(["goal", "room_link", "room_link_request", "room_relay_sent", "host_action", "notice"]);
 /** Latest card representing one member's speech in the full layout: ongoing execution first, then latest speech or wake-up, else fallback card. */
 function latest_member_card(name) {
   const items = free_layout.value;
@@ -2055,7 +2079,51 @@ async function locate_member(name) {
   locating_timer = setTimeout(() => { locating.value = null; locating_label.value = ""; }, LOCATE_GIVE_UP_MS);
   jump_to(target.id);
 }
-defineExpose({ locate_member });
+/** Where reading was (and which tab, when not here) before a `#123` reference showed its message in place; the return pill goes back. */
+const peek_origin = ref(null);
+watch(() => room.value?.id, () => { peek_origin.value = null; });
+/** Show one message in place in the full transcript, keeping the first origin while the reader follows further references. */
+async function peek_message(id, back_to_tab = null) {
+  // Message numbers are shared by all rooms: a `#123` quoted from another room is not here, and waiting for it would never land.
+  if (!view.value.messages.some((message) => message.id === id)) {
+    const room_id = room.value?.id;
+    try { await bridge.request(`/api/rooms/${room_id}/messages/${id}`); }
+    catch (error) {
+      if (room.value?.id === room_id) bridge.notify("warning", t('无法定位 #{value1}：{value2}',{ value1: id, value2: error.message }));
+      if (!peek_origin.value) back_to_tab?.();
+      return;
+    }
+    if (room.value?.id !== room_id) return;
+  }
+  if (!peek_origin.value) peek_origin.value = { tail: follow_tail.value, anchor: active_message.value, back_to_tab };
+  if (view.value.query || view.value.source_filter) {
+    await act("filter", { query: "", mention: false, host: false, authors: [], kinds: [] });
+    await nextTick();
+  }
+  located_id = id;
+  locating_label.value = "";
+  locating.value = id;
+  clearTimeout(locating_timer);
+  locating_timer = setTimeout(() => { locating.value = null; locating_label.value = ""; }, LOCATE_GIVE_UP_MS);
+  jump_to(id);
+}
+/** Folded notices and rolled-back records show one line each; their `#123` opens the full text in place. */
+const opened_folded = ref(new Set());
+function toggle_folded(id) {
+  const next = new Set(opened_folded.value);
+  if (!next.delete(id)) next.add(id);
+  opened_folded.value = next;
+}
+/** Go back to where reading was before the peek, then to the tab it came from. */
+function return_from_peek() {
+  const origin = peek_origin.value;
+  peek_origin.value = null;
+  if (!origin) return;
+  if (origin.tail || origin.anchor == null) return_to_latest();
+  else jump_to(origin.anchor);
+  origin.back_to_tab?.();
+}
+defineExpose({ locate_member, peek_message });
 let located_id = null;
 let awaiting_member_locate = null;
 // The message a locate is still heading for, shown over the transcript until it lands; a jump that never lands stops covering it after a while.
@@ -2078,7 +2146,12 @@ function flash_located(card) {
 function sent_summary(message) {
   const relation = message.relay_sent_relation === 'child' ? t('子房间') : message.relay_sent_relation === 'parent' ? t('父房间') : t('关联房间');
   const args = { host: message.relay_sent_host, relation, title: message.relay_sent_title ?? t('已删除的房间'), id: message.relay_sent_message_id };
-  if (message.relay_sent_queued_id) return t('主持人 {host} 向{relation}「{title}」发送了消息（已排队）', args);
+  // relay_sent_state follows a queued message to its delivery and to the other host's reply.
+  const state = message.relay_sent_state;
+  if (state === 'replied') return args.id ? t('主持人 {host} 向{relation}「{title}」发送了消息 #{id}（已回复）', args) : t('主持人 {host} 向{relation}「{title}」发送了消息（已回复）', args);
+  if (state === 'queued') return t('主持人 {host} 向{relation}「{title}」发送了消息（排队中）', args);
+  if (state === 'delivered' && !message.relay_sent_interrupted) return args.id ? t('主持人 {host} 向{relation}「{title}」发送了消息 #{id}（已送达）', args) : t('主持人 {host} 向{relation}「{title}」发送了消息（已送达）', args);
+  if (message.relay_sent_queued_id && !state) return t('主持人 {host} 向{relation}「{title}」发送了消息（已排队）', args);
   if (message.relay_sent_interrupted) return args.id ? t('主持人 {host} 向{relation}「{title}」立即发送了消息 #{id}', args) : t('主持人 {host} 向{relation}「{title}」立即发送了消息', args);
   return args.id ? t('主持人 {host} 向{relation}「{title}」发送了消息 #{id}', args) : t('主持人 {host} 向{relation}「{title}」发送了消息', args);
 }
@@ -2086,8 +2159,32 @@ async function open_sent_room(message) {
   await act('room', message.relay_sent_room);
   if (view.value.room?.id === message.relay_sent_room && message.relay_sent_message_id) await locate({ id: message.relay_sent_message_id });
 }
+// The owner's answers to the host's link requests, shown before the site confirms: { request id: "approved" | "declined" }.
+const link_decisions = ref({});
+const link_state = (message) => message.link_request.state !== 'pending' ? message.link_request.state : link_decisions.value[message.link_request.id] || 'pending';
+function link_request_text(message) {
+  const args = { title: message.link_request.title ?? t('已删除的房间') };
+  const state = link_state(message);
+  if (state === 'approved') return t('主持人申请关联房间「{title}」：已允许', args);
+  if (state === 'declined') return t('主持人申请关联房间「{title}」：已拒绝', args);
+  return t('主持人申请关联房间「{title}」', args);
+}
+/** Allow or decline a host's link request: the card shows the answer at once and goes back only if the site refuses. */
+async function decide_link(message, approve) {
+  const request = message.link_request, room_id = room.value.id;
+  link_decisions.value = { ...link_decisions.value, [request.id]: approve ? 'approved' : 'declined' };
+  let token = "";
+  try { token = localStorage.getItem(`discuss-access:${request.room_id}`) || ""; } catch { /* No other credential. */ }
+  try {
+    await bridge.request(`/api/rooms/${encodeURIComponent(room_id)}/room-link-requests/${request.id}/decide`, { approve, ...(token ? { other_token: token } : {}) });
+  } catch (error) {
+    const { [request.id]: _, ...rest } = link_decisions.value;
+    link_decisions.value = rest;
+    bridge.notify("error", approve ? t('允许关联「{title}」失败：{error}', { title: request.title, error: error.message }) : t('拒绝关联「{title}」失败：{error}', { title: request.title, error: error.message }));
+  }
+}
 function plain_card(message) {
-  return !message.arrangement && !["room_link", "room_relay_sent", "notice"].includes(message.source) && !message.cancelled_turn && !message.cancelled_execution
+  return !message.arrangement && !["room_link", "room_link_request", "room_relay_sent", "host_action", "notice"].includes(message.source) && !message.cancelled_turn && !message.cancelled_execution
     && !(message.slot_card && !message.failure) && !message.withdrawn;
 }
 /** The header filter: a card shows when any checked speaker or card kind matches it. */
@@ -2100,7 +2197,7 @@ function matches_filter(item) {
   if (view.value.host_only && host && item.author === host) return true;
   if (item.slot_card) return false;
   // The host view also carries the program's notices to the host and Goal progress.
-  if (view.value.host_only && (item.kind === "moderation" || ["notice", "goal"].includes(item.source))) return true;
+  if (view.value.host_only && (item.kind === "moderation" || ["notice", "goal", "host_action"].includes(item.source))) return true;
   return view.value.mention_only && [...new Set(["用户", bridge.display_name("用户")])].some((handle) => (item.text || "").includes(`@${handle}`));
 }
 /** A discussion opened mid-room shows the topic where it began (or at the end before anyone answers); otherwise it stays on top. */
@@ -2585,7 +2682,7 @@ const sending_day_label = computed(() => {
 const navigation_groups = computed(() => {
   const groups = [];
   for (const message of transcript_messages.value) {
-    if (message.slot_card || message.arrangement || message.author === "系统" || ["goal", "room_link", "room_relay_sent", "notice"].includes(message.source)) continue;
+    if (message.slot_card || message.arrangement || message.author === "系统" || ["goal", "room_link", "room_link_request", "room_relay_sent", "host_action", "notice"].includes(message.source)) continue;
     const candidate = bridge.round_groups(room.value)?.findLast((item) => item.start_id <= message.id);
     const round = candidate && (candidate.end_id == null || message.id <= candidate.end_id) ? candidate : null;
     const number = round?.number || 0;
@@ -3131,6 +3228,7 @@ function browse_navigation(event) {
 
 /** Return to the newest record and resume following newly arriving messages. */
 function return_to_latest() {
+  peek_origin.value = null;
   sent_position = null;
   send_clipped.value = false;
   close_preview();
@@ -3508,7 +3606,6 @@ function message_actions(message) {
       : { label: t('朗读'), icon: "i-lucide-volume-2", onSelect: () => reader.start(message.id) }] : []),
     // A share page has no address for one message.
     ...(view.value.share ? [] : [{ label: t('复制原文链接'), icon: "i-lucide-link", onSelect: () => copy_message(message) }]),
-    { label: t('查看原文'), icon: "i-lucide-expand", onSelect: () => emit("detail", message.id) },
     ...(can_branch(message) && message.author !== "用户" ? [{ label: t('从这里分支'), icon: "i-lucide-git-branch", onSelect: () => act("fork_room", message.id) }] : []),
   ]];
 }
@@ -3578,11 +3675,11 @@ function message_card(message) {
   const preview = answer_preview(message);
   const body_html = expanded ? message.rendered_text : preview?.html ?? message.rendered_text;
   const visuals = expanded || !preview?.truncated ? message.visual_blocks : null;
-  // Images drawn in the text are left out of the list below, unless a folded preview has cut off their grid.
-  const shown_inline = message.inline_images?.filter((id) => body_html.includes(`data-inline-image="${id}"`)) || [];
+  // Images drawn in the text belong to it: left out of the list below, even when a folded preview has cut them off.
+  const inline_ids = message.inline_images || [];
   const card = {
     message, identity_version: view.value.admin?.identity_version, narrow: narrow.value, reading: reader.state.message_id === message.id,
-    attachments: shown_inline.length ? message.attachments.filter((file) => !shown_inline.includes(file.id)) : message.attachments, body_html, visuals,
+    attachments: inline_ids.length ? message.attachments.filter((file) => !inline_ids.includes(file.id)) : message.attachments, body_html, visuals,
     can_branch: can_branch(message), can_take_back: can_take_back(message), can_retract: can_retract(message), retracting: retracting_id.value === message.id, private_chat: has_private_chat(message),
     editing: edited, editing_plan: edited && editing.value.plan, editing_error: edited && editing.value.error, editing_pending: edited && is_running("rewind_and_send"),
     round_label: message_round_labels.value.get(message.id), expanded, preview,
@@ -3595,7 +3692,8 @@ function message_card(message) {
     armed: armed_cards.has(message.id), menu_open: menu_open_id.value === message.id, locate: view_source_filter.value,
   };
   // Set after the dependencies are read: a fresh object each time would re-render every card; its text and edge stand in for it.
-  const line = line_marks(message.author, execution, message.kind, message.id);
+  // A follow-up's answer says so even once its execution has left the recent list.
+  const line = line_marks(message.author, execution || (message.followup_of || message.scheduled ? { followup_of: message.followup_of, scheduled: message.scheduled } : null), message.kind, message.id);
   line.badges.push(...dispatch_badges(message.id));
   card.deps = [...Object.values(card), ...line.badges.map((badge) => badge.label), line.edge];
   card.line = line;
@@ -3780,7 +3878,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 
 <template>
   <!-- One root element: the workspace hides this tab with v-show, which a fragment root would ignore. -->
-  <section class="channel-conversation" :class="{ 'is-filtered': view.query || view.source_filter }" role="tabpanel" :aria-label="t('消息')">
+  <section ref="conversation" class="channel-conversation" :class="{ 'is-filtered': view.query || view.source_filter }" role="tabpanel" :aria-label="t('消息')">
+    <div v-if="room_drop" class="channel-room-drop" aria-hidden="true"><span><UIcon name="i-lucide-hash" />{{ t('松开以引用房间「{title}」', { title: room_drop.title }) }}</span></div>
   <ExternalMemberDialog v-model:open="pending_seat_open" :member="pending_seat" />
     <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? t('正在筛选…') : t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
     <nav v-if="navigation_sections.length || navigation_working.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
@@ -3824,7 +3923,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :removable="!mark_editing.touch" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? docked_sheet_style() : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
     <!-- A locate far back waits for the earlier cards to render; the end of the room stays covered meanwhile so it is not taken for the result. -->
     <div v-if="locating !== null" class="channel-locating" role="status"><UIcon name="i-lucide-loader" class="animate-spin" />{{ locating_label || t('正在定位到 #{value1}…', { value1: locating }) }}</div>
-    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, notice_runs, message_groups,view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, is_running('rewind_and_send'), is_running('skip_turn'), is_running('pause_discussion'), is_running('retry_delivery'), open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, opened_folded, notice_runs, message_groups,view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, is_running('rewind_and_send'), is_running('skip_turn'), is_running('pause_discussion'), is_running('retry_delivery'), open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, link_decisions, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="!view_query && !view_source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
         <USeparator :label="group.label" class="channel-date-divider" />
@@ -3842,8 +3941,24 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #actions><small v-if="!message.relay_sent_title">{{ t('该房间已删除') }}</small><UButton v-else-if="!view.share" size="xs" variant="link" :label="t('打开房间')" @click.stop="open_sent_room(message)" /></template>
           <div class="markdown-body" v-html="message.rendered_text"></div>
         </ScheduleCard>
-        <ScheduleCard v-else-if="message.source === 'room_link'" icon="i-lucide-link" plain :expandable="false" :label="t('关联房间')">
-          <template #text>{{ message.text }}<UButton v-if="message.link_title !== null" size="xs" variant="link" :label="t('打开房间')" @click="act('room', message.link_room)" /><small v-else>{{ t('该房间已删除') }}</small></template>
+        <!-- Unlinking removes the link, so its cards (and the 已解除 card itself) have no room to open. -->
+        <ScheduleCard v-else-if="message.source === 'room_link'" class="channel-room-link" icon="i-lucide-link" plain :expandable="false" :label="t('关联房间')">
+          <template #text>{{ message.text }}</template>
+          <template #actions><template v-if="message.link_room"><UButton v-if="message.link_title !== null" size="xs" variant="link" :label="t('打开房间')" @click="act('room', message.link_room)" /><small v-else>{{ t('该房间已删除') }}</small></template></template>
+        </ScheduleCard>
+        <ScheduleCard v-else-if="message.source === 'room_link_request' && message.link_request" class="channel-room-link channel-link-request" icon="i-lucide-link" plain :expandable="false" :label="t('关联申请')">
+          <template #text>{{ link_request_text(message) }}<span v-if="message.link_request.reason" class="channel-link-reason">{{ t('理由：{reason}', { reason: message.link_request.reason }) }}</span></template>
+          <template #actions>
+            <template v-if="link_state(message) === 'pending' && can_manage && !view.share">
+              <UButton size="xs" color="neutral" variant="outline" class="pb-action" data-tone="success" :label="t('允许')" :title="t('建立平级关联，两个房间的主持人可以互发消息')" @click.stop="decide_link(message, true)" />
+              <UButton size="xs" color="neutral" variant="ghost" :label="t('拒绝')" @click.stop="decide_link(message, false)" />
+            </template>
+            <small v-else-if="link_state(message) === 'pending'">{{ t('等待房主决定') }}</small>
+          </template>
+        </ScheduleCard>
+        <ScheduleCard v-else-if="message.source === 'host_action'" class="channel-host-action" icon="i-lucide-crown" plain fold :label="t('主持人操作')">
+          <template #text>{{ message.text }}</template>
+          <p>{{ message.text }}</p>
         </ScheduleCard>
         <ScheduleCard v-else-if="message.source === 'notice' && quiet_checkins.has(message.id)" icon="i-lucide-bell" plain :label="t('定时检查')" :toggle-label="t('展开或收起主持人的检查回复')">
           <template #text><span class="channel-checkin-line">{{ t('定时检查 · {value1}：{value2}', { value1: bridge.display_name(quiet_checkins.get(message.id).author), value2: quiet_checkins.get(message.id).text.replace(/^定时检查[：:]\s*/, '') }) }}</span></template>
@@ -3855,7 +3970,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <ul class="channel-withdrawn-list">
             <li v-for="item in notice_runs.runs.get(message.id)" :key="item.id" :data-message-id="item.id">
               <span class="channel-withdrawn-text" :title="item.text">{{ item.text }}</span>
-              <UButton :label="`#${item.id}`" size="xs" variant="link" color="neutral" :aria-label="t('查看程序通知原文 #{value1}', { value1: item.id })" @click="emit('detail', item.id)" />
+              <UButton :label="`#${item.id}`" size="xs" variant="link" color="neutral" :aria-label="t('查看程序通知原文 #{value1}', { value1: item.id })" :aria-expanded="opened_folded.has(item.id)" @click="toggle_folded(item.id)" />
+              <div v-if="opened_folded.has(item.id)" class="markdown-body channel-withdrawn-full" v-html="bridge.render_room_markdown(item.text)"></div>
             </li>
           </ul>
         </ScheduleCard>
@@ -3946,6 +4062,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <button v-if="notes.length > 1" type="button" class="channel-working-count" :aria-expanded="open_working_notes.has(message.execution_id)" :aria-label="open_working_notes.has(message.execution_id) ? t('收起过程说明') : t('展开全部 {value1} 段过程说明', { value1: notes.length })" @click.stop="toggle_working_notes(message.execution_id)">{{ t('{value1} 段', { value1: notes.length }) }}<UIcon name="i-lucide-chevron-down" /></button>
             </p>
           </div></LiveClock>
+          <BackgroundTaskList v-if="message.background_tasks?.length" :tasks="message.background_tasks" />
         </div>
         <!-- Waiting to redeliver keeps the full card: the reason and its buttons do not fit one line. -->
         <UChatMessage v-else-if="message.slot_card && !message.failure" :id="`execution-${message.id}`" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
@@ -3978,6 +4095,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </template>
             <!-- The same row the answer keeps folded after its result: open while working. -->
             <LiveClock v-slot="{ note_map }"><ExecutionNotes v-if="note_map.get(message.execution_id)?.length" live :notes="note_map.get(message.execution_id)" /></LiveClock>
+            <BackgroundTaskList v-if="message.background_tasks?.length" :tasks="message.background_tasks" />
           </template>
         </UChatMessage>
         <section v-else-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :class="message.marks?.edge" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} ${message.undeliverable ? t('无法投递') : t('执行失败')}`">
@@ -4017,7 +4135,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <ul v-if="message.withdrawn === 'rewound' && expanded_rewinds.has(message.id)" class="channel-withdrawn-list">
             <li v-for="item in rewound_runs.runs.get(message.id)" :key="item.id" :data-message-id="item.id">
               <strong>{{ bridge.display_name(item.author) }}</strong><span class="channel-withdrawn-text" :title="item.text">{{ item.text }}</span>
-              <UButton :label="`#${item.id}`" size="xs" variant="link" color="neutral" :aria-label="t('查看已回退的原文 #{value1}', { value1: item.id })" @click="emit('detail', item.id)" />
+              <UButton :label="`#${item.id}`" size="xs" variant="link" color="neutral" :aria-label="t('查看已回退的原文 #{value1}', { value1: item.id })" :aria-expanded="opened_folded.has(item.id)" @click="toggle_folded(item.id)" />
+              <div v-if="opened_folded.has(item.id)" class="markdown-body channel-withdrawn-full" v-html="bridge.render_room_markdown(item.text)"></div>
             </li>
           </ul>
         </div>
@@ -4182,12 +4301,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <!-- Back from the background: the opening load covers the old cards until the room is read again (state.resuming). -->
     <div v-if="view.resuming" class="channel-resume-loading" role="status" :aria-label="t('正在读取消息')"><div class="channel-message-group channel-loading-skeleton grid gap-6 py-6"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div></div>
     <!-- The opening load (state.resuming) covers the cards, so nothing to jump to or quote shows over it. -->
-    <div v-if="!view.resuming && ((transcript_messages.length && (!follow_tail || send_clipped)) || listen_here?.touch || reader.state.message_id)" class="channel-latest-dock">
+    <div v-if="!view.resuming && ((transcript_messages.length && (!follow_tail || send_clipped)) || listen_here?.touch || reader.state.message_id || peek_origin)" class="channel-latest-dock">
       <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
       <button v-if="listen_here?.touch && listen_here.speech" type="button" class="channel-listen-pill" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
       <span v-if="reader.state.message_id && reader.state.loading" class="channel-listen-pill" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ t('加载中') }}</span>
       <button v-else-if="reader.state.message_id" type="button" class="channel-listen-pill" :class="{ 'is-on': reader.state.following }" :aria-pressed="reader.state.following" :title="reader.state.following ? t('手动滚动即取消跟随') : t('页面跟随朗读位置滚动')" @click="reader.state.following ? (reader.state.following = false) : reader.follow()"><UIcon name="i-lucide-locate-fixed" />{{ reader.state.following ? t('跟随中') : t('跟随') }}</button>
       <button v-if="reader.state.reading" type="button" class="channel-listen-pill" :aria-label="t('停止朗读')" @click="reader.stop()"><UIcon name="i-lucide-square" />{{ t('停止') }}</button>
+      <button v-if="peek_origin" type="button" class="channel-listen-pill" @click="return_from_peek"><UIcon name="i-lucide-undo-2" />{{ t('返回原位置') }}</button>
       <UButton v-if="transcript_messages.length && (!follow_tail || send_clipped)" icon="i-lucide-arrow-down" color="neutral" variant="outline" :aria-label="t('回到最新消息')" class="channel-latest-button" @click="return_to_latest" />
     </div>
     <div ref="composer_dock" class="channel-composer-dock"><div v-if="view.share || view.destroying.includes(view.room?.id)" class="channel-composer-column channel-share-composer">

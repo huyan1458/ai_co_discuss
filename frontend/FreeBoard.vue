@@ -10,6 +10,7 @@ import { t } from './i18n.js';
 /** Right-rail board of a free room, laid out like the discussion progress board. */
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
+import LinkedRooms from "./LinkedRooms.vue";
 import WorkflowControl from "./WorkflowControl.vue";
 import { active_workflow } from "./workflow-state.js";
 import StartDiscussionDialog from "./StartDiscussionDialog.vue";
@@ -18,6 +19,8 @@ import { format_duration } from "./LimitPicker.vue";
 import ProgressBoard from "./ProgressBoard.vue";
 import SpeakingOrder from "./SpeakingOrder.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
+import MemberTextDialog from "./MemberTextDialog.vue";
+import { MAX_EXPERT_PROMPT } from "../runner/expert_prompts.mjs";
 import MemberNameEdit from "./MemberNameEdit.vue";
 import { busy, member_actions } from "./member-actions.js";
 import MemoBlock from "./memo-block.js";
@@ -233,7 +236,8 @@ const task = computed(() => {
   const message = (view.value.messages || []).find((item) => item.id === request.message_id);
   // A goal wake-up is not a task of its own; the goal section already says what the host is pursuing.
   if (message?.source === "goal") return "";
-  return message ? message.text : `#${request.message_id}`;
+  // Blank lines between paragraphs only waste the narrow rail (user 2026-11-25, #10825).
+  return message ? message.text.trim().replace(/\n\s*\n+/g, "\n") : `#${request.message_id}`;
 });
 const task_expanded = computed({
   get: () => expanded_tasks.has(room.value.id),
@@ -254,11 +258,13 @@ function member_row_key(member, state) {
 }
 
 /** The rail's quick entry to a member's actions; the room overview lays the same list out in full. */
+/** The row's menu ("…" and right-click), led by locating the latest speech: a click on the row no longer does it (user 2026-11-25, #10558). */
 function member_menu(member) {
-  return member_actions(member, { view: view.value, act, describe,
+  const locate = { label: t("定位最新发言"), icon: "i-lucide-locate-fixed", onSelect: () => locate_member(member.name) };
+  return [[locate], ...member_actions(member, { view: view.value, act, describe,
     external: (target) => { external_member.value = target; external_reinvite.value = false; external_open.value = true; },
     revoke: (target) => revoke_member(bridge, act, target),
-    copy_link: async (target) => { if (await copy_seat_link(bridge, room.value.id, target.id)) bridge.notify("info", t("已复制邀请链接")); } });
+    copy_link: async (target) => { if (await copy_seat_link(bridge, room.value.id, target.id)) bridge.notify("info", t("已复制邀请链接")); } })];
 }
 
 const inviting = ref(false);
@@ -292,6 +298,15 @@ const describing = ref(""), describing_saving = ref(false);
 const describing_anchor = ref(null);
 const board = ref(null);
 const can_describe = computed(() => Boolean(view.value.access?.can_manage));
+// The member whose own prompt (专属提示词) is open: only a member this computer wakes has one; a workflow member's comes
+// from its card and is shown read-only.
+const prompting = ref(""), prompt_draft = ref(""), prompt_saving = ref(false);
+const local_profile = (name) => view.value.launch.room_models?.participants?.[name] || null;
+const prompt_saved = computed(() => local_profile(prompting.value)?.system_prompt || "");
+function can_prompt(member) {
+  const profile = local_profile(member.name);
+  return Boolean(can_describe.value && member.access === "runner" && profile && profile.project_access !== "own" && !external_of(member));
+}
 const ANCHORED_WIDTH = 420, ANCHORED_HEIGHT = 560, ANCHOR_GAP = 8, ANCHOR_MARGIN = 16;
 
 /** Open the name and description editor of one member. */
@@ -364,6 +379,48 @@ function card_edit() {
   card_close();
   describe(name);
 }
+function card_prompt() {
+  const { name } = card.value;
+  card_close();
+  prompt_draft.value = local_profile(name)?.system_prompt || "";
+  prompting.value = name;
+}
+/** Closes at once; the bridge shows the new text until the local service confirms, and a refusal is told and undone. */
+async function save_prompt() {
+  const name = prompting.value, system_prompt = prompt_draft.value.trim();
+  prompting.value = "";
+  prompt_saving.value = true;
+  try { await bridge.set_member_prompt({ name, system_prompt }); }
+  catch (error) { bridge.notify("error", error.message); }
+  finally { prompt_saving.value = false; }
+}
+/**
+ * A tap on a member row opens its card on a touch screen, where there is no hover; the card holds "定位最新发言".
+ * With a mouse a click does nothing, so a stray click never moves the reading position (user 2026-11-25, #10558).
+ * The card sits left of the rail when there is room, otherwise under the row across the screen (the phone drawer).
+ */
+async function tap_member(name, event) {
+  if (can_hover || describing.value) return;
+  const row = event.currentTarget.getBoundingClientRect();
+  const rail = board.value?.getBoundingClientRect();
+  const beside = rail && !board.value.closest(".progress-drawer") && rail.left - ANCHOR_GAP - ANCHOR_MARGIN >= CARD_WIDTH;
+  card.value = beside ? { name, top: row.top, right: window.innerWidth - rail.left + ANCHOR_GAP }
+    : { name, top: row.bottom + ANCHOR_GAP, left: ANCHOR_MARGIN / 2, wide: true };
+  await nextTick();
+  if (card.value?.name !== name) return;
+  const height = card_element.value?.offsetHeight || 0;
+  if (card.value.wide && card.value.top + height > window.innerHeight - ANCHOR_MARGIN) card.value.top = Math.max(ANCHOR_MARGIN, row.top - ANCHOR_GAP - height);
+  else card.value.top = Math.max(ANCHOR_MARGIN, Math.min(card.value.top, window.innerHeight - height - ANCHOR_MARGIN));
+}
+/** On a touch screen the card closes with a tap anywhere outside it. */
+function tap_outside(event) {
+  if (card.value && !card_element.value?.contains(event.target)) card_close();
+}
+watch(() => Boolean(card.value) && !can_hover, (open) => {
+  if (open) setTimeout(() => document.addEventListener("pointerdown", tap_outside, true));
+  else document.removeEventListener("pointerdown", tap_outside, true);
+});
+onBeforeUnmount(() => document.removeEventListener("pointerdown", tap_outside, true));
 /** Jump the transcript to this member's latest speech or ongoing execution. */
 function locate_member(name) {
   card_close();
@@ -438,9 +495,11 @@ watch(() => room.value.id, () => { starting.value = false; });
     </section>
     <section class="pb-section" :aria-label="t('发言顺序')">
       <h4>{{ t('发言顺序') }}</h4>
-      <SpeakingOrder :away="away_names" :round="current_round" @enter="card_enter" @leave="card_leave" @press="card_close" @select="locate_member">
+      <SpeakingOrder :away="away_names" :round="current_round" @enter="card_enter" @leave="card_leave" @press="card_close" @select="tap_member">
         <template #default="{ item }">
           <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state)]">
+            <!-- Right-click opens the same menu as "…" (user 2026-11-25, #10549). -->
+            <UContextMenu :items="member_menu(member)" :ui="{ content: 'channel-menu' }"><div class="pb-member-context">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body" :data-member="member.name">
               <div class="pb-member-name"><MemberNameEdit :name="member.name" :editable="can_describe" /><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small translate="no" class="notranslate" :title="member_tag(member, false) || undefined">{{ member_tag(member) }}</small></div>
@@ -448,6 +507,7 @@ watch(() => room.value.id, () => { starting.value = false; });
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
             <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="t('{value1} 的更多操作', { value1: member.name })" /></UDropdownMenu>
+            </div></UContextMenu>
           </MemoBlock>
         </template>
       </SpeakingOrder>
@@ -464,6 +524,7 @@ watch(() => room.value.id, () => { starting.value = false; });
       </ul>
       <UButton v-if="!room.archived" icon="i-lucide-plus" :label="t('邀请 AI 加入')" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-action-add" @click="invite_workflow_id = ''; inviting = true" />
     </section>
+    <LinkedRooms />
     <section v-if="!room.archived && !discussion && !goal" class="pb-actions pb-start-actions" :aria-label="t('操作')">
       <div class="pb-start-pair">
         <UButton icon="i-lucide-messages-square" :label="t('开启讨论')" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" :title="t('由主持人推进成员轮流发言，到上限或结束时停止')" :disabled="!can_start" @click="starting = true" />
@@ -479,9 +540,14 @@ watch(() => room.value.id, () => { starting.value = false; });
   <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
     :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving" :anchor="describing_anchor"
     @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
+  <MemberTextDialog :open="Boolean(prompting)" v-model:draft="prompt_draft" :title="t('{value1} 的专属提示词', { value1: bridge.display_name(prompting || ' ') })"
+    :description="in_workflow(prompting) ? t('来自工作流「{value1}」，每次执行时按工作流里的这张卡片发送；请在“工作流”一行点“编辑”修改，修改会作用于所有启用它的房间。', { value1: workflow?.label || '' }) : t('只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。')"
+    :label="t('{value1} 的专属提示词', { value1: bridge.display_name(prompting || ' ') })" :placeholder="t('例如：回答先给结论，控制在三段以内。')" :max="MAX_EXPERT_PROMPT" :rows="8"
+    :readonly="in_workflow(prompting)" :note="in_workflow(prompting) ? t('只读') : prompt_draft.trim() ? t('只发给这位专家，Ctrl + Enter 保存') : t('留空表示不使用')"
+    :changed="prompt_draft.trim() !== prompt_saved" :saving="prompt_saving" @update:open="(open) => { if (!open) prompting = ''; }" @save="save_prompt" />
   <Teleport to="body">
     <Transition name="pb-card-pop">
-      <aside v-if="card && card_member" ref="card_element" class="pb-member-card" :style="{ top: `${card.top}px`, right: `${card.right}px` }" :aria-label="t('{value1} 的成员卡片', { value1: bridge.display_name(card.name) })" @mouseenter="card_keep" @mouseleave="card_leave">
+      <aside v-if="card && card_member" ref="card_element" class="pb-member-card" :class="{ 'is-wide': card.wide }" :style="card.wide ? { top: `${card.top}px`, left: `${card.left}px` } : { top: `${card.top}px`, right: `${card.right}px` }" :aria-label="t('{value1} 的成员卡片', { value1: bridge.display_name(card.name) })" @mouseenter="card_keep" @mouseleave="card_leave">
         <header class="pb-card-head">
           <UAvatar :src="bridge.identities[card.name]?.icon" :text="bridge.identities[card.name]?.initials" :alt="card.name" size="md" class="channel-avatar" :class="bridge.identities[card.name]?.style" />
           <div class="pb-card-title">
@@ -496,6 +562,7 @@ watch(() => room.value.id, () => { starting.value = false; });
         <div class="pb-card-actions">
           <button type="button" class="pb-card-chip" @click="locate_member(card.name)"><UIcon name="i-lucide-locate-fixed" />{{ t('定位最新发言') }}</button>
           <button v-if="can_describe && !room.archived" type="button" class="pb-card-chip" @click="card_edit"><UIcon name="i-lucide-user-pen" />{{ t('编辑名称与描述') }}</button>
+          <button v-if="can_prompt(card_member) && !room.archived" type="button" class="pb-card-chip" @click="card_prompt"><UIcon name="i-lucide-scroll-text" />{{ t('专属提示词') }}</button>
         </div>
       </aside>
     </Transition>
@@ -504,6 +571,7 @@ watch(() => room.value.id, () => { starting.value = false; });
 </template>
 
 <style scoped>
+.pb-member-context { display: contents; }
 .pb-member.is-away { opacity: .6; }
 .pb-member.is-locatable { cursor: pointer; }
 /* The speaking order bleeds 8px past the section on each side (SpeakingOrder.vue); this list does the same so rows line up. */
@@ -527,6 +595,7 @@ watch(() => room.value.id, () => { starting.value = false; });
 .pb-member-card { position: fixed; z-index: 60; display: grid; gap: 14px; width: 320px; max-height: min(70vh, 480px); padding: 14px 16px 16px; overflow: auto;
   border: 1px solid var(--channel-edge-float, var(--ui-border-muted)); border-radius: 12px; background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-float, 0 12px 32px rgb(0 0 0 / .3));
   color: var(--ui-text); font-size: 13px; line-height: 1.6; overscroll-behavior: contain; }
+.pb-member-card.is-wide { right: auto; width: calc(100vw - 16px); }
 .pb-card-pop-enter-active { transition: opacity .12s ease-out, transform .12s ease-out; }
 .pb-card-pop-leave-active { transition: opacity .1s ease-in; }
 .pb-card-pop-enter-from { opacity: 0; transform: translateX(4px); }

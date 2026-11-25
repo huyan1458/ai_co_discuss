@@ -312,8 +312,12 @@ async function load(item) {
     // An Office attachment is read whole by its preview, never decoded as text.
     const binary = media_of(item.path) || document_kind_of(item.path);
     const result = binary ? { text: null, reason: "", size: item.attachment?.size ?? item.metadata?.size, modified_at: item.attachment?.created_at || item.metadata?.modified_at }
-      : item.attachment ? await read_attachment(item.attachment) : await bridge.read_room_files(item.room_id, item.path, 0, "", item.root || 0);
-    if (item.request === request) item.data = result;
+      : item.attachment ? await read_attachment(item.attachment, /\.html?$/i.test(item.path)) : await bridge.read_room_files(item.room_id, item.path, 0, "", item.root || 0);
+    if (item.request === request) {
+      const { page, ...data } = result;
+      item.data = data;
+      if (page) item.page = page;
+    }
     // The computer inlines what a project's HTML file refers to, so it renders as it would opened on that computer;
     // for Markdown it reads the images the file shows.
     await page_read;
@@ -1204,7 +1208,7 @@ onBeforeUnmount(() => {
         <UButton :label="t('保存')" size="xs" :loading="tab.edit.saving" @click="save_edit" />
         <UButton :label="t('放弃修改')" color="neutral" variant="ghost" size="xs" :disabled="tab.edit.saving" @click="cancel_edit" />
       </div>
-      <p v-else-if="preview?.truncated && !(format === 'html' && tab?.page && !source) && !(media_kind && !source) && !office_kind" class="project-editor-banner"><UIcon name="i-lucide-info" />{{ t('文件较大，仅显示前 {value1}（共 {value2}）', { value1: file_size(preview.limit), value2: file_size(preview.size) }) }}<template v-if="format === 'html'">{{ t('，HTML 不渲染不完整的内容') }}</template></p>
+      <p v-else-if="preview?.truncated && !(format === 'html' && tab?.page && !source) && !(media_kind && !source) && !office_kind" class="project-editor-banner"><UIcon name="i-lucide-info" />{{ t('文件较大，仅显示前 {value1}（共 {value2}）', { value1: file_size(preview.limit), value2: file_size(preview.size) }) }}<template v-if="format === 'html' && !tab?.page">{{ t('，HTML 不渲染不完整的内容') }}</template></p>
       <p v-else-if="html_notice && !source" class="project-editor-banner" :title="html_notice"><UIcon name="i-lucide-info" /><span class="project-editor-banner-text">{{ html_notice }}</span></p>
 
       <div ref="editor_body" class="project-editor-body" :style="{ '--file-font-scale': font_scale }">

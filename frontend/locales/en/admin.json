@@ -110,7 +110,6 @@
   "AI 环境已初始化": "AI environment initialized",
   "已安装": "Installed",
   "已移除": "Removed",
-  "系统提示词已保存，三家同时生效": "System prompt saved; applies to all three apps",
   "技能": "Skills",
   "~\\.agents\\skills，由 Claude Code、Codex、Antigravity 共用": "~\\.agents\\skills, shared by Claude Code, Codex and Antigravity",
   "由 Claude Code、Codex、Antigravity 共用": "Shared by Claude Code, Codex and Antigravity",
@@ -131,7 +130,6 @@
   "技能库中的技能均已安装。": "All skills in the library are installed.",
   "安装": "Install",
   "系统提示词": "System prompt",
-  "三家共用一份（~\\.codex\\AGENTS.md，另两份是它的硬链接）": "One shared file (~\\.codex\\AGENTS.md; the other two are hard links)",
   "保存": "Save",
   "集中存放导入的技能，可在各账号的技能分区中安装。": "Imported skills are stored here and can be installed from each account's Skills section.",
   "模型 API（API 成员调用）": "Model APIs (used by API members)",
@@ -480,5 +478,7 @@
   "其中可回收执行临时文件 {size}；单房间上限 {room_limit}。清理历史草稿请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup。": "Includes {size} of reclaimable temporary run files; per-room limit is {room_limit}. To clean older drafts, run $codiscuss-draft-cleanup in an AI chat outside the room.",
   "单房间草稿上限 {room_limit}；历史草稿和成品不会自动删除，需要清理时请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup。": "Per-room draft limit is {room_limit}; older drafts and deliverables are kept. To clean them, run $codiscuss-draft-cleanup in an AI chat outside the room.",
   "房间记录与附件（local/）": "Room records & attachments (local/)",
-  "保存房间消息、事件与附件原件，计入 10 GiB 数据上限；程序不会自动删除，如需释放空间请先导出备份再销毁旧房间。": "Stores room messages, events and original attachments, counted toward the 10 GiB data limit. Never deleted automatically—export a backup and destroy old rooms to free space."
+  "保存房间消息、事件与附件原件，计入 10 GiB 数据上限；程序不会自动删除，如需释放空间请先导出备份再销毁旧房间。": "Stores room messages, events and original attachments, counted toward the 10 GiB data limit. Never deleted automatically—export a backup and destroy old rooms to free space.",
+  "发给该账号由共议唤醒的所有成员，不写入 CLAUDE.md、AGENTS.md": "Sent to every member CoDiscuss wakes for this account; CLAUDE.md and AGENTS.md are not written",
+  "系统提示词已保存，下次唤醒成员起生效": "System prompt saved; it applies from the next wake-up"
 }

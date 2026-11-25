@@ -42,9 +42,15 @@
  *   read from the software's output); `resume` (a stopped turn can go on in the same session, so the owner may pause
  *   a room execution from the private chat without ending it; not yet measured on real software); `close_grace_ms` (after a
  *   normal completion its process is left this long to record the receipt it got before it is stopped; measured per
- *   software, absent means it is stopped at once). `tool_lockdown`: a task with `tool_lockdown: true` can be confined
+ *   software, absent means it is stopped at once). `schedule_reports`: where a schedule the member set in its own
+ *   software can be followed when it fires, so the host's comes into the room (`'window'`: only a delivery into its open
+ *   window; absent: none). `tool_lockdown`: a task with `tool_lockdown: true` can be confined
  *   to the codiscuss subcommands, with no other local file access, no web and no MCP (see `lockdown_support`; not yet
  *   measured on real software, 2026-11-15).
+ * - `capabilities.system_prompt`: where the member's own prompt can go into the software's system prompt: `session`
+ *   (set when the runner starts a new session and kept by it after: Claude Code's snapshot, a Codex thread's developer
+ *   instructions; a changed prompt then goes into the next task text), `launch` (rebuilt at every launch, so always
+ *   current); absent when it cannot, and the prompt goes into the first task sent to each session instead.
  * - `lockdown_hint`: why it cannot be confined, shown when a confined task is refused.
  * - `session_family`: profiles sharing one session store; switching among them keeps the conversation.
  * - `windows_command`: how its shell names the codiscuss CLI on Windows.
@@ -97,7 +103,7 @@ export const ADAPTER_PROFILES = {
     lockdown_hint: '沙箱只读档仍可读整个磁盘、运行任意只读命令，无法只放行 codiscuss 命令',
     sandbox_needs_desktop: true,
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, limits_directories: true, ripgrep: true, chat: true, resume: true, images: true, capture: FINAL_REMARK,
-      tool_lockdown: false,
+      tool_lockdown: false, system_prompt: 'session',
       // Codex CLI 0.163 records a command's output in its session about 0.1 s after reporting it done (2026-11-15).
       close_grace_ms: 1500 },
   },
@@ -120,7 +126,9 @@ export const ADAPTER_PROFILES = {
     // Claude Code runs commands through bash on Windows too, where the npm shim works without .cmd.
     windows_command: 'codiscuss',
     // Confined by --restricted --safe-mode --tools and dontAsk (claude_lockdown); a taken-over manual member keeps its own window.
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, resume: true, images: true, capture: FINAL_REMARK, tool_lockdown: true },
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, resume: true, images: true, capture: FINAL_REMARK, tool_lockdown: true, system_prompt: 'session',
+      // Only the window's session log marks a fire; a `-p` process loses its schedules when it exits (2.1.326).
+      schedule_reports: 'window' },
     // The card shows only Claude's text between tool calls, not its thinking; without this rule it wrote one line per
     // five to fourteen calls, often in English (2026-11-21 session record).
     task_rules: () => '多步任务中，转入新的一段工作时（如读完代码开始修改、改完开始验证）先用一句话说明再继续：'
@@ -158,14 +166,16 @@ export const ADAPTER_PROFILES = {
     // Pi passes the level as each protocol's own reasoning parameter; it clamps xhigh / max to high without a per-model map,
     // so only the three levels every protocol takes are offered. A chat endpoint without a reasoning parameter ignores it.
     efforts: ['low', 'medium', 'high'], models: false, access_levels: ['read', 'write'], per_tool_allow: false, adopt: '', host_existing: false,
-    access_hints: { read: '可读取网页，本机保存了 DeepSeek API Key 时可联网搜索（由 DeepSeek 计费）；用接入程序的文件工具读取、搜索项目文件，可运行工作流登记的只读命令',
-      write: '可读取网页，本机保存了 DeepSeek API Key 时可联网搜索（由 DeepSeek 计费）；用 Pi 自带的读写、编辑与命令行在项目里工作，和本地 CLI 可写一致；Pi 没有审批，可写即可直接运行命令' },
+    access_hints: { read: '用 Pi 自带的读取工具读项目；写入只放行草稿目录，命令只放行网站命令（由接入程序拦截）；可读取网页，本机保存了 DeepSeek API Key 时可联网搜索（由 DeepSeek 计费）',
+      write: '用 Pi 自带的读写、编辑与命令行在项目里工作，和本地 CLI 可写一致；Pi 没有审批，可写即可直接运行命令；可读取网页，本机保存了 DeepSeek API Key 时可联网搜索（由 DeepSeek 计费）' },
     unsupported_hints: { auto: 'Pi 没有需要软件审批的操作，可写即可直接运行命令', full: 'Pi 没有需要软件审批的操作，可写即可直接运行命令' },
-    // Runs in the Pi harness (api_pi.mjs), which keeps a session the runner cuts like a CLI's.
-    // Whether a model reads images depends on the model, not the protocol: the owner says so on the card (`image_input`).
-    // Its answer is only what submit_chat saves (an unknown result is recovered by the same submission), never its last text.
-    // Confined, it keeps only the room tools: no project file tools, registered commands or image tools (api_lockdown).
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, file_tools: true, limits_directories: true, chat: true, images: 'configured', capture: false, tool_lockdown: true },
+    // Runs as Pi itself (api_pi.mjs), like a CLI member (user 2026-11-25): Pi's own tools and skills, codiscuss in its
+    // Git Bash with the credential in its environment, the last remark captured, a private chat a turn of its session.
+    // Pi has no sandbox; read-only is enforced by our extension's tool_call check. Whether a model reads images depends on the model, not
+    // the protocol: the owner says so on the card (`image_input`). Confined (lent to another computer's room), it keeps
+    // only our room tools (api_lockdown).
+    windows_command: 'codiscuss',
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, chat: true, images: 'configured', capture: FINAL_REMARK, tool_lockdown: true, system_prompt: 'launch' },
   },
 };
 

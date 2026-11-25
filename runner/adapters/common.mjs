@@ -801,3 +801,50 @@ export function remove_session_files(paths) {
   }
   return removed;
 }
+
+/** Kinds and states of the background work an adapter reports; the website and pages know only these. */
+export const BACKGROUND_KINDS = ['agent', 'command', 'monitor', 'schedule'];
+export const BACKGROUND_STATES = ['running', 'done', 'failed', 'stopped'];
+/** At most this many items, and this long a title: the newest items are kept. */
+export const MAX_BACKGROUND_TASKS = 20;
+export const MAX_BACKGROUND_TITLE = 120;
+
+/**
+ * The background work one execution's software left running or finished (sub-agents, background commands, monitors,
+ * schedules), as one generic list `[{id, kind, title, state, started_at, ended_at, next_at, schedule}]` (times in ms,
+ * 0 when unknown), passed to `task.on_background_tasks(list)` whenever it changes. Adapters fill it from whatever their
+ * software reports; the product layer never learns which software it was.
+ */
+export class BackgroundTasks {
+  constructor(task) { this.task = task; this.items = new Map(); this.sent = ''; }
+  /** Add or update one item by the adapter's own key; a missing field keeps its earlier value. */
+  set(id, fields) {
+    if (!this.task.on_background_tasks || !id) return;
+    const earlier = this.items.get(id) || { id: String(id), kind: 'command', title: '', state: 'running', started_at: 0, ended_at: 0, next_at: 0, schedule: '' };
+    const item = { ...earlier, ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) };
+    item.title = String(item.title || '').replace(/\s+/g, ' ').trim().slice(0, MAX_BACKGROUND_TITLE).replace(/[\uD800-\uDBFF]$/, '');
+    item.schedule = String(item.schedule || '').slice(0, MAX_BACKGROUND_TITLE);
+    if (item.state !== 'running' && !item.ended_at) item.ended_at = Date.now();
+    this.items.delete(id);
+    this.items.set(id, item);
+    while (this.items.size > MAX_BACKGROUND_TASKS) this.items.delete(this.items.keys().next().value);
+    this.report();
+  }
+  /** End one item that is still running. */
+  end(id, state, at = Date.now()) {
+    if (this.items.get(id)?.state === 'running') this.set(id, { state, ended_at: at });
+  }
+  has(id) { return this.items.has(id); }
+  list() { return [...this.items.values()]; }
+  report() {
+    const list = this.list(), text = JSON.stringify(list);
+    if (text === this.sent) return;
+    this.sent = text;
+    this.task.on_background_tasks?.(list);
+  }
+}
+
+/** The state a task notification's status means: completed, failed, or stopped (killed). */
+export function background_state(status) {
+  return status === 'completed' ? 'done' : status === 'failed' ? 'failed' : ['killed', 'stopped', 'cancelled'].includes(status) ? 'stopped' : 'done';
+}

@@ -68,10 +68,16 @@ markdown.core.ruler.push("source_lines", (state) => {
 });
 markdown.renderer.rules.table_open =() => '<div class="markdown-table" role="region" aria-label="表格，可横向滚动" tabindex="0"><table>\n';
 markdown.renderer.rules.table_close = () => "</table></div>\n";
-// Cell content sits in a width-capped block, so a table keeps its natural width (scrolling sideways when wider than the card)
-// while long cells still wrap instead of stretching into one line.
+// Cell content sits in a block whose floor width follows its text (markdown.css clamps it), so once a wide table
+// scrolls sideways a column of sentences keeps a readable line instead of shrinking to a few characters.
+const CJK_PATTERN = /[⺀-鿿가-힯＀-￯]/u;
+const cell_text_width = (text) => [...text].reduce((width, character) => width + (CJK_PATTERN.test(character) ? 1 : 0.55), 0);
 for (const cell of ["th", "td"]) {
-  markdown.renderer.rules[`${cell}_open`] = (tokens, index, options, environment, renderer) => `${renderer.renderToken(tokens, index, options)}<div class="markdown-cell">`;
+  markdown.renderer.rules[`${cell}_open`] = (tokens, index, options, environment, renderer) => {
+    const inline = tokens[index + 1];
+    const width = inline?.type === "inline" ? cell_text_width(inline.content) : 0;
+    return `${renderer.renderToken(tokens, index, options)}<div class="markdown-cell" style="--cell-text-width:${width.toFixed(1)}em">`;
+  };
   markdown.renderer.rules[`${cell}_close`] = (tokens, index, options, environment, renderer) => `</div>${renderer.renderToken(tokens, index, options)}`;
 }
 // Code blocks carry a copy button; the page copies the adjacent <pre> text through a delegated click on [data-copy-code].

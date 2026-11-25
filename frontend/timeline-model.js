@@ -611,6 +611,8 @@ export function event_text(event, name) {
     case "execution.created": return t('执行 E{value1}（{value2}）{value3}', { value1: data.execution_id, value2: who, value3: status(EXECUTION_STATUS, data.status) });
     case "execution.changed": return t('执行 E{value1}（{value2}）{value3} → {value4}{value5}', { value1: data.execution_id, value2: who, value3: status(EXECUTION_STATUS, data.from_status), value4: status(EXECUTION_STATUS, data.status), value5: data.result ? `：${data.result}` : "" });
     case "execution.retry": return data.stopped ? t('执行 E{value1} 停止自动重试', { value1: data.execution_id }) : t('执行 E{value1} 第 {value2} 次重试{value3}', { value1: data.execution_id, value2: data.attempt, value3: data.reason ? `：${data.reason}` : "" });
+    case "execution.scheduled": return t('执行 E{value1} 是主持人自设定时（{value2}）到点后的定时回报', { value1: data.execution_id, value2: data.schedule || data.task_id });
+    case "execution.followup": return t('执行 E{value1} 是执行 E{value2} 的续报（它留下的后台任务回报了）', { value1: data.execution_id, value2: data.source_id });
     case "execution.late_answer": return t('执行 E{value1} 作废后迟到的回答：{value2}', { value1: data.execution_id, value2: data.text });
     case "batch.opened": return t('批次 #{value1} 开启（{value2} 派出，链 #{value3}）', { value1: data.batch_id, value2: name(data.host_id), value3: data.chain_id });
     case "batch.settled": return t('批次 #{value1} 已收齐', { value1: data.batch_id });

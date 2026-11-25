@@ -57,7 +57,10 @@ export function remote_roots(projects) {
  */
 export function remote_directory(path, { roots, home }) {
   // Say why and exactly how to allow it: the device asking cannot change the list itself (Design_远程访问安全.md).
-  const refused = new Error(t('出于安全考虑，手机、平板等其他设备只能使用这台电脑“常用项目”里的目录，「{path}」不在其中，所以没有执行。请回到这台电脑上打开共议网页：在“新建房间”的项目目录里填入这个路径，点路径右侧的“加入常用项目”，之后其他设备就能直接选它；也可以加入它的上级目录。', { path: typeof path === 'string' ? path : '' }));
+  // The page shows it in its own language from the template; the message itself follows this computer's language.
+  const template = '出于安全考虑，手机、平板等其他设备不能新增这台电脑“常用项目”以外的目录，「{path}」不在其中，所以没有执行。房间和分组里已有的目录仍可使用或移除；要新增这个路径，请回到这台电脑上打开共议网页：在“新建房间”的项目目录里填入它，点路径右侧的“加入常用项目”，之后其他设备就能直接选它；也可以加入它的上级目录。';
+  const params = { path: typeof path === 'string' ? path : '' };
+  const refused = Object.assign(new Error(t(template, params)), { error_text: { template, params } });
   if (!plain_absolute(path)) throw refused;
   let real;
   try { real = realpathSync(path); } catch { throw refused; }
@@ -67,6 +70,26 @@ export function remote_directory(path, { roots, home }) {
   try { service = realpathSync(home); } catch { service = home; }
   if (inside(service, real)) throw refused;
   return real;
+}
+
+/** Whether two folder paths name the same folder as written; Windows compares without case or separator style. */
+function same_directory(left, right) {
+  const key = path => {
+    const text = String(path).replace(/[\\/]+$/, '');
+    return process.platform === 'win32' ? text.replace(/\//g, '\\').toLowerCase() : text;
+  };
+  return typeof left === 'string' && typeof right === 'string' && key(left) === key(right);
+}
+
+/**
+ * Require each folder another device names to be inside a saved project, unless it is one of `kept`: folders this
+ * computer already holds for the room or group, which may stay in use or be removed but never be added to from afar.
+ */
+export function guard_remote_directories(paths, { projects, home, kept = [] }) {
+  const roots = remote_roots(projects);
+  for (const path of paths || []) {
+    if (!kept.some(item => same_directory(item, path))) remote_directory(path, { roots, home });
+  }
 }
 
 /** Whether another device may see what was made in a folder: it still exists here, inside a saved project. */
@@ -89,15 +112,15 @@ function walk(value, visit) {
  * a program location not already saved here, or 全放开 saved as a default. A device reaches this point only unlocked
  * by its passkey that day (or, lacking passkey support, paired at this computer), so a room may be given any level.
  */
-export function guard_remote_request(command, input, { projects, participants, home }) {
+export function guard_remote_request(command, input, { projects, participants, home, kept = [] }) {
   if (LOCAL_ONLY_ACTIONS.has(command)) throw new Error('此操作只能在这台电脑上执行');
   if (!input || typeof input !== 'object') return;
   const roots = remote_roots(projects);
   const saved = Object.values(participants || {});
   const known = Object.fromEntries(SOFTWARE_FIELDS.map(field => [field, new Set(saved.map(profile => profile[field]).filter(Boolean))]));
   walk(input, (key, value) => {
-    if (key === 'cwd' && value) remote_directory(value, { roots, home });
-    else if (key === 'extra_directories' && Array.isArray(value)) value.forEach(directory => remote_directory(directory, { roots, home }));
+    if (key === 'cwd' && value) guard_remote_directories([value], { projects, home, kept });
+    else if (key === 'extra_directories' && Array.isArray(value)) guard_remote_directories(value, { projects, home, kept });
     else if (SOFTWARE_FIELDS.includes(key) && value && !known[key].has(value)) throw new Error(`其他设备不能更改软件位置（${key}），请在电脑上设置`);
     // 全放开 may be given to a room's member; it never becomes a saved default from afar.
     else if (key === 'project_access' && value === 'full' && !WRITE_COMMANDS.has(command)) throw new Error('“全放开”不能从其他设备存为默认设置');

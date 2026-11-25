@@ -2,18 +2,19 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { listen_local } from './local_port.mjs';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
 import { api_lockdown, execute_tool, participant_tools, system_prompt } from '../runner/adapters/api.mjs';
-import { pi_delivery } from '../runner/adapters/api_pi.mjs';
+import { BASH_MISSING, find_bash, pi_delivery } from '../runner/adapters/api_pi.mjs';
+import { pi_tool_path } from '../runner/adapters/api_pi_extension.mjs';
 import { fetch_page, html_text, is_private_address, run_web_tool, web_search_key } from '../runner/adapters/api_web.mjs';
 import { deliver_task, execution_details } from '../runner/adapters/index.mjs';
 import { draw_image, launch_discussion, room_settings, validate_preset } from '../runner/discussion_launch.mjs';
@@ -215,71 +216,6 @@ async function start_free_session(t, { participants, host, title, scheduler, fix
   return { f, started, config, store, runner, log, session: session.session };
 }
 
-test('API host schedules a real session round and providers answer through execution-bound chat writes', async t => {
-  const f = await site_fixture(t);
-  const host_steps = new Map();
-  const mock = await model_fixture(t, call => {
-    const prompt = room_prompt(call), { task } = prompt;
-    assert.ok(!JSON.stringify(call.body).includes(SECRET));
-    if (task.discussion_request?.purpose === 'discuss') {
-      return tool_reply(call, 'submit_chat', { text: `${task.discussion_request.source_question || task.discussion_request.question} 已独立核对。`, summary: '依据与条件已保留。' });
-    }
-    if (task.discussion_request?.cause_kind === 'session_started') {
-      const experts = Object.keys(API_PROVIDERS).filter(name => name !== 'Codex');
-      return tool_reply(call, 'arrange_turns', { turns: experts.map(expert => ({ expert, question: '请独立论证。' })) });
-    }
-    const step = host_steps.get(task.execution_id) || 0;
-    host_steps.set(task.execution_id, step + 1);
-    return [() => tool_reply(call, 'read_messages'),
-      () => tool_reply(call, 'host_message', { text: '本轮观点已收齐，正在整理结论。' }),
-      () => tool_reply(call, 'save_state', { text: '已核对本轮原文。', brief: '专家观点已按原文整理。', until: prompt.room.latest_id }),
-      () => tool_reply(call, 'finish_discussion')][step]();
-  });
-  const participants = profiles(f.home, mock.base_url);
-  const r = await start_free_session(t, { fixture: f, participants, host: 'Codex', title: 'API 模拟讨论' });
-  await until(async () => (await api(r.config, '')).session?.status === 'concluded', () => r.runner.tick());
-  const room = await api(r.config, ''), messages = await api(r.config, '/messages');
-  assert.equal(messages.messages.length, Object.keys(participants).length);
-  assert.deepEqual(messages.messages.map(message => message.author).filter((_, index) => messages.messages[index].kind !== 'moderation').sort(), Object.keys(API_PROVIDERS).filter(name => name !== 'Codex').sort());
-  assert.ok(messages.messages.some(message => message.author === 'Codex' && message.kind === 'moderation'));
-  assert.ok(messages.messages.every(message => message.source === 'api' && message.submitted_by === message.author));
-  assert.ok(!readFileSync(r.started.config_path, 'utf8').includes(SECRET));
-  assert.ok(mock.calls.some(call => call.path.includes(':streamGenerateContent')));
-  assert.equal(room.session.status, 'concluded');
-});
-
-test('API workflow tasks identify the host playbook and give each member only its own current card prompt', async t => {
-  const f = await site_fixture(t);
-  const mock = await model_fixture(t, call => {
-    const { task } = room_prompt(call);
-    // Where the system prompt goes differs by protocol; the whole request must carry it, and a member's must not carry the playbook.
-    const system = JSON.stringify(call.body);
-    if (task.role === 'host') {
-      assert.equal(task.workflow.id, 'writing');
-      assert.equal(task.workflow.members.length, 1);
-      assert.equal(task.workflow.skill, undefined, 'the body is delivered only in the system prompt');
-      assert.match(system, /本房间启用了工作流「写作」/);
-      assert.match(system, /先拟提纲，再写正文/);
-    } else {
-      assert.equal(task.workflow, undefined);
-      assert.match(system, /当前卡片专属提示词/);
-      assert.doesNotMatch(system, /先拟提纲，再写正文/);
-    }
-    return tool_reply(call, 'submit_chat', { text: '完成' });
-  });
-  const configured = profiles(f.home, mock.base_url), participants = { Codex: configured.Codex, Claude: configured.Claude };
-  save_workflow(f.home, { id: 'writing', label: '写作', skill: '先拟提纲，再写正文。', agents: [
-    { card: 'writer', name: 'Claude-writer', system_prompt: '当前卡片专属提示词' }] }, validate_preset);
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
-    workflow: { id: 'writing', members: { writer: 'Claude' } },
-    room: { title: '工作流任务', mode: 'free', host: 'Codex', members: ['Codex', 'Claude'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
-  f.cleanup.push(() => { runner.stop_children(); store.close(); });
-  await api(config, '/messages', { author: '用户', text: '请两位回应', to: ['Codex', 'Claude'], submission_id: randomUUID() });
-  await until(async () => (await api(config, '')).free.requests.every(item => item.status === 'completed'), () => runner.tick());
-  assert.equal(mock.calls.length, 2);
-});
-
 test('API host tools read the latest roster and expose discussion actions only for a session host request', async t => {
   const ordinary = participant_tools({ mode: 'free', role: 'host' }).map(item => item.name);
   const host = participant_tools({ mode: 'free', role: 'host', discussion_request: { purpose: 'discuss_host' } }).map(item => item.name);
@@ -347,202 +283,6 @@ test('API web search bills only a DeepSeek key, sends it only to the DeepSeek Se
 test('API web tools turn HTML into readable text', () => {
   assert.equal(html_text('<head><title>标题</title></head><script>alert(1)</script><h1>参数&nbsp;表</h1><table><tr><td>量程</td><td>±180&#176;</td></tr></table><ul><li>甲</li></ul>'),
     '参数 表\n量程 | ±180° |\n- 甲');
-});
-
-test('free-room API replies bind to their reserved execution and complete the request', async t => {
-  const f = await site_fixture(t);
-  const mock = await model_fixture(t, call => tool_reply(call, 'submit_chat', { text: '处理了本次请求。', summary: '已处理。' }));
-  const participants = { Grok: { ...profiles(f.home, mock.base_url).Grok, effort: 'medium' } };
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
-    room: { title: '自由房间 API', mode: 'free', host: '用户', members: ['Grok'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
-  f.cleanup.push(() => { runner.stop_children(); store.close(); });
-  await api(config, '/messages', { author: '用户', text: '请处理。', source: 'user', kind: 'chat', to: ['Grok'], submission_id: randomUUID() });
-  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Grok'), () => runner.tick());
-  const messages = (await api(config, '/messages')).messages;
-  assert.equal(messages.find(message => message.author === 'Grok').source, 'api');
-  // The member's thinking effort reaches the provider as the protocol's own reasoning parameter.
-  assert.equal(mock.calls[0].body.reasoning?.effort, 'medium');
-});
-
-test('an API member whose card says its model reads images gets the woken message image with its task', async t => {
-  const f = await site_fixture(t);
-  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
-  let step = 0;
-  // It also reads the same image on demand, which comes back through the same image input (#3165).
-  const mock = await model_fixture(t, call => (step++ === 0
-    ? tool_reply(call, 'read_attachment', { id: room_prompt(call).task.attachments[0].id })
-    : tool_reply(call, 'submit_chat', { text: '看到了图。', summary: '已看图。' })));
-  const participants = { Grok: { ...profiles(f.home, mock.base_url).Grok, image_input: 'image' } };
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
-    room: { title: '看图', mode: 'free', host: '用户', members: ['Grok'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
-  f.cleanup.push(() => { runner.stop_children(); store.close(); });
-  const params = new URLSearchParams({ file_name: 'shot.png', actor: '用户', submission_id: randomUUID() });
-  const upload = await (await fetch(`${config.site}/api/rooms/${config.room}/attachments?${params}`, { method: 'POST', body: pixel,
-    headers: { 'X-Discussion-Token': config.token, 'Content-Type': 'application/octet-stream' } })).json();
-  await api(config, '/messages', { author: '用户', text: '[图片 #1] 这是什么？', source: 'user', kind: 'chat', to: ['Grok'],
-    attachment_ids: [upload.attachment.id], submission_id: randomUUID() });
-  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Grok'), () => runner.tick());
-  // The image reaches the provider as an image part, and the task names it by the placeholder in the message.
-  const first = JSON.stringify(mock.calls[0].body);
-  assert.ok(first.includes(pixel.toString('base64')));
-  assert.equal(room_prompt(mock.calls[0]).task.attachments[0].placeholder, '[图片 #1]');
-  const after_read = JSON.stringify(mock.calls[1].body);
-  assert.equal(after_read.split(pixel.toString('base64')).length - 1, 2, 'the image read on demand reaches the provider again');
-  assert.match(after_read, /图片已随本次工具结果附上/);
-});
-
-test('in a room with drawing on, an API member generates and edits images with the image service and answers with them attached, and a CLI member draws with its credential', async t => {
-  const f = await site_fixture(t);
-  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
-  let source = '', step = 0;
-  const mock = await model_fixture(t, call => {
-    if (call.path.endsWith('/images/generations')) return { output_format: 'png', size: '1024x1024', data: [{ b64_json: PNG.toString('base64') }, { b64_json: PNG.toString('base64') }] };
-    if (call.path.endsWith('/images/edits')) return { data: [{ b64_json: PNG.toString('base64') }] };
-    return [() => tool_reply(call, 'generate_image', { prompt: '一只猫', n: 2, quality: 'low', file_name: '猫' }),
-      () => tool_reply(call, 'edit_image', { prompt: '给猫戴帽子', images: [{ attachment_id: source }], output_format: 'webp' }),
-      () => tool_reply(call, 'submit_chat', { text: '画好了。' })][step++]();
-  });
-  const participants = { Codex: profiles(f.home, mock.base_url).Codex };
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
-    room: { title: '生图', mode: 'free', host: '用户', members: ['Codex'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const config = await enable_images(f.home, mock.base_url, started), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
-  f.cleanup.push(() => { runner.stop_children(); store.close(); });
-  const query = new URLSearchParams({ actor: '用户', file_name: 'cat.png', submission_id: randomUUID() });
-  const uploaded = await fetch(`${config.site}/api/rooms/${config.room}/attachments?${query}`, { method: 'POST', body: PNG, headers: { 'X-Discussion-Token': config.token } });
-  source = (await uploaded.json()).attachment.id;
-  await api(config, '/messages', { author: '用户', text: '画只猫', to: ['Codex'], attachment_ids: [source], submission_id: randomUUID() });
-  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Codex'), () => runner.tick());
-  const answer = (await api(config, '/messages')).messages.find(message => message.author === 'Codex');
-  assert.deepEqual(answer.attachments.map(item => [item.file_name, item.content_type]),
-    [['猫-1.png', 'image/png'], ['猫-2.png', 'image/png'], [answer.attachments[2].file_name, 'image/png']]);
-  assert.match(answer.attachments[2].file_name, /^image-\d{14}\.webp$/);
-  const generation = mock.calls.find(call => call.path === '/custom/v1/images/generations');
-  assert.deepEqual(generation.body, { model: 'gpt-image-2.6-flare', prompt: '一只猫', n: 2, quality: 'low' });
-  assert.equal(generation.headers.authorization, `Bearer ${SECRET}`);
-  const edit = mock.calls.find(call => call.path === '/custom/v1/images/edits');
-  assert.equal(edit.body.images[0].image_url, `data:image/png;base64,${PNG.toString('base64')}`);
-  const tools = mock.calls.find(call => call.path.endsWith('/responses')).body.tools.map(item => item.name);
-  assert.ok(tools.includes('generate_image') && tools.includes('edit_image'));
-  // A CLI member draws with its task credential; the images become its own attachments to post with its answer.
-  const access_file = join(f.home, 'member.access.json');
-  writeFileSync(access_file, JSON.stringify({ site: config.site, room: config.room, member: 'Codex', token: config.members.Codex.token }));
-  const drawn = await draw_image(f.home, { access_file, request: { action: 'generate', prompt: '封面' } });
-  assert.equal(drawn.images.length, 2);
-  assert.match(drawn.images[0].attachment_id, /^[a-f0-9]{32}$/);
-  // The room has no project, so its folder of the draft space also holds the images.
-  assert.match(drawn.images[0].saved_path, /^images\/[0-9a-f]{6}-image-\d{14}-1\.png$/);
-  assert.deepEqual(readFileSync(join(config.cwd, drawn.images[1].saved_path)), PNG);
-  await room_settings(f.home, { site: config.site, room_id: config.room, token: config.token, image_generation: false });
-  await assert.rejects(draw_image(f.home, { access_file, request: { action: 'generate', prompt: '封面' } }), /没有添加生图服务/);
-});
-
-test('images an API member generated before its execution failed go out with a later answer instead of being drawn again', async t => {
-  const f = await site_fixture(t);
-  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
-  let step = 0, unsent = null;
-  const mock = await model_fixture(t, call => {
-    if (call.path.endsWith('/images/generations')) return { data: [{ b64_json: PNG.toString('base64') }] };
-    const { task } = room_prompt(call);
-    if (step === 0) { step++; return tool_reply(call, 'generate_image', { prompt: '封面' }); }
-    // The first execution then stops without answering, and fails.
-    if (!task.unsent_images) return { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '先不提交' }] }] };
-    unsent = task.unsent_images;
-    return tool_reply(call, 'submit_chat', { text: '补发上次的封面。', attachments: [unsent[0].attachment_id] });
-  });
-  const participants = { Codex: profiles(f.home, mock.base_url).Codex };
-  // Drawing chosen while creating the room.
-  save_image_service(f.home, mock.base_url);
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants, image_generation: true,
-    room: { title: '补发', mode: 'free', host: '用户', members: ['Codex'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
-  f.cleanup.push(() => { runner.stop_children(); store.close(); });
-  await api(config, '/messages', { author: '用户', text: '画封面', to: ['Codex'], submission_id: randomUUID() });
-  await until(async () => (await api(config, '')).free.requests.some(item => item.status === 'failed'), () => runner.tick());
-  await api(config, '/messages', { author: '用户', text: '把刚才的封面发出来', to: ['Codex'], submission_id: randomUUID() });
-  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Codex'), () => runner.tick());
-  const answer = (await api(config, '/messages')).messages.find(message => message.author === 'Codex');
-  assert.deepEqual(answer.attachments.map(item => item.id), [unsent[0].attachment_id]);
-  assert.equal(mock.calls.filter(call => call.path.endsWith('/images/generations')).length, 1);
-});
-
-test('smart scheduling holds the host until its decision, and a confident pick replaces the host', async t => {
-  const f = await site_fixture(t);
-  let release_decision;
-  const decided = new Promise(resolve => { release_decision = resolve; });
-  const mock = await model_fixture(t, call => tool_reply(call, 'submit_chat', { text: '已处理。', summary: '已处理。' }));
-  const { Grok, DeepSeek } = profiles(f.home, mock.base_url);
-  const scheduler = { provider: 'jev', model: 'jev-latest', ...save_api_key(f.home, { base_url: 'https://api.typesafe.ai/v1', api_key: SECRET }) };
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: { Grok, DeepSeek }, scheduler,
-    room: { title: '智能调度', mode: 'free', host: '用户', members: ['Grok', 'DeepSeek'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const decisions = [];
-  // The decision is held back: the host must not start before it arrives.
-  const fake_fetch = async (url, init) => {
-    decisions.push({ url, body: JSON.parse(init.body), authorization: init.headers.Authorization });
-    await decided;
-    return { ok: true, json: async () => ({ answers: { handler: { type: 'choice', choice: 'DeepSeek', confidence: 0.95, probabilities: { DeepSeek: 0.95, __host__: 0.05 } } } }) };
-  };
-  const config = load_config(started.config_path), store = new DiscussionStore(config.directory);
-  const runner = new FreeRoomRunner(config, store, undefined, () => {}, fake_fetch);
-  f.cleanup.push(() => { release_decision(); runner.stop_children(); store.close(); });
-  const posted = await api(config, '/messages', { author: '用户', text: '帮我查一下这个接口为什么返回 500。', source: 'user', kind: 'chat', submission_id: randomUUID() });
-  const message_id = posted.message.id;
-  await until(async () => decisions.length === 1, () => runner.tick());
-  for (let round = 0; round < 3; round++) await runner.tick();
-  assert.equal((await api(config, '/messages')).messages.some(message => message.author === 'Grok'), false);
-  assert.deepEqual((await api(config, '')).free.requests.map(item => item.status), ['pending']);
-  assert.equal(decisions[0].url, 'https://api.typesafe.ai/v1/systemone');
-  assert.equal(decisions[0].authorization, `Bearer ${SECRET}`);
-  assert.deepEqual(Object.keys(decisions[0].body.questions.handler.criteria), ['DeepSeek', '__host__', '__all__', '__all_seq__', '__none__']);
-  release_decision();
-  await until(async () => (await api(config, '')).free.recommendations.some(item => item.status === 'adopted'), () => runner.tick());
-  const recommendation = (await api(config, '')).free.recommendations[0];
-  assert.deepEqual([recommendation.message_id, recommendation.member, recommendation.status, recommendation.provider, recommendation.confidence],
-    [message_id, 'DeepSeek', 'adopted', 'jev', 0.95]);
-  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'DeepSeek'), () => runner.tick());
-  const room = await api(config, '');
-  assert.deepEqual(room.free.requests.map(item => [item.member, item.purpose, item.status]), [['Grok', 'route', 'cancelled'], ['DeepSeek', 'ask', 'completed']]);
-  assert.equal((await api(config, `/recommendations/${message_id}`, { action: 'adopt', mode: 'interrupt' })).duplicate, true);
-  const decision = room.scheduler_decisions.at(-1);
-  assert.deepEqual([decision.after_message_id, decision.label, decision.applied, decision.provider, decision.feedback], [message_id, '改由 DeepSeek 回答', 1, 'jev', null]);
-  assert.deepEqual(JSON.parse(decision.context), { model: 'jev-latest', threshold: 0.6, wide_threshold: 0.8, mode: 'guided', prompt: ROUTE_GUIDED_PROMPT_VERSION,
-    package: JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version });
-  assert.deepEqual([decision.detail[0].choice, decision.detail[0].probabilities], ['DeepSeek', { DeepSeek: 0.95, __host__: 0.05 }]);
-  await api(config, `/scheduler-decisions/${decision.id}`, { rating: 'bad', should_be: 'Grok', note: '应该先问主持人' });
-  const rated = (await api(config, '')).scheduler_decisions.at(-1);
-  assert.deepEqual([rated.feedback, rated.should_be, rated.note], ['bad', 'Grok', '应该先问主持人']);
-  assert.equal((await api(config, '/backup')).tables.scheduler_decisions[0].note, '应该先问主持人');
-  // The bad rating keeps exactly what the model saw, including option descriptions, for the loopback administrator.
-  const cases = async () => (await (await fetch(`${f.site}/api/scheduler-feedback`)).json()).cases;
-  const [feedback_case] = await cases();
-  assert.deepEqual([feedback_case.decision_id, feedback_case.should_be, feedback_case.snapshot.label], [decision.id, 'Grok', '改由 DeepSeek 回答']);
-  assert.match(feedback_case.snapshot.input.state, /待处理的用户消息/);
-  assert.deepEqual(feedback_case.snapshot.input.questions[0].choices.map(choice => choice.value), ['DeepSeek', '__host__', '__all__', '__all_seq__', '__none__']);
-  await assert.rejects(api(config, `/scheduler-decisions/${decision.id}`, { rating: 'bad', note: 'x'.repeat(201) }), /HTTP 400/);
-  await assert.rejects(api(config, `/scheduler-decisions/${decision.id}`, { rating: 'great' }), /HTTP 400/);
-  await api(config, `/scheduler-decisions/${decision.id}`, { rating: null });
-  assert.equal((await api(config, '')).scheduler_decisions.at(-1).feedback, null);
-  assert.deepEqual(await cases(), []);
-  const backup = await api(config, '/backup');
-  assert.deepEqual(backup.tables.member_recommendations.map(row => [row.message_id, row.status, row.mode]), [[message_id, 'adopted', 'interrupt']]);
-  assert.ok(!readFileSync(started.config_path, 'utf8').includes(SECRET));
-});
-
-test('the room API request limit tells the model to submit before it runs out', async t => {
-  const f = await site_fixture(t);
-  // Keeps reading until the runner says requests are running out, then submits what it has.
-  const mock = await model_fixture(t, call => JSON.stringify(call.body).includes('次模型请求。停止继续读取')
-    ? tool_reply(call, 'submit_chat', { text: '已完成部分，余下未做。' }) : tool_reply(call, 'read_room'));
-  const participants = { Grok: profiles(f.home, mock.base_url).Grok };
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants, api_max_requests: 4,
-    room: { title: 'API 上限', mode: 'free', host: '用户', members: ['Grok'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
-  f.cleanup.push(() => { runner.stop_children(); store.close(); });
-  await api(config, '/messages', { author: '用户', text: '请处理。', source: 'user', kind: 'chat', to: ['Grok'], submission_id: randomUUID() });
-  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Grok'), () => runner.tick());
-  assert.equal(mock.calls.length, 2, 'with 4 requests the reminder follows the first tool results');
-  assert.match(JSON.stringify(mock.calls[0].body), /最多 4 次模型请求/);
 });
 
 test('pause aborts an in-flight API request and prevents a late tool response from writing', async t => {
@@ -890,27 +630,6 @@ function text_reply(call, text) {
   return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: text } }] };
 }
 
-test('an API member answers a private chat in text with the earlier lines as its context, in every protocol', async t => {
-  const home = mkdtempSync(join(tmpdir(), 'codiscuss-api-chat-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
-  const mock = await model_fixture(t, call => text_reply(call, '结论：可以。'));
-  for (const [name, profile] of Object.entries(profiles(home, mock.base_url))) {
-    const notes = []; const lines = [];
-    let ended;
-    const done = new Promise(resolve => { ended = resolve; });
-    const result = await deliver_task(profile, {}, { id: `chat-${name}`, participant: name, directory: home, prompt: '现在呢？', chat: true,
-      chat_history: [{ text: '上次说到哪了', reply: '说到第三集' }], api_context: { home },
-      on_note: text => notes.push(text), on_output: (path, line) => lines.push(line), on_exit: () => ended('exit'), on_failure: error => ended(error) });
-    assert.equal(await done, 'exit', name);
-    assert.deepEqual(notes, ['结论：可以。'], name);
-    assert.equal(typeof result.steer, 'function');
-    const sent = JSON.stringify(mock.calls.at(-1).body);
-    assert.ok(sent.includes('说到第三集') && sent.includes('现在呢？') && sent.includes('私聊'), `${name} carries the earlier lines`);
-    assert.ok(!sent.includes('submit_chat'), `${name} answers in text, without room writes`);
-  }
-  assert.equal(execution_details('api', JSON.stringify({ type: 'codiscuss.entry', entry: { id: 'x', kind: 'tool', title: 'read_room', state: 'done' } })).entries[0].title, 'read_room');
-});
-
 for (const busy of [false, true]) {
   test(`Pi stops an execution at its ${busy ? 'total' : 'idle'} time limit`, t => {
     const home = mkdtempSync(join(tmpdir(), 'codiscuss-pi-timeout-'));
@@ -934,6 +653,58 @@ for (const busy of [false, true]) {
   });
 }
 
+test('a model API member runs as Pi itself: its own tools and skills, the room skills and owner prompts added, codiscuss reaching the room, ending as a CLI turn', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-pi-native-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+  child.kill = () => child.emit('close', null);
+  child.stdin.on('finish', () => setImmediate(() => child.emit('close', 0)));
+  let launched, failure;
+  const ended = new Promise(resolve => {
+    pi_delivery({ cli: 'pi.js', profile: { model: 'm', api_protocol: 'chat' }, key: 'k', binding: {}, service_home: home, native: true,
+      skill_directories: [join(home, 'skills')], system_file: join(home, 'append.md'), context_file: join(home, 'context.json'), prompt: '用户在房间点名了你',
+      task: { id: 'free-1', directory: home, access_path: join(home, 'access.json'), on_failure: reason => { failure = reason; }, on_exit: resolve },
+      spawn_process: (_node, args, options) => { launched = { args, env: options.env }; return child; } });
+  });
+  const { args, env } = launched;
+  for (const flag of ['--system-prompt', '--no-builtin-tools', '--no-context-files', '--no-skills']) assert.ok(!args.includes(flag), `${flag} is not passed`);
+  assert.equal(args[args.indexOf('--skill') + 1], join(home, 'skills'));
+  assert.equal(args[args.indexOf('--append-system-prompt') + 1], join(home, 'append.md'));
+  assert.equal(env.DISCUSS_ACCESS_FILE, join(home, 'access.json'));
+  assert.match(child.stdin.read().toString(), /用户在房间点名了你/);
+  // It answered through codiscuss in its shell; a normal end is the end of the turn, not a failure.
+  child.stdout.write('{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"已提交 #9"}],"stopReason":"stop"}}\n');
+  child.stdout.write('{"type":"agent_settled"}\n');
+  await ended;
+  assert.equal(failure, undefined);
+});
+
+test('a read-only check sees the path Pi would open: ~, @, file:// and Git Bash drive paths', () => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-pi-paths-'));
+  const project = join(home, 'project');
+  mkdirSync(project);
+  try {
+    const at = (given, platform = 'win32') => pi_tool_path(given, project, platform, home);
+    assert.equal(at('~/.codiscuss/keys.json'), join(home, '.codiscuss', 'keys.json'));
+    assert.equal(at(`@${join(home, 'secret.txt')}`), join(home, 'secret.txt'));
+    assert.equal(at(pathToFileURL(join(home, 'secret.txt')).href), join(home, 'secret.txt'));
+    assert.equal(at('notes\u00A0a.txt'), join(project, 'notes a.txt'));
+    if (process.platform === 'win32') assert.equal(at('/c/Windows/win.ini'), 'C:\\Windows\\win.ini');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('on Windows a model API member needs a Bash, found where Pi looks for one', t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-pi-bash-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  assert.equal(find_bash(home, { PATH: '' }, 'win32'), '', 'none: the delivery is refused with how to install Git for Windows');
+  mkdirSync(join(home, 'Git', 'bin'), { recursive: true });
+  writeFileSync(join(home, 'Git', 'bin', 'bash.exe'), '');
+  assert.equal(find_bash(home, { ProgramFiles: home, PATH: '' }, 'win32'), join(home, 'Git', 'bin', 'bash.exe'));
+  assert.equal(find_bash(home, { PATH: join(home, 'Git', 'bin') }, 'win32'), join(home, 'Git', 'bin', 'bash.exe'), 'or bash.exe on PATH');
+  assert.equal(find_bash(home, {}, 'linux'), 'bash');
+  assert.match(BASH_MISSING, /Git for Windows/);
+});
+
 test('a Pi session whose automatic compaction fails reports why and leaves the next execution a new session', async t => {
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-pi-compact-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -952,21 +723,6 @@ test('a Pi session whose automatic compaction fails reports why and leaves the n
   assert.match(reason, /上下文压缩失败.*Summarization failed.*新会话/);
   assert.deepEqual(details, { failure_class: 'compaction_failed', retryable: false });
   assert.equal(bindings.at(-1), '', 'the next execution does not reopen the session that cannot be compacted');
-});
-
-test('an API member whose read hits a missing message gets the error as the tool result and still answers (K20)', async t => {
-  const f = await site_fixture(t);
-  const mock = await model_fixture(t, (call, calls) => (calls.length === 1
-    ? tool_reply(call, 'read_message', { id: 99999 }) : tool_reply(call, 'submit_chat', { text: '编号 99999 不存在，按已读内容回答。' })));
-  const participants = { Grok: profiles(f.home, mock.base_url).Grok };
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
-    room: { title: '读取 404', mode: 'free', host: '用户', members: ['Grok'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
-  f.cleanup.push(() => { runner.stop_children(); store.close(); });
-  await api(config, '/messages', { author: '用户', text: '请核对编号。', source: 'user', kind: 'chat', to: ['Grok'], submission_id: randomUUID() });
-  await until(async () => (await api(config, '/messages')).messages.some(message => message.author === 'Grok'), () => runner.tick());
-  assert.match(JSON.stringify(mock.calls[1].body), /HTTP 404/);
-  assert.equal((await api(config, '')).free.requests.at(-1).status, 'completed');
 });
 
 /** A stand-in room site for execute_tool: it records requests and answers by the handler the test gives. */
@@ -992,106 +748,6 @@ async function room_stub(t, handle) {
   return { seen, context };
 }
 
-test('cross-room message reads drop execution credentials and respect lockdown', async t => {
-  const { seen, context } = await room_stub(t, () => [200, { messages: [] }]);
-  const room = '123456abcdef';
-  const call = { name: 'read_messages', arguments: { room } };
-  await execute_tool(context, call, participant_tools(context));
-  const request = seen.find(item => item.path === `/api/rooms/${room}/messages`);
-  assert.ok(request);
-  assert.equal(request.headers['x-discussion-read-only'], '1');
-  assert.equal(request.headers['x-discussion-token'], undefined);
-  assert.equal(request.query.has('execution_id'), false);
-  const count = seen.length;
-  for (const restricted of [{ tool_lockdown: true }, { external_access: {} }]) {
-    const task = { ...context, ...restricted };
-    assert.ok((await execute_tool(task, call, participant_tools(task))).result.error);
-  }
-  assert.equal(seen.length, count);
-});
-
-test('an API answer keeps one submission ID: an unknown result is looked up, and the same content again is the same submission (5b)', async t => {
-  const stored = new Map();
-  let drop = 2;
-  const { seen, context } = await room_stub(t, (call, _seen, response) => {
-    if (call.method === 'POST' && call.path === '/messages') {
-      const { submission_id } = call.body;
-      const duplicate = stored.has(submission_id);
-      if (!duplicate) stored.set(submission_id, { id: 100 + stored.size, text: call.body.text, submission_id });
-      // The first two answers land but their responses are lost.
-      if (drop-- > 0) { response.socket.destroy(); return undefined; }
-      const message = stored.get(submission_id);
-      return [200, { message, duplicate, receipt: { duplicate, id: message.id, submission_id } }];
-    }
-    if (call.method === 'GET' && call.path === '/messages' && call.query.has('submission_id')) {
-      // The first lookup fails as well, so that answer stays unknown.
-      if (seen.filter(item => item.query.has('submission_id')).length === 1) return [503, { error: '暂时不可用' }];
-      return [200, { messages: [...stored.values()].filter(item => item.submission_id === call.query.get('submission_id')) }];
-    }
-    return [404, { error: '地址不存在' }];
-  });
-  const definitions = participant_tools(context);
-  const submit = text => execute_tool(context, { name: 'submit_chat', arguments: { text } }, definitions);
-  const unknown = await submit('结论 A');
-  assert.equal(unknown.result.outcome, 'unknown');
-  assert.ok(!unknown.terminal, 'an unknown answer does not end the run');
-  const recovered = await submit('结论 A');
-  assert.equal(recovered.result.outcome, 'accepted');
-  assert.equal(recovered.result.recovered, true);
-  assert.equal(recovered.terminal, true);
-  const posts = seen.filter(item => item.method === 'POST');
-  assert.equal(posts[0].body.submission_id, posts[1].body.submission_id, 'the same content keeps its submission ID');
-  assert.equal(stored.size, 1, 'the room holds one message');
-  const again = await submit('结论 A');
-  assert.equal(again.result.duplicate, true);
-  const other = await submit('结论 B');
-  assert.notEqual(seen.filter(item => item.method === 'POST').at(-1).body.submission_id, posts[0].body.submission_id);
-  assert.equal(other.result.duplicate, false);
-});
-
-test('API read tools hand failures back to the model, read text attachments within the reading boundary and say what they cannot read', async t => {
-  const text = '原始返回：第一行\n第二行';
-  const files = { ['a'.repeat(32)]: { message_id: 9, content_type: 'application/octet-stream', size: Buffer.byteLength(text) },
-    ['b'.repeat(32)]: { message_id: 9, content_type: 'application/pdf', size: 10 },
-    ['c'.repeat(32)]: { message_id: 12, content_type: 'application/octet-stream', size: 3 },
-    ['d'.repeat(32)]: { message_id: 9, content_type: 'application/octet-stream', size: 4 },
-    ['e'.repeat(32)]: { message_id: 9, content_type: 'image/png', size: Buffer.byteLength(text) } };
-  const { context } = await room_stub(t, call => {
-    if (call.path === '/messages/5') return [404, { error: '消息不存在' }];
-    if (call.path === '/messages/9') return [200, { id: 9 }];
-    if (call.path === '/messages/12') return [403, { error: '超出本次可读范围' }];
-    const [, id, content] = call.path.match(/^\/attachments\/(\w+)(\/content)?$/) || [];
-    if (!files[id]) return [404, { error: '附件不存在' }];
-    if (!content) return [200, { id, file_name: `${id.slice(0, 1)}.txt`, ...files[id] }];
-    return [200, id.startsWith('d') ? Buffer.from([0xff, 0xfe, 0, 1]) : Buffer.from(text)];
-  });
-  const definitions = participant_tools(context);
-  const run = (name, args) => execute_tool(context, { name, arguments: args }, definitions);
-  assert.match((await run('read_message', { id: 5 })).result.error, /HTTP 404/);
-  const read = (await run('read_attachment', { id: 'a'.repeat(32) })).result;
-  assert.equal(read.readable, true);
-  assert.equal(read.text, text);
-  assert.equal(read.complete, true);
-  const slice = (await run('read_attachment', { id: 'a'.repeat(32), offset: 5, limit: 3 })).result;
-  assert.equal(slice.text, [...text].slice(5, 8).join(''));
-  assert.equal(slice.remaining, [...text].length - 8);
-  assert.equal((await run('read_attachment', { id: 'b'.repeat(32) })).result.readable, false);
-  // An image is seen only by a model that takes images, as an image part beside the result, never inside its text.
-  const image = await run('read_attachment', { id: 'e'.repeat(32) });
-  assert.equal(image.result.readable, false);
-  assert.match(image.result.reason, /未开启看图/);
-  const seen = await execute_tool({ ...context, image_input: true }, { name: 'read_attachment', arguments: { id: 'e'.repeat(32) } }, definitions);
-  assert.equal(seen.result.readable, true);
-  assert.equal(seen.result.images, undefined);
-  assert.deepEqual(seen.images, [{ type: 'image', data: Buffer.from(text).toString('base64'), mimeType: 'image/png' }]);
-  assert.equal((await run('read_attachment', { id: 'd'.repeat(32) })).result.readable, false);
-  // An attachment of a message outside the reading boundary is refused like the message itself.
-  assert.match((await run('read_attachment', { id: 'c'.repeat(32) })).result.error, /HTTP 403/);
-  // A write that is not an answer and whose result is unknown still ends the run.
-  const host = { ...context, role: 'host', discussion_request: { purpose: 'discuss_host' } };
-  await assert.rejects(execute_tool(host, { name: 'save_state', arguments: { text: 'x', brief: 'y', until: 1 } }, participant_tools(host)));
-});
-
 test('every member gets the event log, only the host the proactive post', () => {
   const host = participant_tools({ role: 'host' });
   const member = participant_tools({ role: 'member' });
@@ -1111,98 +767,13 @@ test('the runner captures a last remark only where the adapter declares capture 
     runner.replies.set(id, '最后一段话');
     return FreeRoomRunner.prototype.capture_reply.call(runner, name, id, { delivery: { last_submission: { outcome } } });
   };
-  assert.equal(await capture('Api', 1, 'unknown'), false, 'a model API member is never captured');
   assert.equal(await capture('Cli', 2, 'rejected'), false, 'a refused submit is reported, not replaced');
   assert.equal(await capture('Cli', 3, 'accepted'), false);
   assert.equal(seen.length, 0);
   assert.equal(await capture('Cli', 4, 'unknown'), true);
   assert.equal(seen[0].body.source, 'auto');
-});
-
-test('API message reads send the CLI output budget, resume long text by version and trim attachments as the CLI does', async t => {
-  const attachment = { id: 'a'.repeat(32), file_name: 'x.txt', content_type: 'text/plain', size: 3, sha256: 'f'.repeat(64), url: '/u', room_id: 'room-1', message_id: 9, submission_id: 's' };
-  const { seen, context } = await room_stub(t, call => (call.path === '/messages'
-    ? [200, { messages: [{ id: 9, text: 'x', attachments: [attachment] }], remaining: 0 }]
-    : [200, { id: 9, text: 'x', attachments: [attachment] }]));
-  const definitions = participant_tools(context);
-  const run = (name, args) => execute_tool(context, { name, arguments: args }, definitions);
-  const page = (await run('read_messages', { after: 3 })).result;
-  assert.equal(seen[0].query.get('max_output_chars'), '8000');
-  assert.deepEqual(Object.keys(page.messages[0].attachments[0]), ['id', 'file_name', 'content_type', 'size', 'sha256', 'url']);
-  await run('read_message', { id: 9, offset: 10, limit: 5, version: 'e'.repeat(64) });
-  assert.deepEqual(['offset', 'limit', 'version'].map(key => seen[1].query.get(key)), ['10', '5', 'e'.repeat(64)]);
-  await run('read_message', { id: 9 });
-  assert.equal(seen[2].query.get('offset'), null);
-});
-
-test('an API question whose creation result is unknown is looked up by its submission ID and never ends the run (REVIEW M6)', async t => {
-  const stored = new Map();
-  let drop = 2;
-  const { seen, context } = await room_stub(t, (call, _seen, response) => {
-    if (call.method === 'POST' && call.path === '/questions') {
-      const { submission_id } = call.body;
-      if (!stored.has(submission_id)) stored.set(submission_id, { id: 40 + stored.size, message_id: 300, version: 1, status: 'waiting_user', contract: 'handoff', blocking: true, submission_id });
-      if (drop-- > 0) { response.socket.destroy(); return undefined; }
-      return [200, { question_id: stored.get(submission_id).id, message_id: 300, duplicate: true }];
-    }
-    if (call.method === 'GET' && call.path === '/questions' && call.query.has('submission_id')) {
-      // The first lookup fails too, so that create stays unknown.
-      if (seen.filter(item => item.query.has('submission_id')).length === 1) return [503, { error: '暂时不可用' }];
-      return [200, { questions: [...stored.values()].filter(item => item.submission_id === call.query.get('submission_id')) }];
-    }
-    return [404, { error: '地址不存在' }];
-  });
-  const definitions = participant_tools(context);
-  const args = { contract: 'handoff', blocking: true, explanation: '候选 A/B', questions: [{ prompt: '选哪个？', options: [{ id: 'A', label: '甲' }] }] };
-  const ask = () => execute_tool(context, { name: 'ask_question', arguments: args }, definitions);
-  const unknown = await ask();
-  assert.equal(unknown.result.outcome, 'unknown');
-  assert.ok(!unknown.terminal, 'an unknown create does not end the run');
-  const recovered = await ask();
-  assert.equal(recovered.result.outcome, 'accepted');
-  assert.equal(recovered.result.recovered, true);
-  assert.equal(recovered.result.question_id, 40);
-  assert.equal(recovered.terminal, true, 'a handoff question found by its ID ends the run as a normal create would');
-  const posts = seen.filter(item => item.method === 'POST');
-  assert.equal(posts[0].body.submission_id, posts[1].body.submission_id, 'the same content keeps its submission ID');
-  assert.equal(stored.size, 1, 'the room holds one question');
-});
-
-test('an API execution reports each tool call as a progress note, and a reply cut at the output cap fails as output_truncated', async t => {
-  const f = await site_fixture(t);
-  // The first execution reads a message, then the provider cuts every reply at its output cap (finish_reason length).
-  const mock = await model_fixture(t, (call, calls) => (calls.length === 1 ? tool_reply(call, 'read_message', { id: 1 })
-    : { choices: [{ finish_reason: 'length', message: { role: 'assistant', content: 'Now' } }] }));
-  const participants = { DeepSeek: profiles(f.home, mock.base_url).DeepSeek };
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
-    room: { title: '截断', mode: 'free', host: '用户', members: ['DeepSeek'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
-  f.cleanup.push(() => { runner.stop_children(); store.close(); });
-  await api(config, '/messages', { author: '用户', text: '请处理。', source: 'user', kind: 'chat', to: ['DeepSeek'], submission_id: randomUUID() });
-  const execution = async () => (await api(config, '')).free.executions.at(-1);
-  await until(async () => (await execution())?.status === 'failed', () => runner.tick());
-  const failed = await api(config, `/executions/${(await execution()).id}`);
-  assert.match(failed.result, /模型输出在 1 个 token 处达到输出上限后结束，未提交结果/);
-  assert.doesNotMatch(failed.result, /等你决定|是否支持工具调用/);
-  assert.deepEqual(failed.failure, { class: 'output_truncated', lasting: false });
-  const notes = (await api(config, `/executions/${failed.id}/notes`)).notes.map(item => item.text);
-  assert.ok(notes.includes('read_message id=1'), JSON.stringify(notes));
-});
-
-test('a reply cut at the output cap is followed by a reminder in the same session, and the execution can still answer', async t => {
-  const f = await site_fixture(t);
-  // The first reply spends the whole cap (as DeepSeek did thinking); after the reminder the model submits.
-  const mock = await model_fixture(t, (call, calls) => (calls.length === 1
-    ? { choices: [{ finish_reason: 'length', message: { role: 'assistant', content: '' } }] }
-    : tool_reply(call, 'submit_chat', { text: '完成' })));
-  const participants = { DeepSeek: profiles(f.home, mock.base_url).DeepSeek };
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
-    room: { title: '截断后恢复', mode: 'free', host: '用户', members: ['DeepSeek'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
-  f.cleanup.push(() => { runner.stop_children(); store.close(); });
-  await api(config, '/messages', { author: '用户', text: '请处理。', source: 'user', kind: 'chat', to: ['DeepSeek'], submission_id: randomUUID() });
-  await until(async () => (await api(config, '')).free.requests.every(item => item.status === 'completed'), () => runner.tick());
-  assert.ok(mock.calls.some(call => JSON.stringify(call.body).includes('超过单次输出上限被截断')), 'the reminder reaches the model');
+  // A model API member runs as Pi and is captured as a CLI member is.
+  assert.equal(await capture('Api', 1, 'unknown'), true);
 });
 
 test('a writable API member works with Pi\'s own bash, and the file its command writes counts as its change', async t => {
@@ -1212,7 +783,7 @@ test('a writable API member works with Pi\'s own bash, and the file its command 
   spawnSync('git', ['init', '-q', project]);
   t.after(() => rmSync(project, { recursive: true, force: true }));
   const mock = await model_fixture(t, (call, calls) => (calls.length === 1
-    ? tool_reply(call, 'bash', { command: 'mkdir -p out && echo hi > out/note.txt' }) : tool_reply(call, 'submit_chat', { text: '已写入' })));
+    ? tool_reply(call, 'bash', { command: 'mkdir -p out && echo hi > out/note.txt && env > out/env.txt' }) : text_reply(call, '已写入')));
   const participants = { DeepSeek: { ...profiles(f.home, mock.base_url).DeepSeek, project_access: 'write', cwd: project } };
   const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
     room: { title: 'Pi 命令行', mode: 'free', host: '用户', members: ['DeepSeek'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
@@ -1221,11 +792,56 @@ test('a writable API member works with Pi\'s own bash, and the file its command 
   await api(config, '/messages', { author: '用户', text: '写个文件。', source: 'user', kind: 'chat', to: ['DeepSeek'], submission_id: randomUUID() });
   await until(async () => (await api(config, '')).free.executions.some(item => item.changes.length), () => runner.tick());
   const names = mock.calls[0].body.tools.map(item => item.function?.name);
-  assert.ok(names.includes('bash') && !names.includes('glob'), 'Pi\'s own tools replace the confined file tools');
+  assert.ok(names.includes('bash') && !names.includes('glob') && !names.includes('submit_chat'), 'Pi\'s own tools, not ours');
   assert.equal(readFileSync(join(project, 'out', 'note.txt'), 'utf8').trim(), 'hi');
+  // The model's shell never sees the API key, though Pi got it from the runner.
+  assert.ok(!readFileSync(join(project, 'out', 'env.txt'), 'utf8').includes(SECRET), 'the key is not in the shell environment');
   // Changes are recorded when the process ends, after the answer was saved.
   const execution = (await api(config, '')).free.executions.find(item => item.member === 'DeepSeek');
-  assert.deepEqual(execution.changes, ['out/note.txt']);
+  assert.deepEqual(execution.changes.sort(), ['out/env.txt', 'out/note.txt']);
+});
+
+test('a read-only API member may read but its writes and non-codiscuss commands are refused by the extension, and the reason goes back to the model', async t => {
+  const f = await site_fixture(t);
+  const project = mkdtempSync(join(tmpdir(), 'codiscuss-pi-readonly-'));
+  spawnSync('git', ['init', '-q', project]);
+  writeFileSync(join(project, 'readme.txt'), 'hello');
+  // Pi may still be closing in the project when the test ends; Windows keeps a running process's directory.
+  t.after(async () => {
+    for (let attempt = 0; ; attempt++) {
+      try { rmSync(project, { recursive: true, force: true }); break; } catch (error) { if (attempt >= 50) throw error; await delay(200); }
+    }
+  });
+  const steps = [
+    call => tool_reply(call, 'read', { path: 'readme.txt' }),
+    // The service home holds every saved key: outside what a read-only member may read.
+    call => tool_reply(call, 'read', { path: join(f.home, 'api-keys', `${key_ref}.json`) }),
+    // Pi's own path forms must not slip past the check: a leading @ and a file:// URL name the same file.
+    call => tool_reply(call, 'read', { path: `@${join(f.home, 'api-keys', `${key_ref}.json`)}` }),
+    call => tool_reply(call, 'read', { path: pathToFileURL(join(f.home, 'api-keys', `${key_ref}.json`)).href }),
+    call => tool_reply(call, 'write', { path: `@${join(f.home, 'evil-outside.txt')}`, content: 'x' }),
+    call => tool_reply(call, 'write', { path: 'evil.txt', content: 'x' }),
+    call => tool_reply(call, 'bash', { command: 'echo x > evil2.txt' }),
+    call => tool_reply(call, 'bash', { command: 'codiscuss room view; echo x > evil3.txt' }),
+    call => text_reply(call, '只读完成'),
+  ];
+  let key_ref = '';
+  const mock = await model_fixture(t, (call, calls) => steps[Math.min(calls.length, steps.length) - 1](call));
+  const participants = { DeepSeek: { ...profiles(f.home, mock.base_url).DeepSeek, project_access: 'read', cwd: project } };
+  key_ref = participants.DeepSeek.api_key_ref;
+  assert.ok(readFileSync(join(f.home, 'api-keys', `${key_ref}.json`), 'utf8').includes(SECRET), 'the key file holds the key');
+  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
+    room: { title: 'Pi 只读', mode: 'free', host: '用户', members: ['DeepSeek'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
+  const config = load_config(started.config_path), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
+  f.cleanup.push(() => { runner.stop_children(); store.close(); });
+  await api(config, '/messages', { author: '用户', text: '看看项目。', source: 'user', kind: 'chat', to: ['DeepSeek'], submission_id: randomUUID() });
+  await until(async () => mock.calls.length >= steps.length, () => runner.tick());
+  for (const name of ['evil.txt', 'evil2.txt', 'evil3.txt']) assert.ok(!existsSync(join(project, name)), `${name} was not written`);
+  assert.ok(!existsSync(join(f.home, 'evil-outside.txt')), 'an @ path does not write outside');
+  const sent = JSON.stringify(mock.calls.at(-1).body);
+  assert.ok(sent.includes('hello'), 'reading stays free');
+  assert.ok(sent.includes('项目文件只读') && sent.includes('只读时命令只能是 codiscuss'), 'each refusal reaches the model with its reason');
+  assert.ok(sent.includes('只读时只能读取项目') && !sent.includes(SECRET), 'the service home is not read');
 });
 
 test('Pi reports saved image edits from extension details and drops failed bash or copy-source paths', async t => {
@@ -1263,28 +879,3 @@ test('Pi reports saved image edits from extension details and drops failed bash 
   assert.deepEqual(edits, [join(project, 'images', 'cover.png'), join(project, 'out', 'ok.js')]);
 });
 
-test('in a room with drawing on and a git project, an API member\'s saved image is attributed in execution edited changes', async t => {
-  const f = await site_fixture(t);
-  const project = mkdtempSync(join(tmpdir(), 'codiscuss-pi-img-git-'));
-  spawnSync('git', ['init', '-q', project]);
-  writeFileSync(join(project, 'other.txt'), 'concurrent\n');
-  t.after(() => rmSync(project, { recursive: true, force: true }));
-  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
-  let step = 0;
-  const mock = await model_fixture(t, call => {
-    if (call.path.endsWith('/images/generations')) return { output_format: 'png', data: [{ b64_json: PNG.toString('base64') }] };
-    return [() => tool_reply(call, 'generate_image', { prompt: '海报', save_path: 'art/poster.png' }),
-      () => tool_reply(call, 'submit_chat', { text: '已生成海报。' })][step++]();
-  });
-  const participants = { Codex: { ...profiles(f.home, mock.base_url).Codex, project_access: 'write', cwd: project } };
-  const started = await launch_discussion(f.home, { site: f.site, entry: 'web', participants,
-    room: { title: '生图归属', mode: 'free', host: '用户', members: ['Codex'], submission_id: randomUUID() } }, { start_service: async () => ({ running: true }) });
-  const config = await enable_images(f.home, mock.base_url, started), store = new DiscussionStore(config.directory), runner = new FreeRoomRunner(config, store);
-  f.cleanup.push(() => { runner.stop_children(); store.close(); });
-  await api(config, '/messages', { author: '用户', text: '画一张图存到 art/poster.png', to: ['Codex'], submission_id: randomUUID() });
-  // Simulate an unrelated concurrent file edit in the same workspace during the execution.
-  writeFileSync(join(project, 'other.txt'), 'changed-by-other\n');
-  await until(async () => (await api(config, '')).free.executions.some(item => item.edited?.length), () => runner.tick());
-  const execution = (await api(config, '')).free.executions.find(item => item.member === 'Codex');
-  assert.deepEqual(execution.edited, ['art/poster.png']);
-});

@@ -3,16 +3,24 @@
  * The workflow's SKILL.md beside its canvas, as a docked panel: the host dispatches by this text alone, so it stays in
  * view. It reads as rendered Markdown and switches to editing the source; the one-line description heads the text and
  * scrolls away with it, and (folded) the commands an import registers sit below. The name, the folder and deletion are in the workflow list's "…" menu.
+ * Like a skill, a workflow folder may carry references and other files beside SKILL.md (user 2026-11-24): the shared
+ * file view (SkillFiles, as for an expert's skills) shows SKILL.md first and leads to the folder's list, where a saved
+ * workflow's files are viewed, edited, created and deleted one at a time, outside the workflow's save.
  */
 import { computed, inject, nextTick, ref, watch } from "vue";
+import SkillFiles from "./SkillFiles.vue";
+import { use_workflow_library } from "./workflow-library.js";
+import { t } from "./i18n.js";
 
 const workflow = defineModel("workflow", { type: Object, required: true });
 // An import's commands run on this computer when an API member calls them, so they are kept only once the user allows them.
 const commands_allowed = defineModel("commandsAllowed", { type: Boolean, default: false });
 // `compact`: the stacked page (phone, upright tablet), where the panel is one of two views and cannot fold away.
 // `sub`: a sub-workflow of the open workflow, named here (the page title names the workflow) and carrying no commands.
-const props = defineProps({ saved: Boolean, compact: Boolean, sub: Boolean, readonly: Boolean });
-const { view } = inject("discussion");
+// `files`: this part's other files as `{ path relative to its folder: text }` (cards, canvas and sub-workflows excluded),
+// shown while the part is not saved.
+const props = defineProps({ saved: Boolean, compact: Boolean, sub: Boolean, readonly: Boolean, files: { type: Object, default: () => ({}) } });
+const { view, bridge } = inject("discussion");
 const MAX_SKILL = 20000;
 // A workflow with no SKILL.md text yet opens in editing; otherwise the rendered text comes first.
 const editing = ref(!props.readonly && !workflow.value.skill?.trim());
@@ -22,6 +30,58 @@ const commands = computed(() => props.sub ? [] : workflow.value.commands || []);
 // An import carrying an ID already in the library replaces that workflow when saved.
 const replaced = computed(() => !props.saved && !props.sub && (view.value.launch.workflows || []).find((item) => item.id === workflow.value.id));
 const rendered = computed(() => editing.value ? "" : window.discuss_markdown.render_markdown(workflow.value.skill || ""));
+
+const SKILL_FILE = "SKILL.md";
+// The panel's place in the shared file view (SkillFiles): SKILL.md first.
+const location = ref(SKILL_FILE);
+const library = use_workflow_library();
+// A saved part's files are read and written one at a time through the local service, like an expert's skills; an
+// unsaved workflow or sub-workflow shows the files it was opened with, read-only until it is saved.
+const disk_files = ref(null);
+const live = computed(() => props.saved && !props.readonly && disk_files.value !== null);
+const files = computed(() => [
+  { path: SKILL_FILE, text: workflow.value.skill || "" },
+  ...(disk_files.value || Object.entries(props.files).map(([path, text]) => ({ path, text }))),
+]);
+const digests = computed(() => new Map((disk_files.value || []).map((item) => [item.path, item.digest])));
+
+function file_request(action, input = {}) {
+  const scope = library.saved_scope.value || "global";
+  return bridge.local_request("workflows", { action, id: library.saved_id.value, sub: props.sub ? workflow.value.id : "", scope,
+    ...(scope === "project" && library.saved_project_id.value ? { project_id: library.saved_project_id.value } : {}), ...input });
+}
+
+async function load_files() {
+  if (!props.saved) { disk_files.value = null; return; }
+  try { disk_files.value = (await file_request("files")).files; }
+  catch { disk_files.value = null; }
+}
+
+/** A write moves the workflow's revision; one made on the revision this page holds keeps the page's save going. */
+function follow_revision(result) {
+  const draft = library.draft.value;
+  if (draft && draft.revision === result.revision_before) draft.revision = result.revision;
+}
+
+async function file_change(action, input) {
+  try { follow_revision(await file_request(action, input)); }
+  catch (error) {
+    bridge.notify(error.code === "file_changed" ? "warning" : "error", error.message);
+    if (error.code === "file_changed") load_files();
+    throw error;
+  }
+  await load_files();
+}
+
+const save_file = (path, text) => file_change("file-write", { path, text, digest: digests.value.get(path) || "" })
+  .then(() => bridge.notify("info", t("已保存 {value1}", { value1: path })));
+const remove_file = (entry) => file_change("file-delete", { path: entry.path, digest: entry.digest });
+const create_file = async (folder, name) => {
+  const path = folder ? `${folder}/${name}` : name;
+  await file_change("file-write", { path, text: "", digest: "" });
+  return path;
+};
+load_files();
 
 /** Switch to editing the source, with the cursor in it. */
 function edit() {
@@ -45,10 +105,14 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
   <aside class="workflow-skill" :class="{ 'is-compact': compact }" :aria-label="t('工作流（SKILL.md）')">
     <header class="workflow-skill-head">
       <h3><UIcon :name="sub ? 'i-lucide-git-branch' : 'i-lucide-file-text'" class="workflow-skill-icon" />{{ sub ? t('子工作流') : t('工作流') }}<small>SKILL.md · {{ sub ? t('主持人按需照它做') : t('主持人照它派活') }}</small></h3>
-      <UButton v-if="!readonly" :icon="editing ? 'i-lucide-eye' : 'i-lucide-pencil'" :label="editing ? t('预览') : t('编辑')" size="xs" color="neutral" variant="soft"
+      <UButton v-if="!readonly && location === SKILL_FILE" :icon="editing ? 'i-lucide-eye' : 'i-lucide-pencil'" :label="editing ? t('预览') : t('编辑')" size="xs" color="neutral" variant="soft"
         @click="editing ? (editing = false) : edit()" />
     </header>
-    <div class="workflow-skill-body">
+    <SkillFiles v-model:location="location" class="workflow-skill-files" :files="files" :special="[SKILL_FILE]" :readonly="readonly || !live"
+      :readonly-note="readonly ? t('只读项目目录中的工作流不可修改') : t('保存工作流后可在这里修改')" :save="save_file" :remove="remove_file"
+      :removable="(entry) => !entry.directory && entry.path !== SKILL_FILE && !entry.locked" :create="create_file">
+      <template #special>
+      <div class="workflow-skill-body">
       <label v-if="sub" class="workflow-skill-description">
         <span>{{ t('名称') }}</span>
         <input v-model="workflow.label" :readonly="readonly" :maxlength="32" :placeholder="t('子工作流的名称')" />
@@ -73,8 +137,10 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
       <textarea v-if="editing" ref="source" v-model="workflow.skill" :maxlength="MAX_SKILL" class="workflow-skill-source" spellcheck="false" :aria-label="t('SKILL.md 正文')" />
       <div v-else-if="workflow.skill?.trim()" class="workflow-skill-preview markdown-body" v-html="rendered" @dblclick="edit"></div>
       <button v-else-if="!readonly" type="button" class="workflow-skill-empty" @click="edit"><UIcon name="i-lucide-pencil" class="workflow-skill-icon" />{{ t('写下主持人怎么组织这个{value1}', { value1: sub ? t('子工作流') : t('工作流') }) }}</button>
-    </div>
-    <p v-if="editing" class="workflow-skill-count">{{ (workflow.skill || '').length }} / {{ MAX_SKILL }}</p>
+      </div>
+      </template>
+    </SkillFiles>
+    <p v-if="editing && location === SKILL_FILE" class="workflow-skill-count">{{ (workflow.skill || '').length }} / {{ MAX_SKILL }}</p>
     <details v-if="commands.length" class="workflow-skill-commands" :open="!saved">
       <summary><UIcon name="i-lucide-terminal" class="workflow-skill-icon" />{{ t('API 成员可运行的命令（{value1}）', { value1: commands.length }) }}</summary>
       <ul>
@@ -123,6 +189,7 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
 .workflow-skill-commands li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .workflow-skill-commands code { flex-basis: 100%; overflow-wrap: anywhere; color: var(--ui-text-muted); }
 .workflow-skill-grant, .workflow-skill-warn { display: flex; gap: 6px; align-items: center; margin: 0; color: var(--ui-warning, #e0a33a); font-size: 12px; }
+.workflow-skill-files { flex: 1; }
 /* Stacked page: tighter, the subtitle gives way to the text. */
 .workflow-skill.is-compact { gap: 8px; padding: 8px 12px; }
 .workflow-skill.is-compact .workflow-skill-head small, .workflow-skill.is-compact .workflow-skill-description small, .workflow-skill.is-compact .workflow-skill-meta-hint { display: none; }

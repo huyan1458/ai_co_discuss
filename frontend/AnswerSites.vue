@@ -75,7 +75,8 @@ onMounted(() => load_room_sites(bridge, props.roomId, props.message.id));
         <UButton :label="t('部署为网站')" icon="i-lucide-rocket" size="sm" color="primary" @click="deploy_stage(stage)" />
       </div>
     </div>
-    <div v-for="site in sites" :key="site.site_id" class="site-card" :class="[`is-${site.status}`, { 'is-soon': site.status === 'active' && expires_soon(site) }]">
+    <UContextMenu v-for="site in sites" :key="site.site_id" :disabled="busy === site.site_id" :items="menu(site)" :ui="{ content: 'channel-menu' }">
+    <div class="site-card" :class="[`is-${site.status}`, { 'is-soon': site.status === 'active' && expires_soon(site) }]">
       <div class="site-card-chrome">
         <span class="site-card-dots" aria-hidden="true"><i></i><i></i><i></i></span>
         <a v-if="site.status === 'active'" :href="site.url" target="_blank" rel="noopener noreferrer" class="site-card-address" :title="site.url"><UIcon name="i-lucide-lock" />{{ host(site) }}</a>
@@ -95,6 +96,7 @@ onMounted(() => load_room_sites(bridge, props.roomId, props.message.id));
       </div>
       <span v-if="site.status === 'active'" class="site-card-life" aria-hidden="true"><i :style="{ width: `${life_left(site)}%` }"></i></span>
     </div>
+    </UContextMenu>
   </div>
 </template>
 

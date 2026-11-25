@@ -31,7 +31,7 @@ A room can run either a discussion or Goal at a given time. You can use a workfl
 
 ### 6. How much protection does read-only project access give me?
 
-Project access defaults to read-only. Read-only API file tools restrict access to the project. Codex CLI write restrictions depend on sandbox availability. Existing Claude Code grants and the original project permissions of an `agy` session affect what those tools can do. Codex App, Antigravity App, and manually connected members retain the original tool's permissions. Rewinding the conversation leaves changes to project files in place. [Project permissions by tool](members.md#what-project-permissions-can-enforce).
+Project access defaults to read-only. For model API members, the local service blocks writes and non-CoDiscuss commands when read-only. Codex CLI write restrictions depend on sandbox availability. Existing Claude Code grants and the original project permissions of an `agy` session affect what those tools can do. Codex App, Antigravity App, and manually connected members retain the original tool's permissions. Rewinding the conversation leaves changes to project files in place. [Project permissions by tool](members.md#what-project-permissions-can-enforce).
 
 ### 7. How can I limit token and account usage?
 
@@ -75,7 +75,7 @@ To see what changed in this version, click the version number after "AI CoDiscus
 | Appearance → Visual effects | Full, Compact | Compact turns off background blur and layered shadows for smoother scrolling on slower devices. |
 | Reading → Conversation width | Narrow, Default, Wide | Set the width of the conversation for reading. |
 | Reading → Card text size | Small, Medium, Large | Text size inside message cards. Medium is the default; the choice applies to this device only. |
-| Reading → How long before an answer collapses? | Relaxed, Standard, Eager | Answers fold above about 1.2, 0.7 or 0.5 screen heights respectively. Hover over the heading or an option in either folding setting for an explanation. Relaxed is the default on this device. |
+| Reading → Fold answers longer than | 0.5 screens, 0.7 screens, 1.2 screens | Answers longer than the chosen number of screen heights fold. 1.2 screens is the default; the choice applies to this device only. |
 | Reading → Lines shown when folded | Fewer, Medium, More | A folded answer keeps about 0.35, 0.6 or 0.9 of the screen, converted to lines from the screen height, so phones, tablets and computers each differ. Medium is the default; the choice applies to this device only. |
 | Room preferences → Host's default access | Read-only, Can write, Automatic, Full access | The project access the first member added to a new room (the host by default) starts with; Read-only by default. If its software doesn't support the chosen level, it stays read-only. Saved in the local service, kept across updates; needs the local service connected. |
 | Speech | Text-to-speech service, General voice, voices by platform and for files, Speed, Tone, Voice input, Local process | [Local and cloud speech](voice.md#read-aloud-and-voice-input-local-and-cloud-options) |

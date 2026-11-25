@@ -3,13 +3,15 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, posix, relative, resolve, win32 } from 'node:path';
+import { API_PROVIDERS } from './adapters/profiles.mjs';
 import { adapter_of, BRANCHABLE_ADAPTERS, branch_session, capabilities_of, chosen_settings, cleanup_room, deliver_task, delivery_receipt, preflight_stoppable, recover_turn, session_exists, session_settings, stored_delivery, takes_images } from './adapters/index.mjs';
 import { api as raw_api, overlapping_directories, read_rule, room_draft_key } from './discussion_runner.mjs';
 import { SegmentLog } from './execution_progress.mjs';
 import { capture_base, file_diffs } from './file_diff.mjs';
-import { correctable_refusals, free_task_text, MAX_REFUSAL_RETRIES, refusal_retry_prompt, restart_resume_prompt, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
+import { correctable_refusals, free_task_text, MAX_REFUSAL_RETRIES, PROMPTS_REPLACED, PROMPTS_REVOKED, refusal_retry_prompt, restart_resume_prompt, runs_commands, system_text, TASK_SUBCOMMANDS } from './expert_prompts.mjs';
 import { entry_access, site_fetch } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
+import { t } from './i18n.mjs';
 import { image_settings } from './image_service.mjs';
 import { outside_directory, room_directories, room_directory_entries } from './project_files.mjs';
 import { SessionDriver } from './session_driver.mjs';
@@ -18,7 +20,7 @@ import { effective_profile, load_room_workflow, member_knowledge, workflow_direc
 import { GOAL_CONFIDENCE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence_checkpoint, REVIEW_CONFIDENCE, REVIEW_PROMPT_VERSION, SEQUENCE_CONFIDENCE, SEQUENCE_PROMPT_VERSION, ROUTE_CONFIDENCE, ROUTE_CONTEXT_MESSAGES, ROUTE_GUIDED_PROMPT_VERSION, ROUTE_WIDE_CONFIDENCE, SCHEDULER_MODE, decide_review_completion, route_free_message, some_members } from './scheduler.mjs';
 import { room_text, room_payload } from './room_text.mjs';
 import { question_notice } from './question_weixin.mjs';
-import { host_permissions } from './host_permissions.mjs';
+import { HOST_ACTION_ITEMS, host_allowed, host_permissions } from './host_permissions.mjs';
 const api = (config, path, payload, ...options) => raw_api(config, path, room_payload(payload), ...options);
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -38,6 +40,15 @@ export const GOAL_IDLE_MS = 120_000;
 export const PENDING_NOTICE_MS = 5 * 60_000;
 // A failed Weixin notice is tried again after this long instead of on every tick.
 const NOTICE_RETRY_MS = 60_000;
+// Background reports one follow-up (续报) carries at most (MAX_FOLLOWUP_REPORTS in backend/free_room.py), and the report
+// states that bring no result of their own (FOLLOWUP_ENDED_ONLY there).
+const MAX_FOLLOWUP_REPORTS = 20;
+const FOLLOWUP_ENDED_ONLY = ['stopped', 'killed'];
+// Requests the program opens for a turn the software started on its own (a background report, the host's schedule):
+// nobody waits for their answer, so one that brings nothing ends quietly.
+const PROGRAM_OPENED = ['followup', 'scheduled'];
+// How long reading one process's start time may take.
+const PROCESS_QUERY_MS = 10_000;
 // Without the host's note, the notice quotes the room's latest message, up to this many characters.
 const NOTICE_EXCERPT = 300;
 // A manual member's session that refuses a delivery is retried in the same execution, after a wait the owner can cut short.
@@ -144,6 +155,24 @@ function process_alive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 }
 
+/**
+ * When a process started, as the system reports it ('' when it cannot be read): with the pid it tells a process from a
+ * later one that reused the pid.
+ */
+export function process_started(pid) {
+  const result = process.platform === 'win32'
+    ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${Number(pid)} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`],
+      { windowsHide: true, encoding: 'utf8', timeout: PROCESS_QUERY_MS })
+    : spawnSync('ps', ['-o', 'lstart=', '-p', String(Number(pid))], { encoding: 'utf8', timeout: PROCESS_QUERY_MS });
+  return result.status === 0 ? String(result.stdout || '').trim() : '';
+}
+
+/** End a process and, on Windows, its whole tree (a kill alone leaves its tool commands running). */
+function kill_pid_tree(pid) {
+  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+  else try { process.kill(pid); } catch { /* Already gone. */ }
+}
+
 /** Identify a working directory consistently, so executions in the same cwd can be compared. */
 export function cwd_key(directory) {
   if (!directory) return '';
@@ -243,7 +272,10 @@ export async function user_request_texts(config, execution) {
       if (message.relay_room) {
         for (const request of execution.requests.filter(item => item.message_id === message_id)) {
           request.relay = { from_room: message.relay_room, title: message.relay_title, host: message.relay_host,
-            relation: message.relay_relation, note: '来自关联房间主持人的跨房消息，不代表用户本人新授权' };
+            relation: message.relay_relation, expect: message.relay_expect || 'reply', message_id,
+            reply: message.relay_expect === 'none' ? null : `launch host-control room-post --room ${message.relay_room} --reply-to ${message_id} --expect none`,
+            note: message.relay_expect === 'none' ? t('这是通知，读完即止，不用回传。')
+              : t('按本房已有授权处理；超出授权时在本房问用户。完成后用 reply 命令加正文，一次性回传结果。') };
         }
       } else if (message.author === '用户' && message.text) texts.push(message.text);
     } catch { /* The host still reads the message itself. */ }
@@ -352,22 +384,14 @@ export function room_goal(room) {
 }
 
 async function linked_room_summaries(config) {
-  const describe = async room_id => {
-    try {
-      const room = await api({ ...config, room: room_id }, '');
-      return { room_id, title: room.title, latest_id: room.latest_id,
-        running: (room.free?.members || []).some(member => ['started', 'dispatched'].includes(member.execution?.status)) };
-    } catch { return { room_id }; }
-  };
-  const [parent, children] = await Promise.all([
-    config.spawned_from ? describe(config.spawned_from) : null,
-    Promise.all((config.spawned_rooms || []).map(item => describe(item.room))),
-  ]);
-  return { parent, children };
+  const { links } = await api(config, '/room-links');
+  return links?.length ? links.map(({ room_id, title, host, busy, relation, latest_id }) =>
+    ({ room_id, title, host, busy, relation, latest_id })) : null;
 }
 
 export function free_task_files(config, member, execution, binding, { session = null, suggestions = [], reviews = [], stopped = [], process_access = true,
-  workflow = null, room_members = [], goal = null, attachments = [], room = null, model_change = null, request_texts = [], linked_rooms = null } = {}) {
+  workflow = null, room_members = [], goal = null, attachments = [], room = null, model_change = null, request_texts = [], linked_rooms = null,
+  prompt_record = null, prompt_layers = {} } = {}) {
   const id = `free-${execution.id}`;
   const draft_directory = member_drafts(config, member.name);
   const scratch_directory = join(draft_directory, '.scratch', String(execution.id));
@@ -379,12 +403,13 @@ export function free_task_files(config, member, execution, binding, { session = 
   const profile = effective_profile(config.participants[member.name], member.name, workflow);
   // The host sees the workflow only while its members are here: sending them away ends it.
   const host_workflow = member.role === 'host' && workflow && !workflow.error && workflow_in_use(workflow, room_members) ? workflow : null;
-  atomic_json(access_path, { ...entry_access(), site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
-    session_id: binding.session_id || '', execution_id: execution.id });
   const adapter = adapter_of(profile.adapter);
   const extra_directories = member_extra_directories(config, profile);
   // The expert this member plays keeps its own knowledge, which only it may write (its project access stays as set).
   const knowledge_directory = member_knowledge(config.api_home, member.name, workflow, room_directories(config), profile);
+  atomic_json(access_path, { ...entry_access(), site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
+    session_id: binding.session_id || '', execution_id: execution.id,
+    ...file_scope(config, profile, { member_directory, draft_directory, knowledge_directory, extra_directories }) });
   const readonly_knowledge = knowledge_directory && (config.extra_directories || []).some(item =>
     item.access === 'read' && overlapping_directories(item.path, knowledge_directory));
   const cli = process.platform === 'win32' ? adapter?.windows_command || 'codiscuss.cmd' : 'codiscuss';
@@ -392,6 +417,9 @@ export function free_task_files(config, member, execution, binding, { session = 
   const bound_access = process_access && !inbox && Boolean(adapter?.capabilities.access_env);
   const messages = execution.requests.map(item => `#${item.message_id}`).join('、');
   const requests = execution.requests || [];
+  for (const request of requests) {
+    if (request.relay?.reply?.startsWith('launch ')) request.relay.reply = `${cli} ${request.relay.reply}`;
+  }
   const discussion_request = requests.find(item => item.session_request_id && ['discuss', 'discuss_host'].includes(item.purpose)) || null;
   const direct_question = Boolean(session?.status === 'active' && requests.some(item => item.purpose === 'ask'));
   const { instructions, prompt } = free_task_text({ name: member.label || member.name, role: member.role, discussion: direct_question,
@@ -444,7 +472,7 @@ export function free_task_files(config, member, execution, binding, { session = 
   if (member.role === 'host') {
     if (requests.some(item => item.sequence || item.question?.task || item.question_needed)) skills.push('discuss-host/references/relay.md');
     // A notice, or a hand-back where someone failed or was cancelled, is what calls for diagnosing and recovering.
-    if (linked_rooms || requests.some(item => item.purpose === 'notice' || (item.outcome || []).some(entry => ['failed', 'cancelled'].includes(entry.status)))) {
+    if (linked_rooms || requests.some(item => item.relay || item.purpose === 'notice' || (item.outcome || []).some(entry => ['failed', 'cancelled'].includes(entry.status)))) {
       skills.push('discuss-host/references/control.md');
     }
     if (workflow_field || named?.workflows) skills.push('discuss-host/references/workflow.md');
@@ -488,8 +516,68 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(goal_of_room ? { room_goal: goal_of_room } : {}),
     // Every member may read the folder of the room's workflow (templates, tools, a review of the workflow itself), also
     // while its members are away and the host no longer follows it; only the host's task names it.
-    skill_directories: [skills_directory, ...(readonly_knowledge ? [knowledge_directory] : []), ...(workflow && !workflow.error ? [workflow.directory] : [])], access_path, prompt: with_expert_prompt(prompt, profile), inbox, images,
-    profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill, ...api_sub_workflows(workflow_field, host_workflow) } } : {}) };
+    skill_directories: [skills_directory, ...(readonly_knowledge ? [knowledge_directory] : []), ...(workflow && !workflow.error ? [workflow.directory] : [])], access_path, inbox, images,
+    ...expert_prompt_delivery(prompt, profile, adapter, binding, inbox, prompt_record, { layers: prompt_layers, platform: member_platform(member.name) }), profile, ...(workflow_field ? { workflow: { ...workflow_field, skill: host_workflow.skill, ...api_sub_workflows(workflow_field, host_workflow) } } : {}) };
+}
+
+/** Fingerprint of the prompts sent to a member, to tell whether its session already holds the current text. */
+export function expert_prompt_hash(text) {
+  return text ? createHash('sha256').update(text).digest('hex').slice(0, 16) : '';
+}
+
+// Platform IDs shown under another name (web/app.js PLATFORM_IDENTITIES).
+const PLATFORM_LABELS = { Antigravity: 'Gemini' };
+
+/** A member's platform ID from the fixed platform list (`Claude-2` → `Claude`), '' for any other name. */
+export function member_platform(name) {
+  const text = String(name || '');
+  return Object.keys(API_PROVIDERS).find(platform => text === platform || text.startsWith(`${platform}-`)) || '';
+}
+
+/** The owner's prompts for every member and for each platform, kept in launch-settings.json (never on the website). */
+export function prompt_layers(home) {
+  try { return JSON.parse(readFileSync(join(home, 'launch-settings.json'), 'utf8')).system_prompts || {}; } catch { return {}; }
+}
+
+/**
+ * Where the member's own prompt goes this time: into the software's system prompt when its adapter declares one and this
+ * turn starts the session (or every launch rebuilds it), else into the task text once per session and again after the
+ * user changes it. `prompt_record` is what the bound session last received (`{session_id, hash}`).
+ */
+export function expert_prompt_delivery(prompt, profile, adapter, binding, inbox, prompt_record, { layers = {}, platform = '' } = {}) {
+  // A manually started member keeps its own conversation's prompts: its card has no prompt to set (user 2026-11-25).
+  const text = profile.project_access === 'own' ? '' : system_text(profile, layers, platform, PLATFORM_LABELS[platform] || platform);
+  const hash = expert_prompt_hash(text);
+  const slot = inbox ? '' : adapter?.capabilities.system_prompt || '';
+  const starts = !binding.session_id && !binding.fork;
+  const previous = binding.session_id && prompt_record?.session_id === binding.session_id ? prompt_record.hash || '' : '';
+  // Everything cleared: a session that received some is told once that they no longer apply.
+  if (!hash) return previous ? { prompt: `${prompt}\n\n${PROMPTS_REVOKED}`, expert_prompt_in_task: true, expert_prompt_hash: '' } : { prompt, expert_prompt_hash: '' };
+  if (slot === 'launch' || (slot === 'session' && starts)) return { prompt, system_text: text, expert_prompt_hash: hash };
+  // A session-fixed system prompt is given the current text at every launch too: ignored while the session keeps its
+  // record, it takes over once the session is compacted and rebuilt.
+  const fixed = slot === 'session' ? { system_text: text } : {};
+  if (previous === hash) return { prompt, ...fixed, expert_prompt_hash: hash };
+  // A resumed session may hold an earlier version (in its history or its system prompt): say this one replaces it.
+  const lead = binding.session_id ? `${PROMPTS_REPLACED}\n` : '';
+  return { prompt: `${prompt}\n\n${lead}${text}`, ...fixed, expert_prompt_in_task: true, expert_prompt_hash: hash };
+}
+
+/**
+ * The folders a read-only member's codiscuss commands may name in file arguments (`file_scope` in its credential file,
+ * checked by runner/discuss.py): read from the project, the extra folders, its drafts, knowledge, the skills and its own
+ * runtime folder, as its software may; write only to its drafts, knowledge and writable extra folders. Without it a
+ * read-only member could post any file of this computer (`--body-file`) or save an attachment anywhere (`--dest`).
+ * A member that may write the project or run any command has no scope: its software reaches those files anyway.
+ */
+function file_scope(config, profile, { member_directory, draft_directory, knowledge_directory, extra_directories }) {
+  if (profile.project_access !== 'read' || runs_commands(profile, extra_directories)) return {};
+  const directory = profile.cwd || config.cwd || '';
+  return { file_scope: {
+    read: [directory, member_directory, draft_directory, knowledge_directory, join(config.project, '.agents', 'skills'),
+      ...extra_directories.map(item => item.path)].filter(Boolean),
+    write: [draft_directory, knowledge_directory, ...extra_directories.filter(item => item.access === 'write').map(item => item.path)].filter(Boolean),
+  } };
 }
 
 /** An API host cannot open files outside the project, so its sub-workflows carry their text instead of a path. */
@@ -531,9 +619,15 @@ export function chat_task_files(config, member, chat, binding) {
   const access_path = join(member_directory, `${id}.access.json`);
   const profile = effective_profile(config.participants[member.name], member.name, null);
   atomic_json(access_path, { ...entry_access(), site: config.site, room: config.room, member: member.name, token: config.members[member.name].token,
-    session_id: binding.session_id || '' });
+    session_id: binding.session_id || '', ...file_scope(config, profile, { member_directory, draft_directory,
+      knowledge_directory: member_knowledge(config.api_home, member.name, null, room_directories(config), profile),
+      extra_directories: member_extra_directories(config, profile) }) });
+  // Software whose system prompt is rebuilt at each launch (Pi) is given the owner's prompts again for the chat turn.
+  const relaunched = adapter_of(profile.adapter)?.capabilities.system_prompt === 'launch' && profile.project_access !== 'own';
+  const prompts = relaunched ? system_text(profile, prompt_layers(config.api_home), member_platform(member.name), PLATFORM_LABELS[member_platform(member.name)]) : '';
   return { id, participant: member.name, directory: config.directory, member_directory, draft_directory, extra_directories: member_extra_directories(config, profile),
-    skill_directories: [join(config.project, '.agents', 'skills')], access_path, prompt: `${CHAT_PREAMBLE}\n\n${chat.text}`, inbox: false, profile };
+    skill_directories: [join(config.project, '.agents', 'skills')], access_path, prompt: `${CHAT_PREAMBLE}\n\n${chat.text}`, inbox: false, profile,
+    ...(prompts ? { system_text: prompts } : {}) };
 }
 
 /**
@@ -635,8 +729,15 @@ export class FreeRoomRunner {
     // Execution id -> until when its completed software may still record its receipt (0: stop it now), see `closing`.
     this.closed_at = new Map();
     this.segments = new SegmentLog();
-    // Execution id -> the execution its software turn moved onto when its host dispatched with keep_working.
+    // Each execution's background work as its adapter last listed it, and whether the website has that list yet.
+    this.background_tasks = new Map();
+    // Execution id -> the execution its software turn moved onto when its host dispatched with keep_working, or the
+    // follow-up (续报) opened when background work it left reported after it ended.
     this.continued = new Map();
+    // Per member, software handles kept after an execution completed only because background work it left still runs
+    // (`handle.linger()`); and per execution, the delivery capabilities it reported, which a follow-up reports again.
+    this.lingering = new Map();
+    this.delivery_caps = new Map();
     this.context_errors = new Map();
     this.adopt(config);
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS free_deliveries(member TEXT PRIMARY KEY, client_id TEXT NOT NULL,
@@ -693,6 +794,7 @@ export class FreeRoomRunner {
   }
   /** One bounded iteration: reconcile live executions, then deliver idle members with open requests. */
   async tick() {
+    this.sweep_lingering();
     let inbox; let room;
     // Read one after another: Node's fetch keeps one warm connection per site, and a second parallel request would pay a new
     // TLS handshake (measured 2 s against 0.4 s through a proxy to a hosted site).
@@ -731,6 +833,7 @@ export class FreeRoomRunner {
     // A member sent away or removed no longer appears; its live work was already voided on the website.
     for (const row of this.store.db.prepare('SELECT * FROM free_deliveries').all()) {
       if (LIVE.includes(row.status) && !present.has(row.member)) { this.stop_member(row.member); this.save(row.member, { status: 'idle' }); }
+      if (!present.has(row.member)) this.stop_lingering(row.member);
     }
     await this.report_finished(active);
     this.sweep_attachments();
@@ -746,7 +849,9 @@ export class FreeRoomRunner {
       // A member voided in a window or App the runner could not stop waits until that turn ends (`held_until`).
       else if (!inbox.archived && member.pending.some(request => request.purpose !== 'group') && !this.members.get(member.name)?.size
         && !pending_stops.has(member.name)
-        && !member.pending.some(request => this.routing.has(request.id)) && !(member.held_until * 1000 > Date.now())) await this.start(member, row);
+        && !member.pending.some(request => this.routing.has(request.id)) && !(member.held_until * 1000 > Date.now())
+        // Software kept for background reports still writes the session: stop it, and start once it closed.
+        && !this.release_writers(member.name)) await this.start(member, row);
     }
     // Room work starts first; a private chat line waits until its member is idle.
     if (!inbox.archived) await this.run_chats(inbox.members);
@@ -1217,12 +1322,15 @@ export class FreeRoomRunner {
       const attachments = await request_attachments(this.config, execution, member_runtime(this.config, member.name));
       const request_texts = member.role === 'host' ? await user_request_texts(this.config, execution) : [];
       const model_change = this.model_change(member.name);
-      const linked_rooms = member.role === 'host' && (this.config.spawned_from || this.config.spawned_rooms?.length)
+      const linked_rooms = member.role === 'host'
         ? await linked_room_summaries(this.config) : null;
       const task = free_task_files(this.config, member, execution, binding, {
         session, suggestions: scheduler_suggestions, reviews: review_handoffs, stopped, workflow, room_members: this.room?.members,
         goal: this.room?.goal_state?.goal || null, attachments, room: this.room, model_change, request_texts, linked_rooms,
+        prompt_record: this.prompt_record(member.name), prompt_layers: prompt_layers(this.config.api_home),
       });
+      // A resumed turn sends its resume text instead, so a prompt meant for the task text has not reached the session.
+      const prompt_sent = !(resume && task.expert_prompt_in_task);
       this.store.db.prepare('DELETE FROM metadata WHERE key IN (?,?)').run(`recovery:${execution.id}`, `recovery-denied:${execution.id}`);
       if (task.scratch_created) this.store.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)')
         .run(`scratch:${execution.id}`, JSON.stringify({ member: member.name, id: execution.id }));
@@ -1255,8 +1363,12 @@ export class FreeRoomRunner {
           if (current()) this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)')
             .run(`recovery:${live()}`, JSON.stringify({ adapter: task.profile.adapter, record }));
         },
-        on_binding: session => this.store.bind(member.name, session),
+        on_binding: session => { this.store.bind(member.name, session); if (prompt_sent) this.remember_prompt(member.name, task.expert_prompt_hash); },
         on_process: child => this.track(member.name, child, live()),
+        // Background work this execution left started a new turn of the software: see `follow_up`.
+        on_followup: (reports, handle, options) => this.follow_up(member.name, live(), reports, handle, options),
+        // A schedule the member set in its own software fired: see `schedule_fire`.
+        on_schedule: (schedule, handle) => this.schedule_fire(member.name, live(), schedule, handle),
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(live()); this.segments.mark(live()); },
         on_activity: (phase, tool, call, { synthetic = false } = {}) => {
           if (!current()) return;
@@ -1264,6 +1376,11 @@ export class FreeRoomRunner {
           this.touch(live(), phase);
           this.segments.mark(live(), phase, tool, call);
           if (!synthetic && phase !== 'waiting') this.record_diagnostics(live(), { last_activity_at: Date.now() });
+        },
+        // Only while the execution runs: its final list was sent when it ended, and nothing would send or clear a later one.
+        on_background_tasks: list => {
+          const row = this.row(member.name);
+          if (current() && row?.execution_id === live() && LIVE.includes(row.status)) this.background_tasks.set(live(), { list, sent: false, at: 0 });
         },
         on_diagnostic: facts => {
           if (facts.interjection_confirmed) return this.confirm_interjection(facts.interjection_confirmed);
@@ -1316,12 +1433,14 @@ export class FreeRoomRunner {
         },
       });
       if (result.session_id) this.store.bind(member.name, result.session_id);
+      if (prompt_sent) this.remember_prompt(member.name, task.expert_prompt_hash);
       this.clear_stopped(member.name);
       this.save(member.name, { status: result.status === 'sidecar_pending' ? 'sidecar_pending' : 'running', attempts: 0 });
       if (result.steer) this.steers.set(execution.id, result.steer);
       const delivery = result.capabilities || capabilities_of(adapter.adapter).delivery;
-      await this.report_delivery(execution.id, { ...delivery, steer: Boolean(result.steer),
-        resume: Boolean(capabilities_of(adapter.adapter).resume && delivery.stoppable) }, member.name);
+      const reported = { ...delivery, steer: Boolean(result.steer), resume: Boolean(capabilities_of(adapter.adapter).resume && delivery.stoppable) };
+      this.delivery_caps.set(execution.id, reported);
+      await this.report_delivery(execution.id, reported, member.name);
       // A task posted into the member's own open window runs with that window's model, so the card's choice is not applied;
       // a started process is, and the card's "applies next time" mark ends here.
       if (!task.inbox) {
@@ -1340,6 +1459,18 @@ export class FreeRoomRunner {
       this.save(member.name, { status: 'idle', attempts, error: error.message });
     }
   }
+  /** What the member's bound session last received of its own prompt: `{session_id, hash}` or null. */
+  prompt_record(name) {
+    const row = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`expert-prompt:${name}`);
+    try { return row ? JSON.parse(row.value) : null; } catch { return null; }
+  }
+
+  /** Note that the member's current session holds the prompt with this fingerprint. */
+  remember_prompt(name, hash) {
+    const session_id = this.store.binding(name).session_id;
+    if (session_id) this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(`expert-prompt:${name}`, JSON.stringify({ session_id, hash }));
+  }
+
   /** Recheck local configuration and the site's identity binding before a review starts. */
   async check_review_delivery(member, request) {
     const proof = request.review;
@@ -1441,7 +1572,7 @@ export class FreeRoomRunner {
       this.forget_owner(row.execution_id);
       this.activity.delete(row.execution_id);
       await this.report_segments(row.execution_id, true);
-      this.stop_member(member.name);
+      await this.release_member(member.name, row.execution_id);
       return this.save(member.name, { status: 'idle', error: '' });
     }
     if (row.status === 'storage_stopping') return this.report_storage_stop(row);
@@ -1476,6 +1607,11 @@ export class FreeRoomRunner {
         return this.recover_orphan(member, row, execution);
       }
       if (row.error) return this.retry_or_fail(member.name, execution, row.error);
+      // A follow-up's turn seen to end by an adapter that reports no exit: still live here means it was not answered.
+      if ((execution.followup_of || execution.scheduled) && this.turn_ended.has(execution.id) && !this.exited.has(execution.id)) {
+        this.turn_ended.delete(execution.id);
+        return this.end_quiet(member.name, execution.id);
+      }
       if (this.exited.has(execution.id)) {
         const latest = await api(this.config, `/executions/${execution.id}`);
         const denial = this.exited.get(execution.id);
@@ -1499,12 +1635,17 @@ export class FreeRoomRunner {
         if (['dispatched', 'started'].includes(latest.status) && !denial && await this.capture_reply(member.name, execution.id, latest)) {
           return this.save(member.name, { status: 'idle' });
         }
+        // A follow-up the program opened brought nothing to say: it ends quietly, neither failed nor holding the member.
+        // A refused operation is still reported, so the room sees what was refused.
+        if (['dispatched', 'started'].includes(latest.status) && !denial && latest.requests?.length
+          && latest.requests.every(item => PROGRAM_OPENED.includes(item.purpose))) return this.end_quiet(member.name, execution.id);
         if (['dispatched', 'started'].includes(latest.status)) return this.fail(member.name, execution.id, denial ? room_text("{value1} {value2}，未提交本次回答", { value1: member.name, value2: denial }) : room_text("{value1} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容", { value1: member.name }));
         return this.save(member.name, { status: 'idle' });
       }
     }
     // Segments and notes go first, quietly and often, so a renewal in the same tick already shows the notes it announces.
     if (this.segments.due(execution.id, PROGRESS_REPORT_MS)) await this.report_segments(execution.id);
+    await this.report_background_tasks(execution.id);
     const activity = this.activity.get(execution.id);
     const changed = activity && (activity.phase !== activity.sent_phase || activity.at !== activity.sent_at);
     const elapsed = Date.now() - row.last_renew;
@@ -1534,7 +1675,7 @@ export class FreeRoomRunner {
    */
   async carry_on(name, old, id) {
     this.continued.set(old, id);
-    for (const map of [this.generations, this.steers, this.activity, this.replies, this.exited, this.execution_processes, this.refusal_hints, this.refusal_retries]) {
+    for (const map of [this.generations, this.steers, this.activity, this.replies, this.exited, this.execution_processes, this.refusal_hints, this.refusal_retries, this.delivery_caps]) {
       if (map.has(old)) { map.set(id, map.get(old)); map.delete(old); }
     }
     for (const set of [this.denied, this.not_started, this.not_retryable, this.turn_ended]) if (set.delete(old)) set.add(id);
@@ -1557,6 +1698,164 @@ export class FreeRoomRunner {
     if (workflow) this.record_diagnostics(id, { workflow });
     this.segments.start(id);
     this.save(name, { execution_id: id, last_renew: 0, ...(this.row(name)?.status === 'storage_stopping' ? { status: 'running', error: '' } : {}) });
+  }
+  /**
+   * Stop a member's software once its execution has ended, except a handle its adapter keeps for background work that
+   * execution left (`handle.linger()` true, asked only after a normal completion; a stop ends it as before). The kept
+   * handle leaves the member's busy count but still writes the member's session: whatever resumes that session first
+   * stops it and waits for it to close (`release_writers`). A report it gets meanwhile opens a follow-up (`follow_up`).
+   * A kept process is recorded by pid, so a runner that crashed meanwhile is ended by the next one (`sweep_lingering`).
+   */
+  async release_member(name, execution_id) {
+    const handles = [...(this.members.get(name) || [])];
+    const completed = handles.some(child => child.lingers?.())
+      && (await api(this.config, `/executions/${execution_id}`).catch(() => null))?.status === 'completed';
+    for (const child of handles) {
+      if (!completed || !child.linger?.()) { this.request_stop(child); continue; }
+      this.members.get(name)?.delete(child);
+      this.execution_processes.get(execution_id)?.delete(child);
+      if (!this.lingering.has(name)) this.lingering.set(name, new Set());
+      const kept = this.lingering.get(name);
+      kept.add(child);
+      const key = Number.isInteger(child.pid) ? `lingering:${child.pid}` : '';
+      // With its start time, so a later runner ends this process and never another that reused its pid.
+      if (key) this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)')
+        .run(key, JSON.stringify({ instance: this.instance, member: name, execution_id, started: process_started(child.pid) }));
+      child.once('close', () => {
+        kept.delete(child);
+        try { if (key) this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key); } catch { /* Store closed at shutdown. */ }
+      });
+    }
+  }
+  /**
+   * Whether software kept for background reports still holds the member's session: if so, ask it to stop and report
+   * true, so the caller (new work, a private chat) waits for a later check, after it closed, before resuming the session.
+   */
+  release_writers(name) {
+    const kept = this.lingering.get(name);
+    if (!kept?.size) return false;
+    for (const child of kept) this.request_stop(child);
+    return true;
+  }
+  /** Stop the software a member kept only for background reports, without waiting (it left the room). */
+  stop_lingering(name) {
+    for (const child of this.lingering.get(name) || []) this.request_stop(child);
+  }
+  /**
+   * Once per runner: end software an earlier runner kept for background reports and could not stop (it crashed). Only a
+   * process whose pid and start time both match the record is ended; one that cannot be checked is left alone, as pids
+   * are reused (soon on Windows) and the record may outlive a restart.
+   */
+  sweep_lingering() {
+    if (this.lingering_swept) return;
+    this.lingering_swept = true;
+    for (const { key, value } of this.store.db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'lingering:%'").all()) {
+      const pid = Number(key.slice('lingering:'.length)), record = JSON.parse(value);
+      if (record.instance === this.instance) continue;
+      if (record.started && process_alive(pid) && process_started(pid) === record.started) kill_pid_tree(pid);
+      this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(key);
+    }
+  }
+  /**
+   * Background work the execution `source` left reported, and the member's software started a new turn on it (the
+   * adapter's `on_followup`). While `source` is still open (or judged failed, whose late answer is still taken) the turn
+   * simply belongs to it. Once it completed, open a follow-up (续报) execution for it on the website and move the turn
+   * there as keep_working does, so its answer has a source (red line 4, user 2026-11-25); a stopped one is not carried
+   * on. Answers `true` when the turn now belongs to a live execution; `'keep'` when this report opens nothing but the
+   * rest of the background work is still followed (it only says work was stopped or killed, or the website could not be
+   * reached); `false` when the adapter should stop following altogether (the execution was stopped, the member works on
+   * something else, or the website refused). `steer`: whether the software can still take an interjection in that turn.
+   */
+  async follow_up(name, source, reports, handle, { steer = false } = {}) {
+    if (reports?.length && reports.every(item => FOLLOWUP_ENDED_ONLY.includes(item.status))) return 'keep';
+    let latest;
+    try { latest = await api(this.config, `/executions/${source}`); }
+    catch (error) {
+      this.log(`${name} 执行 #${source} 的后台回报未能接为续报：${error.message}`);
+      return 'keep';
+    }
+    try {
+      if (['dispatched', 'started', 'failed'].includes(latest.status)) return true;
+      if (latest.status !== 'completed') return false;
+      const row = this.row(name), member = this.inbox?.members.find(item => item.name === name);
+      if (!member || (row && LIVE.includes(row.status) && row.execution_id !== source)) return false;
+      const profile = this.config.participants[name];
+      const cwd = profile && !capabilities_of(profile.adapter).project ? '' : cwd_key(profile?.cwd ?? this.config.cwd);
+      const execution = await api(this.config, '/executions', { member_id: member.id, client_id: randomUUID(), cwd, follows: source,
+        reports: (reports || []).slice(0, MAX_FOLLOWUP_REPORTS).map(({ id, status = '', summary = '' }) =>
+          ({ id: String(id).slice(0, 120), status: String(status).slice(0, 40), summary: String(summary).slice(0, 300) })) });
+      await this.adopt_turn(name, source, execution, handle, steer);
+      this.log(`${name} 执行 #${source} 的后台回报接为续报 #${execution.id}`);
+      return true;
+    } catch (error) {
+      this.log(`${name} 执行 #${source} 的后台回报未能接为续报：${error.message}`);
+      return false;
+    }
+  }
+  /**
+   * A schedule the member set in its own software fired and started a turn there (the adapter's `on_schedule`). Only
+   * the host's comes into the room (user 2026-11-25 #10925, option B; the host waking itself is within its full
+   * control, red line 3): open a scheduled execution and move the turn there as a follow-up does. It is the host waking
+   * itself, so it needs the same owner's grant as its timed check-in ("推进方式", user 2026-11-25 #10961); the grant is
+   * kept only in this room's local configuration, so this is where it is checked, as for `host-control checkin`.
+   * The owner's stop of the host (or of everything) also stops a schedule set before it from coming in, until the host
+   * sets one again (user 2026-11-25 #10989); the site keeps when that was (`schedule_stopped_at`), across restarts.
+   * Answers `true` (the turn now belongs to it), `false` (not this one: the host is busy and its execution takes the
+   * turn, or the site refused), `'drop'` (this schedule was set before the owner's last stop: forget it) or `'stop'`
+   * (not the host, or not granted: stop listening for its schedules).
+   */
+  async schedule_fire(name, source, { id, schedule = '', prompt = '', set_at = 0 } = {}, handle = null) {
+    const member = this.inbox?.members.find(item => item.name === name);
+    if (!member) return false;
+    if (member.role !== 'host' || !host_allowed(this.config, HOST_ACTION_ITEMS.checkin)) return 'stop';
+    if (member.schedule_stopped_at && !(set_at > member.schedule_stopped_at)) return 'drop';
+    const row = this.row(name);
+    if (row && LIVE.includes(row.status)) return false;
+    try {
+      const profile = this.config.participants[name];
+      const cwd = profile && !capabilities_of(profile.adapter).project ? '' : cwd_key(profile?.cwd ?? this.config.cwd);
+      const execution = await api(this.config, '/executions', { member_id: member.id, client_id: randomUUID(), cwd,
+        scheduled: { id: String(id || '').slice(0, 120), schedule: String(schedule).slice(0, 120), prompt: String(prompt).slice(0, 300),
+          ...(Number.isSafeInteger(set_at) && set_at > 0 ? { set_at } : {}) } });
+      // The turn is followed by a watch of its own, which takes no interjection.
+      await this.adopt_turn(name, source, execution, handle, false);
+      this.log(`${name} 自设的定时 ${id} 到点，接为定时执行 #${execution.id}`);
+      return true;
+    } catch (error) {
+      this.log(`${name} 自设的定时 ${id} 到点，未能接为定时执行：${error.message}`);
+      return error.code === 'schedule_stopped' ? 'drop' : false;
+    }
+  }
+  /**
+   * Move a software turn that started on its own (a background report, a schedule) onto the execution the website just
+   * opened for it, as keep_working does (`carry_on`): what the ended turn left behind is dropped, the project is watched
+   * from now, its handle is tracked there and the delivery's capabilities are reported again (`steer` as now possible).
+   */
+  async adopt_turn(name, source, execution, handle, steer) {
+    await this.carry_on(name, source, execution.id);
+    for (const store of [this.exited, this.replies, this.failure_classes, this.refusal_hints]) store.delete(execution.id);
+    for (const store of [this.denied, this.not_started, this.not_retryable, this.turn_ended]) store.delete(execution.id);
+    this.watch_workspace(name, execution.id);
+    for (const kept of this.lingering.values()) kept.delete(handle);
+    if (Number.isInteger(handle?.pid)) this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(`lingering:${handle.pid}`);
+    if (handle && !this.execution_processes.get(execution.id)?.has(handle)) this.track(name, handle, execution.id);
+    this.save(name, { execution_id: execution.id, status: 'running', started: Date.now(), last_renew: 0, error: '' });
+    if (!steer) this.steers.delete(execution.id);
+    const delivery = this.delivery_caps.get(execution.id);
+    if (delivery) {
+      this.delivery_caps.set(execution.id, { ...delivery, steer: delivery.steer && steer });
+      await this.report_delivery(execution.id, this.delivery_caps.get(execution.id), name);
+    }
+  }
+  /** Watch the member's project for a follow-up as a delivery does, unless the execution it follows was still watched. */
+  watch_workspace(name, execution_id) {
+    const adapter = this.config.participants[name];
+    if (!adapter || this.snapshots.has(execution_id)) return;
+    const directory = capabilities_of(adapter.adapter).project ? adapter.cwd ?? this.config.cwd : undefined;
+    const before = adapter.project_access === 'read' ? null : workspace_snapshot(directory);
+    const extras = member_extra_directories(this.config, adapter).filter(item => item.access === 'write')
+      .map(item => extra_snapshot(item.path)).filter(item => item.before);
+    this.snapshots.set(execution_id, { member: name, directory, before, extras, base: capture_base(directory, before) });
   }
   /**
    * An execution the owner paused from the private chat, or that takes an interjection only by a pause: stop its
@@ -1615,7 +1914,8 @@ export class FreeRoomRunner {
       const delivery = stored_delivery(value);
       const name = delivery.member || this.store.db.prepare('SELECT member FROM free_deliveries WHERE execution_id=?').get(execution_id)?.member;
       if (!name) continue;
-      for (const child of this.execution_processes.get(execution_id) || []) this.request_stop(child);
+      // Software that may outlive a completed execution for its background work waits until the end is known (`report_stop`).
+      for (const child of this.execution_processes.get(execution_id) || []) if (!child.lingers?.()) this.request_stop(child);
       try { await this.report_stop(name, execution_id); }
       catch (error) { pending.add(name); this.log(`执行 #${execution_id} 的停止结果未能上报：${error.message}`); }
     }
@@ -1649,6 +1949,8 @@ export class FreeRoomRunner {
       this.forget_owner(execution_id);
       return;
     }
+    // A voided execution stops all of its software, background work included.
+    for (const child of processes || []) if (child.lingers?.()) this.request_stop(child);
     // Keep the observed outcome before sending: a restart after a lost response must retry the same fact.
     this.store.db.prepare('UPDATE metadata SET value=? WHERE key=?')
       .run(JSON.stringify({ ...delivery, member: name, pending_result: result }), key);
@@ -1724,11 +2026,28 @@ export class FreeRoomRunner {
   stopped_executions(name) {
     return JSON.parse(this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`stopped:${name}`)?.value || '[]');
   }
+  /**
+   * Send the execution's latest background work list when it changed, no more often than progress reports; `final`
+   * sends what is left and forgets it. A website that refuses the list (one older than this runner) is not asked again
+   * for this execution; a list that could not be sent waits for the next try. It never fails the execution.
+   */
+  async report_background_tasks(execution_id, final = false) {
+    const pending = this.background_tasks.get(execution_id);
+    if (pending && !pending.sent && (final || Date.now() - pending.at >= PROGRESS_REPORT_MS)) {
+      pending.at = Date.now();
+      try {
+        await api(this.config, `/executions/${execution_id}`, { action: 'background_tasks', tasks: pending.list });
+        pending.sent = true;
+      } catch (error) { if (/HTTP 4\d\d/.test(error.message)) pending.sent = true; }
+    }
+    if (final) this.background_tasks.delete(execution_id);
+  }
   /** Send the execution's recorded segments and progress notes; `final` sends the rest once it has ended. */
   async report_segments(execution_id, final = false) {
     const diagnostics = this.diagnostics.get(execution_id);
     await this.segments.report(execution_id, final, ({ segments, notes }) =>
       api(this.config, `/executions/${execution_id}`, { action: 'segments', diagnostics, segments, ...(notes.length ? { notes } : {}) }));
+    await this.report_background_tasks(execution_id, final);
     if (final) {
       const snapshot = this.snapshots.get(execution_id);
       if (snapshot) snapshot.diagnostics = this.diagnostics.get(execution_id);
@@ -1849,6 +2168,11 @@ export class FreeRoomRunner {
       return this.save(member.name, { status: 'idle', error: '' });
     }
     const submitted = ['accepted', 'rejected'].includes(latest.delivery?.last_submission?.outcome);
+    // A follow-up the program opened is not resumed or failed across a restart: nothing it lost was asked for by anyone.
+    if (!submitted && latest.requests?.length && latest.requests.every(item => PROGRAM_OPENED.includes(item.purpose))) {
+      this.forget_owner(execution.id);
+      return this.end_quiet(member.name, execution.id);
+    }
     if (submitted) return this.fail(member.name, execution.id, room_text("{value1} 会话已结束，但未提交本次回答；请核对原会话确认是否已有内容", { value1: member.name }));
     let saved;
     try { saved = JSON.parse(this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`recovery:${execution.id}`)?.value || 'null'); }
@@ -2088,7 +2412,8 @@ export class FreeRoomRunner {
       }
       const next = chats.find(chat => chat.status === 'pending' && !live?.steered.has(chat.id));
       const row = this.row(member.name);
-      if (next && !live && !this.members.get(member.name)?.size && !(row && LIVE.includes(row.status))) await this.start_chat(member, next);
+      if (next && !live && !this.members.get(member.name)?.size && !(row && LIVE.includes(row.status))
+        && !this.release_writers(member.name)) await this.start_chat(member, next);
     }
   }
   /** Start one chat line as its own turn; the turn reports its reply or failure when it ends, without holding the tick. */

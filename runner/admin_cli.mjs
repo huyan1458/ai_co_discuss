@@ -83,11 +83,11 @@ API 密钥、技能、工作流、系统提示词（目标同上）
   skill library  /  skill import <文件夹或.zip>  /  skill delete <名>
   skill list <目标>  /  skill install <目标> <名>...  /  skill remove <目标> <名>...
   workflow list <目标>  /  workflow install <目标>  /  workflow update <目标>
-  prompt get <目标>  /  prompt set <目标> --file <文件> [--group <键>]   管理员的提示词按组保存（见 prompt get）
+  prompt get <账号>  /  prompt set <账号> --file <文件>   托管账号的系统提示词（管理员本人的成员用 codiscuss launch prompts）
   prompt default get  /  prompt default set --file <文件>             新托管账号的默认系统提示词
 
 结果以 JSON 输出。--data 指定管理员服务目录（默认 ~/.codiscuss）。
-`) + t('  storage [clean]                          查看存储用量，或清理已确认结束的执行临时目录') + '\n'
+`) + t('  room-link A B / room-unlink A B / room-links A    建立、解除或查看关联房间') + '\n' + t('  storage [clean]                          查看存储用量，或清理已确认结束的执行临时目录') + '\n'
   + t('  account add <名> --project-data-root <目录>   将新账号的项目、工作区和成员草稿放在指定目录') + '\n'
   + t('  account migrate-data <名> --project-data-root <目录>   停止实例并迁移项目数据') + '\n'
   + t('  account migration-backups <名>   查看各迁移备份的位置与字节数') + '\n'
@@ -255,18 +255,12 @@ async function prompt_command(call, [action, who], values) {
     throw new Error(HELP);
   }
   need(who, t('目标'));
-  if (!is_owner(who)) {
-    if (action === 'get') return { prompt: (await call(`accounts/${who}/env`)).prompt };
-    if (action === 'set') return call(`accounts/${who}/env/prompt`, { text: readFileSync(need(values.file, '--file'), 'utf8') });
-    throw new Error(HELP);
-  }
-  const groups = await call('owner/prompts');
-  if (action === 'get') return groups;
-  if (action !== 'set') throw new Error(HELP);
-  // The owner's prompt files are kept as groups of hard links; the one to write is named, or the only one there is.
-  const group = values.group ? groups.find(item => item.key === values.group) : groups.length === 1 ? groups[0] : null;
-  if (!group) throw new Error(t('请用 --group 指定要写入的组：{value1}', { value1: groups.map(item => item.key).join('、') }));
-  return call('owner/prompts', { key: group.key, text: readFileSync(need(values.file, '--file'), 'utf8'), original: group.text });
+  // The admin's own CLAUDE.md / AGENTS.md are also read by plain AI windows, so CoDiscuss no longer writes them
+  // (user 2026-11-25): the admin's members take their prompts from `codiscuss launch prompts` instead.
+  if (is_owner(who)) throw new Error(t('管理员本人的系统提示词改用 codiscuss launch prompts 设置，不再修改 CLAUDE.md、AGENTS.md'));
+  if (action === 'get') return { prompt: (await call(`accounts/${who}/env`)).prompt };
+  if (action === 'set') return call(`accounts/${who}/env/prompt`, { text: readFileSync(need(values.file, '--file'), 'utf8') });
+  throw new Error(HELP);
 }
 
 // ---- Starting and quitting, without the panel ----
@@ -428,6 +422,12 @@ export async function admin_cli(args, { client = panel_client, print = text => p
     return result;
   }
   const call = await with_elevation(await client(data), data);
+  if (['room-link', 'room-unlink', 'room-links'].includes(command)) {
+    if (rest.length !== (command === 'room-links' ? 1 : 2) || rest.some(id => !/^[a-zA-Z0-9_-]{1,64}$/.test(id))) throw new Error(HELP);
+    const result = await call(`room-links/${command}`, { room: rest[0], target: rest[1] });
+    print(`${JSON.stringify(result, null, 2)}\n`);
+    return result;
+  }
   const commands = {
     storage: () => {
       if (!rest.length) return call('storage');

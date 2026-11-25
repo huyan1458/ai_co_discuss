@@ -15,14 +15,19 @@ export function html_document(text, extra = "") {
   return `${doctype}<meta charset="utf-8">${extra}${text.slice(doctype.length)}`;
 }
 
-/** Read an attachment as UTF-8 text, retaining enough metadata for a truncated source preview. */
-export async function read_attachment(attachment) {
+/**
+ * Read an attachment as UTF-8 text, retaining enough metadata for a truncated source preview. The source view shows at
+ * most ATTACHMENT_TEXT_LIMIT; a larger HTML file is already downloaded whole, so its full text is returned as `page`
+ * for rendering and opening in a new tab.
+ */
+export async function read_attachment(attachment, html = false) {
   const response = await fetch(attachment.url);
   if (!response.ok) throw new Error(t('附件读取失败（{value1}）', { value1: response.status }));
   const blob = await response.blob();
   const truncated = blob.size > ATTACHMENT_TEXT_LIMIT;
   const text = new TextDecoder("utf-8").decode(await (truncated ? blob.slice(0, ATTACHMENT_TEXT_LIMIT) : blob).arrayBuffer());
-  return { text, truncated, limit: ATTACHMENT_TEXT_LIMIT, size: blob.size, modified_at: attachment.created_at, encoding: "utf-8" };
+  const page = truncated && html ? { text: new TextDecoder("utf-8").decode(await blob.arrayBuffer()) } : null;
+  return { text, truncated, limit: ATTACHMENT_TEXT_LIMIT, size: blob.size, modified_at: attachment.created_at, encoding: "utf-8", page };
 }
 
 /**

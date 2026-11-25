@@ -16,7 +16,7 @@ export const HOST_ACTION_ITEMS = {
   access: 'project_access',
   invite: 'roster', away: 'roster', remove: 'roster', back: 'roster',
   order: 'pacing', discussion: 'pacing', goal: 'pacing', checkin: 'pacing',
-  // `room-post` needs no item: it reaches only rooms linked by a `create-room` the owner allowed.
+  // `room-post` needs no item: it reaches only rooms linked by their owners.
   'create-room': 'create_rooms',
 };
 

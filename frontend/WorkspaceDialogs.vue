@@ -1,17 +1,19 @@
 <script setup>
-import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
+import { computed, inject, ref, watch } from "vue";
 import CreateDiscussion from "./CreateDiscussion.vue";
 import DiscussionLimits from "./DiscussionLimits.vue";
 import ExtraDirectoriesField from "./ExtraDirectoriesField.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import AccountSettings from "./AccountSettings.vue";
+import ChainRoundsField from "./ChainRoundsField.vue";
 import SpeechSettings from "./SpeechSettings.vue";
+import SystemPrompts from "./SystemPrompts.vue";
 import WeixinSettings from "./WeixinSettings.vue";
 import LanguagePicker from "./LanguagePicker.vue";
 import { t } from "./i18n.js";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 
-const props = defineProps({ detailId: { type: Number, default: null }, targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] }, foldOptions: { type: Array, default: () => [] }, foldKeepOptions: { type: Array, default: () => [] }, cardTextOptions: { type: Array, default: () => [] } });
+const props = defineProps({ targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] }, foldOptions: { type: Array, default: () => [] }, foldKeepOptions: { type: Array, default: () => [] }, cardTextOptions: { type: Array, default: () => [] } });
 const mode = defineModel({ type: String, default: "" });
 const reading_width = defineModel("readingWidth", { type: String, default: "default" });
 const effects = defineModel("effects", { type: String, default: "full" });
@@ -22,10 +24,10 @@ const rendered_mode = ref(mode.value);
 watch(mode, (value) => { if (value) rendered_mode.value = value; });
 const { view, bridge, act, is_running } = inject("discussion");
 const open = computed({ get: () => Boolean(mode.value), set: (value) => { if (!value) mode.value = ""; } });
-const titles = { settings: t("设置"), create: t("新建房间"), folder: t("新建文件夹"), "rename-folder": t("编辑文件夹"), "delete-folder": t("移除文件夹"), "archive-folder": t("存档文件夹"), edit: t("编辑议题"), message: t("消息原文") };
-Object.assign(titles, { rename: t("重命名房间"), restore: t("恢复房间"), delete: t("销毁房间") });
-const descriptions = { create: t("邀请 AI 一起协作；需要深入讨论时，可在创建时或之后随时开启。"), edit: t("维护话题目标、背景与讨论默认上限。"), message: t("保留作者、来源、提交人和引用关系。") };
-Object.assign(descriptions, { rename: t("名称变化不会影响讨论记录和阅读地址。"), restore: t("移回讨论列表，保持当前讨论阶段。"), delete: t("销毁后无法恢复。") });
+const titles = { settings: t("设置"), create: t("新建房间"), folder: t("新建文件夹"), "rename-folder": t("编辑文件夹"), "delete-folder": t("移除文件夹"), "archive-folder": t("存档文件夹"), edit: t("编辑议题") };
+Object.assign(titles, { restore: t("恢复房间"), delete: t("销毁房间") });
+const descriptions = { create: t("邀请 AI 一起协作；需要深入讨论时，可在创建时或之后随时开启。"), edit: t("维护话题目标、背景与讨论默认上限。") };
+Object.assign(descriptions, { restore: t("移回讨论列表，保持当前讨论阶段。"), delete: t("销毁后无法恢复。") });
 titles.archives = t("已存档房间");
 titles.destructions = t("销毁记录");
 descriptions.destructions = t("查看销毁回执：删除了什么、保留了什么；未完成的可以重试。");
@@ -126,7 +128,6 @@ async function delete_all_archives() {
   } finally { archives_deleting.value = false; }
 }
 
-const management_title = ref("");
 const folder_name = ref("");
 // The folder's project paths, edited as the new-room form does: a main directory, then other directories.
 const folder_main = ref("");
@@ -139,11 +140,10 @@ watch(() => [mode.value, props.targetFolder?.id], () => {
   folder_extras.value = extras;
 });
 const folder_dialog = computed(() => ["folder", "rename-folder", "delete-folder", "archive-folder"].includes(rendered_mode.value));
-watch(() => [mode.value, props.targetRoom?.id], () => { management_title.value = mode.value === "rename" ? props.targetRoom?.title || "" : ""; });
 
 /** Close directory confirmations immediately; background completion never closes a later dialog. */
 async function save_management() {
-  const request = { id: props.targetRoom.id, action: mode.value, title: management_title.value };
+  const request = { id: props.targetRoom.id, action: mode.value };
   if (mode.value === "delete") return ask_final(1, () => destroy_room(request));
   mode.value = "";
   await act("manage_channel", request);
@@ -241,9 +241,9 @@ async function remove_folder(with_rooms) {
   if (deleted) await act("delete_folder", id);
 }
 
-/** Archive the folder's active rooms one request at a time; the folder itself stays. */
+/** Archive the folder's active unpinned rooms one request at a time; the folder and pinned rooms stay. */
 async function archive_folder() {
-  const rooms = folder_rooms.value;
+  const rooms = folder_rooms.value.filter(room => !room.pinned);
   mode.value = "";
   for (const room of rooms) await act("manage_channel", { id: room.id, action: "archive" });
 }
@@ -251,11 +251,6 @@ const details_open = ref(false);
 const topic_limits = ref(null);
 const limits_locked = computed(() => ["active", "paused"].includes(view.value.room?.session?.status));
 const pending_theme = ref(null);
-const pending_attachment = ref(null);
-const detail = ref(null);
-const detail_error = ref("");
-let detail_request = 0, detail_target = null;
-onBeforeUnmount(() => { detail_request++; });
 // The project access the first member of a new room (its host by default) starts with; kept in the local service's create preferences.
 const HOST_ACCESS_OPTIONS = [{ value: "read", label: t("只读") }, { value: "write", label: t("可写") }, { value: "auto", label: t("自动") }, { value: "full", label: t("全放开") }];
 const host_access = computed(() => view.value.launch.create_preferences?.host_project_access || "read");
@@ -287,51 +282,12 @@ function finish_theme_change() {
   pending_theme.value = null;
 }
 
-/** Release the original-message focus trap before opening the shared preview. */
-function open_attachment(event) {
-  const button = event.target.closest("[data-preview-attachment]");
-  if (!button) return;
-  event.stopPropagation();
-  pending_attachment.value = { ...button.dataset, room_id: button.dataset.attachmentRoom, id: button.dataset.previewAttachment };
-  mode.value = "";
-}
-
-/** Apply deferred actions only after the modal removes its accessibility isolation. */
-function after_dialog_leave() {
-  finish_theme_change();
-  if (!pending_attachment.value) return;
-  const file = pending_attachment.value;
-  pending_attachment.value = null;
-  act("preview_attachment", file);
-}
-
-/** Fetch an exact message and discard replies from a previously closed dialog. */
-watch(() => [mode.value, props.detailId, view.value.room?.id], ([kind, id]) => {
-  detail_request++;
-  if (kind === "message" && id && view.value.room) load_detail(id);
-});
-
-/** Switch the original-message view immediately, then fill it only with the latest requested message. */
-async function load_detail(id) {
-  const request = ++detail_request, room_id = view.value.room.id;
-  detail_target = id;
-  detail.value = null;
-  detail_error.value = "";
-  try {
-    const result = await bridge.request(`/api/rooms/${room_id}/messages/${id}`);
-    if (request === detail_request) detail.value = result;
-  } catch (error) { if (request === detail_request) detail_error.value = error.message; }
-}
-
-/** Follow a reply chain inside the same original-message dialog. */
-function follow_reply() { load_detail(detail.value.reply_to); }
-
 /** A half-filled create form closes only through its own Cancel, close button or Escape. */
 const keep_open = (event) => event.preventDefault();
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="final_confirm ? t('再次确认销毁') : titles[rendered_mode] || t('讨论')" :description="final_confirm ? undefined : descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', ['rename', 'restore', 'delete'].includes(rendered_mode) && 'channel-folder-modal channel-manage-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'settings' && 'channel-settings-modal', rendered_mode === 'create' && 'channel-create-modal', rendered_mode === 'message' && 'channel-message-modal'], body: 'dialog-body' }" :content="{ onInteractOutside: keep_open }" @after:leave="after_dialog_leave">
+  <UModal v-model:open="open" :title="final_confirm ? t('再次确认销毁') : titles[rendered_mode] || t('讨论')" :description="final_confirm ? undefined : descriptions[rendered_mode]" :ui="{ content: ['glass-panel studio-modal', folder_dialog && 'channel-folder-modal', ['restore', 'delete'].includes(rendered_mode) && 'channel-folder-modal channel-manage-modal', rendered_mode === 'archives' && 'channel-archive-modal', rendered_mode === 'settings' && 'channel-settings-modal', rendered_mode === 'create' && 'channel-create-modal'], body: 'dialog-body' }" :content="{ onInteractOutside: keep_open }" @after:leave="finish_theme_change">
     <template #body>
       <section v-if="final_confirm" class="dialog-form">
         <p class="channel-destroy-final">{{ final_confirm.count === 1 ? t("确定销毁此房间？记录、附件、AI 会话与草稿将永久删除，无法恢复。") : t("确定销毁这 {count} 个房间？记录、附件、AI 会话与草稿将永久删除，无法恢复。", { count: final_confirm.count }) }}</p>
@@ -387,7 +343,7 @@ const keep_open = (event) => event.preventDefault();
         <UInput v-model="folder_name" icon="i-lucide-folder" :aria-label="rendered_mode === 'folder' ? t('新文件夹名称') : t('文件夹名称')" :placeholder="t('文件夹名称')" autofocus required :maxlength="40" class="w-full" autocomplete="off" @keydown.enter.prevent="!$event.isComposing && save_folder()" />
         <UFormField v-if="['folder', 'rename-folder'].includes(rendered_mode)" :label="t('项目路径（可选）')" :description="t('在此文件夹中新建房间时自动带入，已有房间不受影响。')">
           <div v-if="view.launch.available" class="channel-folder-directories">
-            <ProjectDirectoryField v-model="folder_main" compact :placeholder="t('粘贴或输入临时路径')">
+            <ProjectDirectoryField v-model="folder_main" compact :placeholder="view.launch.remote ? t('从常用项目中选择') : t('粘贴或输入临时路径')">
               <template v-if="folder_main.trim()" #badge><span class="channel-folder-primary">{{ t("主目录") }}</span></template>
               <template v-if="folder_main.trim()" #actions><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="self-center" :aria-label="t('移除主目录 {path}', { path: folder_main })" @click="remove_folder_main" /></template>
             </ProjectDirectoryField>
@@ -400,7 +356,7 @@ const keep_open = (event) => event.preventDefault();
         </UFormField>
         <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'folder' ? t('创建文件夹') : t('保存')" class="channel-primary-button" :loading="is_running('create_folder') || is_running('rename_folder')" :disabled="!folder_name.trim()" /></div>
       </form>
-      <form v-else-if="['rename', 'restore', 'delete'].includes(rendered_mode)" class="dialog-form" @submit.prevent="save_management">
+      <form v-else-if="['restore', 'delete'].includes(rendered_mode)" class="dialog-form" @submit.prevent="save_management">
         <p class="channel-management-target">{{ targetRoom?.title }} <span>· {{ t("{count} 条消息", { count: targetRoom?.message_count }) }}</span></p>
         <p v-if="rendered_mode === 'restore'" class="fine-print">{{ t("恢复不会自动继续讨论；需要继续时，在主持设置中调整阶段。") }}</p>
         <template v-if="rendered_mode === 'delete'">
@@ -412,8 +368,7 @@ const keep_open = (event) => event.preventDefault();
           </ul>
           <div class="channel-destroy-export"><span>{{ export_started ? t("已开始下载，请确认浏览器已保存。") : t("销毁前导出消息、私聊与附件？（不含草稿文件）") }}</span><UButton :label="t('导出资料包')" icon="i-lucide-download" color="neutral" variant="soft" size="xs" :disabled="view.backup_pending" @click="export_before_destroy" /></div>
         </template>
-        <UFormField v-if="rendered_mode === 'rename'" :label="t('房间名称')" required><UInput v-model="management_title" autofocus :maxlength="80" required class="w-full" autocomplete="off" /></UFormField>
-        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? t('立即销毁') : rendered_mode === 'rename' ? t('保存名称') : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="is_running('manage_channel') || view.directory_pending.includes(`delete:${targetRoom?.id}`)" :disabled="rendered_mode === 'rename' && !management_title.trim()" /></div>
+        <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" :label="rendered_mode === 'delete' ? t('立即销毁') : titles[rendered_mode]" :color="rendered_mode === 'delete' ? 'error' : 'primary'" :loading="is_running('manage_channel') || view.directory_pending.includes(`delete:${targetRoom?.id}`)" /></div>
       </form>
       <div v-else-if="rendered_mode === 'settings'">
         <AccountSettings />
@@ -442,12 +397,12 @@ const keep_open = (event) => event.preventDefault();
             <div class="channel-reading-options" role="group" aria-labelledby="channel-card-text-label"><UButton v-for="option in cardTextOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: card_text === option.value }" :aria-pressed="card_text === option.value" @click="card_text = option.value" /></div>
           </section>
           <section class="channel-setting-row">
-            <h3 id="channel-fold-label" :title="t('按回答占几屏来判断。')">{{ t("回答超过多长就收起？") }}</h3>
-            <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-label"><UButton v-for="option in foldOptions" :key="option.value" :label="option.label" :title="option.title" color="neutral" variant="ghost" :class="{ chosen: fold_level === option.value }" :aria-pressed="fold_level === option.value" @click="fold_level = option.value" /></div>
+            <h3 id="channel-fold-label">{{ t("回答收起长度") }}</h3>
+            <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-label"><UButton v-for="option in foldOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_level === option.value }" :aria-pressed="fold_level === option.value" @click="fold_level = option.value" /></div>
           </section>
           <section class="channel-setting-row">
-            <h3 id="channel-fold-keep-label" :title="t('收起后保留多少开头内容？')">{{ t("折叠后显示") }}</h3>
-            <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-keep-label"><UButton v-for="option in foldKeepOptions" :key="option.value" :label="option.label" :title="option.title" color="neutral" variant="ghost" :class="{ chosen: fold_keep === option.value }" :aria-pressed="fold_keep === option.value" @click="fold_keep = option.value" /></div>
+            <h3 id="channel-fold-keep-label">{{ t("折叠后显示") }}</h3>
+            <div class="channel-reading-options" role="group" aria-labelledby="channel-fold-keep-label"><UButton v-for="option in foldKeepOptions" :key="option.value" :label="option.label" color="neutral" variant="ghost" :class="{ chosen: fold_keep === option.value }" :aria-pressed="fold_keep === option.value" @click="fold_keep = option.value" /></div>
           </section>
         </div>
         <h3 class="account-appearance-heading">{{ t("房间偏好") }}</h3>
@@ -457,8 +412,14 @@ const keep_open = (event) => event.preventDefault();
             <div class="channel-reading-options channel-access-options" role="group" aria-labelledby="channel-host-access-label"><UButton v-for="option in HOST_ACCESS_OPTIONS" :key="option.value" :label="option.label" color="neutral" variant="ghost" :disabled="!view.launch.available" :class="{ chosen: host_access === option.value }" :aria-pressed="host_access === option.value" @click="bridge.write_create_preferences({ host_project_access: option.value })" /></div>
             <p class="fine-print">{{ view.launch.available ? t("新建房间时主持人的项目权限；软件不支持时为只读。") : t("连接本机服务后可设置。") }}</p>
           </section>
+          <section v-if="view.launch.available || view.launch.remote" class="channel-setting-row channel-setting-wide">
+            <h3>{{ t("关联房间互传上限") }}</h3>
+            <ChainRoundsField class="channel-setting-limit" :name="t('关联房间互传条数')" :unit="t('条')" :model-value="view.create_relay_rounds ?? 0" @update:model-value="bridge.write_create_relay_rounds($event)"
+              :help="t('任意两个关联房间之间，两边主持人从你上次发言起最多互传几条消息；对所有关联房间生效。')" />
+          </section>
         </div>
         <SpeechSettings />
+        <SystemPrompts />
         <WeixinSettings />
       </div>
       <CreateDiscussion v-else-if="rendered_mode === 'create'" @submit="save_form" @cancel="mode = ''" />
@@ -474,7 +435,6 @@ const keep_open = (event) => event.preventDefault();
         <UCollapsible v-model:open="details_open" class="advanced-fields"><UButton :trailing-icon="details_open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" :label="t('用户原文、背景与边界')" color="neutral" variant="ghost" block class="advanced-trigger" /><template #content><div class="advanced-content"><UFormField v-for="item in [{ key: 'user_request', label: t('用户原文') }, { key: 'background', label: t('背景') }, { key: 'boundaries', label: t('讨论边界') }]" :key="item.key" :label="item.label"><UTextarea :model-value="view.fields[form_id(item.key)]" :maxlength="4000" :rows="2" class="w-full" @update:model-value="bridge.write_field(form_id(item.key), $event)" /></UFormField></div></template></UCollapsible>
         <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" @click="mode = ''" /><UButton type="submit" class="channel-primary-button" :label="t('保存议题')" :loading="is_running('create') || is_running('save_topic')" /></div>
       </form>
-      <div v-else-if="rendered_mode === 'message'" class="original-message"><p v-if="detail_error" role="alert">{{ detail_error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" @click="load_detail(detail_target)" /></p><template v-else-if="detail"><div class="original-meta"><strong>{{ bridge.display_name(detail.author) }}</strong><span>#{{ detail.id }}</span><UBadge color="neutral" variant="subtle">{{ bridge.sources[detail.source] }}</UBadge></div><p class="fine-print">{{ bridge.provenance(detail) }} · {{ new Date(detail.created_at).toLocaleString('zh-CN') }}</p><section v-if="detail.summary" class="channel-answer-summary"><small>{{ t("回答摘要 · {name}", { name: bridge.display_name(detail.summary_by) }) }}</small><p class="message-prose">{{ detail.summary }}</p></section><p class="message-prose">{{ detail.text }}</p><div v-if="detail.attachments?.length" @click="open_attachment" v-html="bridge.attachment_markup(detail.attachments)"></div><UButton v-if="detail.reply_to" :label="t('查看被回复的原文 #{id}', { id: detail.reply_to })" icon="i-lucide-corner-up-left" variant="outline" color="neutral" class="channel-surface-button" @click="follow_reply" /></template><div v-else class="grid gap-4 py-2" role="status" :aria-label="t('正在读取原文')"><USkeleton class="h-5 w-36" /><USkeleton v-for="line in 6" :key="line" class="h-4" :class="line % 3 ? 'w-full' : 'w-2/3'" /></div></div>
     </template>
   </UModal>
   <UModal v-model:open="archive_destroy_open" :title="archive_destroy_final ? t('再次确认销毁') : t('销毁已存档房间')" :description="archive_destroy_final ? undefined : t('销毁后无法恢复。')" :ui="{ content: 'glass-panel studio-modal channel-folder-modal channel-manage-modal', body: 'dialog-body' }" :content="{ onInteractOutside: keep_open }">

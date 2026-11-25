@@ -11,6 +11,8 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
+import { admin_cli } from '../runner/admin_cli.mjs';
+import { create_panel } from '../runner/admin_panel.mjs';
 import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, leave_sub_workflow, launch_settings, room_configuration, room_files, room_media, room_models, room_page, room_member, room_member_model, room_settings, room_skills, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 // Saves that replace a saved workflow on purpose; a save naming the version it edited is tested on its own.
@@ -1382,6 +1384,36 @@ test('with full host control granted, only the host stops, invites at most writi
   const removed = await host_control(f.home, 'remove', { access_file: host_access, member: '评审' });
   assert.deepEqual({ ...removed, execution: undefined }, { ok: true, action: 'remove', member: invited.member, label: '评审', status: 'removed', pending: 0, cancelled_pending: 0, execution: undefined });
   assert.ok(!(await api(config, '')).free.members.some(member => member.name === invited.member && member.status === 'active'));
+});
+
+test('an existing room host requests a peer link and sends only after owner approval', async t => {
+  const f = await fixture(t);
+  async function create(title) {
+    const result = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants,
+      room: { title, mode: 'free', host: 'Codex', members: ['Codex'], submission_id: randomUUID() } }, f.options);
+    return load_config(result.config_path);
+  }
+  const first = await create('来源'), other = await create('目标');
+  const access_file = join(f.directory, 'peer-host.json');
+  writeFileSync(access_file, JSON.stringify({ site: f.site, room: first.room, token: first.members.Codex.token }));
+  const control = (action, options = {}) => host_control(f.home, action, { access_file, room: other.room, ...options });
+  await assert.rejects(control('room-post', { text: '派活' }), /link-request/);
+  const pending = await control('link-request', { reason: '协作测试' });
+  assert.equal(pending.state, 'pending');
+  await api(first, `/room-link-requests/${pending.id}/decide`, { approve: true, other_token: other.token });
+  assert.equal((await control('rooms')).links[0].relation, 'peer');
+  const receipt = await control('room-post', { text: '通知', expect: 'none' });
+  assert.equal((await api(other, `/messages/${receipt.message_id}`)).relay_expect, 'none');
+  writeFileSync(join(f.home, 'local-settings.json'), JSON.stringify({ port: Number(new URL(f.site).port) }));
+  const panel = create_panel({ data: f.home, key: randomUUID(), port: 0 });
+  const admin = (...args) => admin_cli([...args, '--data', f.home], {
+    client: async () => (path, body) => panel.api('POST', '/api/' + path, body), print() {},
+  });
+  assert.equal((await admin('room-links', first.room)).links[0].room_id, other.room);
+  await admin('room-unlink', first.room, other.room);
+  await assert.rejects(control('room-post', { text: '已解除' }), /link-request/);
+  await admin('room-link', first.room, other.room);
+  await assert.rejects(control('room-post', { text: '打断', interrupt: true }), /仅父房间|Only the parent/);
 });
 
 test('a host creates a room inside its project, linked both ways, that cannot create rooms, up to the limit', async t => {

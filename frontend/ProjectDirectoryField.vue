@@ -35,6 +35,27 @@ function same_path(left, right) {
 const temporary = computed(() => Boolean(cwd.value.trim()) && !chosen.value);
 const prefix_label = computed(() => chosen.value ? chosen.value.name : temporary.value ? t('临时路径') : t('常用项目'));
 const write_cwd = (path) => bound.value ? emit("update:modelValue", path) : bridge.write_launch("workspace", "cwd", path);
+// Another device may add only folders inside the saved projects; a path the room or group already has stays usable.
+// The computer enforces it; here a path typed outside them is flagged, and it is not offered as a new saved project.
+const inside_saved = computed(() => {
+  const normalize = (value) => String(value || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const path = normalize(cwd.value);
+  return projects.value.some((project) => { const root = normalize(project.path); return path === root || path.startsWith(`${root}\\`); });
+});
+const savable = computed(() => temporary.value && (native.value || inside_saved.value));
+const typed = ref(false);
+function type_cwd(path) {
+  typed.value = true;
+  write_cwd(path);
+}
+/** After typing, say at once that another device cannot add a path outside the saved projects. */
+function check_typed() {
+  if (!typed.value) return;
+  typed.value = false;
+  if (browsable.value && !native.value && temporary.value && !inside_saved.value) {
+    bridge.notify("warning", t('其他设备不能新增常用项目以外的路径，请从常用项目中选择，或在电脑上把它加入常用项目'));
+  }
+}
 const choose = (project) => relay.value ? bridge.write_launch("workspace", "local_project", project?.id || "") : write_cwd(project.path);
 
 const picking = ref(false);
@@ -262,12 +283,12 @@ async function save_projects() {
         <UIcon :name="chosen ? 'i-lucide-folder' : temporary ? 'i-lucide-pencil-line' : 'i-lucide-folders'" /><span>{{ prefix_label }}</span><UIcon name="i-lucide-chevron-down" class="project-prefix-chevron" />
       </button>
     </UDropdownMenu>
-    <button v-else type="button" class="project-prefix" :aria-label="t('添加常用项目')" :title="t('保存常用项目，之后一键选择；其他设备也能用')" :disabled="props.disabled" @click="temporary ? save_temporary() : open_manager()">
+    <button v-else type="button" class="project-prefix" :aria-label="t('添加常用项目')" :title="t('保存常用项目，之后一键选择；其他设备也能用')" :disabled="props.disabled" @click="savable ? save_temporary() : open_manager()">
       <UIcon :name="temporary ? 'i-lucide-pencil-line' : 'i-lucide-plus'" /><span>{{ prefix_label }}</span>
     </button>
-    <UInput :model-value="cwd" :placeholder="props.placeholder" variant="none" class="project-path" :aria-label="t('项目目录完整路径')" :disabled="props.disabled" @update:model-value="write_cwd" />
+    <UInput :model-value="cwd" :placeholder="props.placeholder" variant="none" class="project-path" :aria-label="t('项目目录完整路径')" :disabled="props.disabled" @update:model-value="type_cwd" @blur="check_typed" />
     <slot name="badge" />
-    <UButton v-if="temporary" icon="i-lucide-bookmark-plus" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="t('加入常用项目')" :title="t('加入常用项目')" :disabled="props.disabled" @click="save_temporary" />
+    <UButton v-if="savable" icon="i-lucide-bookmark-plus" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="t('加入常用项目')" :title="t('加入常用项目')" :disabled="props.disabled" @click="save_temporary" />
     <UButton v-if="browsable" icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="native ? t('在本机选择项目目录') : t('浏览电脑上的文件夹')"
       :title="!native ? t('浏览电脑上常用项目中的文件夹') : picking ? t('目录选择窗口已打开，请在本机窗口中选择') : t('在本机选择文件夹')" :loading="picking" :disabled="props.disabled" @click="pick_directory" />
     <slot name="actions" />

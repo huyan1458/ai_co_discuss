@@ -141,12 +141,12 @@ function step(event, index, direction) {
   if (saving.value) return;
   commit(moved(order.value.movable, index, to), order.value.movable[index], true);
 }
-/** Clicking a member row locates its latest speech; ignore clicks on controls or double-click rename. */
+/** A click on a member row, minus clicks on controls or a double-click rename; the board decides what it does. */
 function select_row(name, event) {
   if (drag.value || event.defaultPrevented) return;
   if (event.target.closest?.("button, input, textarea, select, a, [role='menuitem']")) return;
   if (event.detail > 1 && event.target.closest?.(".member-name-text.is-editable")) return;
-  emit("select", name);
+  emit("select", name, event);
 }
 </script>
 
@@ -199,7 +199,8 @@ function select_row(name, event) {
 </template>
 
 <style scoped>
-.speaking-order-row { position: relative; grid-template-columns: 18px auto minmax(0, 1fr) auto; gap: 8px; min-height: 0; padding: 4px 8px; cursor: pointer; }
+.speaking-order-row { position: relative; grid-template-columns: 18px auto minmax(0, 1fr) auto; gap: 8px; min-height: 0; padding: 4px 8px; }
+@media (hover: none), (pointer: coarse) { .speaking-order-row { cursor: pointer; } }
 .speaking-order-row.is-done, .speaking-order-row.is-away { opacity: .6; }
 .speaking-order-row.is-speaking { background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 10%, transparent); }
 .speaking-order-place, .speaking-order-grip { display: grid; place-items: center; align-self: center; width: 18px; height: 24px; color: var(--ui-text-dimmed); font-size: 11px; font-variant-numeric: tabular-nums; }

@@ -15,7 +15,7 @@ import { parseArgs } from 'node:util';
 import { gunzipSync } from 'node:zlib';
 
 import { adapter_profile, API_PROVIDERS, lockdown_support } from './adapters/profiles.mjs';
-import { correctable_refusals, external_task_text, MAX_EXPERT_PROMPT, MAX_REFUSAL_RETRIES, refusal_retry_prompt, TASK_SUBCOMMANDS, with_expert_prompt } from './expert_prompts.mjs';
+import { correctable_refusals, external_task_text, MAX_REFUSAL_RETRIES, refusal_retry_prompt, TASK_SUBCOMMANDS } from './expert_prompts.mjs';
 import { atomic_json } from './files.mjs';
 import { t } from './i18n.mjs';
 
@@ -420,9 +420,8 @@ function check_ai(input) {
   // The AI reaches the other room only through this computer's codiscuss (a CLI) or this module (the model API's room
   // and repo tools); App windows do neither.
   if (!['cli', 'api'].includes(profile?.kind)) throw failure('ai_unsupported', '外部成员只能派命令行软件（如 Claude Code）或模型 API');
-  // The member's own prompt, as on a room member's card: present (even empty) replaces the software's preset, null drops it.
-  const prompt = input.system_prompt === undefined || input.system_prompt === null ? {} : { system_prompt: String(input.system_prompt).slice(0, MAX_EXPERT_PROMPT) };
-  return { adapter, model: String(input.model || ''), effort: String(input.effort || ''), ...prompt };
+  // An external member takes no prompt of its own (user 2026-11-25): it answers in another person's room by that room's rules.
+  return { adapter, model: String(input.model || ''), effort: String(input.effort || '') };
 }
 
 /** The saved model API this AI runs on, as `[participant name, settings]`; empty when this computer has none. */
@@ -881,12 +880,13 @@ async function start_run(home, record, execution, { lockdown, software, end, res
   // account, which cannot open the record's credential (DPAPI, current user), so its `codiscuss` calls would all fail.
   // A locked-down run is confined by the tool rules instead and keeps read-only.
   const profile = { adapter: record.ai.adapter, ...software, model: record.ai.model || software.model || '', effort: record.ai.effort, cwd: workdir, project_access: lockdown ? 'read' : 'full',
-    ...(Object.hasOwn(record.ai, 'system_prompt') ? { system_prompt: record.ai.system_prompt } : {}) };
+    // No own prompt, not even one left in an older record or in this software's local settings.
+    system_prompt: '' };
   const log_path = join(base, `external-${execution.id}.log`);
   const deliver = deps.deliver || (await import('./adapters/index.mjs')).deliver_task;
   const result = await deliver(profile, { session_id: record.session_id || '' }, {
     id: `external-${execution.id}`, participant: record.member, directory: base, member_directory: base, task_path, access_path,
-    draft_directory: drafts, extra_directories: [], skill_directories: [skills_directory], prompt: resume || with_expert_prompt(prompt, profile), profile, images: [],
+    draft_directory: drafts, extra_directories: [], skill_directories: [skills_directory], prompt: resume || prompt, profile, images: [],
     tool_lockdown: lockdown, room_title: record.room_title,
     // For the model API: its room and repo tools go through `proxy_request` / `repo_command` with `external_access`;
     // no member credential or key is passed (CONTRACT §5.1).
@@ -1174,10 +1174,10 @@ function print_record(record) {
 const HELP = () => t(`外部房间（本机 AI 作为外部成员参加另一台电脑上的房间）
 
 用法：
-  codiscuss join <链接|配对码> [--site 站点] [--machine 电脑编号] --adapter 软件 [--model M] [--effort E] [--session 会话] [--prompt 提示词] [--duration 1h|today|3d]
+  codiscuss join <链接|配对码> [--site 站点] [--machine 电脑编号] --adapter 软件 [--model M] [--effort E] [--session 会话] [--duration 1h|today|3d]
   codiscuss invited list
   codiscuss invited trust ID auto|ask [--unconfined|--confined]
-  codiscuss invited ai ID [--adapter 软件] [--model M] [--effort E] [--prompt 提示词]
+  codiscuss invited ai ID [--adapter 软件] [--model M] [--effort E]
   codiscuss invited pause ID | resume ID
   codiscuss invited lend ID 1h|today|3d
   codiscuss invited approve ID 待确认编号 | refuse ID 待确认编号
@@ -1188,7 +1188,7 @@ const HELP = () => t(`外部房间（本机 AI 作为外部成员参加另一台
 被点名时：auto 直接回答；ask 每次先问你。
 本机权限：默认只在房间里发言（只能运行共议命令）；--unconfined 不受限，可读本机文件、联网。
 借出时间：加入时用 --duration 选择（默认 1h），之后用 lend 从现在起重新计算，最长 3 天。
---session 续接这个软件已有的会话（带着原上下文加入）；--prompt 只发给它的专属提示词，空字符串表示不用软件预设。
+--session 续接这个软件已有的会话（带着原上下文加入）。
 同意后由本机服务唤醒 AI，请保持 codiscuss 服务运行。加 --json 输出 JSON。
 `);
 
@@ -1207,7 +1207,7 @@ export async function external_main(command, args, { home, deps = {}, write = te
   const service = home || (await import('./discussion_service.mjs')).service_home();
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     site: { type: 'string' }, machine: { type: 'string' }, adapter: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' },
-    session: { type: 'string' }, prompt: { type: 'string' }, duration: { type: 'string' },
+    session: { type: 'string' }, duration: { type: 'string' },
     label: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     unconfined: { type: 'boolean' }, confined: { type: 'boolean' },
     'access-file': { type: 'string' }, root: { type: 'string' }, offset: { type: 'string' }, limit: { type: 'string' }, 'max-bytes': { type: 'string' },
@@ -1225,8 +1225,7 @@ export async function external_main(command, args, { home, deps = {}, write = te
     return out(await repo_command(service, op, options, load_access(values['access-file']), deps));
   }
   if (values.help || (command === 'invited' && !positionals.length) || (command === 'join' && !positionals.length)) return write(HELP());
-  const ai = { ...(values.adapter ? { adapter: values.adapter } : {}), ...(values.model !== undefined ? { model: values.model } : {}), ...(values.effort !== undefined ? { effort: values.effort } : {}),
-    ...(values.prompt !== undefined ? { system_prompt: values.prompt } : {}) };
+  const ai = { ...(values.adapter ? { adapter: values.adapter } : {}), ...(values.model !== undefined ? { model: values.model } : {}), ...(values.effort !== undefined ? { effort: values.effort } : {}) };
   let result;
   if (command === 'join') result = await join_invite(service, { invite: positionals[0], site: values.site, machine: values.machine, label: values.label, ...(values.session ? { session_id: values.session } : {}), ...(values.duration ? { duration: values.duration } : {}), ...ai }, deps);
   else {

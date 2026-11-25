@@ -185,7 +185,9 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 /* The message count stays visible after a long title, hinting when a room has grown long (user 2026-11-25, #10417). */
 .channel-room-name { display: flex; align-items: baseline; }
 .channel-room-name > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.channel-room-count { flex-shrink: 0; color: var(--ui-text-dimmed); font-weight: 400; font-size: .9em; font-variant-numeric: tabular-nums; }
+/* A pinned room keeps its place; only a pin after the message count sets it apart, so titles stay aligned (user 2026-11-25, #10598, #10639, #10656). */
+.channel-room-name > .channel-room-pin { flex-shrink: 0; align-self: center; width: 12px; height: 12px; min-width: 12px; margin-left: 4px; color: #939dff; transform: rotate(45deg); }
+.channel-room-count { flex-shrink: 0; margin-left: .45em; color: var(--ui-text-dimmed); opacity: .55; font-weight: 400; font-size: .75em; font-variant-numeric: tabular-nums; }
 .channel-directory-count, .channel-room-time { flex-shrink: 0; margin-left: auto; padding-left: 6px; color: var(--ui-text-dimmed); font-size: var(--channel-nav-meta); font-weight: 400; font-variant-numeric: tabular-nums; }.channel-room-actions, .channel-folder-actions { display: flex; align-items: center; justify-content: flex-end; min-width: 48px; opacity: 0; pointer-events: none; }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button { display: grid; place-items: center; width: 24px; height: 26px; padding: 5px; border-radius: 4px; color: color-mix(in srgb, var(--ui-text-muted) 75%, transparent); background: transparent; box-shadow: none; }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button:hover, :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button[data-state="open"] { color: var(--ui-text-toned); background: color-mix(in srgb, var(--ui-text) 7%, transparent); }
@@ -199,6 +201,10 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-workflow-rename { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; }
 .channel-workflow-rename > [class*="icon"] { flex-shrink: 0; width: 17px; height: 17px; color: #808998; }
 .channel-workflow-rename input { flex: 1; min-width: 0; height: 28px; padding: 0 6px; border: 1px solid var(--channel-accent, var(--ui-primary)); border-radius: 6px;
+  background: var(--ui-bg); color: var(--ui-text-highlighted); font-size: var(--channel-nav-text); outline: none; }
+/* A room renamed in place: the field takes the name's place and width, keeping the row's height. */
+.channel-room-rename { display: flex; flex: 1; min-width: 0; padding: 4px 0; }
+.channel-room-rename input { flex: 1; min-width: 0; height: 28px; padding: 0 3px; border: 1px solid var(--channel-accent, var(--ui-primary)); border-radius: 6px;
   background: var(--ui-bg); color: var(--ui-text-highlighted); font-size: var(--channel-nav-text); outline: none; }
 .channel-folder-section, .channel-folder-rooms, .channel-root-rooms { min-width: 0; }
 .channel-folder-section { position: relative; }
@@ -419,7 +425,7 @@ html[data-theme^="channel"] .pb-restart { border-color: color-mix(in srgb, var(-
 html[data-theme^="channel"] .pb-restart:hover { background: color-mix(in srgb, var(--channel-accent) 24%, transparent); color: var(--channel-accent); }
 html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f05252 45%, transparent); background: color-mix(in srgb, #f05252 12%, transparent); color: #f05252; }
 .pb-section h4 { margin: 0 0 6px; color: var(--ui-text-dimmed); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
-.pb-focus { margin: 0; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+.pb-focus { margin: 0; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
 .pb-focus.is-expanded { display: block; }
 .pb-link { margin-top: 4px; padding: 0; color: var(--channel-accent); font-size: 12px; }
 .pb-members { display: grid; gap: 4px; margin: 0 -8px; padding: 0; list-style: none; }
@@ -432,8 +438,8 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-member-name { min-width: 0; white-space: nowrap; }
 .pb-member-name .member-name-text { flex-shrink: 0; max-width: 100%; }
 .pb-member-name small { min-width: 0; overflow: hidden; color: var(--ui-text-dimmed); font-size: 11px; font-weight: 400; text-overflow: ellipsis; }
-/* While renaming, the row shows only the name field; the rest is hidden but keeps its space so the list never shifts. */
-.pb-member-body:has(.member-name-input) :is(.pb-member-name > :not(.member-name-input), .pb-member-model, .pb-member-status) { visibility: hidden; }
+/* While renaming, the field takes the whole first line (name, crown, model); the lines below stay (user 2026-11-25, #10560). */
+.pb-member-name:has(.member-name-input) > :not(.member-name-input) { display: none; }
 .pb-member-status { display: flex; align-items: center; gap: 6px; color: var(--ui-text-muted); font-size: 12px; }
 .pb-member-status .pb-dot { width: 6px; height: 6px; }
 .pb-member-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -790,6 +796,9 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 /* Files dragged over the composer: dashed accent edge plus a centered "release to attach" hint. */
 .channel-composer[data-drop-hint] { position: relative; border: 1px dashed var(--channel-accent) !important; }
 .channel-composer[data-drop-hint]::after { content: attr(data-drop-hint); position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--composer-surface) 88%, var(--channel-accent)); color: var(--ui-text-highlighted); font-size: 14px; pointer-events: none; }
+/* A sidebar room dragged over the messages: the whole conversation takes it, so a solid edge and a pill set it apart from the file hint. */
+.channel-room-drop { position: absolute; inset: 8px; z-index: 6; display: flex; align-items: center; justify-content: center; border: 2px solid color-mix(in srgb, var(--channel-accent) 70%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--ui-bg) 55%, transparent); pointer-events: none; }
+.channel-room-drop span { display: inline-flex; align-items: center; gap: 8px; max-width: calc(100% - 32px); padding: 8px 16px; border-radius: 999px; background: var(--channel-accent); color: #fff; font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html[data-theme^="channel"] .channel-composer, html[data-theme^="channel"] .channel-composer :focus { --tw-ring-shadow: 0 0 #0000 !important; --tw-inset-ring-color: transparent !important; }
 html[data-theme^="channel"] .channel-composer :is(textarea, input):focus { box-shadow: none !important; }
 html[data-theme^="channel"] .channel-composer:is(:focus, :focus-within, :has(:focus-visible)) { outline: none !important; border-color: var(--channel-edge-panel) !important; box-shadow: var(--channel-shadow-panel) !important; }
@@ -1062,7 +1071,6 @@ html[data-theme^="channel"] .channel-settings-modal .dialog-body { padding: 0 20
 html[data-theme^="channel"] .channel-manage-modal .fine-print { margin: 0; }
 html[data-theme^="channel"] .channel-folder-modal input { height: 40px; font-size: 13px; outline: none; }
 html[data-theme^="channel"] .studio-modal.channel-create-modal { width: calc(100vw - 32px); max-width: 920px; }
-html[data-theme^="channel"] .studio-modal.channel-message-modal { width: calc(100vw - 32px); max-width: var(--channel-reading-width, 960px); }
 html[data-theme^="channel"] .studio-modal.pb-invite-modal { width: calc(100vw - 32px); max-width: 920px; }
 html[data-theme^="channel"] .studio-modal.session-browser-modal { width: calc(100vw - 32px); max-width: 920px; }
 @media (max-width: 720px) {
@@ -1163,6 +1171,9 @@ html[data-theme^="channel"] .theme-choices small { color: #a1aab9; }
 /* Four choices with longer names do not fit beside the label: they take the full width under it. */
 .channel-setting-wide { grid-template-columns: minmax(0, 1fr); }
 .channel-setting-wide > .channel-reading-options { justify-self: stretch; }
+/* A count limit under its label: the stepper starts at the left, its explanation runs below. */
+.channel-setting-row > .channel-setting-limit { justify-self: stretch; }
+.channel-setting-limit .limit-field-row { justify-content: flex-start; }
 @media (max-width: 520px) {
   .channel-setting-row, .channel-setting-wide { grid-template-columns: minmax(0, 1fr); }
   .channel-setting-row > .channel-reading-options { justify-self: stretch; }
@@ -1553,7 +1564,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
     .channel-workspace-heading, .channel-header { height: 60px; }
     .channel-title h1 { font-size: 18px; }
     .channel-message-byline > .channel-avatar { width: 32px; height: 32px; }
-    .channel-working-strip { --working-avatar: 32px; }
+    .channel-working-strip { --working-avatar: 32px; padding: 20px 22px 24px; }
     .channel-message-provenance { color: #767676; }
     .channel-message { padding: 20px 22px 24px !important; margin-bottom: 16px !important; }
     .channel-composer-dock { padding-top: 12px; padding-bottom: 15px; }
@@ -1564,7 +1575,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
     .channel-message-provenance, .channel-message-round, .channel-message-id { font-size: 11px; }
     .channel-source { font-size: 11px !important; }
     .channel-message { padding: 22px 24px 26px !important; }
-    .channel-working-strip { padding-left: 24px; }
+    .channel-working-strip { padding: 22px 24px 26px; }
   }
   @media (max-width: 700px) {
     .channel-message-text { line-height: 1.8; letter-spacing: 0; }
@@ -1690,6 +1701,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-withdrawn-list { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 12px; margin: 6px 0 0; padding: 4px 0 0 22px; border-top: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent); list-style: none; }
 .channel-withdrawn-list li { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-height: 24px; }
 .channel-withdrawn strong { font-weight: 500; color: var(--ui-text-toned); white-space: nowrap; }
+.channel-withdrawn-full { grid-column: 1 / -1; padding: 4px 0 8px; }
 .channel-withdrawn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-withdrawn button { flex: none; font-size: 12px !important; font-weight: 400; padding: 0 !important; }
 @media (min-width: 701px) { .channel-withdrawn { margin-right: var(--message-inset-end); } }
@@ -1711,6 +1723,11 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-relay-sent .channel-schedule-detail .markdown-body p { display: block; margin: 0 0 .55em; }
 .channel-relay-sent .channel-schedule-detail .markdown-body p:last-child { margin-bottom: 0; }
 .channel-schedule-actions { display: inline-flex; gap: 2px; }
+/* No fold toggle on room links; keep "打开房间" in the same column as on the sent-message card beside it. */
+.channel-room-link .channel-schedule-actions { margin-right: 28px; }
+/* The host's reason for a link request reads in full under the request line, so the owner can decide from the card. */
+.channel-link-reason { display: block; margin-top: 4px; color: var(--ui-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.channel-link-request .channel-schedule-actions { gap: 6px; align-items: center; }
 .channel-schedule-rate { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-text-dimmed); cursor: pointer; }
 .channel-schedule-rate [class*="icon"] { width: 13px; height: 13px; }
 .channel-schedule-rate:hover { color: var(--ui-text-toned); background: var(--channel-ghost-hover); }
@@ -1779,8 +1796,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 }
 /* A member at work: who and how long on top, the stage as the main line with the stop key at its end, */
 /* the notes below as a subordinate thread (left rule, smaller and dimmer), folded to the latest note. */
-/* The left padding follows .channel-message at every width, so the avatars of working and finished cards share one column. */
-.channel-working-strip { position: relative; margin: 0 16px 16px; padding: 10px 10px 10px 22px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
+/* The padding follows .channel-message at every width, so the avatars and the time at the top right line up with the finished cards (user 2026-11-25, #10535). */
+.channel-working-strip { position: relative; margin: 0 16px 16px; padding: 20px 22px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); color: var(--ui-text-muted); font-size: 12px; }
 .channel-working-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 /* The avatar matches the message byline's at each width, so a member looks the same working and answered. */
 .channel-working-strip { --working-avatar: 28px; }
@@ -1815,7 +1832,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-working-notes.is-open .channel-working-count [class*="icon"] { transform: rotate(180deg); }
 .channel-working-count:hover { color: var(--ui-text-toned); }
 @media (min-width: 701px) { .channel-working-strip { margin-right: var(--message-inset-end); } }
-@media (max-width: 700px) { .channel-working-strip { --working-avatar: 32px; margin: 0 8px 12px; padding-left: 15px; } }
+@media (max-width: 700px) { .channel-working-strip { --working-avatar: 32px; margin: 0 8px 12px; padding: 14px 15px 16px; } }
 /* Private chat is the last key of a card's toolbar group, at the end opposite "…": the bottom of the hover column with a
    mouse, the left end of the row on touch screens. The working strip has no "…": with a mouse its column holds only
    private chat; on touch screens the key sits inside the strip's bottom-right corner. */

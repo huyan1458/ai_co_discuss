@@ -62,6 +62,24 @@ export const NO_TOOL_REMINDER = '普通文本不会被保存。请调用写入�
 const API_CALL = { stoppable: true, progress: true };
 
 /** Pi's private directories under the service directory: its config (kept apart from the user's own Pi) and sessions. */
+/** Why a model API member cannot start on a Windows computer without a Bash, shown as the delivery failure. */
+export const BASH_MISSING = '模型 API 成员由 Pi 运行，它在 Windows 上要用 Git Bash 执行命令（包括读写房间的 codiscuss），这台电脑没有找到：请安装 Git for Windows（https://git-scm.com/download/win）后重试';
+
+/**
+ * The Bash Pi would use, in its own lookup order (Pi docs/windows.md): `shellPath` in its settings, Git Bash under
+ * Program Files, then bash.exe on PATH; '' when none. Other systems always have one.
+ */
+export function find_bash(agent_dir, env = process.env, platform = process.platform) {
+  if (platform !== 'win32') return 'bash';
+  try {
+    const configured = JSON.parse(readFileSync(join(agent_dir, 'settings.json'), 'utf8')).shellPath;
+    if (configured && existsSync(configured)) return configured;
+  } catch { /* No settings of its own. */ }
+  const candidates = [env.ProgramFiles, env['ProgramFiles(x86)']].filter(Boolean).map(root => join(root, 'Git', 'bin', 'bash.exe'));
+  const on_path = String(env.PATH || env.Path || '').split(';').filter(Boolean).map(folder => join(folder, 'bash.exe'));
+  return [...candidates, ...on_path].find(path => existsSync(path)) || '';
+}
+
 export function pi_home(service_home) {
   const root = join(service_home, 'pi');
   return { agent: join(root, 'agent'), sessions: join(root, 'sessions') };
@@ -76,13 +94,13 @@ export function pi_thinking(profile) {
 }
 
 /** The provider our extension registers for one member: its Base URL, protocol and model, its key from the environment. */
-export function pi_provider(profile, base_url) {
+export function pi_provider(profile, base_url, key = '') {
   const api = PI_APIS[profile.api_protocol];
   if (!api) throw new Error('不支持的 API 请求协议');
   // Pi's Anthropic SDK adds /v1 itself; the other protocols take the root including the version, as we store it.
   const url = profile.api_protocol === 'anthropic' ? base_url.replace(/\/v1$/, '') : base_url;
   // Pi drops the thinking level for a model not marked as reasoning, so only a chosen effort marks it.
-  return { name: 'CoDiscuss', baseUrl: url, apiKey: '$CODISCUSS_PI_KEY', api, models: [{ id: profile.model, name: profile.model,
+  return { name: 'CoDiscuss', baseUrl: url, apiKey: key || '$CODISCUSS_PI_KEY', api, models: [{ id: profile.model, name: profile.model,
     reasoning: Boolean(pi_thinking(profile)), input: takes_images(profile) ? ['text', 'image'] : ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: CONTEXT_WINDOW,
     maxTokens: MAX_OUTPUT_TOKENS }] };
 }
@@ -197,7 +215,8 @@ function on_records(stream, handle) {
  *   `service_home` (the service directory, whose `pi` folder holds Pi's config and sessions), `spawn_process`.
  * @returns {{status: string, session_id: string, capabilities: object, steer: function}}
  */
-export function pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt, images = [], max_requests, project_root, native_shell = false, service_home, spawn_process = spawn }) {
+export function pi_delivery({ cli, profile, key, binding, task, context_file, system_file, prompt, images = [], max_requests, project_root, native_shell = false, native = false,
+  skill_directories = [], service_home, spawn_process = spawn }) {
   const dirs = pi_home(service_home);
   for (const path of Object.values(dirs)) mkdirSync(path, { recursive: true });
   const existing = session_file(dirs.sessions, binding.session_id);
@@ -205,16 +224,23 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
   // A writable member works as Claude Code or Codex do: Pi's own read, bash, edit and write in the project (user
   // 2026-11-17: Pi is a coding agent like them, do not treat it differently). Read-only keeps our confined file tools:
   // Pi has no sandbox, so its bash could not be held to reading.
-  const args = [cli, '--mode', 'rpc', ...(native_shell ? [] : ['--no-builtin-tools']), '--no-context-files', '--no-skills', '--no-prompt-templates',
-    '--no-themes', '--no-mcp', '--no-approve', '-e', EXTENSION, '--session-dir', dirs.sessions,
+  // `native` (user 2026-11-25: a model API member is Pi, not a special case): Pi keeps its own system prompt, tools,
+  // context files and skills, the room's skills are added with --skill, the owner's prompts are appended, and the room
+  // is reached through codiscuss in its shell as a CLI member does. Otherwise (a confined external member) the old
+  // confined run: our system prompt, our tools only.
+  const resources = native ? [...skill_directories.flatMap(path => ['--skill', path]), ...(system_file ? ['--append-system-prompt', system_file] : [])]
+    : [...(native_shell ? [] : ['--no-builtin-tools']), '--no-context-files', '--no-skills', '--no-prompt-templates', '--no-mcp'];
+  const args = [cli, '--mode', 'rpc', ...resources, '--no-themes', '--no-approve', '-e', EXTENSION, '--session-dir', dirs.sessions,
     ...(existing ? ['--session', existing] : ['--session-id', session_id]),
     '--provider', PI_PROVIDER, '--model', profile.model, ...(pi_thinking(profile) ? ['--thinking', pi_thinking(profile)] : []),
-    '--system-prompt', system_file];
+    ...(native ? [] : ['--system-prompt', system_file])];
   // Pi tells the model its working directory, so it is the project root our file tools resolve relative paths against;
   // without a project, Pi's own directory. Never the room's: Windows cannot remove a running process's directory.
   const child = tree_killable(spawn_process(process.execPath, args, { cwd: project_root || dirs.agent, windowsHide: true, shell: false,
     stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PI_CODING_AGENT_DIR: dirs.agent, PI_SKIP_VERSION_CHECK: '1',
-      PI_TELEMETRY: '0', PI_OFFLINE: '1', CODISCUSS_PI_CONTEXT: context_file, CODISCUSS_PI_KEY: key } }));
+      PI_TELEMETRY: '0', PI_OFFLINE: '1', CODISCUSS_PI_CONTEXT: context_file, CODISCUSS_PI_KEY: key,
+      // The room credential, as a CLI member gets it: its codiscuss commands take it from here.
+      ...(native && task.access_path ? { DISCUSS_ACCESS_FILE: task.access_path } : {}) } }));
   const log_path = resolve(task.directory, `api-${task.id}.log`);
   const redact = text => (key ? String(text).replaceAll(key, '[已隐藏]') : String(text));
   // An upstream error can echo the key back and the log is shown to the owner, so it never holds the key. A room
@@ -321,6 +347,14 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
   }
   function settled(event) {
     if (event.aborted || state.terminal || state.failure) return finish();
+    // A native run ends as a CLI turn does: the runner looks for the answer it submitted, or takes its last remark.
+    if (native) {
+      if (state.compaction_error) fail(room_text('会话上下文压缩失败（{reason}），下次执行将改用新会话；请缩短输入或拆分任务后重试',
+        { reason: state.compaction_error }), { failure_class: 'compaction_failed', retryable: false });
+      else if (state.last_error) fail(`模型请求失败：${state.last_error}`);
+      else state.terminal = true;
+      return finish();
+    }
     if (state.compaction_error) {
       fail(room_text('会话上下文压缩失败（{reason}），下次执行将改用新会话；请缩短输入或拆分任务后重试',
         { reason: state.compaction_error }), { failure_class: 'compaction_failed', retryable: false });

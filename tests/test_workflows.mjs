@@ -137,6 +137,37 @@ test('a workflow folder carries its other text files like a skill folder, and a 
   assert.deepEqual(get_workflow(home, NOVEL.id).resources, {});
 });
 
+test('the SKILL.md panel edits a part\'s other files one at a time, never over a change it has not seen, and the page can still save', t => {
+  const home = home_fixture(t);
+  const check = { id: 'aigc-check', label: 'AI 率检查', description: '查 AI 率', skill: '运行脚本。', agents: [] };
+  save_workflow(home, { ...NOVEL, sub_workflows: [check], resources: { 'references/a.md': '甲\n', 'commands.json': JSON.stringify({ commands: [{ id: 'check', description: '检查', run: ['node', '-v'], access: 'read' }] }), 'workflows/aigc-check/scripts/check.py': 'print(1)\n' } }, validate_preset, REPLACE);
+  const folder = join(home, 'workflows', NOVEL.id);
+  const main = workflows_command(home, { action: 'files', id: NOVEL.id });
+  // SKILL.md, cards, the canvas and sub-workflows have fields of their own; commands.json is listed but locked.
+  assert.deepEqual(main.files.map(file => [file.path, Boolean(file.locked)]), [['commands.json', true], ['references/a.md', false]]);
+  assert.deepEqual(workflows_command(home, { action: 'files', id: NOVEL.id, sub: 'aigc-check' }).files.map(file => file.path), ['scripts/check.py']);
+  const file = main.files[1];
+  const written = workflows_command(home, { action: 'file-write', id: NOVEL.id, path: file.path, text: '乙\n', digest: file.digest });
+  assert.equal(readFileSync(join(folder, 'references', 'a.md'), 'utf8'), '乙\n');
+  assert.equal(written.revision_before, main.revision);
+  // The page moves to the new revision and its save goes through, keeping the file.
+  workflows_command(home, { action: 'save', base_revision: written.revision, workflow: { ...NOVEL, skill: '新版' } });
+  assert.equal(readFileSync(join(folder, 'references', 'a.md'), 'utf8'), '乙\n');
+  // Changed on disk since it was read: refused, the newer text stays.
+  writeFileSync(join(folder, 'references', 'a.md'), '别处改的\n');
+  for (const action of ['file-write', 'file-delete']) {
+    assert.throws(() => workflows_command(home, { action, id: NOVEL.id, path: file.path, text: '旧\n', digest: written.digest }), error => error.code === 'file_changed');
+  }
+  assert.equal(readFileSync(join(folder, 'references', 'a.md'), 'utf8'), '别处改的\n');
+  // New files only where none is; nothing the workflow reads as fields, nothing outside the part.
+  workflows_command(home, { action: 'file-write', id: NOVEL.id, sub: 'aigc-check', path: 'notes/b.md', text: '丙', digest: '' });
+  assert.equal(readFileSync(join(folder, 'workflows', 'aigc-check', 'notes', 'b.md'), 'utf8'), '丙');
+  for (const path of ['SKILL.md', 'flow.json', 'commands.json', 'experts/x.md', 'agents/x.md', 'workflows/aigc-check/SKILL.md', '../x.md', 'a/../../x.md', '.hidden', '']) {
+    assert.throws(() => workflows_command(home, { action: 'file-write', id: NOVEL.id, path, text: 'x', digest: '' }), /不能在这里修改/, path);
+  }
+  assert.throws(() => workflows_command(home, { action: 'files', id: NOVEL.id, sub: 'missing' }), /子工作流不存在/);
+});
+
 test('folder import refuses directory links without reading outside the workflow', t => {
   const home = home_fixture(t);
   save_workflow(home, { ...NOVEL, agents: [] }, validate_preset, REPLACE);
@@ -331,9 +362,9 @@ test('sub-workflows live in workflows/<id>/ as workflows of their own: their car
   assert.ok(part.skill_path.endsWith(join('workflows', 'rehearsal', 'SKILL.md')));
   assert.match(part.revision, /^[0-9a-f]{12}$/);
   assert.deepEqual(part.cards, [{ card: 'hero', label: '主角视角', description: '代入主角' }]);
-  // An API host has no files outside the project, so it gets each sub-workflow's text in its system prompt.
-  assert.match(system_prompt({ participant: 'DeepSeek', role: 'host', mode: 'free', workflow: host.workflow }), /子工作流「剧情试演」（rehearsal）[\s\S]*请主角视角试演。/);
-  assert.match(task('Claude-hero').prompt, /你就是主角。/, 'a sub-workflow member gets its card prompt');
+  // A new Claude session takes it as its system prompt (expert_prompt_delivery); software without one gets it with its first task.
+  const hero = task('Claude-hero');
+  assert.match(hero.system_text || hero.prompt, /你就是主角。/, 'a sub-workflow member gets its card prompt');
 });
 
 test('a save that edits a saved workflow names the version it read, so a stale copy never replaces newer files', t => {

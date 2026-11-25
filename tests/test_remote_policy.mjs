@@ -52,6 +52,13 @@ test('a relayed request cannot widen folders, change program locations or turn o
   assert.throws(() => guard('start', { participants: { Claude: { cwd: f.outside } } }), /常用项目|Saved projects/, 'nested cwd is checked too');
   guard('room-settings', { room_id: 'room-a', extra_directories: [join(f.project, 'alpha')] });
   assert.throws(() => guard('room-settings', { room_id: 'room-a', extra_directories: [join(f.project, 'alpha'), f.outside] }), /常用项目|Saved projects/, 'every extra project directory is checked');
+  // A folder the room or group already holds (set on this computer) stays usable and removable; a new one is still refused.
+  const kept = (command, input) => guard_remote_request(command, input, { projects: f.projects, participants, home: f.home, kept: [f.outside] });
+  kept('start', { cwd: join(f.project, 'alpha'), extra_directories: [f.outside] });
+  kept('room-settings', { room_id: 'room-a', extra_directories: [] });
+  assert.throws(() => kept('room-settings', { room_id: 'room-a', extra_directories: [f.outside, f.root] }), /常用项目|Saved projects/);
+  // The page shows the refusal in its own language, whatever this computer's language is.
+  assert.throws(() => guard('start', { cwd: f.outside }), error => error.error_text?.template.includes('常用项目') && error.error_text.params.path === f.outside);
   assert.throws(() => guard('settings', { participants: { Claude: { executable: 'C:/Windows/System32/cmd.exe' } } }), /软件位置/);
   // 全放开 may be given to a room's member, but not saved as a default from afar.
   guard('room-member-access', { room_id: 'room-a', name: 'Claude', project_access: 'full' });

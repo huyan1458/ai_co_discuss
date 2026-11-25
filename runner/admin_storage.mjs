@@ -70,7 +70,8 @@ export async function storage_details(home) {
     const members = [...new Set([...(config?.members.keys() || []), ...Object.keys(totals)])].map(key =>
       ({ key, name: config?.members.get(key) || key, bytes: totals[key] || 0, scratch_bytes: config?.cleanable?.get(key) || 0 }));
     return { key, room_id: config?.room_id || '', site: config?.site || '', bytes: snapshot.rooms[key] || 0,
-      scratch_bytes: members.reduce((sum, member) => sum + member.scratch_bytes, 0), members };
+      scratch_bytes: members.reduce((sum, member) => sum + member.scratch_bytes, 0),
+      unreadable: snapshot.room_unreadable?.[key] || 0, members };
   });
   return { total_bytes: snapshot.total_bytes, draft_bytes: snapshot.draft_bytes, local_bytes: snapshot.local_bytes || 0, rooms, models,
     model_bytes: models.reduce((sum, model) => sum + model.bytes, 0), disk: storage_disk(home, drafts),

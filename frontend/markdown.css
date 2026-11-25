@@ -45,9 +45,16 @@ html[data-theme="channel-light"] .markdown-body {
   color: var(--ui-text-muted, #8a93a3); font-family: inherit; font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-body pre code { padding: 0; border: 0; border-radius: 0; background: none; white-space: inherit; }
 .markdown-body .markdown-table { max-width: 100%; overflow-x: auto; margin: 1em 0; }
-.markdown-body table { width: max-content; min-width: 50%; border-collapse: collapse; font-size: .93em; }
+.markdown-body table { width: 100%; border-collapse: collapse; font-size: .93em; }
 .markdown-body :is(th, td) { border: 1px solid var(--markdown-line); padding: .55em .8em; text-align: left; vertical-align: top; }
-.markdown-body .markdown-cell { max-width: 20em; overflow-wrap: break-word; }
+/* The table fills the card. Once it is too wide and scrolls, every column drops to its minimum width, so each cell
+   sets that minimum from its own text (--cell-text-width, estimated in markdown.mjs) between 4.5em and 14em: short
+   cells stay narrow, sentences keep at least 14 characters a line. A path or identifier is never split (a column as
+   wide as its path reads better than a path chopped into short lines); only link text may break anywhere, so a long
+   URL cannot stretch the whole table. */
+.markdown-body .markdown-cell { min-width: clamp(4.5em, var(--cell-text-width, 4.5em), 14em); overflow-wrap: break-word; }
+.markdown-body .markdown-cell a { overflow-wrap: anywhere; }
+.markdown-body tbody tr:nth-child(even) > td { background: color-mix(in srgb, var(--markdown-panel) 55%, transparent); }
 .markdown-body .markdown-code { position: relative; }
 .markdown-body div.markdown-code > pre { padding-right: 44px; }
 .markdown-body .markdown-copy { position: absolute; top: 6px; right: 6px; z-index: 1; display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
@@ -67,17 +74,19 @@ html[data-theme="channel-light"] .markdown-body {
 .markdown-body .katex-error { color: inherit; font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap; }
 
 .message-attachments { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin: 10px 0 0; max-width: 100%; }
-/* Images referenced in a paragraph or list item sit together right under it in a two-column half-width grid. */
+/* Images referenced in a paragraph or list item sit side by side right under it, each at most half the width;
+   narrow (portrait) images pack next to each other instead of each starting its own half column. */
 .attachment-reference-end { display: inline-block; white-space: nowrap; }
-.attachment-inline-grid { --inline-image-max-height: 280px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; margin: .55em 0 .85em; max-width: 100%; }
+.attachment-inline-grid { --inline-image-max-height: 280px; --inline-image-gap: 10px; --inline-image-cap: calc((100% - var(--inline-image-gap)) / 2);
+  display: flex; flex-wrap: wrap; gap: var(--inline-image-gap); align-items: flex-start; margin: .55em 0 .85em; max-width: 100%; }
 .markdown-body > .attachment-inline-grid:last-child, .markdown-body li > .attachment-inline-grid:last-child, .markdown-body blockquote > .attachment-inline-grid:last-child { margin-bottom: 0; }
 .attachment-image { position: relative; display: block; max-width: 100%; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: none; cursor: zoom-in; }
 /* --image-width / --image-ratio (web/app.js `attachment_image_style`): the size the site measured, within the limits
    below, so the image holds its place before its bytes arrive; without them it takes its own size once loaded. */
 .attachment-image img { display: block; width: var(--image-width, auto); height: auto; aspect-ratio: var(--image-ratio, auto);
   max-width: min(360px, 100%); max-height: 320px; object-fit: contain; border-radius: inherit; }
-.attachment-inline-grid .attachment-image { justify-self: start;
-  width: min(100%, var(--image-natural-width, 100%), calc(var(--inline-image-max-height) * var(--image-ratio-num, 100)));
+.attachment-inline-grid .attachment-image { flex: none; max-width: var(--inline-image-cap);
+  width: min(var(--inline-image-cap), var(--image-natural-width, 100%), calc(var(--inline-image-max-height) * var(--image-ratio-num, 100)));
   box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }
 .attachment-inline-grid .attachment-image img { width: 100%; max-width: 100%; max-height: var(--inline-image-max-height); }
 .attachment-inline-grid .attachment-image:not([style*="--image-ratio"]) { width: auto; }
@@ -92,13 +101,13 @@ html[data-theme="channel-light"] .markdown-body {
   width: min(var(--image-width, 160px), 100%); aspect-ratio: var(--image-ratio, 4 / 3);
   color: inherit; background: color-mix(in srgb, currentColor 8%, transparent); }
 .attachment-inline-grid .attachment-image:has(img[data-relay-src]:not([src])) {
-  width: min(100%, var(--image-natural-width, 160px), calc(var(--inline-image-max-height) * var(--image-ratio-num, 100))); }
+  width: min(var(--inline-image-cap), var(--image-natural-width, 160px), calc(var(--inline-image-max-height) * var(--image-ratio-num, 100))); }
 @media (max-width: 700px) {
-  .attachment-inline-grid { --inline-image-max-height: 220px; gap: 8px; }
-  .attachment-inline-grid[data-count="1"] { --inline-image-max-height: 260px; grid-template-columns: minmax(0, 1fr); }
+  .attachment-inline-grid { --inline-image-max-height: 220px; --inline-image-gap: 8px; }
+  .attachment-inline-grid[data-count="1"] { --inline-image-max-height: 260px; --inline-image-cap: 100%; }
 }
 @media (max-width: 359px) {
-  .attachment-inline-grid { --inline-image-max-height: 260px; grid-template-columns: minmax(0, 1fr); }
+  .attachment-inline-grid { --inline-image-max-height: 260px; --inline-image-cap: 100%; }
 }
 .attachment-image img[data-relay-src]:not([src]) { display: none; }
 .attachment-image:has(img[data-relay-src]:not([src]):not([data-relay-failed]))::after { content: ""; width: 24px; height: 24px;

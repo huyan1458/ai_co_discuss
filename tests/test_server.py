@@ -1338,6 +1338,38 @@ class DiscussionTests(unittest.TestCase):
         self.assertIsNone(self.request(base)[1]["parent_room_id"])
         self.assertIsNone(next(room["parent_room_id"] for room in self.request("/api/rooms")[1]["rooms"] if room["id"] == child))
 
+    def test_detached_child_keeps_parent_link(self):
+        """Showing a child room as standalone only changes the directory flag, never the parent link."""
+        parent = self.room["id"]
+        child = self.request("/api/rooms", {"title": "子房间"})[1]["id"]
+        base = f"/api/rooms/{child}"
+        self.assertEqual(self.request(f"/api/rooms/{parent}/detach", {"actor": "用户", "detached": True})[0], 400)
+        self.request(base + "/room-link", {"relation": "parent", "room_id": parent, "host": "Codex"})
+        self.assertEqual(self.request(base + "/detach", {"actor": "用户", "detached": "yes"})[0], 400)
+        saved = self.request(base + "/detach", {"actor": "用户", "detached": True})[1]
+        self.assertEqual((saved["detached"], saved["parent_room_id"]), (True, parent))
+        ids = [room["id"] for room in self.request("/api/rooms")[1]["rooms"]]
+        self.assertEqual(ids[ids.index(parent) + 1], child)
+        self.assertFalse(self.request(base + "/detach", {"actor": "用户", "detached": False})[1]["detached"])
+
+    def test_pinned_room_cannot_be_archived_or_destroyed(self):
+        """A pinned room refuses archive, destroy and auto-destroy until it is unpinned; its place is unchanged."""
+        base = f"/api/rooms/{self.room['id']}"
+        ids = [room["id"] for room in self.request("/api/rooms")[1]["rooms"]]
+        self.assertEqual(self.request(base + "/pin", {"actor": "用户", "pinned": "yes"})[0], 400)
+        self.assertTrue(self.request(base + "/pin", {"actor": "用户", "pinned": True})[1]["pinned"])
+        listed = self.request("/api/rooms")[1]["rooms"]
+        self.assertEqual([room["id"] for room in listed], ids)
+        self.assertTrue(next(room["pinned"] for room in listed if room["id"] == self.room["id"]))
+        self.assertEqual(self.request(base + "/archive", {"actor": "用户"})[0], 409)
+        self.assertEqual(self.request(base + "/delete", {"actor": "用户", "confirm_title": self.room["title"]})[0], 409)
+        self.request(base + "/auto-destroy", {"actor": "用户", "days": 1})
+        if not self.external:
+            with closing(connect_db(self.database)) as connection:
+                self.assertEqual(expired_rooms(connection, datetime.now(timezone.utc) + timedelta(days=2)), [])
+        self.assertFalse(self.request(base + "/pin", {"actor": "用户", "pinned": False})[1]["pinned"])
+        self.assertTrue(self.request(base + "/archive", {"actor": "用户"})[1]["archived"])
+
     def test_topic_folder_assignment_persists_and_survives_archive_restore(self):
         """Folders categorize existing rooms without changing their archive state."""
         for invalid_name in (None, 42, ["标题"], {}, "   ", "😀" * 41):

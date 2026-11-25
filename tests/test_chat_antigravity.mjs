@@ -240,6 +240,104 @@ test('an App room task is not stopped from here but its end is heard', async t =
   assert.deepEqual(blind_edits, []);
 });
 
+// Steps as App 2.35.1 records them (2026-11-25): each run has its own executionId, a sub-agent its own step and
+// conversation, and a report comes as a message from that conversation or from `<conversation>/task-N`.
+const in_run = (item, run) => ({ ...item, metadata: { ...item.metadata, executionId: run } });
+const report = (sender, run, title) => step('SYSTEM_MESSAGE', { metadata: { executionId: run },
+  systemMessage: { message: `[Message] sender=${sender} priority=MESSAGE_PRIORITY_HIGH content=x`, renderInfo: { title }, agentMessage: { sender } } });
+const subagent = (run, id = 'sub-1', role = 'reviewer') => step('INVOKE_SUBAGENT', { metadata: { executionId: run, toolCall: { name: 'invoke_subagent' } },
+  invokeSubagent: { subagents: [{ role, typeName: 'self' }], results: [{ conversationId: id }] } });
+
+/** Deliver a room task to the fake App and collect what the watch reports until it hears the turn end. */
+async function watch_room(f, id, answers = []) {
+  const followups = [];
+  let list = [], ended;
+  const heard = new Promise(resolve => { ended = resolve; });
+  await deliver_task(f.config, { session_id: 'conv-1' }, { id, directory: f.root, access_path: f.access_path, prompt: 'room',
+    on_turn_end: () => ended(), on_background_tasks: items => { list = items; },
+    on_followup: async reports => { followups.push(reports[0].id); return answers[followups.length - 1] ?? true; } });
+  await heard;
+  return { followups, list };
+}
+
+test('an App chat turn waits for a sub-agent it started to report', async t => {
+  const f = await fake_app(t, { turn: [in_run(response('', [{ id: 'a', name: 'invoke_subagent', argumentsJson: '{}' }]), 'r1'), subagent('r1'), in_run(response('已派出子代理'), 'r1')] });
+  setTimeout(() => { f.app.running = true; f.app.steps.push(report('sub-1', 'r2', 'Message from reviewer (self)')); }, 400);
+  setTimeout(() => { f.app.steps.push(in_run(response('子代理回报后的最终回复'), 'r2')); f.app.running = false; }, 500);
+  const run = await run_chat(f);
+  assert.equal(run.error, undefined);
+  assert.equal(run.notes.at(-1), '子代理回报后的最终回复');
+});
+
+test('an App room task lists its background work and puts a report that starts a new run to the runner', async t => {
+  Object.assign(ROOM_TIMING, { poll_ms: 20, read_failures: 2 });
+  const RUNNING = 'CORTEX_STEP_STATUS_RUNNING';
+  const command = status => step(status === RUNNING ? 'GENERIC' : 'RUN_COMMAND', { metadata: { executionId: 'r1', toolCall: { name: 'run_command' } },
+    taskDetails: { id: 'conv-1/task-3', title: 'npm test' }, runCommand: { commandLine: 'npm test', exitCode: 0 } }, status);
+  const f = await fake_app(t, { turn: [report('system', 'r1', 'task'), subagent('r1'), command(RUNNING),
+    step('GENERIC', { metadata: { executionId: 'r1', toolCall: { name: 'schedule', argumentsJson: '{"CronExpression":"0 9 * * *","Prompt":"daily check"}' } },
+      taskDetails: { id: 'conv-1/task-4', description: 'Cron: 0 9 * * *', title: 'cron' } }, RUNNING),
+    in_run(response('已派出，回答已提交'), 'r1')] });
+  // The sub-agent reports in a new run, then the schedule fires (only shown), then the command finishes and reports,
+  // as App 2.35.1 did once: under the last run's executionId, recorded twice.
+  setTimeout(() => { f.app.running = true; f.app.steps.push(report('sub-1', 'r2', 'Message from reviewer (self)')); }, 400);
+  setTimeout(() => { f.app.steps.push(in_run(response('子代理已回报'), 'r2')); f.app.running = false; }, 450);
+  setTimeout(() => { f.app.running = true; f.app.steps.push(report('conv-1/task-4', 'r3', 'cron fired')); }, 550);
+  setTimeout(() => { f.app.steps.push(in_run(response('定时到了'), 'r3')); f.app.running = false; }, 600);
+  setTimeout(() => { f.app.steps[3] = command('CORTEX_STEP_STATUS_DONE'); f.app.running = true;
+    f.app.steps.push(report('conv-1/task-3', 'r3', 'npm test finished'), report('conv-1/task-3', 'r3', 'npm test finished')); }, 700);
+  setTimeout(() => { f.app.steps.push(in_run(response('测试通过'), 'r3')); f.app.running = false; }, 750);
+  const followups = [], phases = [];
+  let list = [], ended;
+  const heard = new Promise(resolve => { ended = resolve; });
+  await deliver_task(f.config, { session_id: 'conv-1' }, { id: 'free-11', directory: f.root, access_path: f.access_path, prompt: 'room',
+    on_turn_end: () => ended(), on_activity: phase => phases.push(phase), on_background_tasks: items => { list = items; },
+    on_followup: async (reports, handle, options) => { followups.push([reports, handle, options]); return true; } });
+  await heard;
+  assert.deepEqual(followups, [
+    [[{ id: 'sub-1', status: 'completed', summary: 'Message from reviewer (self)' }], null, { steer: false }],
+    [[{ id: 'conv-1/task-3', status: 'completed', summary: 'npm test finished' }], null, { steer: false }],
+  ]);
+  assert.ok(phases.includes('waiting'));
+  assert.deepEqual(list.map(item => [item.id, item.kind, item.title, item.state, item.schedule]).sort(), [
+    ['conv-1/task-3', 'command', 'npm test', 'done', ''],
+    ['conv-1/task-4', 'schedule', 'daily check', 'running', '0 9 * * *'],
+    ['sub-1', 'agent', 'reviewer', 'done', ''],
+  ]);
+});
+
+test('after the next task arrives an App room watch follows only the work it listed, and keeps following on a keep', async t => {
+  Object.assign(ROOM_TIMING, { poll_ms: 20, read_failures: 2 });
+  const f = await fake_app(t, { turn: [report('system', 'r1', 'task'), subagent('r1'),
+    step('GENERIC', { metadata: { executionId: 'r1', toolCall: { name: 'run_command' } }, taskDetails: { id: 'conv-1/task-3', title: 'npm test' } }, 'CORTEX_STEP_STATUS_RUNNING'),
+    in_run(response('已派出，回答已提交'), 'r1')] });
+  // The next task goes into the same conversation and launches its own sub-agent, which reports first; then this task's
+  // sub-agent and command report. An App notice from `system` in between is no next task.
+  setTimeout(async () => {
+    f.app.steps.push(report('system', 'r1', 'notice'));
+    await deliver_task(f.config, { session_id: 'conv-1' }, { id: 'free-12b', directory: f.root, access_path: f.access_path, prompt: 'next' });
+    f.app.steps.push(report('system', 'r2', 'task 2'), subagent('r2', 'sub-2', 'other'), in_run(response('第二个任务答完'), 'r2'));
+  }, 300);
+  setTimeout(() => { f.app.steps.push(report('sub-2', 'r3', 'Message from other'), in_run(response('收到'), 'r3')); }, 450);
+  setTimeout(() => { f.app.steps.push(report('sub-1', 'r4', 'Message from reviewer'), in_run(response('收到'), 'r4')); }, 550);
+  setTimeout(() => { f.app.steps[3].status = 'CORTEX_STEP_STATUS_DONE'; f.app.steps.push(report('conv-1/task-3', 'r5', 'npm test finished'), in_run(response('收到'), 'r5')); }, 650);
+  const watched = await watch_room(f, 'free-12', ['keep', false]);
+  assert.deepEqual(watched.followups, ['sub-1', 'conv-1/task-3']);
+  assert.ok(!watched.list.some(item => item.id === 'sub-2'));
+});
+
+test('an App sub-agent its turn killed is shown stopped and not waited for', async t => {
+  Object.assign(ROOM_TIMING, { poll_ms: 20, read_failures: 2 });
+  // As App 2.35.1 records a kill: the finished manage_subagents step names the conversations it ended.
+  const f = await fake_app(t, { turn: [report('system', 'r1', 'task'), subagent('r1'),
+    step('GENERIC', { metadata: { executionId: 'r1', toolCall: { name: 'manage_subagents', argumentsJson: '{"Action":"kill_all"}' } },
+      generic: { result: { payload: { action: 'kill_all', conversationIds: ['sub-1'] } } } }),
+    report('sub-1', 'r1', 'Message from reviewer (self)'), in_run(response('已结束子代理'), 'r1')] });
+  const watched = await watch_room(f, 'free-13');
+  assert.deepEqual(watched.followups, []);
+  assert.deepEqual(watched.list.map(item => [item.id, item.state]), [['sub-1', 'stopped']]);
+});
+
 test('agy gets the thinking level only through the model ID: a stored effort is never passed beside it', async t => {
   const home = mkdtempSync(join(tmpdir(), 'agy-effort-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));

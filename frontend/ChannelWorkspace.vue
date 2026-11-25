@@ -64,7 +64,6 @@ const modal = ref("");
 const discussion_view = ref(null);
 const managed_room = ref(null);
 const target_folder = ref(null);
-const detail_id = ref(null);
 const nav_open = ref(false);
 const info_open = ref(false);
 const summary = field("state-input");
@@ -76,15 +75,15 @@ const EFFECT_OPTIONS = [{ value: "full", label: t("完整") }, { value: "reduced
 // Text size inside message cards; channel.css maps each value to --card-text-scale.
 const CARD_TEXT_OPTIONS = [{ value: "small", label: t("小") }, { value: "medium", label: t("中") }, { value: "large", label: t("大") }];
 const FOLD_OPTIONS = [
-  { value: "loose", label: t("宽松"), title: t("回答超过约 1.2 屏时收起。") },
-  { value: "standard", label: t("标准"), title: t("回答超过约 0.7 屏时收起。") },
-  { value: "compact", label: t("紧凑"), title: t("回答超过约 0.5 屏时收起。") },
+  { value: "compact", label: t("{count} 屏", { count: 0.5 }) },
+  { value: "standard", label: t("{count} 屏", { count: 0.7 }) },
+  { value: "loose", label: t("{count} 屏", { count: 1.2 }) },
 ];
 // How much a folded answer keeps; ChannelDiscussion.vue MESSAGE_FOLD_KEEP_SHARES gives each level's share of the screen.
 const FOLD_KEEP_OPTIONS = [
-  { value: "short", label: t("少"), title: t("保留开头约 0.35 屏。") },
-  { value: "medium", label: t("中"), title: t("保留开头约 0.6 屏。") },
-  { value: "long", label: t("多"), title: t("保留开头约 0.9 屏。") },
+  { value: "short", label: t("少") },
+  { value: "medium", label: t("中") },
+  { value: "long", label: t("多") },
 ];
 const READING_WIDTHS = { narrow: { label: t("窄"), width: 720 }, default: { label: t("默认"), width: 960 }, wide: { label: t("宽"), width: 1240 } };
 const RAIL_MIN = 220;
@@ -302,8 +301,16 @@ function open_invited(id) { nav_open.value = false; workflow_library.close_page(
 /** Select a shared room (leaving the workflow page) and close the mobile navigation. */
 function choose_room(id) { nav_open.value = false; workflow_library.close_page(() => { invited_rooms.close(); act("room", id); }); }
 
-/** Open an exact original message without altering the transcript. */
-function open_detail(id) { detail_id.value = id; modal.value = "message"; }
+/** Show a message in place in the transcript for a moment; the transcript offers a way back to where reading (and the tab) was. */
+async function open_detail(id) {
+  info_open.value = false;
+  const from_tab = view.value.tab;
+  if (from_tab !== "discussion") {
+    await act("tab", "discussion");
+    await nextTick();
+  }
+  discussion_view.value?.peek_message(Number(id), from_tab === "discussion" ? null : () => act("tab", from_tab));
+}
 /** Jump the transcript to one member's latest message or ongoing work card. */
 async function locate_member(name, { close_drawer = false } = {}) {
   if (close_drawer) info_open.value = false;
@@ -648,6 +655,6 @@ function resize_nav_by_key(event) {
     </USlideover>
     <FilePreview />
     <JoinInvitedDialog />
-    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" v-model:fold-level="fold_level" v-model:fold-keep="fold_keep" v-model:card-text="card_text" :fold-options="FOLD_OPTIONS" :fold-keep-options="FOLD_KEEP_OPTIONS" :card-text-options="CARD_TEXT_OPTIONS" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :detail-id="detail_id" :target-room="managed_room" :target-folder="target_folder" />
+    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" v-model:fold-level="fold_level" v-model:fold-keep="fold_keep" v-model:card-text="card_text" :fold-options="FOLD_OPTIONS" :fold-keep-options="FOLD_KEEP_OPTIONS" :card-text-options="CARD_TEXT_OPTIONS" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :target-room="managed_room" :target-folder="target_folder" />
   </div>
 </template>

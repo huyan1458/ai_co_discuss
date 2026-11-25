@@ -504,7 +504,8 @@ const deleted_time = (value) => modified_time(value);
         <div class="project-files-columns" aria-hidden="true"><span>{{ t('名称') }}</span><span>{{ t('大小') }}</span><span>{{ t('修改时间') }}</span></div>
         <!-- Rows change only with the listing; the room's directories arrive as a new array on every view publish. -->
         <div v-memo="[listing, loading, directory, root, busy]" class="project-files-rows">
-          <div v-for="entry in listing?.entries || []" :key="entry.path" class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable' }">
+          <UContextMenu v-for="entry in listing?.entries || []" :key="entry.path" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu' }">
+          <div class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable' }">
             <button type="button" class="project-file-name" :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? t('{value1}（无法读取或指向项目外）', { value1: entry.name }) : entry.name"
               @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, account_root ? account_root.name : directory, root, entry)">
               <UIcon :name="entry_icon(entry)[0]" class="project-file-icon" :class="entry_icon(entry)[1]" /><span>{{ entry.name }}</span>
@@ -517,6 +518,7 @@ const deleted_time = (value) => modified_time(value);
               </UDropdownMenu>
             </span>
           </div>
+          </UContextMenu>
           <div v-if="!listing && loading" role="status" :aria-label="t('正在读取项目目录')">
             <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
           </div>

@@ -176,6 +176,35 @@ class CliTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         return payload["error"]
 
+    def test_read_only_member_file_arguments_stay_in_its_file_scope(self):
+        from argparse import Namespace
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project, drafts, member, outside = (root / name for name in ("project", "drafts", "member", "outside"))
+            for item in (project, drafts, member, outside):
+                item.mkdir()
+            access = member / "free-1.access.json"
+            access.write_text(json.dumps({"room": "r", "token": "t", "execution_id": 1,
+                                          "file_scope": {"read": [str(project), str(drafts), str(member)], "write": [str(drafts)]}}), encoding="utf-8")
+            check = lambda **values: discuss.check_lockdown_files(Namespace(access_file=str(access), **values))
+            # Its own drafts and project files can be posted, and an attachment saved in its drafts.
+            check(body_file=str(drafts / "answer.md"))
+            check(file=str(project / "chart.png"))
+            check(dest=str(drafts / "a.png"))
+            check(body_file="-")
+            # A file elsewhere on this computer, such as a saved API key, is not carried into the room.
+            with self.assertRaises(discuss.CliError):
+                check(body_file=str(outside / "key.json"))
+            with self.assertRaises(discuss.CliError):
+                check(file=str(project / ".." / "outside" / "key.json"))
+            # Nor is an attachment written outside its drafts, not even into the read-only project.
+            for target in (outside / "a.png", project / "a.png"):
+                with self.assertRaises(discuss.CliError):
+                    check(dest=str(target))
+            # A member without a scope (it may write or run any command) is not limited here.
+            access.write_text(json.dumps({"room": "r", "token": "t", "execution_id": 1}), encoding="utf-8")
+            check(body_file=str(outside / "key.json"))
+
     def test_free_room_member_answers_through_its_execution(self):
         """A member credential file and execution id are enough; reposting without them is refused."""
         if self.external:

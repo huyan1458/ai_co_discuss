@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -170,6 +170,39 @@ test('a Codex App room turn matches only this task prompt and ignores earlier or
   const failing = { async read_thread() { throw new Error('pipe closed'); }, close() {} };
   await watch_room_turn({}, THREAD, { turns: new Set(), items: new Set() }, { prompt: ROOM_PROMPT, on_turn_end: () => { ended++; } }, { connect: async () => failing, poll_ms: 1 });
   assert.equal(ended, 0, 'an unreadable App gives up quietly');
+  cleanup();
+});
+
+test('a Codex App room turn lists the schedules set for its own chat during the turn, and ends one once paused', async () => {
+  const { directory, cleanup } = setup();
+  const home = join(directory, 'home');
+  const automation = (id, fields) => {
+    mkdirSync(join(home, '.codex', 'automations', id), { recursive: true });
+    const lines = Object.entries({ version: 1, id, kind: 'heartbeat', prompt: '跟进 "进度"', ...fields }).map(([key, value]) => `${key} = ${JSON.stringify(value)}`);
+    writeFileSync(join(home, '.codex', 'automations', id, 'automation.toml'), `${lines.join('\n')}\n`);
+  };
+  // Set before the turn, or for another chat: neither is this turn's own.
+  automation('older', { name: '旧的', status: 'ACTIVE', rrule: 'FREQ=HOURLY;INTERVAL=1', target_thread_id: THREAD, created_at: 1 });
+  const running = { thread: { status: { type: 'active' } }, turns: [{ id: 'room', status: 'inProgress', items: [user_message('room-in', ROOM_PROMPT)] }] };
+  const states = [
+    () => {
+      automation('own', { name: '每 5 分钟检查', status: 'ACTIVE', rrule: 'FREQ=MINUTELY;INTERVAL=5', target_thread_id: THREAD, created_at: Date.now() });
+      automation('other', { name: '别的会话', status: 'ACTIVE', rrule: 'FREQ=MINUTELY;INTERVAL=5', target_thread_id: 'thread-2', created_at: Date.now() });
+      return running;
+    },
+    () => { automation('own', { name: '每 5 分钟检查', status: 'PAUSED', rrule: 'FREQ=MINUTELY;INTERVAL=5', target_thread_id: THREAD, created_at: Date.now() }); return running; },
+    () => ({ thread: { status: { type: 'idle' } }, turns: [{ id: 'room', status: 'completed', items: [user_message('room-in', ROOM_PROMPT)] }] }),
+  ];
+  let reads = 0;
+  const lists = [];
+  const app = { async read_thread() { return states[Math.min(reads++, states.length - 1)](); }, close() {} };
+  await watch_room_turn({}, THREAD, { turns: new Set(), items: new Set() },
+    { id: 'free-43', directory, prompt: ROOM_PROMPT, on_background_tasks: list => lists.push(list.map(({ id, kind, title, state, schedule }) => ({ id, kind, title, state, schedule }))) },
+    { connect: async () => app, poll_ms: 1, home });
+  assert.deepEqual(lists, [
+    [{ id: 'automation:own', kind: 'schedule', title: '每 5 分钟检查', state: 'running', schedule: 'FREQ=MINUTELY;INTERVAL=5' }],
+    [{ id: 'automation:own', kind: 'schedule', title: '每 5 分钟检查', state: 'stopped', schedule: 'FREQ=MINUTELY;INTERVAL=5' }],
+  ]);
   cleanup();
 });
 

@@ -1747,6 +1747,7 @@ def check_lockdown_files(args):
         except CliError:
             access = {}
     if os.getenv("CODISCUSS_TOOL_LOCKDOWN") != "1" and not access.get("tool_lockdown"):
+        check_file_scope(args, access.get("file_scope"))
         return
     folder = os.getenv("CODISCUSS_LOCKDOWN_DIRECTORY") or access.get("draft_directory") or ""
     root = Path(folder).resolve() if folder else None
@@ -1761,6 +1762,36 @@ def check_lockdown_files(args):
         if root is None or (target != root and root not in target.parents):
             raise CliError(f"本次运行已收窄，只能读取草稿目录 {folder or '（未指定）'} 里的文件 / "
                            f"This run is restricted and can read files only in its draft folder {folder or '(not set)'}", 2)
+
+
+def within(target, roots):
+    """Whether a resolved path is one of the folders or lies inside one."""
+    return any(target == root or root in target.parents for root in roots)
+
+
+def check_file_scope(args, scope):
+    """A read-only member's file arguments stay where its software may read and write (``file_scope`` in its credential).
+
+    The local service writes the scope into the credential file of a task whose project is read-only
+    (runner/free_runner.mjs ``file_scope``): files it posts or uploads come from its project, extra folders, drafts,
+    knowledge, the skills or its own runtime folder, and a downloaded attachment goes only to its drafts, knowledge or a
+    writable extra folder. Without it, an allowed command could carry any file of this computer into the room.
+    """
+    if not isinstance(scope, dict):
+        return
+    readable = [Path(item).resolve() for item in scope.get("read") or [] if isinstance(item, str) and item]
+    writable = [Path(item).resolve() for item in scope.get("write") or [] if isinstance(item, str) and item]
+    for name, value in vars(args).items():
+        if not isinstance(value, str) or value == "-" or name == "access_file":
+            continue
+        if name == "dest":
+            if not within(Path(value).resolve(), writable):
+                raise CliError("项目只读：附件只能下载到草稿目录、知识目录或可写的额外目录 / "
+                               "The project is read-only: attachments can be saved only in the draft, knowledge or a writable extra folder", 2)
+        elif name.endswith("_file") or name in ("file", "input"):
+            if not within(Path(value).resolve(), readable):
+                raise CliError(f"项目只读：{value} 不在项目、额外目录、草稿、知识目录、技能或本成员运行目录内，不能读取 / "
+                               f"The project is read-only: {value} is outside the project, extra folders, drafts, knowledge, skills and this member's folder", 2)
 
 
 def external_send(plan, access, timeout):

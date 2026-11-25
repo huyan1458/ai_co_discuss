@@ -54,6 +54,14 @@ const target_scope_items = computed(() => [[
     onSelect: () => library.set_draft_target("global"),
   },
 ]]);
+// The open part's other files for the SKILL.md panel: the main flow's leave out the sub-workflows' folders, a
+// sub-workflow's are those under its own folder.
+const part_files = computed(() => {
+  const prefix = scope.value ? `workflows/${scope.value}/` : "";
+  return Object.fromEntries(Object.entries(draft.value?.resources || {})
+    .filter(([path, text]) => typeof text === "string" && (prefix ? path.startsWith(prefix) : !path.startsWith("workflows/")))
+    .map(([path, text]) => [path.slice(prefix.length), text]));
+});
 const scope_badge_label = computed(() => active_scope.value === "project"
   ? (active_project_name.value ? t("项目 · {name}", { name: active_project_name.value }) : t("项目"))
   : t("全局"));
@@ -198,7 +206,7 @@ function start_resize(event) {
         @keydown.right.prevent="set_width(skill_width - SKILL_WIDTH.step)" />
       <div v-if="loading" id="workflow-skill-panel" class="workflow-skill-loading" role="status" :aria-label="loading"><USkeleton class="h-6 w-36" /><USkeleton v-for="line in 8" :key="line" class="h-4" :class="line % 3 ? 'w-full' : 'w-2/3'" /></div>
       <WorkflowEditor v-else id="workflow-skill-panel" :key="canvas_key" :workflow="current" v-model:commands-allowed="commands_allowed" :saved="Boolean(saved_id)"
-        :sub="Boolean(scope)" :compact="stacked" :readonly="draft_readonly" />
+        :sub="Boolean(scope)" :compact="stacked" :readonly="draft_readonly" :files="part_files" />
     </template>
   </section>
 </template>

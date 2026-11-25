@@ -17,7 +17,7 @@ const listed_counts = module_ref(new Map());
 </script>
 
 <script setup>
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, nextTick, ref, watch } from "vue";
 import ImportDialog from "./ImportDialog.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import SitesPanel from "./SitesPanel.vue";
@@ -38,7 +38,7 @@ const children = computed(() => {
   const by_id = new Map(rooms.value.map(room => [room.id, room]));
   const groups = new Map();
   for (const room of rooms.value) {
-    const parent = by_id.get(room.parent_room_id);
+    const parent = room.detached ? null : by_id.get(room.parent_room_id);
     if (!parent || parent.id === room.id || (parent.folder_id || "") !== (room.folder_id || "")) continue;
     if (!groups.has(parent.id)) groups.set(parent.id, []);
     groups.get(parent.id).push(room);
@@ -332,11 +332,48 @@ const revoking = ref(null);
 /** A room's published link, if this browser published one: { url, expires_at }. */
 const share_link = (room) => view.value.share_links?.[room.id] || null;
 
-/** A second desktop mouse click opens the same rename dialog as the room menu. */
+// The room whose name is being edited in place, and the typed name. The menu's 重命名 and a desktop double-click both start it.
+const renaming_id = ref(""), rename_text = ref(""), rename_input = ref(null);
+// Room names stay within 80 characters, the same limit as the topic form's name field.
+const ROOM_TITLE_MAX = 80;
+const set_rename_input = (element) => { rename_input.value = element; };
+const can_rename = (room) => !view.value.directory_pending.includes(`rename:${room.id}`);
+
+/** Turn the room's name into a field holding it, all selected. */
+async function start_rename(room) {
+  if (!can_rename(room)) return;
+  rename_text.value = room.title;
+  renaming_id.value = room.id;
+  await nextTick();
+  rename_input.value?.focus();
+  rename_input.value?.select();
+}
+
+/** Save a changed, non-empty name (shown at once, put back with a notice if the site refuses); otherwise keep the old one. */
+function commit_rename(room) {
+  if (renaming_id.value !== room.id) return;
+  renaming_id.value = "";
+  const title = rename_text.value.trim();
+  if (title && title !== room.title) act("manage_channel", { id: room.id, action: "rename", title });
+}
+
+/** Enter saves, except the Enter that confirms an input-method candidate. */
+function rename_enter(event, room) {
+  if (event.isComposing) return;
+  event.preventDefault();
+  commit_rename(room);
+}
+
+/** A menu that started the rename gives focus back to its trigger on closing; the name field keeps it instead. */
+function keep_rename_focus(event) {
+  if (renaming_id.value) event.preventDefault();
+}
+
+/** A second desktop mouse click renames the room in place; touch keeps a plain tap. */
 function select_room(event, room) {
   if (event.detail === 2 && window.matchMedia("(hover: hover) and (pointer: fine)").matches &&
       (!event.pointerType || event.pointerType === "mouse") && !event.sourceCapabilities?.firesTouchEvents) {
-    if (!view.value.directory_pending.includes(`rename:${room.id}`)) emit("manage", { room, action: "rename" });
+    start_rename(room);
     return;
   }
   emit("select", room.id);
@@ -347,7 +384,7 @@ function actions(room, index, folder_id, folder_room_count) {
   const ordering = view.value.directory_pending.includes("room-order");
   const current = room.id === view.value.room?.id;
   return [[
-    { label: t("重命名"), icon: "i-lucide-pencil", disabled: view.value.directory_pending.includes(`rename:${room.id}`), onSelect: () => emit("manage", { room, action: "rename" }) },
+    { label: t("重命名"), icon: "i-lucide-pencil", disabled: !can_rename(room), onSelect: () => start_rename(room) },
     ...(current ? [{ label: t("编辑议题"), icon: "i-lucide-pencil", onSelect: () => emit("manage", { room, action: "edit" }) }] : []),
     { label: t("复制阅读入口"), icon: "i-lucide-link", onSelect: () => act("copy", `${view.value.room_site}/r/${encodeURIComponent(room.id)}`) },
     { label: t("导出对话"), icon: "i-lucide-upload", disabled: view.value.backup_pending, onSelect: () => act("backup", room.id) },
@@ -359,12 +396,16 @@ function actions(room, index, folder_id, folder_room_count) {
       { label: t("移出文件夹"), icon: "i-lucide-folder-minus", disabled: !room.folder_id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: null }) },
       ...(view.value.folders || []).map((folder) => ({ label: folder.name, icon: "i-lucide-folder", disabled: folder.pending || room.folder_id === folder.id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: folder.id }) })),
     ] },
+    ...(room.parent_room_id ? [room.detached
+      ? { label: t("放回父房间"), icon: "i-lucide-corner-down-right", onSelect: () => act("manage_channel", { id: room.id, action: "detach", detached: false }) }
+      : { label: t("设为独立房间"), icon: "i-lucide-corner-up-left", onSelect: () => act("manage_channel", { id: room.id, action: "detach", detached: true }) }] : []),
+    { label: room.pinned ? t("取消固定") : t("固定房间"), icon: room.pinned ? "i-lucide-pin-off" : "i-lucide-pin", disabled: view.value.directory_pending.includes(`pin:${room.id}`), onSelect: () => act("manage_channel", { id: room.id, action: "pin", pinned: !room.pinned }) },
   ], [
     { label: t("上移"), icon: "i-lucide-arrow-up", disabled: ordering || !manual_order.value || index === 0, onSelect: () => act("move_channel", { id: room.id, direction: -1, folder_id }) },
     { label: t("下移"), icon: "i-lucide-arrow-down", disabled: ordering || !manual_order.value || index === folder_room_count - 1, onSelect: () => act("move_channel", { id: room.id, direction: 1, folder_id }) },
   ], [
-    { label: room.archived ? t("恢复房间") : t("存档房间"), icon: room.archived ? "i-lucide-archive-restore" : "i-lucide-archive", disabled: view.value.archive_pending.includes(room.id), onSelect: () => emit("manage", { room, action: room.archived ? "restore" : "archive" }) },
-    { label: t("销毁房间"), icon: "i-lucide-flame", color: "error", disabled: view.value.directory_pending.includes(`rename:${room.id}`), onSelect: () => emit("manage", { room, action: "delete" }) },
+    { label: room.archived ? t("恢复房间") : t("存档房间"), icon: room.archived ? "i-lucide-archive-restore" : "i-lucide-archive", disabled: view.value.archive_pending.includes(room.id) || (!room.archived && room.pinned), onSelect: () => emit("manage", { room, action: room.archived ? "restore" : "archive" }) },
+    { label: t("销毁房间"), icon: "i-lucide-flame", color: "error", disabled: view.value.directory_pending.includes(`rename:${room.id}`) || room.pinned, onSelect: () => emit("manage", { room, action: "delete" }) },
   ]];
 }
 
@@ -391,6 +432,7 @@ function actions(room, index, folder_id, folder_room_count) {
       <section v-for="(folder, folder_index) in folders" :key="folder.order_id" class="channel-folder-section" :data-room-folder="folder.id" :data-drag-folder="folder.order_id">
        <template v-for="head in [folder_head(folder, folder_index)]" :key="folder.order_id">
        <MemoBlock v-if="folder.id" :deps="[head.key]">
+       <UContextMenu :items="head.items" :ui="{ content: 'channel-menu channel-topic-menu' }">
        <div class="channel-folder-row" :class="{ active: head.collapsed && head.active }">
        <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="folder.name" :aria-expanded="!head.collapsed" :title="t('拖动文件夹排序；上下方向键移动')" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="head.collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><i v-if="head.running && !folder.pending" class="channel-room-running" :title="t('正在执行')" /><small v-else-if="folder.pending" class="channel-directory-count" aria-hidden="true">{{ t('保存中') }}</small></button>
         <div class="channel-folder-actions">
@@ -398,20 +440,22 @@ function actions(room, index, folder_id, folder_room_count) {
           <UDropdownMenu :items="head.items" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="t('管理文件夹 {name}', { name: folder.name })" :title="t('文件夹选项')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         </div>
        </div>
+       </UContextMenu>
        </MemoBlock>
        </template>
        <div v-if="folder_open(folder.id)" :class="folder.id ? 'channel-folder-rooms' : 'channel-root-rooms'" :data-drop-folder="folder.id ? undefined : ''">
-      <MemoBlock v-for="{ room, index, count, depth, expanded, label, highlight, running } in directory_rows(folder)" :key="room.id" :deps="[JSON.stringify(room), index, count, depth, expanded, label, highlight, running, row_state, room_time(room), Boolean(share_link(room))]">
+      <MemoBlock v-for="{ room, index, count, depth, expanded, label, highlight, running } in directory_rows(folder)" :key="room.id" :deps="[JSON.stringify(room), index, count, depth, expanded, label, highlight, running, row_state, room_time(room), Boolean(share_link(room)), renaming_id === room.id]">
       <template v-for="row in [room_row(room, index, count)]" :key="room.id">
-      <UContextMenu :items="row.items" :ui="{ content: 'channel-menu channel-topic-menu' }">
-        <div class="channel-room-row" :class="{ active: row.active || highlight, 'is-destroying': row.destroying }" :style="{ marginInlineStart: depth ? `calc(${depth} * var(--channel-nav-text, 13px))` : undefined }" :data-drag-room="room.id" :inert="row.destroying || undefined">
+      <UContextMenu :items="row.items" :content="{ onCloseAutoFocus: keep_rename_focus }" :ui="{ content: 'channel-menu channel-topic-menu' }">
+        <div class="channel-room-row" :class="{ active: row.active || highlight, 'is-destroying': row.destroying}" :style="{ marginInlineStart: depth ? `calc(${depth} * var(--channel-nav-text, 13px))` : undefined }" :data-drag-room="room.id" :inert="row.destroying || undefined">
           <button class="channel-room-grip" data-drag-handle :aria-label="t('拖动 {name}', { name: room.title })" :title="t('拖动排序；上下方向键移动')"  @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
-          <div class="channel-room-content"><UTooltip v-if="label" :text="label" :ui="{ content: 'channel-topic-tooltip' }"><button class="channel-child-toggle" type="button" :aria-expanded="expanded" :aria-label="label" @click.stop="toggle_parent(room.id)"><UIcon :name="expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" /></button></UTooltip><button class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="bridge.start_drag($event)" @click="select_room($event, room)"><span class="channel-room-name"><span>{{ room.title }}</span><small class="channel-room-count">{{ t("（{count}）", { count: room.message_count ?? 0 }) }}</small></span><i v-if="row.running || running" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button></div>
+          <div class="channel-room-content"><UTooltip v-if="label" :text="label" :ui="{ content: 'channel-topic-tooltip' }"><button class="channel-child-toggle" type="button" :aria-expanded="expanded" :aria-label="label" @click.stop="toggle_parent(room.id)"><UIcon :name="expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" /></button></UTooltip><span v-if="renaming_id === room.id" class="channel-room-rename"><input :ref="set_rename_input" v-model="rename_text" :maxlength="ROOM_TITLE_MAX" :aria-label="t('{name} 的新名称', { name: room.title })" autocomplete="off"
+            @keydown.enter="rename_enter($event, room)" @keydown.esc.prevent.stop="renaming_id = ''" @blur="commit_rename(room)" @click.stop @dblclick.stop @contextmenu.stop /></span><button v-else class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="bridge.start_drag($event)" @click="select_room($event, room)"><span class="channel-room-name"><span>{{ room.title }}</span><small class="channel-room-count">{{ room.message_count ?? 0 }}</small><UIcon v-if="room.pinned" name="i-lucide-pin" class="channel-room-pin" :aria-label="t('已固定')" /></span><i v-if="row.running || running" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button></div>
           <div class="channel-room-actions">
-            <UTooltip :text="room.archived ? t('恢复房间') : t('存档房间')" :ui="{ content: 'channel-topic-tooltip' }">
-              <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="room.archived ? t('恢复 {name}', { name: room.title }) : t('存档 {name}', { name: room.title })" class="channel-room-archive" size="xs" color="neutral" variant="ghost" :disabled="row.archiving" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
+            <UTooltip :text="room.archived ? t('恢复房间') : room.pinned ? t('已固定的房间不能存档') : t('存档房间')" :ui="{ content: 'channel-topic-tooltip' }">
+              <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="room.archived ? t('恢复 {name}', { name: room.title }) : t('存档 {name}', { name: room.title })" class="channel-room-archive" size="xs" color="neutral" variant="ghost" :disabled="row.archiving || (!room.archived && room.pinned)" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
             </UTooltip>
-            <UDropdownMenu :items="row.items" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="t('管理 {name}', { name: room.title })" :title="t('更多操作')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
+            <UDropdownMenu :items="row.items" :content="{ align: 'start', side: 'bottom', sideOffset: 6, onCloseAutoFocus: keep_rename_focus }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="t('管理 {name}', { name: room.title })" :title="t('更多操作')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
           </div>
         </div>
       </UContextMenu>

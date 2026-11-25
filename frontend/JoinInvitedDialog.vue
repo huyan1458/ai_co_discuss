@@ -2,7 +2,7 @@
 /**
  * Join a room on another computer with an invitation link, typed in or read from a QR code (camera, image or pasted
  * screenshot): pick which AI of this computer goes, then set it up on its expert card (ExpertCard.vue in joining mode):
- * software, a new or resumed conversation, model, effort, its own prompt, its local access, how it answers when named
+ * software, a new or resumed conversation, model, effort, its local access, how it answers when named (no prompt of its own)
  * and how long it is lent (starting at 只在房间里发言 · 直接回答 · 1 小时).
  * The same as `codiscuss join <link>`.
  */
@@ -104,8 +104,7 @@ async function submit() {
   open.value = false;
   const joining = invited.join({ invite: link, room_title: link_room_title(link),
     adapter: profile.value.adapter, model: profile.value.model || "", effort: profile.value.effort || "", trust: trust.value, duration: trust.value.duration,
-    ...(profile.value.session_id ? { session_id: profile.value.session_id } : {}),
-    ...(Object.hasOwn(profile.value, "system_prompt") ? { system_prompt: profile.value.system_prompt } : {}) });
+    ...(profile.value.session_id ? { session_id: profile.value.session_id } : {}) });
   // `join` marks the join as under way before its first wait, so the page has something to open on.
   invited.open(PENDING_JOIN_ID);
   const result = await joining;

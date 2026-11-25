@@ -119,6 +119,11 @@ RECENT_CHANGES = 50
 MAX_CHANGED_FILES = 200
 # What a member's software last showed it doing, as reported by the runner with each renewal.
 ACTIVITY_PHASES = ("", "thinking", "command", "tool", "editing", "writing", "waiting")
+# The background work one execution's software reports: kinds, states, how many items and how long a title.
+BACKGROUND_KINDS = ("agent", "command", "monitor", "schedule")
+BACKGROUND_STATES = ("running", "done", "failed", "stopped")
+MAX_BACKGROUND_TASKS = 20
+MAX_BACKGROUND_TITLE = 120
 # Progress notes per execution, their length, and how many one renewal may carry.
 MAX_EXECUTION_NOTES = 50
 MAX_NOTE_LENGTH = 500
@@ -171,7 +176,7 @@ TERMINAL = ("completed", "cancelled", "failed")
 # A queued member has been asked once its request for that message exists.
 QUEUE_ASKED = "EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id={row}.message_id AND r.member_id={row}.member_id)"
 SESSION_MODES = ("new", "borrowed")
-FREE_OPERATIONS = ("messages", "attachments", "move", "folder", "rename", "archive", "restore", "delete", "auto-destroy")
+FREE_OPERATIONS = ("messages", "attachments", "move", "folder", "detach", "pin", "rename", "archive", "restore", "delete", "auto-destroy")
 MEMBER_FIELDS = ("id", "name", "adapter", "role", "status", "access", "session_mode", "read_until")
 EXECUTION_FIELDS = ("id", "member_id", "status", "session_id", "lease_until", "created_at", "finished_at", "result",
                     "activity", "activity_at", "paused_at", "model", "effort")
@@ -807,6 +812,31 @@ def label_members(connection, room_id, token, payload):
             connection.execute("DELETE FROM member_labels WHERE room_id=? AND name=?", (room_id, name))
     return {"labels": member_labels(connection, room_id)}
 
+def background_tasks(connection, execution_id):
+    """The background work list the runner last reported for one execution ([] before any report)."""
+    row = connection.execute("SELECT tasks FROM execution_background_tasks WHERE execution_id=?", (execution_id,)).fetchone()
+    return json.loads(row["tasks"]) if row else []
+
+
+def checked_background_tasks(payload):
+    """Validate a reported background work list; times are milliseconds, 0 when unknown."""
+    tasks = payload.get("tasks")
+    if not isinstance(tasks, list) or len(tasks) > MAX_BACKGROUND_TASKS:
+        raise ValueError(Text("tasks 须为最多 {value1} 项的列表", value1=MAX_BACKGROUND_TASKS))
+    checked = []
+    for item in tasks:
+        if (not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"] or len(item["id"]) > MAX_BACKGROUND_TITLE
+                or item.get("kind") not in BACKGROUND_KINDS or item.get("state") not in BACKGROUND_STATES
+                or not isinstance(item.get("title", ""), str) or len(item.get("title", "")) > MAX_BACKGROUND_TITLE
+                or not isinstance(item.get("schedule", ""), str) or len(item.get("schedule", "")) > MAX_BACKGROUND_TITLE
+                or any(type(item.get(field, 0)) is not int or item.get(field, 0) < 0 for field in ("started_at", "ended_at", "next_at"))):
+            raise ValueError(Text("tasks 每项须为 {{id, kind: {value1}, title, state: {value2}, started_at, ended_at, next_at, schedule}}",
+                                  value1="、".join(BACKGROUND_KINDS), value2="、".join(BACKGROUND_STATES)))
+        checked.append({field: item.get(field, default) for field, default in (("id", ""), ("kind", ""), ("title", ""), ("state", ""),
+                        ("started_at", 0), ("ended_at", 0), ("next_at", 0), ("schedule", ""))})
+    return checked
+
+
 def note_count(connection, execution_id):
     """How many progress notes an execution has; the texts are read separately so room views stay small."""
     return connection.execute("SELECT COUNT(*) FROM execution_notes WHERE execution_id=?", (execution_id,)).fetchone()[0]
@@ -1050,7 +1080,10 @@ def recent_executions(connection, room_id, span=None):
         (SELECT denials FROM execution_denials WHERE execution_id=e.id) AS denials,{CAPABILITY_COLUMNS},
         (SELECT failure_class FROM execution_failures WHERE execution_id=e.id) AS failure_class,
         (SELECT json_object('created_at',created_at) FROM late_answers WHERE execution_id=e.id) AS late_answer,
-        {BACKGROUND_SQL} AS background
+        (SELECT source_id FROM execution_followups WHERE execution_id=e.id) AS followup_of,
+        EXISTS(SELECT 1 FROM execution_schedules WHERE execution_id=e.id) AS scheduled,
+        {BACKGROUND_SQL} AS background,
+        (SELECT tasks FROM execution_background_tasks WHERE execution_id=e.id) AS background_tasks
         FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=?"""
     if span:
         rows = connection.execute(f"SELECT * FROM ({query}) WHERE layout_after>? AND layout_after<=? ORDER BY id DESC",
@@ -1077,6 +1110,8 @@ def recent_executions(connection, room_id, span=None):
             "notes": row["note_count"], "steps": row["step_count"], "commands": row["command_count"], "edits": row["edit_count"], "denials": json.loads(row["denials"] or "[]"), "failure_class": row["failure_class"] or "",
             "capabilities": reported_capabilities(row), "stop_result": row["stop_result"] or "",
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None, "background": bool(row["background"]),
+            "followup_of": row["followup_of"], "scheduled": bool(row["scheduled"]),
+            "background_tasks": json.loads(row["background_tasks"]) if row["background_tasks"] else [],
             "retried": bool(row["retried"]), "replaces_execution_id": row["replaces_execution_id"], "line": line,
             "interjections": execution_interjections(connection, row["id"], row["status"]),
             "retry": execution_retry(connection, row["id"])})
@@ -1236,7 +1271,8 @@ def free_view(connection, room_id):
         member["execution"] = public_execution(latest)
         if latest:
             member["execution"]["texts"] = execution_texts(connection, latest["id"])
-            member["execution"].update(capabilities=reported_capabilities(latest), stop_result=latest["stop_result"] or "")
+            member["execution"].update(capabilities=reported_capabilities(latest), stop_result=latest["stop_result"] or "",
+                                       background_tasks=background_tasks(connection, latest["id"]))
         if latest and latest["status"] in ACTIVE:
             member["execution"]["stale"] = latest["lease_until"] <= now
             member["execution"]["notes"] = note_count(connection, latest["id"])
@@ -1569,8 +1605,9 @@ def check_answer(connection, room_id, member, payload):
     if not row or row["member_id"] != member["id"]:
         raise PermissionError(Text("执行编号不属于本成员"))
     if row["status"] == "completed":
-        # The host dispatched with keep_working and went on in the same turn: its answer belongs to where that turn went.
-        # A continuation stopped or failed since takes the answer as that one's late answer, which ends its hold.
+        # The host dispatched with keep_working and went on in the same turn, or background work this execution left
+        # reported after it completed (a follow-up): the answer belongs to where that turn went. A continuation stopped or
+        # failed since takes the answer as that one's late answer, which ends its hold.
         row = continuation_end(connection, row)
         execution_id = payload["execution_id"] = row["id"]
     revived = revive_failed(connection, room_id, row) if row["status"] == "failed" else None
@@ -1611,10 +1648,13 @@ def check_keep_working(member, payload):
 
 
 def continuation_end(connection, row):
-    """The last execution a host's `keep_working` moved this answered execution's turn onto, in whatever state it is now;
-    the row itself when its turn did not move."""
+    """The last execution a host's `keep_working` moved this answered execution's turn onto, or a follow-up (续报) opened
+    after it completed, in whatever state it is now; the row itself when its turn did not move. The member's software
+    still holds the first execution's credential, so its answer goes where the turn went."""
     while row["status"] == "completed":
-        link = connection.execute("SELECT next_id FROM execution_continuations WHERE execution_id=?", (row["id"],)).fetchone()
+        link = connection.execute("""SELECT next_id FROM execution_continuations WHERE execution_id=?
+            UNION ALL SELECT execution_id FROM execution_followups WHERE source_id=?
+            UNION ALL SELECT execution_id FROM execution_schedules WHERE source_id=?""", (row["id"], row["id"], row["id"])).fetchone()
         if not link:
             break
         row = connection.execute("SELECT * FROM member_executions WHERE id=?", (link[0],)).fetchone()
@@ -3076,9 +3116,12 @@ def stop_room_work(connection, room_id, reason, cancel_reason):
         finish_execution(connection, row["id"], "cancelled", reason, "cancelled", cancel_reason)
     record_cancel_reasons(connection, "room_id=? AND status='pending'", (room_id,), cancel_reason)
     connection.execute("UPDATE member_requests SET status='cancelled' WHERE room_id=? AND status='pending'", (room_id,))
-    # Stopping everything also stops a goal, the host's own "continue" or its timed check-in from waking the host again.
+    # Stopping everything also stops a goal, the host's own "continue" or its timed check-in from waking the host again,
+    # and a schedule the host set in its own software from coming in (`open_scheduled`).
     connection.execute("DELETE FROM free_host_continues WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM free_host_checkins WHERE room_id=?", (room_id,))
+    connection.execute("""INSERT OR REPLACE INTO member_schedule_stops (member_id,stopped_at)
+        SELECT id,? FROM room_members WHERE room_id=?""", (int(time.time() * 1000), room_id))
     connection.execute("UPDATE room_goals SET status='paused',paused_at=? WHERE room_id=? AND status='active'", (int(time.time()), room_id))
     # A relay waiting for the owner has nothing running to cancel; stopping everything ends it too.
     connection.execute("UPDATE free_sequences SET status='stopped' WHERE room_id=? AND status='checkpoint' AND handoff_request=0", (room_id,))
@@ -3200,6 +3243,7 @@ def inbox(connection, room_id, token):
         member_view["label"] = shown.get(row["name"], row["name"])
         member_view["review_capability"] = review_capability(connection, room_id, row["id"], token)
         member_view["held_until"] = held_until(connection, row["id"])
+        member_view["schedule_stopped_at"] = schedule_stopped_at(connection, row["id"])
         member_view["quota_until"] = quota_held_until(connection, row["id"])
         # The runner compares this with its adapter's effect and reports a change.
         reported = connection.execute("SELECT rewind,image_model FROM member_capabilities WHERE member_id=?", (row["id"],)).fetchone()
@@ -3214,6 +3258,10 @@ def inbox(connection, room_id, token):
     executions = [{**public_execution(row), "member": row["name"], "retry": execution_retry(connection, row["id"]),
                    "continues": (connection.execute("SELECT execution_id FROM execution_continuations WHERE next_id=?",
                                                     (row["id"],)).fetchone() or [None])[0],
+                   # A follow-up (续报) names the execution it follows, so a restarted runner still knows it for one.
+                   "followup_of": (connection.execute("SELECT source_id FROM execution_followups WHERE execution_id=?",
+                                                      (row["id"],)).fetchone() or [None])[0],
+                   "scheduled": bool(connection.execute("SELECT 1 FROM execution_schedules WHERE execution_id=?", (row["id"],)).fetchone()),
                    "interjections": [dict(item) for item in connection.execute(
                        """SELECT i.id,i.text,COALESCE(a.author,'') AS author FROM execution_interjections i
                        LEFT JOIN interjection_authors a ON a.interjection_id=i.id WHERE i.execution_id=? AND i.status='pending' ORDER BY i.id""",
@@ -3458,7 +3506,145 @@ def reserve_execution(connection, room_id, token, payload):
                                 (room_id, payload.get("member_id"))).fetchone()
     if not member:
         raise LookupError(Text("成员不存在、已离开或为手动接入"))
+    if payload.get("follows") is not None:
+        return open_followup(connection, room_id, member, payload)
+    if payload.get("scheduled") is not None:
+        return open_scheduled(connection, room_id, member, payload)
     return open_execution(connection, room_id, member, payload)
+
+
+MAX_FOLLOWUP_REPORTS = 20
+MAX_FOLLOWUP_ID = 120
+MAX_FOLLOWUP_SUMMARY = 300
+# Background report states that bring no result of their own.
+FOLLOWUP_ENDED_ONLY = ("stopped", "killed")
+
+
+def followup_reports(payload):
+    """The background reports a follow-up execution was opened on, as [{id, status, summary}], checked and trimmed."""
+    reports = payload.get("reports", [])
+    if not isinstance(reports, list) or len(reports) > MAX_FOLLOWUP_REPORTS or any(
+            not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"]
+            or not isinstance(item.get("status", ""), str) or not isinstance(item.get("summary", ""), str) for item in reports):
+        raise ValueError(Text("reports 须为最多 {value1} 项的 {{id, status, summary}} 列表", value1=MAX_FOLLOWUP_REPORTS))
+    return [{"id": item["id"][:MAX_FOLLOWUP_ID], "status": item.get("status", "")[:40],
+             "summary": item.get("summary", "")[:MAX_FOLLOWUP_SUMMARY]} for item in reports]
+
+
+def open_followup(connection, room_id, member, payload):
+    """Open a follow-up execution (续报, user 2026-11-25): background work the ended execution `follows` left running
+    reported, and the member's software started a new turn on it. Its request hangs on that execution's answer (a program
+    notice when it has none) in the same task chain, so the answer has a source and a host's dispatch from it counts
+    against the chain's rounds; a member's `to` stays a suggestion as always. Only a completed execution of this member
+    (a stopped one is not carried on, as `stopped_executions` says), once: a later report follows the follow-up. Reports
+    that only say the work was stopped or killed (a server Claude Code ended at its timeout) bring nothing new."""
+    source_id = payload.get("follows")
+    if type(source_id) is not int:
+        raise ValueError(Text("follows 须为原执行编号"))
+    reports = followup_reports(payload)
+    source = connection.execute("SELECT * FROM member_executions WHERE room_id=? AND id=?", (room_id, source_id)).fetchone()
+    if not source or source["member_id"] != member["id"]:
+        raise LookupError(Text("原执行不存在或不属于该成员"))
+    if source["status"] in ("cancelled", "failed"):
+        # A stopped, withdrawn or rewound execution is not carried on, nor answered for later (`stopped_executions`).
+        raise FileExistsError(Text("原执行 E{value1} 已被停止或判为失败，不再接收续报", value1=source_id))
+    if source["status"] != "completed":
+        raise FileExistsError(Text("原执行 E{value1} 仍在进行，后台回报照常交给它", value1=source_id))
+    if reports and all(item["status"] in FOLLOWUP_ENDED_ONLY for item in reports):
+        raise FileExistsError(Text("这批回报只说后台工作被停止或被结束，没有新结果，不开续报"))
+    taken = connection.execute("SELECT execution_id FROM execution_followups WHERE source_id=?", (source_id,)).fetchone()
+    if taken:
+        raise FileExistsError(Text("原执行 E{value1} 已有续报 E{value2}，之后的回报接在续报上", value1=source_id, value2=taken[0]))
+    if connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
+                          (member["id"],)).fetchone():
+        raise FileExistsError(Text("该成员已有进行中的执行；同一会话不并发续接"))
+    origin = connection.execute("""SELECT chain_id,created_by FROM member_requests WHERE execution_id=? ORDER BY id DESC LIMIT 1""",
+                                (source_id,)).fetchone()
+    if not origin:
+        raise LookupError(Text("原执行没有关联的请求"))
+    answer = connection.execute("SELECT MAX(answer_id) FROM member_requests WHERE execution_id=?", (source_id,)).fetchone()[0]
+    anchor = answer or followup_notice(connection, room_id, member, source_id)
+    now = int(time.time())
+    execution_id = connection.execute("""INSERT INTO member_executions (room_id,member_id,client_id,session_id,lease_until,created_at,cwd,model,effort)
+        VALUES (?,?,?,?,?,?,?,?,?)""", (room_id, member["id"], str(payload["client_id"]), source["session_id"], now + LEASE_SECONDS, now,
+                                        str(payload.get("cwd") or source["cwd"] or "")[:MAX_PATH_LENGTH], source["model"], source["effort"])).lastrowid
+    connection.execute("""INSERT INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at,status,execution_id)
+        VALUES (?,?,?,?,'followup',?,?,'delivering',?)""", (room_id, member["id"], anchor, origin["chain_id"], origin["created_by"], now, execution_id))
+    connection.execute("INSERT INTO execution_followups (execution_id,source_id,reports) VALUES (?,?,?)",
+                       (execution_id, source_id, json.dumps(reports, ensure_ascii=False)))
+    return execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
+
+
+MAX_SCHEDULE_FIELD = 120
+MAX_SCHEDULE_PROMPT = 300
+
+
+class ScheduleStopped(FileExistsError):
+    """A schedule set before the owner last stopped the member: it no longer comes in (code `schedule_stopped`)."""
+
+    details = {"code": "schedule_stopped"}
+
+
+def schedule_stopped_at(connection, member_id):
+    """When the owner last stopped this member, in milliseconds, or 0."""
+    row = connection.execute("SELECT stopped_at FROM member_schedule_stops WHERE member_id=?", (member_id,)).fetchone()
+    return row[0] if row else 0
+
+
+def open_scheduled(connection, room_id, member, payload):
+    """Open a scheduled execution (定时回报, user 2026-11-25 #10925, option B): a schedule the host set in its own software
+    fired and started a turn there. Only the host's: the host waking itself is within its full control, while a member
+    waking itself would bypass red line 3. Its request hangs on a program notice, in the task chain of the host's latest
+    execution (as a follow-up's does), so a recurring schedule's dispatches all count against that chain's rounds and
+    the owner approves going past them (user 2026-11-25 #10989); only a host with no earlier work starts a chain at the
+    notice. A schedule set (`set_at`, ms) no later than the owner last stopped the member is refused with code
+    `schedule_stopped`: the owner's stop also stops the host waking itself. Refused while the member has a live
+    execution: that one takes the turn."""
+    scheduled = payload.get("scheduled")
+    if (not isinstance(scheduled, dict) or not isinstance(scheduled.get("id"), str) or not scheduled["id"]
+            or any(not isinstance(scheduled.get(field, ""), str) for field in ("schedule", "prompt"))):
+        raise ValueError(Text("scheduled 须为 {{id, schedule, prompt}}"))
+    if member["role"] != "host":
+        raise FileExistsError(Text("只有主持人自设定时的结果会收进房间，普通成员的定时只显示"))
+    set_at, stopped = scheduled.get("set_at"), schedule_stopped_at(connection, member["id"])
+    if set_at is not None and (type(set_at) is not int or set_at < 0):
+        raise ValueError(Text("scheduled.set_at 须为设定时的毫秒时间"))
+    if stopped and (set_at is None or set_at <= stopped):
+        raise ScheduleStopped(Text("用户在这个定时设好之后停止过主持人，它到点的结果不再收进房间；主持人在新的房间任务里重新设定时后才会再收"))
+    if connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
+                          (member["id"],)).fetchone():
+        raise FileExistsError(Text("该成员已有进行中的执行；同一会话不并发续接"))
+    schedule, prompt = scheduled.get("schedule", "")[:MAX_SCHEDULE_FIELD], scheduled.get("prompt", "")[:MAX_SCHEDULE_PROMPT]
+    source = connection.execute("SELECT MAX(id) FROM member_executions WHERE member_id=?", (member["id"],)).fetchone()[0]
+    origin = connection.execute("SELECT chain_id FROM member_requests WHERE execution_id=? AND chain_id>0 ORDER BY id DESC LIMIT 1",
+                                (source,)).fetchone() if source else None
+    text = Text("主持人自设的定时到点（{value1}）：{value2}", value1=schedule or scheduled["id"], value2=prompt)
+    notice = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?,?,?,?,?,?)",
+                                (room_id, NOTICE_AUTHOR, str(text), "notice", f"notice-scheduled:{payload['client_id']}"[:100],
+                                 time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))).lastrowid
+    save_text(connection, "message", notice, "text", text)
+    connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)", (notice, "notice", NOTICE_AUTHOR))
+    now = int(time.time())
+    execution_id = connection.execute("""INSERT INTO member_executions (room_id,member_id,client_id,lease_until,created_at,cwd)
+        VALUES (?,?,?,?,?,?)""", (room_id, member["id"], str(payload["client_id"]), now + LEASE_SECONDS, now,
+                                 str(payload.get("cwd") or "")[:MAX_PATH_LENGTH])).lastrowid
+    connection.execute("""INSERT INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at,status,execution_id)
+        VALUES (?,?,?,?,'scheduled','system',?,'delivering',?)""", (room_id, member["id"], notice, origin[0] if origin else notice, now, execution_id))
+    connection.execute("INSERT INTO execution_schedules (execution_id,source_id,task_id,schedule) VALUES (?,?,?,?)",
+                       (execution_id, source, scheduled["id"][:MAX_SCHEDULE_FIELD], schedule))
+    return execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
+
+
+def followup_notice(connection, room_id, member, source_id):
+    """The program notice a follow-up of an execution that left no answer (it ended on program notices alone) hangs on."""
+    name = member_display_names(connection, room_id).get(member["name"], member["name"])
+    text = Text("{value1} 在执行 E{value2} 里留下的后台任务有了回报，以下是它的续报。", value1=name, value2=source_id)
+    message_id = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?,?,?,?,?,?)",
+                                    (room_id, NOTICE_AUTHOR, str(text), "notice", f"notice-followup:{source_id}",
+                                     time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))).lastrowid
+    save_text(connection, "message", message_id, "text", text)
+    connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)", (message_id, "notice", NOTICE_AUTHOR))
+    return message_id
 
 
 def claim_execution(connection, room_id, member, payload):
@@ -3915,6 +4101,12 @@ def execution_action(connection, room_id, execution_id, token, payload, member=N
             ON CONFLICT(execution_id) DO UPDATE SET stoppable=excluded.stoppable,progress=excluded.progress,steer=excluded.steer,
             resume=excluded.resume""", (execution_id, room_id, int(payload["stoppable"]), int(payload["progress"]),
                                         int(payload.get("steer", False)), int(payload.get("resume", False))))
+    elif action == "background_tasks":
+        # The latest list replaces the earlier one; it may arrive just after the execution ended, with the final states.
+        tasks = checked_background_tasks(payload)
+        connection.execute("""INSERT INTO execution_background_tasks (execution_id,room_id,tasks,updated_at) VALUES (?,?,?,?)
+            ON CONFLICT(execution_id) DO UPDATE SET tasks=excluded.tasks,updated_at=excluded.updated_at""",
+                           (execution_id, room_id, json.dumps(tasks, ensure_ascii=False), now))
     elif action == "interjection":
         # The runner's report on one interjection: it reached the software, or why it could not; a repeated report changes nothing.
         record_interjection_result(connection, room_id, execution_id, payload, now)
@@ -3991,12 +4183,15 @@ def execution_action(connection, room_id, execution_id, token, payload, member=N
         finish_execution(connection, execution_id, "failed", reason, "failed")
         settle_batches(connection, room_id)
     elif action == "quiet":
-        # A program notice (failure reminder, timed check, hand-back) with nothing to handle ends without a message.
+        # A program notice (failure reminder, timed check, hand-back) with nothing to handle ends without a message; so
+        # does a follow-up whose turn brought nothing to say (the program opened it, nobody asked for an answer).
         purposes = {item[0] for item in connection.execute(
             "SELECT purpose FROM member_requests WHERE execution_id=? AND status='delivering'", (execution_id,))}
-        if purposes != {"notice"}:
-            raise ValueError(Text("只有只带程序通知的执行可以不回答就结束"))
-        finish_execution(connection, execution_id, "completed", Text("没有需要处理的事，未发消息"), "completed")
+        if not purposes or not purposes <= {"notice", "followup", "scheduled"}:
+            raise ValueError(Text("只有只带程序通知、续报或定时回报的执行可以不回答就结束"))
+        finish_execution(connection, execution_id, "completed", Text("后台回报这一轮没有交来新内容，未发消息") if "followup" in purposes
+                         else Text("定时这一轮没有需要处理的事，未发消息") if "scheduled" in purposes
+                         else Text("没有需要处理的事，未发消息"), "completed")
         settle_batches(connection, room_id)
     elif action == "release":
         # Only for proven non-delivery: the requests return to the queue unchanged.
@@ -4134,6 +4329,9 @@ def interrupt_member(connection, room_id, member_id, token, by_host=""):
     pause_queue(connection, room_id)
     reason = Text("主持人 {host} 打断", host=by_host) if by_host else Text("用户打断")
     stop_member_work(connection, member_id, reason, "user_stop", keep_pending=True)
+    if not by_host:
+        connection.execute("INSERT OR REPLACE INTO member_schedule_stops (member_id,stopped_at) VALUES (?,?)",
+                           (member_id, int(time.time() * 1000)))
     settle_batches(connection, room_id)
     return free_view(connection, room_id)
 
@@ -4425,9 +4623,78 @@ def record_relay_send(connection, room_id, token, payload):
         VALUES(?,?,?,'room_relay_sent',?,?)""", (room_id, NOTICE_AUTHOR, text, identifier,
         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))).lastrowid
     connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,'notice',?)", (message_id, NOTICE_AUTHOR))
+    if queued and payload.get("target_submission_id"):
+        delivered = connection.execute("SELECT id FROM messages WHERE room_id=? AND submission_id=?",
+                                       (target, payload["target_submission_id"])).fetchone()
+        sent = delivered[0] if delivered else None
+    state = "queued" if queued and not sent else "delivered"
+    if sent and connection.execute("SELECT 1 FROM message_relays WHERE reply_to=? AND source_room_id=?", (sent, target)).fetchone():
+        state = "replied"
     connection.execute("""INSERT INTO room_relay_sends
-        (message_id,room_id,target_room_id,target_message_id,queued_id,interrupted,host,member) VALUES (?,?,?,?,?,?,?,?)""",
-                       (message_id, room_id, target, sent, queued, interrupted, host, member))
+        (message_id,room_id,target_room_id,target_message_id,queued_id,interrupted,host,member,state) VALUES (?,?,?,?,?,?,?,?,?)""",
+                       (message_id, room_id, target, sent, queued, interrupted, host, member, state))
+    return {"message_id": message_id, "duplicate": False}
+
+
+# What a host did through `launch host-control`, one sentence each; `{detail}` is the step's own value (text, number).
+HOST_ACTION_TEXTS = {
+    "stop": "主持人 {host} 打断了 {member}",
+    "stop-all": "主持人 {host} 停止了房间里的全部工作",
+    "steer": "主持人 {host} 向 {member} 插话：{detail}",
+    "retry": "主持人 {host} 重试了执行 #{detail}",
+    "withdraw": "主持人 {host} 撤回了 #{detail} 派出的活",
+    "order": "主持人 {host} 调整了发言顺序：{detail}",
+    "invite": "主持人 {host} 邀请 {member} 加入",
+    "away": "主持人 {host} 让 {member} 暂离",
+    "remove": "主持人 {host} 移除了 {member}",
+    "back": "主持人 {host} 请回了 {member}",
+    "access:read": "主持人 {host} 把 {member} 的项目权限改为只读",
+    "access:write": "主持人 {host} 把 {member} 的项目权限改为可写",
+    "adapter": "主持人 {host} 把 {member} 的接入方式改为 {detail}",
+    "label": "主持人 {host} 把 {member} 改名为 {detail}",
+    "description": "主持人 {host} 更新了 {member} 的描述",
+    "checkin": "主持人 {host} 设定每 {detail} 分钟定时检查",
+    "checkin:off": "主持人 {host} 关闭了定时检查",
+    "discussion:start": "主持人 {host} 开启了讨论：{detail}",
+    "discussion:pause": "主持人 {host} 暂停了讨论",
+    "discussion:resume": "主持人 {host} 恢复了讨论",
+    "discussion:end": "主持人 {host} 结束了讨论",
+    "goal:start": "主持人 {host} 开启了 Goal：{detail}",
+    "goal:pause": "主持人 {host} 暂停了 Goal",
+    "goal:resume": "主持人 {host} 恢复了 Goal",
+    "goal:end": "主持人 {host} 结束了 Goal",
+}
+HOST_ACTION_DETAIL_LIMIT = 2000
+
+
+def record_host_action(connection, room_id, token, host, payload):
+    """Leave a one-line record of a control the host ran through `launch host-control`, so the owner sees in the
+    message flow what the host did to members and the room. Nobody is woken.
+
+    The host's name comes from its own credential (`acting_host`), never from the payload; a retry with the same
+    `submission_id` returns the record already there.
+    """
+    require_owner(connection, room_id, token)
+    if not host:
+        raise PermissionError(Text("只有主持人经 host-control 的操作才能留痕"))
+    action, member, detail = payload.get("action"), payload.get("member", ""), payload.get("detail", "")
+    if action not in HOST_ACTION_TEXTS:
+        raise ValueError(Text("主持人操作类型无效"))
+    if not isinstance(member, str) or len(member) > 100 or not isinstance(detail, (str, int)) or len(str(detail)) > HOST_ACTION_DETAIL_LIMIT:
+        raise ValueError(Text("主持人操作留痕的成员或内容无效"))
+    identifier = payload.get("submission_id")
+    if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", identifier):
+        raise ValueError(Text("submission_id 必须是 8–100 位字母、数字、下划线或连字符"))
+    begin_write(connection)
+    previous = connection.execute("SELECT id FROM messages WHERE room_id=? AND submission_id=?", (room_id, f"host-action-{identifier}")).fetchone()
+    if previous:
+        return {"message_id": previous[0], "duplicate": True}
+    text = Text(HOST_ACTION_TEXTS[action], host=host, member=member, detail=str(detail))
+    message_id = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?,?,?,?,?,?)",
+                                    (room_id, NOTICE_AUTHOR, text, "host_action", f"host-action-{identifier}",
+                                     time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))).lastrowid
+    save_text(connection, "message", message_id, "text", text)
+    connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)", (message_id, "notice", NOTICE_AUTHOR))
     return {"message_id": message_id, "duplicate": False}
 
 
@@ -4463,6 +4730,14 @@ def record_room_link(connection, room_id, token, payload):
 MAX_RELAY_LIMIT = 100
 
 
+def relay_count(connection, room_id, source):
+    """Count messages exchanged since the last owner message in either room."""
+    spoke = connection.execute("""SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE m.room_id IN (?,?) AND m.author='用户'
+        AND NOT EXISTS (SELECT 1 FROM message_relays r WHERE r.message_id=m.id)""", (room_id, source)).fetchone()[0]
+    return connection.execute("""SELECT COUNT(*) FROM message_relays r JOIN messages m ON m.id=r.message_id WHERE m.id>?
+        AND ((m.room_id=? AND r.source_room_id=?) OR (m.room_id=? AND r.source_room_id=?))""", (spoke, room_id, source, source, room_id)).fetchone()[0]
+
+
 def check_relay(connection, room_id, relay):
     """Check a message another room's host sends here: the rooms are linked, and the hosts have not passed the limit.
 
@@ -4480,12 +4755,17 @@ def check_relay(connection, room_id, relay):
         raise ValueError(Text("relay.limit 须为 0–100 的整数，0 表示不限"))
     if not connection.execute("SELECT 1 FROM room_links WHERE room_id=? AND other_room_id=?", (room_id, source)).fetchone():
         raise PermissionError(Text("只有互相关联的房间之间才能代主持人发言"))
+    if relay.get("expect", "reply") not in ("reply", "none"):
+        raise ValueError(Text("expect 须为 reply 或 none"))
+    reply_to = relay.get("reply_to")
+    if reply_to is not None and (type(reply_to) is not int or not connection.execute(
+            """SELECT 1 FROM message_relays r JOIN messages m ON m.id=r.message_id
+               WHERE m.room_id=? AND r.source_room_id=? AND r.message_id=? AND r.expect='reply'""",
+            (source, room_id, reply_to)).fetchone()):
+        raise ValueError(Text("只能回复对方发来的、需要回传的消息"))
     if not limit:
         return host
-    spoke = connection.execute("""SELECT COALESCE(MAX(m.id),0) FROM messages m WHERE m.room_id IN (?,?) AND m.author='用户'
-        AND NOT EXISTS (SELECT 1 FROM message_relays r WHERE r.message_id=m.id)""", (room_id, source)).fetchone()[0]
-    passed = connection.execute("""SELECT COUNT(*) FROM message_relays r JOIN messages m ON m.id=r.message_id WHERE m.id>?
-        AND ((m.room_id=? AND r.source_room_id=?) OR (m.room_id=? AND r.source_room_id=?))""", (spoke, room_id, source, source, room_id)).fetchone()[0]
+    passed = relay_count(connection, room_id, source)
     if passed >= limit:
         raise FileExistsError(Text("两个房间的主持人自用户上次发言后已互传 {count} 条消息，达到上限；请等用户在任一房间发言后再继续", count=passed))
     return host
@@ -4494,7 +4774,11 @@ def check_relay(connection, room_id, relay):
 def save_message_relay(connection, room_id, message_id, relay):
     """Label an owner-credential message the host of another room sent: `relay = {room_id, host}`."""
     host = check_relay(connection, room_id, relay)
-    connection.execute("INSERT INTO message_relays (message_id,source_room_id,host,member) VALUES (?,?,?,?)", (message_id, relay["room_id"], host, relay.get("member", "")))
+    connection.execute("INSERT INTO message_relays (message_id,source_room_id,host,member,expect,reply_to) VALUES (?,?,?,?,?,?)",
+                       (message_id, relay["room_id"], host, relay.get("member", ""), relay.get("expect", "reply"), relay.get("reply_to")))
+    if relay.get("reply_to"):
+        connection.execute("""UPDATE room_relay_sends SET state='replied'
+            WHERE room_id=? AND target_room_id=? AND target_message_id=?""", (room_id, relay["room_id"], relay["reply_to"]))
 
 
 def record_model_change(connection, room_id, member, payload):

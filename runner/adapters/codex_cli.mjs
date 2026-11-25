@@ -12,7 +12,7 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { cli_delivery } from './cli.mjs';
 import { daemon_chat, daemon_link } from './codex_daemon.mjs';
-import { CALL_TIMEOUT_MS, edge_entries, launch_directory, log_entries, marked, model_entry, json_line, newest_record, not_sent,
+import { BackgroundTasks, background_state, CALL_TIMEOUT_MS, edge_entries, launch_directory, log_entries, marked, model_entry, json_line, newest_record, not_sent,
   page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog, remove_session_files, same_path, shell_written_paths, typed_prompt } from './common.mjs';
 import { adapter_capabilities } from './profiles.mjs';
 
@@ -175,8 +175,9 @@ function invocation(config, binding, task) {
   if (refusal) throw not_sent(new Error(refusal));
   const permissions = codex_permissions(config, task);
   const full = runs_unsandboxed(config);
-  const developer_instructions = codex_developer_instructions();
-  const input = `${JSON.stringify({ prompt: task.prompt, thread_id: binding.session_id || '', cwd: launch_directory(config, task),
+  // The bridge sets these only when it starts a thread; the runner sends the member's prompt only for a new one.
+  const developer_instructions = [codex_developer_instructions(), task.system_text || ''].filter(Boolean).join('\n\n');
+  const input = `${JSON.stringify({ prompt: task.prompt, ...(task.on_followup ? { background: true } : {}), thread_id: binding.session_id || '', cwd: launch_directory(config, task),
     model: config.model || '', effort: config.effort || '', full, ...(developer_instructions ? { developer_instructions } : {}),
     ...(task.images?.length ? { images: task.images.map(image => image.path) } : {}) })}\n`;
   return { executable: process.execPath, args: [CODEX_BRIDGE, config.executable, ...(full ? [] : permissions.args)], input,
@@ -189,13 +190,58 @@ function remember_writer_conflict(state, diagnostic) {
   if (/thread-store conflict:[\s\S]*already has an active writer/.test(diagnostic)) state.writer_conflict = true;
 }
 
+/** Keep the writer while owned work or a runner decision is outstanding. */
+function background_event(state, event, task) {
+  const child = state.child;
+  if (!state.background) {
+    state.background = new BackgroundTasks(task);
+    state.active_background = new Set();
+    child.lingers = () => !state.stopped && !state.error && child.exitCode === null && !child.signalCode
+      && Boolean(state.active_background.size || state.followup_pending);
+    child.linger = () => {
+      if (!child.lingers() || child.stdin.destroyed || child.stdin.writableEnded) return false;
+      child.stdin.write(JSON.stringify({ linger: true }) + '\n');
+      return true;
+    };
+  }
+  if (event.type === 'background.started') {
+    state.active_background.add(event.id);
+    state.background.set(event.id, { kind: event.kind, title: event.title, started_at: Date.now() });
+  } else if (event.type === 'background.ended') {
+    state.active_background.delete(event.id);
+    state.followup_pending = event.pending;
+    state.background.end(event.id, background_state(event.status));
+  } else if (event.type === 'background.followup') {
+    state.followup_pending = true;
+    Promise.resolve().then(() => !state.stopped && task.on_followup(event.reports, child, { steer: true }))
+      .catch(() => false).then(accepted => {
+        if (state.stopped || child.stdin.destroyed || child.stdin.writableEnded) return;
+        if (accepted === true) state.completed = false;
+        child.stdin.write(JSON.stringify({ followup: accepted === 'keep' ? 'keep' : accepted === true }) + '\n');
+        state.followup_pending = false;
+      });
+  }
+}
+
 /** Consume only documented lifecycle events, not text produced by agent tools. */
 function lifecycle(state, event, task, bind) {
+  if (event.type?.startsWith('background.') && task.on_followup) background_event(state, event, task);
   if (event.type === 'codiscuss.interjection_confirmed') task.on_diagnostic?.({ interjection_confirmed: event.interjection_id });
   if (event.type === 'thread.started') bind(event.thread_id);
   if (event.type === 'codiscuss.turn') task.on_recovery?.({ kind: 'codex_turn',
     thread_id: event.thread_id, turn_id: event.turn_id, rollout_path: event.rollout_path });
-  if (event.type === 'turn.completed') { state.completed = true; state.finish_timer = setTimeout(() => { state.finished = true; task.on_trace?.('kill_after_completed'); state.child.kill(); }, CLI_EXIT_GRACE_MS); }
+  if (event.type === 'turn.completed') {
+    state.completed = true;
+    if (event.waiting) {
+      state.followup_pending = true;
+      task.on_activity?.('waiting');
+    }
+    else state.finish_timer = setTimeout(() => {
+      state.finished = true;
+      task.on_trace?.('kill_after_completed');
+      state.child.kill();
+    }, CLI_EXIT_GRACE_MS);
+  }
   if (event.type === 'turn.failed') { state.error = event.error?.message || 'Codex CLI 执行失败'; state.failure_info = event.error; }
   if (event.type === 'error') { state.diagnostic = event.message || 'Codex CLI 返回错误'; if (!state.error) state.failure_info = event; }
   remember_writer_conflict(state, state.error || state.diagnostic);

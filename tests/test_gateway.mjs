@@ -512,6 +512,15 @@ test('a paired device reads, writes and uploads to a protected instance through 
   const uploaded = await room_upload(home, paired, { id: 'upload-relay-protected-1', path: `/api/rooms/${room.id}/attachments?file_name=note.txt&actor=%E7%94%A8%E6%88%B7&submission_id=relay-protected-upload`,
     index: 0, total: 1, size: content.length, content_type: 'text/plain', data: content.toString('base64') });
   assert.ok([200, 201].includes(uploaded.status), JSON.stringify(uploaded.body));
+  // A group's paths set on this computer stay usable and removable from afar; a new path outside the saved projects is refused.
+  const folder = await (await site_fetch(`http://127.0.0.1:${port}/api/folders`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: '分组', directories: [root] }) })).json();
+  await assert.rejects(room_api(home, paired, { method: 'POST', path: '/api/folders', body: { name: '新分组', directories: [root] } }), /常用项目|Saved projects/);
+  await assert.rejects(room_api(home, paired, { method: 'POST', path: `/api/folders/${folder.id}/rename`, body: { name: '分组', directories: [root, home] } }), /常用项目|Saved projects/);
+  const kept = await room_api(home, paired, { method: 'POST', path: `/api/folders/${folder.id}/rename`, body: { name: '分组', directories: [root] } });
+  assert.equal(kept.status, 200, JSON.stringify(kept.body));
+  const removed = await room_api(home, paired, { method: 'POST', path: `/api/folders/${folder.id}/rename`, body: { name: '分组', directories: [] } });
+  assert.deepEqual(removed.body.directories, []);
 
   const id = crypto.randomUUID();
   const timing = { id, route: 'messages' };

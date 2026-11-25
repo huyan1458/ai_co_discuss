@@ -143,7 +143,8 @@ export async function api(config, tail, body, token = config.token) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const result = await response.json();
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${result.error || '请求失败'}`);
+  // A classified refusal keeps its code (e.g. `schedule_stopped`), so the caller can tell it apart without reading prose.
+  if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}: ${result.error || '请求失败'}`), { status: response.status, ...(result.code ? { code: result.code } : {}) });
   return result;
 }
 

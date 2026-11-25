@@ -93,6 +93,8 @@
   "删除频道": "Delete channel",
   "{value1}失败，已恢复原状态：{value2}": "{value1} failed. Previous state restored: {value2}",
   "「{value1}」重命名": "Rename “{value1}”",
+  "「{value1}」设为独立房间": "Making “{value1}” a standalone room",
+  "「{value1}」放回父房间": "Nesting “{value1}” under its parent room",
   "频道排序": "Channel order",
   "已存档「{value1}」": "Archived “{value1}”",
   "存档": "Archive",
@@ -443,7 +445,7 @@
   "移除 {name}": "Remove {name}",
   "预览 {name}": "Preview {name}",
   "下载 {name}": "Download {name}",
-  "共议聊天室 · AI CoDiscuss": "AI CoDiscuss",
+  "共议 · CoDiscuss": "CoDiscuss",
   "[图片 #{number}]": "[Image #{number}]",
   "[文件 #{number}]": "[File #{number}]",
   "{name} 参与方式": "{name} participation method",
@@ -461,7 +463,7 @@
   "请先登录": "Please sign in",
   "分享": "Share",
   "用自己的 AI 开一个房间": "Start a room with your own AIs",
-  "{title} · AI CoDiscuss": "{title} · AI CoDiscuss",
+  "{title} · CoDiscuss": "{title} · CoDiscuss",
   "这是只读的分享页面，不能修改房间": "This is a read-only shared page; the room cannot be changed here",
   "分享页面不包含这部分内容": "This shared page does not include this content",
   "读取网页文件 {path} 失败": "Could not read the page file {path}",
@@ -636,5 +638,7 @@
   "{count} 个文件 · {size}": "{count} files · {size}",
   "第 {version} 版 · {count} 个文件 · {size}": "Version {version} · {count} files · {size}",
   "{time} 到期": "expires {time}",
-  "本机 .codiscuss 数据已占 {used}（不含语音模型），接近 {limit} 上限，请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或清理临时文件。": "Local .codiscuss data uses {used} (excluding speech models), approaching the {limit} limit. Run $codiscuss-draft-cleanup in an AI chat outside the room or clear temporary files."
+  "本机 .codiscuss 数据已占 {used}（不含语音模型），接近 {limit} 上限，请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或清理临时文件。": "Local .codiscuss data uses {used} (excluding speech models), approaching the {limit} limit. Run $codiscuss-draft-cleanup in an AI chat outside the room or clear temporary files.",
+  "固定「{value1}」": "Pinning “{value1}”",
+  "取消固定「{value1}」": "Unpinning “{value1}”"
 }

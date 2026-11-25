@@ -5,8 +5,11 @@
  * `{ preset }`. Files are read and written one at a time through the service (`skills`, `skill-write`, `skill-delete`,
  * `skill-remove`), never through the workflow's save; each write names the digest it read, and a file the expert
  * changed meanwhile is refused with a reload offered instead of overwriting it. Deleting asks a second click.
+ * The files show in the shared SkillFiles view (user 2026-11-24): the top lists the skills as folders with their
+ * descriptions; a file is created in any folder inside a skill.
  */
 import { computed, inject, ref, watch } from "vue";
+import SkillFiles from "./SkillFiles.vue";
 import { t } from "./i18n.js";
 
 const props = defineProps({
@@ -15,63 +18,63 @@ const props = defineProps({
   blocked: { type: String, default: "" },
 });
 const { bridge } = inject("discussion");
-// A skill's folder name follows the workflow ID rule; a reference file name is one path segment.
+// A skill's folder name follows the workflow ID rule.
 const SKILL_NAME = /^(?=.{1,40}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const FILE_NAME = /^[^./\\:*?"<>|\x00-\x1f][^/\\:*?"<>|\x00-\x1f]{0,99}$/;
 
 const skills = ref([]), loading = ref(false), failure = ref(""), changed = ref(false);
-const expanded = ref(new Set()), file = ref(null), text = ref(""), saving = ref(false);
-// The control waiting for its second click: `skill:<name>` or `file:<path>`.
-const armed = ref("");
+const location = ref("");
 const adding = ref(false), new_name = ref(""), new_description = ref("");
-const adding_file = ref(""), new_file = ref("");
-const edited = computed(() => Boolean(file.value) && file.value.text !== null && text.value !== file.value.text);
 const key = computed(() => JSON.stringify(props.source));
+const files = computed(() => skills.value.flatMap((skill) => skill.files));
+const digests = computed(() => new Map(files.value.map((item) => [item.path, item.digest])));
+const notes = computed(() => Object.fromEntries(skills.value.map((skill) => [skill.name, skill.description])));
 
 function request(action, input = {}) {
   return bridge.local_request("workflows", { action, ...props.source, ...input });
 }
 
-/** Read every skill again; the open file stays open when it is still there. */
+/** Read every skill again; the folder or file shown stays shown. */
 async function load() {
   if (props.blocked) return;
   loading.value = true;
   try {
     skills.value = (await request("skills")).skills;
     failure.value = ""; changed.value = false;
-    const path = file.value?.path;
-    const found = path && skills.value.flatMap((skill) => skill.files).find((item) => item.path === path);
-    pick(found || null);
   } catch (error) { failure.value = error.message; skills.value = []; }
   finally { loading.value = false; }
 }
 
-function pick(item) {
-  file.value = item; text.value = item?.text ?? ""; armed.value = "";
-}
-
-function toggle(name) {
-  const next = new Set(expanded.value);
-  if (next.has(name)) next.delete(name); else next.add(name);
-  expanded.value = next;
-}
-
-/** A refusal because the expert changed the file shows the reload offer; any other is a notice. */
+/** A refusal because the expert changed the file shows the reload offer; any other is a notice. Rethrows for the view. */
 function refused(error) {
   if (error.code === "skill_changed") changed.value = true;
   bridge.notify(error.code === "skill_changed" ? "warning" : "error", error.message);
+  throw error;
 }
 
-async function save() {
-  if (!file.value || saving.value) return;
-  saving.value = true;
+async function save(path, text) {
   try {
-    const result = await request("skill-write", { path: file.value.path, text: text.value, digest: file.value.digest });
-    file.value = { ...file.value, text: text.value, digest: result.digest };
-    skills.value = skills.value.map((skill) => ({ ...skill, files: skill.files.map((item) => item.path === result.path ? file.value : item) }));
-    bridge.notify("info", t("已保存 {value1}", { value1: result.path }));
+    await request("skill-write", { path, text, digest: digests.value.get(path) || "" });
+    bridge.notify("info", t("已保存 {value1}", { value1: path }));
   } catch (error) { refused(error); }
-  finally { saving.value = false; }
+  await load();
+}
+
+/** A skill at the top goes whole (backed up first); below it, one file at a time. */
+async function remove(entry) {
+  try {
+    if (entry.directory) {
+      await request("skill-remove", { skill: entry.path });
+      bridge.notify("info", t("已删除技能 {value1}，原来的文件夹已移到服务目录的 backups 下", { value1: entry.path }));
+    } else await request("skill-delete", { path: entry.path, digest: entry.digest });
+  } catch (error) { refused(error); }
+  await load();
+}
+
+async function create(folder, name) {
+  const path = `${folder}/${name}`;
+  try { await request("skill-write", { path, text: "", digest: "" }); } catch (error) { refused(error); }
+  await load();
+  return path;
 }
 
 /** A new skill starts as its SKILL.md with the front matter Agent Skills reads. */
@@ -82,47 +85,16 @@ async function add_skill() {
   try {
     await request("skill-write", { path: `${name}/SKILL.md`, text: `---\nname: ${name}\ndescription: ${description}\n---\n`, digest: "" });
     adding.value = false; new_name.value = ""; new_description.value = "";
-    expanded.value = new Set([...expanded.value, name]);
     await load();
-  } catch (error) { refused(error); }
+    location.value = `${name}/SKILL.md`;
+  } catch (error) { try { refused(error); } catch { /* told */ } }
 }
 
-async function add_file(skill) {
-  const name = new_file.value.trim();
-  if (!FILE_NAME.test(name)) return bridge.notify("warning", t("文件名不合法"));
-  const path = `${skill}/references/${name}`;
-  try {
-    await request("skill-write", { path, text: "", digest: "" });
-    adding_file.value = ""; new_file.value = "";
-    await load();
-    pick(skills.value.flatMap((item) => item.files).find((item) => item.path === path) || null);
-  } catch (error) { refused(error); }
-}
-
-async function delete_file(item) {
-  if (armed.value !== `file:${item.path}`) { armed.value = `file:${item.path}`; return; }
-  try {
-    await request("skill-delete", { path: item.path, digest: item.digest });
-    if (file.value?.path === item.path) pick(null);
-    await load();
-  } catch (error) { refused(error); }
-}
-
-async function remove_skill(name) {
-  if (armed.value !== `skill:${name}`) { armed.value = `skill:${name}`; return; }
-  try {
-    await request("skill-remove", { skill: name });
-    if (file.value?.path.startsWith(`${name}/`)) pick(null);
-    bridge.notify("info", t("已删除技能 {value1}，原来的文件夹已移到服务目录的 backups 下", { value1: name }));
-    await load();
-  } catch (error) { refused(error); }
-}
-
-watch([key, () => props.blocked], () => { pick(null); expanded.value = new Set(); load(); }, { immediate: true });
+watch([key, () => props.blocked], () => { location.value = ""; load(); }, { immediate: true });
 </script>
 
 <template>
-  <section class="expert-skills" :class="{ 'is-editing': file }" :aria-label="t('技能')">
+  <section class="expert-skills" :aria-label="t('技能')">
     <header class="expert-skills-head">
       <span>{{ t("这位专家自己读写的知识；这里的修改直接写入，不需要保存工作流") }}</span>
       <UButton v-if="!blocked" icon="i-lucide-refresh-cw" size="xs" color="neutral" variant="ghost" :loading="loading" :aria-label="t('重新载入技能')" :title="t('重新载入技能')" @click="load" />
@@ -138,58 +110,16 @@ watch([key, () => props.blocked], () => { pick(null); expanded.value = new Set()
         <UInput v-model="new_description" size="sm" class="expert-skills-grow" :placeholder="t('一句描述：这条技能管什么')" :aria-label="t('技能描述')" />
         <UButton type="submit" :label="t('创建')" size="sm" />
       </form>
-      <div class="expert-skills-body">
-        <div class="expert-skills-tree">
-          <p v-if="!loading && !failure && !skills.length" class="expert-skills-note">{{ t("还没有技能。") }}</p>
-          <ul class="expert-skills-list">
-            <li v-for="skill in skills" :key="skill.name">
-              <div class="expert-skills-skill">
-                <button type="button" class="expert-skills-toggle" :aria-expanded="expanded.has(skill.name)" :title="skill.description" @click="toggle(skill.name)">
-                  <UIcon :name="expanded.has(skill.name) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="expert-skills-icon" />
-                  <span><strong>{{ skill.name }}</strong><small>{{ skill.description }}</small></span>
-                </button>
-                <UButton :label="armed === `skill:${skill.name}` ? t('确认删除技能') : undefined" icon="i-lucide-trash-2" size="xs" :color="armed === `skill:${skill.name}` ? 'error' : 'neutral'" variant="ghost"
-                  :aria-label="t('删除技能 {value1}', { value1: skill.name })" :title="t('删除整条技能；原来的文件夹会移到服务目录的 backups 下')" @click="remove_skill(skill.name)" />
-              </div>
-              <ul v-if="expanded.has(skill.name)" class="expert-skills-files">
-                <li v-for="item in skill.files" :key="item.path">
-                  <button type="button" class="expert-skills-file" :aria-current="file?.path === item.path ? 'true' : undefined" :title="item.path" @click="pick(item)">
-                    <UIcon :name="item.text === null ? 'i-lucide-file-x' : 'i-lucide-file-text'" class="expert-skills-icon" /><span>{{ item.path.slice(skill.name.length + 1) }}</span>
-                  </button>
-                  <UButton :label="armed === `file:${item.path}` ? t('确认删除') : undefined" icon="i-lucide-x" size="xs" :color="armed === `file:${item.path}` ? 'error' : 'neutral'" variant="ghost"
-                    :aria-label="t('删除文件 {value1}', { value1: item.path })" @click="delete_file(item)" />
-                </li>
-                <li>
-                  <form v-if="adding_file === skill.name" class="expert-skills-form" @submit.prevent="add_file(skill.name)">
-                    <UInput v-model="new_file" size="xs" class="expert-skills-grow" :placeholder="t('references 下的文件名，如 fire.md')" :aria-label="t('资料文件名')" />
-                    <UButton type="submit" :label="t('创建')" size="xs" />
-                  </form>
-                  <UButton v-else :label="t('新建资料文件')" icon="i-lucide-file-plus" size="xs" color="neutral" variant="ghost" @click="adding_file = skill.name; new_file = ''" />
-                </li>
-              </ul>
-            </li>
-          </ul>
-        </div>
-        <div class="expert-skills-editor">
-          <template v-if="file">
-            <div class="expert-skills-editor-head">
-              <UButton icon="i-lucide-arrow-left" size="xs" color="neutral" variant="ghost" class="expert-skills-back" :aria-label="t('返回文件列表')" @click="pick(null)" />
-              <code :title="file.path">{{ file.path }}</code>
-              <UButton v-if="file.text !== null" :label="t('保存')" icon="i-lucide-save" size="xs" :disabled="!edited" :loading="saving" @click="save" />
-              <UButton :label="t('关闭')" size="xs" color="neutral" variant="ghost" class="expert-skills-close" @click="pick(null)" /></div>
-            <p v-if="file.text === null" class="expert-skills-note">{{ t("不是文本或超过大小上限，不能在这里查看和修改。") }}</p>
-            <UTextarea v-else v-model="text" class="expert-skills-text" :aria-label="file.path" />
-          </template>
-          <p v-else class="expert-skills-empty">{{ t("在左侧展开技能，选一个文件查看和修改。") }}</p>
-        </div>
-      </div>
+      <p v-if="!loading && !failure && !skills.length" class="expert-skills-note">{{ t("还没有技能。") }}</p>
+      <SkillFiles v-else v-model:location="location" class="expert-skills-files" :files="files" :folders="skills.map((skill) => skill.name)" :notes="notes" :root-label="t('技能')"
+        :save="save" :remove="remove" :removable="(entry) => !entry.directory || !entry.path.includes('/')" :create="create" :can-create="(folder) => Boolean(folder)" />
     </template>
   </section>
 </template>
 
 <style scoped>
-/* Fills its parent's height: the header and notes on top, then the file tree beside the editor, each scrolling on its own. */
-.expert-skills { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; container-type: inline-size; }
+/* Fills its parent's height: the header and notes on top, then the files. */
+.expert-skills { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
 .expert-skills-head { display: flex; align-items: center; gap: 6px; }
 .expert-skills-head > span { flex: 1; min-width: 0; font-size: 12px; color: var(--ui-text-dimmed); }
 .expert-skills-note { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--ui-text-muted); font-size: 12px; }
@@ -197,32 +127,5 @@ watch([key, () => props.blocked], () => { pick(null); expanded.value = new Set()
 .expert-skills-note.is-warning { color: var(--ui-warning, #e0a33a); }
 .expert-skills-form { display: flex; align-items: center; gap: 6px; }
 .expert-skills-grow { flex: 1; min-width: 0; }
-.expert-skills-body { display: grid; flex: 1; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 12px; min-height: 0; }
-.expert-skills-tree { min-height: 0; overflow-y: auto; padding-right: 8px; border-right: 1px solid var(--ui-border-muted); }
-.expert-skills-list, .expert-skills-files { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.expert-skills-files { padding-left: 18px; }
-.expert-skills-files > li, .expert-skills-skill { display: flex; align-items: center; gap: 4px; }
-.expert-skills-toggle, .expert-skills-file { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; padding: 5px 6px; border-radius: 6px; text-align: left; cursor: pointer; font-size: 13px; }
-.expert-skills-toggle:hover, .expert-skills-file:hover { background: var(--ui-bg-elevated); }
-.expert-skills-file[aria-current] { background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 16%, transparent); }
-.expert-skills-icon { flex-shrink: 0; }
-.expert-skills-toggle > span { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
-.expert-skills-toggle strong { font-weight: 500; overflow-wrap: anywhere; }
-.expert-skills-toggle small, .expert-skills-file > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.expert-skills-toggle small { color: var(--ui-text-dimmed); font-size: 11px; }
-.expert-skills-editor { display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; }
-.expert-skills-editor-head { display: flex; align-items: center; gap: 6px; }
-.expert-skills-editor-head code { flex: 1; min-width: 0; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.expert-skills-back { display: none; }
-.expert-skills-text { display: flex; flex: 1; min-height: 240px; }
-.expert-skills-text :deep(textarea) { flex: 1; height: 100%; resize: none; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.6; }
-.expert-skills-empty { margin: auto; color: var(--ui-text-dimmed); font-size: 12px; }
-/* Too narrow for both side by side (a phone, an upright tablet beside the card list): the files, or the open file with a way back. */
-@container (max-width: 560px) {
-  .expert-skills-body { grid-template-columns: minmax(0, 1fr); }
-  .expert-skills-tree { padding-right: 0; border-right: 0; }
-  .expert-skills.is-editing .expert-skills-tree, .expert-skills:not(.is-editing) .expert-skills-editor { display: none; }
-  .expert-skills-back { display: inline-flex; }
-  .expert-skills-close { display: none; }
-}
+.expert-skills-files { flex: 1; }
 </style>

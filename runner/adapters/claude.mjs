@@ -13,12 +13,14 @@ import { dirname, join, resolve } from 'node:path';
 import { runs_commands } from '../expert_prompts.mjs';
 import { bind_access, carve_protected, cli_max_run_ms, cli_timeout_reason, DENIAL_FIELD, EDIT_TOOLS, edge_entries, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
   clock_reset_at, newest_record, not_sent, page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog,
-  remove_session_files, report_edits, same_path, TASK_SUBCOMMANDS, track_edits, tree_killable, typed_prompt, watch_events, shell_written_paths } from './common.mjs';
+  remove_session_files, report_edits, same_path, TASK_SUBCOMMANDS, BackgroundTasks, background_state, track_edits, tree_killable, typed_prompt, watch_events, shell_written_paths } from './common.mjs';
 
 // A message posted to an open Claude window that has not started by then is reported, not failed.
 const INBOX_CHECK_MS = 90_000;
 // How often an open window's session log is read for the end of the turn that took a task.
 const WINDOW_POLL_MS = 3_000;
+// How much of a schedule's prompt marks the turn its fire starts (see `listen_schedules`).
+const SCHEDULE_MARKER_CHARS = 200;
 // A private chat line posted to an open window fails when the window has not taken it by then, when the window waits on
 // a prompt (an approval, a dialog) that long, or when its turn runs past the limit.
 const CHAT_START_MS = 90_000;
@@ -246,6 +248,10 @@ function edit_denial(task) {
 /** What Claude's stream-json events say the agent is doing, which tool it starts, and text it wrote to the user. */
 const events = {
   phase(event) {
+    // A sub-agent's own steps (-p marks them with the call that started it) are not the member's.
+    if (event.parent_tool_use_id) return '';
+    // Reports on background tasks come while the member waits for them; they are not the member thinking.
+    if (event.type === 'system' && /^(task_|background_tasks)/.test(event.subtype || '')) return '';
     if (event.type === 'system' || event.type === 'user') return 'thinking';
     const block = event.type === 'assistant' ? event.message?.content?.at(-1) : null;
     if (block?.type === 'tool_use') return /^(Bash|PowerShell)$/.test(block.name) ? 'command' : EDIT_TOOLS.test(block.name) ? 'editing' : 'tool';
@@ -261,7 +267,7 @@ const events = {
     return block?.type === 'tool_use' ? String(block.id || '') : '';
   },
   note(event) {
-    if (event.type !== 'assistant') return '';
+    if (event.type !== 'assistant' || event.parent_tool_use_id) return '';
     return (event.message?.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n').trim();
   },
   edits(event, pending) {
@@ -424,7 +430,7 @@ async function inbox_delivery(config, window, task, options = {}) {
   const handle = new EventEmitter();
   // The turn's steps, read from the session log, are the execution's process log, so the private chat can show them.
   const watcher = watch_window_turn({ file, offset, pid: window.pid, marker: `${task.id}.task.json`, log_path }, task, {
-    on_end: () => handle.emit('close', 0),
+    handle: reached.ok ? handle : null, on_end: () => handle.emit('close', 0),
     stop_key: () => {
       const sent = console_of(window.pid, { escape: true });
       task.on_output?.(log_path, `${JSON.stringify({ type: 'codiscuss.stop', terminal: sent.terminal, sent: sent.ok, reason: sent.reason })}\n`);
@@ -436,6 +442,9 @@ async function inbox_delivery(config, window, task, options = {}) {
   task.on_binding?.(config.session_id);
   if (reached.ok) {
     handle.kill = () => watcher.stop();
+    // Past a completed execution the runner keeps the watch only for reports of background work (`index.mjs`).
+    handle.lingers = () => watcher.lingers();
+    handle.linger = () => watcher.linger();
     // The Esc key goes into the owner's own window; only the owner's stop sends it, never the runner's shutdown.
     handle.stop_on_shutdown = false;
     task.on_process?.(handle);
@@ -543,8 +552,23 @@ function window_state(pid, env = process.env) {
 export function watch_window_turn({ file, offset, pid, marker, session_id = '', log_path = '' }, task, options = {}) {
   const { interval = WINDOW_POLL_MS, unstarted_after = INBOX_CHECK_MS, chat = false, start_after = CHAT_START_MS,
     waiting_after = CHAT_WAITING_MS, turn_limit = CHAT_TURN_MS, env = process.env, on_end, stop_key,
-    stop_poll = STOP_POLL_MS, stop_tool_wait = STOP_TOOL_WAIT_MS, stop_end_wait = STOP_END_WAIT_MS } = options;
+    stop_poll = STOP_POLL_MS, stop_tool_wait = STOP_TOOL_WAIT_MS, stop_end_wait = STOP_END_WAIT_MS, handle = null } = options;
   const since = Date.now(), awaited = new Set([marker]), open_tools = new Set(), background = new Map(), pending_edits = new Map();
+  // Follow-ups (续报): `residual` once the runner kept this watch past a completed execution (`linger`) and it only waits
+  // for the reports of the background work already listed, `asking` while the runner decides on one, `held` the entries
+  // from that report on, `asked` the reports already put to it.
+  let residual = false, asking = false, held = [];
+  const asked = new WeakSet();
+  // Whether this watch follows a room task's turn now, for the window's schedule listener; the latest room task in this
+  // window is the one a schedule fire is put to (`listen_schedules`).
+  const presence = { following: () => !done && !residual };
+  if (!chat && file) {
+    if (!window_watches.has(file)) window_watches.set(file, new Set());
+    window_watches.get(file).add(presence);
+    schedule_listeners.get(file)?.adopt({ task, log_path, stop_key, interval, env });
+  }
+  // What the background work looks like to the room, and the tool calls it was launched with.
+  const listed = new BackgroundTasks(chat ? {} : task), calls = new Map();
   if (!chat) track_edits(claude, task);
   let pending = Buffer.alloc(0), taken = false, noted = false, error = null, done = false, waiting_since = 0;
   let stop_asked = 0, stop_sent = 0, stop_timer = null, last_message = null, idle_since = 0, waiting_noted = false;
@@ -554,6 +578,7 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     if (done) return;
     done = true;
     clearInterval(timer); clearInterval(stop_timer);
+    window_watches.get(file)?.delete(presence);
     if (error) task.on_failure?.(claude_error_reason(error), { retryable: !error.lasting, ...claude_failure_class(error) });
     else if (reason) task.on_failure?.(reason);
     else if (ended) task.on_exit?.(ended);
@@ -561,9 +586,11 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     on_end?.();
   };
   const tick = () => {
-    if (done) return;
-    const entries = read_appended();
-    for (const entry of entries) {
+    if (asking || (done && !residual)) return;
+    const entries = [...held.splice(0), ...read_appended()];
+    if (residual) return follow_reports(entries);
+    for (const [index, entry] of entries.entries()) {
+      if (reports_background(entry)) { held = entries.slice(index); return ask(entry); }
       for (const item of awaited) if (takes(entry, item)) { awaited.delete(item); taken = true; }
       if (!taken) continue;
       if (entry.type === 'user' && INTERRUPTED.test(prompt_text(entry.message?.content).trim())) {
@@ -574,6 +601,7 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
       if ((chat || log_path) && !api_error) report(entry);
       if (!chat && !api_error && !entry.isSidechain) report_edits(claude, entry, task, pending_edits);
       if (!entry.isSidechain) { track_tools(entry); track_background(entry); }
+      if (!chat && file && !entry.isSidechain) note_schedules(entry);
       // A turn that left a background task running ends while the window waits for it; its report starts the next turn.
       if (entry.type === 'system' && entry.subtype === 'turn_duration' && !awaited.size && !background.size) return finish();
       // Only the turn's own messages count: bookkeeping entries (hook summaries, queue operations) may be stamped later.
@@ -665,14 +693,28 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
    */
   function track_background(entry) {
     const blocks = Array.isArray(entry.message?.content) ? entry.message.content : [];
+    const at = Date.parse(entry.timestamp) || Date.now(), result = entry.toolUseResult;
+    for (const block of blocks) if (entry.type === 'assistant' && block?.type === 'tool_use') calls.set(block.id, { name: block.name, input: block.input || {} });
+    const results = entry.type === 'user' ? blocks.filter(block => block?.type === 'tool_result') : [];
     if (launches_background(entry)) {
-      const result = entry.toolUseResult, task_id = result.backgroundTaskId || result.taskId || result.agentId || '';
-      for (const block of blocks) if (block?.type === 'tool_result') background.set(block.tool_use_id, task_id);
+      const task_id = result.backgroundTaskId || result.taskId || result.agentId || '';
+      for (const block of results) {
+        background.set(block.tool_use_id, task_id);
+        const call = calls.get(block.tool_use_id);
+        listed.set(block.tool_use_id, { kind: background_kind(call?.name), title: background_title(call), started_at: at });
+      }
     }
-    const stopped = entry.type === 'user' && entry.toolUseResult?.task_id
-      && blocks.some(block => block?.type === 'tool_result' && !block.is_error) ? entry.toolUseResult.task_id : '';
-    for (const [id, task_id] of background) if (stopped && task_id === stopped) background.delete(id);
-    for (const { id } of task_notifications(entry)) background.delete(id);
+    // A schedule the turn set (CronCreate) or cancelled (CronDelete); it is shown, not waited for.
+    for (const block of results.filter(item => !item.is_error)) {
+      const call = calls.get(block.tool_use_id);
+      if (call?.name === 'CronCreate' && result?.id) {
+        listed.set(`cron:${result.id}`, { kind: 'schedule', title: call.input.prompt, schedule: result.humanSchedule, next_at: result.nextFireAt, started_at: at });
+      }
+      if (call?.name === 'CronDelete' && call.input.id) listed.end(`cron:${call.input.id}`, 'stopped', at);
+    }
+    const stopped = entry.type === 'user' && result?.task_id && results.some(block => !block.is_error) ? result.task_id : '';
+    for (const [id, task_id] of background) if (stopped && task_id === stopped) { background.delete(id); listed.end(id, 'stopped', at); }
+    for (const { id, status } of task_notifications(entry)) { background.delete(id); listed.end(id, background_state(status), at); }
   }
   /**
    * Whether the turn is over and the window only waits for its background tasks: the turn's last message is the
@@ -715,17 +757,198 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
     // no end the watch knows (a later Claude Code may record turns differently), so the member is not held busy for good.
     if (taken && !open_tools.size && window_state(pid, env)?.status === 'idle') finish('', '停止时原窗口已空闲');
   }
+  /** Whether an entry brings the report of background work this turn launched (a turn's prompt or a queued message), not yet put to the runner. */
+  function reports_background(entry) {
+    return !chat && typeof task.on_followup === 'function' && !asked.has(entry)
+      && task_notifications(entry).some(item => background.has(item.id));
+  }
+  /**
+   * Put a background report to the runner (`on_followup`) before reading on, the entries from it waiting in `held`: once
+   * the execution has ended it opens a follow-up and the window's turn on the report is followed there; 'keep' opens
+   * nothing and goes on waiting for the rest; a refusal (the member works on something else) ends the watch.
+   */
+  function ask(entry) {
+    asked.add(entry);
+    asking = true;
+    const reports = task_notifications(entry).filter(item => background.has(item.id));
+    // The window takes interjections through its inbox, so a follow-up can take them too.
+    Promise.resolve().then(() => task.on_followup(reports, handle, { steer: true })).catch(() => false).then(answer => {
+      asking = false;
+      // 'keep': this report opens nothing, the rest of the listed work is still followed.
+      if (answer === 'keep') { for (const item of reports) background.delete(item.id); return tick(); }
+      if (answer !== true) { held = []; return quit(); }
+      if (residual) resume();
+      tick();
+    });
+  }
+  /** A kept watch's report became a follow-up: follow the window's turn on it as the task's own turn. */
+  function resume() {
+    done = false; residual = false; taken = true; noted = true; error = null; awaited.clear(); open_tools.clear();
+    last_message = null; idle_since = 0; waiting_noted = false; stop_asked = 0; stop_sent = 0;
+  }
+  /**
+   * While kept: wait for the next report of the background work already listed, and drop what the turn stops itself
+   * (TaskStop). Work launched meanwhile (a later task in the same window) is not taken on. Ends once nothing is left,
+   * the window closed, or the runner stops it.
+   */
+  function follow_reports(entries) {
+    for (const [index, entry] of entries.entries()) {
+      if (reports_background(entry)) { held = entries.slice(index); return ask(entry); }
+      const stopped = entry.type === 'user' && entry.toolUseResult?.task_id
+        && Array.isArray(entry.message?.content) && entry.message.content.some(block => block?.type === 'tool_result' && !block.is_error)
+        ? entry.toolUseResult.task_id : '';
+      for (const [id, task_id] of background) if (stopped && task_id === stopped) background.delete(id);
+    }
+    if (!background.size || !process_alive(pid)) quit();
+  }
+  /** Stop reading the log for good; the handle closes unless this watch already ended and closed it. */
+  function quit() {
+    const open = !done || residual;
+    done = true; residual = false;
+    clearInterval(timer); clearInterval(stop_timer);
+    window_watches.get(file)?.delete(presence);
+    if (open) on_end?.();
+  }
+  /** A schedule the turn set (CronCreate) starts the window's schedule listener, which keeps it across executions. */
+  function note_schedules(entry) {
+    if (entry.type !== 'user' || !entry.toolUseResult?.id || typeof task.on_schedule !== 'function') return;
+    for (const block of Array.isArray(entry.message?.content) ? entry.message.content : []) {
+      const call = block?.type === 'tool_result' && !block.is_error ? calls.get(block.tool_use_id) : null;
+      if (call?.name === 'CronCreate') listen_schedules(file, pid, { task, log_path, stop_key, interval, env }).add(entry.toolUseResult.id, schedule_of(entry, call));
+    }
+  }
+  /** Whether only background work the turn launched keeps this watch going: it could still bring a report. */
+  function lingers() {
+    return !chat && (residual || (!done && background.size > 0)) && typeof task.on_followup === 'function' && process_alive(pid);
+  }
   return {
     get done() { return done; },
     expect(item) { if (done) return false; awaited.add(item); return true; },
     forget(item) { awaited.delete(item); },
+    lingers,
+    /** The execution completed: keep following only the reports of the background work listed so far (`follow_reports`). */
+    linger() {
+      if (!lingers()) return false;
+      if (!residual) { residual = true; done = true; clearInterval(stop_timer); stop_timer = null; stop_asked = 0; stop_sent = 0; }
+      return true;
+    },
     stop() {
+      // A kept watch has no turn of its own to stop: it just stops following.
+      if (residual) { quit(); return true; }
       if (done) return false;
       if (!stop_asked) { stop_asked = Date.now(); stop_timer = setInterval(tick, stop_poll); stop_timer.unref(); setImmediate(tick); }
       return true;
     },
-    cancel() { done = true; clearInterval(timer); clearInterval(stop_timer); },
+    cancel() { done = true; clearInterval(timer); clearInterval(stop_timer); window_watches.get(file)?.delete(presence); },
   };
+}
+
+// Per session log of an open window: the room task watches on it, each saying whether it follows a turn now, and the
+// listener for the schedules the member set there (`listen_schedules`).
+const window_watches = new Map();
+const schedule_listeners = new Map();
+
+/** Whether a watch on this log follows a room task's turn now; a schedule fire then belongs to that execution. */
+function following_turn(file) {
+  return [...(window_watches.get(file) || [])].some(watch => watch.following());
+}
+
+/**
+ * Listen to one window's session log for the schedules the member set there, across room executions: from the CronCreate
+ * a room task's watch saw (and any later one) until CronDelete, a one-off schedule's fire, or the window closing. When
+ * one fires, Claude Code starts a turn on its own: `system/scheduled_task_fire` naming the task (`taskId`, `cron`,
+ * `prompt`), then an `isMeta` user prompt with that prompt (2.1.325, 2026-11-14). A fire while a watch follows a room
+ * task's turn belongs to that execution. Otherwise it goes to the latest room task's `on_schedule`: `true` (the runner
+ * opened a scheduled execution) starts a watch on that turn, `'stop'` ends the listener (the member is no longer the
+ * host or not granted), `'drop'` forgets that one schedule (set before the owner's last stop), anything else leaves the
+ * turn unfollowed. The listener only reads the log: it writes no session and holds no
+ * member busy. `setup`: `{task, log_path, stop_key, interval, env}` of the latest room task, renewed by each new watch.
+ */
+function listen_schedules(file, pid, setup) {
+  const existing = schedule_listeners.get(file);
+  if (existing) { existing.adopt(setup); return existing; }
+  const crons = new Map(), calls = new Map();
+  let offset = statSync(file).size, pending = Buffer.alloc(0), asking = false, held = [];
+  const timer = setInterval(tick, setup.interval || WINDOW_POLL_MS);
+  timer.unref();
+  const listener = { crons, add: (id, cron) => crons.set(id, cron), adopt: next => Object.assign(setup, next), end };
+  schedule_listeners.set(file, listener);
+  return listener;
+  function tick() {
+    if (asking) return;
+    const entries = [...held.splice(0), ...read_lines()];
+    for (const [index, { entry, start }] of entries.entries()) {
+      const blocks = Array.isArray(entry.message?.content) ? entry.message.content : [];
+      for (const block of blocks) if (entry.type === 'assistant' && block?.type === 'tool_use') calls.set(block.id, { name: block.name, input: block.input || {} });
+      for (const block of blocks) {
+        const call = entry.type === 'user' && block?.type === 'tool_result' && !block.is_error ? calls.get(block.tool_use_id) : null;
+        if (call?.name === 'CronCreate' && entry.toolUseResult?.id) crons.set(entry.toolUseResult.id, schedule_of(entry, call));
+        if (call?.name === 'CronDelete' && call.input?.id) crons.delete(call.input.id);
+      }
+      if (entry.type !== 'system' || entry.subtype !== 'scheduled_task_fire' || !crons.has(entry.taskId)) continue;
+      const cron = crons.get(entry.taskId);
+      if (cron.recurring === false) crons.delete(entry.taskId);
+      if (following_turn(file)) continue;
+      held = entries.slice(index + 1);
+      return fire(entry, start, cron);
+    }
+    if (!crons.size || !process_alive(pid)) end();
+  }
+  function fire(entry, start, cron) {
+    const prompt = String(entry.prompt || cron.prompt || '');
+    if (!prompt) return tick();
+    asking = true;
+    const { task } = setup, handle = new EventEmitter();
+    let watch = null;
+    handle.kill = () => watch?.stop();
+    // The Esc key goes into the owner's own window; only the owner's stop sends it, never the runner's shutdown.
+    handle.stop_on_shutdown = false;
+    const schedule = { id: String(entry.taskId), schedule: String(cron.schedule || entry.cron || ''), prompt, ...(cron.set_at ? { set_at: cron.set_at } : {}) };
+    Promise.resolve().then(() => task.on_schedule(schedule, handle)).catch(() => false).then(answer => {
+      asking = false;
+      if (answer === 'stop') return end();
+      // This schedule no longer comes in (the owner stopped the member after it was set); later ones still may.
+      if (answer === 'drop') crons.delete(schedule.id);
+      // The turn's prompt is the schedule's prompt: it marks the turn the watch follows, from the fire on.
+      if (answer === true) {
+        watch = watch_window_turn({ file, offset: start, pid, marker: prompt.slice(0, SCHEDULE_MARKER_CHARS), log_path: setup.log_path }, task,
+          { interval: setup.interval, env: setup.env, stop_key: setup.stop_key, handle, on_end: () => handle.emit('close', 0) });
+      }
+      tick();
+    });
+  }
+  /** Whole lines the log gained, each with the byte offset it starts at; a line still being written waits. */
+  function read_lines() {
+    let size;
+    try { size = statSync(file).size; } catch { return []; }
+    if (size <= offset) return [];
+    const chunk = Buffer.alloc(size - offset), descriptor = openSync(file, 'r');
+    try { readSync(descriptor, chunk, 0, chunk.length, offset); } finally { closeSync(descriptor); }
+    const base = offset - pending.length;
+    offset = size;
+    pending = Buffer.concat([pending, chunk]);
+    const lines = [];
+    let position = 0;
+    for (let end = pending.indexOf(0x0a); end >= 0; end = pending.indexOf(0x0a, position)) {
+      const entry = json_line(pending.subarray(position, end).toString('utf8'));
+      if (entry) lines.push({ entry, start: base + position });
+      position = end + 1;
+    }
+    pending = pending.subarray(position);
+    return lines;
+  }
+  function end() {
+    clearInterval(timer);
+    crons.clear();
+    if (schedule_listeners.get(file) === listener) schedule_listeners.delete(file);
+  }
+}
+
+/** A schedule as its CronCreate result names it, with when it was set (ms; 0 when the log does not say). */
+function schedule_of(entry, call) {
+  const result = entry.toolUseResult;
+  return { schedule: String(result.humanSchedule || call.input?.cron || ''), prompt: String(call.input?.prompt || ''),
+    recurring: result.recurring !== false, set_at: Date.parse(entry.timestamp) || 0 };
 }
 
 /**
@@ -734,6 +957,17 @@ export function watch_window_turn({ file, offset, pid, marker, session_id = '', 
  * `Monitor` result naming its `taskId` and `timeoutMs`. A `persistent` monitor runs as long as the session and is not waited for; its
  * events come as notifications without a tool call and end nothing.
  */
+/** The kind of background work a tool launched, by the tool's name. */
+function background_kind(name) {
+  return name === 'Agent' || name === 'Task' ? 'agent' : name === 'Monitor' ? 'monitor' : 'command';
+}
+
+/** What a background tool call says it is for: its description, else its command or prompt. */
+function background_title(call) {
+  const input = call?.input || {};
+  return String(input.description || input.command || input.prompt || call?.name || '');
+}
+
 function launches_background(entry) {
   const result = entry.type === 'user' ? entry.toolUseResult : null;
   return Boolean(result?.isAsync || result?.backgroundTaskId || (result?.taskId && result.timeoutMs && !result.persistent));
@@ -779,10 +1013,13 @@ async function deliver(config, binding, task, spawn_process = spawn, user_home, 
   // A rewound or forked member first forks its earlier session into the ID it is now bound to, cut at `at` when given.
   const fork = binding.fork ? ['--resume', binding.fork.from, '--fork-session', ...(binding.fork.at ? ['--resume-session-at', binding.fork.at] : []), '--session-id', session_id]
     : [binding.session_id ? '--resume' : '--session-id', session_id];
+  // Claude Code records a new session's system prompt at its first request and reuses it on every resume until the session
+  // is compacted, so the current text is passed at every launch: ignored while the record holds, taken up after compaction.
+  const system = task.system_text ? ['--append-system-prompt', task.system_text] : [];
   // The prompt goes in as the first stdin message and stdin stays open, so an interjection can follow while the turn runs.
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', ...fork,
     ...(config.model ? ['--model', config.model] : []), ...(config.effort ? ['--effort', config.effort] : []),
-    ...(task.tool_lockdown ? claude_lockdown(task) : claude_permissions(config, task))];
+    ...(task.tool_lockdown ? claude_lockdown(task) : claude_permissions(config, task)), ...system];
   let child;
   try {
     child = spawn_process(config.executable, args, {
@@ -806,7 +1043,27 @@ async function deliver(config, binding, task, spawn_process = spawn, user_home, 
     offset: existsSync(log_path) ? statSync(log_path).size : 0 });
   let partial_line = '';
   // Background tasks the process started and has not reported: it stays up for them after its result, and says so.
-  const background = new Set();
+  const background = new Set(), listed = new BackgroundTasks(task);
+  // Whether the last turn ended (its result came): a background report after that starts a new turn of the process.
+  let turn_over = false;
+  /**
+   * Such a report goes to the runner first (`on_followup`), the output held meanwhile: once the execution has ended it
+   * opens a follow-up (续报) and the turn goes on there. On refusal the process stops: it would write the member's session
+   * beside the next delivery.
+   */
+  const follow = event => {
+    turn_over = false;
+    if (typeof task.on_followup !== 'function') return;
+    child.stdout.pause();
+    const reports = [{ id: String(event.task_id || ''), status: String(event.status || ''), summary: String(event.summary || '') }];
+    // stdin closed after the first result, so the follow-up takes no interjection.
+    Promise.resolve().then(() => task.on_followup(reports, child, { steer: false })).catch(() => false)
+      // 'keep' leaves the process up for the rest of its background work.
+      .then(answer => { if (answer !== true && answer !== 'keep') child.kill(); child.stdout.resume(); });
+  };
+  // Kept past a completed execution while background work it left runs (the runner asks), so that work's report can come back.
+  child.lingers = () => background.size > 0 && child.exitCode === null && child.signalCode === null;
+  child.linger = child.lingers;
   child.stdout.on('data', chunk => {
     output += chunk;
     task.on_output(log_path, chunk);
@@ -815,8 +1072,17 @@ async function deliver(config, binding, task, spawn_process = spawn, user_home, 
     partial_line = lines.pop();
     const parsed = lines.map(json_line).filter(Boolean);
     for (const event of parsed) {
-      if (event.type === 'system' && event.subtype === 'task_started' && event.is_backgrounded) background.add(event.task_id);
-      if (event.type === 'system' && event.subtype === 'task_notification') background.delete(event.task_id);
+      if (event.type === 'system' && event.subtype === 'task_started' && event.is_backgrounded) {
+        background.add(event.task_id);
+        listed.set(event.task_id, { kind: event.task_type === 'local_agent' ? 'agent' : event.task_type === 'local_bash' ? 'command' : 'monitor',
+          title: event.description, started_at: Date.now() });
+      }
+      if (event.type === 'system' && event.subtype === 'task_notification') {
+        background.delete(event.task_id);
+        listed.end(event.task_id, background_state(event.status));
+      }
+      if (event.type === 'system' && event.subtype === 'task_notification' && turn_over) follow(event);
+      if (event.type === 'result') turn_over = true;
       if (event.type === 'result' && background.size) task.on_activity?.('waiting');
     }
     if (!child.stdin.writableEnded && parsed.some(event => event.type === 'result')) child.stdin.end();

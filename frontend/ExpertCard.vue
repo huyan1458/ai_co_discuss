@@ -18,7 +18,7 @@ import WorkflowExperts from "./WorkflowExperts.vue";
 import { LEND_DURATIONS, SCOPES, WAKES, scope_label } from "./external-members.js";
 import { MAX_LABEL } from "./member-actions.js";
 import { adapter_profile, same_session_family } from "../runner/adapters/profiles.mjs";
-import { EXPERT_PROMPT_HEADING, EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
+import { EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
 
 const props = defineProps({
   name: { type: String, required: true },
@@ -112,9 +112,11 @@ const browse_adapter = computed(() => {
   return relay_client.value ? "" : entry_items.value.find((item) => adapter_profile(item.value)?.browse_sessions)?.value || "";
 });
 const mode_options = computed(() => {
+  // A member added from an expert preset is started by the service: its prompt and setup come from the preset (user 2026-11-25).
+  const offered_modes = preset_origin_data.value ? offered.value.filter((option) => option !== "manual") : offered.value;
   const reachable = view.value.launch.available || Boolean(view.value.launch.relay);
-  if (!offered.value.includes("cli") || props.workflow || preset.value || !browse_adapter.value || !reachable) return offered.value;
-  return ["cli", HISTORY, ...offered.value.filter((option) => option !== "cli")];
+  if (!offered_modes.includes("cli") || props.workflow || preset.value || !browse_adapter.value || !reachable) return offered_modes;
+  return ["cli", HISTORY, ...offered_modes.filter((option) => option !== "cli")];
 });
 const current_mode = computed(() => props.mode === "cli" && resuming.value ? HISTORY : props.mode);
 const browse_directory = computed(() => props.directory || profile.value.cwd || view.value.launch.workspace?.cwd || "");
@@ -349,17 +351,19 @@ const skills_preset_info = computed(() => {
   if (!view.value?.launch.available || props.workflow || props.joining) return null;
   const origin = preset_origin_data.value;
   if (origin) {
-    return bridge.preset_skilled(origin) ? {
+    // Every saved preset opens it: one without skills gets its first there and becomes an advisor (user 2026-11-24).
+    return {
       name: origin.name,
       scope: origin.scope || "global",
       project_id: origin.project_id || "",
       room_id: card_room_id.value,
       cwd: card_cwd.value,
       readonly: Boolean(origin.readonly),
-    } : null;
+      skilled: bridge.preset_skilled(origin),
+    };
   }
-  if (view.value.launch.presets.some((item) => item.name === props.name) && bridge.preset_skilled({ name: props.name, scope: "global" })) {
-    return { name: props.name, scope: "global", project_id: "", room_id: "", cwd: "", readonly: false };
+  if (view.value.launch.presets.some((item) => item.name === props.name)) {
+    return { name: props.name, scope: "global", project_id: "", room_id: "", cwd: "", readonly: false, skilled: bridge.preset_skilled({ name: props.name, scope: "global" }) };
   }
   return null;
 });
@@ -452,23 +456,23 @@ const prompt_note = computed(() => {
 const prompt_source = computed(() => prompt_preset.value && prompt_draft.value.trim() !== prompt_preset.value.trim()
   ? { tag: t('软件预设'), text: prompt_preset.value, action: t('恢复预设') } : null);
 // What the runner adds for this member, built by the runner's own function so the dialog never drifts from what is sent;
-// values known only at delivery are placeholders. An API expert gets the skills as its system prompt instead.
+// values known only at delivery are placeholders. A model API expert runs as Pi and gets the same text.
 const prompt_fixed = computed(() => {
   if (preset.value || props.joining) return null;
   const adapter = profile.value.adapter;
-  if (!adapter || adapter === "api") return null;
+  if (!adapter) return null;
   // The local service runs on this computer, so its command name and the Windows read rule follow this browser's system.
   const windows = /Windows/.test(navigator.userAgent);
-  const cli = windows && adapter !== "claude" ? "codiscuss.cmd" : "codiscuss";
+  const cli = windows ? adapter_profile(adapter)?.windows_command || "codiscuss.cmd" : "codiscuss";
   const read_rule = !windows ? "" : adapter === "codex_cli" ? READ_RULE : `（本机装有 rg 时附加）${READ_RULE}`;
   const { prompt, instructions } = free_task_text({ name: props.name, role: props.host ? "host" : "member", discussion: false,
     profile: { ...profile.value, cwd: view.value.launch.workspace?.cwd || profile.value.cwd }, cli, room: "{房间}",
     messages: "#{消息编号}", read_after: "{已读编号}", execution_id: "{执行编号}", task_path: "{任务文件}",
-    // Only the CLIs get the credential bound to their process; the others name the file on each command.
-    access_file: ["claude", "codex_cli", "antigravity_cli"].includes(adapter) ? "" : "{凭据文件}", read_rule });
+    // Software that takes the credential from its environment (access_env) needs no file named on each command.
+    access_file: adapter_profile(adapter)?.capabilities.access_env ? "" : "{凭据文件}", read_rule });
   return { summary: t("程序固定附加的说明（只读）"), sections: [
     // The heading goes out only when there is an expert prompt to follow it, so it is described, not shown as sent text.
-    { label: t('每次唤醒随消息发送；填了专属提示词时，后面另起一段“{heading}”再接它', { heading: EXPERT_PROMPT_HEADING }), text: prompt },
+    { label: t('每次唤醒随消息发送；“设置 → 系统提示词”与专属提示词合成一段，会话开始时写入系统提示词，软件不支持时附在该会话的第一次任务后'), text: prompt },
     { label: t("任务文件中的说明（由 AI 读取）"), text: instructions },
     { label: t("说明"), text: t("以上是房间未开讨论时的版本；开启讨论后改用讨论版说明。{…} 为每次执行时才确定的值。") },
   ] };
@@ -618,8 +622,8 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <div class="expert-card-heading"><strong>{{ member_label }}<span v-if="member_label !== name">{{ name }}</span><span>{{ t('设置') }}</span></strong>
           <span class="expert-card-heading-tools">
           <button v-if="!joining" type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="t('编辑 {value1} 的名称与描述', { value1: name })" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
-          <button v-if="preset || profile.adapter" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="t('编辑 {value1} 的专属提示词', { value1: name })" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
-          <button v-if="skills_preset_info" type="button" class="expert-card-back-tool" :aria-label="t('{value1} 的高级配置', { value1: name })" :title="t('高级配置：这位顾问的技能')" @click="advanced_open = true"><UIcon name="i-lucide-settings-2" /></button>
+          <button v-if="(preset || profile.adapter) && !joining" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="t('编辑 {value1} 的专属提示词', { value1: name })" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
+          <button v-if="skills_preset_info" type="button" class="expert-card-back-tool" :aria-label="t('{value1} 的高级配置', { value1: name })" :title="skills_preset_info.skilled ? t('高级配置：这位顾问的技能') : t('高级配置：给这位专家添加技能，带技能的预设就是顾问')" @click="advanced_open = true"><UIcon name="i-lucide-settings-2" /></button>
           <UButton v-if="api_mode" icon="i-lucide-zap" :aria-label="t('检查 {value1} 的 API 配置', { value1: name })" :title="t('检查配置：发送一次极短请求，核对地址、密钥、协议与模型')" size="xs" :color="api_check.state === 'ok' ? 'success' : api_check.state === 'error' ? 'error' : 'neutral'" variant="ghost" :loading="api_check.state === 'loading'" :disabled="!profile.api_key_ref || !profile.model || !view.launch.available" @click="check_api" /></span></div>
         <div v-if="!preset && automatic && !restricted && entry_items.length > 1" class="expert-card-field">
           <span>{{ t('接入') }}</span><USelect :model-value="profile.adapter || ''" :items="entry_items" :placeholder="t('选择 API / App / CLI')" :aria-label="t('{value1} 软件入口', { value1: name })" size="xs" class="w-full" @update:model-value="bridge.write_launch(name, 'adapter', $event)" />

@@ -504,7 +504,7 @@ if (SHARE && Number.isFinite(Date.parse(SHARE.exported_at))) {
   Date.now = () => exported_at + (performance.now() - opened_at) / 1000;
 }
 // index.html carries the Chinese tab title; it follows the page language here.
-document.title = SHARE ? t("{title} · AI CoDiscuss", { title: SHARE.title }) : t("共议聊天室 · AI CoDiscuss");
+document.title = SHARE ? t("{title} · CoDiscuss", { title: SHARE.title }) : t("共议 · CoDiscuss");
 
 const REFRESH_INTERVAL_MS = 60000;
 const FALLBACK_REFRESH_INTERVAL_MS = 12000;
@@ -679,7 +679,7 @@ const MANUAL_TRIGGER_INSTRUCTION = "首次复制后，可由人工或软件原�
 const MANAGEMENT_LOGIN_HINT = t('需要登录管理员账号或使用创建该房间的浏览器');
 const THEMES = ["channel", "channel-light"];
 // proxy and host_proxy label answers relayed for the retired web chatbot members.
-const SOURCE_LABELS = { room_relay_sent: t('跨房发送'), demo: t('示例'), user: t('本人发言'), proxy: t('用户代发'), cli: t('CLI 发言'), api: t('API 发言'), url: t('历史 URL 发言'), host_proxy: t('主持人代发'), goal: "Goal" };
+const SOURCE_LABELS = { room_relay_sent: t('跨房发送'), host_action: t('主持人操作'), demo: t('示例'), user: t('本人发言'), proxy: t('用户代发'), cli: t('CLI 发言'), api: t('API 发言'), url: t('历史 URL 发言'), host_proxy: t('主持人代发'), goal: "Goal" };
 const TURN_LABELS = { pending: t('待处理'), notified: t('已通知，待回答'), answered: t('已回答'), cancelled: t('已取消') };
 const PLATFORM_IDENTITIES = {
   "用户": { label: "User", initials: "U", style: "user", icon: "/icons/user.svg", description: t('发起与协助') },
@@ -1301,8 +1301,8 @@ function sort_directory(value) {
 /** Provide pointer and keyboard alternatives to dragging in the classic theme. */
 function room_menu_html(room, index, count) {
   const ordering = state.directory_pending.has("room-order");
-  return [["rename", t('重命名'), state.directory_pending.has(`rename:${room.id}`)], ["backup", t('导出对话'), state.backup_pending], [room.archived ? "restore" : "archive", room.archived ? t('恢复频道') : t('存档频道'), state.archive_changes.has(room.id)],
-    ["up", t('上移'), ordering || state.directory_sort === "recent" || index === 0], ["down", t('下移'), ordering || state.directory_sort === "recent" || index === count - 1], ["delete", t('删除频道'), state.directory_pending.has(`rename:${room.id}`)]]
+  return [["rename", t('重命名'), state.directory_pending.has(`rename:${room.id}`)], ["backup", t('导出对话'), state.backup_pending], [room.archived ? "restore" : "archive", room.archived ? t('恢复频道') : t('存档频道'), state.archive_changes.has(room.id) || (!room.archived && room.pinned)],
+    ["up", t('上移'), ordering || state.directory_sort === "recent" || index === 0], ["down", t('下移'), ordering || state.directory_sort === "recent" || index === count - 1], ["delete", t('删除频道'), state.directory_pending.has(`rename:${room.id}`) || room.pinned]]
     .map(([action, label, disabled]) => `<button type="button" data-manage-room="${room.id}" data-room-action="${action}" ${disabled ? "disabled" : ""}>${label}</button>`).join("");
 }
 
@@ -1310,8 +1310,10 @@ function room_menu_html(room, index, count) {
 function toggle_archives() { state.archive_view = !state.archive_view; render_rooms(); publish_view(); }
 
 /** Dispatch directory changes without waiting for unrelated reads. */
-async function manage_channel({ id, action, title, before_id, folder_id, undo, days }) {
+async function manage_channel({ id, action, title, before_id, folder_id, undo, days, detached, pinned }) {
   if (action === "auto-destroy") return set_auto_destroy(id, days);
+  if (action === "detach") return detach_channel(id, detached);
+  if (action === "pin") return pin_channel(id, pinned);
   if (action === "folder") return assign_channel_folder(id, folder_id ?? null);
   if (["archive", "restore"].includes(action)) return archive_channel(id, action === "archive", { undo });
   if (action === "rename") return rename_channel(id, title);
@@ -1375,6 +1377,40 @@ async function rename_channel(id, title) {
     apply: () => patch_directory_room(id, patch), rollback: () => patch_directory_room(id, { title: room.title }),
     save: () => request_json(`/api/rooms/${id}/rename`, { actor: "用户", ...patch }),
     commit: saved => patch_directory_room(id, { title: saved.title }) });
+}
+
+/**
+ * Show a child room as an ordinary room, or nest it under its parent again. Only the directory display changes; the
+ * parent link stays. A lifted room lands right after its parent, as the server places it.
+ */
+async function detach_channel(id, detached) {
+  const room = state.rooms.find(item => item.id === id);
+  if (!room || !room.parent_room_id || Boolean(room.detached) === detached) return;
+  const previous = state.rooms.map(item => item.id);
+  const after_parent = () => {
+    const rest = state.rooms.filter(item => item.id !== id);
+    const index = rest.findIndex(item => item.id === room.parent_room_id);
+    return index < 0 ? null : rest[index + 1]?.id ?? null;
+  };
+  return update_directory({ key: `detach:${id}`, label: detached ? t('「{value1}」设为独立房间', { value1: room.title }) : t('「{value1}」放回父房间', { value1: room.title }),
+    apply: () => {
+      if (detached) state.rooms = move_directory_item(state.rooms, id, after_parent());
+      patch_directory_room(id, { detached });
+    },
+    rollback: () => { state.rooms = directory_order(state.rooms, previous); patch_directory_room(id, { detached: !detached }); },
+    save: () => request_json(`/api/rooms/${id}/detach`, { actor: "用户", detached }),
+    commit: saved => patch_directory_room(id, { detached: Boolean(saved.detached) }) });
+}
+
+/** Pin or unpin a room in place; a pinned room keeps its position and cannot be archived or destroyed. */
+async function pin_channel(id, pinned) {
+  const room = state.rooms.find(item => item.id === id);
+  if (!room || Boolean(room.pinned) === pinned) return;
+  return update_directory({ key: `pin:${id}`, label: pinned ? t('固定「{value1}」', { value1: room.title }) : t('取消固定「{value1}」', { value1: room.title }),
+    apply: () => patch_directory_room(id, { pinned }),
+    rollback: () => patch_directory_room(id, { pinned: !pinned }),
+    save: () => request_json(`/api/rooms/${id}/pin`, { actor: "用户", pinned }),
+    commit: saved => patch_directory_room(id, { pinned: Boolean(saved.pinned) }) });
 }
 
 /** Show the new room order before its single write completes. */
@@ -1920,7 +1956,7 @@ async function move_folder({ id, before_id, direction }) {
 }
 
 function directory_parent(room, rooms) {
-  const parent = rooms.find(item => item.id === room?.parent_room_id && !item.archived);
+  const parent = !room?.detached && rooms.find(item => item.id === room?.parent_room_id && !item.archived);
   return parent && (parent.folder_id || "") === (room.folder_id || "") ? parent.id : null;
 }
 
@@ -2538,7 +2574,9 @@ function render_message_body(message) {
   const visual_blocks = [];
   const visual_label = message.author !== "用户" && message.kind !== "receipt" || SHARE ? t('交互式可视化') : "";
   const inlined = new Set();
-  const rendered_text = link_attachment_placeholders(render_room_markdown(message.text,
+  // A linked room's host message went to the host this room had when it was posted; it reads as naming them.
+  const text = message.relay_to ? `@${mention_handles(message.relay_to, (state.room?.members || []).map(member => member.name))[0]} ${message.text}` : message.text;
+  const rendered_text = link_attachment_placeholders(render_room_markdown(text,
     { visual_label, visual_blocks: SHARE ? undefined : visual_blocks }), message.attachments, inlined);
   return { rendered_text, visual_blocks, inline_images: [...inlined] };
 }
@@ -3133,7 +3171,8 @@ async function save_member_choice(command, name, choice) {
   const key = JSON.stringify([room_id, name, command]);
   const member_key = JSON.stringify([room_id, name]);
   const previous = member_choice_writes.get(member_key);
-  const patch = command === "room-member-model" ? { ...choice, model_pending: "next" } : choice;
+  // Only a model or effort change waits for the next run to show as applied; a prompt has no such mark.
+  const patch = command === "room-member-model" && !Object.hasOwn(choice, "system_prompt") ? { ...choice, model_pending: "next" } : choice;
   const entry = { room_id, name, choice: patch };
   member_choices.set(key, entry);
   publish_view();
@@ -3169,6 +3208,23 @@ function set_member_access({ name, project_access }) {
 /** Change a woken CLI member's model and effort; the local service applies them from its next run and keeps its session. */
 function set_member_model({ name, model, effort }) {
   return save_member_choice("room-member-model", name, { model, effort });
+}
+
+/** Change a woken member's own prompt in this room; the local service sends it from its next run on. */
+function set_member_prompt({ name, system_prompt }) {
+  return save_member_choice("room-member-model", name, { system_prompt });
+}
+
+/** The owner's prompts for every member and for each platform (launch-settings.json `system_prompts`). */
+async function read_system_prompts() {
+  const settings = await local_launch_request("settings");
+  return settings?.system_prompts || {};
+}
+
+/** Save one layer: `{ program }` or `{ platforms: { [platform]: text } }`; an empty text removes it. */
+async function save_system_prompts(patch) {
+  const settings = await local_launch_request("settings", { system_prompts: patch });
+  return settings?.system_prompts || {};
 }
 
 /** Switch an idle Codex member between the App and the CLI; its conversation stays. */
@@ -7877,6 +7933,7 @@ function update_directory_drag(event) {
   drag.handle.dataset.suppressDragClick = "true";
   render_directory_drag_preview(drag, event);
   clear_directory_drop(drag);
+  announce_room_drag(drag, "move", event);
   const hit = document.elementFromPoint(event.clientX, event.clientY);
   if (!hit || !drag.list.contains(hit)) return;
   if (drag.kind === "folder") return update_folder_drop(drag, hit, event.clientY);
@@ -7921,11 +7978,22 @@ function cancel_directory_drag(event) {
   finish_directory_drag({ type: "pointercancel", pointerId: state.dragged_room.pointer });
 }
 
+/**
+ * Tell the page where a dragged room is, so the open room's messages can take a reference to it (ChannelDiscussion.vue):
+ * `codiscuss:room-drag` with { phase: "move" | "drop" | "cancel", id, title, x, y, touch }. Folders are not announced.
+ */
+function announce_room_drag(drag, phase, event) {
+  if (drag.kind !== "room" || !drag.moved) return;
+  const title = state.rooms.find((room) => room.id === drag.id)?.title || "";
+  window.dispatchEvent(new CustomEvent("codiscuss:room-drag", { detail: { phase, id: drag.id, title, x: event.clientX, y: event.clientY, touch: event.pointerType === "touch" } }));
+}
+
 /** Save only completed drops and release all temporary pointer listeners. */
 function finish_directory_drag(event) {
   const drag = state.dragged_room;
   if (!drag || event.pointerId !== drag.pointer) return;
   if (event.type === "pointerup" && drag.moved) update_directory_drag(event);
+  announce_room_drag(drag, event.type === "pointerup" ? "drop" : "cancel", event);
   const target = drag.target;
   state.dragged_room = null;
   document.removeEventListener("pointermove", update_directory_drag);
@@ -8400,7 +8468,13 @@ function watch_room_files() {
   document.addEventListener("click", download_relay_file, true);
   document.addEventListener("error", mark_failed_media, true);
   document.addEventListener("loadeddata", event => {
-    if (event.target.matches?.(".attachment-video video")) event.target.removeAttribute("poster");
+    const video = event.target;
+    if (!video.matches?.(".attachment-video video")) return;
+    // Inside the Video.js skin Chrome leaves the first frame undrawn until a seek, so the cover stayed black: seek a
+    // hair in, then drop the transparent poster so the frame shows (user 2026-11-24).
+    if (video.currentTime) { video.removeAttribute("poster"); return; }
+    video.addEventListener("seeked", () => video.removeAttribute("poster"), { once: true });
+    video.currentTime = 0.001;
   }, true);
   new MutationObserver((records) => { if (files_by_blob()) show_relay_images(records); }).observe(document.body, { childList: true, subtree: true });
 }
@@ -9393,7 +9467,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, platform_identity: name => PLATFORM_IDENTITIES[name], display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, set_member_prompt, read_system_prompts, save_system_prompts, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();
