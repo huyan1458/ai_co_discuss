@@ -4362,7 +4362,7 @@ def interrupt_for_message(connection, room_id, message_id):
     now = int(time.time())
     source = connection.execute("""SELECT r.title FROM message_relays m JOIN rooms r ON r.id=m.source_room_id
         WHERE m.message_id=?""", (message_id,)).fetchone()
-    notice = (Text("关联房间「{room}」的主持人刚发来消息 #{message_id}，请先读原文。", room=source[0], message_id=message_id)
+    notice = (Text("房间「{room}」的主持人刚发来消息 #{message_id}，请先读原文。", room=source[0], message_id=message_id)
               if source else Text("用户刚发来消息 #{message_id}，请先读原文，在这一轮的回答里一并处理。", message_id=message_id))
     for row in steerable:
         execution = connection.execute("SELECT * FROM member_executions WHERE id=?", (row["execution_id"],)).fetchone()
@@ -4600,8 +4600,6 @@ def record_relay_send(connection, room_id, token, payload):
     begin_write(connection)
     target = payload.get("target_room_id")
     host = linked_room_values(connection, room_id, target, payload.get("host"))
-    if not connection.execute("SELECT 1 FROM room_links WHERE room_id=? AND other_room_id=?", (room_id, target)).fetchone():
-        raise PermissionError(Text("只有互相关联的房间之间才能代主持人发言"))
     text, member = payload.get("text"), payload.get("member", "")
     if not isinstance(text, str) or not text.strip() or len(text.strip()) > 32000 or not isinstance(member, str):
         raise ValueError(Text("发信留痕须包含有效的正文与成员名称"))
@@ -4739,7 +4737,7 @@ def relay_count(connection, room_id, source):
 
 
 def check_relay(connection, room_id, relay):
-    """Check a message another room's host sends here: the rooms are linked, and the hosts have not passed the limit.
+    """Validate the source room, reply reference, and the pair's message limit.
 
     `relay.limit` is the owner's limit the runner reads from this computer's preferences (0 or absent: unlimited, user
     2026-11-21). It counts both directions since the owner's own last message in either room; past it the write is a 409
@@ -4753,8 +4751,6 @@ def check_relay(connection, room_id, relay):
     source, limit = relay["room_id"], relay.get("limit", 0)
     if type(limit) is not int or not 0 <= limit <= MAX_RELAY_LIMIT:
         raise ValueError(Text("relay.limit 须为 0–100 的整数，0 表示不限"))
-    if not connection.execute("SELECT 1 FROM room_links WHERE room_id=? AND other_room_id=?", (room_id, source)).fetchone():
-        raise PermissionError(Text("只有互相关联的房间之间才能代主持人发言"))
     if relay.get("expect", "reply") not in ("reply", "none"):
         raise ValueError(Text("expect 须为 reply 或 none"))
     reply_to = relay.get("reply_to")

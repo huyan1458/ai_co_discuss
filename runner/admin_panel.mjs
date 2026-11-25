@@ -775,15 +775,11 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // Accounts follow the way external members can reach them, in the background (#5660).
     const after_change = () => { op.reconcile_external(data).catch(() => {}); };
     const hosting = hosting_enabled(data);
-    if (section === 'room-links' && method === 'POST') {
-      const { room, target } = body;
-      const verbs = new Map([['room-link', 'POST'], ['room-unlink', 'DELETE'], ['room-links', 'GET']]);
-      const verb = verbs.get(name);
-      if (!verb || typeof room !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(room)
-          || (verb !== 'GET' && (typeof target !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(target)))) throw panel_error('房间编号无效');
-      const url = new URL(`api/rooms/${room}/room-links${verb === 'DELETE' ? '/' + target : ''}`, site_url(data));
-      const response = await site_fetch(url.href, { method: verb, redirect: 'error', signal: AbortSignal.timeout(10000),
-        headers: { 'Content-Type': 'application/json' }, body: verb === 'POST' ? JSON.stringify({ room_id: target }) : undefined });
+    if (path === '/api/room-links/room-links' && method === 'POST') {
+      const room = body.room;
+      if (typeof room !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(room)) throw panel_error('房间编号无效');
+      const url = new URL(`api/rooms/${room}/room-links`, site_url(data));
+      const response = await site_fetch(url.href, { redirect: 'error', signal: AbortSignal.timeout(10000) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
       return result;

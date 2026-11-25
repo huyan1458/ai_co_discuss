@@ -232,7 +232,7 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
           <span v-else class="queued-thumbnail queued-thumbnail-icon" :aria-label="t('图片附件')"><UIcon name="i-lucide-image" /></span>
         </template>
         <UTooltip :disabled="!!drag" :delay-duration="PREVIEW_DELAY_MS" :ui="{ content: 'queued-tooltip queued-preview' }">
-          <span class="queued-text" tabindex="0" :aria-label="t('排队消息 {value1}：{value2}', { value1: index + 1, value2: summary(item).slice(0, 80) })"><strong v-if="item.relay_room" class="queued-relay-source">{{ item.relay_relation === 'parent' ? t('父房间「{room}」主持 {host}', { room: item.relay_title ?? t('已删除的房间'), host: item.relay_host }) : t('子房间「{room}」主持 {host}', { room: item.relay_title ?? t('已删除的房间'), host: item.relay_host }) }} · </strong>{{ summary(item) }}</span>
+          <span class="queued-text" tabindex="0" :aria-label="t('排队消息 {value1}：{value2}', { value1: index + 1, value2: summary(item).slice(0, 80) })"><strong v-if="item.relay_room" class="queued-relay-source">{{ item.relay_relation === 'parent' ? t('父房间「{room}」主持 {host}', { room: item.relay_title ?? t('已删除的房间'), host: item.relay_host }) : item.relay_relation === 'child' ? t('子房间「{room}」主持 {host}', { room: item.relay_title ?? t('已删除的房间'), host: item.relay_host }) : t('来自房间「{room}」的主持人 {host}', { room: item.relay_title ?? t('已删除的房间'), host: item.relay_host }) }} · </strong>{{ summary(item) }}</span>
           <template #content>
             <p v-if="item.failure" class="queued-failure">{{ t('未能发出：{value1}', { value1: item.failure }) }}<br><span class="queued-tooltip-remedy">{{ t('重试、编辑或删除后队列继续') }}</span></p>
             <div class="queued-preview-body">{{ item.text || summary(item) }}</div>

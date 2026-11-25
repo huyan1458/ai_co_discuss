@@ -42,8 +42,8 @@ const emit = defineEmits(["update:modelValue"]);
 const ITEM_TEXTS = {
   execution: [t('处理执行问题'), t('停止、插话、重试成员，撤回自己派出的活')],
   member_config: [t('调整成员配置'), t('改成员的模型、强度、接入方式、名称与描述')],
-  project_access: [t('改项目权限'), t('在只读与可写之间切换成员的项目权限')],
-  roster: [t('管理成员名单'), t('邀请本机已配置的软件（最高可写），暂离、移除、请回成员')],
+  project_access: [t('改项目权限'), t('按需调整成员的项目权限，包括全放开')],
+  roster: [t('管理成员名单'), t('邀请本机已配置的软件，暂离、移除、请回成员')],
   pacing: [t('推进方式'), t('调整发言顺序，开启和控制讨论与 Goal，给自己设定时检查')],
   workflows: [t('工作流'), t('保存并启用工作流，邀请工作流所需的成员')],
   create_rooms: [t('新建房间'), t('从本房间新建房间并在其中分派工作；新房间不能再新建房间')],
@@ -76,7 +76,7 @@ function write_limit(value) {
 <template>
   <div class="host-permissions">
     <UCheckbox :model-value="all" :disabled="disabled" :label="t('主持人完整权限')" :aria-label="t('主持人完整权限')"
-      :description="t('主持人自行处理问题、持续推进；给成员的项目权限最高可写。')"
+      :description="t('主持人自行处理问题、持续推进，按需调整成员的项目权限。')"
       @update:model-value="send($event === true ? HOST_ITEMS : [])" />
     <span v-if="edits.has(roomId)" class="host-saving" role="status">{{ t('保存中…') }}</span>
     <details class="host-permission-items" :open="roomId ? open_rooms.has(roomId) : undefined" @toggle="roomId && ($event.target.open ? open_rooms.add(roomId) : open_rooms.delete(roomId))">

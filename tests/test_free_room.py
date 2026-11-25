@@ -776,23 +776,14 @@ class SingleMemberTests(FreeRoomTests):
         queue = self.request(f"{self.path}/queue", {"action": "send", "id": fourth_id}, self.owner)[1]
         self.assertEqual((queue["items"], texts()), ([], ["一", "答一", "二", "三", "四"]))
 
-    def test_peer_link_requires_both_owners_and_tracks_queue_and_reply(self):
-        """Approve one host request, track its round trip, and revoke future delivery."""
+    def test_unlinked_hosts_exchange_messages_with_pair_limit(self):
+        """Track a queued round trip between unrelated rooms and enforce their shared limit."""
         self.review_member_id()
         other_owner = uuid.uuid4().hex
         other = self.request("/api/rooms", {"title": "测试房", "host": "Codex", "members": [
             {"name": "Codex", "token": uuid.uuid4().hex}]}, other_owner)[1]["id"]
         peer = f"/api/rooms/{other}"
-        links = self.path + "/room-links"
-        self.assertEqual(self.request(links, {"room_id": other}, self.owner)[0], 403)
-        request = {"room_id": other, "reason": "协作测试", "submission_id": uuid.uuid4().hex}
-        status, pending = self.request(self.path + "/room-link-requests", request, self.member)
-        self.assertEqual(status, 200, pending)
-        decide = self.path + f"/room-link-requests/{pending['id']}/decide"
-        self.assertEqual(self.request(decide, {"approve": True}, self.member)[0], 403)
-        self.assertEqual(self.request(decide, {"approve": True}, self.owner)[0], 403)
-        self.assertEqual(self.request(decide, {"approve": True, "other_token": other_owner}, self.owner)[1]["state"], "approved")
-        self.assertEqual(self.request(links, token=self.member)[1]["links"][0]["relation"], "peer")
+        self.say("先处理本房任务")
         relay = {"room_id": other, "host": "Codex", "expect": "reply"}
         self.assertEqual(self.say("打断", relay=relay, interrupt=True)[0], 403)
         execution = self.reserve()[1]["id"]
@@ -809,10 +800,7 @@ class SingleMemberTests(FreeRoomTests):
                                                           "relay": reply}, other_owner)
         self.assertEqual(status, 201, result)
         self.assertEqual(self.request(receipt_path)[1]["relay_sent_state"], "replied")
-        unlink = {"action": "delete", "room_id": other}
-        self.assertEqual(self.request(links, unlink, self.owner)[0], 403)
-        self.assertEqual(self.request(links, {**unlink, "other_token": other_owner}, self.owner)[0], 200)
-        self.assertEqual(self.say("再发送", relay=relay)[0], 403)
+        self.assertEqual(self.say("超过上限", relay={**relay, "limit": 2})[0], 409)
 
     def test_linked_host_queue_interrupt_and_identity(self):
         """Both directions queue, but only the parent may steer or stop a running host."""
@@ -1623,7 +1611,6 @@ class MultiMemberTests(FreeRoomTests):
             {"name": "Codex", "token": uuid.uuid4().hex}]}, self.owner)[1]["id"]
         endpoint = self.path + "/room-relay-sent"
         payload = dict(target_room_id=target, host="主持", member="Codex", text="**完整正文**", submission_id=uuid.uuid4().hex)
-        self.assertEqual(self.request(endpoint, payload, self.owner)[0], 403)
         self.request(self.path + "/room-link", dict(relation="child", room_id=target, host="Codex"), self.owner)
         self.assertEqual(self.request(endpoint, payload, self.member)[0], 403)
         self.assertEqual(self.request(endpoint, {**payload, "text": " "}, self.owner)[0], 400)

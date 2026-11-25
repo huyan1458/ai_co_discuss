@@ -18,7 +18,7 @@ Message a member or host, understand main and branch work and assignment labels,
 
 Once the site returns a message number, known recipients appear below the message. If an automatically connected member is busy and the request must wait for its current task to finish, a one-line notice with a clock shows the member’s name and the queued message number. Hover over the notice to see how long the request has waited. The working card takes its place when the member starts. If smart scheduling needs to choose the recipient, the page shows scheduling progress.
 
-Quick navigation on the left lists messages from users and members. Hover over a mark to preview the message or click to jump to its card. In the right sidebar's “Speaking order”, open a member row's “…” menu or right-click it and choose “Jump to latest message” (the same button is also on the member card, which appears when you hover over the row on a computer or tap it on a phone or tablet) to jump straight to that member's latest message or ongoing work card.
+Quick navigation on the left lists messages from users and members. Hover over a mark to preview the message or click to jump to its card. In the right sidebar's “Speaking order”, open a member row's “…” menu or right-click it and choose “Jump to latest message” (on a phone or tablet, tapping the row opens this menu; on a computer, the member card that appears when you hover over the row has the same button) to jump straight to that member's latest message or ongoing work card.
 
 ### 2. Understand main lines, branches, and assignment labels
 

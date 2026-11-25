@@ -1271,7 +1271,7 @@ test('outside a room a workflow folder is checked without saving, then saved wit
   assert.equal(get_workflow(home, 'serial').agents[0].name, 'Claude-writer');
 });
 
-test('only the host of a room whose owner allowed it adopts a workflow, inviting its cards with at most write access', async t => {
+test('only the host of a room whose owner allowed it adopts a workflow, inviting its cards at their declared access', async t => {
   const f = await fixture(t), token = randomUUID() + randomUUID();
   save_launch_settings(f.home, { participants: f.input.participants });
   const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
@@ -1285,7 +1285,7 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   const host_access = access('Codex', config.members.Codex.token);
   const draft = join(f.directory, 'draft.md');
   writeFileSync(draft, '<!-- workflow-part: 1/1 id: serial -->\n<!-- workflow-file: SKILL.md -->\n---\nname: serial\nlabel: 连载\n---\n先写再审。\n'
-    + '<!-- workflow-file: agents/writer.md -->\n---\nname: Claude-writer\nlabel: 写手\nproject_access: full\n---\n按任务书写。\n');
+    + '<!-- workflow-file: agents/writer.md -->\n---\nname: Claude-writer\nlabel: 写手\nproject_access: write\n---\n按任务书写。\n');
   await assert.rejects(adopt_workflow(f.home, { access_file: host_access, draft_file: draft }), /主持人权限/);
   assert.equal(list_workflows(f.home).length, 0);
   // A browser of the local site without the room credential grants it with the site's administrator authority.
@@ -1316,7 +1316,7 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   assert.deepEqual((await adopt_workflow(f.home, { access_file: host_access, draft_file: draft })).members, { writer: 'Claude-writer' });
   assert.equal(get_workflow(f.home, 'serial').skill, '先写，再审，再改。');
   assert.equal((await api(config, '')).free.members.length, 2);
-  // A workflow already in the library is enabled by its ID, left unchanged there, and its cards still join at most writing.
+  // A workflow already in the library is enabled by its ID, left unchanged there, and its cards join at their declared access.
   save_workflow(f.home, { id: 'review', label: '评审', skill: '逐段审。', agents: [{ card: 'checker', name: 'Claude-checker', project_access: 'full' }] }, validate_preset, REPLACE);
   await assert.rejects(adopt_workflow(f.home, { access_file: host_access, draft_file: draft, workflow_id: 'review' }), /之一/);
   const enabled = await adopt_workflow(f.home, { access_file: host_access, workflow_id: 'review' });
@@ -1325,7 +1325,7 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   assert.equal(get_workflow(f.home, 'review').agents[0].project_access, 'full');
   const switched = load_config(launched.config_path);
   assert.equal(switched.workflow.id, 'review');
-  assert.equal(switched.participants['Claude-checker'].project_access, 'write');
+  assert.equal(switched.participants['Claude-checker'].project_access, 'full');
   // A card on a platform without local software joins on its official API once a key for that root is saved here.
   save_workflow(f.home, { id: 'ledger', label: '记账', skill: '定稿后记账。', agents: [{ card: 'inventory', name: 'DeepSeek-inventory', project_access: 'full', effort: 'high' }] }, validate_preset, REPLACE);
   await assert.rejects(adopt_workflow(f.home, { access_file: host_access, workflow_id: 'ledger' }), /DeepSeek-inventory/);
@@ -1343,7 +1343,7 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
   assert.deepEqual(pick(load_config(launched.config_path).participants['DeepSeek-inventory']), { ...without_effort, model: 'deepseek-v4-pro' });
 });
 
-test('with full host control granted, only the host stops, invites at most writing and removes others, never itself', async t => {
+test('with full host control granted, only the host stops, grants any access and removes others, never itself', async t => {
   const f = await fixture(t), token = randomUUID() + randomUUID();
   save_launch_settings(f.home, { participants: f.input.participants });
   const launched = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants, token,
@@ -1363,7 +1363,7 @@ test('with full host control granted, only the host stops, invites at most writi
   assert.deepEqual(load_config(launched.config_path).host_permissions.items, ['execution']);
   await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', allowed: true }, { 'X-CoDiscuss-Local': '1' });
   await assert.rejects(host_control(f.home, 'stop-all', { access_file: access('Other', randomUUID() + randomUUID()) }), /只有本房间的主持人/);
-  await assert.rejects(host_control(f.home, 'invite', { access_file: host_access, name: 'Claude', access: 'full' }), /read 或 write/);
+  await assert.rejects(host_control(f.home, 'invite', { access_file: host_access, name: 'Claude', access: 'root' }), /read、write、auto 或 full/);
   // 可 2: a host-invited member reads only unless the host asks for writing, and the answer says which.
   const invited = await host_control(f.home, 'invite', { access_file: host_access, name: 'Claude' });
   assert.equal(invited.project_access, 'read');
@@ -1372,7 +1372,11 @@ test('with full host control granted, only the host stops, invites at most writi
   await assert.rejects(host_control(f.home, 'stop', { access_file: host_access, member: 'Codex' }), /不能对自己/);
   await host_control(f.home, 'model', { access_file: host_access, member: 'Codex', model: 'gpt-5' });
   assert.equal(load_config(launched.config_path).participants.Codex.model, 'gpt-5', 'the host may switch its own model');
-  await assert.rejects(host_control(f.home, 'access', { access_file: host_access, member: invited.member, access: 'full' }), /read 或 write/);
+  // The host may grant any level the software has (user 2026-11-25).
+  await host_control(f.home, 'access', { access_file: host_access, member: invited.member, access: 'full' });
+  assert.equal(load_config(launched.config_path).participants[invited.member].project_access, 'full');
+  await host_control(f.home, 'access', { access_file: host_access, member: invited.member, access: 'auto' });
+  assert.equal(load_config(launched.config_path).participants[invited.member].project_access, 'auto');
   await host_control(f.home, 'label', { access_file: host_access, member: invited.member, label: '评审' });
   assert.equal((await api(config, '')).labels[invited.member], '评审');
   await assert.rejects(host_control(f.home, 'steer', { access_file: host_access, member: '评审', text: '先看第 3 节' }), /没有进行中的执行/);
@@ -1386,7 +1390,7 @@ test('with full host control granted, only the host stops, invites at most writi
   assert.ok(!(await api(config, '')).free.members.some(member => member.name === invited.member && member.status === 'active'));
 });
 
-test('an existing room host requests a peer link and sends only after owner approval', async t => {
+test('an existing room host sends directly to an unrelated room', async t => {
   const f = await fixture(t);
   async function create(title) {
     const result = await launch_discussion(f.home, { site: f.site, entry: 'web', participants: f.input.participants,
@@ -1397,11 +1401,8 @@ test('an existing room host requests a peer link and sends only after owner appr
   const access_file = join(f.directory, 'peer-host.json');
   writeFileSync(access_file, JSON.stringify({ site: f.site, room: first.room, token: first.members.Codex.token }));
   const control = (action, options = {}) => host_control(f.home, action, { access_file, room: other.room, ...options });
-  await assert.rejects(control('room-post', { text: '派活' }), /link-request/);
-  const pending = await control('link-request', { reason: '协作测试' });
-  assert.equal(pending.state, 'pending');
-  await api(first, `/room-link-requests/${pending.id}/decide`, { approve: true, other_token: other.token });
-  assert.equal((await control('rooms')).links[0].relation, 'peer');
+  assert.deepEqual((await control('rooms')).links, []);
+  await assert.rejects(api(first, '/host-room-post', { target_room_id: other.room, text: '冒名' }), /403/);
   const receipt = await control('room-post', { text: '通知', expect: 'none' });
   assert.equal((await api(other, `/messages/${receipt.message_id}`)).relay_expect, 'none');
   writeFileSync(join(f.home, 'local-settings.json'), JSON.stringify({ port: Number(new URL(f.site).port) }));
@@ -1409,11 +1410,13 @@ test('an existing room host requests a peer link and sends only after owner appr
   const admin = (...args) => admin_cli([...args, '--data', f.home], {
     client: async () => (path, body) => panel.api('POST', '/api/' + path, body), print() {},
   });
-  assert.equal((await admin('room-links', first.room)).links[0].room_id, other.room);
-  await admin('room-unlink', first.room, other.room);
-  await assert.rejects(control('room-post', { text: '已解除' }), /link-request/);
-  await admin('room-link', first.room, other.room);
+  assert.deepEqual((await admin('room-links', first.room)).links, []);
+  await assert.rejects(control('room-post', { room: 'missing', text: '通知' }), /404/);
+  assert.equal((await control('rooms')).links.length, 0);
+  assert.equal((await api(other, `/messages/${receipt.message_id}`)).relay_relation, null);
   await assert.rejects(control('room-post', { text: '打断', interrupt: true }), /仅父房间|Only the parent/);
+  await api(other, '/archive', { actor: '用户' });
+  await assert.rejects(control('room-post', { text: '归档后' }), /409/);
 });
 
 test('a host creates a room inside its project, linked both ways, that cannot create rooms, up to the limit', async t => {
@@ -1437,7 +1440,7 @@ test('a host creates a room inside its project, linked both ways, that cannot cr
   await assert.rejects(create(), /新建房间/);
   await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', permissions: { items: ['execution', 'roster', 'create_rooms'], room_limit: 1 } }, { 'X-CoDiscuss-Local': '1' });
   await assert.rejects(create({ cwd: '..' }), /子目录/);
-  await assert.rejects(create({ access: 'full' }), /read 或 write/);
+  await assert.rejects(create({ access: 'root' }), /read、write、auto 或 full/);
   const folder = (await request(f.site, '/api/folders', { name: '项目' })).body.id;
   assert.ok(folder);
   const stale_profile = load_config(launched.config_path);
@@ -1468,7 +1471,7 @@ test('a host creates a room inside its project, linked both ways, that cannot cr
   assert.equal((await create()).room_id, created.room_id);
   assert.equal((await api(child, '/messages?after=0')).messages.length, 2);
   await assert.rejects(create({ submission_id: 'second-room' }), /上限 1/);
-  await assert.rejects(host_control(f.home, 'room-post', { access_file: host_access, room: 'elsewhere', text: '你好' }), /关联的房间/);
+  await assert.rejects(host_control(f.home, 'room-post', { access_file: host_access, room: 'elsewhere', text: '你好' }), /404/);
   assert.equal(child_messages.at(-1).text, '先列方案\n再给验收结果');
   assert.equal(child_messages.at(-1).relay_member, 'Codex');
   assert.deepEqual((await sent(config)).map(m => [m.text, m.relay_sent_message_id]), [[child_messages.at(-1).text, child_messages.at(-1).id]]);

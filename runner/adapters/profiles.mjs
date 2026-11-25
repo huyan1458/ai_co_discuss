@@ -54,11 +54,23 @@
  * - `lockdown_hint`: why it cannot be confined, shown when a confined task is refused.
  * - `session_family`: profiles sharing one session store; switching among them keeps the conversation.
  * - `windows_command`: how its shell names the codiscuss CLI on Windows.
- * - `task_rules(cli, {runs_commands})`: fixed task text this software needs, added by the runner so no member prompt drops it.
+ * - `task_rules(cli, {runs_commands})`: fixed task text this software needs, added by the runner so no member prompt drops it;
+ *   built from `rules`: each `{ id, when, text(cli) }`, `when` being `always` or `read_only` (only while it may not run
+ *   any command). The settings page shows each by its `id` with a line for people (SystemPrompts.vue).
  * - `sandbox_needs_desktop`: its sandbox cannot start in a background session without a desktop, so there it runs without
  *   one and `adapter_capabilities` reports `no_sandbox` and no enforced limits (see `NO_DESKTOP_VARIABLE`).
  */
 const ALL_ACCESS = ['read', 'write', 'auto', 'full'];
+/**
+ * The card shows only the software's text between tool calls, not its thinking (Claude Code, measured 2026-11-21; agy
+ * 1.5.16 gives only a thinking token count, 2026-11-25): without this rule a user waiting sees nothing of its progress.
+ */
+const PROGRESS_RULE = { id: 'progress', when: 'always', text: () => '多步任务中，转入新的一段工作时（如读完代码开始修改、改完开始验证）先用一句话说明再继续：'
+  + '用户等待时网页卡片只显示这些话，看不到你的思考。用请求者的语言写，即使代码和工具输出是英文；一句即可，不打断手头的工作。' };
+/** The fixed task text of a software's rules that apply now. */
+function rules_text(rules, cli, { runs_commands }) {
+  return rules.filter(rule => rule.when === 'always' || !runs_commands).map(rule => rule.text(cli)).join('');
+}
 /**
  * Set to '1' by the start script of an instance running as a background task of its own Windows user. Codex CLI 0.169's
  * sandbox process exits with 0xC0000142 there, while the same settings start on a desktop (tested 2026-11-18).
@@ -131,15 +143,15 @@ export const ADAPTER_PROFILES = {
       schedule_reports: 'window' },
     // The card shows only Claude's text between tool calls, not its thinking; without this rule it wrote one line per
     // five to fourteen calls, often in English (2026-11-21 session record).
-    task_rules: () => '多步任务中，转入新的一段工作时（如读完代码开始修改、改完开始验证）先用一句话说明再继续：'
-      + '用户等待时网页卡片只显示这些话，看不到你的思考。用请求者的语言写，即使代码和工具输出是英文；一句即可，不打断手头的工作。',
+    rules: [PROGRESS_RULE],
+    task_rules(cli, options) { return rules_text(this.rules, cli, options); },
   },
   antigravity_cli: {
     platform: 'Antigravity', label: 'Antigravity CLI', kind: 'cli', location: 'executable', fields: ['project_id', 'project_name'],
     // agy names the thinking level inside the model ID (gemini-4-neon-xhigh) and, since 1.5, refuses a separate --effort
     // that disagrees with it, so the level is chosen with the model and no effort is offered.
     efforts: null, models: true, defaults_by_query: true,
-    // Headless agy refuses `--mode auto` ("not available for this account", 1.4.10–1.4.11), so 自动 is not offered.
+    // Headless agy refuses `--mode auto` ("not available for this account", 1.4.10–1.4.11 and 1.5.16), so 自动 is not offered.
     access_levels: ['read', 'write', 'full'], per_tool_allow: true,
     access_hints: { read: '只放行网站命令；碰到未放行的命令会直接结束本轮', write: '可写项目，命令全部放行（在 agy 沙箱内）',
       full: '跳过全部权限确认（--dangerously-skip-permissions），并放开沙箱外命令与 MCP 工具' },
@@ -150,9 +162,10 @@ export const ADAPTER_PROFILES = {
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, capture: FINAL_REMARK, tool_lockdown: true },
     // A read-only agy session allows only codiscuss commands and headless agy ends the turn on a denied one; agy streams no
     // thinking text, so without a word at each turning point the page cannot show how far it got.
-    task_rules: (cli, { runs_commands }) => (runs_commands ? ''
-      : `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝并使会话直接结束；列目录、搜索或读取文件用你环境自带的文件工具，不要经 run_command。`)
-      + '多步任务中，在关键转折处用一句话写出进展再继续：agy 不输出思考过程，网页只能靠这些话显示你做到哪一步。',
+    // A denied command ends headless agy's turn at once (1.5.16, 2026-11-25), so it must not list or read through the shell.
+    rules: [{ id: 'commands_only', when: 'read_only', text: cli => `无人值守下 run_command 只能运行 ${cli} 的 subcommands 子命令，其他命令会被自动拒绝，本轮任务随即中断；列目录、搜索或读取文件用你环境自带的文件工具，不要经 run_command。` },
+      PROGRESS_RULE],
+    task_rules(cli, options) { return rules_text(this.rules, cli, options); },
   },
   antigravity: {
     platform: 'Antigravity', label: 'Antigravity App', kind: 'app', location: 'ipc_directory', fields: ['project_id', 'project_name'],

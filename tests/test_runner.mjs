@@ -4263,7 +4263,7 @@ test('the agy command limit comes from the runner, so clearing the expert prompt
   assert.doesNotMatch(software_rules({ adapter: 'antigravity_cli', cwd: 'D:/project', project_access: 'write' }, 'codiscuss'), /run_command/, 'a writable agy runs any command');
   // agy shows no thinking, so writing progress is a fixed rule for it in every task, beside the skill's general note.
   const agy = { cli: 'codiscuss', messages: '#3', task_path: 'free-7.task.json', name: 'Antigravity', profile: { adapter: 'antigravity_cli', project_access: 'write', cwd: 'D:/project' } };
-  assert.match(free_task_text(agy).instructions, /关键转折处用一句话写出进展再继续/);
+  assert.match(free_task_text(agy).instructions, /转入新的一段工作时.*先用一句话说明再继续/);
   // Claude's card shows only its text between tool calls, so it gets a progress rule too; a software without one does not.
   assert.match(free_task_text({ ...agy, profile: { adapter: 'claude', project_access: 'read' } }).instructions, /转入新的一段工作时.*用请求者的语言写/);
   assert.doesNotMatch(free_task_text({ ...agy, profile: { adapter: 'codex_cli', project_access: 'read' } }).instructions, /写出进展|转入新的一段工作时/);

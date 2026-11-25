@@ -258,10 +258,18 @@ function member_row_key(member, state) {
 }
 
 /** The rail's quick entry to a member's actions; the room overview lays the same list out in full. */
-/** The row's menu ("…" and right-click), led by locating the latest speech: a click on the row no longer does it (user 2026-11-25, #10558). */
+/**
+ * The row's menu ("…", right-click, and a tap on the row on a touch screen), led by locating the latest speech: a click
+ * on the row no longer does it (user 2026-11-25, #10558). A touch screen has no hover card, so the menu also carries
+ * what only the card showed: the description, read-only on top, and the member's own prompt (user 2026-11-25, #11353).
+ */
 function member_menu(member) {
   const locate = { label: t("定位最新发言"), icon: "i-lucide-locate-fixed", onSelect: () => locate_member(member.name) };
-  return [[locate], ...member_actions(member, { view: view.value, act, describe,
+  const description = !can_hover && room.value.descriptions?.[member.name];
+  const prompt = !can_hover && can_prompt(member) && !room.value.archived
+    ? [{ label: t("专属提示词"), icon: "i-lucide-scroll-text", onSelect: () => open_prompt(member.name) }] : [];
+  return [...(description ? [[{ type: "label", label: description, class: "pb-menu-description" }]] : []), [locate, ...prompt],
+    ...member_actions(member, { view: view.value, act, describe,
     external: (target) => { external_member.value = target; external_reinvite.value = false; external_open.value = true; },
     revoke: (target) => revoke_member(bridge, act, target),
     copy_link: async (target) => { if (await copy_seat_link(bridge, room.value.id, target.id)) bridge.notify("info", t("已复制邀请链接")); } })];
@@ -382,6 +390,9 @@ function card_edit() {
 function card_prompt() {
   const { name } = card.value;
   card_close();
+  open_prompt(name);
+}
+function open_prompt(name) {
   prompt_draft.value = local_profile(name)?.system_prompt || "";
   prompting.value = name;
 }
@@ -394,33 +405,17 @@ async function save_prompt() {
   catch (error) { bridge.notify("error", error.message); }
   finally { prompt_saving.value = false; }
 }
+// The member whose row menu a tap opened on a touch screen.
+const menu_open = ref("");
 /**
- * A tap on a member row opens its card on a touch screen, where there is no hover; the card holds "定位最新发言".
- * With a mouse a click does nothing, so a stray click never moves the reading position (user 2026-11-25, #10558).
- * The card sits left of the rail when there is room, otherwise under the row across the screen (the phone drawer).
+ * A tap on a member row opens the row's "…" menu on a touch screen, where there is no hover card; the separate tap card
+ * was as wide as the phone and repeated the menu's actions (user 2026-11-25, #11349). With a mouse a click does
+ * nothing, so a stray click never moves the reading position (user 2026-11-25, #10558).
  */
-async function tap_member(name, event) {
+function tap_member(name) {
   if (can_hover || describing.value) return;
-  const row = event.currentTarget.getBoundingClientRect();
-  const rail = board.value?.getBoundingClientRect();
-  const beside = rail && !board.value.closest(".progress-drawer") && rail.left - ANCHOR_GAP - ANCHOR_MARGIN >= CARD_WIDTH;
-  card.value = beside ? { name, top: row.top, right: window.innerWidth - rail.left + ANCHOR_GAP }
-    : { name, top: row.bottom + ANCHOR_GAP, left: ANCHOR_MARGIN / 2, wide: true };
-  await nextTick();
-  if (card.value?.name !== name) return;
-  const height = card_element.value?.offsetHeight || 0;
-  if (card.value.wide && card.value.top + height > window.innerHeight - ANCHOR_MARGIN) card.value.top = Math.max(ANCHOR_MARGIN, row.top - ANCHOR_GAP - height);
-  else card.value.top = Math.max(ANCHOR_MARGIN, Math.min(card.value.top, window.innerHeight - height - ANCHOR_MARGIN));
+  menu_open.value = name;
 }
-/** On a touch screen the card closes with a tap anywhere outside it. */
-function tap_outside(event) {
-  if (card.value && !card_element.value?.contains(event.target)) card_close();
-}
-watch(() => Boolean(card.value) && !can_hover, (open) => {
-  if (open) setTimeout(() => document.addEventListener("pointerdown", tap_outside, true));
-  else document.removeEventListener("pointerdown", tap_outside, true);
-});
-onBeforeUnmount(() => document.removeEventListener("pointerdown", tap_outside, true));
 /** Jump the transcript to this member's latest speech or ongoing execution. */
 function locate_member(name) {
   card_close();
@@ -497,7 +492,7 @@ watch(() => room.value.id, () => { starting.value = false; });
       <h4>{{ t('发言顺序') }}</h4>
       <SpeakingOrder :away="away_names" :round="current_round" @enter="card_enter" @leave="card_leave" @press="card_close" @select="tap_member">
         <template #default="{ item }">
-          <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state)]">
+          <MemoBlock v-for="member in [member_named(item.name)].filter(Boolean)" :key="member.id" :deps="[member_row_key(member, item.state), menu_open === member.name]">
             <!-- Right-click opens the same menu as "…" (user 2026-11-25, #10549). -->
             <UContextMenu :items="member_menu(member)" :ui="{ content: 'channel-menu' }"><div class="pb-member-context">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
@@ -506,7 +501,7 @@ watch(() => room.value.id, () => { starting.value = false; });
               <div v-if="member_setup(member) || in_workflow(member.name)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)"><small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>{{ member_setup(member) }}</div>
               <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
-            <UDropdownMenu :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="t('{value1} 的更多操作', { value1: member.name })" /></UDropdownMenu>
+            <UDropdownMenu :open="menu_open === member.name" @update:open="(open) => menu_open = open ? member.name : ''" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="t('{value1} 的更多操作', { value1: member.name })" /></UDropdownMenu>
             </div></UContextMenu>
           </MemoBlock>
         </template>
@@ -547,7 +542,7 @@ watch(() => room.value.id, () => { starting.value = false; });
     :changed="prompt_draft.trim() !== prompt_saved" :saving="prompt_saving" @update:open="(open) => { if (!open) prompting = ''; }" @save="save_prompt" />
   <Teleport to="body">
     <Transition name="pb-card-pop">
-      <aside v-if="card && card_member" ref="card_element" class="pb-member-card" :class="{ 'is-wide': card.wide }" :style="card.wide ? { top: `${card.top}px`, left: `${card.left}px` } : { top: `${card.top}px`, right: `${card.right}px` }" :aria-label="t('{value1} 的成员卡片', { value1: bridge.display_name(card.name) })" @mouseenter="card_keep" @mouseleave="card_leave">
+      <aside v-if="card && card_member" ref="card_element" class="pb-member-card" :style="{ top: `${card.top}px`, right: `${card.right}px` }" :aria-label="t('{value1} 的成员卡片', { value1: bridge.display_name(card.name) })" @mouseenter="card_keep" @mouseleave="card_leave">
         <header class="pb-card-head">
           <UAvatar :src="bridge.identities[card.name]?.icon" :text="bridge.identities[card.name]?.initials" :alt="card.name" size="md" class="channel-avatar" :class="bridge.identities[card.name]?.style" />
           <div class="pb-card-title">
@@ -595,7 +590,6 @@ watch(() => room.value.id, () => { starting.value = false; });
 .pb-member-card { position: fixed; z-index: 60; display: grid; gap: 14px; width: 320px; max-height: min(70vh, 480px); padding: 14px 16px 16px; overflow: auto;
   border: 1px solid var(--channel-edge-float, var(--ui-border-muted)); border-radius: 12px; background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-float, 0 12px 32px rgb(0 0 0 / .3));
   color: var(--ui-text); font-size: 13px; line-height: 1.6; overscroll-behavior: contain; }
-.pb-member-card.is-wide { right: auto; width: calc(100vw - 16px); }
 .pb-card-pop-enter-active { transition: opacity .12s ease-out, transform .12s ease-out; }
 .pb-card-pop-leave-active { transition: opacity .1s ease-in; }
 .pb-card-pop-enter-from { opacity: 0; transform: translateX(4px); }

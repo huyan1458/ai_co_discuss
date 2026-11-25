@@ -245,6 +245,13 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 @media (max-width: 700px), (hover: none), (pointer: coarse) {
   .channel-folder-rooms:has(.channel-child-toggle) { padding-left: 41px; }
 }
+/* Sorted by recent activity a row has no grip, so a filed room's name starts where its folder's name does (42px), with or
+   without a toggle; the toggle keeps its center under the folder icon, 30px in (user 2026-11-25, #11361). */
+@media (max-width: 700px), (hover: hover) and (pointer: fine) {
+  .channel-room-list.is-recent .channel-folder-rooms { padding-left: 34px; }
+  .channel-room-list.is-recent .channel-folder-rooms .channel-child-toggle { left: -13px; }
+}
+@media (max-width: 700px) { .channel-room-list.is-recent .channel-folder-rooms .channel-child-toggle { left: -15px; } }
 .channel-folder-heading { display: flex; width: 100%; min-width: 0; align-items: center; gap: 5px; padding: 7px 4px; color: var(--ui-text-muted); font-size: var(--channel-nav-text); text-align: left; user-select: none; }
 .channel-folder-heading[data-drag-handle] { cursor: grab; touch-action: pan-y; -webkit-user-select: none; -webkit-touch-callout: none; }
 .channel-folder-section.drop-before::before, .channel-folder-section.drop-after::after { content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--channel-accent); pointer-events: none; }
@@ -1006,6 +1013,9 @@ html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot=
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="item"][data-highlighted]::before { background: var(--channel-ghost-hover); }
 html[data-theme^="channel"] :is(.channel-menu, .channel-select-menu) [data-slot="itemLeadingIcon"] { width: 14px; height: 14px; color: #a4aebe; }
 html[data-theme^="channel"] .channel-menu [data-slot="label"] { color: #8e97a9; padding: 7px 8px 5px; font-size: 10px; font-weight: 400; }
+/* A member's description on top of its rail menu on a touch screen: read-only, three lines at most. */
+html[data-theme^="channel"] .channel-menu [data-slot="label"].pb-menu-description { display: -webkit-box; max-width: 240px; overflow: hidden; font-size: 12px; line-height: 1.45; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+html[data-theme^="channel"] .channel-menu .pb-menu-description [data-slot="itemLabel"] { overflow: visible; white-space: normal; }
 /* Phone filter menu: one line per item, tighter rows and group labels so the whole list fits without scrolling. */
 @media (max-width: 700px) {
   html[data-theme^="channel"] .channel-menu.channel-source-menu { min-width: 168px; }
@@ -1725,9 +1735,6 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-schedule-actions { display: inline-flex; gap: 2px; }
 /* No fold toggle on room links; keep "打开房间" in the same column as on the sent-message card beside it. */
 .channel-room-link .channel-schedule-actions { margin-right: 28px; }
-/* The host's reason for a link request reads in full under the request line, so the owner can decide from the card. */
-.channel-link-reason { display: block; margin-top: 4px; color: var(--ui-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
-.channel-link-request .channel-schedule-actions { gap: 6px; align-items: center; }
 .channel-schedule-rate { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-text-dimmed); cursor: pointer; }
 .channel-schedule-rate [class*="icon"] { width: 13px; height: 13px; }
 .channel-schedule-rate:hover { color: var(--ui-text-toned); background: var(--channel-ghost-hover); }

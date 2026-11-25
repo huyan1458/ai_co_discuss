@@ -418,8 +418,8 @@ const keep_open = (event) => event.preventDefault();
               :help="t('任意两个关联房间之间，两边主持人从你上次发言起最多互传几条消息；对所有关联房间生效。')" />
           </section>
         </div>
-        <SpeechSettings />
         <SystemPrompts />
+        <SpeechSettings />
         <WeixinSettings />
       </div>
       <CreateDiscussion v-else-if="rendered_mode === 'create'" @submit="save_form" @cancel="mode = ''" />

@@ -635,7 +635,7 @@ test('a run refused by its rules says so here, and the inviting room hears it wi
   const { home, record } = await joined(t, b);
   b.state.pending = [{ id: 1, message_id: 10 }];
   await poll_record(home, record.id, deps(b, delivery));
-  delivery.runs[0].task.on_exit('运行了未授权的命令「codiscuss.cmd message post --body "C:/Users/me"」，无人值守模式下无法确认权限而被自动拒绝，随后会话结束');
+  delivery.runs[0].task.on_exit('运行了未授权的命令「codiscuss.cmd message post --body "C:/Users/me"」，无人值守模式下无法确认权限而被自动拒绝，随后本轮中断');
   await wait_for(reported(b, 'fail'));
   const run = read_store(home).records[record.id].history.find(item => item.execution_id === 100 && item.outcome === 'failed');
   assert.match(run.reason, /运行了未授权的命令「codiscuss\.cmd message post/);

@@ -23,10 +23,18 @@ const rows = computed(() => [{ key: PROGRAM, label: t("所有成员"), text: pro
   ...Object.keys(API_PROVIDERS).map((name) => ({ key: name, label: platform_label(name), text: prompts.value.platforms?.[name] || "" }))]);
 const current = computed(() => rows.value.find((row) => row.key === editing.value) || { label: "", text: "" });
 const set_count = computed(() => rows.value.filter((row) => row.text).length);
+// What each fixed rule is for, in words for people; the model gets the original text, shown folded below it.
+const RULE_NOTES = {
+  progress: () => t("提醒它在任务中途写一句进展，否则等待时卡片上看不到它做到哪了"),
+  commands_only: () => t("提醒它不要用命令行看目录、读文件，否则这一轮会被中断"),
+};
+const RULE_WHEN = { always: () => t("每次任务"), read_only: () => t("仅只读权限时") };
 // The rules the runner always adds for this platform's software; shown so the owner does not write them again.
 const fixed = computed(() => {
-  const sections = Object.values(ADAPTER_PROFILES).filter((profile) => profile.platform === editing.value && profile.task_rules)
-    .map((profile) => ({ label: profile.label, text: profile.task_rules("codiscuss", { runs_commands: false }) })).filter((item) => item.text);
+  const sections = Object.values(ADAPTER_PROFILES).filter((profile) => profile.platform === editing.value && profile.rules)
+    .flatMap((profile) => profile.rules.map((rule) => ({
+      label: t("{software}：{note}（{when}）", { software: profile.label, note: RULE_NOTES[rule.id]?.() || rule.id, when: RULE_WHEN[rule.when]?.() || rule.when }),
+      text: rule.text("codiscuss") })));
   return sections.length ? { summary: t("程序固定附加的规则（只读）"), sections } : null;
 });
 

@@ -171,27 +171,27 @@ room-profiles 导出房间的本机成员软件配置与实际会话 ID（不含
 room-restore 把导入房间的本机成员配置登记到本机并核对原会话存在，Claude Code 成员保持手动；须提供 site、room_id、token、local_members。
 room-fork 把从原房间分支出的新房间登记到本机，各本机成员从原会话分叉、不含分支点之后的执行，原会话不变；须提供 site、room_id、token、source_room_id、source_token、executions（{成员名: [排除的执行编号]}）。
 workflow-promote 将本房间的项目工作流移到全局，房主须允许主持人管理工作流。
-workflow-adopt 主持人在本房间启用工作流：--draft 把自己的草稿（一段，分段头 1/1）保存进工作流库后启用，--id 启用工作流库里已有的工作流（不改动它）；缺的卡片成员由本机服务邀请，项目权限最高可写；须房主已为本房间打开“主持人完整权限”。凭据为本次任务的 access_file（或 DISCUSS_ACCESS_FILE）。
+workflow-adopt 主持人在本房间启用工作流：--draft 把自己的草稿（一段，分段头 1/1）保存进工作流库后启用，--id 启用工作流库里已有的工作流（不改动它）；缺的卡片成员由本机服务邀请，项目权限按卡片声明；须房主已为本房间打开“主持人完整权限”。凭据为本次任务的 access_file（或 DISCUSS_ACCESS_FILE）。
 workflow-join 主持人为本房间在用工作流里还没有成员的卡片（启用后才新增的）邀请成员，不填 --card 即全部主线卡片；无需额外授权，离开或移除的成员由用户请回。--sub 改为请进该子工作流的卡片成员（离开的请回原会话）。凭据同上。 --card 一张卡片加 --label 显示名：按这个显示名请一位扮演该卡片的成员（同一张卡可请多位，各有自己的会话；显示名只在本房间、不能和别的成员重复；该卡片已有同名的离开成员就请回它的原会话）。
 workflow-leave 主持人用完子工作流后，把 --sub 子工作流卡片的成员设为离开（会话保留，下次 workflow-join --sub 请回）；主线成员不能这样请离。凭据同上。 --member 成员（成员 ID 或显示名）只请离子工作流卡片的这一位成员。
 ${t("host-control 主持人代房主控制房间，须房主已为本房间勾选对应的主持人权限（任务的 host_permissions 列出已勾选的项），凭据同上；成员用 --member（成员 ID 或显示名），除 retry、model、label 外不能是主持人自己：")}
   ${t("诊断：details --execution N 读取该执行的本机过程日志（服务端详情与事件记录用 execution / room events 读取）；")}
   ${t("恢复：stop --member 打断；stop-all 停止全部执行、请求与接力；steer --member --text 话 [--submission-id ID] 向它进行中的执行插话；")}
         ${t("retry --execution N 重试失败的执行（含你自己的）；model --member [--model M] [--effort E] 改 CLI 或 API 成员的模型与强度（空值恢复默认；API 成员不填模型则保留原模型；换后房间留一条系统记录，成员下次任务带 model_change）；model --member M --list 列出该成员软件的可用模型；")}
-        ${t("adapter --member --adapter ID 在同一软件的 App 与 CLI 间切换；access --member --access read|write 调整项目权限；")}
-  ${t("成员：invite --name 平台 [--access read|write] [--model M] [--effort E] 用本机已配置的软件邀请，项目权限默认只读、最高可写，离开中的同名成员改为请回；")}
+        ${t("adapter --member --adapter ID 在同一软件的 App 与 CLI 间切换；access --member --access read|write|auto|full 调整项目权限（按任务需要给，软件不支持的档位会被拒绝）；")}
+  ${t("成员：invite --name 平台 [--access read|write|auto|full] [--model M] [--effort E] 用本机已配置的软件邀请，项目权限默认只读，离开中的同名成员改为请回；")}
         ${t("away / remove / back --member 暂离、移除、请回（暂离与移除会取消仍在等它的请求，返回 cancelled_pending 条数）；label --member [--label 显示名] [--description 描述]；")}
   ${t("撤回：withdraw --message N 撤回自己的一次派活：接力或循环停下，未开始的请求取消，进行中的停止，不再交回；")}
   ${t("兜底：checkin --minutes N 房间有进行中的工作时每 N 分钟（5–120）给你发一次定时检查，房间空闲、停止全部或换主持人后自动结束；checkin --off 关闭；")}
   ${t("推进：order 读取发言顺序，order --order 甲,乙 --revision REV 调整尚未发言的部分；")}
         ${t("discussion 读取讨论，discussion --do start --goal 目标 --revision REV 开启（上限用房间默认值），--do pause|resume|end --revision REV；")}
         ${t("goal 读取 Goal，goal --do start --goal 目标 --revision REV 开启（预算用房主默认值，默认不限时为 8 次续跑、90 分钟），--do pause|resume|end --revision REV。")}
-  ${t("房间：create-room --title 标题 [--goal 目标] [--members 甲,乙] [--host 平台] [--host-model 模型] [--host-effort 档位] [--cwd 子目录] [--access read|write] [--text 首条消息 | --body-file FILE] [--submission-id ID]")}
-        ${t("新建一个房间分担工作：成员用本机已配置的软件，项目权限默认只读、最高可写，目录只能是本房间项目目录或其子目录；不填 --host 时由与你同款的专家主持；")}
+  ${t("房间：create-room --title 标题 [--goal 目标] [--members 甲,乙] [--host 平台] [--host-model 模型] [--host-effort 档位] [--cwd 子目录] [--access read|write|auto|full] [--text 首条消息 | --body-file FILE] [--submission-id ID]")}
+        ${t("新建一个房间分担工作：成员用本机已配置的软件，项目权限默认只读，目录只能是本房间项目目录或其子目录；不填 --host 时由与你同款的专家主持；")}
         ${t("新房间复制本房间的智能调度、生图、API 上限、连续派活上限与主持人权限（不含新建房间），本房间可新建的数量有上限；两边各留一张链接卡片；重试沿用同一 --submission-id；")}
-        ${t("rooms 查看已关联房间；link-request --room 编号 --reason 理由 请房主批准关联。")}
-        ${t("room-post --room 房间编号 (--text 正文 | --body-file FILE) [--expect reply|none] [--reply-to 消息编号] [--interrupt] [--submission-id ID] 向关联房间发言；只有父房间可打断子房间。")}
-  ${t("不开放：批准超出上限的轮数、项目权限高于可写或放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己的其他操作。")}
+        ${t("rooms 查看父子房间；room list --query 标题片段 查找站点中的其他房间。")}
+        ${t("room-post --room 房间编号 (--text 正文 | --body-file FILE) [--expect reply|none] [--reply-to 消息编号] [--interrupt] [--submission-id ID] 向同站点房间的主持人发言；只有父房间可打断子房间。")}
+  ${t("不开放：批准超出上限的轮数、放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己的其他操作。")}
 workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库，卡片按声明的项目权限保存；库里已有同 ID 的工作流时须表明来意：--revision 写读取时的修订号（库在那之后被改过就拒绝，什么都不写），或 --overwrite 明确整份覆盖，两样都没有就拒绝。写法见 workflow-creator 技能。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
 或 room_id（已有房间）、participants（本次软件覆盖配置）。
@@ -2746,8 +2746,6 @@ export async function room_workflow(home, raw) {
   } finally { release(); }
 }
 
-// The most a host-made card may ask for; anything above writing is lowered to it.
-const HOST_CARD_ACCESS = ['read', 'write'];
 
 /**
  * The registered room whose present host holds this task's access file.
@@ -3012,9 +3010,9 @@ function host_target({ roster, labels, host }, wanted, { self = false } = {}) {
   return member;
 }
 
-/** The profile a host-invited member starts from: this computer's saved settings, project access at most write. */
+/** The profile a host-invited member starts from: this computer's saved settings, read-only unless the host asks. */
 function host_invite_profile(home, name, { access, model, effort }) {
-  if (access && !HOST_CARD_ACCESS.includes(access)) throw new Error('主持人邀请的成员项目权限只能是 read 或 write');
+  if (access && !PROJECT_ACCESS.includes(access)) throw new Error('项目权限须为 read、write、auto 或 full');
   if (!card_platform_ready(home, name)) {
     const ready = configured_platforms(home);
     throw new Error(`本机没有配置 ${name} 的软件或 API Key；只能邀请本机已配置的平台：${ready.join('、')}`);
@@ -3086,7 +3084,7 @@ async function host_label(ctx, { member: wanted, label, description }) {
   return { member: member.name, label: label || null, description: description || null };
 }
 
-/** Invite a member from this computer's configured software, project access at most write. */
+/** Invite a member from this computer's configured software, read-only unless the host asks. */
 async function host_invite(ctx, options) {
   if (!options.name) throw new Error('须用 --name 指定要邀请的平台（如 Claude、Codex）');
   // Inviting a member that is only away brings it back under its own name and settings instead of adding a new one.
@@ -3179,7 +3177,7 @@ function edit_room_config(path, change) {
 
 /**
  * Create a room for part of the work (`create-room`, user 2026-11-21): this computer's configured software as members,
- * project access at most write, the directory this room's or one inside it. The new room's host is `--host` when given,
+ * read-only unless the host asks, the directory this room's or one inside it. The new room's host is `--host` when given,
  * else this host's own platform with its settings. Its host permissions are this computer's defaults without creating
  * rooms, so rooms do not multiply. A card links the two rooms both ways; `--text` is its first message, sent as by
  * `room-post`. A retry passes the same --submission-id and returns the same room.
@@ -3194,7 +3192,7 @@ async function host_create_room(ctx, o) {
   if (!retry && created.length >= host_room_limit(config)) {
     throw new Error(`本房间已新建 ${created.length} 个房间，达到上限 ${host_room_limit(config)}；需要更多请让用户在“主持人权限”里调高上限`);
   }
-  if (o.access && !HOST_CARD_ACCESS.includes(o.access)) throw new Error('新房间成员的项目权限只能是 read 或 write');
+  if (o.access && !PROJECT_ACCESS.includes(o.access)) throw new Error('项目权限须为 read、write、auto 或 full');
   const access = o.access || 'read';
   const host_name = o.host || platform_of(host);
   const listed = (o.members || '').split(',').map(name => name.trim()).filter(Boolean);
@@ -3246,25 +3244,19 @@ async function host_create_room(ctx, o) {
 }
 
 /**
- * Speak in a linked room (`room-post`): a room linked by the owner or by an authorized room creation. It goes with that
- * room's owner credential, so it routes and wakes as the owner's message there, labelled with this room and host. The
+ * Send a message to another host on the same site using the source room's owner and host credentials. The
  * site counts how many messages two hosts pass each other before the owner speaks again, against this computer's
  * `relay_rounds` preference (0, the default, is unlimited; set in Settings).
  */
 async function host_room_post(ctx, o) {
   const { home, config, host } = ctx;
-  const { links } = await ctx.call('/room-links');
-  const target = links.find(item => item.room_id === o.room);
-  if (!target) throw new Error(t('请先用 link-request 申请关联的房间，再发送消息'));
-  if (o.interrupt && target.relation !== 'child') throw new Error(t('仅父房间主持人可以打断子房间'));
   if (!o.text) throw new Error(t('须用 --text 或 --body-file 写明要发的消息'));
-  const child = registered_room_config(home, config.site, o.room).config;
   const submission_id = o.submission_id || randomUUID();
   const label = ctx.labels[host] || host;
-  const result = await site_request(config.site, `/api/rooms/${o.room}/messages`, child.token, { author: '用户', text: o.text,
-    submission_id, queue: true, ...(o.interrupt ? { interrupt: true } : {}), relay: { room_id: config.room, member: host, host: label,
-      expect: o.expect || (o.reply_to ? 'none' : 'reply'), ...(o.reply_to !== undefined ? { reply_to: Number(o.reply_to) } : {}),
-      limit: launch_settings(home).create_preferences?.relay_rounds ?? 0 } }, caller_only(ctx.headers));
+  const result = await ctx.call('/host-room-post', { target_room_id: o.room, text: o.text, submission_id,
+    interrupt: Boolean(o.interrupt), expect: o.expect || (o.reply_to ? 'none' : 'reply'),
+    ...(o.reply_to !== undefined ? { reply_to: Number(o.reply_to) } : {}),
+    limit: launch_settings(home).create_preferences?.relay_rounds ?? 0 });
   const receipt = { room_id: o.room, message_id: result.message?.id ?? null, queued: result.queued ?? null,
     interrupted: Boolean(result.interrupted), ...(result.reason ? { reason: result.reason } : {}) };
   const key = createHash('sha256').update(JSON.stringify([o.room, submission_id])).digest('hex');
@@ -3282,8 +3274,6 @@ const HOST_CONTROLS = {
     const limit = launch_settings(ctx.home).create_preferences?.relay_rounds || 0;
     return ctx.call(`/room-links?limit=${limit}`);
   },
-  'link-request': (ctx, o) => site_request(ctx.config.site, `/api/rooms/${ctx.config.room}/room-link-requests`,
-    ctx.config.members[ctx.host].token, { room_id: o.room, reason: o.reason, submission_id: o.submission_id || randomUUID() }, caller_only(ctx.headers)),
   'create-room': host_create_room,
   'room-post': host_room_post,
   stop: (ctx, o) => {
@@ -3308,7 +3298,7 @@ const HOST_CONTROLS = {
   model: (ctx, o) => o.list ? host_model_list(ctx, o)
     : room_member_model(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member, { self: true }).name, model: o.model || '', effort: o.effort || '' }, ctx.headers),
   access: (ctx, o) => {
-    if (!HOST_CARD_ACCESS.includes(o.access)) throw new Error('主持人只能把成员的项目权限设为 read 或 write');
+    if (!PROJECT_ACCESS.includes(o.access)) throw new Error('项目权限须为 read、write、auto 或 full');
     return room_member_access(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member).name, project_access: o.access });
   },
   adapter: (ctx, o) => room_member_adapter(ctx.home, { ...ctx.owner, name: host_target(ctx, o.member).name, adapter: o.adapter }),
@@ -3331,11 +3321,11 @@ const HOST_CONTROLS = {
 /**
  * The host runs a room control the owner otherwise does in the web page, when the owner granted this room full host
  * control (`host_workflows`), so it can keep work moving and handle what goes wrong by itself: stop, steer or retry a
- * member, read an execution's local log, change the speaking order, invite (configured software, at most write), send
- * away, remove or bring back members, change a member's model, effort, client or access (read/write only), label it,
- * and read, start, pause, resume or end the discussion or goal. The site checks every write as for the owner (revisions
- * included). What stays the owner's: acting on the host itself, approving rounds beyond the limit, access above write
- * or tool approvals, project directories, the owner's messages and private chats.
+ * member, read an execution's local log, change the speaking order, invite (configured software, any access), send
+ * away, remove or bring back members, change a member's model, effort, client or access (any level, user 2026-11-25),
+ * label it, and read, start, pause, resume or end the discussion or goal. The site checks every write as for the owner
+ * (revisions included). What stays the owner's: acting on the host itself, approving rounds beyond the limit, tool
+ * approvals, project directories, the owner's messages and private chats.
  */
 export async function host_control(home, action, options, launch_options = {}) {
   if (!Object.hasOwn(HOST_CONTROLS, action || '')) throw new Error(`操作须为 ${Object.keys(HOST_CONTROLS).join('、')} 之一`);
@@ -3403,15 +3393,11 @@ async function record_host_action(ctx, action, options, result) {
   }
 }
 
-/** Cards as the host may bring them: any access above writing is lowered to it. */
-const host_cards = agents => agents.map(agent => agent.project_access && !HOST_CARD_ACCESS.includes(agent.project_access)
-  ? { ...agent, project_access: 'write' } : agent);
-
 /**
  * The host enables a workflow in its own room, when the owner allowed that for this room (`host_workflows`): either
  * its own draft, saved into the library first (the same ID again updates it), or one already in the library, named by
- * `workflow_id` and left unchanged there. Each card the room lacks is invited as a program-started member with at most
- * write access, one that left is brought back. Returns which member plays which card and where its SKILL.md is, so the
+ * `workflow_id` and left unchanged there. Each card the room lacks is invited as a program-started member at the card's
+ * access, one that left is brought back. Returns which member plays which card and where its SKILL.md is, so the
  * host can follow it and name them in the same execution.
  */
 export async function adopt_workflow(home, { access_file, draft_file, workflow_id, scope, project_id }) {
@@ -3439,10 +3425,9 @@ export async function adopt_workflow(home, { access_file, draft_file, workflow_i
     const ready = configured_platforms(home);
     throw new Error(`本机没有配置这些卡片的软件或 API Key：${missing.join('、')}；卡片的 platform 只能用本机已配置的平台 ID：${ready.join('、')}`);
   }
-  workflow = workflow_id ? { ...workflow, agents: host_cards(workflow.agents) }
-    // The host's draft replaces the room's own workflow on purpose (another one is refused above); a draft carries no
-    // sub-workflows or other files, so those are kept as saved.
-    : save_workflow(store, { ...workflow, agents: host_cards(workflow.agents) }, validate_preset, { overwrite: bound === workflow.id });
+  // The host's draft replaces the room's own workflow on purpose (another one is refused above); a draft carries no
+  // sub-workflows or other files, so those are kept as saved.
+  if (!workflow_id) workflow = save_workflow(store, workflow, validate_preset, { overwrite: bound === workflow.id });
   const owner = { site: config.site, room_id: config.room, token: config.token };
   const members = await join_workflow_cards(home, config, roster, workflow, bound === workflow.id ? config.workflow.members || {} : {});
   const enabled = await room_workflow(home, { ...owner, action: 'enable', workflow: { ...binding, id: workflow.id, members } });
@@ -3522,7 +3507,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     'project-id': { type: 'string' }, scope: { type: 'string' }, project: { type: 'string' }, draft: { type: 'string' }, 'access-file': { type: 'string' }, dir: { type: 'string' }, card: { type: 'string' }, sub: { type: 'string' }, id: { type: 'string' },
     member: { type: 'string' }, order: { type: 'string' }, revision: { type: 'string' }, name: { type: 'string' }, access: { type: 'string' },
     model: { type: 'string' }, effort: { type: 'string' }, do: { type: 'string' }, execution: { type: 'string' }, text: { type: 'string' },
-    reason: { type: 'string' }, expect: { type: 'string' }, 'reply-to': { type: 'string' }, 'host-model': { type: 'string' }, 'host-effort': { type: 'string' }, interrupt: { type: 'boolean' }, 'body-file': { type: 'string' },
+    expect: { type: 'string' }, 'reply-to': { type: 'string' }, 'host-model': { type: 'string' }, 'host-effort': { type: 'string' }, interrupt: { type: 'boolean' }, 'body-file': { type: 'string' },
     goal: { type: 'string' }, label: { type: 'string' }, description: { type: 'string' }, adapter: { type: 'string' }, 'submission-id': { type: 'string' },
     message: { type: 'string' }, minutes: { type: 'string' }, off: { type: 'boolean' }, list: { type: 'boolean' },
     title: { type: 'string' }, members: { type: 'string' }, host: { type: 'string' }, cwd: { type: 'string' }, room: { type: 'string' },
@@ -3544,7 +3529,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     const { member, order, revision, name, access, model, effort, execution, text, goal, label, description, adapter } = values;
     const result = await host_control(service_home(), positionals[1], { member, order, revision, name, access, model, effort, execution, text, goal,
       label, description, adapter, message: values.message, minutes: values.minutes, off: values.off, list: values.list, do: values.do, submission_id: values['submission-id'],
-      title: values.title, members: values.members, host: values.host, cwd: values.cwd, room: values.room, reason: values.reason, expect: values.expect, reply_to: values['reply-to'], interrupt: values.interrupt, body_file: values['body-file'], host_model: values['host-model'], host_effort: values['host-effort'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+      title: values.title, members: values.members, host: values.host, cwd: values.cwd, room: values.room, expect: values.expect, reply_to: values['reply-to'], interrupt: values.interrupt, body_file: values['body-file'], host_model: values['host-model'], host_effort: values['host-effort'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}
 `);
   }

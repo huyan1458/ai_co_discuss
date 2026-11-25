@@ -114,15 +114,9 @@ CREATE TABLE IF NOT EXISTS room_links (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
     room_id TEXT NOT NULL REFERENCES rooms(id),
     other_room_id TEXT NOT NULL,
-    relation TEXT NOT NULL CHECK(relation IN ('child','parent','peer')),
+    relation TEXT NOT NULL CHECK(relation IN ('child','parent')),
     host TEXT NOT NULL,
     UNIQUE(room_id, other_room_id)
-);
-CREATE TABLE IF NOT EXISTS room_link_requests (
-    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-    target_room_id TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    state TEXT NOT NULL CHECK(state IN ('pending','approved','declined'))
 );
 -- Sender-side receipts survive deletion of the destination room.
 CREATE TABLE IF NOT EXISTS room_relay_sends (

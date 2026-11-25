@@ -56,7 +56,8 @@ from .visual_fences import fold_message_visuals
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label_text, is_ai, is_participant
 from .message_queue import drain as drain_queue, enqueue, enqueue_share, queue_action, queue_split, queue_view
 from .room_import import import_room, imported_attachment
-from .room_links import handle_links, request_view
+from .room_links import list_links
+from .free_room import require_owner_or_host
 from .runtime import (begin_write, limit_values, owner_proxy_token, require_owner, token_hash,
                      enforce_session_limits, room_limits_view, session_limits_view)
 from .goal_room import goal_action, goal_view
@@ -542,13 +543,7 @@ def init_database(database, seed=True):
             connection.executescript(SCHEMA)
             if 'member' not in {row[1] for row in connection.execute('PRAGMA table_info(message_relays)')}:
                 connection.execute("ALTER TABLE message_relays ADD COLUMN member TEXT NOT NULL DEFAULT ''")
-            links_schema = connection.execute("SELECT sql FROM sqlite_master WHERE name='room_links'").fetchone()[0]
-            if "'peer'" not in links_schema:
-                begin_write(connection)
-                connection.execute("ALTER TABLE room_links RENAME TO old_room_links")
-                connection.execute(links_schema.replace("'child','parent'", "'child','parent','peer'"))
-                connection.execute("INSERT INTO room_links SELECT * FROM old_room_links")
-                connection.execute("DROP TABLE old_room_links")
+            connection.execute("DELETE FROM room_links WHERE relation='peer'")
             relay_columns = {row[1] for row in connection.execute("PRAGMA table_info(message_relays)")}
             if "expect" not in relay_columns:
                 connection.execute("ALTER TABLE message_relays ADD COLUMN expect TEXT NOT NULL DEFAULT 'reply'")
@@ -2380,8 +2375,6 @@ def message_with_attachments(connection, row):
     if message["withdrawn"] == "retracted":
         # The owner retracted it before anyone handled it: only the page that retracted it keeps the text.
         return {**message, "text": "", "summary": "", "suggestions": [], "attachments": []}
-    if message["source"] == "room_link_request":
-        message["link_request"] = request_view(connection, message["room_id"], message["id"])
     message["texts"] = load_texts(connection, "message", message["id"])
     message["suggestions"] = message_suggestions(connection, message["id"])
     files = with_image_sizes(connection, connection.execute("SELECT * FROM attachments WHERE message_id=? ORDER BY position,id",
@@ -2781,6 +2774,8 @@ def append_message(connection, room_id, payload, actor):
     room = require_room(connection, room_id)
     if not payload.get("relay"):
         return append_free_message(connection, room, payload, actor)
+    if room["archived"]:
+        raise FileExistsError(Text("房间已存档，不再投递"))
     if payload.get("interrupt") is not True:
         return append_free_message(connection, room, {**payload, "queue": True}, actor)
     relay = payload["relay"]
@@ -3741,10 +3736,6 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Handle read-only GET requests."""
         self.dispatch("GET")
 
-    def do_DELETE(self):
-        """Remove an existing peer link."""
-        self.dispatch("DELETE")
-
     def do_POST(self):
         """Handle JSON mutations and explicit binary attachment uploads."""
         self.dispatch("POST")
@@ -4265,24 +4256,37 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         self.refuse_read_only(parts, method)
-        supplied_room_token = self.headers.get("X-Discussion-Token")
         self.admin_as_owner(connection, room_id)
         token = self.headers.get("X-Discussion-Token", "")
         if self.headers.get("X-Discussion-Session"):
             record_reported_session(connection, room_id, token, {"session_id": self.headers.get("X-Discussion-Session"),
                                                                  "session_client": self.headers.get("X-Discussion-Session-Client")})
             connection.commit()
-        if parts[3:4] in (["room-links"], ["room-link-requests"]):
-            site_owner = (self.bridged or session_valid(connection, self.admin_token()) or
-                          (not supplied_room_token and self.local_visitor()))
-            body = self.read_payload() if method == "POST" else {}
-            result = handle_links(connection, room_id, token, parts[3:], method, body, site_owner,
-                                  body.get("other_token") or self.headers.get("X-Target-Room-Token", token),
-                                  int(params.get("limit", 0)))
+        if parts[3:] == ["room-links"] and method == "GET":
+            require_owner_or_host(connection, room_id, token)
+            limit = int(params.get("limit", 0))
+            if not 0 <= limit <= 100:
+                raise ValueError(Text("relay.limit 须为 0–100 的整数，0 表示不限"))
+            return self.respond(list_links(connection, room_id, limit))
+        if parts[3:] == ["host-room-post"] and method == "POST":
+            require_owner(connection, room_id, token)
+            host = require_member(connection, room_id, self.headers.get(ACTING_MEMBER_HEADER))
+            if host["role"] != "host":
+                raise PermissionError(Text("只有房主或当前主持人可以读取"))
+            body = self.read_payload()
+            target = body.get("target_room_id")
+            relay = {key: body[key] for key in ("limit", "expect", "reply_to") if key in body}
+            relay.update(room_id=room_id, member=host["name"], host=member_display_names(connection, room_id)[host["name"]])
+            payload = dict(author="用户", text=body.get("text"), submission_id=body.get("submission_id"),
+                           interrupt=body.get("interrupt", False), relay=relay)
+            result = append_message(connection, target, payload, "用户")
+            drain_room_queue(connection, target)
             connection.commit()
-            if method != "GET":
-                self.server.hub.notify_update()
-            return self.respond(result)
+            self.server.hub.notify_update(target)
+            receipt = {key: result[key] for key in ("queued", "interrupted", "reason") if key in result}
+            if result.get("message"):
+                receipt["message"] = {"id": result["message"]["id"]}
+            return self.respond(receipt)
         if parts[3:4] == ["external-members"]:
             result, status = external_owner_api(connection, room_id, parts[4:], params, method, token, self.read_payload)
             # Revoking (or finding expired) the member that held the room frees it: messages queued behind it go now.

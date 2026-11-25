@@ -2,6 +2,12 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.28 (2026-11-25 07:24)
+
+- Changed: Hosts can message other rooms' hosts directly without linking first; "Parent and child rooms" on the right shows related rooms.
+- Changed: With host permissions on, the host can adjust members' project access as needed, including "Full access".
+- New: "System prompt" shows each software's built-in reminders, such as asking members to note progress midway.
+
 ## 0.5.27 (2026-11-25 05:21)
 
 - New: Link existing rooms so their hosts can pass messages; rooms the host creates sit under their parent room.

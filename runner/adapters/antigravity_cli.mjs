@@ -474,7 +474,7 @@ function lifecycle(state, event, task, bind) {
   if (denied) {
     if (!state.denials.some(item => item.detail === denied.detail) && state.denials.length < MAX_DENIALS) state.denials.push(denied);
     const action = { write_file: '写入了未授权的文件', read_file: '读取了未授权的文件' }[denied.tool] || '运行了未授权的命令';
-    state.denial = `${action}「${denied.detail.slice(0, 120)}」，无人值守模式下无法确认权限而被自动拒绝，随后会话结束`;
+    state.denial = `${action}「${denied.detail.slice(0, 120)}」，无人值守模式下无法确认权限而被自动拒绝，随后本轮中断`;
   }
   if (event.event === 'result') {
     const result = event.result || {};
@@ -482,7 +482,7 @@ function lifecycle(state, event, task, bind) {
     state.completed = result.status === 'SUCCESS';
     // A refused operation still ends with SUCCESS and an empty response; name it even when no failed step was seen.
     if (!state.denial && Array.isArray(result.denied_actions) && result.denied_actions.length) {
-      state.denial = `的${result.denied_actions.map(item => item.display_name || item.action).join('、')}操作未获授权，无人值守模式下被自动拒绝，随后会话结束`;
+      state.denial = `的${result.denied_actions.map(item => item.display_name || item.action).join('、')}操作未获授权，无人值守模式下被自动拒绝，随后本轮中断`;
     }
     // agy reports `error` as a plain string (1.4.x), older builds as { message }.
     const reason = typeof result.error === 'string' ? result.error : result.error?.message;

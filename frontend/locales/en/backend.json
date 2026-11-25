@@ -210,7 +210,7 @@
   "这条排队消息已发出或已删除": "This queued message was sent or deleted",
   "排队消息已变化，请刷新后再调整顺序": "Queued messages changed; refresh before reordering",
   "点名的成员已不在房间": "The members it names are no longer in the room",
-  "关联房间「{room}」的主持人刚发来消息 #{message_id}，请先读原文。": "The host of linked room “{room}” just sent message #{message_id}. Read the original message.",
+  "房间「{room}」的主持人刚发来消息 #{message_id}，请先读原文。": "The host of room “{room}” just sent message #{message_id}. Read the original message.",
   "仅父房间主持人可以打断子房间": "Only the parent room’s host can interrupt a child room.",
   "只能编辑用户自己的消息": "Only the user's own messages can be edited.",
   "relay.member 须为成员名称": "relay.member must be a member name.",

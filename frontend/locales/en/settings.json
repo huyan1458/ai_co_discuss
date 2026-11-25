@@ -889,5 +889,10 @@
   "{value1} 的系统提示词": "System prompt for {value1}",
   "发给本机唤醒的所有成员，补充做法与偏好；不改变权限和技能规则。": "Sent to every member this computer wakes, adding practices and preferences; it does not change permissions or skill rules.",
   "发给 {value1} 平台的所有成员，含本地软件、模型 API、预设与工作流里的专家。": "Sent to every {value1} member, including local software, model APIs, presets and workflow experts.",
-  "Ctrl + Enter 保存": "Ctrl + Enter to save"
+  "Ctrl + Enter 保存": "Ctrl + Enter to save",
+  "提醒它在任务中途写一句进展，否则等待时卡片上看不到它做到哪了": "Reminds it to write a line of progress during a task; otherwise the card shows nothing of how far it got while you wait",
+  "提醒它不要用命令行看目录、读文件，否则这一轮会被中断": "Reminds it not to list folders or read files through the command line; otherwise the turn is cut short",
+  "每次任务": "every task",
+  "仅只读权限时": "only when read-only",
+  "{software}：{note}（{when}）": "{software}: {note} ({when})"
 }
