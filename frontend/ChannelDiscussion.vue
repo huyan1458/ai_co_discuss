@@ -188,8 +188,13 @@ async function track_selection() {
   if (check !== selection_check || pointer_down || quoting.value) return;
   // On touch screens the system's own selection menu sits next to the selection, so the buttons wait above the composer instead.
   const touch = window.matchMedia("(pointer: coarse)").matches;
-  const to = body.contains(kept.endContainer) ? text_offset(body, kept.endContainer, kept.endOffset) : body.textContent.length;
-  const from = text_offset(body, kept.startContainer, kept.startOffset);
+  const all = body.textContent;
+  let to = body.contains(kept.endContainer) ? text_offset(body, kept.endContainer, kept.endOffset) : all.length;
+  let from = text_offset(body, kept.startContainer, kept.startOffset);
+  // A triple-click ends at the next block, taking the blank between blocks, which has no box to mark: trim it off
+  // (2026-11-26 user #12560: notes on whole list items lost their underline and number).
+  while (to > from && /\s/.test(all[to - 1])) to--;
+  while (from < to && /\s/.test(all[from])) from++;
   listen_here.value = { id: Number(card.dataset.messageId), range: kept, text, from, to, speech, touch, ...place_by(kept, QUOTE_OFFER_WIDTH, QUOTE_OFFER_HEIGHT) };
 }
 /** Open the comment box for the offered selection, keeping the selected text highlighted meanwhile. */

@@ -23,7 +23,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from backend.server import DiscussionServer, attachment_path, connect_db, create_room, expired_rooms, image_size, init_database, require_room, sweep_attachments
+from backend.server import DiscussionServer, attachment_path, page_host, connect_db, create_room, expired_rooms, image_size, init_database, require_room, sweep_attachments
 from backend.texts import Text, incoming_text, load_texts, save_text
 
 
@@ -789,26 +789,33 @@ class DiscussionTests(unittest.TestCase):
         if not self.external:
             self.assertEqual(list(Path(str(self.database) + ".attachments").iterdir()), [])
 
-    def test_page_ticket_serves_its_folder_sandboxed_and_nothing_outside(self):
-        """A project page opened in a tab reads the files beside it, as an opaque origin; no path leaves the folder."""
+    def test_page_ticket_serves_its_folder_on_its_own_origin_and_nothing_else(self):
+        """A project page opened in a tab reads the files beside it on its folder's own origin; that origin reaches no
+        room route, the site's own origin no page, and no path leaves the folder."""
         if self.external:
             self.skipTest("page tickets belong to the local site")
+        local_site, self.server.local_site = self.server.local_site, True
+        self.addCleanup(setattr, self.server, "local_site", local_site)
         root = Path(str(self.database) + ".page")
         (root / "img").mkdir(parents=True)
         (root / "index.html").write_text('<img src="img/a.png">', encoding="utf-8")
-        (root / "img" / "a.png").write_bytes(b"\x89PNG")
+        (root / "img" / "a.png").write_bytes(b"PNG")
         Path(str(self.database) + ".secret").write_text("secret", encoding="utf-8")
-        self.server.page_tickets["good"] = (root.resolve(), time.time() + 60)
-        self.server.page_tickets["old"] = (root.resolve(), time.time() - 1)
-        status, headers, body = self.attachment_request("/api/local/page/good/index.html")
-        self.assertEqual((status, body), (200, b'<img src="img/a.png">'))
+        self.server.page_tickets["good"] = (root.resolve(), time.time() + 60, (root / "index.html").resolve(), "<script>bridge()</script>")
+        self.server.page_tickets["old"] = (root.resolve(), time.time() - 1, None, "")
+        host = {"Host": page_host(root.resolve(), self.server.server_port)}
+        status, headers, body = self.attachment_request("/api/local/page/good/index.html", headers=host)
+        self.assertEqual((status, body), (200, b'<script>bridge()</script><img src="img/a.png">'), "the preview's script goes into the opened file alone")
         self.assertTrue(headers["Content-Type"].startswith("text/html"))
-        self.assertIn("sandbox allow-scripts", headers["Content-Security-Policy"])
-        self.assertNotIn("allow-same-origin", headers["Content-Security-Policy"])
-        self.assertEqual(self.attachment_request("/api/local/page/good/img/a.png")[2], b"\x89PNG")
+        self.assertIsNone(headers["Content-Security-Policy"], "a page runs as from disk, with its own storage")
+        self.assertEqual(self.attachment_request("/api/local/page/good/img/a.png", headers=host)[2], b"PNG")
+        self.assertEqual(self.attachment_request("/api/local/page/good/index.html")[0], 404, "never on the site's origin")
+        self.assertEqual(self.attachment_request(f"/api/rooms/{self.room['id']}", headers=host)[0], 404, "a page reaches no room")
+        other = {"Host": page_host(Path(str(self.database)).resolve(), self.server.server_port)}
+        self.assertEqual(self.attachment_request("/api/local/page/good/index.html", headers=other)[0], 404, "nor another folder's origin")
         name = Path(str(self.database) + ".secret").name
         for path in (f"/api/local/page/good/%2E%2E/{name}", f"/api/local/page/good/..%5C{name}", "/api/local/page/old/index.html", "/api/local/page/none/index.html"):
-            self.assertEqual(self.attachment_request(path)[0], 404, path)
+            self.assertEqual(self.attachment_request(path, headers=host)[0], 404, path)
 
     def test_media_ticket_streams_only_its_checked_file_until_it_expires_or_changes(self):
         """A local page plays a project file by a random ticket; an unknown, expired or outdated ticket reads nothing."""

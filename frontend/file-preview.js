@@ -9,10 +9,19 @@ export const ATTACHMENT_TEXT_LIMIT = 2 * 1024 * 1024;
 // Scripts run in an opaque origin, including when the preview is opened in a new tab.
 export const HTML_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals";
 
+// A sandboxed page runs as an opaque origin, where reading localStorage or sessionStorage throws and a page relying on
+// them stops at its first line (2026-11-26 user #12484: a review page showed only its header). This puts a storage kept
+// in memory in their place, so the page works; what it saves lasts until the preview closes.
+const STORAGE_STANDIN = '<script>(()=>{for(const name of ["localStorage","sessionStorage"]){try{window[name].length;continue;}catch{}'
+  + "const data=new Map();const store={get length(){return data.size},key:(i)=>[...data.keys()][i]??null,"
+  + "getItem:(k)=>data.has(String(k))?data.get(String(k)):null,setItem:(k,v)=>{data.set(String(k),String(v));},"
+  + "removeItem:(k)=>{data.delete(String(k));},clear:()=>{data.clear();}};"
+  + "try{Object.defineProperty(window,name,{value:store,configurable:true});}catch{}}})();</script>";
+
 /** Wrap preview source without putting the UTF-8 declaration before its doctype. */
 export function html_document(text, extra = "") {
   const doctype = /^\uFEFF?\s*<!doctype[^>]*>/i.exec(text)?.[0] || "";
-  return `${doctype}<meta charset="utf-8">${extra}${text.slice(doctype.length)}`;
+  return `${doctype}<meta charset="utf-8">${STORAGE_STANDIN}${extra}${text.slice(doctype.length)}`;
 }
 
 /**

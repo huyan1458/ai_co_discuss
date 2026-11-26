@@ -2,6 +2,12 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.30 (2026-11-25 19:42)
+
+- Fixed: Previewing some web page files showed only the top and left the rest blank.
+- Changed: Very large web page files open faster in the preview and no longer flash their source first.
+- Fixed: Triple-clicking a whole list item to annotate it lost the underline and number.
+
 ## 0.5.29 (2026-11-25 18:37)
 
 - New: When viewing an image, the side buttons or left and right arrow keys step through the other images in the message.

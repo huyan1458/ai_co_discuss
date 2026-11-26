@@ -6354,10 +6354,11 @@ async function read_room_media(room_id, path, root = 0, on_progress = () => {}, 
  * it, sandboxed (the local website's page ticket); null where the page is not this computer's own (another device, a
  * connected website), which reads the page through `read_room_page` instead (user 2026-11-26, #12397).
  */
-async function local_page_url(room_id, path, root = 0) {
+async function local_page_url(room_id, path, root = 0, inject = "") {
   if (state.remote_rooms || SHARE) return null;
-  const answer = await local_launch_request("room-media", { room_id, path, root, page: true, token: localStorage.getItem(`discuss-access:${room_id}`) });
-  return answer.url && answer.url.startsWith("/api/local/page/") ? `${local_connection?.endpoint || ""}${answer.url}` : null;
+  const answer = await local_launch_request("room-media", { room_id, path, root, page: true, ...(inject ? { inject } : {}), token: localStorage.getItem(`discuss-access:${room_id}`) });
+  // The computer's website names the page on its own origin (a *.localhost host), so it is opened as given.
+  return /^http:\/\/p[0-9a-f]{16}\.localhost:\d+\/api\/local\/page\//.test(answer.url || "") ? answer.url : null;
 }
 
 /**

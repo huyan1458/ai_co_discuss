@@ -115,9 +115,13 @@ MEDIA_TICKET_SECONDS = 600
 # A project page the computer's own browser opens in a tab keeps reading the files beside it (lazy images, scripts) for
 # this long; its address is a random ticket naming the project folder, never a path.
 PAGE_TICKET_SECONDS = 12 * 3600
-# The page runs as an opaque origin (no allow-same-origin), so it can read nothing of this site; it may run its scripts,
-# open pop-ups and dialogs, and load anything from the folder or the web. No forms: a write to this site needs its origin.
-PAGE_POLICY = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"
+# The most script the page may ask to put into the opened file (the preview's selection bridge).
+MAX_PAGE_INJECT_BYTES = 8 * 1024
+# A page is served on its own origin, `p<folder hash>.localhost:<port>` (browsers send *.localhost to this computer), so it
+# runs as it would opened from disk, with its own storage (2026-11-26 user #12484: as a sandboxed opaque origin it could
+# not use localStorage and its script stopped, leaving an empty page), yet shares nothing with this site's origin; on that
+# host this server answers page files alone (`page_host_request`).
+PAGE_HOST = re.compile(r"p([0-9a-f]{16})\.localhost:(\d+)")
 MAX_MEDIA_TICKETS = 64
 MAX_TEXT_LENGTH = 32000
 SESSION_ID_PATTERN = re.compile(r"[0-9A-Za-z_-]{8,128}")
@@ -2458,6 +2462,11 @@ def attachment_path(database, attachment):
     return root / attachment["id"]
 
 
+def page_host(root, port):
+    """The origin host a project folder's pages are served on: one per folder, so pages of a folder keep their storage."""
+    return f"p{hashlib.sha256(str(root).lower().encode('utf-8')).hexdigest()[:16]}.localhost:{port}"
+
+
 def thumbnail_path(database, attachment):
     """Where the smaller copy of an image attachment is kept, beside the original."""
     return attachment_path(database, {"id": attachment["id"] + THUMBNAIL_SUFFIX})
@@ -3740,6 +3749,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def dispatch_routes(self, method, parsed, params, parts, text_mode):
         """Route one request and map validation, permission and lookup errors to their status codes."""
         try:
+            if self.page_host_request():
+                if parts[:3] == ["api", "local", "page"] and len(parts) >= 5 and method == "GET":
+                    return self.serve_page_ticket(parts[3], parts[4:])
+                raise LookupError(Text('地址不存在'))
             if self.entry_refused(method, parsed):
                 return None
             try:
@@ -3752,8 +3765,6 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             self.bridged = self.relay_bridge(parts)
             if parts[:3] == ["api", "local", "media"] and len(parts) == 4 and method == "GET":
                 return self.serve_media_ticket(parts[3])
-            if parts[:3] == ["api", "local", "page"] and len(parts) >= 5 and method == "GET":
-                return self.serve_page_ticket(parts[3], parts[4:])
             if parts[:2] == ["api", "local"]:
                 return self.handle_local_launch(parts, method)
             if parts == ["api", "updates"] and method == "GET":
@@ -4018,7 +4029,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """
         if not re.search(r"\.html?$", str(payload.get("path", "")), re.I):
             raise ValueError(Text('只能打开 HTML 文件'))
-        status, result = self.local_command_result("room-media", {**{key: value for key, value in payload.items() if key != "page"}, "download": True})
+        inject = payload.get("inject") or ""
+        if not isinstance(inject, str) or len(inject.encode("utf-8")) > MAX_PAGE_INJECT_BYTES:
+            raise ValueError(Text('页面附加脚本无效'))
+        status, result = self.local_command_result("room-media", {**{key: value for key, value in payload.items() if key not in ("page", "inject")}, "download": True})
         if status != 200:
             return self.respond(result, status)
         root, path = Path(result["directory"]).resolve(), Path(result["file"]).resolve()
@@ -4030,17 +4044,30 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 del tickets[key]
             while len(tickets) >= MAX_MEDIA_TICKETS:
                 del tickets[next(iter(tickets))]
-            tickets[ticket] = (root, now + PAGE_TICKET_SECONDS)
+            # `inject`: a script the computer's own page asked to put into this file alone, after its doctype (the
+            # preview's selection bridge, so a passage chosen in the page can go into the conversation).
+            tickets[ticket] = (root, now + PAGE_TICKET_SECONDS, path, inject)
         relative = "/".join(quote(part) for part in path.relative_to(root).parts)
-        return self.respond({"url": f"/api/local/page/{ticket}/{relative}"})
+        return self.respond({"url": f"http://{page_host(root, self.server.server_port)}/api/local/page/{ticket}/{relative}"})
+
+    def page_host_request(self):
+        """Whether a loopback request names a page origin; such a host reaches nothing of this site but page files."""
+        match = PAGE_HOST.fullmatch(self.headers.get("Host", ""))
+        if not match:
+            return False
+        if not self.server.local_site or self.client_address[0] != "127.0.0.1" or int(match[2]) != self.server.server_port:
+            raise LookupError(Text('地址不存在'))
+        return True
 
     def serve_page_ticket(self, ticket, parts):
-        """Serve one file of the project folder a page ticket names, sandboxed; nothing outside the folder."""
+        """Serve one file of the project folder a page ticket names, on that folder's own origin; nothing outside it."""
         with self.server.media_lock:
             item = self.server.page_tickets.get(ticket)
         if not item or item[1] <= time.time():
             raise LookupError(Text('页面地址已过期，请重新打开文件'))
         root = item[0]
+        if self.headers.get("Host", "") != page_host(root, self.server.server_port):
+            raise LookupError(Text('文件不存在'))
         names = [unquote(part) for part in parts]
         if any(name in ("", ".", "..") or ":" in name or "\\" in name for name in names):
             raise LookupError(Text('文件不存在'))
@@ -4050,7 +4077,12 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         if content_type.startswith("text/") or content_type in ("application/javascript", "application/json"):
             content_type += "; charset=utf-8"
-        self.send_file(path, content_type, path.name, "inline", policy=PAGE_POLICY)
+        if item[3] and path == item[2]:
+            text = path.read_bytes().decode("utf-8", errors="replace")
+            doctype = re.match(r"\ufeff?\s*<!doctype[^>]*>", text, re.I)
+            at = doctype.end() if doctype else 0
+            return self.send_file(None, content_type, path.name, "inline", data=(text[:at] + item[3] + text[at:]).encode("utf-8"), policy="")
+        self.send_file(path, content_type, path.name, "inline", policy="")
 
     def serve_media_ticket(self, ticket):
         """Stream the project media file a ticket names, refusing it once expired or changed since it was checked."""
@@ -4730,7 +4762,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def send_file(self, path, content_type, file_name, disposition, extra=None, data=None, policy="default-src 'none'; sandbox"):
         """Send one stored file, or the single byte range a player asks for, never as executable content.
 
-        `policy` is the Content-Security-Policy; a project page opened in its own tab runs sandboxed (PAGE_POLICY).
+        `policy` is the Content-Security-Policy; none for a project page served on its own origin (PAGE_HOST).
         """
         size = path.stat().st_size if data is None else len(data)
         start, end, status = 0, size - 1, 200
@@ -4757,7 +4789,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         for name, value in (extra or {}).items():
             self.send_header(name, value)
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", policy)
+        if policy:
+            self.send_header("Content-Security-Policy", policy)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()

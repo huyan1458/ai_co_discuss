@@ -125,6 +125,8 @@ addEventListener("pointerdown",e=>{down=e.pointerType!=="touch";},true);addEvent
 addEventListener("message",e=>{if(e.source===parent&&e.data&&e.data.codiscuss_clear){const s=getSelection();if(s)s.removeAllRanges();}});})();<\/script>`;
 // A project's HTML file is shown as the computer bundles it (the files it refers to inlined); an attachment as it is.
 const html_text = computed(() => tab.value?.page?.text ?? preview.value?.text ?? "");
+// A project page this computer serves from disk (`load_page`): the frame loads it by address, not as written text.
+const page_url = computed(() => (themed_html.value ? "" : tab.value?.page?.url) || "");
 const themed_html = computed(() => Boolean(tab.value?.attachment || tab.value?.visual));
 const html_preview = computed(() => themed_html.value
   ? inline_visual_document(html_text.value, Boolean(tab.value?.visual), { extra: tab.value?.visual ? "" : selection_bridge(), measure: false })
@@ -143,11 +145,19 @@ const html_notice = computed(() => {
 
 /** Show the HTML file in a new tab: a page of ours holding only the sandboxed file, so it never runs as this site. */
 function open_html_tab() {
+  if (page_url.value) { window.open(page_url.value, "_blank"); return; }
   const theme = themed_html.value ? inline_visual_theme(document.documentElement) : null;
   open_html_preview_tab(preview_name.value, html_text.value, theme, Boolean(tab.value?.visual));
 }
 const can_render = computed(() => preview.value?.text != null && (format.value !== "text" || Boolean(media_kind.value)) && !(format.value === "html" && preview.value.truncated && !tab.value?.page));
-const showing_source = computed(() => preview.value?.text != null && (!can_render.value || source.value));
+// A large HTML file's first part arrives before the whole page: it waits behind the loading view rather than showing
+// as source and then turning into the page (2026-11-26 user #12529).
+const awaiting_page = computed(() => format.value === "html" && !source.value && Boolean(preview.value?.truncated) && Boolean(tab.value?.loading)
+  && !tab.value?.page && !tab.value?.page_error);
+const showing_source = computed(() => preview.value?.text != null && (!can_render.value || source.value) && !awaiting_page.value);
+// Whether the HTML frame has drawn the current page; until then the loading view covers its blank white.
+const frame_ready = ref(false);
+watch(() => [html_preview.value, page_url.value], () => { frame_ready.value = Boolean(RELAY_FRAME); });
 // A project's text file can be edited from its source view; the computer reads it again in full to edit.
 // A file past the preview's first part is read whole when editing starts; the computer refuses one over its edit limit.
 const can_edit = computed(() => showing_source.value && !themed_html.value && !tab.value?.edit);
@@ -208,6 +218,7 @@ const editor_body = ref(null), markdown_scroll = ref(null), markdown_body = ref(
 
 /** The HTML frame's load: on the share site the first load is the empty relay page, which is sent the document first. */
 function html_frame_loaded() {
+  frame_ready.value = true;
   if (relay_frame_loaded(html_frame.value, html_preview.value)) apply_attachment_theme();
 }
 
@@ -334,6 +345,13 @@ async function load(item) {
 /** Read referenced images or bundled HTML beside the source file instead of adding another serial round trip. */
 async function load_page(item, request) {
   try {
+    // On this computer a project page loads straight from disk on its own origin, with the selection bridge, instead
+    // of being read whole and put together first (2026-11-26 user #12553: a 17 MB page kept the preview waiting).
+    const url = /\.html?$/i.test(item.path) ? await bridge.local_page_url(item.room_id, item.path, item.root || 0, selection_bridge()).catch(() => null) : null;
+    if (url) {
+      if (item.request === request) Object.assign(item, { page: { url, text: null, missing: [], skipped: [] }, page_error: "" });
+      return;
+    }
     const page = await bridge.read_room_page(item.room_id, item.path, item.root || 0);
     if (/\.(md|markdown)$/i.test(item.path)) page.images = JSON.parse(page.text || "{}");
     if (item.request === request) Object.assign(item, { page, page_error: "" });
@@ -1210,7 +1228,7 @@ onBeforeUnmount(() => {
         <UButton :label="t('保存')" size="xs" :loading="tab.edit.saving" @click="save_edit" />
         <UButton :label="t('放弃修改')" color="neutral" variant="ghost" size="xs" :disabled="tab.edit.saving" @click="cancel_edit" />
       </div>
-      <p v-else-if="preview?.truncated && !(format === 'html' && tab?.page && !source) && !(media_kind && !source) && !office_kind" class="project-editor-banner"><UIcon name="i-lucide-info" />{{ t('文件较大，仅显示前 {value1}（共 {value2}）', { value1: file_size(preview.limit), value2: file_size(preview.size) }) }}<template v-if="format === 'html' && !tab?.page">{{ t('，HTML 不渲染不完整的内容') }}</template></p>
+      <p v-else-if="preview?.truncated && !awaiting_page && !(format === 'html' && tab?.page && !source) && !(media_kind && !source) && !office_kind" class="project-editor-banner"><UIcon name="i-lucide-info" />{{ t('文件较大，仅显示前 {value1}（共 {value2}）', { value1: file_size(preview.limit), value2: file_size(preview.size) }) }}<template v-if="format === 'html' && !tab?.page">{{ t('，HTML 不渲染不完整的内容') }}</template></p>
       <p v-else-if="html_notice && !source" class="project-editor-banner" :title="html_notice"><UIcon name="i-lucide-info" /><span class="project-editor-banner-text">{{ html_notice }}</span></p>
 
       <div ref="editor_body" class="project-editor-body" :style="{ '--file-font-scale': font_scale }">
@@ -1255,8 +1273,13 @@ onBeforeUnmount(() => {
           </tbody></table>
         </div>
         <PreviewLoading v-else-if="preview && format === 'html' && tab?.loading && !tab.page" :label="t('正在载入页面引用的文件…')" />
-        <iframe v-else-if="preview && format === 'html'" ref="html_frame" class="project-html-preview" :class="{ 'is-themed-attachment': themed_html }"
-          :key="RELAY_FRAME ? html_preview : tab.id" :sandbox="tab.visual ? INLINE_VISUAL_SANDBOX : HTML_SANDBOX" referrerpolicy="no-referrer" :src="RELAY_FRAME || undefined" :srcdoc="RELAY_FRAME ? undefined : html_preview" :title="t('HTML 文件预览')" @load="html_frame_loaded"></iframe>
+        <template v-else-if="preview && format === 'html'">
+          <PreviewLoading v-if="!frame_ready" class="project-html-loading" :label="t('正在打开…')" />
+          <iframe ref="html_frame" class="project-html-preview" :class="{ 'is-themed-attachment': themed_html, 'is-drawing': !frame_ready }"
+            v-if="page_url" :key="page_url" referrerpolicy="no-referrer" :src="page_url" :title="t('HTML 文件预览')" @load="html_frame_loaded"></iframe>
+          <iframe v-else ref="html_frame" class="project-html-preview" :class="{ 'is-themed-attachment': themed_html, 'is-drawing': !frame_ready }"
+            :key="RELAY_FRAME ? html_preview : tab.id" :sandbox="tab.visual ? INLINE_VISUAL_SANDBOX : HTML_SANDBOX" referrerpolicy="no-referrer" :src="RELAY_FRAME || undefined" :srcdoc="RELAY_FRAME ? undefined : html_preview" :title="t('HTML 文件预览')" @load="html_frame_loaded"></iframe>
+        </template>
         <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer" @scroll.capture.passive="follow_inner_scroll" @click="open_mark_at"
           @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
           <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
@@ -1398,6 +1421,8 @@ onBeforeUnmount(() => {
 .file-comment.is-docked { inset: auto 0 0; max-width: none; padding-bottom: calc(var(--keyboard-inset, 0px) + 12px); }
 .file-listen-dock { position: absolute; inset: auto 0 12px; z-index: 3; display: flex; justify-content: center; gap: 8px; pointer-events: none; }
 .project-html-preview { display: block; flex: 1; width: 100%; border: 0; background: white; }
+/* Drawn behind the loading view until it has loaded, so no blank white shows first. */
+.project-html-preview.is-drawing { flex: 0 0 0; height: 0; visibility: hidden; }
 .project-html-preview.is-themed-attachment { box-sizing: border-box; padding: 16px 20px; background: var(--ui-bg-elevated); }
 .project-editor-status { display: flex; align-items: center; gap: 16px; flex-shrink: 0; height: 26px; padding: 0 14px; font-size: 11.5px; color: var(--ui-text-muted);
   background: var(--ui-bg-elevated); border-top: 1px solid var(--ui-border); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }

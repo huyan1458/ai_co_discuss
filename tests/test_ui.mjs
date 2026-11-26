@@ -3175,7 +3175,7 @@ test("only an inline visual offers submit, and a panel's result replaces its own
   const started = (html) => {
     const posted = [], window = { addEventListener() {}, document: { documentElement: { addEventListener() {}, style: {} } } };
     window.parent = { postMessage: (data) => posted.push(data) };
-    vm.runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)[1], Object.assign(window, { window }));
+    vm.runInNewContext([...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]).find((code) => !code.includes("localStorage")), Object.assign(window, { window }));
     return { codiscuss: window.codiscuss, posted };
   };
   const panel = started(inline_visual_document("<p>x</p>", true, { submit: true }));
