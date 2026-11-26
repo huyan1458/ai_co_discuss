@@ -2644,6 +2644,58 @@ function paired_attachment_fixture() {
   return fixture;
 }
 
+test("opening an original image twice shares the pending action and the tab can retry after failure", async () => {
+  const source = readFileSync(new URL("../frontend/FilePreview.vue", import.meta.url), "utf8");
+  const tab = { value: { media: { preview: true }, request: 0 } };
+  const calls = [];
+  const context = vm.createContext({ tab, load_media: () => new Promise((resolve, reject) => calls.push({ resolve, reject })) });
+  vm.runInContext(source.match(/async function show_original\(\) \{[\s\S]*?\n\}/)[0], context);
+  const first = context.show_original();
+  await context.show_original();
+  assert.equal(calls.length, 1);
+  assert.equal(tab.value.loading_original, true);
+  calls[0].reject(new Error("offline"));
+  await assert.rejects(first);
+  const retry = context.show_original();
+  calls[1].resolve();
+  await retry;
+  assert.equal(tab.value.request, 2);
+  assert.equal(tab.value.loading_original, false);
+});
+
+test("project image previews validate the version before displaying cached bytes and downloads read original parts", async () => {
+  const { context } = paired_attachment_fixture();
+  Object.assign(context, { atob, Blob });
+  let version = "one", requests = [], inflight = 0, peak = 0;
+  const originals = Buffer.from("abcdefghijk");
+  context.local_launch_request = async (_, input) => {
+    requests.push(input);
+    if (input.known_preview === version && !input.download)
+      return { unchanged: true, preview_version: version, size: originals.length };
+    const source = input.download ? originals : Buffer.from(version);
+    const offset = input.offset;
+    peak = Math.max(peak, ++inflight);
+    await new Promise(resolve => setImmediate(resolve));
+    inflight--;
+    return { offset, version, size: originals.length, total: source.length, content_type: "image/jpeg",
+      preview_version: input.download ? undefined : version, data: source.subarray(offset, offset + 3).toString("base64") };
+  };
+  async function open(download) {
+    const media = await context.read_room_media("r", "hero.png", 0, () => {}, download);
+    try { return await (await fetch(media.url)).text(); }
+    finally { URL.revokeObjectURL(media.url); }
+  }
+  assert.equal(await open(false), "one");
+  requests = [];
+  assert.equal(await open(false), "one");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].known_preview, "one");
+  version = "two";
+  assert.equal(await open(false), "two");
+  assert.equal(await open(true), originals.toString());
+  assert.equal(peak, 3);
+});
+
 test("stalled attachment lookup falls back once and its late result cannot replace the displayed file", async () => {
   const f = paired_attachment_fixture(), path = "/api/rooms/r/attachments/a/content";
   let finish, reads = 0;

@@ -218,7 +218,7 @@ test('a page pairs at the computer with a passkey, then runs operations on it en
     return body;
   };
   page_code = vm.runInNewContext([`const MODEL_CATALOG_TIMEOUT_MS = 35000;`, constants, source.slice(start, end), '({ relay_command, pair_this_device, device_credential })'].join('\n'),
-    { crypto, TextEncoder, TextDecoder, btoa, atob, setTimeout, Uint8Array, JSON, Date, Object, Error, Promise, Math, request_json, relay_machine: machine,
+    { relay_files: new Map(), relay_file_queue: [], relay_cache_checks: new Map(), performance, crypto, TextEncoder, TextDecoder, btoa, atob, setTimeout, Uint8Array, JSON, Date, Object, Error, Promise, Math, request_json, relay_machine: machine,
       t: translate, server_text: (payload, fallback) => payload?.template ? translate(payload.template, payload.params) : fallback,
       fetch: (url, options) => worker.fetch(new Request(new URL(url, 'https://discussion.test'), options), f.env), URL,
       localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)), removeItem: key => storage.delete(key) },
@@ -303,7 +303,9 @@ test('the machine relay hands requests to the computer, answers once, and never 
   assert.deepEqual(await relay.relay({ id: 'request-2', envelope: {} }), { id: 'request-2', status: 'duplicate' });
   relay.webSocketMessage(device, JSON.stringify({ type: 'response', id: 'request-2', envelope: { data: 'forged' } }));
   relay.webSocketMessage(machine, JSON.stringify({ type: 'response', id: 'request-2', envelope: { data: 'answer' } }));
-  assert.deepEqual(await waiting, { id: 'request-2', status: 'done', response: { data: 'answer' } }, 'only the computer can answer');
+  const result = await waiting;
+  assert.ok(result.roundtrip_ms >= 0);
+  assert.deepEqual(result.response, { data: 'answer' });
 
   relay.webSocketMessage(machine, JSON.stringify({ type: 'event', rooms: ['room-a'] }));
   assert.deepEqual(device.sent.pop(), { type: 'change', rooms: ['room-a'] });
@@ -368,7 +370,7 @@ test('Worker hands relay sockets and requests to the computer relay only after c
   f.env.RELAY = { idFromName: name => name, get: id => ({ fetch: async (input, init) => {
     const request = new Request(input, init);
     seen.push({ id, role: request.headers.get('X-Relay-Role'), body: request.method === 'POST' ? await request.json() : null });
-    return request.method === 'POST' ? Response.json({ id: 'relay-request-000001', status: 'unknown' }) : new Response(null, { status: 204 });
+    return request.method === 'POST' ? Response.json({ id: 'relay-request-000001', status: 'unknown', machine_colo: 'SJC' }) : new Response(null, { status: 204 });
   } }) };
   const key = { kty: 'EC', crv: 'P-256', x: 'A'.repeat(43), y: 'B'.repeat(43) };
   const request = { id: 'relay-request-000001', envelope: { key, iv: 'C'.repeat(16), data: 'ZGF0YQ==' } };
@@ -382,9 +384,22 @@ test('Worker hands relay sockets and requests to the computer relay only after c
   assert.equal((await upgrade(`m.${machine_token}`)).status, 204);
   assert.equal((await upgrade(`d.${await f.device.credential('GET', path)}`)).status, 204);
   assert.equal((await f.signed(path, { ...request, envelope: { ...request.envelope, data: 'not base64!' } })).status, 400);
-  assert.deepEqual((await f.signed(path, request)).body, { id: 'relay-request-000001', status: 'unknown' });
+  const timed = (await f.signed(path, request)).body;
+  assert.ok(timed.worker_ms >= 0);
+  assert.equal(timed.status, 'unknown');
   assert.deepEqual(seen.map(item => [item.id, item.role]), [[f.machine_id, 'machine'], [f.machine_id, 'device'], [f.machine_id, 'request']]);
   assert.deepEqual(seen[2].body, request);
+  assert.equal(timed.machine_colo, 'SJC');
+  const link = (await import('../runner/remote_launch.mjs')).machine_links(f.home).sites['https://discussion.test'];
+  const external = await (await import('./passkey_authenticator.mjs')).software_device(link.id);
+  const devices = await (await import('../runner/device_auth.mjs')).signed_device_list(f.home, link, Date.now(),
+    [{ id: external.id, ...external.public_key, room: 'sample', expires_at: Date.now() + 60000 }]);
+  const sync = await call(f, `/api/machines/${link.id}/sync`, { projects: [], clients: {}, sign_key: link.sign_public_key, devices },
+    { 'X-Machine-Token': machine_token });
+  assert.equal(sync.status, 200);
+  const external_response = await f.signed(path, request, external);
+  assert.equal(external_response.status, 200);
+  assert.ok(!('machine_colo' in external_response.body) && !('device_colo' in external_response.body));
 
   // Once expired, a device that may renew still reaches the computer one request at a time, and nothing else.
   const file = join(f.home, 'devices.json'), registry = JSON.parse(await readFile(file, 'utf8'));
@@ -589,4 +604,20 @@ test('a bound computer binds its hosted accounts with one-time child tokens, and
   assert.ok(!(await call(f, '/api/machines')).body.machines.some(machine => machine.id === account.id), 'gone from the list');
   assert.equal((await issue(account.id, account.token)).status, 401, 'its credential no longer works');
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM machine_parents WHERE parent_id=?').get(f.machine_id).count, 0, 'the slot is back');
+});
+
+
+test('file relay timings survive routine reads and validate reported durations', async () => {
+  const source = await readFile(join(PROJECT_ROOT, 'web', 'app.js'), 'utf8');
+  const fragment = source.slice(source.indexOf('const recent_relay_times'), source.indexOf('async function seal_relay_request'));
+  const machine = { id: 'machine' };
+  const api = vm.runInNewContext(fragment + '\n({ record_relay_time, recent_relay_times, relay_time_reports })',
+    { relay_machine: machine, Event, window: { dispatchEvent() {} }, setTimeout: () => 1 });
+  for (let i = 0; i < 13; i++) api.record_relay_time(machine, String(i), 'thumbnail', 90, { worker_ms: 60.3, roundtrip_ms: 40.8, frame_bytes: 100 }, 10);
+  for (let i = 0; i < 20; i++) api.record_relay_time(machine, String(i), 'messages', 10, { worker_ms: '9', roundtrip_ms: -2 }, 1);
+  assert.equal(api.recent_relay_times.length, 12);
+  assert.equal(api.recent_relay_times.at(-1).id, '1');
+  assert.equal(api.recent_relay_times[0].site, 19);
+  assert.equal(api.recent_relay_times[0].bytes, 100);
+  assert.equal(api.relay_time_reports.at(-1).worker, null);
 });

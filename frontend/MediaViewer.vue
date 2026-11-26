@@ -15,6 +15,7 @@ const props = defineProps({
   kind: { type: String, required: true },
   url: { type: String, required: true },
   name: { type: String, default: "" },
+  saveOriginal: Function,
 });
 const image = ref(null), failed = ref(false);
 const loading = ref(true);
@@ -27,7 +28,7 @@ function mount_viewer() {
   viewer = null;
   if (props.kind !== "image" || !image.value) return;
   viewer = new Viewer(image.value, { inline: true, navbar: false, title: false, button: false, backdrop: false,
-    transition: false, toolbar: image_toolbar(() => ({ url: props.url, name: props.name })), toggleOnDblclick: true, ...IMAGE_ZOOM, viewed: () => { loading.value = false; } });
+    transition: false, toolbar: image_toolbar(() => ({ url: props.url, name: props.name, save: props.saveOriginal })), toggleOnDblclick: true, ...IMAGE_ZOOM, viewed: () => { loading.value = false; } });
 }
 
 /** Recreate the failed media element so the browser reads and decodes it again. */

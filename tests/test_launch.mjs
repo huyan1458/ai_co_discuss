@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { crc32, deflateSync } from 'node:zlib';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, existsSync, symlinkSync, truncateSync } from 'node:fs';
 import { request as http_request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -13,7 +14,7 @@ import { test } from 'node:test';
 
 import { admin_cli } from '../runner/admin_cli.mjs';
 import { create_panel } from '../runner/admin_panel.mjs';
-import { adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, leave_sub_workflow, launch_settings, room_configuration, room_files, room_media, room_models, room_page, room_member, room_member_model, room_settings, room_skills, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
+import { project_preview_reader, adopt_member_profile, adopt_workflow, host_control, borrowed_session, cached_software_defaults, check_or_save_workflow, join_workflow, launch_discussion, leave_sub_workflow, launch_settings, room_configuration, room_files, room_media, room_models, room_page, room_member, room_member_model, room_settings, room_skills, room_workflow, save_launch_projects, save_launch_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, list_workflows, save_workflow } from '../runner/workflows.mjs';
 // Saves that replace a saved workflow on purpose; a save naming the version it edited is tested on its own.
 const REPLACE = { overwrite: true };
@@ -519,6 +520,65 @@ test('a Markdown preview gets the project images it shows, keyed as the page res
   const html = inline_markdown_images(render_markdown(text), images, 'docs');
   for (const url of Object.values(images)) assert.ok(html.includes(`<img src="${url}"`), url.slice(0, 30));
   assert.ok(html.includes('src="../../outside.png"'), 'a path outside the project stays as written');
+});
+
+test('project previews share queued versions, cap encoding at two and retry an unsuccessful conversion', async () => {
+  const read = project_preview_reader(() => 'python'), started = [], finish = [];
+  const load = key => read('home', key, () => new Promise(resolve => { started.push(key); finish.push(resolve); }));
+  const jobs = ['a', 'b', 'c', 'c'].map(load);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(started, ['a', 'b']);
+  finish[0](null);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(started, ['a', 'b', 'c']);
+  finish[1]('B'); finish[2]('C');
+  assert.deepEqual(await Promise.all(jobs), [null, 'B', 'C', 'C']);
+  assert.equal(await read('home', 'a', () => 'A'), 'A');
+  assert.equal(await load('a'), 'A');
+});
+
+test('an unavailable project preview interpreter is probed only once', async () => {
+  let probes = 0;
+  const read = project_preview_reader(() => { probes++; throw new Error('unavailable'); });
+  for (const key of ['a', 'b', 'a']) assert.equal(await read('home', key, () => 'unexpected'), null);
+  assert.equal(probes, 1);
+});
+
+test('a remote project image preview shrinks, revalidates changed bytes and falls back on codec failure', { skip: process.platform !== 'win32' }, async t => {
+  const f = await fixture(t), project = join(f.directory, 'preview');
+  mkdirSync(project);
+  const path = 'screen.png', file = join(project, path);
+  const chunk = (kind, data) => {
+    const length = Buffer.alloc(4), check = Buffer.alloc(4);
+    const body = Buffer.concat([Buffer.from(kind), data]);
+    length.writeUInt32BE(data.length);
+    check.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, check]);
+  };
+  const header = Buffer.alloc(13), width = 1800, height = 700;
+  header.writeUInt32BE(width);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 2;
+  const original = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', header),
+    chunk('IDAT', deflateSync(Buffer.alloc((width * 3 + 1) * height), { level: 0 })), chunk('IEND', Buffer.alloc(0))]);
+  writeFileSync(file, original);
+  const launch = await launch_discussion(f.home, { ...f.input, cwd: project }, f.options);
+  const config = load_config(launch.config_path);
+  const input = { site: f.site, room_id: config.room, token: config.token, path, preview: true };
+  const remote = extra => room_media(f.home, { ...input, ...extra }, { trust: true, parts: true });
+  const first = await remote({});
+  assert.equal(first.content_type, 'image/jpeg');
+  assert.ok(first.total < original.length && first.preview_version);
+  assert.equal((await remote({ known_preview: first.preview_version })).unchanged, true);
+  assert.equal((await room_media(f.home, input)).file, file);
+  writeFileSync(file, Buffer.concat([original, Buffer.alloc(1)]));
+  const changed = await remote({ known_preview: first.preview_version });
+  assert.ok(changed.preview_version && changed.preview_version !== first.preview_version);
+  writeFileSync(file, 'undecodable');
+  const fallback = await remote({ known_preview: changed.preview_version });
+  assert.equal(fallback.preview_version, undefined);
+  assert.equal(Buffer.from(fallback.data, 'base64').toString(), 'undecodable');
 });
 
 test('a project media file is named to the local site, and reaches another device only in parts within the limit', async t => {
@@ -1982,17 +2042,49 @@ test('the relay channel reaches only local room routes, as the bridge, and answe
   const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', ephemeral.publicKey);
   const id = 'relay-request-0000000001';
   const device = await pair_test_device(home, link.id);
-  const sealed = await seal(key, await device.seal(id, { action: 'room-api', payload: { method: 'POST', path: '/api/rooms/abc123/messages', body: { text: '外出' } } }), id);
-  const answer = await answer_request(home, 'https://site.test', link, { id, envelope: { ...sealed, key: { kty, crv, x, y } } }, { fetcher });
+  const sealed = await seal(key, await device.seal(id, { timing_version: 1, action: 'room-api', payload: { method: 'POST', path: '/api/rooms/abc123/messages', body: { text: '外出' } } }), id);
+  const timing = { received_at: performance.now() };
+  const answer = await answer_request(home, 'https://site.test', link, { id, envelope: { ...sealed, key: { kty, crv, x, y } } }, { fetcher, timing });
+  timing.queued_before_send = 321;
   assert.equal(answer.type, 'response');
   assert.equal(answer.envelope.encoding, 'gzip');
   const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(answer.envelope.iv, 'base64'), additionalData: new TextEncoder().encode(`${id}:response`) },
     key, Buffer.from(answer.envelope.data, 'base64'));
   assert.deepEqual(JSON.parse(gunzipSync(Buffer.from(plain)).toString()), { status: 200, body: { messages: [] } });
   assert.deepEqual(JSON.parse(calls[1].options.body), { text: '外出' });
+  const sidecar = answer.envelope.timing;
+  const timing_plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(sidecar.iv, 'base64'),
+    additionalData: new TextEncoder().encode(`${id}:timing`) }, key, Buffer.from(sidecar.data, 'base64'));
+  const observed = JSON.parse(gunzipSync(Buffer.from(timing_plain)));
+  assert.ok(observed.computer_ms >= 0);
+  const log_file = join(home, 'relay-timing.jsonl');
+  async function feedback(request_id) {
+    const receipt = await device.seal(request_id, { action: 'timing-report', timing_reports: [
+      { id, total: 130, worker: 110, relay: 100, dc: 'HKG', mc: 'SJC', token: bridge, path: '/private/marker' }] });
+    const cipher = await seal(key, receipt, request_id);
+    return answer_request(home, 'https://site.test', link, { id: request_id, envelope: { ...cipher, key: { kty, crv, x, y } } });
+  }
+  await feedback('timing-feedback-00000001');
+  for (let i = 0; i < 100 && !existsSync(log_file); i++) await new Promise(resolve => setTimeout(resolve, 5));
+  const log_text = readFileSync(log_file, 'utf8');
+  assert.equal(JSON.parse(log_text).mobile_ms, 20);
+  assert.equal(JSON.parse(log_text).frame_bytes, Buffer.byteLength(JSON.stringify(answer)));
+  assert.equal(JSON.parse(log_text).buffered_bytes, 321);
+  for (const secret of [bridge, 'abc123', '/private/marker', '外出']) assert.ok(!log_text.includes(secret));
+  // Make the destination unwritable as a file; the signed operation must still return its normal answer.
+  rmSync(log_file);
+  mkdirSync(log_file);
+  const second_id = 'relay-request-0000000099';
+  const second = await seal(key, await device.seal(second_id, { action: 'room-api', payload: { path: '/api/rooms' } }), second_id);
+  await answer_request(home, 'https://site.test', link, { id: second_id, envelope: { ...second, key: { kty, crv, x, y } } }, { fetcher });
+  const failed_id = 'timing-feedback-00000002';
+  const failed = await seal(key, await device.seal(failed_id, { action: 'timing-report', timing_reports: [{ id: second_id }] }), failed_id);
+  const accepted = await answer_request(home, 'https://site.test', link, { id: failed_id, envelope: { ...failed, key: { kty, crv, x, y } } });
+  assert.equal(accepted.type, 'response');
+  const prior_calls = calls.length;
   await assert.rejects(answer_request(home, 'https://site.test', link, { id: 'relay-request-0000000002', envelope: { ...sealed, key: { kty, crv, x, y } } }, { fetcher }),
     'a request sealed under another id is not run');
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, prior_calls);
 
   // An answer over the website's 1 MiB frame would close the connection for every request; only that request fails.
   // An in-process manager without a service lock cannot answer from a cold launch subprocess.

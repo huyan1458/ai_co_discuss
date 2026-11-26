@@ -764,6 +764,48 @@ class DiscussionTests(unittest.TestCase):
             self.assertEqual(list(Path(str(self.database) + ".attachments").iterdir()), [])
 
     @unittest.skipUnless(os.name == "nt", "Windows system image codec")
+    def test_project_preview_rotates_exif_jpeg_without_stretching(self):
+        """A white square stays square and the red left edge becomes the top after a clockwise turn."""
+        import ctypes
+        from backend.windows_thumbnail import encode_preview, graphics_library
+
+        width, height = 240, 120
+        rgb = bytearray()
+        for y in range(height):
+            for x in range(width):
+                white = 100 <= x < 140 and 40 <= y < 80
+                rgb.extend((255, 255, 255) if white else (0, 0, 220) if x < 120 else (220, 0, 0))
+        bitmap = (struct.pack("<2sIHHI", b"BM", 54 + len(rgb), 0, 0, 54)
+                  + struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0, len(rgb), 0, 0, 0, 0) + rgb)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.bmp"
+            path.write_bytes(bitmap)
+            jpeg = encode_preview(path, width, height)
+            exif = bytes.fromhex("45786966000049492a0008000000010012010300010000000600000000000000")
+            path = path.with_suffix(".jpg")
+            path.write_bytes(jpeg[:2] + bytes.fromhex("ffe1") + struct.pack(">H", len(exif) + 2) + exif + jpeg[2:])
+            expected = image_size(io.BytesIO(path.read_bytes()))
+            self.assertEqual(expected, (height, width))
+            result = encode_preview(path, *expected, 120, project=True)
+            self.assertEqual(image_size(io.BytesIO(result)), (60, 120))
+            path.write_bytes(result)
+            lib, handle = graphics_library(), ctypes.c_void_p()
+            self.assertEqual(lib.GdipLoadImageFromFile(str(path), ctypes.byref(handle)), 0)
+            try:
+                def pixel(x, y):
+                    color = ctypes.c_uint()
+                    self.assertEqual(lib.GdipBitmapGetPixel(handle, x, y, ctypes.byref(color)), 0)
+                    return tuple((color.value >> shift) & 255 for shift in (16, 8, 0))
+                self.assertGreater(pixel(30, 10)[0], 180)
+                self.assertGreater(pixel(30, 110)[2], 180)
+                spans = [sum(min(pixel(x, 60)) > 180 for x in range(60)),
+                         sum(min(pixel(30, y)) > 180 for y in range(120))]
+                for span in spans:
+                    self.assertAlmostEqual(span, 20, delta=2)
+            finally:
+                lib.GdipDisposeImage(handle)
+
+    @unittest.skipUnless(os.name == "nt", "Windows system image codec")
     def test_png_upload_includes_smaller_preview(self):
         """A binary upload supplies its preview without a browser."""
         width, height = 900, 300

@@ -467,6 +467,7 @@ async function finish_machine_command(database, machine_id, command_id, token, p
  * Without the RELAY binding the route is absent and both sides keep the D1 command queue.
  */
 async function handle_relay(env, request, machine_id) {
+  const started = performance.now();
   if (!env.RELAY) throw new HttpError(404, "中转未配置");
   const database = env.DB;
   const relay = env.RELAY.get(env.RELAY.idFromName(machine_id));
@@ -486,6 +487,7 @@ async function handle_relay(env, request, machine_id) {
     }
     const forwarded = new Request(request);
     forwarded.headers.set("X-Relay-Role", role);
+    forwarded.headers.set("X-Relay-Colo", request.cf?.colo || "");
     // The relay keeps which device holds each socket and until when, so it can close it on expiry or revocation.
     if (identity) forwarded.headers.set("X-Relay-Device", JSON.stringify({ id: identity.device_id, expires_at: identity.expires_at }));
     return relay.fetch(forwarded);
@@ -496,15 +498,25 @@ async function handle_relay(env, request, machine_id) {
   const identity = await require_device(database, request, { renewing: true, external: true });
   if (identity.machine_id !== machine_id) throw new HttpError(403, "这台设备配对的是另一台电脑");
   await require_paired_machine(database, machine_id);
-  return forward_relay(relay, await read_payload(request));
+  return forward_relay(relay, await read_payload(request), started, identity.kind === "device" ? request.cf?.colo || null : undefined);
 }
 
 /** Hand one sealed request to the computer's relay object and return its answer. */
-async function forward_relay(relay, { id, envelope, wait }) {
+async function forward_relay(relay, { id, envelope, wait }, started, colo) {
   if (typeof id !== "string" || !/^[A-Za-z0-9_-]{16,80}$/.test(id)) throw new HttpError(400, "命令编号无效");
   const answer = await relay.fetch("https://relay.internal/", { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Role": "request" },
     body: JSON.stringify({ id, envelope: valid_envelope(envelope, true), ...(Number.isInteger(wait) ? { wait } : {}) }) });
-  return respond(await answer.json());
+  const result = await answer.json();
+  // Unsigned site observations are diagnostic only. Never use them for authorization or routing.
+  if (started !== undefined) {
+    result.worker_ms = Math.round(performance.now() - started);
+    if (colo !== undefined) result.device_colo = colo;
+  }
+  if (colo === undefined) {
+    delete result.device_colo;
+    delete result.machine_colo;
+  }
+  return respond(result);
 }
 
 /**

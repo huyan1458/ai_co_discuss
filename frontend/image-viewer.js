@@ -15,7 +15,8 @@ import { t } from './i18n.js';
  */
 export function image_toolbar(source) {
   return { zoomIn: 1, zoomOut: 1, reset: 1, rotateLeft: 1, rotateRight: 1, save: { show: 1, click() {
-    const { url, name } = source();
+    const { url, name, save } = source();
+    if (save) return save();
     if (!url) return;
     const link = document.createElement("a");
     link.href = url;

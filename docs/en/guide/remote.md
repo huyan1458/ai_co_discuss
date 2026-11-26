@@ -58,3 +58,5 @@ Phones support portrait layout only. Tablets support both portrait and landscape
 - **Some changes require the computer:** Changing software executable paths, browsing outside Saved projects, and adding a new device must be done at the computer.
 - **Attachment cache:** Pictures and files viewed through the relay are cached in this device’s browser and cleared when you unpair on this device.
 - **Clearing browser data requires pairing again:** Clearing browser data removes the device key. The handoff command also expires after 10 minutes, so keep the phone's clock reasonably accurate.
+
+**View file relay timings.** On your phone, open Settings → Account → Paired devices and expand Recent relay timings (ms). The latest 12 file requests show response frame sizes in bytes and estimates for the phone link, site processing, computer link and local processing. The two location codes identify the phone request and computer connection ingress respectively. A dash means unavailable.

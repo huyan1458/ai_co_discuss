@@ -40,7 +40,7 @@ export class MachineRelay {
       const pair = new WebSocketPair();
       let device = null;
       try { device = JSON.parse(request.headers.get("X-Relay-Device") || "null"); } catch { /* An untagged socket is closed at the next list. */ }
-      this.accept(pair[1], role, device);
+      this.accept(pair[1], role, device, request.headers.get("X-Relay-Colo"));
       return new Response(null, { status: 101, webSocket: pair[0], headers: { "Sec-WebSocket-Protocol": RELAY_PROTOCOL } });
     }
     if (request.method === "POST" && role === "request") return Response.json(await this.relay(await request.json()));
@@ -54,7 +54,7 @@ export class MachineRelay {
    * Register a socket; a new computer connection replaces the old one, and devices learn whether it is online. A device
    * socket keeps which device opened it and until when that device is paired.
    */
-  accept(socket, role, device = null) {
+  accept(socket, role, device = null, colo = null) {
     if (role === "machine") {
       // Requests waiting now went to the old connection, whose answers can no longer arrive (a stalled one never sends
       // them): fail them at once so the device can ask again over the new one, instead of waiting out the timeout.
@@ -64,7 +64,7 @@ export class MachineRelay {
     }
     this.ctx.acceptWebSocket(socket, [role]);
     // The role survives hibernation with the socket, so a woken object still knows who sent a frame.
-    socket.serializeAttachment(role === "device" ? { role, device: device?.id ?? "", expires_at: Number(device?.expires_at) || 0 } : { role });
+    socket.serializeAttachment(role === "device" ? { role, device: device?.id ?? "", expires_at: Number(device?.expires_at) || 0 } : { role, colo });
     if (role === "machine") this.broadcast({ type: "presence", online: true });
     else socket.send(JSON.stringify({ type: "presence", online: this.machine() !== null }));
   }
@@ -82,7 +82,7 @@ export class MachineRelay {
     return new Promise(resolve => {
       const limit = Number.isInteger(wait) ? Math.min(Math.max(wait, 1000), RELAY_MAX_WAIT_MS) : RELAY_WAIT_MS;
       const timer = setTimeout(() => this.settle(id, { id, status: "unknown" }), limit);
-      this.pending.set(id, { resolve, timer });
+      this.pending.set(id, { resolve, timer, started: performance.now() });
       try { machine.send(JSON.stringify({ type: "request", id, envelope })); }
       catch { this.settle(id, { id, status: "offline" }); }
     });
@@ -167,7 +167,11 @@ export class MachineRelay {
     let frame;
     try { frame = JSON.parse(message); } catch { return; }
     if (typeof frame.type === "string" && frame.type.startsWith("entry-") && typeof frame.id === "string") this.entry_frame(frame);
-    else if (frame.type === "response" && typeof frame.id === "string") this.settle(frame.id, { id: frame.id, status: "done", response: frame.envelope });
+    else if (frame.type === "response" && typeof frame.id === "string") {
+      const waiting = this.pending.get(frame.id);
+      if (waiting) this.settle(frame.id, { id: frame.id, status: "done", response: frame.envelope,
+        frame_bytes: message.length, roundtrip_ms: Math.round(performance.now() - waiting.started), machine_colo: socket.deserializeAttachment()?.colo || null });
+    }
     else if (frame.type === "event") this.broadcast({ type: "change", rooms: Array.isArray(frame.rooms) ? frame.rooms.slice(0, 100) : null });
   }
 

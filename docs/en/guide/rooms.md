@@ -42,6 +42,8 @@ Rooms created by a host inherit its folder. Select the arrow to the left of the 
 
 ### 3. Set project directories and browse project files
 
+When viewing a project image through the relay on another device, supported images open as a “Reduced preview”. Choose “View original” for full detail (under file actions on narrow screens). Save downloads the original file. The local computer displays the original directly, as do other devices when a smaller preview cannot be generated.
+
 “File changes” below an answer shows the number of changed files and lines added or removed. Lists of five files or fewer open by default. Select the file count to open a longer list. Read-only visitors can see the list, but only the room owner can view patches.
 
 - **Add or remove directories.** A room supports one primary directory and up to eight additional directories. After creating a room, open the “Room” tab at the top of the room and find “Project folder”. Add or remove additional directories there. Changes apply from each member’s next run and do not interrupt a session. A primary directory cannot be changed after it is set. If the room was created without one, you can set it once in the same section. Members can access all room directories subject to their individual project permissions.

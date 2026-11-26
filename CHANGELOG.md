@@ -2,6 +2,11 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.37 (2026-11-26 09:01)
+
+- Changed: Phones and other devices previewing project images on the computer show a "Reduced preview" first so they load faster; tap "View original" for detail.
+- New: "Paired devices" shows "Recent relay timings (ms)", so you can see which leg is slow.
+
 ## 0.5.36 (2026-11-26 04:22)
 
 - New: On phones, swipe left or right to switch images in the viewer; the side buttons hide when left idle.

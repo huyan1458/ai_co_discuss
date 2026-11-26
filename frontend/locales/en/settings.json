@@ -1,4 +1,6 @@
 {
+  "最近中转耗时（毫秒）": "Recent relay timings (ms)",
+  "手机线路 {mobile} · 站点 {site} · 电脑线路 {link} · 本机 {local}": "Phone link {mobile} · Site {site} · Computer link {link} · Local {local}",
   "需连接本机服务": "Local service connection required",
   "读取中…": "Loading…",
   "{value1} · 未配置": "{value1} · Not configured",

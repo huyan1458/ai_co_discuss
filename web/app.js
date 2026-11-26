@@ -689,6 +689,7 @@ const COMPUTER_UNREACHABLE = t('电脑未连接：请先与电脑配对，并确
 let local_connection = null;
 let computer_connecting = false;
 let relay_machine = null;
+
 // Object URLs of files read from the computer's rooms, by their room route.
 // `own`: originals this page sent itself, shown in the list from its own copy; an original read to view it is not (#13478).
 const relay_files = Object.assign(new Map(), { own: new Set() });
@@ -1603,7 +1604,10 @@ async function watch_destruction(id) {
 /** Tell what was removed for each room whose receipt is complete. */
 function settle_destructions() {
   if (state.remote_rooms) for (const item of state.destructions) {
-    if (item.status === "done") remove_room_cache(`/api/rooms/${encodeURIComponent(item.room_id)}/attachments/`);
+    if (item.status === "done") {
+      remove_room_cache(`/api/rooms/${encodeURIComponent(item.room_id)}/attachments/`);
+      remove_room_cache(`/api/rooms/${encodeURIComponent(item.room_id)}/project-previews/`);
+    }
   }
   for (const [id, entry] of state.destroying) {
     const record = state.destructions.find(item => item.room_id === id);
@@ -5225,6 +5229,7 @@ async function device_credential(method, path) {
 
 /** This browser no longer counts as paired: the computer revoked it, or it is being unpaired here. */
 function forget_pairing() {
+  recent_relay_times.length = relay_time_reports.length = 0;
   const clearing = purge_cached_attachments(pairing_scope());
   clear_relay_memory();
   try { localStorage.removeItem(PAIRED_KEY); } catch { /* Nothing stored. */ }
@@ -5417,6 +5422,30 @@ async function meet_device_need(error) {
  * Seal one request so that only the paired computer can read it and seal the answer. This browser signs it with its
  * device key; only a pairing request goes unsigned. The send time lets the computer refuse a replay.
  */
+const recent_relay_times = [];
+const relay_time_reports = [];
+let relay_feedback_timer;
+function record_relay_time(machine, id, category, total, result, local) {
+  if (relay_machine?.id !== machine.id || !Number.isFinite(local)) return;
+  const delta = (a, b) => Number.isFinite(a) && Number.isFinite(b) && a >= b ? Math.round(a - b) : null;
+  const milliseconds = n => Number.isFinite(n) && n >= 0 && n <= 600000 ? Math.round(n) : null;
+  const report = { id, total, worker: milliseconds(result.worker_ms), relay: milliseconds(result.roundtrip_ms),
+    dc: /^[A-Z]{3}$/.test(result.device_colo) ? result.device_colo : null, mc: /^[A-Z]{3}$/.test(result.machine_colo) ? result.machine_colo : null };
+  if (["thumbnail", "attachment", "room-files", "room-media", "room-upload"].includes(category)) {
+    const bytes = Number.isSafeInteger(result.frame_bytes) && result.frame_bytes >= 0 ? result.frame_bytes : null;
+    recent_relay_times.unshift({ id, category, bytes, mobile: delta(total, report.worker), site: delta(report.worker, report.relay),
+    link: delta(report.relay, local), local, dc: report.dc, mc: report.mc });
+    recent_relay_times.splice(12);
+    window.dispatchEvent(new Event("relay-timing"));
+  }
+  relay_time_reports.push(report);
+  if (relay_time_reports.length > 16) relay_time_reports.shift();
+  if (!relay_feedback_timer) relay_feedback_timer = setTimeout(() => {
+    relay_feedback_timer = null;
+    if (relay_time_reports.length && relay_machine?.id === machine.id) relay_exchange("timing-report", {}).catch(() => {});
+  }, 1500);
+}
+
 async function seal_relay_request(machine, id, request) {
   const encoder = new TextEncoder();
   // The computer it is meant for is signed too, so the request cannot be passed on to another paired computer.
@@ -5436,8 +5465,8 @@ async function seal_relay_request(machine, id, request) {
 }
 
 /** Open the computer's answer to one request as { status, body }; answers over the relay connection are compressed. */
-async function open_relay_response(key, id, sealed) {
-  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64_to_bytes(sealed.iv), additionalData: new TextEncoder().encode(`${id}:response`) },
+async function open_relay_response(key, id, sealed, purpose = "response") {
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64_to_bytes(sealed.iv), additionalData: new TextEncoder().encode(`${id}:${purpose}`) },
     key, base64_to_bytes(sealed.data));
   const bytes = sealed.encoding === "gzip" ? await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer() : plain;
   return JSON.parse(new TextDecoder().decode(bytes));
@@ -5458,7 +5487,10 @@ async function relay_exchange(action, payload, wait, trace) {
     trace.log("started", 0);
   }
   const target = computer_rooms_only() ? { target: "computer" } : {};
-  const { key, envelope } = await seal_relay_request(machine, id, { action, payload, ...target });
+  const reports = action === "timing-report" ? relay_time_reports.splice(0) : [];
+  const { key, envelope } = await seal_relay_request(machine, id, { action, payload, ...target, timing_version: 1,
+    ...(reports.length ? { timing_reports: reports } : {}) });
+  const sent = performance.now();
   const result = await request_json(`/api/machines/${encodeURIComponent(machine.id)}/relay`, { id, envelope, ...(wait ? { wait } : {}) })
     .catch(error => {
       // A request given up in the network may still have reached the computer, so its outcome is unconfirmed. Safari
@@ -5468,7 +5500,14 @@ async function relay_exchange(action, payload, wait, trace) {
       throw error.status === 401 ? Object.assign(error, { need: "pairing" }) : error;
     });
   if (result.status === "done") {
+    const total = Math.round(performance.now() - sent);
     const answer = await open_relay_response(key, id, result.response);
+    if (result.response.timing) {
+      try {
+        const timing = await open_relay_response(key, id, result.response.timing, "timing");
+        record_relay_time(machine, id, timing.category, total, result, timing.computer_ms);
+      } catch { /* Optional diagnostics cannot invalidate the authenticated business response. */ }
+    }
     if (trace) {
       trace.bytes = Math.floor(result.response.data.replace(/=+$/, "").length * 3 / 4);
       trace.received_at = performance.now();
@@ -5788,6 +5827,11 @@ function set_relay_machine(machine) {
     clear_relay_memory();
     relay_memory_machine_id = machine.id;
   }
+  if (relay_machine?.id !== machine?.id) {
+    recent_relay_times.length = relay_time_reports.length = 0;
+    clearTimeout(relay_feedback_timer);
+    relay_feedback_timer = null;
+  }
   relay_machine = machine;
 }
 
@@ -5839,17 +5883,24 @@ async function attachment_transaction(work) {
 }
 
 /** A stalled browser database must not hold up a relay read. A late result has no display side effects. */
-async function lookup_cached_attachment(scope, path) {
+async function lookup_cached_attachment(scope, path, latest = false) {
   let timer;
   const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(null), RELAY_CACHE_READ_TIMEOUT_MS); });
-  try { return await Promise.race([cached_attachment(scope, path), timeout]); }
+  try { return await Promise.race([cached_attachment(scope, path, false, latest), timeout]); }
   finally { clearTimeout(timer); }
 }
 
-function cached_attachment(scope, path, touch_only = false) {
+function cached_attachment(scope, path, touch_only = false, latest = false) {
   return attachment_transaction(async (bodies, usage, state_store) => {
-    const key = [scope, path];
-    const item = await cache_result(usage.index("file").get(key));
+    let key = [scope, path];
+    const files = usage.index("file");
+    let item;
+    if (latest) {
+      const range = IDBKeyRange.bound(key, [scope, path + "\uffff"]);
+      const versions = await cache_result(files.getAll(range));
+      item = versions.reduce((last, entry) => !last || entry.order > last.order ? entry : last, null);
+      if (item) key = item.key;
+    } else item = await cache_result(files.get(key));
     if (!item) return { epoch: await cache_result(state_store.get(scope)) };
     const blob = touch_only ? null : await cache_result(bodies.get(key));
     usage.delete(item.order);
@@ -5859,7 +5910,7 @@ function cached_attachment(scope, path, touch_only = false) {
       return { epoch: await cache_result(state_store.get(scope)) };
     }
     usage.add({ key, size: item.size });
-    return touch_only ? null : { blob };
+    return touch_only ? null : latest ? { blob, version: key[1].slice(path.length), epoch: await cache_result(state_store.get(scope)) } : { blob };
   });
 }
 
@@ -6786,22 +6837,43 @@ function read_member_skills(room_id, name) {
  */
 async function read_room_media(room_id, path, root = 0, on_progress = () => {}, download = false) {
   const token = localStorage.getItem(`discuss-access:${room_id}`);
-  const flag = download ? { download: true } : {};
-  let answer = await local_launch_request("room-media", { room_id, path, root, offset: 0, token, ...flag });
-  if (answer.url) return { url: `${local_connection?.endpoint || ""}${answer.url}`, content_type: answer.content_type, size: answer.size, blob: false };
-  const parts = [], version = answer.version;
-  let offset = 0;
-  for (;;) {
-    if (answer.version !== version) throw new Error(t('文件在读取时发生了变化，请重试'));
-    const bytes = base64_to_bytes(answer.data || "");
-    if (!bytes.length && offset < answer.total) throw new Error(t('文件读取失败'));
-    parts.push(bytes);
-    offset += bytes.length;
-    on_progress(offset, answer.total);
-    if (offset >= answer.total) break;
-    answer = await local_launch_request("room-media", { room_id, path, root, offset, token, ...flag });
+  const preview = !download && /\.(png|jpe?g|webp)$/i.test(path);
+  const scope = preview && attachment_cache_scope();
+  const room_prefix = `/api/rooms/${encodeURIComponent(room_id)}/project-previews/`;
+  const prefix = `${room_prefix}${root}/${encodeURIComponent(path)}/`;
+  const cached = scope && !relay_removed_paths.has(room_prefix) ? await lookup_cached_attachment(scope, prefix, true) : null;
+  const input = { room_id, path, root, token, ...(download ? { download: true } : preview ? { preview: true } : {}) };
+  const first = await local_launch_request("room-media", { ...input, offset: 0, ...(cached?.blob ? { known_preview: cached.version } : {}) });
+  if (first.url) return { url: `${local_connection?.endpoint || ""}${first.url}`, content_type: first.content_type, size: first.size, blob: false };
+  const unchanged = first.unchanged && cached?.blob && cached.version === first.preview_version;
+  const blob = unchanged ? cached.blob : await read_media_parts(first, input, on_progress);
+  if (scope && (scope !== attachment_cache_scope() || relay_removed_paths.has(room_prefix))) throw new Error(t('文件读取失败'));
+  if (!unchanged && first.preview_version && cached) keep_cached_attachment(scope, prefix + first.preview_version, blob, cached.epoch);
+  return { url: URL.createObjectURL(blob), content_type: blob.type, size: first.size, blob: true, preview: Boolean(first.preview_version) };
+}
+
+/** Assemble up to three subsequent ranges at a time; retain ordering and reject a changed file or representation. */
+async function read_media_parts(first, input, on_progress) {
+  const bytes = base64_to_bytes(first.data || ""), step = bytes.length, total = first.total;
+  if (!Number.isSafeInteger(total) || total < step || (!step && total)) throw new Error(t('文件读取失败'));
+  const parts = [bytes], count = step ? Math.ceil(total / step) : 1;
+  let next = 1, loaded = step;
+  on_progress(loaded, total);
+  async function read_next() {
+    for (let index; (index = next++) < count;) {
+      const offset = index * step;
+      const part = await local_launch_request("room-media", { ...input, offset });
+      if (part.version !== first.version || part.total !== total || part.preview_version !== first.preview_version)
+        throw new Error(t('文件在读取时发生了变化，请重试'));
+      const data = base64_to_bytes(part.data || "");
+      if (part.offset !== offset || data.length !== Math.min(step, total - offset)) throw new Error(t('文件读取失败'));
+      parts[index] = data;
+      loaded += data.length;
+      on_progress(loaded, total);
+    }
   }
-  return { url: URL.createObjectURL(new Blob(parts, { type: answer.content_type })), content_type: answer.content_type, size: answer.total, blob: true };
+  await Promise.all(Array.from({ length: Math.min(3, count - 1) }, read_next));
+  return new Blob(parts, { type: first.content_type });
 }
 
 /**
@@ -10111,7 +10183,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
     update_profile: update_admin_profile, avatar_from_file: admin_avatar_from_file, validate: validate_admin_form,
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },
-  device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
+  device: { recent_timings: () => recent_relay_times.slice(), request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, load_earlier_messages, load_messages_until, can_retract_message, identities: IDENTITIES, platform_identity: name => PLATFORM_IDENTITIES[name], display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
   set_member_access, set_member_model, set_member_prompt, read_system_prompts, save_system_prompts, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, local_page_url, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,

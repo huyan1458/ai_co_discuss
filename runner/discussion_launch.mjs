@@ -1,5 +1,5 @@
 import { ensure_global_experts_migrated, replace_global_experts, change_project_expert, project_experts } from './experts.mjs';
-import { local_settings } from './discussion_setup.mjs';
+import { detect_python, local_settings } from './discussion_setup.mjs';
 /** Shared launch configuration for an existing AI conversation and the local website. */
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -739,6 +739,68 @@ export async function room_page(home, raw, { trust = false, parts = false } = {}
 // Through the relay a media file comes whole, in parts, so another device plays at most this much.
 export const REMOTE_MEDIA_MAX_BYTES = 64 * 1024 * 1024;
 
+const PROJECT_PREVIEW_SLOTS = 12;
+const PROJECT_PREVIEW_CONCURRENCY = 2;
+const PROJECT_PREVIEW_MAX = 8 * 1024 * 1024;
+
+/** Keep completed previews in an LRU; queued and running versions share a promise until encoding finishes. */
+export function project_preview_reader(probe) {
+  const cached = new Map(), pending = new Map(), waiting = [];
+  let python, running = 0;
+  async function generate(home, key, encode) {
+    if (running === PROJECT_PREVIEW_CONCURRENCY) await new Promise(resolve => waiting.push(resolve));
+    else running++;
+    try {
+      python ??= Promise.resolve().then(() => probe(home));
+      const bytes = await encode(await python);
+      if (bytes) {
+        cached.set(key, bytes);
+        if (cached.size > PROJECT_PREVIEW_SLOTS) cached.delete(cached.keys().next().value);
+      }
+      return bytes;
+    } catch { return null; }
+    finally {
+      pending.delete(key);
+      if (waiting.length) waiting.shift()();
+      else running--;
+    }
+  }
+  return (home, key, encode) => {
+    if (cached.has(key)) {
+      const bytes = cached.get(key);
+      cached.delete(key);
+      cached.set(key, bytes);
+      return bytes;
+    }
+    if (!pending.has(key)) pending.set(key, generate(home, key, encode));
+    return pending.get(key);
+  };
+}
+
+const project_preview_bytes = project_preview_reader(home => detect_python(local_settings(home).python));
+
+async function encode_project_preview(preview_python, file) {
+  const script = join(import.meta.dirname, '..', 'backend', 'windows_thumbnail.py');
+  const fd = openSync(file, 'r');
+  let child;
+  try {
+    child = spawn(preview_python, ['-I', '-B', script], {
+      windowsHide: true, timeout: 15000, stdio: [fd, 'pipe', 'ignore'], cwd: dirname(script),
+    });
+  } finally { closeSync(fd); }
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    child.stdout.on('data', chunk => {
+      size += chunk.length;
+      if (size <= PROJECT_PREVIEW_MAX) chunks.push(chunk);
+      else child.kill();
+    });
+    child.on('error', reject);
+    child.on('close', code => resolve(code === 0 && size && size <= PROJECT_PREVIEW_MAX ? Buffer.concat(chunks) : null));
+  });
+}
+
 /**
  * One image, video or audio file of the room's project (see `project_media`). For the computer's own page it names
  * the real file, which the local site streams by a ticket and never shows the page; with `parts` (another device,
@@ -759,6 +821,22 @@ export async function room_media(home, raw, { trust = false, parts = false } = {
     throw new Error(input.download === true
       ? `文件 ${Math.ceil(media.size / 1024 / 1024)} MB，超过其他设备可下载的 ${REMOTE_MEDIA_MAX_BYTES / 1024 / 1024} MB 上限；请在这台电脑上取用，或让 AI 处理`
       : `文件 ${Math.ceil(media.size / 1024 / 1024)} MB，超过其他设备可播放的 ${REMOTE_MEDIA_MAX_BYTES / 1024 / 1024} MB 上限；请在这台电脑上打开`);
+  }
+  if (process.platform === 'win32' && input.preview === true && !input.download && /^image\/(png|jpeg|webp)$/.test(media.content_type)) {
+    const preview_version = createHash('sha256').update(JSON.stringify([file, media.version, '1440-v2'])).digest('hex');
+    if (!offset && input.known_preview === preview_version) return { ...media, preview_version, unchanged: true };
+    const bytes = await project_preview_bytes(home, preview_version, python => {
+      const ready = project_media(directory, input.path);
+      if (ready.file !== file || ready.version !== media.version) return null;
+      return encode_project_preview(python, file);
+    });
+    const current = project_media(directory, input.path);
+    if (current.file !== file || current.version !== media.version) throw new Error('文件在读取时发生了变化，请重试');
+    if (bytes && bytes.length < media.size) {
+      const content_type = bytes[0] === 0xff ? 'image/jpeg' : 'image/png';
+      return { room_id: input.room_id, root, ...media, preview_version, content_type, total: bytes.length,
+        offset, data: bytes.subarray(offset, offset + PAGE_PART_BYTES).toString('base64') };
+    }
   }
   const part = Buffer.alloc(Math.max(0, Math.min(PAGE_PART_BYTES, media.size - offset)));
   const handle = openSync(file, 'r');

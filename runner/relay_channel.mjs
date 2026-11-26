@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import timers from 'node:timers/promises';
 import { gzipSync } from 'node:zlib';
 
+import { accept_timing, remember_timing } from './relay_timing.mjs';
 import { atomic_json } from './files.mjs';
 import { network_failure, reconnect_reader } from './relay_health.mjs';
 import { t } from './i18n.mjs';
@@ -101,6 +102,8 @@ export async function seal_compressed(key, value, label) {
 function relay_read_route(payload) {
   if ((payload?.method ?? 'GET') !== 'GET' || typeof payload?.path !== 'string') return '';
   const path = payload.path.split('?', 1)[0];
+  if (/\/attachments\/[^/]+\/(content|thumbnail)$/.test(path)) return path.endsWith('/thumbnail') ? 'thumbnail' : 'attachment';
+  if (path.endsWith('/room-media')) return 'room-media';
   if (path === '/api/rooms') return 'directory';
   if (/^\/api\/rooms\/[A-Za-z0-9_-]+$/.test(path)) return 'room';
   if (/^\/api\/rooms\/[A-Za-z0-9_-]+\/messages$/.test(path)) return 'messages';
@@ -279,19 +282,51 @@ async function run_command(home, command, run) {
 
 /** Answer one relayed request: room routes and uploads go to the local website, everything else to the local entrypoint as before. */
 export async function answer_request(home, site, link, frame, { run = run_launch_command, fetcher, report, timing } = {}) {
+  const started = timing?.received_at ?? performance.now();
   const { id, envelope } = frame;
   const key = await relay_cipher(link.private_key, envelope.key);
   const sealed = await unseal(key, envelope, id);
-  let response, request = {};
+  let response, request = {}, device = null;
+  async function finish_response(value) {
+    const label = `${id}:response`;
+    let envelope = await seal_compressed(key, value, label);
+    let answer = { type: 'response', id, envelope };
+    let frame_bytes = Buffer.byteLength(JSON.stringify(answer));
+    if (frame_bytes > FRAME_MAX_BYTES) {
+      value = { status: 413, body: { error: '回应超过中转单帧上限，未能送出' } };
+      report?.({ action: request.action, route: '', status: 413 });
+      envelope = await seal_compressed(key, value, label);
+      answer = { type: 'response', id, envelope, oversized: true };
+      frame_bytes = Buffer.byteLength(JSON.stringify({ type: 'response', id, envelope }));
+    }
+    const elapsed = Math.round(performance.now() - started);
+    const action = request.action;
+    const category = action === 'room-api' ? relay_read_route(request.payload) || 'room-api'
+      : ROOM_ACTIONS.has(action) || DEVICE_ACTIONS.has(action) || ['computer-site', 'room-upload', 'room-media'].includes(action) ? action : 'other';
+    if (request.timing_version === 1 && action !== 'timing-report') {
+      // Seal the small measurement separately, after the business response has been compressed and encrypted.
+      try {
+        const diagnostic = await seal_compressed(key, { computer_ms: elapsed, category }, `${id}:timing`);
+        const extra_bytes = Buffer.byteLength(JSON.stringify(diagnostic)) + ',"timing":'.length;
+        if (frame_bytes + extra_bytes <= FRAME_MAX_BYTES) {
+          envelope.timing = diagnostic;
+          frame_bytes += extra_bytes;
+        }
+      } catch { /* A failed timing attachment must not hide a completed operation. */ }
+    }
+    if (action !== 'timing-report') {
+      const measurement = timing ?? {};
+      measurement.frame_bytes = frame_bytes;
+      remember_timing(home, site, device, id, category, elapsed, value.status, measurement);
+    }
+    return answer;
+  }
   // An external member's request (or an invite being redeemed) goes to the external gateway alone: it never reaches the
   // device actions, the local entrypoint or the bridge, and never gains this computer's owner credential.
   if (is_external_request(sealed)) {
     ({ request, response } = await answer_external(home, { machine_id: link.id, link, fetcher, on_change: () => sync_remote_launches(home) }, id, sealed));
     report?.({ action: request.action, route: '', status: response.status });
-    const answer = { type: 'response', id, envelope: await seal_compressed(key, response, `${id}:response`) };
-    if (JSON.stringify(answer).length <= FRAME_MAX_BYTES) return answer;
-    return { type: 'response', id, oversized: true,
-      envelope: await seal_compressed(key, { status: 413, body: { error: '回应超过中转单帧上限，未能送出' } }, `${id}:response`) };
+    return finish_response(response);
   }
   try {
     // Only a paired device's signed request runs; an unpaired browser may only prove a pairing code.
@@ -300,8 +335,9 @@ export async function answer_request(home, site, link, frame, { run = run_launch
     const { action, payload, target } = request;
     if (timing && action === 'room-api' && RELAY_READ_ID.test(id)) timing.route = relay_read_route(payload);
     claim_relayed_command(home, id, request.sent_at);
-    const device = opened.device_id;
-    response = DEVICE_ACTIONS.has(action) ? await device_command(home, { site, machine_id: link.id, device_id: device, on_change: () => sync_remote_launches(home) }, action, payload)
+    device = opened.device_id;
+    accept_timing(home, site, device, request.timing_reports);
+    response = action === 'timing-report' && device ? { status: 200, body: {} } : DEVICE_ACTIONS.has(action) ? await device_command(home, { site, machine_id: link.id, device_id: device, on_change: () => sync_remote_launches(home) }, action, payload)
       : action === 'computer-site' ? { status: 200, body: { site: local_origin(home) } }
       : action === 'room-api' ? await room_api(home, site, payload, { fetcher, device, timing })
       : action === 'room-upload' ? await room_upload(home, site, payload, { fetcher })
@@ -309,17 +345,13 @@ export async function answer_request(home, site, link, frame, { run = run_launch
     if (timing?.local_request_at !== undefined) timing.local_response_at = performance.now();
   } catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}), ...(error.error_text ? { error_text: error.error_text } : {}) } }; }
   // Remote writes go to this computer's audit log: kind, route, device and outcome, never content. Reads are not logged.
-  if (request.action && !(request.action === 'room-api' && (request.payload?.method || 'GET') === 'GET') && !DEVICE_ACTIONS.has(request.action) && request.action !== 'computer-site') {
+  if (request.action && request.action !== 'timing-report' && !(request.action === 'room-api' && (request.payload?.method || 'GET') === 'GET') && !DEVICE_ACTIONS.has(request.action) && request.action !== 'computer-site') {
     audit(home, { event: 'command', action: request.action, route: typeof request.payload?.path === 'string' ? request.payload.path.split('?')[0] : '',
       device: sealed.device_id || null, status: response.status });
   }
   // Only what kind of request it was and how it ended: never its content or query.
   report?.({ action: request.action, route: typeof request.payload?.path === 'string' ? request.payload.path.split('?')[0] : '', status: response.status });
-  const answer = { type: 'response', id, envelope: await seal_compressed(key, response, `${id}:response`) };
-  if (JSON.stringify(answer).length <= FRAME_MAX_BYTES) return answer;
-  report?.({ action: request.action, route: typeof request.payload?.path === 'string' ? request.payload.path.split('?')[0] : '', status: 413 });
-  return { type: 'response', id, oversized: true,
-    envelope: await seal_compressed(key, { status: 413, body: { error: '回应超过中转单帧上限，未能送出' } }, `${id}:response`) };
+  return finish_response(response);
 }
 
 /** Pass the local website's change notices to the devices while the relay is connected. */
@@ -516,10 +548,10 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
           const { oversized, ...frame_out } = answer;
           if (open) {
             const outgoing = JSON.stringify(frame_out);
+            timing.queued_before_send = socket.bufferedAmount;
             socket.send(outgoing);
             if (timing.route) {
               timing.sent_at = performance.now();
-              timing.frame_bytes = Buffer.byteLength(outgoing);
               timing.buffered_bytes = socket.bufferedAmount || 0;
             }
           }

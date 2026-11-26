@@ -253,7 +253,7 @@ const reader = use_read_aloud({ bridge, container: () => markdown_scroll.value, 
   title: () => view.value.room?.title || "" });
 const can_read = computed(() => speech_ready.value && format.value === "markdown" && !source.value && Boolean(preview.value?.text));
 /** Read the entire archive only after a download is requested. */
-async function download_zip() {
+async function download_current_file() {
   const item = tab.value;
   try {
     if (!item.attachment) return await bridge.download_project_file(item.room_id, item.path, item.root ?? 0);
@@ -274,7 +274,8 @@ const file_menu = computed(() => {
     { label: t('恢复默认字号（当前 {value1}%）', { value1: Math.round(font_scale.value * 100) }), icon: "i-lucide-rotate-ccw", disabled: font_scale.value === 1, onSelect: keep_open(() => change_font_scale(0)) },
   ]);
   const rest = [];
-  if (document_kind.value === "zip") rest.push({ label: t("下载"), icon: "i-lucide-download", onSelect: download_zip });
+  if (tab.value?.media?.preview) rest.push({ label: t("查看原图"), icon: tab.value.loading_original ? "i-lucide-loader-circle" : "i-lucide-image", disabled: tab.value.loading_original, onSelect: show_original });
+  if (document_kind.value === "zip") rest.push({ label: t("下载"), icon: "i-lucide-download", onSelect: download_current_file });
   if (showing_source.value) rest.push({ label: wrap.value ? t('关闭自动换行') : t('自动换行'), icon: "i-lucide-wrap-text", onSelect: () => { wrap.value = !wrap.value; } });
   if (can_edit.value) rest.push({ label: t('编辑'), icon: "i-lucide-pencil", disabled: tab.value.starting_edit, onSelect: () => start_edit() });
   if (can_read.value) rest.push(reader.state.reading ? { label: t('停止朗读'), icon: "i-lucide-square", onSelect: () => reader.stop() } : { label: t('朗读'), icon: "i-lucide-volume-2", onSelect: () => read_file() });
@@ -359,14 +360,23 @@ async function load_page(item, request) {
 }
 
 /** Give a media tab its playable address: a stream of the computer's website, or the whole file through the relay. */
-async function load_media(item, request) {
-  release_media(item);
+async function show_original() {
+  const item = tab.value;
+  if (!item?.media?.preview || item.loading_original) return;
+  item.loading_original = true;
+  try { await load_media(item, ++item.request, true); }
+  finally { item.loading_original = false; }
+}
+
+async function load_media(item, request, original = false) {
+  if (!original) release_media(item);
   Object.assign(item, { media_error: "", media_progress: 0 });
   try {
     const media = await bridge.read_room_media(item.room_id, item.path, item.root || 0, (loaded, total) => {
       if (item.request === request) item.media_progress = total ? loaded / total : 0;
-    });
+    }, original);
     if (item.request !== request) { if (media.blob) URL.revokeObjectURL(media.url); return; }
+    if (original) release_media(item);
     item.media = media;
     if (item.data) item.data.size = media.size;
   } catch (error) { if (item.request === request) item.media_error = error.message; }
@@ -1196,7 +1206,8 @@ onBeforeUnmount(() => {
             <button type="button" class="project-editor-font-value" :title="t('恢复默认字号')" :aria-label="t('恢复默认字号')" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
             <button type="button" :title="t('放大字号')" :aria-label="t('放大字号')" :disabled="font_scale >= FONT_SCALE_MAX" @click="change_font_scale(1)"><UIcon name="i-lucide-a-arrow-up" /></button>
           </div>
-          <UButton v-if="document_kind === 'zip'" icon="i-lucide-download" color="neutral" variant="ghost" size="sm" :title="t('下载')" :aria-label="t('下载')" @click="download_zip" />
+          <UButton v-if="tab?.media?.preview" icon="i-lucide-image" color="neutral" variant="ghost" size="sm" :title="t('查看原图')" :aria-label="t('查看原图')" :loading="tab.loading_original" :disabled="tab.loading_original" @click="show_original" />
+          <UButton v-if="document_kind === 'zip'" icon="i-lucide-download" color="neutral" variant="ghost" size="sm" :title="t('下载')" :aria-label="t('下载')" @click="download_current_file" />
           <UButton v-if="can_edit" icon="i-lucide-pencil" color="neutral" variant="ghost" size="sm" :title="t('编辑')" :aria-label="t('编辑此文件')" :loading="tab.starting_edit" :disabled="tab.starting_edit" @click="start_edit" />
           <UButton v-if="showing_source" icon="i-lucide-wrap-text" color="neutral" :variant="wrap ? 'soft' : 'ghost'" size="sm" :aria-pressed="wrap"
             :title="wrap ? t('关闭自动换行') : t('自动换行')" :aria-label="t('自动换行')" @click="wrap = !wrap" />
@@ -1209,7 +1220,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="project-editor-window-actions">
-          <UDropdownMenu v-if="folded_actions && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('文件操作')" :title="t('字号、朗读、显示方式')" :loading="tab?.starting_edit" /></UDropdownMenu>
+          <UDropdownMenu v-if="folded_actions && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('文件操作')" :title="t('字号、朗读、显示方式')" :loading="tab?.starting_edit || tab?.loading_original" /></UDropdownMenu>
           <UButton v-if="can_dock" :icon="docked ? 'i-lucide-picture-in-picture-2' : 'i-lucide-panel-right'" color="neutral" variant="ghost" size="sm" :title="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" :aria-label="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" @click="toggle_dock" />
           <UButton :icon="narrow ? 'i-lucide-chevron-down' : 'i-lucide-minus'" color="neutral" variant="ghost" size="sm" :title="t('收起到屏幕边缘（手机上也可下拉收起）')" :aria-label="t('收起预览')" @click="fold" />
           <UButton v-if="!narrow" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="shown_tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" :aria-label="shown_tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" @click="close_all" />
@@ -1236,7 +1247,7 @@ onBeforeUnmount(() => {
         <div v-else-if="tab?.error && !preview" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.error }}</p><UButton :label="t('重试')" color="neutral" variant="outline" class="pb-action" size="sm" @click="load(tab)" /></div>
         <template v-else-if="media_kind && !source">
           <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton :label="t('重试')" color="neutral" variant="outline" class="pb-action" size="sm" @click="load(tab)" /></div>
-          <MediaViewer v-else-if="tab.media" :kind="media_kind" :url="tab.media.url" :name="preview_name" />
+          <MediaViewer v-else-if="tab.media" :kind="media_kind" :url="tab.media.url" :name="preview_name" :save-original="tab.media.preview ? download_current_file : null" />
           <PreviewLoading v-else :label="tab.media_progress ? t('正在经电脑读取… {value1}%', { value1: Math.round(tab.media_progress * 100) }) : t('正在打开…')" :progress="tab.media_progress || 0" />
         </template>
         <template v-else-if="office_kind">
@@ -1315,7 +1326,7 @@ onBeforeUnmount(() => {
           <span>{{ t('{value1} 行', { value1: line_count }) }}</span><span class="project-editor-encoding">{{ encoding_label }}</span>
         </template>
         <span v-if="preview">{{ file_size(preview.size) }}</span>
-        <span>{{ preview_type[0] }}</span>
+        <span>{{ tab?.media?.preview ? t('缩小图') : preview_type[0] }}</span>
       </footer>
      </div>
     </template>

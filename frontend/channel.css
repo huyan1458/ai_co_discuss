@@ -146,8 +146,13 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-room-content { display: flex; min-width: 0; align-items: center; }
 .channel-room-content > .channel-room-select { flex: 1; min-width: 0; }
 /* Out of flow in the left gutter: sits one level inside folders, or aligned with folder chevrons when unfiled. */
-.channel-child-toggle { position: absolute; left: -18px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 18px; height: 24px; border-radius: 4px; color: var(--ui-text-muted); cursor: pointer; }
+.channel-child-toggle { position: absolute; left: -18px; top: 0; bottom: 0; display: grid; place-items: center; width: 18px; border-radius: 8px 0 0 8px; color: var(--ui-text-muted); cursor: pointer; }
 .channel-child-toggle:hover { color: var(--ui-text-toned); background: color-mix(in srgb, var(--ui-text) 7%, transparent); }
+/* A hovered or selected row's background takes in its toggle, as a folder row's does its chevron (user 2026-11-26, #13600).
+   Painted only up to the row's edge: where the toggle overlaps the row, the translucent fills would otherwise stack. */
+.channel-room-row:has(.channel-child-toggle) { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+@media (hover: hover) { .channel-room-row:hover .channel-child-toggle { background: linear-gradient(to right, var(--channel-ghost-hover) calc(100% - var(--channel-child-toggle-overlap, 0px)), transparent 0); } }
+.channel-room-row.active .channel-child-toggle { background: linear-gradient(to right, var(--channel-ghost-active) calc(100% - var(--channel-child-toggle-overlap, 0px)), transparent 0); }
 .channel-child-toggle [class*="icon"] { width: 14px; height: 14px; }
 .channel-room-row.drag-source, .channel-folder-section.drag-source { opacity: .45; }
 .channel-room-row.is-destroying { opacity: .45; pointer-events: none; }
@@ -224,7 +229,7 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 @media (max-width: 700px), (hover: none), (pointer: coarse) {
   .channel-room-actions .channel-room-archive { display: none; }
   .channel-room-actions { min-width: 32px; }
-  .channel-child-toggle { left: -22px; width: 22px; height: 28px; }
+  .channel-child-toggle { left: -22px; width: 22px; }
   :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button { width: 32px; height: 32px; padding: 9px; }
 }
 /* Sorted by recent activity a room has no place to be dragged to within its folder, so the grip gives its width back. */
@@ -249,9 +254,9 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
    without a toggle; the toggle keeps its center under the folder icon, 30px in (user 2026-11-25, #11361). */
 @media (max-width: 700px), (hover: hover) and (pointer: fine) {
   .channel-room-list.is-recent .channel-folder-rooms { padding-left: 34px; }
-  .channel-room-list.is-recent .channel-folder-rooms .channel-child-toggle { left: -13px; }
+  .channel-room-list.is-recent .channel-folder-rooms .channel-child-toggle { left: -13px; --channel-child-toggle-overlap: 5px; }
 }
-@media (max-width: 700px) { .channel-room-list.is-recent .channel-folder-rooms .channel-child-toggle { left: -15px; } }
+@media (max-width: 700px) { .channel-room-list.is-recent .channel-folder-rooms .channel-child-toggle { left: -15px; --channel-child-toggle-overlap: 7px; } }
 .channel-folder-heading { display: flex; width: 100%; min-width: 0; align-items: center; gap: 5px; padding: 7px 4px; color: var(--ui-text-muted); font-size: var(--channel-nav-text); text-align: left; user-select: none; }
 .channel-folder-heading[data-drag-handle] { cursor: grab; touch-action: pan-y; -webkit-user-select: none; -webkit-touch-callout: none; }
 .channel-folder-section.drop-before::before, .channel-folder-section.drop-after::after { content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--channel-accent); pointer-events: none; }
