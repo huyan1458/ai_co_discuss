@@ -190,7 +190,7 @@ ${t("host-control 主持人代房主控制房间，须房主已为本房间勾�
         ${t("新建一个房间分担工作：成员用本机已配置的软件，项目权限默认只读，目录只能是本房间项目目录或其子目录；不填 --host 时由与你同款的专家主持；")}
         ${t("新房间复制本房间的智能调度、生图、API 上限、连续派活上限与主持人权限（不含新建房间），本房间可新建的数量有上限；两边各留一张链接卡片；重试沿用同一 --submission-id；")}
         ${t("rooms 查看父子房间；room list --query 标题片段 查找站点中的其他房间。")}
-        ${t("room-post --room 房间编号 (--text 正文 | --body-file FILE) [--expect reply|none] [--reply-to 消息编号] [--interrupt] [--submission-id ID] 向同站点房间的主持人发言；只有父房间可打断子房间。")}
+        ${t("room-post --room 房间编号 (--text 正文 | --body-file FILE) [--expect reply|none] [--reply-to 消息编号] [--interrupt] [--submission-id ID] 向同站点房间的主持人发言。回复本次执行的跨房请求即完成该请求；只有父房间可打断子房间。")}
   ${t("不开放：批准超出上限的轮数、放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己的其他操作。")}
 workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库，卡片按声明的项目权限保存；库里已有同 ID 的工作流时须表明来意：--revision 写读取时的修订号（库在那之后被改过就拒绝，什么都不写），或 --overwrite 明确整份覆盖，两样都没有就拒绝。写法见 workflow-creator 技能。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
@@ -2773,7 +2773,7 @@ async function host_room(home, access_file) {
   if (!host || !roster.some(member => member.name === host && member.role === 'host' && member.status === 'active')) throw new Error('只有本房间的主持人能运行此命令');
   // How the room shows each member (the owner's label, else its platform nickname), so the host names them as it sees them.
   const labels = { ...Object.fromEntries((room.members || []).map(member => [member.name, member.label])), ...room.labels };
-  return { path, config, roster, labels, host, folder_id: room.folder_id, max_rounds: room.free?.max_rounds };
+  return { path, config, roster, labels, host, execution_id: access.execution_id, folder_id: room.folder_id, max_rounds: room.free?.max_rounds };
 }
 
 const IMAGE_ACTIONS = { generate: 'generate_image', edit: 'edit_image' };
@@ -3265,10 +3265,11 @@ async function host_room_post(ctx, o) {
   const label = ctx.labels[host] || host;
   const result = await ctx.call('/host-room-post', { target_room_id: o.room, text: o.text, submission_id,
     interrupt: Boolean(o.interrupt), expect: o.expect || (o.reply_to ? 'none' : 'reply'),
-    ...(o.reply_to !== undefined ? { reply_to: Number(o.reply_to) } : {}),
+    ...(o.reply_to !== undefined ? { reply_to: Number(o.reply_to), execution_id: ctx.execution_id } : {}),
     limit: launch_settings(home).create_preferences?.relay_rounds ?? 0 });
   const receipt = { room_id: o.room, message_id: result.message?.id ?? null, queued: result.queued ?? null,
     interrupted: Boolean(result.interrupted), ...(result.reason ? { reason: result.reason } : {}) };
+  if (result.answer_id) return { ...receipt, answer_id: result.answer_id, submission_id };
   const key = createHash('sha256').update(JSON.stringify([o.room, submission_id])).digest('hex');
   try {
     await ctx.call('/room-relay-sent', { target_room_id: o.room, target_message_id: receipt.message_id,
@@ -3339,7 +3340,7 @@ const HOST_CONTROLS = {
  */
 export async function host_control(home, action, options, launch_options = {}) {
   if (!Object.hasOwn(HOST_CONTROLS, action || '')) throw new Error(`操作须为 ${Object.keys(HOST_CONTROLS).join('、')} 之一`);
-  const { config, roster, labels, host, folder_id, max_rounds } = await host_room(home, options.access_file);
+  const { config, roster, labels, host, execution_id, folder_id, max_rounds } = await host_room(home, options.access_file);
   const needed = HOST_ACTION_ITEMS[action];
   if (needed && !host_allowed(config, needed)) throw new Error(host_refusal(needed));
   if (options.body_file && ['create-room', 'room-post'].includes(action)) {
@@ -3357,7 +3358,7 @@ export async function host_control(home, action, options, launch_options = {}) {
   const headers = { 'User-Agent': `AI-CoDiscuss-host:${host}`, 'X-Acting-Member-Token': config.members[host].token };
   const owner = { site: config.site, room_id: config.room, token: config.token };
   const call = (path, body) => site_request(config.site, `/api/rooms/${config.room}${path}`, config.token, body, headers);
-  const ctx = { home, config, roster, labels, host, headers, owner, call, launch_options, folder_id, max_rounds };
+  const ctx = { home, config, roster, labels, host, execution_id, headers, owner, call, launch_options, folder_id, max_rounds };
   const result = await HOST_CONTROLS[action](ctx, options);
   await record_host_action(ctx, action, options, result);
   return result;

@@ -225,8 +225,10 @@ export function free_task_text({ name, discussion, discussion_request, profile, 
   const route = workflow ? '本房间启用了工作流：派活或改文件之前，先读 workflow.skill_path，把这次请求对照主线和 workflow.sub_workflows 每一项的 description；命中就读它的 SKILL.md 并照做，不问要不要用，回答开头用一句话写明走的哪条；都不命中就按普通请求处理，回答里不必说明。' : '';
   // A message with files is never a mere greeting: the quick path would skip them (2026-11-14, #3143); nor is a
   // hand-back, notice, Goal or host assignment, so the shortcut only goes with a user's own message (#3145 四.5).
-  const prompt = files || !from_user(requests)
-    ? `${opening}先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${route}${read_rule}${files}`
+  const relay_commands = requests.filter(request => request.relay?.reply)
+    .map(request => `${request.relay.reply} — ${request.relay.note}`).join('\n');
+  const prompt = relay_commands || files || !from_user(requests)
+    ? `${relay_commands ? relay_commands + '\n' : ''}${opening}先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${route}${read_rule}${files}`
     : `${opening}${quick}其他请求先读任务文件 ${task_path}，按其中列出的技能处理并提交一次回答。${route}${read_rule}`;
   return { instructions, prompt };
 }

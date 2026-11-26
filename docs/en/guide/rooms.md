@@ -76,7 +76,7 @@ Rooms created by a host inherit its folder. Select the arrow to the left of the 
 
 ### 6. Contact another room’s host
 
-Give your host the target room’s title, ID or link and describe the work. On a computer, drag a room from the left sidebar onto the messages or the message box to insert “"Room title" (room ID)” at the cursor, so the host can find it by its ID. When the other host answers, the room automatically sends the result back and wakes your host. If the other host delegates, it sends the final result back manually. A delivery failure appears in the room that produced the answer. A notification needs no reply.
+Give your host the target room’s title, ID or link and describe the work. On a computer, drag a room from the left sidebar onto the messages or the message box to insert “"Room title" (room ID)” at the cursor, so the host can find it by its ID. The other host answers with the reply command in its task. Sending or queuing the reply completes the request and keeps its full text on the sending card. If the other host delegates, it sends the final result back manually. A notification needs no reply.
 
 A message from another room goes to this room's current host: an idle host takes it at once even while other members work; it queues only while the host is busy. The outgoing message shows whether it is queued, delivered or answered. Open it to read the original. Only a parent can interrupt a child. Set the linked-room message limit under Settings → Room preferences (0 means unlimited). The count resets when you speak in either room. The Parent and child rooms section shows these relationships even after a room is detached in the directory.
 

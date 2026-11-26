@@ -20,7 +20,7 @@ const REPLACE = { overwrite: true };
 import { API_PROVIDERS, save_api_key } from '../runner/discussion_api.mjs';
 import { read_project_files } from '../runner/project_files.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
-import { FreeRoomRunner } from '../runner/free_runner.mjs';
+import { FreeRoomRunner, free_task_files, user_request_texts } from '../runner/free_runner.mjs';
 import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
 import { host_permissions } from '../runner/host_permissions.mjs';
 import { save_site_connection } from '../runner/discussion_local.mjs';
@@ -1412,6 +1412,17 @@ test('an existing room host sends directly to an unrelated room', async t => {
   const control = (action, options = {}) => host_control(f.home, action, { access_file, room: other.room, ...options });
   assert.deepEqual((await control('rooms')).links, []);
   await assert.rejects(api(first, '/host-room-post', { target_room_id: other.room, text: '冒名' }), /403/);
+  const original = await control('room-post', { text: '请答复' });
+  const host = (await api(other, '')).free.members[0];
+  const work = await api(other, '/executions', { member_id: host.id, client_id: randomUUID() });
+  await user_request_texts(other, work);
+  const task = free_task_files(other, host, work, {}, {});
+  const relay = JSON.parse(readFileSync(task.task_path, 'utf8')).requests[0].relay;
+  assert.ok(relay.reply.includes(`room-post --room ${first.room} --reply-to ${original.message_id} --body-file`));
+  assert.ok(task.prompt.includes(relay.reply));
+  const answer = await host_control(f.home, 'room-post', { access_file: task.access_path,
+    room: first.room, reply_to: original.message_id, text: '答复' });
+  assert.equal((await api(other, `/messages/${answer.answer_id}`)).execution_id, work.id);
   const receipt = await control('room-post', { text: '通知', expect: 'none' });
   assert.equal((await api(other, `/messages/${receipt.message_id}`)).relay_expect, 'none');
   writeFileSync(join(f.home, 'local-settings.json'), JSON.stringify({ port: Number(new URL(f.site).port) }));

@@ -274,7 +274,7 @@ export async function user_request_texts(config, execution) {
           request.relay = { from_room: message.relay_room, title: message.relay_title, host: message.relay_host,
             relation: message.relay_relation, expect: message.relay_expect || 'reply', message_id,
             note: t(message.relay_expect === 'none' ? '这是通知，读完即止，不用回传。'
-              : '照常回答，程序会自动回传给来源房间。', {}, process.env.CODISCUSS_LANG || 'zh-CN') };
+              : '用这条命令回答，发出即完成本次请求。', {}, process.env.CODISCUSS_LANG || 'zh-CN') };
         }
       } else if (message.author === '用户' && message.text) texts.push(message.text);
     } catch { /* The host still reads the message itself. */ }
@@ -416,6 +416,11 @@ export function free_task_files(config, member, execution, binding, { session = 
   const bound_access = process_access && !inbox && Boolean(adapter?.capabilities.access_env);
   const messages = execution.requests.map(item => `#${item.message_id}`).join('、');
   const requests = execution.requests || [];
+  for (const { relay } of requests) {
+    if (relay?.expect !== 'reply') continue;
+    const access = bound_access ? '' : ` --access-file "${access_path}"`;
+    relay.reply = `${cli} launch host-control room-post --room ${relay.from_room} --reply-to ${relay.message_id} --body-file "${t('回答.md', {}, process.env.CODISCUSS_LANG || 'zh-CN')}"${access}`;
+  }
   const discussion_request = requests.find(item => item.session_request_id && ['discuss', 'discuss_host'].includes(item.purpose)) || null;
   const direct_question = Boolean(session?.status === 'active' && requests.some(item => item.purpose === 'ask'));
   const { instructions, prompt } = free_task_text({ name: member.label || member.name, role: member.role, discussion: direct_question,

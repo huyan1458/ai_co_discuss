@@ -1,5 +1,4 @@
 {
-  "回答 #{answer} 回传到房间 {room} 失败：{reason}": "Could not return answer #{answer} to room {room}: {reason}",
   "expect 须为 reply 或 none": "expect must be reply or none",
   "只能回复对方发来的、需要回传的消息": "You can only reply to a message from the other host that requested a reply",
   "找不到关联申请": "Room link request not found",
@@ -95,6 +94,7 @@
   "附件已随消息发出或正在排队，不能撤下": "This attachment was already sent with a message or is queued, so it cannot be taken back",
   "附件已用于其他消息，或不属于本次实际提交者": "Attachment belongs to another message or another actual submitter",
   "主持说明不能声明评审授权、依次接力或申请轮数；请在派活时提交": "Host notes cannot grant review access, relay work or request rounds; submit those when assigning work",
+  "这个请求已回答": "This request has already been answered",
   "这个提交编号已被另一条内容使用，请为新发言生成新编号": "This submission ID was used for different content; generate a new ID for a new message",
   "手动主持说明须关联有效的主持请求 request_ids": "Manual host notes must link valid host request_ids",
   "主持说明只能关联当前有效的主持请求": "Host notes can only link currently valid host requests",

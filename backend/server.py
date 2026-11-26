@@ -56,7 +56,7 @@ from .visual_fences import fold_message_visuals
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label_text, is_ai, is_participant
 from .message_queue import drain as drain_queue, enqueue, enqueue_share, queue_action, queue_split, queue_view
 from .room_import import import_room, imported_attachment
-from .free_room import answered_chain, tell_owner, save_relay_receipt
+from .free_room import save_relay_receipt
 from .room_links import list_links
 from .free_room import require_owner_or_host
 from .runtime import (begin_write, limit_values, owner_proxy_token, require_owner, token_hash,
@@ -563,8 +563,6 @@ def init_database(database, seed=True):
                 connection.execute("ALTER TABLE message_relays ADD COLUMN member TEXT NOT NULL DEFAULT ''")
             connection.execute("DELETE FROM room_links WHERE relation='peer'")
             relay_columns = {row[1] for row in connection.execute("PRAGMA table_info(message_relays)")}
-            if "relay_limit" not in relay_columns:
-                connection.execute("ALTER TABLE message_relays ADD COLUMN relay_limit INTEGER NOT NULL DEFAULT 0")
             if "expect" not in relay_columns:
                 connection.execute("ALTER TABLE message_relays ADD COLUMN expect TEXT NOT NULL DEFAULT 'reply'")
             if "reply_to" not in relay_columns:
@@ -2725,8 +2723,6 @@ def append_free_message(connection, room, payload, actor):
         apply_mode_command(connection, room_id, cursor.lastrowid, mode_command)
     else:
         after_free_message(connection, room_id, cursor.lastrowid, actor, payload)
-        if actor != "用户" and actor["role"] == "host":
-            return_host_answer(connection, room_id, cursor.lastrowid, actor, payload)
     if payload.get("proactive") is not True:
         complete_session_requests(connection, room_id, payload, actor, cursor.lastrowid)
     saved_message = connection.execute(f"{MESSAGE_QUERY} WHERE messages.id=?", (cursor.lastrowid,)).fetchone()
@@ -2734,45 +2730,6 @@ def append_free_message(connection, room, payload, actor):
         enqueue_share(connection, room_id, queued_share, cursor.lastrowid, waiting)
         return {"message": message_with_attachments(connection, saved_message), "duplicate": False, "queue": queue_view(connection, room_id)}
     return {"message": message_with_attachments(connection, saved_message), "duplicate": False}
-
-
-def return_host_answer(connection, room_id, answer_id, host, payload):
-    """Return direct answers to incoming relay requests in the same transaction."""
-    if any(payload.get(field) for field in ("to", "continue", "keep_working", "detach")):
-        return
-    origins = connection.execute("""SELECT DISTINCT m.* FROM member_requests r JOIN message_relays m
-        ON m.message_id=r.message_id WHERE r.answer_id=? AND m.expect='reply'""", (answer_id,)).fetchall()
-    for origin in origins:
-        original = origin["message_id"]
-        key = f"relay-answer-{original}-{answer_id}"
-        connection.execute("SAVEPOINT return_answer")
-        try:
-            forward_host_answer(connection, room_id, origin, host, (payload["text"], key))
-        except (ValueError, LookupError, PermissionError, FileExistsError, sqlite3.IntegrityError) as error:
-            connection.execute("ROLLBACK TO return_answer")
-            tell_owner(connection, room_id, Text("回答 #{answer} 回传到房间 {room} 失败：{reason}",
-                       answer=answer_id, room=origin["source_room_id"], reason=str(error)), key, original)
-        finally:
-            connection.execute("RELEASE return_answer")
-
-
-def forward_host_answer(connection, room_id, origin, host, answer):
-    """Deliver or queue the attributed reply and leave an outgoing receipt."""
-    target = origin["source_room_id"]
-    room = connection.execute("""SELECT rooms.id,COALESCE(d.archived,0) AS archived FROM rooms
-        LEFT JOIN room_directory d ON d.room_id=rooms.id WHERE rooms.id=?""", (target,)).fetchone()
-    if not room:
-        raise LookupError(Text("房间不存在"))
-    if not connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND status='active' AND role='host'", (target,)).fetchone():
-        raise FileExistsError(Text("房间没有在场的主持人，无法继续"))
-    text, key = answer
-    label = member_display_names(connection, room_id)[host["name"]]
-    relay = dict(room_id=room_id, host=label, member=host["name"], expect="none", reply_to=origin["message_id"], limit=origin["relay_limit"])
-    result = append_free_message(connection, room, dict(author="用户", text=text, submission_id=key,
-                                 queue=True, relay=relay), "用户")
-    save_relay_receipt(connection, room_id, dict(target_room_id=target, text=text, host=label, member=host["name"],
-                       submission_id="sent-" + key, target_submission_id=key, queued_id=result.get("queued"),
-                       target_message_id=(result.get("message") or {}).get("id")))
 
 
 def append_free_moderation(connection, room, payload, actor):
@@ -2883,6 +2840,60 @@ def append_message(connection, room_id, payload, actor):
     message_values(payload)
     begin_write(connection)
     room = require_room(connection, room_id)
+    return append_room_message(connection, room, payload, actor)
+
+
+def post_host_relay(connection, host, target, payload, execution_id):
+    """Send a cross-room message and bind its local receipt when it answers this host's request."""
+    incoming = payload["relay"]
+    room_id = incoming["room_id"]
+    if execution_id is not None and type(execution_id) is not int:
+        raise ValueError(Text("成员回答须关联本次执行编号 execution_id"))
+    payload["text"] = message_values(payload)[1]
+    begin_write(connection)
+    room = require_room(connection, target)
+    begin_write(connection)
+    request = connection.execute("""SELECT r.id,r.answer_id,m.submission_id,m.text,s.target_message_id,s.queued_id,s.interrupted FROM member_requests r
+        JOIN message_relays relay ON relay.message_id=r.message_id
+        LEFT JOIN messages m ON m.id=r.answer_id LEFT JOIN room_relay_sends s ON s.message_id=r.answer_id
+        WHERE r.room_id=? AND r.member_id=? AND r.execution_id=? AND r.message_id=?
+          AND relay.source_room_id=? AND relay.expect='reply'""",
+        (room_id, host["id"], execution_id, incoming.get("reply_to"), target)).fetchone()
+    if not request:
+        return append_room_message(connection, room, payload, "用户")
+    # Use the CLI's existing receipt key so a retry produces the same card.
+    signature = json.dumps([target, payload["submission_id"]], separators=(",", ":"), ensure_ascii=False)
+    key = "sent-" + hashlib.sha256(signature.encode()).hexdigest()
+    answer = {"execution_id": execution_id, "text": payload["text"]}
+    if request["answer_id"]:
+        if request["submission_id"] != key:
+            raise FileExistsError(Text("这个请求已回答"))
+        if request["text"] != payload["text"]:
+            raise FileExistsError(Text("这个提交编号已被另一条内容使用，请为新发言生成新编号"))
+        delivery = ({"message": {"id": request["target_message_id"]}} if request["target_message_id"]
+                    else {"queued": request["queued_id"]})
+        return {**delivery, "answer_id": request["answer_id"], "interrupted": bool(request["interrupted"])}
+    check_answer(connection, room_id, host, answer)
+    incoming["expect"] = "none"
+    result = append_room_message(connection, room, payload, "用户")
+    sent = result.get("message") or {}
+    if sent and sent.get("relay_reply_to") != incoming["reply_to"]:
+        raise FileExistsError(Text("这个提交编号已被另一条内容使用，请为新发言生成新编号"))
+    receipt = save_relay_receipt(connection, room_id, dict(target_room_id=target, host=incoming["host"],
+        member=host["name"], text=payload["text"], submission_id=key, target_submission_id=payload["submission_id"],
+        target_message_id=(result.get("message") or {}).get("id"), queued_id=result.get("queued"),
+        interrupted=result.get("interrupted", False)))
+    # Other questions bundled in this execution still need their own answer.
+    connection.execute("""UPDATE member_requests SET status='pending',execution_id=NULL
+        WHERE execution_id=? AND status='delivering' AND id<>?""", (execution_id, request["id"]))
+    after_free_message(connection, room_id, receipt["message_id"], host, answer)
+    drain_room_queue(connection, room_id)
+    return {**result, "answer_id": receipt["message_id"]}
+
+
+def append_room_message(connection, room, payload, actor):
+    """Append to a resolved room under the current write lock."""
+    room_id = room["id"]
     if not payload.get("relay"):
         return append_free_message(connection, room, payload, actor)
     if room["archived"]:
@@ -4462,11 +4473,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             relay.update(room_id=room_id, member=host["name"], host=member_display_names(connection, room_id)[host["name"]])
             payload = dict(author="用户", text=body.get("text"), submission_id=body.get("submission_id"),
                            interrupt=body.get("interrupt", False), relay=relay)
-            result = append_message(connection, target, payload, "用户")
+            result = post_host_relay(connection, host, target, payload, body.get("execution_id"))
             drain_room_queue(connection, target)
             connection.commit()
             self.server.hub.notify_update(target)
-            receipt = {key: result[key] for key in ("queued", "interrupted", "reason") if key in result}
+            if result.get("answer_id"):
+                self.server.hub.notify_update(room_id)
+            receipt = {key: result[key] for key in ("queued", "interrupted", "reason", "answer_id") if key in result}
             if result.get("message"):
                 receipt["message"] = {"id": result["message"]["id"]}
             return self.respond(receipt)

@@ -138,7 +138,6 @@ CREATE TABLE IF NOT EXISTS message_relays (
     message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
     source_room_id TEXT NOT NULL,
     expect TEXT NOT NULL DEFAULT 'reply',
-    relay_limit INTEGER NOT NULL DEFAULT 0,
     reply_to INTEGER,
     host TEXT NOT NULL,
     member TEXT NOT NULL DEFAULT ''

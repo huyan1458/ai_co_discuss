@@ -46,3 +46,6 @@ components.d.ts
 wrangler.local.jsonc
 .DS_Store
 Thumbs.db
+
+# Test runs leave temporary folders here (some unreadable by git).
+.test-tmp/

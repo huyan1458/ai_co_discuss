@@ -2,6 +2,11 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.33 (2026-11-25 23:39)
+
+- Changed: A request from another room is complete once its answer is sent, and the card sent back keeps the full text.
+- Changed: When a member's background work ends, its card sums up how many tasks ended and how many failed.
+
 ## 0.5.32 (2026-11-25 22:37)
 
 - Changed: When another room asks this room's host for something, the answer goes back to that room automatically and wakes its host.

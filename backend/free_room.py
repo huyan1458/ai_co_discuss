@@ -4601,7 +4601,7 @@ def record_relay_send(connection, room_id, token, payload):
 
 
 def save_relay_receipt(connection, room_id, payload):
-    """Save a receipt for an authorized send or an automatically returned answer."""
+    """Save the sending room’s receipt for a host-to-host message."""
     begin_write(connection)
     target = payload.get("target_room_id")
     host = linked_room_values(connection, room_id, target, payload.get("host"))
@@ -4775,8 +4775,8 @@ def check_relay(connection, room_id, relay):
 def save_message_relay(connection, room_id, message_id, relay):
     """Label an owner-credential message the host of another room sent: `relay = {room_id, host}`."""
     host = check_relay(connection, room_id, relay)
-    connection.execute("INSERT INTO message_relays (message_id,source_room_id,host,member,expect,reply_to,relay_limit) VALUES (?,?,?,?,?,?,?)",
-                       (message_id, relay["room_id"], host, relay.get("member", ""), relay.get("expect", "reply"), relay.get("reply_to"), relay.get("limit", 0)))
+    connection.execute("INSERT INTO message_relays (message_id,source_room_id,host,member,expect,reply_to) VALUES (?,?,?,?,?,?)",
+                       (message_id, relay["room_id"], host, relay.get("member", ""), relay.get("expect", "reply"), relay.get("reply_to")))
     if relay.get("reply_to"):
         connection.execute("""UPDATE room_relay_sends SET state='replied'
             WHERE room_id=? AND target_room_id=? AND target_message_id=?""", (room_id, relay["room_id"], relay["reply_to"]))

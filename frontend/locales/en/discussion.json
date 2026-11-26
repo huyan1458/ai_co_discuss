@@ -360,5 +360,7 @@
   "下次 {value1}": "next {value1}",
   "进行中 · 已 {value1}": "Running · {value1}",
   "后台工作": "Background work",
-  "成员在自己的软件里设的定时；到点后的结果暂不进入房间": "A schedule the member set in its own software; what it does when it fires does not reach the room yet"
+  "成员在自己的软件里设的定时；到点后的结果暂不进入房间": "A schedule the member set in its own software; what it does when it fires does not reach the room yet",
+  "{value1} 项后台工作已结束": "{value1} background tasks ended",
+  "{value1} 项后台工作已结束，{value2} 项失败": "{value1} background tasks ended, {value2} failed"
 }
