@@ -462,6 +462,7 @@
   "未能确认这条排队消息的状态，内容已保留在输入框，请确认未发出后再发送": "Couldn't confirm this queued message's status. Its text is kept in the composer. Check that it wasn't sent before sending it again.",
   "请先登录": "Please sign in",
   "分享": "Share",
+  "分享房间": "Share room",
   "用自己的 AI 开一个房间": "Start a room with your own AIs",
   "{title} · CoDiscuss": "{title} · CoDiscuss",
   "这是只读的分享页面，不能修改房间": "This is a read-only shared page; the room cannot be changed here",

@@ -227,6 +227,20 @@ def keep_rest(connection, row, payload, waiting, message_id):
         connection.execute("DELETE FROM queued_messages WHERE id=?", (row["id"],))
 
 
+def notify_return_failure(connection, row, payload, reason):
+    """Notify the answering room when its queued automatic reply cannot be delivered."""
+    key = payload.get("submission_id", "")
+    if not key.startswith("relay-answer-"):
+        return
+    receipt = connection.execute("""SELECT s.room_id FROM room_relay_sends s JOIN messages m ON m.id=s.message_id
+        WHERE s.target_room_id=? AND s.queued_id=? AND m.submission_id=?""",
+        (row["room_id"], row["id"], "sent-" + key)).fetchone()
+    if receipt:
+        from .free_room import tell_owner
+        tell_owner(connection, receipt["room_id"], Text("回答 #{answer} 回传到房间 {room} 失败：{reason}",
+                   answer=key.rsplit("-", 1)[-1], room=row["room_id"], reason=str(reason)), key, payload["relay"]["reply_to"])
+
+
 def post_item(connection, room_id, row, post, names=None):
     """Release one queued row to `names` (everyone it waits for by default); the members left keep their share queued.
 
@@ -253,6 +267,7 @@ def post_item(connection, room_id, row, post, names=None):
         failure = Text("发送失败：{reason}", reason=str(error)[:500])
         connection.execute("UPDATE queued_messages SET failure=? WHERE id=?", (str(failure)[:500], row["id"]))
         save_text(connection, "queued_message", row["id"], "failure", failure)
+        notify_return_failure(connection, row, payload, error)
         return None
     connection.execute("RELEASE queued_post")
     if payload.get("relay"):
@@ -286,6 +301,7 @@ def next_queued(connection, room_id):
                 failure = Text("点名的成员已不在房间")
                 connection.execute("UPDATE queued_messages SET failure=? WHERE id=?", (str(failure), row["id"]))
                 save_text(connection, "queued_message", row["id"], "failure", failure)
+                notify_return_failure(connection, row, payload, failure)
             continue
         waiting = waiting_names(connection, room_id, named, before=row["id"])
         free = [name for name in named if name not in waiting]

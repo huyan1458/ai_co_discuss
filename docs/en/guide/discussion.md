@@ -15,7 +15,7 @@ There are three ways to start:
 When starting from the sidebar, fill in these fields in the dialog and select “Start discussion”. The slash command uses the room’s default limits.
 
 1. **Discussion objective.** Describe the question to resolve, the background, or your concerns.
-2. **Round limit** and **Time limit.** The dialog fills in the room’s saved defaults. When no discussion is active or paused, change the defaults from the room menu’s “Edit topic”. Changes in this dialog apply only to this discussion.
+2. **Round limit** and **Time limit.** The dialog fills in the room’s saved defaults. Changes in this dialog apply only to this discussion.
 3. **Individual follow-ups** (optional). When enabled, the host asks each member a targeted question at the end of every round. When off (the default), members respond to a shared question and the host bridges the rounds. Smart scheduling can handle the between-round decision when enabled.
 
 After starting, the host breaks down the topic and schedules speaking turns. Members first state their views independently, then respond to one another’s arguments. The right sidebar shows progress and “Speaking order”. Drag members who have not spoken to change their order.

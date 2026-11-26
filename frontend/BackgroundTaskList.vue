@@ -48,7 +48,7 @@ function state_text(task) {
 </template>
 
 <style scoped>
-.background-tasks { list-style: none; margin: 4px 0 0; padding: 0 0 0 calc(var(--working-avatar, 0px) + 8px); display: grid; gap: 2px; font-size: 12px; color: var(--ui-text-muted); }
+.background-tasks { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; font-size: 12px; color: var(--ui-text-muted); }
 .background-tasks li { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .background-task-icon { flex: none; width: 14px; height: 14px; }
 .background-task-kind { flex: none; }

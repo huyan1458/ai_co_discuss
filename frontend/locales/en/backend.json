@@ -1,4 +1,5 @@
 {
+  "回答 #{answer} 回传到房间 {room} 失败：{reason}": "Could not return answer #{answer} to room {room}: {reason}",
   "expect 须为 reply 或 none": "expect must be reply or none",
   "只能回复对方发来的、需要回传的消息": "You can only reply to a message from the other host that requested a reply",
   "找不到关联申请": "Room link request not found",

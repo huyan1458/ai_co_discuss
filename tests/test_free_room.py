@@ -795,12 +795,33 @@ class SingleMemberTests(FreeRoomTests):
         self.assertEqual(self.answer(execution)[0], 201)
         delivered = self.request(receipt_path)[1]
         self.assertEqual(delivered["relay_sent_state"], "delivered")
-        reply = {"room_id": self.room["id"], "host": "Claude", "expect": "none", "reply_to": delivered["relay_sent_message_id"]}
-        status, result = self.request(peer + "/messages", {"author": "用户", "text": "完成", "submission_id": uuid.uuid4().hex,
-                                                          "relay": reply}, other_owner)
-        self.assertEqual(status, 201, result)
+        execution = self.reserve()[1]["id"]
+        submission = uuid.uuid4().hex
+        self.assertEqual(self.answer(execution, "完成", submission_id=submission)[0], 201)
+        self.assertEqual(self.answer(execution, "完成", submission_id=submission)[0], 200)
+        returns = [m for m in self.request(peer + "/messages?after=0")[1]["messages"] if m["relay_reply_to"]]
+        self.assertEqual([(m["text"], m["relay_reply_to"], m["relay_expect"]) for m in returns],
+                         [("完成", delivered["relay_sent_message_id"], "none")])
         self.assertEqual(self.request(receipt_path)[1]["relay_sent_state"], "replied")
         self.assertEqual(self.say("超过上限", relay={**relay, "limit": 2})[0], 409)
+
+    def test_captured_relay_answer_and_limit_failure(self):
+        """Captured host answers return normally; a pair limit keeps the answer and explains the failure locally."""
+        for limit in (0, 1):
+            other = self.request("/api/rooms", {"title": "来源", "host": "Codex", "members": [
+                {"name": "Codex", "token": uuid.uuid4().hex}]}, uuid.uuid4().hex)[1]["id"]
+            original = self.say("请回答", relay={"room_id": other, "host": "Codex", "limit": limit})[1]["message"]["id"]
+            execution = self.reserve()[1]["id"]
+            status, saved = self.answer(execution, "收录结果", source="auto")
+            self.assertEqual(status, 201, saved)
+            replies = self.request(f"/api/rooms/{other}/messages?after=0")[1]["messages"]
+            if limit:
+                self.assertFalse(replies)
+                local = self.request(self.path + "/messages?after=0")[1]["messages"]
+                self.assertTrue(any(m["kind"] == "notice" and other in m["text"] and "达到上限" in m["text"] for m in local))
+            else:
+                self.assertEqual([(m["text"], m["relay_reply_to"], m["relay_expect"]) for m in replies],
+                                 [("收录结果", original, "none")])
 
     def test_linked_host_queue_interrupt_and_identity(self):
         """Both directions queue, but only the parent may steer or stop a running host."""

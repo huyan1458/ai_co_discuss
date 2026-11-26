@@ -168,7 +168,7 @@ function recovery_items(item) {
 const unconfirmed_launches = computed(() => view.value.launch.recoveries.filter((item) => item.id !== view.value.creating_room?.submission_id));
 
 function room_row(room, index, count) {
-  return { items: actions(room, index, room.folder_id || null, count), active: !middle_page.value && room.id === view.value.room?.id,
+  return { items: actions(room), active: !middle_page.value && room.id === view.value.room?.id,
     archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room),
     running: room_running(room), destroying: view.value.destroying.includes(room.id) };
 }
@@ -380,18 +380,16 @@ function select_room(event, room) {
 }
 
 /** Keep actions targeted to the clicked channel without changing the open draft. */
-function actions(room, index, folder_id, folder_room_count) {
-  const ordering = view.value.directory_pending.includes("room-order");
-  const current = room.id === view.value.room?.id;
+function actions(room) {
   return [[
     { label: t("重命名"), icon: "i-lucide-pencil", disabled: !can_rename(room), onSelect: () => start_rename(room) },
-    ...(current ? [{ label: t("编辑议题"), icon: "i-lucide-pencil", onSelect: () => emit("manage", { room, action: "edit" }) }] : []),
-    { label: t("复制阅读入口"), icon: "i-lucide-link", onSelect: () => act("copy", `${view.value.room_site}/r/${encodeURIComponent(room.id)}`) },
-    { label: t("导出对话"), icon: "i-lucide-upload", disabled: view.value.backup_pending, onSelect: () => act("backup", room.id) },
-    { label: t("分享"), icon: "i-lucide-share-2", onSelect: () => emit("manage", { room, action: "share_prepare" }) },
-    ...(share_link(room) ? [{ label: t("复制分享链接"), icon: "i-lucide-link-2", onSelect: () => act("share_copy", room.id) },
-      { label: t("撤销分享链接"), icon: "i-lucide-link-2-off", onSelect: () => { revoking.value = room; } }] : []),
-  ], ...(current ? [[{ label: t("刷新消息"), icon: "i-lucide-refresh-cw", onSelect: () => act("refresh") }]] : []), [
+    { label: t("分享"), icon: "i-lucide-share-2", children: [
+      { label: t("分享房间"), icon: "i-lucide-share-2", onSelect: () => emit("manage", { room, action: "share_prepare" }) },
+      ...(share_link(room) ? [{ label: t("复制分享链接"), icon: "i-lucide-link-2", onSelect: () => act("share_copy", room.id) },
+        { label: t("撤销分享链接"), icon: "i-lucide-link-2-off", onSelect: () => { revoking.value = room; } }] : []),
+      { label: t("导出对话"), icon: "i-lucide-upload", disabled: view.value.backup_pending, onSelect: () => act("backup", room.id) },
+    ] },
+  ], [
     { label: t("移至文件夹"), icon: "i-lucide-folder-input", disabled: (!room.folder_id && !view.value.folders?.length), children: [
       { label: t("移出文件夹"), icon: "i-lucide-folder-minus", disabled: !room.folder_id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: null }) },
       ...(view.value.folders || []).map((folder) => ({ label: folder.name, icon: "i-lucide-folder", disabled: folder.pending || room.folder_id === folder.id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: folder.id }) })),
@@ -400,9 +398,6 @@ function actions(room, index, folder_id, folder_room_count) {
       ? { label: t("放回父房间"), icon: "i-lucide-corner-down-right", onSelect: () => act("manage_channel", { id: room.id, action: "detach", detached: false }) }
       : { label: t("设为独立房间"), icon: "i-lucide-corner-up-left", onSelect: () => act("manage_channel", { id: room.id, action: "detach", detached: true }) }] : []),
     { label: room.pinned ? t("取消固定") : t("固定房间"), icon: room.pinned ? "i-lucide-pin-off" : "i-lucide-pin", disabled: view.value.directory_pending.includes(`pin:${room.id}`), onSelect: () => act("manage_channel", { id: room.id, action: "pin", pinned: !room.pinned }) },
-  ], [
-    { label: t("上移"), icon: "i-lucide-arrow-up", disabled: ordering || !manual_order.value || index === 0, onSelect: () => act("move_channel", { id: room.id, direction: -1, folder_id }) },
-    { label: t("下移"), icon: "i-lucide-arrow-down", disabled: ordering || !manual_order.value || index === folder_room_count - 1, onSelect: () => act("move_channel", { id: room.id, direction: 1, folder_id }) },
   ], [
     { label: room.archived ? t("恢复房间") : t("存档房间"), icon: room.archived ? "i-lucide-archive-restore" : "i-lucide-archive", disabled: view.value.archive_pending.includes(room.id) || (!room.archived && room.pinned), onSelect: () => emit("manage", { room, action: room.archived ? "restore" : "archive" }) },
     { label: t("销毁房间"), icon: "i-lucide-flame", color: "error", disabled: view.value.directory_pending.includes(`rename:${room.id}`) || room.pinned, onSelect: () => emit("manage", { room, action: "delete" }) },

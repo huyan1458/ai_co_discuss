@@ -273,9 +273,8 @@ export async function user_request_texts(config, execution) {
         for (const request of execution.requests.filter(item => item.message_id === message_id)) {
           request.relay = { from_room: message.relay_room, title: message.relay_title, host: message.relay_host,
             relation: message.relay_relation, expect: message.relay_expect || 'reply', message_id,
-            reply: message.relay_expect === 'none' ? null : `launch host-control room-post --room ${message.relay_room} --reply-to ${message_id} --expect none`,
-            note: message.relay_expect === 'none' ? t('这是通知，读完即止，不用回传。')
-              : t('按本房已有授权处理；超出授权时在本房问用户。完成后用 reply 命令加正文，一次性回传结果。') };
+            note: t(message.relay_expect === 'none' ? '这是通知，读完即止，不用回传。'
+              : '照常回答，程序会自动回传给来源房间。', {}, process.env.CODISCUSS_LANG || 'zh-CN') };
         }
       } else if (message.author === '用户' && message.text) texts.push(message.text);
     } catch { /* The host still reads the message itself. */ }
@@ -417,9 +416,6 @@ export function free_task_files(config, member, execution, binding, { session = 
   const bound_access = process_access && !inbox && Boolean(adapter?.capabilities.access_env);
   const messages = execution.requests.map(item => `#${item.message_id}`).join('、');
   const requests = execution.requests || [];
-  for (const request of requests) {
-    if (request.relay?.reply?.startsWith('launch ')) request.relay.reply = `${cli} ${request.relay.reply}`;
-  }
   const discussion_request = requests.find(item => item.session_request_id && ['discuss', 'discuss_host'].includes(item.purpose)) || null;
   const direct_question = Boolean(session?.status === 'active' && requests.some(item => item.purpose === 'ask'));
   const { instructions, prompt } = free_task_text({ name: member.label || member.name, role: member.role, discussion: direct_question,

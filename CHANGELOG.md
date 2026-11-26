@@ -2,6 +2,11 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.32 (2026-11-25 22:37)
+
+- Changed: When another room asks this room's host for something, the answer goes back to that room automatically and wakes its host.
+- Changed: The room menu is shorter; exporting, copying links and the like now sit under "Share".
+
 ## 0.5.31 (2026-11-25 21:17)
 
 - Fixed: Model API members resuming an old session could not use room commands; they now start a new session and the card says why.

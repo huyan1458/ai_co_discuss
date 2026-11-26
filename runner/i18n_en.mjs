@@ -18,7 +18,7 @@ export default {
   "codiscuss launch host-control ACTION [选项] [--access-file FILE]": "codiscuss launch host-control ACTION [options] [--access-file FILE]",
   "用法：{command}": "Usage: {command}",
   "这是通知，读完即止，不用回传。": "This is a notification. Read it without sending an acknowledgement.",
-  "按本房已有授权处理；超出授权时在本房问用户。完成后用 reply 命令加正文，一次性回传结果。": "Work within this room’s permissions. Ask its owner if more authority is needed. When finished, use the reply command with the result to send one response.",
+  "照常回答，程序会自动回传给来源房间。": "Answer normally. Your answer will automatically be sent back to the originating room.",
   "房间编号无效": "Invalid room ID",
   "  room-links A    查看父子房间": "  room-links A    List parent and child rooms",
   "rooms 查看父子房间；room list --query 标题片段 查找站点中的其他房间。": "rooms lists parent and child rooms. Use room list --query TITLE to find other rooms on the site.",

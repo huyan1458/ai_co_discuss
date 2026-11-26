@@ -56,6 +56,7 @@ from .visual_fences import fold_message_visuals
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label_text, is_ai, is_participant
 from .message_queue import drain as drain_queue, enqueue, enqueue_share, queue_action, queue_split, queue_view
 from .room_import import import_room, imported_attachment
+from .free_room import answered_chain, tell_owner, save_relay_receipt
 from .room_links import list_links
 from .free_room import require_owner_or_host
 from .runtime import (begin_write, limit_values, owner_proxy_token, require_owner, token_hash,
@@ -562,6 +563,8 @@ def init_database(database, seed=True):
                 connection.execute("ALTER TABLE message_relays ADD COLUMN member TEXT NOT NULL DEFAULT ''")
             connection.execute("DELETE FROM room_links WHERE relation='peer'")
             relay_columns = {row[1] for row in connection.execute("PRAGMA table_info(message_relays)")}
+            if "relay_limit" not in relay_columns:
+                connection.execute("ALTER TABLE message_relays ADD COLUMN relay_limit INTEGER NOT NULL DEFAULT 0")
             if "expect" not in relay_columns:
                 connection.execute("ALTER TABLE message_relays ADD COLUMN expect TEXT NOT NULL DEFAULT 'reply'")
             if "reply_to" not in relay_columns:
@@ -2722,6 +2725,8 @@ def append_free_message(connection, room, payload, actor):
         apply_mode_command(connection, room_id, cursor.lastrowid, mode_command)
     else:
         after_free_message(connection, room_id, cursor.lastrowid, actor, payload)
+        if actor != "用户" and actor["role"] == "host":
+            return_host_answer(connection, room_id, cursor.lastrowid, actor, payload)
     if payload.get("proactive") is not True:
         complete_session_requests(connection, room_id, payload, actor, cursor.lastrowid)
     saved_message = connection.execute(f"{MESSAGE_QUERY} WHERE messages.id=?", (cursor.lastrowid,)).fetchone()
@@ -2729,6 +2734,45 @@ def append_free_message(connection, room, payload, actor):
         enqueue_share(connection, room_id, queued_share, cursor.lastrowid, waiting)
         return {"message": message_with_attachments(connection, saved_message), "duplicate": False, "queue": queue_view(connection, room_id)}
     return {"message": message_with_attachments(connection, saved_message), "duplicate": False}
+
+
+def return_host_answer(connection, room_id, answer_id, host, payload):
+    """Return direct answers to incoming relay requests in the same transaction."""
+    if any(payload.get(field) for field in ("to", "continue", "keep_working", "detach")):
+        return
+    origins = connection.execute("""SELECT DISTINCT m.* FROM member_requests r JOIN message_relays m
+        ON m.message_id=r.message_id WHERE r.answer_id=? AND m.expect='reply'""", (answer_id,)).fetchall()
+    for origin in origins:
+        original = origin["message_id"]
+        key = f"relay-answer-{original}-{answer_id}"
+        connection.execute("SAVEPOINT return_answer")
+        try:
+            forward_host_answer(connection, room_id, origin, host, (payload["text"], key))
+        except (ValueError, LookupError, PermissionError, FileExistsError, sqlite3.IntegrityError) as error:
+            connection.execute("ROLLBACK TO return_answer")
+            tell_owner(connection, room_id, Text("回答 #{answer} 回传到房间 {room} 失败：{reason}",
+                       answer=answer_id, room=origin["source_room_id"], reason=str(error)), key, original)
+        finally:
+            connection.execute("RELEASE return_answer")
+
+
+def forward_host_answer(connection, room_id, origin, host, answer):
+    """Deliver or queue the attributed reply and leave an outgoing receipt."""
+    target = origin["source_room_id"]
+    room = connection.execute("""SELECT rooms.id,COALESCE(d.archived,0) AS archived FROM rooms
+        LEFT JOIN room_directory d ON d.room_id=rooms.id WHERE rooms.id=?""", (target,)).fetchone()
+    if not room:
+        raise LookupError(Text("房间不存在"))
+    if not connection.execute("SELECT 1 FROM room_members WHERE room_id=? AND status='active' AND role='host'", (target,)).fetchone():
+        raise FileExistsError(Text("房间没有在场的主持人，无法继续"))
+    text, key = answer
+    label = member_display_names(connection, room_id)[host["name"]]
+    relay = dict(room_id=room_id, host=label, member=host["name"], expect="none", reply_to=origin["message_id"], limit=origin["relay_limit"])
+    result = append_free_message(connection, room, dict(author="用户", text=text, submission_id=key,
+                                 queue=True, relay=relay), "用户")
+    save_relay_receipt(connection, room_id, dict(target_room_id=target, text=text, host=label, member=host["name"],
+                       submission_id="sent-" + key, target_submission_id=key, queued_id=result.get("queued"),
+                       target_message_id=(result.get("message") or {}).get("id")))
 
 
 def append_free_moderation(connection, room, payload, actor):
