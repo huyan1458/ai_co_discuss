@@ -672,6 +672,11 @@ const UPLOAD_PERCENT_BEFORE_SAVED = 99;
 // (2026-11-16: opening a room with 51 screenshots read 46 MB at once; message reads and sends timed out, and the retried
 // parts were sent again).
 const RELAY_FILE_CONCURRENCY = 2;
+// Six typical sealed thumbnail responses occupy about 0.8 MB (at most about 4 MB at the 512 KB thumbnail limit); the two
+// limits add up, so a room of old images without thumbnails can have both full at once.
+const RELAY_THUMBNAIL_CONCURRENCY = 6;
+const RELAY_EXPECTED_PART_BYTES = 700 * 1024;
+const RELAY_FIRST_PARTS = 4;
 // Parts of a file the user opened that are asked at once; such a file also does not wait for one of the slots above.
 const RELAY_URGENT_PARTS = 3;
 // Images and media of the computer's rooms are read once they come this near the screen, not all when a room opens.
@@ -685,12 +690,13 @@ let local_connection = null;
 let computer_connecting = false;
 let relay_machine = null;
 // Object URLs of files read from the computer's rooms, by their room route.
-const relay_files = new Map();
+// `own`: originals this page sent itself, shown in the list from its own copy; an original read to view it is not (#13478).
+const relay_files = Object.assign(new Map(), { own: new Set() });
 /** Room files are read as bytes and shown from object URLs: the computer's rooms through the relay, a share page from what it carries. */
 const files_by_blob = () => state.remote_rooms || Boolean(SHARE);
-// Relay file reads waiting for a free slot as { path, job }, and how many are running (RELAY_FILE_CONCURRENCY).
+// Waiting reads retain the visible boxes that need them. Urgent reads bypass both background limits.
 const relay_file_queue = [];
-let relay_file_running = 0;
+const relay_file_running = { thumbnail: 0, original: 0 };
 // The room list and room views last read, with their ETags, by route; an unchanged read is answered 304 and reuses them.
 const ROOM_READ_PATH = /^\/api\/rooms(\/[^/?]+)?$/;
 const ROOM_TIMING_ENABLED = (() => {
@@ -1596,6 +1602,9 @@ async function watch_destruction(id) {
 
 /** Tell what was removed for each room whose receipt is complete. */
 function settle_destructions() {
+  if (state.remote_rooms) for (const item of state.destructions) {
+    if (item.status === "done") remove_room_cache(`/api/rooms/${encodeURIComponent(item.room_id)}/attachments/`);
+  }
   for (const [id, entry] of state.destroying) {
     const record = state.destructions.find(item => item.room_id === id);
     // Wait until the dissolve finishes so the notice appears right as the animation ends.
@@ -2100,9 +2109,17 @@ function render_messages(result) {
   const previous = new Map(state.messages.map((message) => [message.id, message]));
   // Cached history is read once; a later retract or rewind reaches it through the room's withdrawal list.
   const withdrawn = new Map((state.room?.withdrawals || []).map((item) => [item.message_id, item.kind]));
+  if (state.remote_rooms) {
+    for (const id of withdrawn.keys()) {
+      for (const file of previous.get(id)?.attachments || [])
+        remove_room_cache(`/api/rooms/${encodeURIComponent(file.room_id || state.room.id)}/attachments/${encodeURIComponent(file.id)}/`);
+    }
+  }
   const messages = result.messages.map((message) => {
     const saved = previous.get(message.id) || rendered_messages.get(message);
     const kind = withdrawn.get(message.id) || message.withdrawn || "";
+    if (kind && state.remote_rooms) for (const file of (saved?.attachments?.length ? saved : message).attachments || [])
+      remove_room_cache(`/api/rooms/${encodeURIComponent(file.room_id || state.room.id)}/attachments/${encodeURIComponent(file.id)}/`);
     let shown;
     // A message shown straight from its send response is replaced by the copy the transcript reads.
     if (saved && !saved.just_sent && saved.text === message.text && saved.summary === message.summary) shown = (saved.withdrawn || "") === kind ? saved : { ...saved, withdrawn: kind };
@@ -3895,7 +3912,7 @@ async function deliver_send(job) {
     // The saved card shows these files from this browser's own copy rather than reading them back through the relay.
     for (const item of drafts) {
       const path = `/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(item.uploaded)}/content`;
-      if (!relay_files.has(path)) relay_files.set(path, URL.createObjectURL(item.file));
+      if (!relay_files.has(path)) { relay_files.set(path, URL.createObjectURL(item.file)); relay_files.own?.add(path); }
     }
     return request_json(`/api/rooms/${room_id}/messages`, payload);
   };
@@ -4257,7 +4274,8 @@ function discard_draft_upload(item) {
   if (item.uploading || !item.uploaded || !item.room_id) return;
   const path = `/api/rooms/${encodeURIComponent(item.room_id)}/attachments/${encodeURIComponent(item.uploaded)}/discard`;
   item.uploaded = null;
-  request_json(path, {}).catch(() => null);
+  const scope = state.remote_rooms && attachment_cache_scope();
+  request_json(path, {}).then(() => { if (scope && scope === attachment_cache_scope()) remove_room_cache(path.slice(0, -7)); }).catch(() => null);
 }
 
 /** Upload once per actual uploader, retaining receipts across ambiguous send failures. */
@@ -4451,7 +4469,7 @@ function attachment_thumbnail_route(file) {
 function attachment_image_markup(file, { inline = false, badge = "" } = {}) {
   const original = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
   // The smaller copy, where the image has one, unless the original is already here (a share page carries originals only).
-  const url = file.thumbnail_url && !SHARE && typeof relay_files.get(original) !== "string" ? attachment_thumbnail_route(file) : original;
+  const url = file.thumbnail_url && !SHARE && !relay_files.own?.has(original) ? attachment_thumbnail_route(file) : original;
   // `local_url`: this page's own copy of a file still being sent (the sending card).
   const local_preview = file.local_url || relay_files.get(url);
   const source = typeof local_preview === "string" ? `src="${escape_html(local_preview)}"` : files_by_blob() ? `data-relay-src="${url}"` : `src="${url}"`;
@@ -4546,7 +4564,7 @@ function close_attachment_preview() {
  */
 async function attachment_url(file) {
   const path = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
-  return files_by_blob() ? relay_file_url(path, { urgent: true }) : path;
+  return files_by_blob() ? relay_file_url(path, { urgent: true, size: Number(file.size) }) : path;
 }
 
 /**
@@ -4561,6 +4579,12 @@ function attachment_range_reader(file) {
 
 /** Read bytes `begin` up to `end` of a room file through the relay, in as many parts as the relay's frame needs. */
 async function relay_room_range(path, begin, end) {
+  const scope = RELAY_ATTACHMENT_PATH.test(path) && attachment_cache_scope();
+  if (scope && !removed_attachment_path(path)) {
+    const cached = await lookup_cached_attachment(scope, path);
+    if (scope !== attachment_cache_scope() || removed_attachment_path(path)) throw new Error(t('附件读取失败'));
+    if (cached?.blob) return new Uint8Array(await cached.blob.slice(begin, end).arrayBuffer());
+  }
   const parts = [];
   for (let offset = begin; offset < end;) {
     const answer = await relay_file_part(path, offset);
@@ -4577,10 +4601,12 @@ async function relay_room_range(path, begin, end) {
 }
 
 /** The address of an image attachment's smaller copy, or "" when it has none; read as attachment_url reads files. */
-async function attachment_thumbnail_url(file) {
+function attachment_thumbnail_url(file) {
   if (!file.thumbnail_url || SHARE) return "";
   const path = attachment_thumbnail_route(file);
-  return files_by_blob() ? relay_file_url(path, { urgent: true }) : path;
+  const cached = relay_files.get(path);
+  if (typeof cached === "string") return cached;
+  return files_by_blob() ? relay_file_url(path, { urgent: !file.prefetch }) : path;
 }
 
 /** The image attachments of the shown messages of a file's room, in transcript order, for stepping through in the viewer. */
@@ -5199,10 +5225,13 @@ async function device_credential(method, path) {
 
 /** This browser no longer counts as paired: the computer revoked it, or it is being unpaired here. */
 function forget_pairing() {
+  const clearing = purge_cached_attachments(pairing_scope());
+  clear_relay_memory();
   try { localStorage.removeItem(PAIRED_KEY); } catch { /* Nothing stored. */ }
   state.admin.logged_in = false;
   state.device.needs = state.admin.devices ? "pairing" : state.device.needs;
   publish_view();
+  return clearing;
 }
 
 /** Run a device action on the paired computer, or on this computer's own service from its local page. */
@@ -5252,6 +5281,11 @@ async function pair_this_device(code) {
       const answer = await pair_exchange(machine, { public_key: device.public_jwk, label: device_label(), proof, passkey });
       if (answer.status >= 400 && refused && answer.body?.need === "passkey") throw passkey_error(refused);
       if (answer.status >= 400) throw new Error(server_text(answer.body?.error_text, answer.body?.error) || t('配对失败'));
+      const old_scope = pairing_scope();
+      if (old_scope !== pairing_scope({ machine_id: machine.id, fingerprint })) {
+        clear_relay_memory();
+        purge_cached_attachments(old_scope);
+      }
       localStorage.setItem(PAIRED_KEY, JSON.stringify({ machine_id: machine.id, fingerprint }));
       Object.assign(state.device, { needs: "", pairing_code: "", pairing_fp: "" });
       state.admin.logged_in = true;
@@ -5363,6 +5397,8 @@ async function meet_device_need(error) {
   }
   // An expired device that may still renew asks for its passkey at once, then carries on; cancelling leaves the button in settings.
   if (error.need === "renew") {
+    clear_relay_memory();
+    purge_cached_attachments(pairing_scope());
     try {
       await renew_this_device();
       return true;
@@ -5513,9 +5549,26 @@ async function relay_room_request_once(path, payload, etag, trace) {
  * are: a large image takes several parts, and one lost frame would otherwise leave it failed until the page reloads.
  */
 async function relay_file_part(path, offset) {
+  const scope = attachment_cache_scope();
   for (let attempt = 0; ; attempt += 1) {
-    try { return await relay_exchange("room-api", { method: "GET", path, offset }); }
-    catch (error) {
+    try {
+      const answer = await relay_exchange("room-api", { method: "GET", path, offset });
+      if (answer.status >= 400 && answer.body?.need) throw Object.assign(new Error(server_text(answer.body.error_text, answer.body.error)), { need: answer.body.need });
+      return answer;
+    } catch (error) {
+      if (error.need === "pairing" || error.need === "renew") {
+        if (scope && scope === attachment_cache_scope()) {
+          if (error.need === "pairing") {
+            if (state.admin.devices) forget_pairing();
+          } else {
+            state.device.needs = "renew";
+            clear_relay_memory();
+            purge_cached_attachments(scope);
+            publish_view();
+          }
+        }
+        throw error;
+      }
       if (attempt >= RELAY_READ_RETRY_MS.length) throw error;
       await new Promise((resolve) => setTimeout(resolve, RELAY_READ_RETRY_MS[attempt]));
     }
@@ -5527,7 +5580,7 @@ async function relay_file_part(path, offset) {
  * size. `parallel` parts after the first are asked at once: a file the user opened waits for the network once per
  * round, not once per part (2026-11-26: a phone opening a 1 MB screenshot or a large PDF waited part after part).
  */
-async function relay_room_bytes(path, { parallel = 1 } = {}) {
+async function relay_room_bytes(path, { parallel = 1, size = 0 } = {}) {
   if (SHARE) return share_file_blob(path);
   const read_part = async (offset) => {
     const answer = await relay_file_part(path, offset);
@@ -5535,7 +5588,19 @@ async function relay_room_bytes(path, { parallel = 1 } = {}) {
     if (typeof answer.body_base64 !== "string") throw new Error(t('文件读取失败'));
     return { bytes: base64_to_bytes(answer.body_base64), total: answer.total, type: answer.content_type };
   };
-  const first = await read_part(0), step = first.bytes.length;
+  const first_read = read_part(0);
+  const ahead = new Map();
+  if (parallel > 1 && Number.isSafeInteger(size)) {
+    for (let offset = RELAY_EXPECTED_PART_BYTES; offset < size && ahead.size < RELAY_FIRST_PARTS - 1; offset += RELAY_EXPECTED_PART_BYTES) {
+      ahead.set(offset, read_part(offset).then(part => ({ part }), error => ({ error })));
+    }
+  }
+  const first = await first_read, step = first.bytes.length;
+  // A previous runner may return a different part size. Drop speculative offsets outside its grid.
+  if (ahead.size && (step !== RELAY_EXPECTED_PART_BYTES || size !== first.total)) {
+    await Promise.all(ahead.values());
+    ahead.clear();
+  }
   if (step >= first.total) return new Blob([first.bytes], { type: first.type });
   if (!step) throw new Error(t('文件读取失败'));
   const offsets = [];
@@ -5544,7 +5609,9 @@ async function relay_room_bytes(path, { parallel = 1 } = {}) {
   let next = 0;
   const read_rest = async () => {
     for (let index; (index = next++) < offsets.length;) {
-      const part = await read_part(offsets[index]);
+      const prefetched = ahead.has(offsets[index]) ? await ahead.get(offsets[index]) : null;
+      if (prefetched?.error) throw prefetched.error;
+      const part = prefetched?.part ?? await read_part(offsets[index]);
       if (part.total !== first.total || part.bytes.length !== Math.min(step, first.total - offsets[index])) throw new Error(t('文件读取失败'));
       parts[index] = part.bytes;
     }
@@ -5617,18 +5684,27 @@ const thumbnail_attempts = new Set();
 let thumbnail_chain = Promise.resolve();
 
 /**
- * Encode the smaller copy of a decoded image (an <img> or ImageBitmap): WebP, or JPEG for a JPEG original where the
- * browser cannot write WebP (Safari), since JPEG would lose a PNG's transparency. Null when it saves too little.
+ * Encode the smaller copy of a decoded image (an <img> or ImageBitmap): WebP, or JPEG for an opaque PNG or JPEG
+ * when the browser cannot write WebP. Null when it saves too little.
  */
 async function encode_thumbnail(source, file) {
   const width = source.naturalWidth || source.width, height = source.naturalHeight || source.height;
   if (!(width > 0 && height > 0)) return null;
   const scale = Math.min(1, THUMBNAIL_WIDTH / width, THUMBNAIL_MAX_SIDE / height);
   const canvas = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) });
-  canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
+  const context = canvas.getContext("2d");
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
   const encode = (type) => new Promise(resolve => canvas.toBlob(resolve, type, THUMBNAIL_QUALITY));
   let blob = await encode("image/webp");
-  if (blob?.type !== "image/webp") blob = file.content_type === "image/jpeg" ? await encode("image/jpeg") : null;
+  if (blob?.type !== "image/webp") {
+    if (file.content_type === "image/png") {
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let alpha = 3; alpha < pixels.length; alpha += 4) {
+        if (pixels[alpha] !== 255) return null;
+      }
+    } else if (file.content_type !== "image/jpeg") return null;
+    blob = await encode("image/jpeg");
+  }
   return blob && blob.size < file.size / 2 ? blob : null;
 }
 
@@ -5671,45 +5747,287 @@ async function post_room_file(path, body, token, on_progress) {
 
 /** Read the bytes of a room file from this website, or from the paired computer while its rooms are shown. */
 async function read_room_file(path) {
-  if (files_by_blob()) return new Uint8Array(await (await relay_room_bytes(path)).arrayBuffer());
+  if (files_by_blob()) {
+    if (RELAY_ATTACHMENT_PATH.test(path) && attachment_cache_scope()) {
+      const scope = attachment_cache_scope();
+      const existing = relay_files.get(path);
+      if (existing) {
+        const url = await relay_file_url(path, { urgent: true });
+        if (!url || scope !== attachment_cache_scope()) throw new Error(t('附件读取失败'));
+        return new Uint8Array(await (await fetch(url)).arrayBuffer());
+      }
+      const cached = removed_attachment_path(path) ? null : await lookup_cached_attachment(scope, path);
+      if (scope !== attachment_cache_scope()) throw new Error(t('附件读取失败'));
+      const blob = cached?.blob || await relay_room_bytes(path);
+      if (scope !== attachment_cache_scope()) throw new Error(t('附件读取失败'));
+      if (cached && !cached.blob && !removed_attachment_path(path)) keep_cached_attachment(scope, path, blob, cached.epoch);
+      return new Uint8Array(await blob.arrayBuffer());
+    }
+    return new Uint8Array(await (await relay_room_bytes(path)).arrayBuffer());
+  }
   const response = await fetch(path, { cache: "no-store" });
   if (!response.ok) throw new Error(t('附件读取失败'));
   return new Uint8Array(await response.arrayBuffer());
 }
 
-/**
- * Read one room file through the relay: images on the page wait for one of RELAY_FILE_CONCURRENCY slots, a file the
- * user opened (`urgent`) starts at once with RELAY_URGENT_PARTS parts in flight. `read(parallel)` reads the file.
- */
-function queue_relay_file(path, read, urgent) {
-  return new Promise((resolve, reject) => {
-    const start = (now_urgent) => {
-      relay_file_running += 1;
-      read(now_urgent ? RELAY_URGENT_PARTS : 1).then(resolve, reject).finally(() => {
-        relay_file_running -= 1;
-        if (relay_file_running < RELAY_FILE_CONCURRENCY) relay_file_queue.shift()?.start(false);
-      });
-    };
-    if (urgent || relay_file_running < RELAY_FILE_CONCURRENCY) start(urgent);
-    else relay_file_queue.push({ path, start });
+// IndexedDB is origin-isolated. Keep Blob bodies separate from small LRU records so a hit only updates metadata.
+const RELAY_ATTACHMENT_PATH = /^\/api\/rooms\/[^/?#]+\/attachments\/[^/?#]+\/(?:content|thumbnail)$/;
+const RELAY_CACHE_LIMIT = 200 * 1024 * 1024;
+const RELAY_CACHE_FILE_LIMIT = 20 * 1024 * 1024;
+const relay_cache_checks = new Map();
+const relay_removed_paths = new Set();
+let relay_cache_database, relay_memory_machine_id = "";
+const RELAY_CACHE_READ_TIMEOUT_MS = 300;
+
+function pairing_scope(record = paired_record()) {
+  return record?.machine_id ? JSON.stringify([record.machine_id, record.fingerprint || ""]) : "";
+}
+
+function set_relay_machine(machine) {
+  if (machine && relay_memory_machine_id !== machine.id) {
+    clear_relay_memory();
+    relay_memory_machine_id = machine.id;
+  }
+  relay_machine = machine;
+}
+
+function attachment_cache_scope() {
+  if (SHARE || !state.remote_rooms || state.device.needs || !relay_machine) return "";
+  const record = paired_record();
+  return record?.machine_id === relay_machine.id ? pairing_scope(record) : "";
+}
+
+function attachment_cache_open() {
+  if (!relay_cache_database) {
+    relay_cache_database = new Promise((resolve, reject) => {
+      const open = indexedDB.open("codiscuss-relay-attachments", 1);
+      open.onupgradeneeded = () => {
+        open.result.createObjectStore("bodies");
+        open.result.createObjectStore("state");
+        open.result.createObjectStore("usage", { keyPath: "order", autoIncrement: true }).createIndex("file", "key", { unique: true });
+      };
+      open.onerror = () => reject(open.error);
+      open.onblocked = () => reject(new Error());
+      open.onsuccess = () => {
+        open.result.onversionchange = () => { open.result.close(); relay_cache_database = null; };
+        resolve(open.result);
+      };
+    }).catch(() => null);
+  }
+  return relay_cache_database;
+}
+
+const cache_result = request => new Promise((resolve, reject) => {
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error);
+});
+
+/** Serialize body, eviction order, byte count and invalidation epochs across tabs. Failures roll back together. */
+async function attachment_transaction(work) {
+  try {
+    const db = await attachment_cache_open();
+    if (!db) return null;
+    const tx = db.transaction(["bodies", "usage", "state"], "readwrite");
+    const done = new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onabort = tx.onerror = () => reject(tx.error);
+    });
+    const operation = work(tx.objectStore("bodies"), tx.objectStore("usage"), tx.objectStore("state"))
+      .catch(error => { try { tx.abort(); } catch {} throw error; });
+    return (await Promise.all([operation, done]))[0];
+  } catch { return null; }
+}
+
+/** A stalled browser database must not hold up a relay read. A late result has no display side effects. */
+async function lookup_cached_attachment(scope, path) {
+  let timer;
+  const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(null), RELAY_CACHE_READ_TIMEOUT_MS); });
+  try { return await Promise.race([cached_attachment(scope, path), timeout]); }
+  finally { clearTimeout(timer); }
+}
+
+function cached_attachment(scope, path, touch_only = false) {
+  return attachment_transaction(async (bodies, usage, state_store) => {
+    const key = [scope, path];
+    const item = await cache_result(usage.index("file").get(key));
+    if (!item) return { epoch: await cache_result(state_store.get(scope)) };
+    const blob = touch_only ? null : await cache_result(bodies.get(key));
+    usage.delete(item.order);
+    if (!touch_only && !blob) {
+      const total = await cache_result(state_store.get("bytes")) || 0;
+      state_store.put(total - item.size, "bytes");
+      return { epoch: await cache_result(state_store.get(scope)) };
+    }
+    usage.add({ key, size: item.size });
+    return touch_only ? null : { blob };
   });
 }
 
-/** Read one file of the computer's rooms through the relay once, and keep it as an object URL for this page. */
-function relay_file_url(path, { urgent = false } = {}) {
+function keep_cached_attachment(scope, path, blob, epoch) {
+  if (!blob.size || blob.size > RELAY_CACHE_FILE_LIMIT) return;
+  return attachment_transaction(async (bodies, usage, state_store) => {
+    const key = [scope, path];
+    if ((await cache_result(state_store.get(scope))) !== epoch || await cache_result(usage.index("file").getKey(key)) !== undefined) return;
+    let total = (await cache_result(state_store.get("bytes")) || 0) + blob.size;
+    while (total > RELAY_CACHE_LIMIT) {
+      const oldest = (await cache_result(usage.getAll(null, 1)))[0];
+      if (!oldest) break;
+      bodies.delete(oldest.key);
+      usage.delete(oldest.order);
+      total -= oldest.size;
+    }
+    bodies.add(blob, key);
+    usage.add({ key, size: blob.size });
+    state_store.put(total, "bytes");
+  });
+}
+
+function purge_cached_attachments(scope, prefix = "") {
+  if (!scope) return;
+  return attachment_transaction(async (bodies, usage, state_store) => {
+    // A read started before deletion (possibly in another tab) cannot reinsert its late response.
+    state_store.put((await cache_result(state_store.get(scope)) || 0) + 1, scope);
+    const range = IDBKeyRange.bound([scope, prefix], [scope, prefix + "\uffff"]);
+    const items = await cache_result(usage.index("file").getAll(range));
+    let total = await cache_result(state_store.get("bytes")) || 0;
+    for (const item of items) {
+      bodies.delete(item.key);
+      usage.delete(item.order);
+      total -= item.size;
+    }
+    state_store.put(total, "bytes");
+  });
+}
+
+function clear_relay_memory(prefix = "") {
+  for (const [path, value] of relay_files) {
+    if (!path.startsWith(prefix)) continue;
+    if (typeof value === "string" && value.startsWith("blob:")) URL.revokeObjectURL(value);
+    relay_files.delete(path);
+    relay_files.own?.delete(path);
+    relay_cache_checks.delete(path);
+  }
+  for (const entry of [...relay_file_queue]) {
+    if (!entry.path.startsWith(prefix)) continue;
+    relay_file_queue.splice(relay_file_queue.indexOf(entry), 1);
+    entry.cancel();
+  }
+  if (!prefix) relay_removed_paths.clear();
+}
+
+function removed_attachment_path(path) {
+  const attachment = path.slice(0, path.lastIndexOf("/") + 1);
+  const room = attachment.slice(0, attachment.lastIndexOf("/", attachment.length - 2) + 1);
+  return relay_removed_paths.has(room) || relay_removed_paths.has(attachment);
+}
+
+function remove_room_cache(prefix) {
+  const scope = attachment_cache_scope();
+  if (!scope || relay_removed_paths.has(prefix)) return;
+  relay_removed_paths.add(prefix);
+  clear_relay_memory(prefix);
+  purge_cached_attachments(scope, prefix);
+}
+
+/** Vertical distance to the visible part of the transcript in the viewport. */
+function relay_box_distance(box) {
+  const rect = box.getBoundingClientRect();
+  const viewport = box.closest(".channel-transcript")?.getBoundingClientRect();
+  return Math.max(0, Math.max(0, viewport?.top ?? 0) - rect.bottom,
+    rect.top - Math.min(window.innerHeight, viewport?.bottom ?? window.innerHeight));
+}
+
+function queue_relay_file(path, read, urgent, box, interest) {
+  const kind = path.endsWith("/thumbnail") ? "thumbnail" : "original";
+  const limit = kind === "thumbnail" ? RELAY_THUMBNAIL_CONCURRENCY : RELAY_FILE_CONCURRENCY;
+  return new Promise((resolve, reject) => {
+    const start = (priority, size) => {
+      if (!priority) relay_file_running[kind]++;
+      read(priority ? RELAY_URGENT_PARTS : 1, size).then(resolve, reject).finally(() => {
+        if (priority) return;
+        relay_file_running[kind]--;
+        let next, best = Infinity;
+        for (const entry of relay_file_queue) {
+          if (entry.kind !== kind) continue;
+          const distance = entry.boxes.size ? Math.min(...Array.from(entry.boxes, relay_box_distance)) : Infinity;
+          if (!next || distance < best) { next = entry; best = distance; }
+        }
+        if (next) relay_file_queue.splice(relay_file_queue.indexOf(next), 1)[0].start(false);
+      });
+    };
+    if (urgent || relay_file_running[kind] < limit) start(urgent);
+    else relay_file_queue.push({ path, kind, start, boxes: interest?.boxes || new Set(box ? [box] : []), pinned: interest?.pinned ?? !box, cancel: () => resolve(null) });
+  });
+}
+
+/** Read once, sharing both in-flight reads and completed object URLs with the viewer. */
+function relay_file_url(path, { urgent = false, size = 0, box = null } = {}) {
   if (!relay_files.has(path)) {
-    // A share page reads its files from the page or the share site, not through the relay: nothing to wait in line for,
-    // so an HTML demo is not held behind the room's images and recordings (user 2026-11-23: five seconds of white).
-    const read = SHARE ? relay_room_bytes(path) : queue_relay_file(path, (parallel) => relay_room_bytes(path, { parallel }), urgent);
-    relay_files.set(path, read.then(blob => URL.createObjectURL(blob))
-      .catch(error => { relay_files.delete(path); throw error; }));
-  } else if (urgent) {
-    // Opening an image whose thumbnail is still waiting in line starts that read now, instead of after every image
-    // queued before it (2026-11-26, iPhone: an opened screenshot kept loading behind the room's other images).
+    const scope = RELAY_ATTACHMENT_PATH.test(path) ? attachment_cache_scope() : "";
+    const cacheable = scope && !removed_attachment_path(path);
+    const interest = { urgent, size, boxes: new Set(box ? [box] : []), pinned: !box };
+    const read_network = () => queue_relay_file(path, (parallel, promoted_size) =>
+      relay_room_bytes(path, { parallel, size: promoted_size || interest.size }), interest.urgent, box, interest);
+    const read = async () => {
+      if (SHARE) return relay_room_bytes(path);
+      if (!cacheable) return read_network();
+      relay_cache_checks.set(path, interest);
+      const cached = await lookup_cached_attachment(scope, path);
+      if (relay_cache_checks.get(path) !== interest) return null;
+      relay_cache_checks.delete(path);
+      if (scope !== attachment_cache_scope()) return null;
+      if (cached?.blob) return cached.blob;
+      const blob = await read_network();
+      if (blob && cached && relay_files.get(path) === pending && scope === attachment_cache_scope())
+        keep_cached_attachment(scope, path, blob, cached.epoch);
+      return blob;
+    };
+    const pending = read().then(blob => {
+      if (!blob || relay_files.get(path) !== pending || (scope && attachment_cache_scope() !== scope)) {
+        if (relay_files.get(path) === pending) relay_files.delete(path);
+        return "";
+      }
+      const url = URL.createObjectURL(blob);
+      relay_files.set(path, url);
+      return url;
+    }).catch(error => { if (relay_files.get(path) === pending) relay_files.delete(path); throw error; });
+    relay_files.set(path, pending);
+  } else {
+    if (typeof relay_files.get(path) === "string" && !relay_files.own?.has(path) && RELAY_ATTACHMENT_PATH.test(path)) {
+      const scope = attachment_cache_scope();
+      if (scope) cached_attachment(scope, path, true);
+    }
+    const checking = relay_cache_checks.get(path);
+    if (checking) {
+      if (urgent) { checking.urgent = true; checking.size = size || checking.size; }
+      if (box) checking.boxes.add(box);
+      else checking.pinned = true;
+    }
     const index = relay_file_queue.findIndex(entry => entry.path === path);
-    if (index >= 0) relay_file_queue.splice(index, 1)[0].start(true);
+    if (index >= 0) {
+      const entry = relay_file_queue[index];
+      if (urgent) relay_file_queue.splice(index, 1)[0].start(true, size);
+      else if (box) entry.boxes.add(box);
+      else entry.pinned = true;
+    }
   }
   return Promise.resolve(relay_files.get(path));
+}
+
+/** Release a queued read when its last interested box leaves the prefetch area. */
+function release_relay_box(box, path) {
+  const checking = relay_cache_checks.get(path);
+  if (checking?.boxes.delete(box) && !checking.boxes.size && !checking.pinned) {
+    relay_cache_checks.delete(path);
+    relay_files.delete(path);
+    return;
+  }
+  const index = relay_file_queue.findIndex(entry => entry.path === path);
+  const entry = relay_file_queue[index];
+  if (!entry || !entry.boxes.delete(box) || entry.boxes.size || entry.pinned) return;
+  relay_file_queue.splice(index, 1);
+  relay_files.delete(path);
+  entry.cancel();
 }
 
 /** Read a relayed image or media file once it nears the screen. */
@@ -5719,11 +6037,13 @@ function relay_file_url(path, { urgent = false } = {}) {
 const relay_media_boxes = new WeakMap();
 const relay_media_box = (media) => media.closest(".attachment-image, .attachment-media") || media;
 const relay_media_observer = typeof IntersectionObserver === "function" ? new IntersectionObserver((entries) => {
-  for (const entry of entries) {
-    if (!entry.isIntersecting) continue;
-    relay_media_observer.unobserve(entry.target);
-    for (const media of relay_media_boxes.get(entry.target) || []) load_relay_media(media);
-    relay_media_boxes.delete(entry.target);
+  const nearest = [...entries].sort((a, b) => Number(a.isIntersecting) - Number(b.isIntersecting)
+    || relay_box_distance(a.target) - relay_box_distance(b.target));
+  for (const entry of nearest) {
+    for (const media of relay_media_boxes.get(entry.target) || []) {
+      if (entry.isIntersecting) load_relay_media(media);
+      else release_relay_box(entry.target, media.dataset.relaySrc);
+    }
   }
 }, { rootMargin: RELAY_MEDIA_MARGIN }) : null;
 
@@ -5750,7 +6070,8 @@ function load_relay_media(media) {
   if (!media.isConnected || media.getAttribute("src")) return;
   const mark_failed = () => { if (!media.getAttribute("src")) media.dataset.relayFailed = "1"; };
   const deadline = setTimeout(mark_failed, RELAY_MEDIA_TIMEOUT_MS);
-  relay_file_url(media.dataset.relaySrc).then(async url => {
+  relay_file_url(media.dataset.relaySrc, { box: relay_media_box(media) }).then(async url => {
+    if (!url) return;
     const scroller = media.closest(".channel-transcript");
     // Decoded first, the image has its size the moment it gets its file, so the growth and its offset share one frame.
     if (scroller && media.tagName === "IMG") await Promise.race([Object.assign(new Image(), { src: url }).decode().catch(() => null),
@@ -5758,6 +6079,11 @@ function load_relay_media(media) {
     await transcript_settled(scroller);
     if (!media.isConnected || media.getAttribute("src")) return;
     media.src = url;
+    const box = relay_media_box(media);
+    if (relay_media_boxes.get(box)?.every(item => item.getAttribute("src"))) {
+      relay_media_observer?.unobserve(box);
+      relay_media_boxes.delete(box);
+    }
     delete media.dataset.relayFailed;
   }).catch(mark_failed).finally(() => clearTimeout(deadline));
 }
@@ -5772,6 +6098,7 @@ function show_relay_images(records) {
       if (node.nodeType !== Node.ELEMENT_NODE) continue;
       for (const image of node.matches("[data-relay-src]") ? [node] : node.querySelectorAll("[data-relay-src]")) {
         const box = relay_media_box(image);
+        release_relay_box(box, image.dataset.relaySrc);
         relay_media_observer.unobserve(box);
         relay_media_boxes.delete(box);
       }
@@ -5842,6 +6169,7 @@ async function show_computer_rooms(remote) {
     try { await load_remote_site(); }
     catch (error) { prefetched.clear(); throw error; }
   }
+  if (state.remote_rooms !== Boolean(remote)) clear_relay_memory();
   state.remote_rooms = Boolean(remote);
   // The two lists share no rooms, so nothing read from one may be shown for the other.
   room_views.clear();
@@ -6062,7 +6390,7 @@ async function load_launch_settings({ relay_known = () => {} } = {}) {
       // The previous one stays in use until this answer arrives, so requests made meanwhile still reach the computer.
       // A website without rooms of its own asks the relay itself, which knows at once whether the computer is connected;
       // the website's own record of the computer's last heartbeat can lag behind when that heartbeat is slow to arrive.
-      relay_machine = state.launch.relay?.public_key && (state.launch.relay.online || computer_rooms_only()) ? state.launch.relay : null;
+      set_relay_machine(state.launch.relay?.public_key && (state.launch.relay.online || computer_rooms_only()) ? state.launch.relay : null);
       if (!relay_machine) return;
       state.launch.remote = true;
     }
@@ -6087,7 +6415,7 @@ async function load_launch_settings({ relay_known = () => {} } = {}) {
   } catch (error) {
     // An unpaired or expired device keeps its way to the computer: pairing and renewal go through it.
     // A website without rooms of its own reaches the computer only through the relay, so one failed request keeps it.
-    relay_machine = computer_rooms_only() || error.need === "pairing" || error.need === "renew" ? relay_machine : null;
+    if (!computer_rooms_only() && error.need !== "pairing" && error.need !== "renew") set_relay_machine(null);
     // The relay answering that the computer is not connected is shown as the computer being offline.
     if (computer_rooms_only() && !state.remote_rooms) state.remote_online = error.offline ? false : null;
     state.launch.remote = Boolean(local_connection);
@@ -6111,12 +6439,16 @@ async function load_relay_machine() {
     const record = paired_record();
     // A paired browser talks only to the computer it paired with: a website that no longer lists it must not swap in another.
     if (record?.machine_id && !machines.some(item => item.id === record.machine_id)) {
+      clear_relay_memory();
+      purge_cached_attachments(pairing_scope(record));
       notify("error", t('网站上找不到与这台设备配对的电脑，已停止连接；如果电脑确实换过绑定，请在电脑前重新扫码配对'));
       return null;
     }
     // Without a pairing a page defaults to an owner's computer, never a hosted account's (`parent`, #5494).
     const machine = machines.find(item => item.id === record?.machine_id) || machines.find(item => !item.parent) || null;
     if (machine && record?.machine_id === machine.id && record.fingerprint && record.fingerprint !== await machine_fingerprint(machine)) {
+      clear_relay_memory();
+      purge_cached_attachments(pairing_scope(record));
       notify("error", t('网站给出的电脑身份与配对时不符，已停止连接；请在电脑前重新扫码配对'));
       return null;
     }
@@ -8580,6 +8912,7 @@ async function initialize() {
       const result = computer_rooms_only() ? { rooms: [] } : await request_json("/api/rooms");
       state.rooms = result.rooms;
       state.destructions = result.destructions || [];
+      settle_destructions();
       announce_away_destructions(state.destructions);
       state.last_room = result.last_room || "";
       set_folder_directory(result);
@@ -8597,6 +8930,7 @@ async function initialize() {
     if (document.hidden) stop_live_updates();
     else { begin_resuming(); start_live_updates(); load_admin_state(); share_job_refresh(); }
   });
+  window.addEventListener("storage", event => { if (event.key === PAIRED_KEY || event.key === null) clear_relay_memory(); });
   window.addEventListener("pagehide", stop_live_updates);
   // The network coming back (a phone leaving a lift, a laptop waking) reconnects at once.
   window.addEventListener("online", () => { if (!state.connected) reconnect_live_updates({ automatic: true }); });

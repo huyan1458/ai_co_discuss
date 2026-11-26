@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import * as vue_runtime from "vue";
 import { compile } from "@vue/compiler-dom";
 import { computed, nextTick, reactive, ref, watch } from "vue";
@@ -2588,6 +2589,176 @@ test("relayed room files are read two at a time, a file the user opens at once, 
   finish.get("/files/c")();
   assert.equal(JSON.stringify(await Promise.all(reads)), JSON.stringify(["a", "b", "c", "d"].map((name) => `blob:/files/${name}`)));
   assert.equal(started.length, 5, "a file already read is not read again");
+});
+
+test("relay attachments survive reload, skip network slots, isolate computers and clear on unpair", async () => {
+  const indexedDB = new IDBFactory(), path = "/api/rooms/r/attachments/a/content";
+  let reads = 0;
+  function device(machine) {
+    const { context } = update_fixture();
+    Object.assign(context, { indexedDB, IDBKeyRange, Blob });
+    context.test_state.remote_rooms = true;
+    context.localStorage.setItem("codiscuss-paired", JSON.stringify({ machine_id: machine }));
+    context.set_relay_machine({ id: machine });
+    context.relay_room_bytes = async () => new Blob([machine + ++reads]);
+    return context;
+  }
+  const first = device("A");
+  await first.relay_file_url(path);
+  const scope = first.attachment_cache_scope();
+  assert.equal(await (await first.cached_attachment(scope, path)).blob.text(), "A1");
+  const reopened = device("A");
+  reopened.queue_relay_file = () => assert.fail("a hit must not queue or use the relay");
+  const url = await reopened.relay_file_url(path);
+  assert.equal(await (await fetch(url)).text(), "A1");
+  reopened.relay_file_part = () => assert.fail("a range of a cached attachment must stay local");
+  assert.equal(Buffer.from(await reopened.relay_room_range(path, 1, 2)).toString(), "1");
+  const second = device("B");
+  await second.relay_file_url(path);
+  assert.equal(await (await second.cached_attachment(second.attachment_cache_scope(), path)).blob.text(), "B2");
+  await reopened.forget_pairing();
+  assert.equal((await first.cached_attachment(scope, path)).blob, undefined);
+  assert.equal(await (await second.cached_attachment(second.attachment_cache_scope(), path)).blob.text(), "B2");
+  assert.equal(reads, 2);
+});
+
+test("relay attachment reads still display without IndexedDB and removed files stay out of storage", async () => {
+  const { context } = update_fixture();
+  context.test_state.remote_rooms = true;
+  context.localStorage.setItem("codiscuss-paired", JSON.stringify({ machine_id: "A" }));
+  context.set_relay_machine({ id: "A" });
+  const base = "/api/rooms/r/attachments/a/", path = base + "thumbnail";
+  context.relay_room_bytes = async () => new Blob(["local fallback"]);
+  assert.equal(await (await fetch(await context.relay_file_url(path))).text(), "local fallback");
+  context.remove_room_cache(base);
+  assert.equal(context.removed_attachment_path(path), true);
+  assert.equal(context.removed_attachment_path("/api/rooms/r/attachments/ab/thumbnail"), false);
+});
+
+function paired_attachment_fixture() {
+  const fixture = update_fixture(), { context } = fixture;
+  Object.assign(context, { indexedDB: new IDBFactory(), IDBKeyRange, Blob });
+  context.test_state.remote_rooms = true;
+  context.localStorage.setItem("codiscuss-paired", JSON.stringify({ machine_id: "A" }));
+  context.set_relay_machine({ id: "A" });
+  return fixture;
+}
+
+test("stalled attachment lookup falls back once and its late result cannot replace the displayed file", async () => {
+  const f = paired_attachment_fixture(), path = "/api/rooms/r/attachments/a/content";
+  let finish, reads = 0;
+  f.context.cached_attachment = () => new Promise(resolve => { finish = resolve; });
+  f.context.relay_room_bytes = async () => { reads++; return new Blob(["network"]); };
+  const display = f.context.relay_file_url(path);
+  await f.run(300);
+  const url = await display;
+  finish({ blob: new Blob(["late"]) });
+  assert.equal(await f.context.relay_file_url(path), url);
+  assert.equal(await (await fetch(url)).text(), "network");
+  assert.equal(reads, 1);
+});
+
+test("offline and reconnect preserve displayed attachment URLs until the computer changes", async () => {
+  const { context } = paired_attachment_fixture(), path = "/api/rooms/r/attachments/a/content";
+  context.relay_room_bytes = async () => new Blob(["A"]);
+  const url = await context.relay_file_url(path);
+  context.set_relay_machine(null);
+  assert.equal(await (await fetch(url)).text(), "A");
+  context.set_relay_machine({ id: "A" });
+  assert.equal(await context.relay_file_url(path), url);
+  context.set_relay_machine(null);
+  context.set_relay_machine({ id: "B" });
+  await assert.rejects(fetch(url));
+});
+
+test("document byte reads retain no object URL and repair missing stored bytes on the next read", async () => {
+  const { context } = paired_attachment_fixture(), path = "/api/rooms/r/attachments/a/content";
+  const scope = context.attachment_cache_scope();
+  let reads = 0;
+  context.URL = { createObjectURL() { assert.fail("byte-only reads must not pin an object URL"); } };
+  context.relay_room_bytes = async () => new Blob([reads++ ? "new" : "original"]);
+  assert.equal(Buffer.from(await context.read_room_file(path)).toString(), "original");
+  assert.equal(Buffer.from(await context.read_room_file(path)).toString(), "original");
+  await context.attachment_transaction(async bodies => { bodies.delete([scope, path]); });
+  assert.equal(Buffer.from(await context.read_room_file(path)).toString(), "new");
+  assert.equal(await (await context.cached_attachment(scope, path)).blob.text(), "new");
+  const bytes = await vm.runInContext('attachment_transaction(async (_bodies, _usage, state) => cache_result(state.get("bytes")))', context);
+  assert.equal(bytes, 3);
+  assert.equal(reads, 2);
+});
+
+test("an attachment pairing error forgets the pairing only in device authentication mode", async () => {
+  for (const devices of [false, true]) {
+    const { context, storage } = paired_attachment_fixture();
+    context.test_state.admin.devices = devices;
+    context.relay_exchange = async () => { throw Object.assign(new Error("pair"), { need: "pairing" }); };
+    await assert.rejects(context.relay_file_part("/file", 0), /pair/);
+    assert.equal(storage.has("codiscuss-paired"), !devices);
+  }
+});
+
+test("relay attachment LRU evicts by access across computers and rejects stale post-purge writes", async () => {
+  const { context } = update_fixture();
+  Object.assign(context, { indexedDB: new IDBFactory(), IDBKeyRange });
+  const body = new Blob([new Uint8Array(20 * 1024 * 1024)]);
+  for (let i = 0; i < 10; i++) await context.keep_cached_attachment("A", String(i), body, undefined);
+  assert.equal((await context.cached_attachment("A", "0")).blob.size, body.size);
+  await context.keep_cached_attachment("B", "new", body, undefined);
+  assert.equal((await context.cached_attachment("A", "1")).blob, undefined);
+  assert.equal((await context.cached_attachment("A", "0")).blob.size, body.size);
+  const miss = await context.cached_attachment("B", "late");
+  await context.purge_cached_attachments("B");
+  await context.keep_cached_attachment("B", "late", body, miss.epoch);
+  assert.equal((await context.cached_attachment("B", "late")).blob, undefined);
+  await context.keep_cached_attachment("A", "huge", new Blob([body, "x"]), undefined);
+  assert.equal((await context.cached_attachment("A", "huge")).blob, undefined);
+});
+
+test("thumbnail slots are independent, queued boxes yield to the viewport and can re-enter", async () => {
+  const f = update_fixture(), started = [], finish = new Map();
+  f.context.window.innerHeight = 900;
+  f.context.URL = { createObjectURL: path => "blob:" + path };
+  f.context.relay_room_bytes = path => {
+    started.push(path);
+    return new Promise(resolve => finish.set(path, () => resolve(path)));
+  };
+  const box = top => ({ closest: () => null, getBoundingClientRect: () => ({ top, bottom: top + 20 }) });
+  const read = (id, owner) => f.context.relay_file_url("/" + id + "/thumbnail", { box: owner });
+  const background = Array.from({ length: 6 }, (_, i) => read(i, box(0)));
+  const leaves = box(1300), near = box(950), visible = box(50);
+  const removed = read(6, leaves), queued = [read(7, near), read(8, visible)];
+  const original = f.context.relay_file_url("/original");
+  assert.equal(started.length, 7);
+  f.context.release_relay_box(leaves, "/6/thumbnail");
+  assert.equal(await removed, "");
+  finish.get("/0/thumbnail")();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(started.at(-1), "/8/thumbnail");
+  queued.push(read(6, leaves));
+  for (const id of [1, 2, 3, 4, 5, 8]) finish.get("/" + id + "/thumbnail")();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(started.slice(-2), ["/7/thumbnail", "/6/thumbnail"]);
+  for (const path of ["/7/thumbnail", "/6/thumbnail", "/original"]) finish.get(path)();
+  await Promise.all([...background, ...queued, original]);
+});
+
+test("urgent known-size reads start four offsets immediately and follow the actual runner part size", async () => {
+  const step = 700 * 1024, size = 3 * step + 12;
+  for (const actual of [step, step / 2]) {
+    const f = update_fixture(), offsets = [], data = Buffer.alloc(size);
+    for (let i = 0; i < size; i++) data[i] = i % 251;
+    Object.assign(f.context, { atob, Blob });
+    f.context.relay_file_part = async (_, offset) => {
+      offsets.push(offset);
+      await new Promise(resolve => setImmediate(resolve));
+      return { status: 206, total: size, content_type: "image/png",
+        body_base64: data.subarray(offset, offset + actual).toString("base64") };
+    };
+    const pending = f.context.relay_room_bytes("/image", { size, parallel: 3 });
+    assert.deepEqual(offsets, [0, step, 2 * step, 3 * step]);
+    assert.deepEqual(Buffer.from(await (await pending).arrayBuffer()), data);
+    if (actual === step) assert.equal(offsets.length, 4);
+  }
 });
 
 test("a relayed file is put together from parts asked several at a time", async () => {

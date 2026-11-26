@@ -89,7 +89,13 @@ V=<V>; T="https://registry.npmjs.org/ai_co_discuss/-/ai_co_discuss-${V#v}.tgz"; 
 codiscuss admin update 2>&1 | tail -30; codiscuss admin status 2>&1 | grep -m2 '"version"'
 ```
 
-它安装 npm 上的最新版、无提问地执行 `codiscuss setup`（更新本机技能），并重启本机服务、登录入口和原先在运行的实例；重启期间正在进行的房间执行会中断。在房间里执行本阶段时，本次执行也会被打断，所以顺序是：先提交回答（写明已开始更新、结果下次核对），**再**执行上面的命令，这是本次执行的最后一个动作，不能只在回答里说“将更新”而不执行；下次被唤醒时先用 `codiscuss admin status` 核对版本并报告。测试机等其他电脑用 `ssh <主机> "codiscuss admin update"`，在提交回答之前做；连不上就如实报告。两个 `version` 都是 `<V>` 才算成功；不是或命令报错时报告输出，不重试安装、不手动 `npm install`。
+它安装 npm 上的最新版、无提问地执行 `codiscuss setup`（更新本机技能），并重启本机服务、登录入口和原先在运行的实例；重启期间正在进行的房间执行会中断。在房间里执行本阶段时，本次执行也会被打断，而提交回答后本回合就结束了，接在回答后面的命令不会执行（0.5.28、0.5.35 两次都因此只说了“将更新”却没更新）。所以顺序是：**先**用下面的命令安排一个独立进程，等 60 秒再更新并把输出写进日志，确认它已启动；**再**提交回答（写明已安排更新、结果下次核对）：
+
+```bash
+powershell -NoProfile -Command "Start-Process -WindowStyle Hidden -FilePath cmd -ArgumentList '/c timeout /t 60 /nobreak >nul & codiscuss admin update > %USERPROFILE%\.codiscuss\last-update.log 2>&1'" && echo "本机更新已安排，60 秒后开始"
+```
+
+下次被唤醒时先用 `codiscuss admin status` 核对版本，失败时读 `~/.codiscuss/last-update.log`，并报告。测试机等其他电脑用 `ssh <主机> "codiscuss admin update"`，在提交回答之前做；连不上就如实报告。两个 `version` 都是 `<V>` 才算成功；不是或命令报错时报告输出，不重试安装、不手动 `npm install`。
 
 **中断后续做**（发版途中执行被打断，例如本机服务重启、会话结束）：先看做到哪一步，做完的不重做。
 

@@ -384,7 +384,9 @@ async function copy_share_card() {
           <UTooltip :text="t('刷新统计')">
             <UButton icon="i-lucide-refresh-cw" size="sm" color="neutral" variant="ghost" :aria-label="t('刷新统计')" :loading="loading && Boolean(report)" @click="load(true)" />
           </UTooltip>
-          <UButton icon="i-lucide-image" :label="t('生成分享图')" size="sm" color="neutral" variant="outline" :disabled="!report" @click="share_open = true" />
+          <button type="button" class="analytics-share-button" :title="t('生成分享图')" :aria-label="t('生成分享图')" :disabled="!report" @click="share_open = true">
+            <UIcon name="i-lucide-image" /><span>{{ t("生成分享图") }}</span>
+          </button>
         </div>
       </header>
 
@@ -773,6 +775,10 @@ async function copy_share_card() {
 .analytics-segmented button:hover { color: var(--ui-text-highlighted); }
 .analytics-segmented button[aria-pressed="true"] { background: var(--ui-bg-elevated); color: var(--ui-text-highlighted); box-shadow: 0 1px 2px #0000001f, 0 0 0 1px var(--ui-border-muted); }
 
+.analytics-share-button { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--ui-border); border-radius: 7px; background: transparent; color: var(--ui-text-highlighted); font-size: 12.5px; }
+.analytics-share-button:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-text) 6%, transparent); }
+.analytics-share-button:disabled { opacity: .5; }
+.analytics-share-button :deep([class*="icon"]) { width: 15px; height: 15px; }
 .analytics-skeleton { display: grid; gap: 20px; }
 .analytics-error { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--ui-error) 35%, var(--ui-border)); border-radius: 12px; background: color-mix(in srgb, var(--ui-error) 8%, transparent); font-size: 13px; }
 .analytics-error p { margin: 0; flex: 1; }
@@ -948,6 +954,11 @@ async function copy_share_card() {
   .analytics-hero-side, .analytics-hero.is-compact .analytics-hero-side { grid-template-columns: minmax(0, 1fr); }
   .analytics-stat + .analytics-stat, .analytics-hero.is-compact .analytics-stat + .analytics-stat { border-left: 0; border-top: 1px solid var(--ui-border-muted); }
   .analytics-panel { padding: 16px; }
+  /* Phones: period switch, refresh and share sit on one row; the share button keeps only its icon (#13468). */
+  .analytics-controls { flex-wrap: nowrap; gap: 4px; width: 100%; }
+  .analytics-segmented button { padding: 4px 8px; }
+  .analytics-share-button { width: 32px; padding: 0; justify-content: center; margin-left: auto; }
+  .analytics-share-button span { display: none; }
   /* Phones: tables keep the columns needed to compare at a glance instead of scrolling sideways (2026-11-26 #13416).
      Member scorecard keeps member, runs, share and completion; workflows keep name, runs, completion and cards;
      the folder legend drops the started count so folder and room names stay readable. */

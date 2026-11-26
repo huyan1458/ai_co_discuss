@@ -114,12 +114,19 @@ function centered(viewer) {
 
 // A local placeholder lets Viewer build its full-screen controls before a relayed image has an address.
 const EMPTY_IMAGE = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/%3E";
+// The step buttons fade out after this long without pointer, wheel or key activity (user 2026-11-26, #13469).
+const STEP_IDLE_MS = 2500;
+// A one-finger swipe steps when it travels this far sideways, and mostly sideways.
+const SWIPE_MIN_PX = 50;
+const SWIPE_SIDEWAYS_RATIO = 1.5;
 
 /**
  * Open immediately, resolve the image address in the background, and release the viewer when closed. `files` are the
  * images that can be stepped through, `index` the one shown first; side buttons and the left / right arrow keys step
- * between them (user 2026-11-26, #12354). `load_url(file)` resolves one file's address; `load_thumbnail(file)` its
- * smaller copy's, or "" when it has none: that copy shows first and the original takes its place once read.
+ * between them (user 2026-11-26, #12354), and on a touch screen a sideways swipe does too while the image fits the view;
+ * the side buttons fade out when left idle and come back on any activity (user 2026-11-26, #13469). `load_url(file)`
+ * resolves one file's address; `load_thumbnail(file)` its smaller copy's, or "" when it has none: that copy shows first
+ * and the original takes its place once read.
  */
 export function open_image_viewer(files, index, load_url, load_thumbnail = () => Promise.resolve("")) {
   const image = document.createElement("img");
@@ -140,6 +147,39 @@ export function open_image_viewer(files, index, load_url, load_thumbnail = () =>
     button.addEventListener("click", () => go(step));
     return button;
   }) : [];
+  let idle_timer = 0, swipe = null;
+  const touches = new Set();
+  /** Show the step buttons again and fade them out after a while without activity; a mouse resting on one keeps them. */
+  function wake_steps() {
+    if (!steps.length || closed) return;
+    viewer.viewer?.classList.remove("viewer-steps-idle");
+    clearTimeout(idle_timer);
+    idle_timer = setTimeout(() => {
+      if (closed) return;
+      if (matchMedia("(hover: hover)").matches && steps.some((button) => button.matches(":hover"))) { wake_steps(); return; }
+      viewer.viewer?.classList.add("viewer-steps-idle");
+    }, STEP_IDLE_MS);
+  }
+  // On the window in the capture phase: the pinch handling claims touch events further down and stops them there.
+  const on_pointer = (event) => {
+    if (closed || !viewer.viewer) return;
+    if (event.type === "pointermove" || event.type === "pointerdown") {
+      if (!viewer.viewer.contains(event.target)) return;
+      wake_steps();
+      if (event.type === "pointermove" || event.pointerType !== "touch") return;
+      touches.add(event.pointerId);
+      // Only a lone finger on an image that fits the view swipes: a larger image is being dragged, two fingers pinch.
+      swipe = touches.size === 1 && steps.length && centered(viewer) ? { x: event.clientX, y: event.clientY } : null;
+      return;
+    }
+    if (!touches.delete(event.pointerId)) return;
+    if (event.type === "pointerup" && swipe && !touches.size) {
+      const dx = event.clientX - swipe.x, dy = event.clientY - swipe.y;
+      if (Math.abs(dx) >= SWIPE_MIN_PX && Math.abs(dx) > SWIPE_SIDEWAYS_RATIO * Math.abs(dy)) go(dx < 0 ? 1 : -1);
+    }
+    if (!touches.size) swipe = null;
+  };
+  const pointer_events = ["pointerdown", "pointermove", "pointerup", "pointercancel"];
   const on_key = (event) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     // Viewer.js would also take the arrow keys; here they only step between the images.
@@ -149,15 +189,28 @@ export function open_image_viewer(files, index, load_url, load_thumbnail = () =>
   };
   const viewer = new Viewer(image, { navbar: false, title: [1, title], toolbar: image_toolbar(() => ({ url: loaded_url, name: file_name() })), transition: false,
     toggleOnDblclick: true, ...IMAGE_ZOOM,
-    shown() { viewer.viewer.append(cover, ...steps); },
+    shown() {
+      viewer.viewer.append(cover, ...steps);
+      for (const type of pointer_events) window.addEventListener(type, on_pointer, true);
+      viewer.viewer.addEventListener("wheel", wake_steps, { passive: true });
+      wake_steps();
+    },
     viewed() { if (shown_url && viewer.image?.src === shown_url) render(null, cover); },
-    hidden() { closed = true; document.removeEventListener("keydown", on_key, true); render(null, cover); viewer.destroy(); } });
+    hidden() {
+      closed = true;
+      clearTimeout(idle_timer);
+      for (const type of pointer_events) window.removeEventListener(type, on_pointer, true);
+      document.removeEventListener("keydown", on_key, true);
+      render(null, cover);
+      viewer.destroy();
+    } });
   /** Show the image `step` places away; the first and last image have no further step. */
   function go(step) {
     const next = current + step;
     if (closed || next < 0 || next >= files.length) return;
     current = next;
     show_steps();
+    wake_steps();
     load();
   }
   function show_steps() {
@@ -182,21 +235,31 @@ export function open_image_viewer(files, index, load_url, load_thumbnail = () =>
     const read = ++reading, file = files[current];
     loaded_url = "";
     render(h(PreviewLoading, { label: t('正在载入图片…') }), cover);
-    const original = Promise.resolve().then(() => load_url(file));
-    original.catch(() => {});
+    let showing_thumbnail = false;
+    const show_thumbnail = url => {
+      if (url && !closed && read === reading && !loaded_url) {
+        show(url);
+        showing_thumbnail = true;
+      }
+    };
     try {
-      const thumbnail = await Promise.resolve().then(() => load_thumbnail(file)).catch(() => "");
-      // Stepping on while an image was read shows the later one only.
-      if (closed || read !== reading) return;
-      if (thumbnail) show(thumbnail);
+      const original = load_url(file);
+      const preview = load_thumbnail(file);
+      if (typeof preview === "string") show_thumbnail(preview);
+      else Promise.resolve(preview).then(show_thumbnail).catch(() => {});
       const address = await original;
       if (closed || read !== reading) return;
       // The original takes the smaller copy's place where it is, keeping any zoom or turn made meanwhile.
-      if (thumbnail && viewer.image) {
+      if (showing_thumbnail && viewer.image) {
         image.src = viewer.image.src = address;
         shown_url = viewer.image.src;
       } else show(address);
       loaded_url = image.src;
+      for (const neighbor of [files[current - 1], files[current + 1]]) {
+        if (neighbor?.thumbnail_url) Promise.resolve(load_thumbnail({ ...neighbor, prefetch: true })).then(url => {
+          if (url && !url.startsWith("blob:")) new Image().src = url;
+        }).catch(() => {});
+      }
       viewer.image?.addEventListener("error", () => failed(new Error(t('图片读取失败'))), { once: true });
     } catch (error) { if (read === reading) failed(error); }
   }

@@ -15,6 +15,7 @@ import time
 import unittest
 import uuid
 import zipfile
+import zlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -761,6 +762,26 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.attachment_request(file["url"])[0], 404)
         if not self.external:
             self.assertEqual(list(Path(str(self.database) + ".attachments").iterdir()), [])
+
+    @unittest.skipUnless(os.name == "nt", "Windows system image codec")
+    def test_png_upload_includes_smaller_preview(self):
+        """A binary upload supplies its preview without a browser."""
+        width, height = 900, 300
+        def chunk(kind, data):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+        pixels = (bytes([0]) + b"abc" * width) * height
+        original = (bytes.fromhex("89504e470d0a1a0a") + chunk(b"IHDR", header)
+                    + chunk(b"IDAT", zlib.compress(pixels, 0)) + chunk(b"IEND", b""))
+        params = urlencode({"actor": "用户", "file_name": "example.png", "submission_id": "binary-preview"})
+        route = f"/api/rooms/{self.room['id']}/attachments?"
+        status, _, result = self.attachment_request(route + params, original)
+        self.assertEqual(status, 201)
+        file = json.loads(result)["attachment"]
+        status, _, preview = self.attachment_request(file["thumbnail_url"])
+        self.assertEqual(status, 200)
+        self.assertEqual(image_size(io.BytesIO(preview)), (720, 240))
+        self.assertLess(len(preview), len(original) // 2)
 
     def test_image_thumbnail_is_kept_once_with_the_original_shape_and_goes_with_it(self):
         """A page's smaller copy of an image is checked, kept once, served beside the original and removed with it."""

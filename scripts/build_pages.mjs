@@ -78,6 +78,9 @@ async function stamp_asset_versions(output) {
   // Every URL of these assets now carries its content hash, so a browser may keep them without asking again; Pages
   // otherwise revalidates each one on every visit, a round trip apiece on a slow network.
   const rules = [...versions.keys()].map((name) => `/${name}\n  Cache-Control: public, max-age=31536000, immutable\n`);
+  // Icons carry no hash: a day without asking, then the cached copy shows while the browser checks in the background
+  // (2026-11-26, iPhone on 5G: every avatar waited for its own revalidation on each visit).
+  rules.push("/icons/*\n  Cache-Control: public, max-age=86400, stale-while-revalidate=604800\n");
   await writeFile(join(output, "_headers"), rules.join(""));
 }
 

@@ -56,4 +56,5 @@ Phones support portrait layout only. Tablets support both portrait and landscape
 - **Rooms are unavailable when the computer is offline:** If the computer is off, asleep, or its local service is stopped, the room list shows **Rooms (computer offline)** or **Rooms (computer not connected)**. It reconnects when the computer comes back online.
 - **Timed-out requests are not resent automatically:** If the computer does not respond in time, the page says “Result unconfirmed.”. Check the room to see whether the action took effect before trying again.
 - **Some changes require the computer:** Changing software executable paths, browsing outside Saved projects, and adding a new device must be done at the computer.
+- **Attachment cache:** Pictures and files viewed through the relay are cached in this device’s browser and cleared when you unpair on this device.
 - **Clearing browser data requires pairing again:** Clearing browser data removes the device key. The handoff command also expires after 10 minutes, so keep the phone's clock reasonably accurate.

@@ -52,6 +52,7 @@ from .room_trace import message_trace
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
 from .free_room import review_ready, advance_review, late_answer, execution_changes, execution_changes_batch, execution_diffs
 from .free_room import checked_sequence, continue_sequence, sequence_view
+from .windows_thumbnail import encode_preview
 from . import questions
 from .visual_fences import fold_message_visuals
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label_text, is_ai, is_participant
@@ -2485,7 +2486,7 @@ def thumbnail_path(database, attachment):
 def store_attachment_thumbnail(connection, database, room_id, identifier, token, data):
     """Keep the smaller copy of an image attachment a room participant's page made; the first one stored stays.
 
-    The site cannot decode images, so it checks what it can read from the headers: a WebP or JPEG no larger than
+    Validate a client-supplied preview using its headers: a WebP or JPEG no larger than
     MAX_THUMBNAIL_SIDE pixels, smaller than the original, with the original's shape.
 
     Returns:
@@ -2512,6 +2513,45 @@ def store_attachment_thumbnail(connection, database, room_id, identifier, token,
     connection.execute("UPDATE attachments SET thumbnail_type=? WHERE id=?", (content_type, identifier))
     connection.commit()
     return {"attachment": get_attachment(connection, room_id, identifier), "duplicate": False}
+
+
+def generate_attachment_thumbnail(connection, database, attachment):
+    """Keep a smaller PNG attachment preview, if the local codec and original are available."""
+    if (os.name != "nt" or attachment["content_type"] != "image/png"
+            or attachment.get("thumbnail_type")):
+        return False
+    path = attachment_path(database, attachment)
+    try:
+        with path.open("rb") as source:
+            width, height = image_size(source)
+        data = encode_preview(path, width, height)
+        if data and data.startswith(b"\x89PNG") and len(data) > MAX_THUMBNAIL_BYTES:
+            data = encode_preview(path, width, height, max_width=360)
+        if not data or len(data) > MAX_THUMBNAIL_BYTES or len(data) * 2 >= attachment["size"]:
+            return False
+        with connection:
+            begin_write(connection)
+            updated = connection.execute("UPDATE attachments SET thumbnail_type=? "
+                                         "WHERE id=? AND thumbnail_type IS NULL", (attachment_content_type(data), attachment["id"]))
+            if not updated.rowcount:
+                return False
+            thumbnail_path(database, attachment).write_bytes(data)
+        return True
+    except (OSError, ValueError, sqlite3.Error):
+        logging.debug("Preview unavailable for %s", attachment["id"], exc_info=True)
+        return False
+
+
+def backfill_thumbnails(database, room_id):
+    """Generate missing previews in one room, one file at a time outside the write lock."""
+    with closing(connect_db(database)) as connection:
+        require_room(connection, room_id)
+        rows = connection.execute("SELECT id,content_type,size,thumbnail_type FROM attachments "
+                                  "WHERE room_id=? AND content_type='image/png' AND thumbnail_type IS NULL "
+                                  "AND message_id IS NOT NULL",
+                                  (room_id,)).fetchall()
+        generated = sum(generate_attachment_thumbnail(connection, database, dict(row)) for row in rows)
+        logging.info("Generated %d of %d missing PNG previews", generated, len(rows))
 
 
 def store_attachment(connection, database, room_id, metadata, data):
@@ -2542,6 +2582,7 @@ def store_attachment(connection, database, room_id, metadata, data):
     except Exception:
         path.unlink(missing_ok=True)
         raise
+    generate_attachment_thumbnail(connection, database, record)
     return {"attachment": get_attachment(connection, room_id, record["id"]), "duplicate": False}
 
 
@@ -5151,8 +5192,12 @@ def main():
     parser.add_argument("--no-demo", action="store_true", help="Do not seed sample data in a new database")
     parser.add_argument("--local-launch", action="store_true", help="Enable local AI launch and configuration (127.0.0.1 only)")
     parser.add_argument("--reset-admin", action="store_true", help="Delete the administrator account and sessions, then exit")
+    parser.add_argument("--backfill-thumbnails", metavar="ROOM", help="Generate missing PNG previews / 补齐房间 PNG 预览图")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    if args.backfill_thumbnails:
+        backfill_thumbnails(args.database, args.backfill_thumbnails)
+        return
     init_database(args.database, seed=not args.no_demo)
     retry_destruction(args.database)
     if args.reset_admin:
