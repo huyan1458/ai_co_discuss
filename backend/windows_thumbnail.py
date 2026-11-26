@@ -162,6 +162,8 @@ if __name__ == "__main__":
             decoded = Path(directory) / "decoded.png"
             decode_system_webp(path, decoded)
             path = decoded
-        result = encode_preview(path, width, height, 1440, project=True)
+        # The longest side asked for: 1440 for the preview, smaller for the file page's thumbnails.
+        side = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1440
+        result = encode_preview(path, width, height, max(64, min(side, 1440)), project=True)
         if result and len(result) < os.fstat(sys.stdin.fileno()).st_size:
             sys.stdout.buffer.write(result)

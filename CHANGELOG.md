@@ -2,6 +2,12 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.38 (2026-11-26 10:05)
+
+- New: The "Files" tab can switch to "Icon view", showing image thumbnails (on Windows computers for now).
+- New: Images a Markdown file links from the project now show in its preview; click one to page through them in the viewer.
+- Changed: In the image viewer, an image that fits the view stays centered; dragging only pans once zoomed in.
+
 ## 0.5.37 (2026-11-26 09:01)
 
 - Changed: Phones and other devices previewing project images on the computer show a "Reduced preview" first so they load faster; tap "View original" for detail.

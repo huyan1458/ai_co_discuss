@@ -9,7 +9,7 @@ import PreviewLoading from "./PreviewLoading.vue";
 import ZipViewer from "./ZipViewer.vue";
 import Papa from "papaparse";
 import { gunzip } from "fflate";
-import { ATTACHMENT_TEXT_LIMIT, HTML_SANDBOX, add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_range, file_preview, file_size, file_type, hold_selection, html_document, inline_markdown_images, inner_scroll_follower, media_of, modified_time, read_attachment, scrolled_out, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
+import { ATTACHMENT_TEXT_LIMIT, HTML_SANDBOX, add_excerpt as put_excerpt, crumbs_of, document_kind_of, excerpt_range, file_preview, file_size, file_type, hold_selection, html_document, inner_scroll_follower, media_of, project_markdown_images, modified_time, read_attachment, scrolled_out, subtitle_cues, text_kind_of, text_offset } from "./file-preview.js";
 import { t } from './i18n.js';
 import { INLINE_VISUAL_SANDBOX, RELAY_FRAME, relay_frame_loaded, inline_visual_document, inline_visual_theme, observe_visual_theme, open_html_preview_tab, send_visual_theme } from "./inline-visual.js";
 
@@ -110,9 +110,17 @@ const cues = computed(() => (format.value === "subtitle" && preview.value?.text 
 // Images, video and audio of a project open in the viewer and players instead of as text (an SVG keeps its source view).
 // A file from a zip has no other viewer, so its images and media play here too.
 const media_kind = computed(() => (tab.value?.attachment && !tab.value.archive ? "" : media_of(active_path.value)));
-// Images a project Markdown file refers to by relative path are read by the computer (`tab.page.images`).
-const rendered = computed(() => format.value === "markdown" && preview.value?.text
-  ? inline_markdown_images(window.discuss_markdown.render_markdown(preview.value.text, [], { source_lines: true }), tab.value?.page?.images, active_path.value.split("/").slice(0, -1).join("/")) : "");
+// Images a project Markdown file names by path show as message images do: each is read through the computer by the
+// page's shared loader once it comes near, read again when the file is (`request`). An attachment has no folder, so
+// its images stay as written.
+const rendered = computed(() => {
+  if (format.value !== "markdown" || !preview.value?.text) return "";
+  const html = window.discuss_markdown.render_markdown(preview.value.text, [], { source_lines: true });
+  const item = tab.value;
+  if (!item || item.attachment) return html;
+  return project_markdown_images(html, item.path.split("/").slice(0, -1).join("/"), item.root || 0,
+    (source) => bridge.project_media_route(item.room_id, source.root, source.path, item.request));
+});
 // Sent into the in-page preview so a selection can be quoted: once a selection settles it posts its text and boxes
 // (in the frame's viewport) to this page, which offers "添加到对话"; it clears the selection when asked. The file's own
 // scripts could post the same message; at worst that shows an offer the user still has to confirm.
@@ -300,7 +308,7 @@ function check_speech() {
 async function load(item) {
   const request = (item.request || 0) + 1;
   Object.assign(item, { request, loading: true, error: "" });
-  const page_read = !item.attachment && /\.(md|markdown|html?)$/i.test(item.path) ? load_page(item, request) : null;
+  const page_read = !item.attachment && /\.html?$/i.test(item.path) ? load_page(item, request) : null;
   try {
     // The tab is already open with its loading animation; an attachment's address (through the relay for the
     // computer's rooms) is fetched only now.
@@ -354,7 +362,6 @@ async function load_page(item, request) {
       return;
     }
     const page = await bridge.read_room_page(item.room_id, item.path, item.root || 0);
-    if (/\.(md|markdown)$/i.test(item.path)) page.images = JSON.parse(page.text || "{}");
     if (item.request === request) Object.assign(item, { page, page_error: "" });
   } catch (error) { if (item.request === request) item.page_error = error.message; }
 }
@@ -402,6 +409,27 @@ function release_media(item) {
   if (item.media?.blob) URL.revokeObjectURL(item.media.url);
   item.media = null;
   if (item.archive_url) { URL.revokeObjectURL(item.archive_url); item.archive_url = ""; }
+}
+
+/** Size each image of the rendered Markdown once it has its file: wide ones fill the line, tall ones fit the window. */
+function show_markdown_images() {
+  for (const image of markdown_body.value?.querySelectorAll("[data-markdown-image] img") || []) {
+    const size = () => image.closest("[data-markdown-image]")?.classList.toggle("is-tall", image.naturalHeight > image.naturalWidth);
+    if (image.complete && image.naturalWidth) size();
+    else image.addEventListener("load", size);
+  }
+}
+
+/** Open a shown Markdown image in the image viewer, stepping through the file's other shown images. */
+function open_markdown_image(event) {
+  const box = event.target.closest?.("[data-markdown-image]");
+  if (!box) return;
+  event.stopPropagation();
+  const images = [...markdown_body.value.querySelectorAll("[data-markdown-image] img[src]")];
+  const index = images.indexOf(box.querySelector("img[src]"));
+  if (index < 0) return;
+  const files = images.map((image) => ({ file_name: image.alt, url: image.src }));
+  open_image_viewer(files, index, (file) => Promise.resolve(file.url));
 }
 
 /**
@@ -1137,6 +1165,7 @@ watch([active_id, source, rendered], async ([id, shown_source], [last_id, last_s
 watch([active_id, source], () => { if (!speech_ready.value && !source.value && format.value === "markdown") check_speech(); });
 // Unfolded, the text is laid out anew; the reading's highlight moves onto it.
 watch(markdown_body, (root) => { if (root) { reader.rebind_document(root); nextTick(place_file_marks); } });
+watch([rendered, markdown_body], () => nextTick(show_markdown_images), { flush: "post" });
 watch(code_scroll, (root) => { if (root) nextTick(place_file_marks); });
 onMounted(() => {
   file_preview.open = open_file;
@@ -1292,7 +1321,7 @@ onBeforeUnmount(() => {
             :key="RELAY_FRAME ? html_preview : tab.id" :sandbox="tab.visual ? INLINE_VISUAL_SANDBOX : HTML_SANDBOX" referrerpolicy="no-referrer" :src="RELAY_FRAME || undefined" :srcdoc="RELAY_FRAME ? undefined : html_preview" :title="t('HTML 文件预览')" @load="html_frame_loaded"></iframe>
         </template>
         <div v-else-if="preview" ref="markdown_scroll" v-keep-reading class="project-markdown-scroll" tabindex="0" @scroll.passive="schedule_offer" @scroll.capture.passive="follow_inner_scroll" @click="open_mark_at"
-          @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" v-html="rendered"></div>
+          @wheel.passive="stop_following" @touchmove.passive="stop_following" @keydown="stop_following" @pointerdown="stop_following"><div ref="markdown_body" class="markdown-body project-markdown-preview" @click="open_markdown_image" v-html="rendered"></div>
           <button v-for="mark in file_marks" :key="mark.id" type="button" class="excerpt-mark" :style="{ left: `${mark.left}px`, top: `${mark.top}px` }" :title="t('注释 {value1}：点击修改批注', { value1: mark.number })" :aria-label="t('修改注释 {value1} 的批注', { value1: mark.number })" @click="open_mark(mark.id)">{{ mark.number }}</button></div>
         <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" class="file-selection-offer file-comment" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :style="mark_editing.touch ? {} : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }"
           @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
@@ -1529,6 +1558,13 @@ onBeforeUnmount(() => {
 .project-markdown-preview h2 { font-size: 1.4em; padding-bottom: .3em; border-bottom: 1px solid color-mix(in srgb, var(--markdown-line) 60%, transparent); }
 .project-markdown-preview h3 { font-size: 1.18em; }
 .project-markdown-preview p { margin: 0 0 1em; }
+/* Images show as message images do (markdown.css `.attachment-image`), but across the full width: a tall one keeps its
+   height within the window; one still loading keeps a wide box with the spinner. */
+.project-markdown-preview .attachment-image[data-markdown-image] { width: 100%; margin: 1.2em auto; }
+.project-markdown-preview .attachment-image[data-markdown-image] img { width: 100%; max-width: 100%; max-height: none; }
+.project-markdown-preview .attachment-image[data-markdown-image].is-tall { width: fit-content; max-width: 100%; }
+.project-markdown-preview .attachment-image[data-markdown-image].is-tall img { width: auto; max-height: 80vh; }
+.project-markdown-preview .attachment-image[data-markdown-image]:has(img[data-relay-src]:not([src])) { width: 100%; aspect-ratio: 16 / 9; }
 .project-markdown-preview li { margin: .4em 0; }
 .project-markdown-preview code { font-family: "Cascadia Code", ui-monospace, Consolas, "Microsoft YaHei", monospace; font-size: .86em; }
 .project-markdown-preview pre { line-height: 1.65; }

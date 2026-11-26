@@ -8,6 +8,11 @@ const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true })
   .use(markdown_it_cjk_friendly)
   .use(katex, { delimiters: "all", throwOnError: false, trust: false, logger: () => "ignore" });
 
+// A local image named by a `file:` address (as Typora and VS Code accept) renders as an image too; the project preview
+// reads it from the computer, a message leaves it to the browser, which does not open `file:` from a website.
+const valid_link = markdown.validateLink.bind(markdown);
+markdown.validateLink = (url) => valid_link(url) || /^file:[^?#]*\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)([?#].*)?$/i.test(url);
+
 // Platform skills the "/" menu inserts as `$id` (keep in step with PLATFORM_SKILL_COMMANDS in ChannelDiscussion.vue).
 const PLATFORM_SKILLS = ["workflow-creator"];
 const SKILL_PATTERN = new RegExp(`(^|[\\s(（，,。；;：:、])(\\$(?:${PLATFORM_SKILLS.join("|")}))(?![\\w-])`, "gu");

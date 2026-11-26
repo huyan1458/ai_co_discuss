@@ -6011,16 +6011,34 @@ function queue_relay_file(path, read, urgent, box, interest) {
   });
 }
 
+// An image a project Markdown file shows, read through the computer (`read_room_media`) by the same loader as message
+// images: `/api/rooms/<room>/project-media/<root>/<reading>/<path>`, where `<reading>` changes when the file is read
+// again, so changed images are read again too. It names no route of the website.
+const PROJECT_MEDIA_PATH = /^\/api\/rooms\/([^/?#]+)\/project-media\/([^/?#]+)\/[^/?#]+\/([^?#]+)$/;
+
+/** The loader address of one image a project Markdown file shows (see PROJECT_MEDIA_PATH). */
+function project_media_route(room_id, root, path, reading = 0) {
+  return `/api/rooms/${encodeURIComponent(room_id)}/project-media/${encodeURIComponent(String(root))}/${reading}/${encodeURIComponent(path)}`;
+}
+
+/** The bytes of one project Markdown image: the computer's smaller copy on another device, the file itself here. */
+async function read_project_media(path) {
+  const [, room, root, file] = PROJECT_MEDIA_PATH.exec(path).map(decodeURIComponent);
+  const media = await read_room_media(room, file, /^\d+$/.test(root) ? Number(root) : root);
+  try { return await (await fetch(media.url)).blob(); }
+  finally { if (media.blob) URL.revokeObjectURL(media.url); }
+}
+
 /** Read once, sharing both in-flight reads and completed object URLs with the viewer. */
 function relay_file_url(path, { urgent = false, size = 0, box = null } = {}) {
   if (!relay_files.has(path)) {
     const scope = RELAY_ATTACHMENT_PATH.test(path) ? attachment_cache_scope() : "";
     const cacheable = scope && !removed_attachment_path(path);
     const interest = { urgent, size, boxes: new Set(box ? [box] : []), pinned: !box };
-    const read_network = () => queue_relay_file(path, (parallel, promoted_size) =>
-      relay_room_bytes(path, { parallel, size: promoted_size || interest.size }), interest.urgent, box, interest);
+    const read_network = () => queue_relay_file(path, (parallel, promoted_size) => PROJECT_MEDIA_PATH.test(path) ? read_project_media(path)
+      : relay_room_bytes(path, { parallel, size: promoted_size || interest.size }), interest.urgent, box, interest);
     const read = async () => {
-      if (SHARE) return relay_room_bytes(path);
+      if (SHARE && !PROJECT_MEDIA_PATH.test(path)) return relay_room_bytes(path);
       if (!cacheable) return read_network();
       relay_cache_checks.set(path, interest);
       const cached = await lookup_cached_attachment(scope, path);
@@ -6850,6 +6868,29 @@ async function read_room_media(room_id, path, root = 0, on_progress = () => {}, 
   if (scope && (scope !== attachment_cache_scope() || relay_removed_paths.has(room_prefix))) throw new Error(t('文件读取失败'));
   if (!unchanged && first.preview_version && cached) keep_cached_attachment(scope, prefix + first.preview_version, blob, cached.epoch);
   return { url: URL.createObjectURL(blob), content_type: blob.type, size: first.size, blob: true, preview: Boolean(first.preview_version) };
+}
+
+// Thumbnails the file page's icon view has shown, by room, folder, path and file version: a Blob URL, or "" for none.
+const room_thumbnails = new Map();
+const ROOM_THUMBNAIL_LIMIT = 600;
+
+/**
+ * The address of the small copy of one project image the computer made for the file page's icon view, or "" where it
+ * made none (the page keeps the file's icon). `version` is the listing's size and modification time, so a changed file
+ * is read again.
+ */
+async function read_room_thumbnail(room_id, path, root = 0, version = "") {
+  const key = JSON.stringify([room_id, root, path, version]);
+  if (room_thumbnails.has(key)) return room_thumbnails.get(key);
+  const answer = await local_launch_request("room-media", { room_id, path, root, thumbnail: true, token: localStorage.getItem(`discuss-access:${room_id}`) });
+  const url = answer.data ? URL.createObjectURL(new Blob([base64_to_bytes(answer.data)], { type: answer.content_type })) : "";
+  room_thumbnails.set(key, url);
+  if (room_thumbnails.size > ROOM_THUMBNAIL_LIMIT) {
+    const [oldest, address] = room_thumbnails.entries().next().value;
+    room_thumbnails.delete(oldest);
+    if (address) URL.revokeObjectURL(address);
+  }
+  return url;
 }
 
 /** Assemble up to three subsequent ranges at a time; retain ordering and reject a changed file or representation. */
@@ -9195,7 +9236,8 @@ function watch_room_files() {
     video.addEventListener("seeked", () => video.removeAttribute("poster"), { once: true });
     video.currentTime = 0.001;
   }, true);
-  new MutationObserver((records) => { if (files_by_blob()) show_relay_images(records); }).observe(document.body, { childList: true, subtree: true });
+  // Project Markdown images are read through the computer on this computer's own page too (PROJECT_MEDIA_PATH).
+  new MutationObserver((records) => show_relay_images(records)).observe(document.body, { childList: true, subtree: true });
 }
 
 /** Open the one room a share page carries, with no administrator, launcher, relay or live updates behind it. */
@@ -10186,7 +10228,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   device: { recent_timings: () => recent_relay_times.slice(), request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, load_earlier_messages, load_messages_until, can_retract_message, identities: IDENTITIES, platform_identity: name => PLATFORM_IDENTITIES[name], display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, set_member_prompt, read_system_prompts, save_system_prompts, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, local_page_url, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, set_member_prompt, read_system_prompts, save_system_prompts, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, local_page_url, read_room_media, read_room_thumbnail, project_media_route, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

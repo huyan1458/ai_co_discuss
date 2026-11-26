@@ -26,8 +26,9 @@ export function image_toolbar(source) {
 }
 // Two fingers only pinch to zoom: Viewer.js would also turn the image by any small twist of the fingers (rotateOnGesture,
 // rotateOnTouch), which tilts it at odd angles; the toolbar still rotates by 90 degrees.
-// An image that fits the view stays centered: dragging only pans an image larger than the view, and zooming back
-// down to a fitting size centers it again. Viewer.js passes the image element, which holds the viewer as `viewer`.
+// An image that fits the view stays centered: dragging only pans an image larger than the view, and no edge of it may
+// come inside the view's edge (user 2026-11-26, #13732, as the Windows photo viewer); zooming or turning puts it back in
+// bounds. Viewer.js passes the image element, which holds the viewer as `viewer`.
 export const IMAGE_ZOOM = { zoomRatio: 0.2, minZoomRatio: 0.05, maxZoomRatio: 40, rotateOnGesture: false, rotateOnTouch: false,
   ready() {
     const save = this.viewer.toolbar.querySelector(".viewer-save");
@@ -35,8 +36,15 @@ export const IMAGE_ZOOM = { zoomRatio: 0.2, minZoomRatio: 0.05, maxZoomRatio: 40
     save?.setAttribute("title", t('保存图片'));
     one_gesture_at_a_time(this.viewer);
   },
-  move(event) { const center = centered(this.viewer); if (center && (event.detail.x !== center.x || event.detail.y !== center.y)) event.preventDefault(); },
-  zoomed() { const center = centered(this.viewer); if (center) this.viewer.moveTo(center.x, center.y); } };
+  move(event) {
+    const bound = bounded(this.viewer, event.detail.x, event.detail.y);
+    if (!bound || (bound.x === event.detail.x && bound.y === event.detail.y)) return;
+    event.preventDefault();
+    // Viewer.js hooks this handler again for the second move, which is already in bounds and goes through.
+    this.viewer.moveTo(bound.x, bound.y);
+  },
+  zoomed() { keep_in_bounds(this.viewer); },
+  rotated() { keep_in_bounds(this.viewer); } };
 
 // How far the two fingers must spread or close before a pinch counts, so resting them on the image changes nothing.
 const PINCH_START_PX = 8;
@@ -100,6 +108,27 @@ function one_gesture_at_a_time(viewer) {
   for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
     viewer.viewer.addEventListener(type, (event) => { if (fingers.size) claim(event); }, { capture: true, passive: false });
   }
+}
+
+/**
+ * Where the image may sit when asked to sit at `x`, `y` (its unrotated top-left inside the view): an axis it fits on
+ * stays centered, an axis it overflows keeps both edges at or beyond the view's edges. Null before an image is shown.
+ */
+function bounded(viewer, x, y) {
+  const { imageData, viewerData, initialImageData: initial } = viewer || {};
+  if (!imageData || !viewerData || !initial) return null;
+  const turned = Math.abs(imageData.rotate || 0) % 180 === 90;
+  const [width, height] = turned ? [imageData.height, imageData.width] : [imageData.width, imageData.height];
+  // A quarter turn swaps the box around the same center, so the box's top-left sits `shift` from the image's.
+  const axis = (position, box, room, center, shift) => box <= room + 1 ? center : Math.min(-shift, Math.max(room - box - shift, position));
+  return { x: axis(x, width, viewerData.width, initial.left + (initial.width - imageData.width) / 2, (imageData.width - width) / 2),
+    y: axis(y, height, viewerData.height, initial.top + (initial.height - imageData.height) / 2, (imageData.height - height) / 2) };
+}
+
+/** Move the image back inside the bounds after a zoom or turn left it elsewhere. */
+function keep_in_bounds(viewer) {
+  const bound = bounded(viewer, viewer.imageData?.x, viewer.imageData?.y);
+  if (bound && (bound.x !== viewer.imageData.x || bound.y !== viewer.imageData.y)) viewer.moveTo(bound.x, bound.y);
 }
 
 /** The image's centered position while it fits inside the view (rotation counted), or null when it is larger. */

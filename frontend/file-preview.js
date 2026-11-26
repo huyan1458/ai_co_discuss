@@ -317,13 +317,37 @@ export function markdown_image_path(base, src) {
   return parts.join("/");
 }
 
-/** Point the images of rendered Markdown at the data URLs the computer read for them; others stay as written. */
-export function inline_markdown_images(html, images, base) {
-  if (!images) return html;
-  return html.replace(/<img src="([^"]*)"/g, (whole, src) => {
-    const url = images[markdown_image_path(base, src)];
-    return url ? `<img src="${url}"` : whole;
+/**
+ * Show the images of a project Markdown file the way a message shows its images (`.attachment-image`, markdown.css):
+ * a box with a spinner until the image comes near and is read through the computer (`route(source)`, the page's shared
+ * relayed-image reader), then the image; one that cannot be read says so. Web addresses and data URLs load as written.
+ */
+export function project_markdown_images(html, base, root, route) {
+  return html.replace(/<img src="([^"]*)"([^>]*)>/g, (whole, src, rest) => {
+    let image = whole;
+    if (!/^(https?:|data:|blob:|\/\/)/i.test(src)) {
+      const source = markdown_image_source(base, src, root);
+      image = source ? `<img data-relay-src="${route(source)}"${rest}>` : `<img data-relay-src="" data-relay-failed="1"${rest}>`;
+    }
+    return `<button type="button" class="attachment-image" data-markdown-image>${image}</button>`;
   });
+}
+
+/**
+ * What the computer is asked for one Markdown image: `{ path, root }`, or null for a relative path leaving the project.
+ * Paths are taken as the common Markdown editors take them: relative to the file, `/…` from the project folder (or an
+ * absolute path where the computer has one inside a room directory), `D:\…`, `D:/…`, UNC and `file:` addresses as
+ * absolute paths on the computer, which reads them only inside the room's directories.
+ */
+export function markdown_image_source(base, src, root) {
+  let raw = src.replace(/&amp;/g, "&").trim().replace(/[?#].*$/, "");
+  try { raw = decodeURIComponent(raw); } catch { /* Kept as written. */ }
+  const file = /^file:(\/\/)?(.*)$/i.exec(raw);
+  // file:///D:/a.png, file://server/share/a.png (UNC) and file:///home/a.png (an absolute POSIX path).
+  if (file) raw = /^\/[a-z]:[\\/]/i.test(file[2]) ? file[2].slice(1) : file[1] && !file[2].startsWith("/") ? `\\\\${file[2].replace(/\//g, "\\")}` : file[2];
+  if (/^([a-z]:[\\/]|\\\\)/i.test(raw) || raw.startsWith("/")) return { path: raw, root };
+  const path = markdown_image_path(base, src);
+  return path === null ? null : { path, root };
 }
 
 /** Split a project-relative path into clickable crumbs, rooted at the project folder's own name. */

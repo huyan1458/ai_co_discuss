@@ -480,6 +480,8 @@
   "正在读取项目目录": "Loading project folder",
   "重新读取目录": "Reload folder",
   "此文件夹为空": "This folder is empty",
+  "列表视图": "List view",
+  "图标视图": "Icon view",
   "{value1} 项": "{value1} items",
   "，已显示 {value1} 项": "; {value1} shown",
   "正在排版 Word 文档…": "Laying out Word document…",

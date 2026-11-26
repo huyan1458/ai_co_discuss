@@ -742,9 +742,12 @@ export const REMOTE_MEDIA_MAX_BYTES = 64 * 1024 * 1024;
 const PROJECT_PREVIEW_SLOTS = 12;
 const PROJECT_PREVIEW_CONCURRENCY = 2;
 const PROJECT_PREVIEW_MAX = 8 * 1024 * 1024;
+// The file page's icon view: the longest side of an image's thumbnail, and how many of them the computer keeps.
+const PROJECT_THUMBNAIL_SIDE = 256;
+const PROJECT_THUMBNAIL_SLOTS = 400;
 
 /** Keep completed previews in an LRU; queued and running versions share a promise until encoding finishes. */
-export function project_preview_reader(probe) {
+export function project_preview_reader(probe, slots = PROJECT_PREVIEW_SLOTS) {
   const cached = new Map(), pending = new Map(), waiting = [];
   let python, running = 0;
   async function generate(home, key, encode) {
@@ -755,7 +758,7 @@ export function project_preview_reader(probe) {
       const bytes = await encode(await python);
       if (bytes) {
         cached.set(key, bytes);
-        if (cached.size > PROJECT_PREVIEW_SLOTS) cached.delete(cached.keys().next().value);
+        if (cached.size > slots) cached.delete(cached.keys().next().value);
       }
       return bytes;
     } catch { return null; }
@@ -778,13 +781,14 @@ export function project_preview_reader(probe) {
 }
 
 const project_preview_bytes = project_preview_reader(home => detect_python(local_settings(home).python));
+const project_thumbnail_bytes = project_preview_reader(home => detect_python(local_settings(home).python), PROJECT_THUMBNAIL_SLOTS);
 
-async function encode_project_preview(preview_python, file) {
+async function encode_project_preview(preview_python, file, side = 1440) {
   const script = join(import.meta.dirname, '..', 'backend', 'windows_thumbnail.py');
   const fd = openSync(file, 'r');
   let child;
   try {
-    child = spawn(preview_python, ['-I', '-B', script], {
+    child = spawn(preview_python, ['-I', '-B', script, String(side)], {
       windowsHide: true, timeout: 15000, stdio: [fd, 'pipe', 'ignore'], cwd: dirname(script),
     });
   } finally { closeSync(fd); }
@@ -809,12 +813,18 @@ async function encode_project_preview(preview_python, file) {
  */
 export async function room_media(home, raw, { trust = false, parts = false } = {}) {
   const { input, config } = await member_room_context(home, raw, { trust });
+  // A Markdown file may name an image by its absolute path on this computer: it is read from the room directory holding
+  // it. `/…` is such a path where one exists (macOS, Linux), otherwise a path from the project folder, as editors take it.
+  const named = String(input.path || '');
+  if (/^([a-zA-Z]:[\\/]|\\\\)/.test(named)) Object.assign(input, absolute_room_path(config, named, win32));
+  else if (named.startsWith('/')) Object.assign(input, (process.platform !== 'win32' && absolute_room_path(config, named, posix, false)) || { path: named.replace(/^\/+/, '') });
   const root = input.root ?? 0;
   const offset = input.offset ?? 0;
   const directory = files_root(home, config, root);
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('文件读取位置无效');
   // `download` reads any regular file for saving, not only the kinds the preview shows.
   const { file, ...media } = project_media(directory, input.path, { download: input.download === true });
+  if (input.thumbnail === true) return { room_id: input.room_id, root, ...media, ...await project_thumbnail(home, directory, input.path, file, media) };
   // The folder goes to the computer's own website alone, for a page opened in a tab (it never reaches a page).
   if (!parts) return { room_id: input.room_id, root, ...media, file, directory };
   if (media.size > REMOTE_MEDIA_MAX_BYTES) {
@@ -842,6 +852,37 @@ export async function room_media(home, raw, { trust = false, parts = false } = {
   const handle = openSync(file, 'r');
   try { readSync(handle, part, 0, part.length, offset); } finally { closeSync(handle); }
   return { room_id: input.room_id, root, ...media, total: media.size, offset, data: part.toString('base64') };
+}
+
+/**
+ * `{ root, path }` of an absolute path (`paths`: node's win32 or posix) inside one of the room's directories; elsewhere
+ * refused, or null when not `required`.
+ */
+function absolute_room_path(config, path, paths, required = true) {
+  const target = paths.resolve(path);
+  for (const [root, directory] of room_directories(config).entries()) {
+    const inside = paths.relative(paths.resolve(directory), target);
+    if (inside && !inside.startsWith('..') && !paths.isAbsolute(inside)) return { root, path: inside.replaceAll('\\', '/') };
+  }
+  if (!required) return null;
+  throw new Error('图片不在房间的项目目录内，无法读取');
+}
+
+/**
+ * The small copy of one project image the file page's icon view shows, made on this computer for both its own page and
+ * another device: `{ data, content_type }` (base64, whole), or `{ data: null }` where none can be made (not a PNG, JPEG
+ * or WebP, not Windows, an image too large to decode), and the page keeps the file's icon.
+ */
+async function project_thumbnail(home, directory, path, file, media) {
+  if (process.platform !== 'win32' || !/^image\/(png|jpeg|webp)$/.test(media.content_type)) return { data: null };
+  const key = createHash('sha256').update(JSON.stringify([file, media.version, `${PROJECT_THUMBNAIL_SIDE}-v1`])).digest('hex');
+  const bytes = await project_thumbnail_bytes(home, key, python => {
+    const ready = project_media(directory, path);
+    if (ready.file !== file || ready.version !== media.version) return null;
+    return encode_project_preview(python, file, PROJECT_THUMBNAIL_SIDE);
+  });
+  if (!bytes || bytes.length > PAGE_PART_BYTES) return { data: null };
+  return { content_type: bytes[0] === 0xff ? 'image/jpeg' : 'image/png', data: bytes.toString('base64') };
 }
 
 /** `room-media` asked for by another device, answered inside the relay's own process in parts. */

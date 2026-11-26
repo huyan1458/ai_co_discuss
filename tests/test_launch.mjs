@@ -516,10 +516,11 @@ test('a Markdown preview gets the project images it shows, keyed as the page res
   assert.deepEqual(page.missing.sort(), ['../outside.png', 'docs/images/none.webp']);
   // The page renders the same file and finds each image under the key the computer sent.
   const { render_markdown } = await import('../frontend/markdown.mjs');
-  const { inline_markdown_images } = await import('../frontend/file-preview.js');
-  const html = inline_markdown_images(render_markdown(text), images, 'docs');
-  for (const url of Object.values(images)) assert.ok(html.includes(`<img src="${url}"`), url.slice(0, 30));
-  assert.ok(html.includes('src="../../outside.png"'), 'a path outside the project stays as written');
+  const { project_markdown_images } = await import('../frontend/file-preview.js');
+  const html = project_markdown_images(render_markdown(text), 'docs', 0, (source) => encodeURIComponent(source.path));
+  const asked = [...html.matchAll(/data-relay-src="([^"]*)"/g)].map(([, route]) => decodeURIComponent(route));
+  for (const key of Object.keys(images)) assert.ok(asked.includes(key), key);
+  assert.ok(html.includes('data-relay-src="" data-relay-failed="1"'), 'a path outside the project is not asked for');
 });
 
 test('project previews share queued versions, cap encoding at two and retry an unsuccessful conversion', async () => {
@@ -572,6 +573,11 @@ test('a remote project image preview shrinks, revalidates changed bytes and fall
   assert.ok(first.total < original.length && first.preview_version);
   assert.equal((await remote({ known_preview: first.preview_version })).unchanged, true);
   assert.equal((await room_media(f.home, input)).file, file);
+  // The icon view's thumbnail comes back whole to the computer's own page too, smaller than the preview, without the path.
+  const thumbnail = await room_media(f.home, { ...input, preview: undefined, thumbnail: true });
+  assert.equal(thumbnail.content_type, 'image/jpeg');
+  assert.ok(Buffer.from(thumbnail.data, 'base64').length < first.total);
+  assert.equal(thumbnail.file, undefined);
   writeFileSync(file, Buffer.concat([original, Buffer.alloc(1)]));
   const changed = await remote({ known_preview: first.preview_version });
   assert.ok(changed.preview_version && changed.preview_version !== first.preview_version);
@@ -597,6 +603,13 @@ test('a project media file is named to the local site, and reaches another devic
   const local = await room_media(f.home, input);
   assert.equal(local.content_type, 'video/mp4');
   assert.equal(local.file, join(project, 'media', 'clip.mp4'), 'the local site streams the checked file');
+  if (process.platform === 'win32') {
+    // A Markdown image named by its absolute path is read from the room directory holding it, and nowhere else.
+    assert.equal((await room_media(f.home, { ...input, path: join(project, 'media', 'clip.mp4') })).file, join(project, 'media', 'clip.mp4'));
+    await assert.rejects(room_media(f.home, { ...input, path: join(f.directory, 'outside.mp3') }), /不在房间的项目目录内/);
+    // `/…` on Windows names a path from the project folder, as Markdown editors take it.
+    assert.equal((await room_media(f.home, { ...input, path: '/media/clip.mp4' })).file, join(project, 'media', 'clip.mp4'));
+  }
   const parts = [];
   for (let offset = 0; offset < clip.length;) {
     const part = await room_media(f.home, { ...input, offset }, { trust: true, parts: true });

@@ -2,6 +2,7 @@
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { file_preview, file_size, file_type, folder_listings, modified_time, shown_folders } from "./file-preview.js";
 import { t } from './i18n.js';
+import ProjectFileThumbnail from "./ProjectFileThumbnail.vue";
 
 // The room's project directories, the main one first; with more than one, a switch above the list picks which is shown.
 // Above them, "项目" lists the account's projects and drafts (runner `account_roots`), each opened by its id.
@@ -45,6 +46,10 @@ const SWEEP_BATCH = 100, SWEEP_FOLDER_LIMIT = 10000, SWEEP_SETTLE_MS = 3000;
 const SWEEP_SKIPPED = new Set(["node_modules", ".git", "__pycache__", ".venv", "venv"]);
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 let sweep_run = 0, sweep_timer = 0, left_page = false;
+// "list" (name, size, time) or "icons" (tiles with image thumbnails), kept for this browser.
+const LAYOUT_KEY = "codiscuss-project-files-layout";
+const layout = ref(localStorage.getItem(LAYOUT_KEY) === "icons" ? "icons" : "list");
+watch(layout, (value) => localStorage.setItem(LAYOUT_KEY, value));
 const key_in = (top, path) => `${top}
 ${path}`;
 const cache_key = (path) => key_in(directory.value, path);
@@ -402,6 +407,8 @@ const deleted_time = (value) => modified_time(value);
           <UButton icon="i-lucide-upload" color="neutral" variant="ghost" size="sm" :aria-label="t('上传文件')" :title="t('上传文件（单个不超过 20 MB）')" :disabled="busy" @click="file_input?.click()" />
           <UButton v-if="clipboard" icon="i-lucide-clipboard-paste" color="neutral" variant="soft" size="sm" :label="t('粘贴')" :title="t('粘贴 {value1}', { value1: clipboard.name })" :disabled="busy" @click="paste" />
           <input ref="file_input" type="file" multiple hidden @change="upload_files($event.target.files)" />
+          <UButton :icon="layout === 'icons' ? 'i-lucide-list' : 'i-lucide-layout-grid'" color="neutral" variant="ghost" size="sm"
+            :aria-label="layout === 'icons' ? t('列表视图') : t('图标视图')" :title="layout === 'icons' ? t('列表视图') : t('图标视图')" @click="layout = layout === 'icons' ? 'list' : 'icons'" />
         </template>
         <UButton v-if="mode === 'roots' && roots?.can_create_project" icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="sm" :label="t('新建项目')" :disabled="loading || busy" @click="start_naming('project')" />
         <UButton icon="i-lucide-trash-2" color="neutral" :variant="mode === 'trash' ? 'soft' : 'ghost'" size="sm" :aria-label="t('回收区')" :title="t('回收区')" @click="mode === 'trash' ? open_project(current_path) : show_trash()" />
@@ -501,9 +508,25 @@ const deleted_time = (value) => modified_time(value);
       </template>
 
       <template v-else-if="mode === 'folder'">
-        <div class="project-files-columns" aria-hidden="true"><span>{{ t('名称') }}</span><span>{{ t('大小') }}</span><span>{{ t('修改时间') }}</span></div>
+        <div v-if="layout === 'list'" class="project-files-columns" aria-hidden="true"><span>{{ t('名称') }}</span><span>{{ t('大小') }}</span><span>{{ t('修改时间') }}</span></div>
+        <!-- Tiles change only with the listing; each loads its own thumbnail once it scrolls into view. -->
+        <div v-if="layout === 'icons' && listing?.entries.length" v-memo="[listing, directory, root, busy]" class="project-files-tiles">
+          <UContextMenu v-for="entry in listing.entries" :key="entry.path" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu' }">
+          <div class="project-file-tile" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable' }">
+            <button type="button" :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? t('{value1}（无法读取或指向项目外）', { value1: entry.name }) : entry.name"
+              @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, account_root ? account_root.name : directory, root, entry)">
+              <ProjectFileThumbnail :key="`${entry.size}:${entry.modified_at}`" :entry="entry" :root="root" :icon="entry_icon(entry)" />
+              <span class="project-file-tile-name">{{ entry.name }}</span>
+            </button>
+            <UDropdownMenu v-if="entry.kind !== 'unavailable'" :items="entry_menu(entry)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+              <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="project-file-tile-menu" :aria-label="t('{value1} 的操作', { value1: entry.name })" :disabled="busy" />
+            </UDropdownMenu>
+          </div>
+          </UContextMenu>
+        </div>
         <!-- Rows change only with the listing; the room's directories arrive as a new array on every view publish. -->
-        <div v-memo="[listing, loading, directory, root, busy]" class="project-files-rows">
+        <div v-memo="[listing, loading, directory, root, busy, layout]" class="project-files-rows">
+          <template v-if="layout === 'list'">
           <UContextMenu v-for="entry in listing?.entries || []" :key="entry.path" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu' }">
           <div class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable' }">
             <button type="button" class="project-file-name" :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? t('{value1}（无法读取或指向项目外）', { value1: entry.name }) : entry.name"
@@ -519,6 +542,7 @@ const deleted_time = (value) => modified_time(value);
             </span>
           </div>
           </UContextMenu>
+          </template>
           <div v-if="!listing && loading" role="status" :aria-label="t('正在读取项目目录')">
             <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
           </div>
@@ -583,6 +607,21 @@ const deleted_time = (value) => modified_time(value);
 .project-file-name > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .project-file-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .project-file-row time, .project-file-size { color: var(--ui-text-dimmed); font-size: 12px; font-variant-numeric: tabular-nums; }
+.project-files-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 6px; padding: 8px; }
+.project-file-tile { position: relative; min-width: 0; border-radius: 8px; }
+@media (hover: hover) { .project-file-tile:hover { background: var(--ui-bg-accented); } }
+.project-file-tile.is-unavailable { opacity: .45; }
+.project-file-tile > button { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; padding: 8px; border-radius: 8px; cursor: pointer; }
+.project-file-tile > button:disabled { cursor: default; }
+.project-file-tile > button:focus-visible { outline: 1px solid var(--ui-primary); outline-offset: -1px; }
+.project-file-tile-name { display: -webkit-box; width: 100%; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 12px; line-height: 16px;
+  text-align: center; overflow-wrap: anywhere; }
+.project-file-tile.is-hidden .project-file-tile-name { color: var(--ui-text-muted); }
+.project-file-tile-menu { position: absolute; top: 4px; right: 4px; }
+@media (hover: hover) {
+  .project-file-tile-menu { opacity: 0; }
+  .project-file-tile:hover .project-file-tile-menu, .project-file-tile:focus-within .project-file-tile-menu, .project-file-tile-menu[data-state="open"] { opacity: 1; }
+}
 .project-files-footer { display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 14px; border-top: 1px solid var(--ui-border); color: var(--ui-text-dimmed); font-size: 12px; }
 .project-files-empty { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 40px 12px; font-size: 13px; color: var(--ui-text-muted); }
 .project-files-empty.is-small { padding: 8px 12px; justify-content: flex-start; font-size: 12px; }
@@ -592,5 +631,7 @@ const deleted_time = (value) => modified_time(value);
   .project-explorer-path button { padding: 3px 4px; }
   .project-files-columns, .project-file-row { grid-template-columns: minmax(0, 1fr) 64px auto; gap: 8px; }
   .project-files-columns > :last-child, .project-file-row time, .project-file-date { display: none; }
+  .project-files-tiles { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 4px; padding: 6px; }
+  .project-file-tile > button { padding: 6px; }
 }
 </style>

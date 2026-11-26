@@ -4108,8 +4108,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 payload = {"site": site}
         if command == "room-config" and "participants" in payload:
             return self.save_local_room_configuration(command, payload)
-        # The computer's own page plays a project media file straight from disk by a ticket, with ranges for seeking.
-        if command == "room-media" and not self.bridge_origin:
+        # The computer's own page plays a project media file straight from disk by a ticket, with ranges for seeking;
+        # a thumbnail comes back whole, as to another device.
+        if command == "room-media" and not self.bridge_origin and payload.get("thumbnail") is not True:
             return self.issue_media_ticket(payload)
         # A connected website's page is another device's entry: it gets the same limits as the relay.
         return self.run_local_command(command, payload, remote=bool(self.bridge_origin) and command != "machine-link")
