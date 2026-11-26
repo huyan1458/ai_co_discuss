@@ -1,6 +1,6 @@
 {
   "name": "ai_co_discuss",
-  "version": "0.5.35",
+  "version": "0.5.36",
   "bin": {
     "codiscuss": "runner/codiscuss.mjs"
   },
@@ -38,6 +38,7 @@
     "@vue-flow/core": "1.48.2",
     "@vue-flow/minimap": "1.5.4",
     "docx-preview": "0.4.1",
+    "fake-indexeddb": "6.2.8",
     "fflate": "0.8.3",
     "jsqr": "1.4.0",
     "katex": "0.18.10",
