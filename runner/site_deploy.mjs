@@ -516,7 +516,9 @@ async function write_stage_record(home, { room_id, site, write_token }, { real_t
     stage_id, room_id, local_path: real_target, kind, directory: display_dir, title,
     exclude: Array.isArray(input.exclude) ? input.exclude : [], created_at: new Date().toISOString(),
   });
-  if (room_id && site) {
+  // The owner's deploy dialog stages a file only to show what would go public (`preview`): the stage stays on this
+  // computer, so no "待部署" card appears under the answer unless it is published (user 2026-11-25, #12748).
+  if (room_id && site && !input.preview) {
     await room_api_request(site, `/api/rooms/${encodeURIComponent(room_id)}/sites`, {
       method: 'POST', token: write_token, body: payload, fetcher,
     });

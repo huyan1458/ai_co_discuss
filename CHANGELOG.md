@@ -2,6 +2,12 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.31 (2026-11-25 21:17)
+
+- Fixed: Model API members resuming an old session could not use room commands; they now start a new session and the card says why.
+- Fixed: After a prompt changed, model API members kept working from the old prompt.
+- Fixed: Previewing a site without confirming the deploy still left a site card under the answer.
+
 ## 0.5.30 (2026-11-25 19:42)
 
 - Fixed: Previewing some web page files showed only the top and left the rest blank.

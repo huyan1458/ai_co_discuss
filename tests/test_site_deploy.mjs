@@ -67,6 +67,20 @@ test("a member stages and publishes a built folder of its room", async () => {
   } finally { rmSync(base, { recursive: true, force: true }); }
 });
 
+test("the deploy dialog's preview stage leaves no waiting card in the room until it is published", async () => {
+  const { base, home } = setup();
+  try {
+    const net = fake_network();
+    const options = { fetcher: net.fetcher, sites_origin: ORIGIN };
+    const room_writes = () => net.calls.filter((call) => call.origin === SITE && call.method === "POST").length;
+    const staged = await site_command(home, "site-stage", { room_id: ROOM, dir: "dist", member: "Claude", execution_id: 7, preview: true }, options);
+    assert.equal(room_writes(), 0, "only opening the dialog writes nothing to the room");
+    const published = await site_command(home, "site-publish", { room_id: ROOM, stage_id: staged.stage_id, member: "Claude", execution_id: 7 }, options);
+    assert.equal(published.url, "https://abcdefghij.sites.test");
+    assert.ok(room_writes() >= 1, "a confirmed deploy is recorded as the answer's site");
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
 function diagnostic_fixture(t) {
   const { base, home } = setup();
   t.after(() => rmSync(base, { recursive: true, force: true }));

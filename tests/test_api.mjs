@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { listen_local } from './local_port.mjs';
 import { API_PROVIDERS, api_base_url, api_check, api_generate, api_history, api_models, api_request, api_response, api_tool_results, read_api_key, save_api_key } from '../runner/discussion_api.mjs';
 import { api_lockdown, execute_tool, participant_tools, system_prompt } from '../runner/adapters/api.mjs';
-import { BASH_MISSING, find_bash, pi_delivery } from '../runner/adapters/api_pi.mjs';
+import { BASH_MISSING, find_bash, pi_delivery, session_fits, session_tools } from '../runner/adapters/api_pi.mjs';
 import { pi_tool_path } from '../runner/adapters/api_pi_extension.mjs';
 import { fetch_page, html_text, is_private_address, run_web_tool, web_search_key } from '../runner/adapters/api_web.mjs';
 import { deliver_task, execution_details } from '../runner/adapters/index.mjs';
@@ -691,6 +691,48 @@ test('a read-only check sees the path Pi would open: ~, @, file:// and Git Bash 
     assert.equal(at('notes\u00A0a.txt'), join(project, 'notes a.txt'));
     if (process.platform === 'win32') assert.equal(at('/c/Windows/win.ini'), 'C:\\Windows\\win.ini');
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('a session is resumed only if Pi restores the tools the run needs: shell for a native run, room tools for a confined one', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-pi-legacy-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const sessions = join(home, 'pi', 'sessions');
+  mkdirSync(sessions, { recursive: true });
+  const file = id => join(sessions, `2026-11-24T00-00-00-000Z_${id}.jsonl`);
+  const write = (id, ...systems) => writeFileSync(file(id), [{ type: 'session', version: 3, id }, { type: 'model_change', provider: 'codiscuss', modelId: 'm' },
+    ...systems.map(([added, removed = []]) => ({ type: 'message', message: { role: 'system', content: '', sections: { preamble: '提到 submit_chat 也无妨' },
+      toolsAdded: added.map(name => ({ name })), ...(removed.length ? { toolsRemoved: removed.map(name => ({ name })) } : {}) } }))]
+    .map(item => JSON.stringify(item)).join('\n') + '\n');
+  write('old-confined', [['read_room', 'read', 'grep', 'submit_chat', 'web_fetch']]);
+  // A native session whose project AGENTS.md happens to mention submit_chat is still native: its tools decide.
+  write('old-native', [['read', 'bash', 'edit', 'write', 'web_fetch']]);
+  // Later system messages change the loadout: a shell removed afterwards is gone.
+  write('shell-removed', [['read', 'bash']], [[], ['bash']]);
+  assert.deepEqual([...session_tools(file('old-confined'))].sort(), ['grep', 'read', 'read_room', 'submit_chat', 'web_fetch']);
+  assert.equal(session_fits(file('old-confined'), true), false);
+  assert.equal(session_fits(file('old-native'), true), true);
+  assert.equal(session_fits(file('shell-removed'), true), false);
+  const launch = (session_id, native = true) => {
+    let args;
+    const notes = [];
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+    child.kill = () => child.emit('close', null);
+    const result = pi_delivery({ cli: 'pi.js', profile: { model: 'm', api_protocol: 'chat' }, key: 'k', binding: { session_id }, service_home: home, native,
+      context_file: '', system_file: native ? '' : join(home, 'system.md'), prompt: 'go', task: { id: 'free-1', directory: home, on_note: note => notes.push(note) },
+      spawn_process: (_node, given) => { args = given; return child; } });
+    child.emit('close', 0);
+    return { args, notes, session_id: result.session_id };
+  };
+  const legacy = launch('old-confined');
+  assert.notEqual(legacy.session_id, 'old-confined', 'a new session');
+  assert.ok(!legacy.args.includes('--session') && legacy.args.includes('--session-id'));
+  assert.ok(legacy.notes.some(note => /旧会话与当前运行方式不兼容，已改用新会话/.test(note)), 'its card says why it forgot');
+  const resumed = launch('old-native');
+  assert.equal(resumed.session_id, 'old-native', 'a native session is resumed');
+  assert.ok(!resumed.notes.some(note => /旧会话/.test(note)));
+  // The other way round: a confined run (a member lent to another computer's room) does not resume a native session.
+  assert.notEqual(launch('old-native', false).session_id, 'old-native');
+  assert.equal(launch('old-confined', false).session_id, 'old-confined');
 });
 
 test('on Windows a model API member needs a Bash, found where Pi looks for one', t => {

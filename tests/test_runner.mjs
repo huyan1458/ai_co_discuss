@@ -4253,6 +4253,11 @@ test("a member's own prompt goes into the system prompt of a new session where p
   assert.doesNotMatch(layered.prompt, /不发给别家/);
   assert.notEqual(layered.expert_prompt_hash, agy.expert_prompt_hash, 'a changed layer is sent again');
   assert.match(expert_prompt_delivery('任务', { adapter: 'claude' }, adapter_of('claude'), {}, false, null, { layers, platform: 'Claude' }).system_text, /不发给别家/);
+  // A model API member's Pi session keeps the prompt it started with too (measured 2026-11-25): a change is resent.
+  const api_fresh = expert_prompt_delivery('任务', { adapter: 'api', system_prompt: '只看测试' }, adapter_of('api'), {}, false, null);
+  assert.ok(api_fresh.system_text && api_fresh.prompt === '任务');
+  assert.match(expert_prompt_delivery('任务', { adapter: 'api', system_prompt: '只改文档' }, adapter_of('api'), { session_id: 'p1' }, false,
+    { session_id: 'p1', hash: api_fresh.expert_prompt_hash }).prompt, /替换此前给你的同类提示[\s\S]*只改文档/);
   // A manually started member takes none, even one left in its settings.
   assert.equal(expert_prompt_delivery('任务', { ...profile('claude'), project_access: 'own' }, adapter_of('claude'), { session_id: 's1' }, false, null).prompt, '任务');
 });

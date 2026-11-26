@@ -64,7 +64,8 @@ export async function open_deploy(bridge, { room_id, message_id, execution_id, m
   if (stage) return;
   const dialog = sites_state.dialog;
   try {
-    dialog.stage = await site_command(bridge, "stage", room_id, { path: file.path, root: file.root, message_id, execution_id, member });
+    // A preview: it stays on this computer, so only a confirmed deploy leaves a card under the answer.
+    dialog.stage = await site_command(bridge, "stage", room_id, { path: file.path, root: file.root, message_id, execution_id, member, preview: true });
     dialog.phase = "confirm";
   } catch (error) { Object.assign(dialog, { phase: "error", error: error.message, files: error.files || [] }); }
 }

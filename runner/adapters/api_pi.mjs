@@ -135,6 +135,36 @@ function session_settings(session_id, options = {}) {
 }
 
 /** Pi's timestamped session file name. */
+/**
+ * The tool loadout a session restores when resumed, as Pi rebuilds it (agent-session.js _restoreToolsFromTranscript):
+ * the tools its system messages added and removed, in order; null when it records none, so Pi keeps the current tools.
+ */
+export function session_tools(file) {
+  let tools = null;
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    if (!line.includes('"system"')) continue;
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    const message = entry.type === 'message' && entry.message?.role === 'system' ? entry.message : null;
+    if (!message?.toolsAdded && !message?.toolsRemoved) continue;
+    tools ||= new Set();
+    for (const tool of message.toolsAdded || []) tools.add(tool.name);
+    for (const tool of message.toolsRemoved || []) tools.delete(tool.name);
+  }
+  return tools;
+}
+
+/**
+ * Whether a run can resume this session with the tools it needs: a native run needs Pi's shell for codiscuss, a confined
+ * run our room tools (submit_chat). The session's tools are what Pi will restore, not what its prompt says.
+ */
+export function session_fits(file, native) {
+  try {
+    const tools = session_tools(file);
+    return !tools || tools.has(native ? 'bash' : 'submit_chat');
+  } catch { return true; /* An unreadable session is resumed as before; Pi reports what is wrong with it. */ }
+}
+
 function session_file_name(session_id) {
   return `${new Date().toISOString().replace(/[:.]/g, '-')}_${session_id}.jsonl`;
 }
@@ -219,8 +249,15 @@ export function pi_delivery({ cli, profile, key, binding, task, context_file, sy
   skill_directories = [], service_home, spawn_process = spawn }) {
   const dirs = pi_home(service_home);
   for (const path of Object.values(dirs)) mkdirSync(path, { recursive: true });
-  const existing = session_file(dirs.sessions, binding.session_id);
+  // A session keeps the system prompt and tool loadout it started with (Pi stores both in the transcript's first system
+  // message): a native run in a session the confined run started has no shell and is told not to use codiscuss (found
+  // 2026-11-25, room fdc15d1b0f79, executions 7734 and 8364), and a confined run in a native session keeps Pi's prompt.
+  // Either way it starts a new session instead.
+  const found = session_file(dirs.sessions, binding.session_id);
+  const existing = found && session_fits(found, native) ? found : '';
   const session_id = existing ? binding.session_id : randomUUID();
+  // The member loses what that session held, so its card says why rather than leaving it to look forgetful.
+  if (found && !existing) task.on_note?.(room_text('旧会话与当前运行方式不兼容，已改用新会话'));
   // A writable member works as Claude Code or Codex do: Pi's own read, bash, edit and write in the project (user
   // 2026-11-17: Pi is a coding agent like them, do not treat it differently). Read-only keeps our confined file tools:
   // Pi has no sandbox, so its bash could not be held to reading.

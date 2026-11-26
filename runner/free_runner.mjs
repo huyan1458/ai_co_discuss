@@ -622,8 +622,9 @@ export function chat_task_files(config, member, chat, binding) {
     session_id: binding.session_id || '', ...file_scope(config, profile, { member_directory, draft_directory,
       knowledge_directory: member_knowledge(config.api_home, member.name, null, room_directories(config), profile),
       extra_directories: member_extra_directories(config, profile) }) });
-  // Software whose system prompt is rebuilt at each launch (Pi) is given the owner's prompts again for the chat turn.
-  const relaunched = adapter_of(profile.adapter)?.capabilities.system_prompt === 'launch' && profile.project_access !== 'own';
+  // A chat turn runs in the member's session too: software taking a system prompt is given the current text again, or a
+  // launch without it would read as the prompts being removed (Pi records the change in the session).
+  const relaunched = Boolean(adapter_of(profile.adapter)?.capabilities.system_prompt) && profile.project_access !== 'own';
   const prompts = relaunched ? system_text(profile, prompt_layers(config.api_home), member_platform(member.name), PLATFORM_LABELS[member_platform(member.name)]) : '';
   return { id, participant: member.name, directory: config.directory, member_directory, draft_directory, extra_directories: member_extra_directories(config, profile),
     skill_directories: [join(config.project, '.agents', 'skills')], access_path, prompt: `${CHAT_PREAMBLE}\n\n${chat.text}`, inbox: false, profile,

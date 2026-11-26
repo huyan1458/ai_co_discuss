@@ -941,5 +941,6 @@
   "主持人 {host} 结束了 Goal": "Host {host} ended the Goal",
   "只有主持人经 host-control 的操作才能留痕": "Only controls the host runs through host-control can be recorded",
   "主持人操作类型无效": "Invalid host control type",
-  "主持人操作留痕的成员或内容无效": "Invalid member or content in the host control record"
+  "主持人操作留痕的成员或内容无效": "Invalid member or content in the host control record",
+  "旧会话与当前运行方式不兼容，已改用新会话": "The earlier session does not fit how this member now runs; a new session was started"
 }

@@ -49,8 +49,10 @@
  *   measured on real software, 2026-11-15).
  * - `capabilities.system_prompt`: where the member's own prompt can go into the software's system prompt: `session`
  *   (set when the runner starts a new session and kept by it after: Claude Code's snapshot, a Codex thread's developer
- *   instructions; a changed prompt then goes into the next task text), `launch` (rebuilt at every launch, so always
- *   current); absent when it cannot, and the prompt goes into the first task sent to each session instead.
+ *   instructions, the first system message of a Pi session, which a changed prompt only follows as an addendum the model
+ *   may weigh below the original, measured 2026-11-25; a changed prompt then also goes into the next task text, saying it
+ *   replaces the earlier one), `launch` (rebuilt at every launch, so always current; no software declares it now);
+ *   absent when it cannot, and the prompt goes into the first task sent to each session instead.
  * - `lockdown_hint`: why it cannot be confined, shown when a confined task is refused.
  * - `session_family`: profiles sharing one session store; switching among them keeps the conversation.
  * - `windows_command`: how its shell names the codiscuss CLI on Windows.
@@ -188,7 +190,7 @@ export const ADAPTER_PROFILES = {
     // the protocol: the owner says so on the card (`image_input`). Confined (lent to another computer's room), it keeps
     // only our room tools (api_lockdown).
     windows_command: 'codiscuss',
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, chat: true, images: 'configured', capture: FINAL_REMARK, tool_lockdown: true, system_prompt: 'launch' },
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, chat: true, images: 'configured', capture: FINAL_REMARK, tool_lockdown: true, system_prompt: 'session' },
   },
 };
 
