@@ -134,7 +134,7 @@ Ctrl+C 停止服务
 /** Keep startup convenient while separating local service management from website operations. */
 async function main(args = process.argv.slice(2)) {
   const [command] = args;
-  if (['--help', '-h', 'help'].includes(command)) return process.stdout.write(HELP);
+  if (['--help', '-h', 'help'].includes(command)) return process.stdout.write(HELP + '\n  ' + t('analytics  查看全房间协作统计') + '\n');
   if (command === 'service') return service_cli(args.slice(1));
   if (command === 'launch') {
     // A restricted run (子Task5 CONTRACT §5) may not read local files through launch commands.
@@ -143,6 +143,7 @@ async function main(args = process.argv.slice(2)) {
   }
   if (['install', 'setup'].includes(command)) return setup_main(command, args.slice(1));
   if (command === 'local') return local_main(args.slice(1));
+  if (command === 'analytics') return (await import('./analytics.mjs')).analytics_cli(args.slice(1));
   if (command === 'token') return admin_main(args.slice(1));
   if (command === 'panel') return (await import('./admin_panel.mjs')).panel_main(args.slice(1));
   if (command === 'admin') return (await import('./admin_cli.mjs')).admin_cli(args.slice(1));

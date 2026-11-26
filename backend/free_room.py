@@ -18,7 +18,7 @@ import uuid
 from .execution_diagnostics import diagnostic_detail, record_diagnostics
 from .identity import MAX_ROOM_AGENTS, default_label, is_ai
 from .message_queue import pause as pause_queue, queue_view
-from .texts import Text, incoming_text, load_texts, save_text, text_payload
+from .texts import BoundaryError, Text, incoming_text, load_texts, save_text, text_payload
 from .runtime import (LEASE_SECONDS, MAX_EXECUTION_SEGMENTS, begin_write, enforce_session_limits,
                       require_owner, save_segments, token_hash)
 
@@ -117,6 +117,8 @@ TIMELINE_NOTES_SQL = f"""SELECT execution_id,created_at FROM execution_notes
     WHERE room_id=?1 AND execution_id IN ({TIMELINE_FREE_IDS}) ORDER BY execution_id,seq"""
 RECENT_CHANGES = 50
 MAX_CHANGED_FILES = 200
+INLINE_CHANGED_FILES = 5
+EXECUTION_CHANGES_BATCH_LIMIT = 100
 # What a member's software last showed it doing, as reported by the runner with each renewal.
 ACTIVITY_PHASES = ("", "thinking", "command", "tool", "editing", "writing", "waiting")
 # The background work one execution's software reports: kinds, states, how many items and how long a title.
@@ -1051,20 +1053,37 @@ BACKGROUND_SQL = """EXISTS(SELECT 1 FROM member_requests r WHERE r.execution_id=
     AND (r.batch_id=0 OR EXISTS(SELECT 1 FROM member_requests k WHERE k.message_id=r.message_id AND k.purpose='keep_working')))"""
 
 
+HISTORY_EXECUTION_ANCHORS_SQL = f"""WITH request_anchors AS MATERIALIZED (
+        SELECT r.id,r.execution_id,{LAYOUT_AFTER_SQL} AS anchor
+        FROM member_requests r WHERE r.room_id=?
+    ), execution_anchors AS (
+        SELECT execution_id,anchor FROM request_anchors WHERE execution_id IS NOT NULL AND anchor>?
+        UNION ALL
+        SELECT rr.execution_id,r.anchor FROM request_anchors r JOIN retried_requests rr ON rr.request_id=r.id
+        WHERE r.anchor>?
+    ), batch_executions AS MATERIALIZED (
+        SELECT execution_id,MAX(anchor) AS layout_after FROM execution_anchors
+        GROUP BY execution_id HAVING MAX(anchor)<=?
+    )"""
+
+
 def recent_executions(connection, room_id, span=None):
     """Return bounded public reports, including requests no longer in the recent request list.
 
     With `span` (low, high], instead every execution whose cards sit after a message in that range (high None: no end),
     so a transcript read in batches also gets the cards of history older than the recent ones.
     """
+    # History already resolved the anchor from requests. The unpaged room view is limited to the newest executions.
+    layout = "batch.layout_after" if span else f"""(SELECT MAX({LAYOUT_AFTER_SQL}) FROM member_requests r WHERE r.execution_id=e.id
+        OR r.id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id))"""
+    source = "batch_executions batch CROSS JOIN member_executions e ON e.id=batch.execution_id" if span else "member_executions e"
     query = f"""SELECT e.*,m.name AS member,
         (SELECT json_group_array(id) FROM member_requests WHERE execution_id=e.id) AS request_ids,
         (SELECT MAX(answer_id) FROM member_requests WHERE execution_id=e.id) AS answer_id,
         (SELECT MIN(message_id) FROM member_requests WHERE execution_id=e.id
             OR id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id)) AS request_message_id,
         -- Work on several requests started after the latest of them, so its card shows under the last message it answers.
-        (SELECT MAX({LAYOUT_AFTER_SQL}) FROM member_requests r WHERE r.execution_id=e.id
-            OR r.id IN (SELECT request_id FROM retried_requests WHERE execution_id=e.id)) AS layout_after,
+        {layout} AS layout_after,
         EXISTS(SELECT 1 FROM retried_requests WHERE execution_id=e.id) AS retried,
         (SELECT CAST(substr(w.key,13) AS INTEGER) FROM free_host_wakes w
             WHERE w.room_id=e.room_id AND w.key LIKE 'host_failed:%'
@@ -1084,10 +1103,11 @@ def recent_executions(connection, room_id, span=None):
         EXISTS(SELECT 1 FROM execution_schedules WHERE execution_id=e.id) AS scheduled,
         {BACKGROUND_SQL} AS background,
         (SELECT tasks FROM execution_background_tasks WHERE execution_id=e.id) AS background_tasks
-        FROM member_executions e JOIN room_members m ON m.id=e.member_id WHERE e.room_id=?"""
+        FROM {source} JOIN room_members m ON m.id=e.member_id WHERE e.room_id=?"""
     if span:
-        rows = connection.execute(f"SELECT * FROM ({query}) WHERE layout_after>? AND layout_after<=? ORDER BY id DESC",
-                                  (room_id, span[0], MAX_MESSAGE_ID if span[1] is None else span[1]))
+        low, high = span
+        rows = connection.execute(f"{HISTORY_EXECUTION_ANCHORS_SQL} {query} ORDER BY e.id DESC",
+                                  (room_id, low, low, MAX_MESSAGE_ID if high is None else high, room_id))
     else:
         rows = connection.execute(
             f"""{query} AND (e.status IN ('dispatched','started')
@@ -1102,9 +1122,9 @@ def recent_executions(connection, room_id, span=None):
             line = line or line_of(connection, request, positions)
             request_data = {key: request[key] for key in ("id", "message_id", "purpose", "status", "answer_id")}
             requests.append({**request_data, **session_request_source(connection, request["id"], request["message_id"])})
-        executions.append({**public_execution(row), "texts": execution_texts(connection, row["id"]), "member": row["member"], "cwd": row["cwd"], "changes": json.loads(row["changes"] or "[]"),
+        executions.append({**public_execution(row), "texts": execution_texts(connection, row["id"]), "member": row["member"], "cwd": row["cwd"],
             "changes_recorded": bool(row["changes"]), "request_ids": json.loads(row["request_ids"]),
-            "edited": json.loads(row["edited"]) if row["edited"] else None, "diff_stats": diff_stats(row["diffs"]),
+            "change_summary": execution_change_summary(row),
             "answer_id": row["answer_id"], "request_message_id": row["request_message_id"],
             "layout_after": row["layout_after"], "layout_at": row["layout_at"] or row["created_at"], "requests": requests,
             "notes": row["note_count"], "steps": row["step_count"], "commands": row["command_count"], "edits": row["edit_count"], "denials": json.loads(row["denials"] or "[]"), "failure_class": row["failure_class"] or "",
@@ -3814,9 +3834,8 @@ def execution_delivery(connection, room_id, row):
     return {"outcome": "unknown", "execution_id": row["id"], "received": False}
 
 
-def view_execution(connection, room_id, execution_id, token):
-    """Let the owner, the present host (to diagnose a member's failure) or the executing member read one execution."""
-    row = connection.execute("SELECT * FROM member_executions WHERE room_id=? AND id=?", (room_id, execution_id)).fetchone()
+def require_execution_reader(connection, room_id, row, token):
+    """Allow the owner, present host or executing member to read an execution's details."""
     if not row:
         raise LookupError(Text("执行不存在"))
     try:
@@ -3827,6 +3846,13 @@ def view_execution(connection, room_id, execution_id, token):
         member = require_member(connection, room_id, token)
         if member["id"] != row["member_id"] and member["role"] != "host":
             raise
+    return owner
+
+
+def view_execution(connection, room_id, execution_id, token):
+    """Return details after checking access to the execution."""
+    row = connection.execute("SELECT * FROM member_executions WHERE room_id=? AND id=?", (room_id, execution_id)).fetchone()
+    owner = require_execution_reader(connection, room_id, row, token)
     return {**execution_detail(connection, row), "delivery": {"last_submission": execution_delivery(connection, room_id, row)},
             "diagnostics": diagnostic_detail(connection, row, owner)}
 
@@ -3874,8 +3900,75 @@ def file_diffs(payload, changes):
 
 
 def diff_stats(stored):
-    """The stored diffs without their patches: what every room read carries; the patches are read on demand."""
+    """The stored diff metadata, without project contents."""
     return [{key: value for key, value in item.items() if key != "patch"} for item in json.loads(stored)] if stored else []
+
+
+def attributed_changes(row):
+    """Return the subset of observed changes attributed to the executing member."""
+    edited = set(json.loads(row["edited"])) if row["edited"] else set()
+    return [path for path in json.loads(row["changes"] or "[]") if path in edited]
+
+
+def execution_change_summary(row):
+    """Return the counts the collapsed card needs and signal replacement of a provisional report."""
+    changes = attributed_changes(row)
+    stats = {item["path"]: item for item in diff_stats(row["diffs"])} if changes else {}
+    counted = [stats[path] for path in changes if path in stats and "added" in stats[path]]
+    inline = {"changes": changes, "diff_stats": [stats[path] for path in changes if path in stats]} if 0 < len(changes) <= INLINE_CHANGED_FILES else {}
+    return {"count": len(changes), "added": sum(item["added"] for item in counted),
+            "removed": sum(item["removed"] for item in counted), "counted": bool(counted),
+            "provisional": bool(row["changes_provisional"]), **inline}
+
+
+def execution_changes_reader(connection, room_id, token):
+    """Return the member whose own executions may be read, or None for an unrestricted reader."""
+    if discussion.session_message_access(connection, room_id, {}, token) is None:
+        return None
+    try:
+        return require_member(connection, room_id, token)["id"]
+    except PermissionError:
+        return 0
+
+
+def execution_changes_data(row):
+    """Return a file list and statistics without patches."""
+    return {"execution_id": row["id"], "changes": json.loads(row["changes"] or "[]"),
+            "edited": json.loads(row["edited"]) if row["edited"] else None,
+            "provisional": bool(row["changes_provisional"]), "diff_stats": diff_stats(row["diffs"])}
+
+
+def execution_changes(connection, room_id, execution_id, token):
+    """Read one execution's file metadata under the room's reading boundary."""
+    reader = execution_changes_reader(connection, room_id, token)
+    row = connection.execute("""SELECT id,member_id,changes,edited,diffs,changes_provisional FROM member_executions
+        WHERE room_id=? AND id=?""", (room_id, execution_id)).fetchone()
+    if reader is not None and (not row or reader != row["member_id"]):
+        raise BoundaryError(Text("执行不存在"), code="reading_boundary")
+    if not row:
+        raise LookupError(Text("执行不存在"))
+    return execution_changes_data(row)
+
+
+def execution_changes_batch(connection, room_id, ids, token):
+    """Read file metadata by execution id, omitting missing, restricted or unreadable entries."""
+    pieces = ids.split(",")
+    if not 1 <= len(pieces) <= EXECUTION_CHANGES_BATCH_LIMIT or any(
+        not part.isascii() or not part.isdecimal() or len(part) > 19 or not 0 < int(part) <= MAX_MESSAGE_ID
+        for part in pieces
+    ):
+        raise ValueError(Text("ids 须为最多 {limit} 个逗号分隔的执行编号", limit=EXECUTION_CHANGES_BATCH_LIMIT))
+    reader = execution_changes_reader(connection, room_id, token)
+    rows = connection.execute("""SELECT id,member_id,changes,edited,diffs,changes_provisional FROM member_executions
+        WHERE room_id=? AND id IN (SELECT value FROM json_each(?)) AND (? IS NULL OR member_id=?)""",
+        (room_id, json.dumps([int(part) for part in pieces]), reader, reader))
+    items = {}
+    for row in rows:
+        try:
+            items[row["id"]] = execution_changes_data(row)
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return {"items": items}
 
 
 def execution_diffs(connection, room_id, execution_id, token):

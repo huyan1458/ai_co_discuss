@@ -596,6 +596,7 @@ test("a concurrent push lets the receipt read replace the member card before rea
   const message = { id: 8, created_at: new Date().toISOString() };
   const room_read = Promise.withResolvers(), started = Promise.withResolvers();
   Object.assign(context, { ROOM_TIMING_ENABLED: false, display_name: name => name, room_views: new Map(),
+    message_history_key: room_id => room_id,
     patch_directory_room() {}, cache_room_entry() {}, merge_room_folder: room => room, render_room() {}, load_room_models() {},
     request_json: async (_url, payload) => {
       if (payload) return { message };
@@ -1845,7 +1846,7 @@ function free_card_fixture({ messages = [], members = [], executions = [], reque
   const busy_end = discussion_source.indexOf("/** Late text is owner-only", busy_start);
   vm.runInContext(`${discussion_source.slice(busy_start, busy_end)}\nglobalThis.cards = { busy: free_busy, working: free_working, now: free_now };`, context);
   const layout_start = discussion_source.indexOf("const failure_wakes = computed(");
-  const layout_end = discussion_source.indexOf("/** Id of the top-level message at or before", layout_start);
+  const layout_end = discussion_source.indexOf("\n});", discussion_source.indexOf("const free_layout = computed(", layout_start)) + 4;
   vm.runInContext(`${discussion_source.slice(layout_start, layout_end)}\nglobalThis.layout_state = { failures: free_failures, layout: free_layout, rewinds: rewound_runs, toggle: toggle_rewound };`, context);
   return { context, view: view.value, room: view.value.room, cards: context.cards, state: context.layout_state, timers,
     advance(seconds) { current_time += seconds; for (const callback of timers.values()) callback(); } };
@@ -2060,18 +2061,34 @@ function history_fixture(records) {
   const requests = [];
   const context = vm.createContext({ URLSearchParams, window: {}, document: { getElementById: () => ({ value: "Codex" }) } });
   vm.runInContext(`${source}\nglobalThis.test_state = state;`, context);
+  const state = context.test_state;
+  state.room = { id: "scale50" };
+  context.publish_view = () => {};
   context.request_json = async (path) => {
     requests.push(path);
     const url = new URL(path, "http://test.local");
     const room = url.pathname.split("/")[3];
     const params = url.searchParams;
+    if (!params.size) return { id: room };
+    const limit = Number(params.get("limit"));
+    if (params.has("before")) {
+      const before = Number(params.get("before"));
+      const earlier = records.filter(message => message.room === room && (!before || message.id < before));
+      return { messages: earlier.slice(-limit), has_earlier: earlier.length > limit };
+    }
     const matching = records.filter((message) => message.room === room && message.id > Number(params.get("after"))
       && (!params.get("q") || message.text.includes(params.get("q")))
       && (!params.get("mention") || message.text.includes(`@${params.get("mention")}`)));
-    const messages = matching.slice(0, 20);
-    return { messages, has_more: matching.length > 20, next_after: messages.at(-1)?.id || Number(params.get("after")) };
+    const messages = matching.slice(0, limit);
+    return { messages, has_more: matching.length > limit, next_after: messages.at(-1)?.id || Number(params.get("after")) };
   };
-  return { context, state: context.test_state, requests, load: () => context.load_message_history("scale50", context.test_state.refresh_version) };
+  const load = async () => {
+    const version = state.refresh_version;
+    const history = await context.read_message_history("scale50", state.query, () => version === state.refresh_version);
+    if (history) context.render_messages(history);
+    return history;
+  };
+  return { context, state, requests, load };
 }
 
 test("rooms not on screen stay cached while working or after they change", async () => {
@@ -2262,30 +2279,100 @@ test("folder ordering saves once, preserves drafts and recovers after a failed w
   assert.equal(fixture.draft.value, "保留当前草稿");
 });
 
-test("continuous history joins 200 records exactly once and refreshes from its cursor", async () => {
-  const records = Array.from({ length: 200 }, (_, index) => ({ id: index + 1, room: "scale50", text: `第 ${Math.floor(index / 4) + 1} 轮` }));
+test("history reads one latest page, prepends on demand and reaches a jump target", async () => {
+  const records = Array.from({ length: 250 }, (_, index) => ({ id: index + 1, room: "scale50", text: "发言" }));
   const fixture = history_fixture(records);
   const first = await fixture.load();
-  assert.deepEqual(Array.from(first.messages, (message) => message.id), records.map((message) => message.id));
-  assert.equal(fixture.requests.length, 10);
-  records.push({ id: 201, room: "scale50", text: "新发言" });
+  assert.deepEqual(Array.from(first.messages, message => message.id), records.slice(-40).map(message => message.id));
+  assert.equal(first.has_earlier, true);
+  assert.equal(fixture.requests.length, 1);
+  assert.match(fixture.requests[0], /limit=40.*before=0$/);
+  const earlier = fixture.context.load_earlier_messages();
+  assert.equal(earlier, fixture.context.load_earlier_messages(), "the same page already in flight is not requested twice");
+  assert.equal(await earlier, true);
+  assert.equal(fixture.state.messages[0].id, 11);
+  assert.match(fixture.requests.at(-1), /before=211$/);
+  assert.equal(await fixture.context.load_messages_until(3), true);
+  assert.equal(fixture.state.message_history.has_earlier, false);
+  assert.match(fixture.requests.at(-1), /before=11$/);
+  records.push({ id: 251, room: "scale50", text: "新发言" });
   const refreshed = await fixture.load();
-  assert.equal(refreshed.total, 201);
-  assert.equal(refreshed.pages, 1);
-  assert.match(fixture.requests.at(-1), /after=200$/);
-  assert.equal(new Set(refreshed.messages.map((message) => message.id)).size, 201);
+  assert.match(fixture.requests.at(-1), /after=250$/);
+  assert.deepEqual(Array.from(refreshed.messages, message => message.id), records.map(message => message.id));
 });
 
 test("an obsolete request cannot replace history after a room or filter change", async () => {
-  const fixture = history_fixture([{ id: 1, room: "scale50", text: "已读取" }]);
-  await fixture.load();
-  const saved = fixture.state.message_history;
-  fixture.context.request_json = async () => {
-    fixture.state.refresh_version++;
-    return { messages: [{ id: 2 }], has_more: false };
+  const records = Array.from({ length: 50 }, (_, index) => ({ id: index + 1, room: "scale50", text: index ? "已读取" : "关键词" }));
+  const { context, state, load } = history_fixture(records);
+  await load();
+  const request = context.request_json;
+  let finish;
+  context.request_json = path => path.endsWith("before=11") ? new Promise(resolve => { finish = resolve; }) : request(path);
+  const earlier = context.load_earlier_messages();
+  context.set_message_query("关键词");
+  const search = await load();
+  vm.runInContext("message_histories.delete(message_history_key('scale50'));", context);
+  finish({ messages: records.slice(0, 10), has_earlier: false });
+  assert.equal(await earlier, false);
+  assert.equal(state.message_history, search);
+  assert.deepEqual(Array.from(state.messages, message => message.id), [1]);
+});
+
+test("concurrent cold history reads retain the newer overlapping page without duplicate records", async () => {
+  const { context, load } = history_fixture([]);
+  const responses = [];
+  context.request_json = path => {
+    assert.match(path, /before=0$/);
+    return new Promise(resolve => responses.push(resolve));
   };
-  assert.equal(await fixture.load(), null);
-  assert.equal(fixture.state.message_history, saved);
+  const preload = context.read_message_history("scale50", "", () => true);
+  const opening = load();
+  const records = Array.from({ length: 60 }, (_, index) => ({ id: index + 1 }));
+  responses[0]({ messages: records.slice(10, 50), has_earlier: true });
+  await preload;
+  responses[1]({ messages: records.slice(20), has_earlier: true });
+  assert.deepEqual(Array.from((await opening).messages, message => message.id), records.slice(10).map(message => message.id));
+});
+
+test("concurrent disjoint cold history pages fill the gap from the cached cursor", async () => {
+  const records = Array.from({ length: 100 }, (_, index) => ({ id: index + 1, room: "scale50" }));
+  const { context, load, requests } = history_fixture(records);
+  const read = context.request_json, cold = [];
+  context.request_json = path => path.endsWith("before=0") ? new Promise(resolve => cold.push(resolve)) : read(path);
+  const preload = context.read_message_history("scale50", "", () => true);
+  const opening = load();
+  cold[0]({ messages: records.slice(0, 40), has_earlier: false });
+  await preload;
+  cold[1]({ messages: records.slice(60), has_earlier: true });
+  const history = await opening;
+  assert.match(requests.at(-1), /after=40$/);
+  assert.deepEqual(Array.from(history.messages, message => message.id), records.map(message => message.id));
+});
+
+test("an earlier history request reports errors to its caller and can be retried", async () => {
+  const records = Array.from({ length: 50 }, (_, index) => ({ id: index + 1, room: "scale50" }));
+  const { context, load, state } = history_fixture(records);
+  await load();
+  const read = context.request_json;
+  context.request_json = async () => { throw new Error("request failed"); };
+  context.notify = () => assert.fail("the history bridge must not show a notice");
+  await assert.rejects(context.load_earlier_messages(), /request failed/);
+  context.request_json = read;
+  assert.equal(await context.load_earlier_messages(), true);
+  assert.equal(state.messages[0].id, 1);
+});
+
+test("retract availability does not mistake a filtered tail or missing historical requests for an untouched message", () => {
+  const { context } = history_fixture([]);
+  const requests = Array.from({ length: 100 }, (_, index) => ({ message_id: 200 - index, status: "pending", created_at: 200 - index }));
+  requests[0].status = "completed";
+  const room = { latest_id: 205, free: { requests } };
+  const message = (id, seconds) => ({ id, created_at: new Date(seconds * 1000).toISOString() });
+  assert.equal(context.can_retract_message(message(100, 100), room), false);
+  assert.equal(context.can_retract_message(message(101, 101), room), false);
+  assert.equal(context.can_retract_message(message(102, 102), room), true);
+  assert.equal(context.can_retract_message(message(200, 200), room), false);
+  assert.equal(context.can_retract_message(message(205, 205), room), true);
 });
 
 /** A theme fixture whose network answers come from a route table. */

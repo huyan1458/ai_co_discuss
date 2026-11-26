@@ -2,6 +2,13 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.34 (2026-11-26 02:14)
+
+- New: The "Analytics" page shows weekly and monthly reports, how each member did and where work got stuck, and exports a share image.
+- New: Switch a member's project access right from "Project files" in its member menu.
+- Changed: A member's background tasks fold into one line; open it to see each task's progress.
+- Changed: "File changes" under an answer shows how many files and lines changed, and opens by itself when only a few files changed.
+
 ## 0.5.33 (2026-11-25 23:39)
 
 - Changed: A request from another room is complete once its answer is sent, and the card sent back keeps the full text.

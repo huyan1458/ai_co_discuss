@@ -1,5 +1,14 @@
 /** English CLI strings. */
 export default {
+  "analytics  查看全房间协作统计": "analytics  Show collaboration statistics across rooms",
+  "用法：codiscuss analytics [--range today|7d|30d|all] [--scope all|current] [--from YYYY-MM-DD --to YYYY-MM-DD] [--json]": "Usage: codiscuss analytics [--range today|7d|30d|all] [--scope all|current] [--from YYYY-MM-DD --to YYYY-MM-DD] [--json]",
+  "需要管理员身份": "Administrator access required",
+  "统计日期范围或时区无效": "Invalid analytics date range or time zone",
+  "读取统计失败": "Could not read analytics",
+  "统计期间 {from} 至 {to}（结束日不含），含 {rooms} 个现存房间和 {sealed} 个已销毁房间。": "Period {from} to {to} (exclusive), including {rooms} current and {sealed} destroyed rooms.",
+  "发起 {initiated} 次，其中 {answered} 次已获回复。免介入 {unassisted} 条，已结束 {ended} 条。": "Of {initiated} initiations, {answered} received replies. {unassisted} of {ended} ended chains had no intervention.",
+  "最高同时运行 {rooms} 个房间、{members} 位专家，当前排队 {count} 条。": "Peak concurrency: {rooms} rooms and {members} experts; {count} messages queued now.",
+
   "host-control 主持人代房主控制房间，须房主已为本房间勾选对应的主持人权限（任务的 host_permissions 列出已勾选的项），凭据同上；成员用 --member（成员 ID 或显示名），除 retry、model、label 外不能是主持人自己：": "host-control lets the host manage the room within the permissions granted by the owner (listed in host_permissions). Use --access-file or DISCUSS_ACCESS_FILE for credentials. --member accepts an ID or display name. Only retry, model and label may target the host itself.",
   "诊断：details --execution N 读取该执行的本机过程日志（服务端详情与事件记录用 execution / room events 读取）；": "Diagnostics: details --execution N reads the local log. Use execution for server-side details and room events for the event log.",
   "恢复：stop --member 打断；stop-all 停止全部执行、请求与接力；steer --member --text 话 [--submission-id ID] 向它进行中的执行插话；": "Recovery: stop --member interrupts one member. stop-all stops all executions, requests and relays. steer --member --text TEXT [--submission-id ID] sends an interjection to an active execution.",

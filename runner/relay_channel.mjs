@@ -47,7 +47,7 @@ const FRAME_MAX_BYTES = 1024 * 1024 - 1024;
 // filled with large answers (images) holds back every other answer and the heartbeat behind them.
 const BACKLOG_LOG_BYTES = 4 * 1024 * 1024;
 const BACKLOG_LOG_MS = 60000;
-const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions|sites)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
+const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions|sites|analytics)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
 const RELAY_READ_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Attachment uploads arrive in parts and are sent to the local website whole, as one browser upload would be.
 const UPLOAD_PATH = /^\/api\/rooms\/[A-Za-z0-9_-]+\/attachments(\/[A-Za-z0-9_-]+\/(import|thumbnail))?(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;

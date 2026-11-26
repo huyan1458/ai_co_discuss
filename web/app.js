@@ -8,6 +8,7 @@ const SHARE = window.CODISCUSS_SHARE || null;
 // BEGIN generated share core (runner/share_shared.mjs)
 // While a share page is being assembled, the raw answers of its reads, by route.
 const SHARE_READ_CONCURRENCY = 6;
+const SHARE_EXECUTION_BATCH_SIZE = 100;
 const SHARE_UPLOAD_CONCURRENCY = 6;
 // Where a reader of a share page learns about the product.
 const SHARE_HOME = "https://codiscuss.com";
@@ -126,6 +127,10 @@ function create_share_core({ t, display_name, collapse_visual_fences, is_text_at
     const result = {};
     for (const [key, item] of Object.entries(value)) {
       if (SHARE_DROPPED_FIELDS.has(key) || SHARE_DROPPED_TEXT.has(key) && typeof item === "string") continue;
+      if (key === "change_summary" && item?.changes) {
+        result[key] = share_clean({ ...item, cwd: value.cwd }, keep_files);
+        continue;
+      }
       result[key] = SHARE_EMPTIED_FIELDS.has(key) && !(keep_files && key === "attachments") ? (Array.isArray(item) ? [] : null) : share_clean(item, keep_files);
     }
     // When a member's quota comes back is the same fact as a quota notice's reset time, as a timestamp.
@@ -341,7 +346,14 @@ function create_share_core({ t, display_name, collapse_visual_fences, is_text_at
       .flatMap(([, body]) => (body.messages || []).filter(message => message.withdrawn).map(message => message.id)));
     const on_withdrawn = (run) => [run.task_id, run.request_message_id, run.answer_id].some(id => withdrawn.has(id));
     const dropped_runs = new Set();
-    JSON.stringify(raw, (key, item) => { if (key === "executions" && Array.isArray(item)) for (const run of item) if (run && on_withdrawn(run)) dropped_runs.add(run.id); return item; });
+    const execution_cwds = new Map();
+    JSON.stringify(raw, (key, item) => {
+      if (key === "executions" && Array.isArray(item)) for (const run of item) {
+        if (run && on_withdrawn(run)) dropped_runs.add(run.id);
+        if (run?.cwd) execution_cwds.set(run.id, run.cwd);
+      }
+      return item;
+    });
     const without_runs = (value) => {
       if (Array.isArray(value)) return value.map(without_runs);
       if (!value || typeof value !== "object") return value;
@@ -349,12 +361,20 @@ function create_share_core({ t, display_name, collapse_visual_fences, is_text_at
     };
     const responses = {};
     for (const [path, body] of Object.entries(raw)) {
-      const run = path.match(/\/executions\/(\d+)\/notes$/);
+      if (path.startsWith(`/api/rooms/${room_id}/executions/changes?`)) {
+        for (const [id, details] of Object.entries(body.items || {})) {
+          if (dropped_runs.has(Number(id))) continue;
+          responses[`/api/rooms/${room_id}/executions/${id}/changes`] = strip(share_clean({ ...details, cwd: execution_cwds.get(Number(id)) }));
+        }
+        continue;
+      }
+      const run = path.match(/\/executions\/(\d+)\/(notes|changes)$/);
       if (run && dropped_runs.has(Number(run[1]))) continue;
       let kept = body;
       if (path === "/api/rooms") kept = { rooms: (body.rooms || []).filter(room => room.id === room_id).map(room => ({ ...room, folder_id: "", archived: false })),
         folders: [], uncategorized_position: 0, participants: [], last_room: room_id };
       else if (/\/messages\?/.test(path)) kept = share_batch(body);
+      else if (run?.[2] === "changes") kept = { ...body, cwd: execution_cwds.get(Number(run[1])) };
       responses[path] = strip(share_clean(without_runs(kept), attachments));
     }
     return responses;
@@ -416,13 +436,15 @@ function create_share_core({ t, display_name, collapse_visual_fences, is_text_at
 
   async function share_collect_reads(room_id, history_batch_path, keep) {
     const base = `/api/rooms/${room_id}`;
-    await Promise.all([keep("/api/rooms"), keep(base)]);
+    const [, room] = await Promise.all([keep("/api/rooms"), keep(base)]);
     const noted = new Set(), runs = new Set();
+    const changed = new Set((room.free?.executions || []).filter(execution => execution.change_summary?.count && !execution.change_summary.changes).map(execution => execution.id));
     for (let after = 0, more = true; more;) {
       const batch = await keep(history_batch_path(room_id, "", after));
       for (const execution of batch.cards?.executions || []) {
         runs.add(execution.id);
         if (execution.notes > 0) noted.add(execution.id);
+        if (execution.change_summary?.count && !execution.change_summary.changes) changed.add(execution.id);
       }
       more = Boolean(batch.has_more) && batch.messages.length > 0;
       after = batch.messages.at(-1)?.id || after;
@@ -435,6 +457,12 @@ function create_share_core({ t, display_name, collapse_visual_fences, is_text_at
     }
     // Notes are read only for runs that have some; one that cannot be read stops the page rather than leaving it short.
     await share_parallel([...noted], SHARE_READ_CONCURRENCY, id => keep(`${base}/executions/${id}/notes`));
+    const ids = [...changed], batches = [];
+    for (let start = 0; start < ids.length; start += SHARE_EXECUTION_BATCH_SIZE) {
+      batches.push(ids.slice(start, start + SHARE_EXECUTION_BATCH_SIZE));
+    }
+    await share_parallel(batches, SHARE_READ_CONCURRENCY,
+      batch => keep(`${base}/executions/changes?ids=${batch.join(",")}`).catch(() => null));
     return runs.size;
   }
   async function share_find_delivered(responses, room_id, folders, stat) {
@@ -618,7 +646,7 @@ const RELAY_CIPHER_INFO = "codiscuss-relay-v1";
 // The rooms kept on the paired computer are read and written through its relay connection; only room routes go there.
 const RELAY_PROTOCOL = "codiscuss-relay";
 const RELAY_PING_MS = 25000;
-const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions|sites)(\/|\?|$)/;
+const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions|sites|analytics)(\/|\?|$)/;
 // One part is base64-encoded, encrypted and base64-encoded again (about 16/9 of its size), and the sealed request
 // must stay inside the hosted site's 512 KiB request limit (backend/worker.mjs MAX_BODY_BYTES). Parts stay small enough
 // for a slow phone network to carry one well inside its wait: 256 KiB parts took 3.4 s each on a phone, and one that ran
@@ -740,9 +768,10 @@ state.remote_rooms = false;
 state.last_room = "";
 state.remote_online = null;
 state.remote_site = "";
-// The last full view and transcript of recently opened rooms: reopening one shows it at once while the site is read again,
+// The last room view and loaded transcript: reopening shows them at once while the site is read again,
 // and only messages after the cached ones are fetched. A later retract or rewind reaches them through the room's withdrawal list.
 const ROOM_CACHE_LIMIT = 12;
+const RECENT_REQUEST_LIMIT = 100; // backend/free_room.py: RECENT_REQUESTS
 const room_views = new Map();
 // Member settings read for a new room before it opens, used once by its first load_room_models.
 const preloaded_room_models = new Map();
@@ -751,8 +780,9 @@ const ROOM_MODELS_FRESH_MS = 30000;
 // How long a new room's placeholder waits for the room's content before opening it anyway.
 const ROOM_PRELOAD_LIMIT_MS = 4000;
 const message_histories = new Map();
-const history_cards = new Map();
-// Rooms kept current in the background. Below ROOM_CACHE_LIMIT, so these reads never evict each other and re-read whole transcripts.
+let earlier_read = null;
+let view_publish_pending = false;
+// Rooms kept current in the background, below ROOM_CACHE_LIMIT so these reads do not evict each other.
 const BACKGROUND_ROOM_LIMIT = 8;
 // A working room reports progress constantly; new messages and the end of its work are read at once regardless.
 const BACKGROUND_PROGRESS_INTERVAL_MS = 5000;
@@ -1015,7 +1045,7 @@ async function request_json(path, payload, access_token, trace, recording = null
   const result = await response.json();
   // The hosted account's session ended (signed out elsewhere, expired, password reset): back to the sign-in (#5688).
   if (response.status === 401 && result?.code === "entry_login") { keep_draft_for_login(); window.location.assign("/_entry/login"); throw Object.assign(new Error(t('请先登录')), { status: 401 }); }
-  if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('请求失败，请重试')), { preflight: response.status >= 400 && response.status < 500, status: response.status });
+  if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('请求失败，请重试')), { preflight: response.status >= 400 && response.status < 500, status: response.status, code: result.code });
   record(result);
   return conditional ? remember(response.status, result, response.headers.get("ETag")) : localize(result);
 }
@@ -2084,7 +2114,10 @@ function render_messages(result) {
   if (messages.length !== state.messages.length || messages.some((message, index) => message !== state.messages[index])) state.messages = messages;
   state.message_total = result.total;
   // A message shown straight from its send response brings no cards; the ones already read stay.
-  if ("cards" in result) state.history_cards = result.cards;
+  if ("cards" in result) {
+    state.history_cards = result.cards;
+    state.message_history = result;
+  }
   state.messages_loading = false;
   state.messages_failure = "";
   // The Vue transcript renders from state.messages; the hidden controller markup is not rebuilt on every refresh.
@@ -2106,52 +2139,152 @@ function latest_batch_path(room_id, before, limit) {
   return `/api/rooms/${room_id}/messages?${new URLSearchParams({ q: "", withdrawn: "include", limit, cards: "1", before })}`;
 }
 
-/** Join bounded cursor batches for the interactive transcript; refresh only new records. `on_latest` gets the latest
- *  messages of a room read for the first time, before the earlier ones are read. */
-async function load_message_history(room_id, version, start_trace, on_latest) {
-  const query = state.query;
-  const history = await read_message_history(room_id, query, () => version === state.refresh_version, start_trace, on_latest);
-  if (history) state.message_history = { key: `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include" })}`, messages: history.messages };
+/** Key the unfiltered transcript separately from each server-side search. */
+function message_history_key(room_id, query = "") {
+  return `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include" })}`;
+}
+
+/** Keep the active transcript available even if other rooms or searches fill the cache. */
+function message_history_for(key) {
+  return message_histories.get(key) || (state.message_history?.key === key ? state.message_history : null);
+}
+
+/** Save a continuous loaded range and its cards together. */
+function cache_message_history(key, { messages, cards, has_earlier }) {
+  const history = { key, messages, cards: cards || null, has_earlier: Boolean(has_earlier && messages.length), total: messages.length, page: 1, pages: 1 };
+  cache_room_entry(message_histories, key, history);
   return history;
 }
 
-/**
- * Read the messages after the cached ones into the cache; null once `wanted` says the answer is no longer needed.
- * A full transcript not read before is read from the newest end: the latest MESSAGE_FIRST_BATCH go to `on_latest` at
- * once, then earlier batches back to the first message, so the page shows the room before its whole history arrives.
- */
-async function read_message_history(room_id, query, wanted, start_trace, on_latest) {
-  const key = `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include" })}`;
-  const messages = [...message_histories.get(key) || []];
-  let cards = history_cards.get(key) || null;
-  if (!messages.length && !query) {
-    let before = 0, limit = MESSAGE_FIRST_BATCH, earlier = true;
-    while (earlier) {
-      const trace = start_trace?.("messages");
-      const result = await request_json(latest_batch_path(room_id, before, limit), undefined, undefined, trace);
-      trace?.received();
-      if (!wanted()) return null;
-      messages.unshift(...result.messages);
-      if (result.cards) cards = merge_history_cards(cards, result.cards);
-      earlier = result.has_earlier && result.messages.length > 0;
-      if (earlier && !before) on_latest?.({ messages: [...messages], cards, total: messages.length, page: 1, pages: 1 });
-      before = messages[0]?.id || 0;
-      limit = MESSAGE_HISTORY_BATCH;
-    }
-  }
-  let has_more = true;
-  while (has_more) {
+/** A cold room reads just its newest batch. A cache hit or search reads forward to the newest result. */
+async function read_message_history(room_id, query, wanted, start_trace) {
+  const key = message_history_key(room_id, query);
+  const read_batch = async (path) => {
     const trace = start_trace?.("messages");
-    const result = await request_json(history_batch_path(room_id, query, messages.at(-1)?.id || 0), undefined, undefined, trace);
+    const result = await request_json(path, undefined, undefined, trace);
     trace?.received();
+    return result;
+  };
+  let base = message_history_for(key);
+  // Shares already carry their full history locally in forward batches.
+  if (!base && !query && !SHARE) {
+    const batch = await read_batch(latest_batch_path(room_id, 0, MESSAGE_FIRST_BATCH));
     if (!wanted()) return null;
-    messages.push(...result.messages);
-    if (result.cards) cards = merge_history_cards(cards, result.cards);
-    has_more = result.has_more;
+    base = message_history_for(key);
+    if (!base?.messages.length) return batch.messages.length || !base ? cache_message_history(key, batch) : base;
+    const newest = base.messages.at(-1).id;
+    if ((batch.messages.at(-1)?.id || 0) <= newest) return base;
+    if (batch.messages.some(message => message.id === newest)) {
+      return cache_message_history(key, {
+        messages: [...base.messages, ...batch.messages.filter(message => message.id > newest)],
+        cards: batch.cards ? merge_history_cards(base.cards, batch.cards) : base.cards,
+        has_earlier: base.has_earlier,
+      });
+    }
+    // Two cold reads can straddle more than a whole page of new messages. Fill any gap from the cached cursor.
   }
-  cache_room_entry(message_histories, key, messages);
-  if (cards) cache_room_entry(history_cards, key, cards);
-  return { messages, cards, total: messages.length, page: 1, pages: 1 };
+  let after = base?.messages.at(-1)?.id || 0, cards = null;
+  const added = [];
+  while (true) {
+    const batch = await read_batch(history_batch_path(room_id, query, after));
+    if (!wanted()) return null;
+    added.push(...batch.messages);
+    if (batch.cards) cards = merge_history_cards(cards, batch.cards);
+    if (!batch.has_more) break;
+    after = batch.next_after;
+  }
+  // An older-page request may have prepended records while the new end was being read.
+  base = message_history_for(key) || base;
+  const newest = base?.messages.at(-1)?.id || 0;
+  return cache_message_history(key, {
+    messages: [...base?.messages || [], ...added.filter(message => message.id > newest)],
+    cards: cards ? merge_history_cards(base?.cards, cards) : base?.cards,
+    has_earlier: base?.has_earlier,
+  });
+}
+
+/** Load one older batch for the active unfiltered transcript. Concurrent requests share the same page. */
+function load_earlier_messages() {
+  const room_id = state.room?.id;
+  if (!room_id || state.query) return Promise.resolve(false);
+  const key = message_history_key(room_id);
+  if (earlier_read?.key === key) return earlier_read.promise;
+  const base = message_history_for(key);
+  if (state.message_history?.key !== key || !base?.has_earlier) return Promise.resolve(false);
+  const before = base.messages[0].id;
+  const job = { key };
+  earlier_read = job;
+  job.promise = request_json(latest_batch_path(room_id, before, MESSAGE_HISTORY_BATCH)).then(batch => {
+    if (earlier_read !== job || state.room?.id !== room_id || state.query) return false;
+    // An incremental refresh may have appended records at the other end.
+    const current = message_history_for(key);
+    if (!current) return false;
+    const history = cache_message_history(key, {
+      messages: [...batch.messages, ...current.messages],
+      cards: batch.cards ? merge_history_cards(current.cards, batch.cards) : current.cards,
+      has_earlier: batch.has_earlier && batch.messages.length > 0,
+    });
+    if (!state.query) {
+      const newest = history.messages.at(-1)?.id || 0;
+      const sent = state.messages.filter(message => message.just_sent && message.id > newest);
+      render_messages(history);
+      if (sent.length) state.messages = [...state.messages, ...sent];
+    }
+    return batch.messages.length > 0;
+  }, error => {
+    if (earlier_read !== job || state.room?.id !== room_id || state.query) return false;
+    throw error;
+  }).finally(() => {
+    if (earlier_read === job) { earlier_read = null; publish_view(); }
+  });
+  publish_view();
+  return job.promise;
+}
+
+/** Verify an unloaded target belongs to this room before fetching earlier pages. */
+async function load_messages_until(message_id, wanted = () => true) {
+  const room_id = state.room?.id;
+  const key = message_history_key(room_id);
+  const current = () => state.room?.id === room_id && !state.query && state.message_history?.key === key && wanted();
+  const id = Number(message_id);
+  if (!room_id || !Number.isSafeInteger(id) || id <= 0 || !current()) return false;
+  const loaded = () => state.message_history.messages.some(message => message.id === id);
+  const needs_page = () => state.message_history.has_earlier && state.message_history.messages[0].id > id;
+  if (!needs_page()) return loaded();
+  try {
+    await request_json(`/api/rooms/${encodeURIComponent(room_id)}/messages/${id}?withdrawn=include&limit=1`);
+  } catch (error) {
+    if (!current() || error.status === 404) return false;
+    throw error;
+  }
+  while (current() && needs_page()) {
+    if (!await load_earlier_messages()) break;
+  }
+  return current() && loaded();
+}
+
+/** An explicit source filter needs every candidate, without looking up a synthetic jump target. */
+async function load_source_filter_history(authors) {
+  while (state.authors === authors && await load_earlier_messages()) { /* Keep reading while this filter is selected. */ }
+}
+
+/** Changing the search term relinquishes any in-flight prepend from the previous transcript. */
+function set_message_query(query) {
+  if (state.query !== query) earlier_read = null;
+  state.query = query;
+}
+
+/** A historical message is retractable only if its request history is known. */
+function can_retract_message(message, room) {
+  const requests = room?.free?.requests;
+  if (!Array.isArray(requests)) return false;
+  // The actual latest message can also take the stop-and-rewind path; a filtered tail is not the latest.
+  if (message.id === room.latest_id) return true;
+  if (requests.some(request => request.message_id === message.id && ["delivering", "completed", "failed"].includes(request.status))) return false;
+  if (requests.length < RECENT_REQUEST_LIMIT) return true;
+  // Requests are newest by ID, with older live requests optionally included. An omitted request may share
+  // the cutoff second, so absence is evidence only for a message strictly newer than that second.
+  return Math.floor(Date.parse(message.created_at) / 1000) > requests[RECENT_REQUEST_LIMIT - 1].created_at;
 }
 
 /** Forget background reads when the directory changes to another computer's rooms. */
@@ -2219,12 +2352,10 @@ async function read_background_room(room_id, mark) {
 
 /** The unfiltered transcript cached for a room, shaped like a loaded history, or null. */
 function cached_message_history(room_id) {
-  const key = `${room_id}?${new URLSearchParams({ q: "", withdrawn: "include" })}`;
-  const messages = message_histories.get(key);
-  return messages ? { messages, cards: history_cards.get(key) || null, total: messages.length, page: 1, pages: 1 } : null;
+  return message_history_for(message_history_key(room_id));
 }
 
-/** Show the room and transcript as each arrives, independently of the directory read. */
+/** Publish room details and history together, independently of the directory read. */
 async function refresh_room_content(room_id, version, versions) {
   const current = () => version === state.refresh_version && state.room?.id === room_id;
   const traces = [];
@@ -2246,44 +2377,23 @@ async function refresh_room_content(room_id, version, versions) {
   const confirmed_members = [...member_changes].filter(item => item.room_id === room_id && item.done);
   const receipts = [...recipient_previews.values()].filter(item => item.room_id === room_id);
   const trace = start_trace?.("room");
-  const room_read = request_json(`/api/rooms/${room_id}`, undefined, undefined, trace).then((room) => {
-    trace?.received();
-    if (!current()) return;
-    cache_room_entry(room_views, room_id, room);
-    for (const item of confirmed_members) {
-      const still_present = ["remove", "revoke"].includes(item.action) && room.members?.some(member => member.id === item.member_id);
-      item.debug?.(still_present ? "overlay-retained" : "snapshot-confirmed");
-      if (!still_present) member_changes.delete(item);
-    }
-    state.room = merge_room_folder(room, versions.folder, versions.archive, versions.directory);
-    for (const item of receipts) recipient_previews.delete(item.message.id);
-    render_room();
-    // With a transcript already shown, the new room state waits for the new transcript and both show in one snapshot:
-    // the room's requests and working cards laid out against the old messages, then again against the new ones, made
-    // the page collapse and refill for a moment after every send. A room opened for the first time shows at once.
-    if (!history_read || !state.messages.length) { publish_view(); finish_traces("published", "room"); }
-    load_room_models();
-  });
-  // A room read for the first time shows its latest messages while the earlier ones are read (#8131).
-  let history_done = false;
-  const show_latest = async (latest) => {
-    if (!state.room?.experts) await room_read;
-    if (current() && !history_done) { render_messages(latest); state.messages_loading = false; publish_view(); }
-  };
-  const history_read = state.tab === "discussion" ? load_message_history(room_id, version, start_trace, show_latest).then(async (result) => {
-    history_done = true;
-    // A room opened for the first time has only its directory entry: the topic card and the transcript wait for each
-    // other and show together, so neither pushes the other down when it arrives (user 2026-11-18, #4818).
-    if (!state.room?.experts) await room_read;
-    if (current() && result) { render_messages(result); publish_view(); finish_traces("published"); }
-  }) : null;
+  const room_read = request_json(`/api/rooms/${room_id}`, undefined, undefined, trace).then(room => { trace?.received(); return room; });
+  const history_key = message_history_key(room_id, state.query);
+  const history_read = state.tab === "discussion" ? read_message_history(room_id, state.query, current, start_trace) : null;
   // Only a transcript not yet read shows the loading state; re-reading an empty room keeps its empty view.
-  const history_key = `${room_id}?${new URLSearchParams({ q: state.query, withdrawn: "include" })}`;
   if (history_read && !state.messages.length && state.message_history?.key !== history_key) { state.messages_loading = true; publish_view(); }
   try {
-    await Promise.all([room_read, history_read]);
-    if (current()) publish_view();
-    finish_traces(current() ? "published" : state.room?.id === room_id ? "discarded:superseded" : "discarded:room-changed");
+    const [details, transcript] = await Promise.allSettled([room_read, history_read]);
+    if (!current()) { finish_traces(state.room?.id === room_id ? "discarded:superseded" : "discarded:room-changed"); return; }
+    if (details.status === "fulfilled") {
+      apply_room_read(details.value, versions, confirmed_members, receipts);
+      load_room_models();
+    } else if (!state.room?.experts) throw details.reason;
+    if (transcript.value) render_messages(message_history_for(history_key) || transcript.value);
+    if (details.status === "rejected") throw details.reason;
+    if (transcript.status === "rejected") throw transcript.reason;
+    publish_view();
+    finish_traces("published");
   } catch (error) {
     finish_traces("discarded:read-failed");
     // With the room's messages already on screen a failed re-read changes nothing there: the connection status says it,
@@ -2297,6 +2407,19 @@ async function refresh_room_content(room_id, version, versions) {
     }
     throw error;
   }
+}
+
+/** Apply room details, retaining optimistic member changes until the site confirms them. */
+function apply_room_read(room, versions, confirmed_members, receipts) {
+  cache_room_entry(room_views, room.id, room);
+  for (const item of confirmed_members) {
+    const still_present = ["remove", "revoke"].includes(item.action) && room.members?.some(member => member.id === item.member_id);
+    item.debug?.(still_present ? "overlay-retained" : "snapshot-confirmed");
+    if (!still_present) member_changes.delete(item);
+  }
+  state.room = merge_room_folder(room, versions.folder, versions.archive, versions.directory);
+  for (const item of receipts) recipient_previews.delete(item.message.id);
+  render_room();
 }
 
 /** Refresh a room with version guards so slower requests cannot change the active view. */
@@ -2351,7 +2474,7 @@ async function refresh_room({ room: read_room = true } = {}) {
   await content_read;
   if (version !== state.refresh_version || state.room?.id !== room_id) return;
   render_rooms();
-  set_connection(true);
+  if (!state.connected || state.reconnecting) set_connection(true);
 }
 
 /** Select a room and reset room-specific draft and filter state. */
@@ -2455,6 +2578,7 @@ async function select_room(room_id) {
   }
   state.messages = [];
   state.message_history = null;
+  earlier_read = null;
   state.history_cards = null;
   element("message-input").value = "";
   element("search-input").value = "";
@@ -2481,11 +2605,7 @@ async function select_room(room_id) {
   render_rooms();
   if (cached) render_room();
   if (preloaded_room_models.has(room_id)) load_room_models();
-  if (cached_history) {
-    render_messages(cached_history);
-    // Marks the transcript as read, so re-reading an empty room does not bring the loading state back.
-    state.message_history = { key: `${room_id}?${new URLSearchParams({ q: "", withdrawn: "include" })}`, messages: cached_history.messages };
-  }
+  if (cached_history) render_messages(cached_history);
   publish_view();
   const reading = state.opening = refresh_room();
   try { await reading; }
@@ -3971,6 +4091,8 @@ function drop_unreferenced_attachments(text) {
   }
   if (cleaned !== text) write_view_field("message-input", cleaned, { publish: false });
   remove_attachment(gone.map(item => item.id));
+  // Both composers restore the caret with Vue's nextTick as soon as this synchronous call returns.
+  flush_view_publish();
   return true;
 }
 
@@ -4710,10 +4832,11 @@ function prepare_room_request(signature) {
  * complete in one step. Answers the room's details, or null when they are slow or fail and the room opens the usual way.
  */
 async function preload_room(room_id) {
-  const reads = Promise.all([request_json(`/api/rooms/${room_id}`), read_message_history(room_id, "", () => true),
+  const generation = background_reads.generation;
+  const reads = Promise.all([request_json(`/api/rooms/${room_id}`), read_message_history(room_id, "", () => generation === background_reads.generation),
     state.launch.available ? local_launch_request("room-models", { room_id, quick: true }).catch(() => null) : null]).catch(() => null);
   const loaded = await Promise.race([reads, new Promise(resolve => setTimeout(resolve, ROOM_PRELOAD_LIMIT_MS, null))]);
-  if (!loaded) return null;
+  if (!loaded || generation !== background_reads.generation) return null;
   const [room, , models] = loaded;
   cache_room_entry(room_views, room_id, room);
   if (models) preloaded_room_models.set(room_id, models);
@@ -5381,7 +5504,7 @@ async function relay_room_request_once(path, payload, etag, trace) {
     }
   }
   if (answer.status >= 400) throw Object.assign(new Error(server_text(answer.body?.error_text, answer.body?.error) || t('请求失败，请重试')),
-    { preflight: answer.status < 500, status: answer.status, need: answer.body?.need, room_id: answer.body?.room_id });
+    { preflight: answer.status < 500, status: answer.status, code: answer.body?.code, need: answer.body?.need, room_id: answer.body?.room_id });
   return answer;
 }
 
@@ -5726,7 +5849,7 @@ async function show_computer_rooms(remote) {
   preloaded_room_models.clear();
   state.launch.room_models = null;
   message_histories.clear();
-  history_cards.clear();
+  earlier_read = null;
   reset_background_reads();
   state.remote_online = null;
   state.rooms = [];
@@ -7644,7 +7767,12 @@ async function retract_latest() {
     try { await last.done; } catch { return; }
     if (state.room?.id !== room_id) return;
   }
-  const message = state.messages.findLast(item => item.author === "用户" && !item.relay_room && !item.withdrawn);
+  const latest = () => state.messages.findLast(item => item.author === "用户" && !item.relay_room && !item.withdrawn);
+  while (!latest() && await load_earlier_messages()) {
+    if (state.room?.id !== room_id) return;
+  }
+  if (state.room?.id !== room_id) return;
+  const message = latest();
   if (message) await retract_message(message.id);
 }
 
@@ -8194,10 +8322,10 @@ function bind_controls() {
   const forms = { "message-form": send_from_composer, "room-form": submit_room, "state-form": save_context };
   Object.entries(forms).forEach(([id, action]) => element(id).addEventListener("submit", (event) => run_action(() => action(event))));
   element("search-form").addEventListener("submit", (event) => {
-    event.preventDefault(); state.query = element("search-input").value.trim(); state.page = 1; run_action(refresh_room);
+    event.preventDefault(); set_message_query(element("search-input").value.trim()); state.page = 1; run_action(refresh_room);
   });
   element("search-input").addEventListener("search", () => {
-    state.query = element("search-input").value.trim(); state.page = 1; run_action(refresh_room);
+    set_message_query(element("search-input").value.trim()); state.page = 1; run_action(refresh_room);
   });
   element("mention-filter").addEventListener("click", () => {
     state.mention_only = !state.mention_only; state.page = 1;
@@ -8475,8 +8603,17 @@ async function initialize() {
   window.addEventListener("pageshow", start_live_updates);
 }
 
-/** Publish a presentation snapshot shared by the legacy and Vue renderers. */
+/** Coalesce synchronous controller changes without waiting for network responses. */
 function publish_view() {
+  if (view_publish_pending) return;
+  view_publish_pending = true;
+  queueMicrotask(flush_view_publish);
+}
+
+/** Finish a queued publication; synchronous bridge operations can make it visible before returning. */
+function flush_view_publish() {
+  if (!view_publish_pending) return;
+  view_publish_pending = false;
   document.dispatchEvent(new CustomEvent("discuss:view"));
 }
 
@@ -8499,6 +8636,7 @@ function view_snapshot() {
   const experts = Object.fromEntries(["new-expert-modes"].map((id) =>
     [id, element(id) ? read_expert_inputs(id) : {}]));
   const sending_previews = room_sending_previews();
+  const transcript = !state.query && state.room && state.message_history?.key === message_history_key(state.room.id) ? state.message_history : null;
   return { room_source: { computer: computer_rooms_only(), signed_in: state.admin.logged_in, remote: state.remote_rooms, online: state.remote_online },
     room_site: room_site(), rooms: ordered_rooms(), folders: state.folders, folder_groups: ordered_folders(), room: shown_room(), archive_view: state.archive_view, directory_sort: state.directory_sort, messages: receipt_messages(), history_cards: state.history_cards, total: state.message_total,
     recipient_previews: [...recipient_previews.values()].filter(item => item.room_id === state.room?.id),
@@ -8511,6 +8649,7 @@ function view_snapshot() {
     failed_sends: state.failed_sends.filter(job => job.room_id === state.room?.id).map((failed) => ({ id: failed.id, ...failed.preview })),
     mention_only: state.mention_only, host_only: state.host_only, authors: state.authors, card_kinds: state.card_kinds,
     source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, queued_taken: state.queued_taken, composer_restored: state.composer_restored,
+    has_earlier: Boolean(transcript?.has_earlier), loading_earlier: Boolean(transcript && earlier_read?.key === transcript.key),
     access: access_snapshot(), admin: admin_snapshot(), entry_account: state.entry_account || "",
     device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
@@ -8577,6 +8716,8 @@ function write_view_expert(container_id, name, value) {
   control.value = value;
   control.dispatchEvent(new Event("input", { bubbles: true }));
   publish_view();
+  // The create form immediately reads the new roster to repair the selected host.
+  flush_view_publish();
 }
 
 /** Select a quoted message for both renderers without changing its text. */
@@ -8589,15 +8730,24 @@ function set_view_reply(message) {
 /** Apply filters to the continuous transcript through the existing controller. */
 async function filter_view({ query = state.query, mention = state.mention_only, host = state.host_only, authors = state.authors, kinds = state.card_kinds, page = 1 }) {
   const same_query = query.trim() === state.query && page === state.page;
-  state.query = query.trim();
+  if (mention !== state.mention_only || host !== state.host_only
+      || JSON.stringify(authors) !== JSON.stringify(state.authors)
+      || JSON.stringify(kinds) !== JSON.stringify(state.card_kinds)) earlier_read = null;
+  set_message_query(query.trim());
   state.mention_only = mention;
   state.host_only = host;
   state.authors = [...authors];
   state.card_kinds = [...kinds];
-  // Speaker and card filters apply to the loaded transcript in the page; only a new search reads the site.
+  const filter = state.authors;
+  // Text search runs at the site. Source filters run in the page and explicitly ask for all older candidates.
+  const needs_history = !state.query && (mention || host || authors.length || kinds.length);
   if (same_query) {
     element("mention-filter").setAttribute("aria-pressed", String(mention));
     publish_view();
+    if (needs_history) {
+      if (!state.message_history) await state.opening;
+      await load_source_filter_history(filter);
+    }
     return;
   }
   state.page = page;
@@ -8617,6 +8767,7 @@ async function filter_view({ query = state.query, mention = state.mention_only, 
     }
     throw error;
   }
+  if (needs_history) await load_source_filter_history(filter);
 }
 
 /** Open the attachment a clicked image, file card or `[图片 #n]` tag names. */
@@ -9628,7 +9779,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
     sessions: admin_sessions, revoke: revoke_admin_sessions, change_password: change_admin_password },
   device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
-  request: request_json, rewind_plan, identities: IDENTITIES, platform_identity: name => PLATFORM_IDENTITIES[name], display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
+  request: request_json, rewind_plan, load_earlier_messages, load_messages_until, can_retract_message, identities: IDENTITIES, platform_identity: name => PLATFORM_IDENTITIES[name], display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
   set_member_access, set_member_model, set_member_prompt, read_system_prompts, save_system_prompts, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, local_page_url, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 

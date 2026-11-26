@@ -10,7 +10,7 @@ const execution_notes = module_ref(new Map());
 </script>
 
 <script setup>
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import ScheduleCard from "./ScheduleCard.vue";
 import SchedulerDecision from "./SchedulerDecision.vue";
 import TopicCard from "./TopicCard.vue";
@@ -18,7 +18,6 @@ import DiscussionEndCard from "./DiscussionEndCard.vue";
 import GoalNoticeCard from "./GoalNoticeCard.vue";
 import ExecutionDenials from "./ExecutionDenials.vue";
 import ExecutionNotes from "./ExecutionNotes.vue";
-import BackgroundTaskList from "./BackgroundTaskList.vue";
 import WorkingText from "./WorkingText.vue";
 import UploadPercent from "./UploadPercent.vue";
 import AttachmentUploadRing from "./AttachmentUploadRing.vue";
@@ -578,26 +577,11 @@ const FOLLOW_TAIL_THRESHOLD = 70;
 // reader leaving the end (2026-11-16: first opening a room stopped 70–358px short, with "回到最新" shown).
 const ROOM_SETTLE_MS = 8000;
 let settle_until = performance.now() + ROOM_SETTLE_MS, moved_by_hand = false;
-// Cards mounted when a room opens, a few screens' worth; earlier ones follow in slices (see render_floor).
-const RENDER_BATCH = 15;
-// Within this distance (px) of the top, earlier cards are rendered on every frame instead of when idle.
-const LOAD_EARLIER_MARGIN = 2000;
-// Render time (ms) one slice may take: idle slices stay inside a frame, slices a scrolling reader waits on nearly fill
-// one, and a clicked jump, where nothing moves until it lands, takes larger ones to land sooner.
-const PRELOAD_BUDGET_MS = 8;
-const PRELOAD_URGENT_BUDGET_MS = 14;
-const PRELOAD_JUMP_BUDGET_MS = 40;
-const PRELOAD_FIRST_SLICE = 2;
-const PRELOAD_MAX_SLICE = 20;
-// Share of the cards already shown that one slice adds at least (see preload_slice).
-const PRELOAD_RENDERED_SHARE = 0.25;
-const PRELOAD_SHARE_CEILING = 40;
-// Cards rendered right after a room opens; earlier ones follow in background slices of PRELOAD_BACKGROUND_SLICE once the
-// room has settled (ROOM_SETTLE_MS), or at once when the reader nears them or jumps to one.
-const PRELOAD_IDLE_CARDS = 100;
-const PRELOAD_BACKGROUND_SLICE = 10;
-// Idle slices wait this long at most (ms) for an idle moment.
-const PRELOAD_IDLE_TIMEOUT_MS = 300;
+// Keep a few screens mounted on either side of the reader and use measured heights for evicted rows.
+const WINDOW_OVERSCAN = 2;
+const WINDOW_MAX_ROWS = 100;
+const ESTIMATED_ROW_HEIGHT = 200;
+const LOAD_EARLIER_MARGIN = 1000;
 // The reader is still scrolling until this long (ms) after their last scroll event. iOS sends scroll events only for
 // whole-pixel moves, so the slow end of a swipe's momentum can go quiet for longer than a frame or two.
 const SCROLL_SETTLE_MS = 300;
@@ -645,7 +629,8 @@ const current_room_id = computed(() => room.value?.id);
 // reference while their content is the same.
 const sending_previews = stable_computed(() => view.value.sending_previews);
 const failed_sends = stable_computed(() => view.value.failed_sends);
-const speaking_turn = computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
+const session = stable_computed(() => room.value?.session);
+const speaking_turn = stable_computed(() => ["pending", "notified"].includes(room.value?.current_turn?.status)
   && !["paused", "concluded"].includes(room.value.phase) ? room.value.current_turn : null);
 const is_manual_member = (member) => member?.access === "manual" && member.status === "active";
 const speaking_member = computed(() => (room.value.members || []).find((member) => member.name === speaking_turn.value?.expert));
@@ -671,6 +656,14 @@ function with_history(kind, recent) {
   return [...items.values()];
 }
 const all_executions = computed(() => with_history("executions", room.value.free?.executions));
+const executions_by_id = computed(() => new Map(all_executions.value.map((item) => [item.id, item])));
+const executions_by_answer = computed(() => {
+  const index = new Map();
+  for (const item of all_executions.value) {
+    if (item.answer_id != null && !index.has(item.answer_id)) index.set(item.answer_id, item);
+  }
+  return index;
+});
 const all_decisions = computed(() => with_history("scheduler_decisions", room.value.scheduler_decisions));
 const all_arrangements = computed(() => with_history("host_arrangements", room.value.host_arrangements));
 const all_cancelled_turns = computed(() => with_history("cancelled_turns", room.value.cancelled_turns));
@@ -872,6 +865,8 @@ async function load_late_answer(execution_id, event) {
 /** What a working card calls a tool: its own name, or the kind of action for software that does not report names. */
 const TOOL_KIND_LABELS = { command: t('命令'), editing: t('编辑'), tool: t('工具') };
 const tool_label = (item) => item.tool || TOOL_KIND_LABELS[item.phase];
+/** How many background tasks the working card's execution still has running. */
+const background_running = (message) => (message.background_tasks || []).filter((task) => task.state === "running").length;
 async function read_note_texts(room_id, execution_id) {
   const { notes } = await bridge.request(`/api/rooms/${room_id}/executions/${execution_id}/notes`);
   return notes;
@@ -926,7 +921,7 @@ watch(() => free_busy.value.map((item) => `${item.execution_id}:${item.notes}`).
 const QUIET_SOURCES = new Set(["user", "cli", "api", "auto"]);
 /** The execution that delivered an answer, when the room still lists it. */
 function answer_execution(message) {
-  return all_executions.value.find((item) => item.answer_id === message.id);
+  return executions_by_answer.value.get(message.id);
 }
 /**
  * Which line a card's work belongs to (user 2026-11-20, "多线开发"): the main line is the speaking order the host or the
@@ -1102,7 +1097,7 @@ const shows_progress = (item) => capabilities(item)?.progress !== false;
 const stop_reason_text = (result) => result === "用户立即发送" ? t("已打断：你立即发送了新消息，它会连同这条一起处理") : result;
 /** The execution behind a stopped or skipped card, when the room still lists it. */
 function voided_execution(message) {
-  return message.cancelled_execution || all_executions.value.find((item) => item.id === message.execution_id) || null;
+  return message.cancelled_execution || executions_by_id.value.get(message.execution_id) || null;
 }
 /** Seconds an ended execution ran, or null while it has not ended. */
 const execution_seconds = (execution) => execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null;
@@ -1164,15 +1159,16 @@ const execution_reports = stable_computed(() => {
   for (const execution of all_executions.value) {
     if (!["completed", "failed", "cancelled"].includes(execution.status)) continue;
     const changes = (execution.changes || []).filter((path) => execution.edited?.includes(path));
+    const change_count = execution.change_summary?.count ?? changes.length;
     // The runner counts the changed files once the member's software has exited, seconds after the answer: a member
     // that edited files holds the card's place meanwhile, so the list does not appear from nothing (user 2026-11-19, #5665).
     const tallying = execution.status === "completed" && execution.edits > 0 && execution.changes_recorded === false
       && Math.max(tally_now.value, Math.floor(Date.now() / 1000)) - execution.finished_at < TALLY_WAIT_SECONDS;
-    if (execution.status === "completed" && !changes.length && !execution.denials?.length && !tallying) continue;
+    if (execution.status === "completed" && !change_count && !execution.denials?.length && !tallying) continue;
     // A failed free-room execution keeps its own card in the slot it worked in, and so does a delivered one that was voided.
     if (execution.status === "failed" || (execution.status === "cancelled" && execution.capabilities)) continue;
     const message_id = execution.answer_id || execution.request_message_id;
-    const report = { ...execution, changes, tallying, label: execution.status === "cancelled" ? bridge.stop_label(execution) : { completed: t('已完成'), failed: t('失败') }[execution.status] };
+    const report = { ...execution, changes, change_count, tallying, label: execution.status === "cancelled" ? bridge.stop_label(execution) : { completed: t('已完成'), failed: t('失败') }[execution.status] };
     reports.set(message_id, [...(reports.get(message_id) || []), report]);
   }
   return reports;
@@ -1287,7 +1283,7 @@ function arrangement_seconds(plan, anchor) {
 function message_elapsed(message) {
   if (message.elapsed_seconds != null) return message.elapsed_seconds;
   // Read every execution, not the reports: a clean completion earns no report card but still has its time.
-  const execution = all_executions.value.find((item) => item.answer_id === message.id);
+  const execution = executions_by_answer.value.get(message.id);
   return execution?.created_at && execution.finished_at ? Math.max(0, execution.finished_at - execution.created_at) : null;
 }
 const date_formatter = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" });
@@ -1675,17 +1671,21 @@ function find_mention(value, start, end = start) {
   return { start: start - match[1].length - 1, end: start, query: match[1] };
 }
 
-/** Locate a "/" command at the start of the draft or after whitespace, so paths such as a/b never trigger it. */
+/**
+ * Locate a "/" command at the start of the draft, after whitespace, or right after a member's @handle ("@Claude/"),
+ * so paths such as a/b or @src/ never trigger it. `glued` marks the last case: picking an option first adds the space.
+ */
 function find_command(value, start, end = start) {
   if (start !== end || !(can_use_modes.value || can_pick_workflow.value || can_call_skill.value)) return null;
-  const match = value.slice(0, start).match(/(?:^|\s)\/([^\s/]*)$/u);
+  const match = value.slice(0, start).match(/(?:^|\s|(@[^\s@/]+))\/([^\s/]*)$/u);
   if (!match) return null;
-  const command_start = start - match[1].length - 1;
+  const command_start = start - match[2].length - 1;
   const before = value.slice(0, command_start).trimEnd();
   const names = free_members.value.map(member => member.name);
   const mentioned = bridge.mentioned_members(before, names);
   const member = names.find(name => mentioned.has(name) && bridge.mention_handles(name, names).some(handle => before.endsWith(`@${handle}`)));
-  return { start: command_start, end: start, query: match[1], command: true, member };
+  if (match[1] && !member) return null;
+  return { start: command_start, end: start, query: match[2], command: true, member, glued: Boolean(match[1]) };
 }
 
 /**
@@ -1738,7 +1738,13 @@ const mention_handle = (name) => GROUP_MENTIONS[name] ? name : bridge.mention_ha
 /** Replace just the active token and leave the caret ready for the next word. */
 async function select_mention(option) {
   if (!mention_context.value || mention_context.value.composing || !mention_options.value.some((item) => item.key === option.key)) return;
-  const { start, end } = mention_context.value;
+  let { start, end } = mention_context.value;
+  if (mention_context.value.glued) {
+    // "@Claude/" picked an option: separate the command from the mention so the message reads "@Claude /…".
+    await replace_draft(start, start, " ");
+    start += 1;
+    end += 1;
+  }
   if (option.mode) return pick_mode(option, start, end);
   if (option.workflow) return pick_workflow(option, start, end);
   if (option.skill) return pick_skill(option, start, end);
@@ -2024,7 +2030,7 @@ const CARD_KINDS = {
   stopped: (item) => Boolean(item.cancelled_turn || item.cancelled_execution) || Boolean(!item.slot_card && item.withdrawn),
   arrangement: (item) => Boolean(item.arrangement),
   scheduler: (item) => !item.slot_card && (scheduler_decisions.value.has(item.id) || routing_messages.value.has(item.id) || recommendations.value.has(item.id)),
-  changes: (item) => !item.slot_card && (execution_reports.value.get(item.id) || []).some((report) => report.changes?.length),
+  changes: (item) => !item.slot_card && (execution_reports.value.get(item.id) || []).some((report) => report.change_count),
 };
 /** Leave the filter and scroll the full transcript to this card, or to the message it shows under. */
 async function locate(item) {
@@ -2062,13 +2068,27 @@ async function locate_member(name) {
   awaiting_member_locate = null;
   const target = latest_member_card(name);
   if (!target) {
-    if (!view.value.query && (room.value?.message_count || 0) > view.value.messages.length) {
+    if (view.value.has_earlier && bridge.load_earlier_messages) {
       awaiting_member_locate = name;
       locating_label.value = t('正在查找 {value1} 的最新发言…', { value1: bridge.display_name(name) });
       locating.value = name;
       clearTimeout(locating_timer);
       locating_timer = setTimeout(() => { awaiting_member_locate = null; locating.value = null; locating_label.value = ""; }, LOCATE_GIVE_UP_MS);
-      return;
+      try {
+        while (awaiting_member_locate === name && view.value.has_earlier) {
+          const first = view.value.messages[0]?.id;
+          await bridge.load_earlier_messages();
+          await nextTick();
+          if (awaiting_member_locate === name && latest_member_card(name)) return locate_member(name);
+          if (first === view.value.messages[0]?.id) break;
+        }
+      } catch (error) { if (awaiting_member_locate === name) notify_history_error(error); }
+      if (awaiting_member_locate !== name) return;
+      awaiting_member_locate = null;
+      locating.value = null;
+      locating_label.value = "";
+      clearTimeout(locating_timer);
+      if (view.value.has_earlier) return;
     }
     bridge.notify("info", t('{value1} 在本房间还没有发言', { value1: bridge.display_name(name) }));
     return;
@@ -2205,6 +2225,7 @@ const topic_anchor = stable_computed(() => {
 const end_anchor = stable_computed(() => {
   const session = room.value?.session;
   if (session?.status !== "concluded") return null;
+  if (view.value.has_earlier && view.value.messages[0]?.id > session.ended_message_id) return null;
   const messages = transcript_messages.value;
   const index = messages.findIndex((message) => !message.slot_card && Number(message.id) > session.ended_message_id);
   return index < 0 ? "end" : messages[index].id;
@@ -2246,34 +2267,44 @@ function undeliverable_requests() {
         failure: { role: blocked.get(request.member_id).role, result: blocked.get(request.member_id).adopt_error } };
     });
 }
-/** Consecutive rewound messages share one box at the first of them, which lists them when expanded; a retracted one is a line of its own. */
-const rewound_runs = stable_computed(() => {
-  const runs = new Map(), hidden = new Set();
+/** Group loaded runs at their first row, but identify them by their tail when an older page extends them. */
+function contiguous_runs(messages, includes) {
+  const runs = new Map(), hidden = new Map();
   let start = null;
-  for (const message of view.value.messages) {
-    if (message.withdrawn !== "rewound") { start = null; continue; }
+  for (const message of messages) {
+    if (!includes(message)) { start = null; continue; }
     if (start === null) { start = message.id; runs.set(start, []); }
     runs.get(start).push(message);
-    if (start !== message.id) hidden.add(message.id);
+    if (start !== message.id) hidden.set(message.id, start);
   }
   return { runs, hidden };
-});
-/**
- * Consecutive program notices to the host share one card at the first of them (user 2026-11-25, #10413): they each only
- * say a batch came back, and the host is woken once for them anyway. Timed checks folded with their answer, notices
- * hidden behind a host failure and any other message break a run; a lone notice keeps its own card.
- */
-const notice_runs = stable_computed(() => {
-  const runs = new Map(), hidden = new Set();
-  let start = null;
-  for (const message of view.value.messages) {
-    if (message.source !== "notice" || quiet_checkins.value.has(message.id) || failure_wakes.value.has(message.id)) { start = null; continue; }
-    if (start === null) { start = message.id; runs.set(start, []); }
-    runs.get(start).push(message);
-    if (start !== message.id) hidden.add(message.id);
-  }
-  return { runs, hidden };
-});
+}
+const rewound_runs = stable_computed(() => contiguous_runs(view.value.messages, (message) => message.withdrawn === "rewound"));
+// A known check-in notice is not a plain notification, even if only one side of the pair is loaded.
+const checkin_notices = computed(() => new Map(all_quiet_checkins.value.map(({ message_id, answer_id }) => [message_id, answer_id])));
+const checkin_hosts = computed(() => new Map([...quiet_checkins.value].map(([notice, answer]) => [answer.id, notice])));
+const notice_runs = stable_computed(() => contiguous_runs(view.value.messages,
+  (message) => message.source === "notice" && !checkin_notices.value.has(message.id) && !failure_wakes.value.has(message.id)));
+const open_notice_groups = ref(new Set());
+function toggle_notice_group(id) {
+  const next = new Set(open_notice_groups.value);
+  if (!next.delete(id)) next.add(id);
+  open_notice_groups.value = next;
+}
+
+function clipped_run(id) {
+  return !view.value.query && view.value.has_earlier && view.value.messages[0]?.id === id;
+}
+
+function run_count(run, id) {
+  return clipped_run(id) ? "\u2265" + run.length : run.length;
+}
+
+function fold_target(id) {
+  return rewound_runs.value.hidden.get(id) ?? notice_runs.value.hidden.get(id) ?? checkin_hosts.value.get(id)
+    ?? (failure_wakes.value.has(id) ? 'failed-' + failure_wakes.value.get(id) : undefined);
+}
+
 function toggle_rewound(id) {
   const next = new Set(expanded_rewinds.value);
   if (!next.delete(id)) next.add(id);
@@ -2295,7 +2326,7 @@ const free_layout = computed(() => {
   // Work on a taken-back message is no longer shown; a failure there is dropped too.
   const taken_back = new Set(view.value.messages.filter((message) => message.withdrawn).map((message) => message.id));
   const slots = new Map();
-  const executions = new Map(all_executions.value.map((execution) => [execution.id, execution]));
+  const executions = executions_by_id.value;
   // Top-level messages in id order, filled while the messages are placed.
   const root_ids = [];
   const record = typeof debug_log === "function" ? (item, after, reason, anchor) =>
@@ -2361,77 +2392,219 @@ const free_layout = computed(() => {
   }
   return [...ordered, ...tail];
 });
-/** Id of the top-level message at or before `index`, where a shown range can start without splitting a slot; 0 shows all. */
-function floor_before(messages, index) {
-  for (let position = Math.min(index, messages.length - 1); position >= 0; position--) {
-    if (!messages[position].slot_card) return Number(messages[position].id);
+const window_focus = ref(null); // null follows the newest rows
+const window_height = ref(0);
+const row_heights = new Map();
+const row_measurements = new Map();
+const height_revision = ref(0);
+const window_offsets = computed(() => {
+  height_revision.value;
+  const offsets = [0], positions = new Map();
+  for (const message of transcript_messages.value) {
+    positions.set(message.id, offsets.length - 1);
+    offsets.push(offsets.at(-1) + (row_heights.get(message.id) ?? ESTIMATED_ROW_HEIGHT));
   }
-  return 0;
+  return { offsets, positions };
+});
+
+/** Find the row at a pixel offset in the measured/estimated history. */
+function row_at(offsets, pixel) {
+  let low = 0, high = offsets.length - 1;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (offsets[middle + 1] <= pixel) low = middle + 1;
+    else high = middle;
+  }
+  return Math.min(low, offsets.length - 2);
 }
-// A long room first mounts only its newest cards (mounting hundreds at once held the page for seconds), then renders the
-// earlier ones a few at a time, each slice sized to fit within a frame: while the page is idle, so they are ready before
-// the reader scrolls up to them, or on every frame while the reader nears the top or waits on a jump.
-// Null follows the newest batch; otherwise it is the id of the first shown message, so new arrivals never push cards out
-// above the reader.
-const render_floor = ref(null);
-const render_start = computed(() => {
-  const messages = transcript_messages.value;
-  const floor = render_floor.value ?? floor_before(messages, messages.length - RENDER_BATCH);
-  const index = messages.findIndex((message) => !message.slot_card && Number(message.id) >= floor);
-  return index > messages.findIndex((message) => !message.slot_card) ? index : 0;
+const SHARE_RENDER_BATCH = 12;
+const share_limit = ref(SHARE_RENDER_BATCH);
+const gesture_window = shallowRef(null);
+let drawn_history = null;
+const settled_window = stable_computed(() => {
+  if (is_share.value) return { start: 0, end: Math.min(share_limit.value, transcript_messages.value.length), before: 0, after: 0 };
+  const { offsets, positions } = window_offsets.value;
+  const count = offsets.length - 1;
+  if (!count) return { start: 0, end: 0, before: 0, after: 0 };
+  const height = window_height.value || ESTIMATED_ROW_HEIGHT * 3;
+  const focus = positions.get(window_focus.value);
+  const top = focus == null ? Math.max(0, offsets[count] - height) : offsets[focus];
+  const margin = height * WINDOW_OVERSCAN;
+  const start = Math.max(0, row_at(offsets, top - margin), (focus ?? count - 1) - Math.floor(WINDOW_MAX_ROWS / 2));
+  const end = Math.min(count, Math.max(start + 1, row_at(offsets, top + height + margin) + 1), start + WINDOW_MAX_ROWS);
+  return { start, end, before: offsets[start], after: offsets[count] - offsets[end] };
 });
-watch(follow_tail, (following) => {
-  if (!following && render_floor.value === null) render_floor.value = floor_before(transcript_messages.value, transcript_messages.value.length - RENDER_BATCH);
-});
-// Earlier messages arriving above the first one (a room opened first shows its latest 40, then reads the rest, #8131)
-// mount in slices like any others. A short list rendered to its top has floor 0, "from the very first"; left so, the
-// whole history mounted at once when it arrived (627 cards: 2.2s and 1.4s long tasks), so the floor moves to the old top.
-watch(() => transcript_messages.value.find((message) => !message.slot_card)?.id, (first, previous) => {
-  if (first == null || previous == null || Number(first) >= Number(previous) || render_floor.value === null) return;
-  if (Number(render_floor.value) <= Number(previous)) render_floor.value = Number(previous);
-});
-/** Whether message `id` is in the history but not rendered yet. */
-function not_rendered(id) {
-  const index = id == null ? -1 : transcript_messages.value.findIndex((message) => message.id === id);
-  return index >= 0 && index < render_start.value;
-}
-let preload_timer = null;
-let preload_size = PRELOAD_FIRST_SLICE;
-let preload_busy = false;
-// The map entry under the pointer is rendered ahead of a click; a click on one still being reached jumps once it is.
-let preload_wanted = null;
-let pending_jump = null;
-// A jump to a message older than any read yet waits here for the earlier messages (jump_to).
+
+const render_window = computed(() => gesture_window.value?.range ?? settled_window.value);
+const top_topic_visible = computed(() => gesture_window.value?.topic
+  ?? (!view_query.value && !view_source_filter.value && !topic_anchor.value && !view.value.has_earlier && render_window.value.start === 0));
+const drawn_rewinds = computed(() => gesture_window.value?.rewinds ?? rewound_runs.value);
+const drawn_notices = computed(() => gesture_window.value?.notices ?? notice_runs.value);
+const drawn_checkins = computed(() => gesture_window.value?.checkins ?? quiet_checkins.value);
+
+const before_window = ref(null);
+const after_window = ref(null);
 let awaiting_jump = null;
-watch(() => transcript_messages.value.length, () => {
-  if (awaiting_member_locate != null) {
-    const name = awaiting_member_locate;
-    const target = latest_member_card(name);
-    if (target) {
-      awaiting_member_locate = null;
-      nextTick(() => locate_member(name));
-    } else if (view.value.messages.length >= (room.value?.message_count || 0)) {
-      awaiting_member_locate = null;
-      locating.value = null;
-      locating_label.value = "";
-      clearTimeout(locating_timer);
-      bridge.notify("info", t('{value1} 在本房间还没有发言', { value1: bridge.display_name(name) }));
-    }
-  }
-  if (awaiting_jump == null || !transcript_messages.value.some((message) => message.id === awaiting_jump)) return;
-  const id = awaiting_jump;
-  nextTick(() => jump_to(id));
+let earlier_loading = null;
+let earlier_intent = false;
+let prepend_anchor = null;
+let webkit_shift = null;
+const history_errors = new WeakSet();
+
+function notify_history_error(error) {
+  if (history_errors.has(error)) return;
+  if (error && typeof error === "object") history_errors.add(error);
+  bridge.notify("error", error?.message ?? String(error));
+}
+
+/** Sample the displayed row before Vue patches in the earlier page. */
+function visible_anchor() {
+  const element = transcript.value;
+  if (!element?.clientHeight) return null;
+  const top = reading_top(element);
+  const rows = element.querySelectorAll("[data-transcript-row]");
+  const row = [...rows].find((item) => item.getBoundingClientRect().bottom > top);
+  if (!row) return null;
+  const id = row_id(row.dataset.transcriptRow);
+  const card = card_element(element, id) ?? row;
+  return { id, top: card.getBoundingClientRect().top };
+}
+
+watch([() => view.value.messages, current_room_id, view_query, view_source_filter], ([messages, id, query, filter], [previous, old_id, old_query, old_filter]) => {
+  if (is_share.value || id !== old_id || query !== old_query || filter !== old_filter) return;
+  const previous_first = previous?.[0]?.id;
+  if (previous_first == null || !(messages[0]?.id < previous_first)
+      || !messages.some((message) => message.id === previous_first)
+      || (follow_tail.value && !earlier_loading?.from_transcript)) return;
+  prepend_anchor ??= visible_anchor();
+  if (!prepend_anchor) return;
+  follow_tail.value = false;
+  window_focus.value = fold_target(prepend_anchor.id) ?? prepend_anchor.id;
+  if (reader_busy()) { mark_reader_scroll(); return; }
+  nextTick(restore_prepend);
 });
+
+/** Restore before tracking reads the new scroll geometry, including at scrollTop=0 and on WebKit. */
+function restore_prepend() {
+  const anchor = prepend_anchor, element = transcript.value;
+  if (!anchor || !element || reader_busy()) return;
+  prepend_anchor = null;
+  earlier_intent = false;
+  const id = CSS.escape(String(fold_target(anchor.id) ?? anchor.id));
+  const row = element.querySelector('[data-transcript-row="' + id + '"]');
+  const card = card_element(element, anchor.id) ?? row;
+  if (card) scroll_by_drift(element, card.getBoundingClientRect().top - anchor.top);
+  reading_position?.mark();
+  track_scroll();
+}
+
+/** Request one older page, shared by the transcript and quick navigation. */
+function read_earlier(from_transcript = false) {
+  if (!view.value.has_earlier || view.value.loading_earlier || earlier_loading || !bridge.load_earlier_messages) return;
+  const job = { from_transcript };
+  earlier_loading = job;
+  Promise.resolve(bridge.load_earlier_messages()).catch((error) => {
+    if (earlier_loading === job) notify_history_error(error);
+  }).finally(() => { if (earlier_loading === job) earlier_loading = null; });
+}
+
+function maybe_load_earlier(element) {
+  if (!earlier_intent || element.scrollTop > LOAD_EARLIER_MARGIN || prepend_anchor) return;
+  earlier_intent = false;
+  read_earlier(true);
+}
+/** Keep a mounted leading row at its actual offset; use the frozen estimates only inside a spacer. */
+function gesture_leading_row(rows, range, offsets, top, first, last) {
+  if (top >= first && top < last) {
+    const index = rows.findIndex((row) => row.getBoundingClientRect().bottom > top);
+    if (index >= 0) return { start: range.start + index, before: range.before + rows[index].getBoundingClientRect().top - first };
+  }
+  const above = top < first;
+  const edge = above ? range.start : range.end;
+  const edge_top = above ? first : last;
+  const pixel = offsets[edge] + top - edge_top;
+  const start = row_at(offsets, pixel);
+  return { start, before: Math.max(0, range.before + edge_top - first + offsets[start] - offsets[edge]), pixel };
+}
+
+/** Fill an exposed spacer without mounting anything above the first row the reader can see. */
+function track_webkit_gesture(element) {
+  if (SCROLL_ANCHORING || is_share.value || !reader_scrolling.value || !drawn_history || !after_window.value) return;
+  const { range, history, offsets } = drawn_history;
+  const rows = [...element.querySelectorAll("[data-transcript-row]")];
+  if (!rows.length || rows.length !== range.end - range.start) return;
+  const top = reading_top(element), bottom = element.getBoundingClientRect().bottom;
+  const first = rows[0].getBoundingClientRect().top;
+  const last = after_window.value.getBoundingClientRect().top;
+  if ((top >= first || range.start === 0) && (bottom <= last || range.end >= history.length)) return;
+  const { start, before, pixel } = gesture_leading_row(rows, range, offsets, top, first, last);
+  const end_pixel = pixel == null ? offsets[range.end] + bottom - last : pixel + bottom - top;
+  const end = Math.min(history.length, Math.max(start + 1, row_at(offsets, end_pixel) + 1), start + WINDOW_MAX_ROWS);
+  if (start === range.start && end === range.end) return;
+  gesture_window.value = { ...drawn_history, range: { start, end, before, after: offsets.at(-1) - offsets[end] } };
+  // Check the next frame in case shorter actual rows leave more of the viewport to fill.
+  nextTick(queue_track_scroll);
+}
+
+/** Retarget only when the reader nears the edge of the overscan, so ordinary scrolls keep the DOM intact. */
+function track_window(element, near_end) {
+  if (is_share.value || (!SCROLL_ANCHORING && reader_busy())) return;
+  const { start, end } = render_window.value;
+  if (near_end && !reader_busy()) { window_focus.value = null; return; }
+  const top = reading_top(element);
+  const first = before_window.value?.getBoundingClientRect().bottom ?? top;
+  const last = after_window.value?.getBoundingClientRect().top ?? top;
+  const height = element.clientHeight;
+  if ((!start || top - first > height) && (end === transcript_messages.value.length || last - top > height * 2)) return;
+  const { offsets } = window_offsets.value;
+  // Inside the window, real DOM positions are more accurate than estimates for newly mounted rows.
+  const rows = [...element.querySelectorAll("[data-transcript-row]")];
+  let low = 0, high = rows.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (rows[middle].getBoundingClientRect().bottom <= top) low = middle + 1;
+    else high = middle;
+  }
+  const row = rows[low];
+  if (row && top >= first) {
+    shift_window(element, row_id(row.dataset.transcriptRow), top - row.getBoundingClientRect().top, false);
+    return;
+  }
+  const pixel = top < first ? offsets[start] + top - first : offsets[end] + top - last;
+  const index = row_at(offsets, pixel);
+  shift_window(element, transcript_messages.value[index]?.id ?? null, pixel - offsets[index], true);
+}
+
+/** Replace estimated heights without moving the reader's anchor on browsers without native anchoring. */
+function shift_window(element, id, inside, estimated) {
+  if (window_focus.value === id) return;
+  window_focus.value = id;
+  if (SCROLL_ANCHORING || id == null) return;
+  const shift = { id, inside, estimated };
+  webkit_shift = shift;
+  nextTick(() => {
+    if (webkit_shift !== shift) return;
+    webkit_shift = null;
+    if (element !== transcript.value || reader_busy()) return;
+    const row = element.querySelector('[data-transcript-row="' + CSS.escape(String(shift.id)) + '"]');
+    if (row) {
+      const rect = row.getBoundingClientRect();
+      const pixels = shift.estimated ? Math.max(0, Math.min(shift.inside, rect.height - 1)) : shift.inside;
+      scroll_by_drift(element, rect.top + pixels - reading_top(element));
+    }
+    reading_position?.mark();
+    track_scroll();
+  });
+}
 // The reader's own scrolling owns the position: a finger on the transcript, and the scroll events of their drag, wheel or
 // momentum until SCROLL_SETTLE_MS after the last. Meanwhile the page writes no scrollTop (on iOS one written into a touch
-// scroll also lands on the main thread's older offset, and the page jumps back), renders no earlier cards and keeps the
-// transcript as drawn (transcript_memo); what came in meanwhile is drawn once the reader stops, with the position kept in
+// scroll also lands on the main thread's older offset, and the page jumps back). WebKit only fills newly visible spacers;
+// incoming history is drawn when the reader stops, with the position kept in
 // the same frame. A tap scrolls nothing and holds nothing back.
 let last_scroll_at = 0;
 let reader_input_at = 0;
 let written_top = null;
 let touch_active = false;
-let touch_scroll = false;
 // When the finger last went down or moved, and whether this touch has scrolled (a tap has not).
 let touch_at = 0;
 let touch_scrolled = false;
@@ -2443,8 +2616,8 @@ let settle_timer = 0;
 // Follows to the end and position keeps that waited for the reader to stop.
 let follow_pending = false;
 let keep_pending = false;
-// The sub-pixel pad (px, 0 to 1) above the cards that keeps each slice's shift whole.
-let preload_pad = 0;
+// The sub-pixel pad (px, 0 to 1) keeps manual WebKit scroll compensation in whole pixels.
+let anchor_pad = 0;
 /** Whether the reader is scrolling the transcript (or has a finger on it): the page must not move it now. */
 function reader_busy() {
   const now = performance.now();
@@ -2490,6 +2663,11 @@ function release_reader() {
   settle_timer = 0;
   last_scroll_at = 0;
   const element = transcript.value;
+  if (prepend_anchor || gesture_window.value) {
+    prepend_anchor = visible_anchor() ?? prepend_anchor;
+    if (prepend_anchor) window_focus.value = fold_target(prepend_anchor.id) ?? prepend_anchor.id;
+    gesture_window.value = null;
+  }
   if (reader_scrolling.value) {
     reader_scrolling.value = false;
     element?.removeAttribute("data-reader-scrolling");
@@ -2499,15 +2677,30 @@ function release_reader() {
   reading_position?.settle();
   if (follow_pending) { follow_pending = false; follow_messages(); }
   if (keep_pending) keep_reading();
-  if (element?.clientHeight) schedule_preload(preload_urgent(element));
+  apply_row_measurements();
+  if (element?.clientHeight) nextTick(() => {
+    if (prepend_anchor) restore_prepend();
+    else { keep_reading(); track_scroll(); }
+  });
 }
 /**
  * The transcript's v-memo: while the reader scrolls it stays as drawn, so nothing arriving (messages, progress, reports,
  * a timer tick) re-renders it or changes a height under their finger.
  */
 let held_memo = null;
+let held_range = null;
 function transcript_memo(memo) {
-  if (reader_scrolling.value && held_memo) return held_memo;
+  const { start, end } = render_window.value;
+  const range = [transcript_messages.value[start]?.id, transcript_messages.value[end - 1]?.id];
+  if (!SCROLL_ANCHORING && !is_share.value) {
+    const gesture = gesture_window.value;
+    if (reader_scrolling.value && held_memo && (!gesture || gesture === drawn_history)) return held_memo;
+    drawn_history = gesture ?? { range: render_window.value, history: transcript_rows.value,
+      offsets: window_offsets.value.offsets, topic: top_topic_visible.value,
+      rewinds: rewound_runs.value, notices: notice_runs.value, checkins: quiet_checkins.value };
+  } else if (!is_share.value && reader_scrolling.value && held_memo
+      && (prepend_anchor || range.every((id, index) => id === held_range[index]))) return held_memo;
+  held_range = range;
   return held_memo = memo;
 }
 /**
@@ -2517,7 +2710,7 @@ function transcript_memo(memo) {
  */
 function keep_reading() {
   const element = transcript.value;
-  if (SCROLL_ANCHORING || !element || !reading_position || follow_tail.value) return;
+  if (SCROLL_ANCHORING || !element || !reading_position || follow_tail.value || prepend_anchor || webkit_shift) return;
   if (reader_busy() || glide.isAnimating()) { keep_pending = true; if (reader_busy()) arm_settle(); return; }
   keep_pending = false;
   scroll_by_drift(element, reading_position.drift());
@@ -2525,114 +2718,38 @@ function keep_reading() {
 /** Scroll by `drift` (px, content pushed down positive) so the content stays put on screen, in whole pixels plus the pad. */
 function scroll_by_drift(element, drift) {
   if (drift == null || Math.abs(drift) < 0.25) return;
-  const pad = (((preload_pad - drift) % 1) + 1) % 1;
+  const pad = (((anchor_pad - drift) % 1) + 1) % 1;
   element.style.setProperty("--preload-pad", `${pad}px`);
-  const top = element.scrollTop + Math.round(drift + pad - preload_pad);
-  preload_pad = pad;
+  const top = element.scrollTop + Math.round(drift + pad - anchor_pad);
+  anchor_pad = pad;
   write_scroll(element, top);
 }
-/** Whether the reader is waiting on earlier cards: near the top, or heading for one not rendered. */
-function preload_urgent(element) {
-  return element.scrollTop < LOAD_EARLIER_MARGIN || not_rendered(pending_jump) || not_rendered(preload_wanted);
-}
-/** Queue the next slice: on the next frame when urgent, otherwise when the page is idle. */
-function schedule_preload(urgent = false) {
-  // Without scroll anchoring (WebKit, so every iPhone) each slice above has to be offset by hand in whole pixels plus a
-  // sub-pixel pad, and slices every few hundred milliseconds made the cards on screen creep for seconds after a long
-  // room opened. There earlier cards render only when the reader nears them or jumps to one, not while idle.
-  if (!SCROLL_ANCHORING && !urgent) return;
-  if (!render_start.value || (preload_timer && (preload_timer.urgent || !urgent))) return;
-  preload_timer?.cancel();
-  const run = () => { preload_timer = null; preload_slice(); };
-  // Rendering a whole long history right after the room opened held the page for seconds each time (653 cards: ~3.7s of
-  // long tasks after switching back to it, user 2026-11-23). A few screens render at once; the rest follows in small
-  // background slices once the room has settled, only while the page is idle, so a jump far back still lands at once.
-  const background = !urgent && transcript_messages.value.length - render_start.value >= PRELOAD_IDLE_CARDS;
-  const wait = background ? settle_until - performance.now() : 0;
-  if (wait > 0) {
-    const timer = setTimeout(() => { preload_timer = null; schedule_preload(); }, wait);
-    preload_timer = { urgent, cancel: () => clearTimeout(timer) };
-  } else if (background && window.requestIdleCallback) {
-    const idle = requestIdleCallback(run);
-    preload_timer = { urgent, cancel: () => cancelIdleCallback(idle) };
-  } else if (urgent) {
-    const frame = requestAnimationFrame(run);
-    preload_timer = { urgent, cancel: () => cancelAnimationFrame(frame) };
-  } else if (window.requestIdleCallback) {
-    const idle = requestIdleCallback(run, { timeout: PRELOAD_IDLE_TIMEOUT_MS });
-    preload_timer = { urgent, cancel: () => cancelIdleCallback(idle) };
-  } else {
-    const timer = setTimeout(run, PRELOAD_IDLE_TIMEOUT_MS);
-    preload_timer = { urgent, cancel: () => clearTimeout(timer) };
+/** Apply measurements after user scrolling, keeping spacer estimates stable during a gesture. */
+function apply_row_measurements() {
+  if (reader_busy() || !row_measurements.size) return;
+  let changed = false;
+  for (const [id, height] of row_measurements) {
+    if (height === row_heights.get(id)) continue;
+    row_heights.set(id, height);
+    changed = true;
   }
+  row_measurements.clear();
+  if (changed) height_revision.value += 1;
 }
-onBeforeUnmount(() => preload_timer?.cancel());
-/** Render one slice of earlier cards above the shown ones, keeping what the reader sees in place. */
-async function preload_slice() {
-  const element = transcript.value;
-  // A hidden transcript has no layout to keep; showing it again tracks the scroll, which resumes the preload.
-  if (preload_busy || !element?.clientHeight || !render_start.value) return;
-  const urgent = preload_urgent(element);
-  // Where the slice is offset by hand, the reader's scrolling holds every slice, even one they wait on near the top. Where
-  // the browser keeps the position, only touch scrolling holds those. A transcript held as drawn while the reader scrolls
-  // (transcript_memo) holds them too: slices taken then rendered nothing and so sized themselves ever larger, and the whole
-  // backlog mounted at once when the scroll settled (~1.3–2s at the top of a 650-card room). A held slice keeps its urgency,
-  // so it resumes once the reader stops.
-  if (glide.isAnimating() || (reader_busy() && (!SCROLL_ANCHORING || !urgent || touch_scroll)) || (reader_scrolling.value && held_memo)) return schedule_preload(urgent);
-  preload_busy = true;
-  const started = performance.now();
-  const top_before = element.scrollTop;
-  const from_bottom = element.scrollHeight - top_before;
-  const anchor = message_nodes(element)[0];
-  // Measured from the top of the content, so it holds a fraction of a pixel exactly and no scroll made meanwhile (the
-  // composer growing keeps the end in view) counts as a shift.
-  const content_top = (node) => node.getBoundingClientRect().top - element.firstElementChild.getBoundingClientRect().top;
-  const anchor_top = anchor && content_top(anchor);
-  const anchor_screen = anchor?.getBoundingClientRect().top;
-  // Background slices (schedule_preload) stay small, so a reader who starts scrolling waits at most one of them.
-  const background = !urgent && transcript_messages.value.length - render_start.value >= PRELOAD_IDLE_CARDS;
-  render_floor.value = floor_before(transcript_messages.value, render_start.value - (background ? PRELOAD_BACKGROUND_SLICE : preload_size));
-  await nextTick();
-  if (!SCROLL_ANCHORING && anchor?.isConnected) {
-    // By hand, the first card shown before (right below the new ones; at the very top the topic card stays above them)
-    // goes back where it was on screen. Measured on screen, so a shift the browser made by itself (WebKit's own
-    // anchoring, should it run despite overflow-anchor: none) is not counted twice. The reading position is then taken
-    // afresh, so the growth this slice causes is not offset a second time (keep_reading).
-    scroll_by_drift(element, anchor.getBoundingClientRect().top - anchor_screen);
-    reading_position?.mark();
-  } else if (anchor?.isConnected) {
-    // The browser follows by itself. The cards moved down by `shift`, a fraction of a pixel included; the pad takes the
-    // fraction so the browser follows by whole screen pixels (a fraction of a CSS pixel when zoomed): a fractional follow
-    // rounds each card on screen differently and the text wobbled by 1px.
-    const unit = 1 / window.devicePixelRatio;
-    const shift = content_top(anchor) - anchor_top;
-    const pad = (((preload_pad - shift) % unit) + unit) % unit;
-    element.style.setProperty("--preload-pad", `${pad}px`);
-    written_top = Math.round(top_before + shift + pad - preload_pad);
-    preload_pad = pad;
-    // The browser anchors on the first node in view; with the space above the first card in view (a locate landing on the
-    // first card shown) that node sits above the new cards and stays put, so the cards slid down while the page stayed.
-    if (Math.abs(element.scrollTop - written_top) >= 1) element.scrollTop = written_top;
-  } else {
-    written_top = element.scrollHeight - from_bottom;
-    if (element.scrollTop !== written_top) element.scrollTop = written_top;
+const row_id = (id) => /^\d+$/.test(id) ? Number(id) : id;
+const resize_rows = new ResizeObserver((entries) => {
+  for (const { target } of entries) {
+    // The room or filter may have changed between notification and delivery.
+    if (target.parentElement !== transcript.value || !transcript.value?.clientHeight) continue;
+    row_measurements.set(row_id(target.dataset.transcriptRow), target.getBoundingClientRect().height);
   }
-  const spent = performance.now() - started;
-  const budget = not_rendered(pending_jump) ? PRELOAD_JUMP_BUDGET_MS : urgent ? PRELOAD_URGENT_BUDGET_MS : PRELOAD_BUDGET_MS;
-  // A slice re-renders and measures every card already shown, so its time grows with those cards, not with the slice;
-  // shrinking it then only adds slices. It takes at least a share of them, so a long history fills in a few dozen slices,
-  // but never more than PRELOAD_SHARE_CEILING cards: mounting is ~5ms a card, and a share of hundreds held the page ~0.6s.
-  const fitted = Math.max(1, Math.min(PRELOAD_MAX_SLICE, Math.round(preload_size * budget / Math.max(spent, 1))));
-  const share = Math.min(PRELOAD_SHARE_CEILING, Math.ceil((transcript_messages.value.length - render_start.value) * PRELOAD_RENDERED_SHARE));
-  if (!background) preload_size = Math.max(fitted, share);
-  preload_busy = false;
-  if (pending_jump !== null && !not_rendered(pending_jump)) {
-    const id = pending_jump;
-    pending_jump = null;
-    jump_to(id);
-  }
-  schedule_preload(preload_urgent(element));
-}
+  apply_row_measurements();
+});
+const v_measure_row = {
+  mounted: (element) => { if (!is_share.value) resize_rows.observe(element); },
+  unmounted: (element) => resize_rows.unobserve(element),
+};
+onBeforeUnmount(() => resize_rows.disconnect());
 /**
  * Scroll events from the reader, told apart from the offsets the page writes and from scrolls nobody asked for (the
  * browser's own anchoring, a clamp): the reader's come with a finger down, soon after a drag, wheel or scroll key, or
@@ -2647,24 +2764,37 @@ function note_scroll() {
   if (touch_active || now - reader_input_at < READER_INPUT_MS || (reader_scrolling.value && now - last_scroll_at < SCROLL_SETTLE_MS)) mark_reader_scroll();
 }
 /** Split continuous history at local calendar boundaries; a working card stays in the day of the card above it. */
-const message_groups = stable_computed(() => {
-  const groups = [];
-  for (const message of transcript_messages.value.slice(render_start.value)) {
-    // Filtered cards stand apart from their messages, so each one takes its own day.
-    if (message.slot_card && groups.length && !view.value.source_filter) { groups.at(-1).messages.push(message); continue; }
-    const date = new Date(message.slot_card ? (message.created_at ?? 0) * 1000 : message.created_at);
-    const key = date.toLocaleDateString();
-    if (groups.at(-1)?.key !== key) groups.push({ key, label: date_formatter.format(date), messages: [] });
-    groups.at(-1).messages.push(message);
+const transcript_rows = stable_computed(() => {
+  const rows = [];
+  let last_day = "";
+  for (const message of transcript_messages.value) {
+    let divider = "";
+    if (!message.slot_card || !rows.length || view_source_filter.value) {
+      const date = new Date(message.slot_card ? (message.created_at ?? 0) * 1000 : message.created_at);
+      const day = date.toLocaleDateString();
+      if (last_day !== day) divider = date_formatter.format(date);
+      last_day = day;
+    }
+    rows.push({ message, divider, day: last_day });
   }
-  return groups;
+  return rows;
 });
+/** Reuse the working row when it takes over a queued request. */
+function transcript_key(message) {
+  const rewind = drawn_rewinds.value.runs.get(message.id), notice = drawn_notices.value.runs.get(message.id);
+  if (rewind) return 'rewind-' + rewind.at(-1).id;
+  if (notice) return 'notice-' + notice.at(-1).id;
+  const source = message.work_message_id || message.request_message_id;
+  return (message.queued || message.working) && source ? ['work', source, message.member_id].join('-') : message.id;
+}
+const mounted_rows = stable_computed(() => (gesture_window.value?.history ?? transcript_rows.value)
+  .slice(render_window.value.start, render_window.value.end));
 /** The sending card sits outside the day groups, so it carries its own divider when it opens a new day. */
 const sending_day_label = computed(() => {
   const preview = view.value.sending_preview;
   if (!preview) return "";
   const date = new Date(preview.created_at);
-  return message_groups.value.at(-1)?.key === date.toLocaleDateString() ? "" : date_formatter.format(date);
+  return transcript_rows.value.at(-1)?.day === date.toLocaleDateString() ? "" : date_formatter.format(date);
 });
 
 /** Preserve room-wide round boundaries while navigating filtered history. */
@@ -2686,7 +2816,6 @@ const navigation_groups = computed(() => {
   return groups;
 });
 
-const active_round = computed(() => navigation_groups.value.find((group) => group.messages.some((message) => message.id === active_message.value))?.number);
 // Concluded sessions keep their historical labels; later collaboration is outside their end boundary.
 const message_round_labels = stable_computed(() => new Map(navigation_groups.value.filter((group) => group.number).flatMap((group) => group.messages.map((message) => [message.id, group.label]))));
 
@@ -2706,17 +2835,51 @@ const navigation_entries = computed(() => navigation_sections.value.flatMap((sec
 /** Work in progress is not a message yet; it gets a pulsing tick after the messages until its answer lands. */
 const navigation_working = computed(() => transcript_messages.value.filter((item) => item.slot_card && item.working && !item.failure && !item.retry));
 
-/** Scroll a work-in-progress card to the reading line. */
+// Match the gap between .channel-map-round elements in channel.css.
+const NAV_ROUND_GAP = 6;
+const NAV_OVERSCAN_ROWS = 5;
+let nav_earlier_until = 0;
+const nav_scroll = ref(0), nav_height = ref(320);
+const nav_layout = computed(() => {
+  let top = 0;
+  return navigation_sections.value.map((section, index, sections) => {
+    const working = index === sections.length - 1 ? navigation_working.value : [];
+    const count = section.count + working.length;
+    const group = { ...section, top, count, working, first_index: section.entries[0].index };
+    top += count * NAV_ENTRY_HEIGHT + NAV_ROUND_GAP;
+    return group;
+  });
+});
+
+/** Only the visible ticks get buttons; grid rows keep the full navigation range scrollable. */
+const nav_windows = computed(() => nav_layout.value.map((section) => {
+  const tab_stop = active_message.value ?? view.value.messages[0]?.id;
+  const active = section.entries.find((item) => !item.round && item.message.id === tab_stop);
+  const start = Math.max(0, Math.floor((nav_scroll.value - NAV_EDGE_INSET - section.top) / NAV_ENTRY_HEIGHT) - NAV_OVERSCAN_ROWS);
+  const end = Math.min(section.count, Math.ceil((nav_scroll.value + nav_height.value - section.top) / NAV_ENTRY_HEIGHT) + NAV_OVERSCAN_ROWS);
+  const entries = end > start ? [section.entries[0], ...section.entries.slice(start + 1, end + 1)] : [];
+  if (active && !entries.includes(active)) entries.push(active);
+  return { ...section, entries,
+    visible_working: end > start ? section.working.slice(Math.max(0, start - section.entries.length + 1), Math.max(0, end - section.entries.length + 1)) : [] };
+}));
+const nav_observer = new ResizeObserver(sync_navigation_window);
+watch(message_map, (nav, previous) => {
+  if (previous) nav_observer.unobserve(previous);
+  if (nav) { nav_observer.observe(nav); sync_navigation_window(); }
+}, { flush: "post" });
+onBeforeUnmount(() => nav_observer.disconnect());
+
+/** Use the same viewport for mouse scrolling, touch scrubbing and keyboard jumps. */
+function sync_navigation_window() {
+  const nav = message_map.value;
+  if (!nav?.clientHeight) return;
+  nav_scroll.value = nav.scrollTop;
+  nav_height.value = nav.clientHeight;
+}
+
+/** Jump to a work-in-progress card even when its slot is not mounted. */
 function jump_to_working(item) {
-  const element = transcript.value;
-  const card = element?.querySelector(`[id="execution-${item.id}"]`);
-  debug_log?.("navigation", { input: "working-card", card: item.id, execution: item.execution_id, found: Boolean(card) });
-  if (!card) return;
-  close_preview();
-  reader.state.following = false;
-  jump_target.value = null;
-  write_scroll(element, element.scrollTop + card.getBoundingClientRect().top - reading_top(element) - READING_OFFSET);
-  track_scroll();
+  jump_to(item.id);
 }
 
 /** The glass top bar overlays the transcript, so readable content starts below it. */
@@ -2724,7 +2887,7 @@ function reading_top(element) {
   return element.getBoundingClientRect().top + (parseFloat(getComputedStyle(element).getPropertyValue("--channel-topbar-height")) || 0);
 }
 
-// Collecting the cards walks the whole transcript (tens of thousands of nodes); keep the list until a node is added or removed.
+// Keep the mounted card list until a node is added or removed.
 let card_list = null;
 let card_observer = null;
 /** The transcript's message cards in document order. */
@@ -2745,20 +2908,25 @@ onBeforeUnmount(() => card_observer?.disconnect());
 function track_scroll() {
   const element = transcript.value;
   // Mid-glide the distance to the end is the glide's, not the reader's; following stays on.
-  if (!element || !element.clientHeight || glide.isAnimating() || toggle_hold?.inline) return;
+  if (!element || !element.clientHeight || glide.isAnimating() || toggle_hold?.inline || webkit_shift) return;
+  track_webkit_gesture(element);
+  if (prepend_anchor) return;
+  maybe_load_earlier(element);
   // After a resize the cards have rewrapped; until the reading position is restored this scrollTop is not the reader's.
   if (reading_position?.stale()) return;
-  schedule_preload(preload_urgent(element));
+  if (SCROLL_ANCHORING || !reader_busy()) window_height.value = element.clientHeight;
   const destination = follow_destination(element);
   send_clipped.value = element.scrollHeight - element.clientHeight - destination > 1;
   const distance = destination - element.scrollTop - visual_tail_space;
   if (distance >= 0) set_visual_tail_space(0);
   const near_end = !visual_tail_space && distance < FOLLOW_TAIL_THRESHOLD;
-  if (!near_end && follow_tail.value && !moved_by_hand && !reader_busy() && performance.now() < settle_until && jump_target.value == null && !pending_jump) {
+  if (!near_end && follow_tail.value && !moved_by_hand && !reader_busy() && performance.now() < settle_until && jump_target.value == null && awaiting_jump == null) {
     write_scroll(element, destination);
     return;
   }
-  follow_tail.value = near_end;
+  // A share is growing downward in local batches, not receiving new replies. Do not follow its temporary bottom.
+  follow_tail.value = near_end && (!is_share.value || share_limit.value >= transcript_messages.value.length);
+  track_window(element, near_end);
   const bounds = element.getBoundingClientRect();
   const top = reading_top(element);
   const messages = message_nodes(element);
@@ -2787,6 +2955,9 @@ function track_scroll() {
 let scroll_frame = 0;
 function schedule_track_scroll() {
   note_scroll();
+  queue_track_scroll();
+}
+function queue_track_scroll() {
   if (!scroll_frame) scroll_frame = requestAnimationFrame(() => { scroll_frame = 0; track_scroll(); });
 }
 onBeforeUnmount(() => cancelAnimationFrame(scroll_frame));
@@ -2821,10 +2992,19 @@ glide.on("animationComplete", () => {
 async function follow_messages(smooth = false) {
   await nextTick();
   const element = transcript.value;
+  if (prepend_anchor) return;
   // A reader scrolling near the end is still scrolling: the follow waits until they stop (release_reader). Only the glide
   // of their own send goes at once.
   if (follow_tail.value && element && smooth !== true && reader_busy()) { follow_pending = true; arm_settle(); }
   else if (follow_tail.value && element) {
+    if (window_focus.value != null) {
+      window_focus.value = null;
+      await nextTick();
+      if (element !== transcript.value || !follow_tail.value) return;
+      if (before_window.value?.getBoundingClientRect().bottom > element.getBoundingClientRect().bottom) {
+        write_scroll(element, Math.max(0, follow_destination(element) - element.clientHeight));
+      }
+    }
     set_visual_tail_space(0);
     const bottom = follow_destination(element);
     // While a send is in flight every follow glides, whichever watcher sees the new card first.
@@ -2888,6 +3068,8 @@ send_entry.on("animationComplete", () => {
 watch(() => view.value.sending_preview?.id, (id) => {
   if (!id) return;
   sent_position = { id };
+  gesture_window.value = null;
+  prepend_anchor = null;
   // Sending is the reader's own move to the end; a scroll of theirs still settling no longer holds the transcript.
   release_reader();
   if (document.documentElement.dataset.motion === "off") send_entry.jump(1);
@@ -2904,6 +3086,7 @@ watch(() => view.value.messages, (messages) => {
 // Filters compare by content: sending resets them to fresh empty lists, which is no change, and treating it as one put the
 // transcript back to its newest cards and refilled it, so the page collapsed and jumped after every send.
 watch([() => view.value.room?.id, () => view.value.query, () => view.value.source_filter, () => (view.value.authors || []).join(","), () => (view.value.card_kinds || []).join(",")], () => {
+  jump_align_token += 1;
   jump_target.value = null;
   active_message.value = null;
   locating.value = null;
@@ -2911,19 +3094,33 @@ watch([() => view.value.room?.id, () => view.value.query, () => view.value.sourc
   reset_preview();
   follow_tail.value = true;
   sent_position = null;
-  render_floor.value = null;
-  pending_jump = preload_wanted = awaiting_jump = awaiting_member_locate = null;
+  window_focus.value = null;
+  row_heights.clear();
+  row_measurements.clear();
+  height_revision.value += 1;
+  earlier_loading = null;
+  earlier_intent = false;
+  nav_earlier_until = 0;
+  gesture_window.value = null;
+  drawn_history = null;
+  prepend_anchor = null;
+  webkit_shift = null;
+  awaiting_jump = awaiting_member_locate = null;
   settle_until = performance.now() + ROOM_SETTLE_MS;
   moved_by_hand = false;
-  // Another room or filter starts from its end with its first slice small; nothing of the last one's scrolling holds it.
-  preload_size = PRELOAD_FIRST_SLICE;
+  // Another room or filter opens its newest window without inheriting the previous scroll hold.
   release_reader();
 });
 watch(() => view.value.tab, (tab) => {
   reset_preview();
   if (tab === "discussion") follow_messages();
 });
-watch(() => view.value.room?.id, () => expanded_answers.value.clear());
+watch(() => view.value.room?.id, () => {
+  expanded_answers.value.clear();
+  expanded_rewinds.value = new Set();
+  open_notice_groups.value = new Set();
+  opened_folded.value = new Set();
+});
 
 /** Expand in place; collapsing a long answer restores its visible beginning. */
 async function toggle_answer(message, event) {
@@ -2952,32 +3149,41 @@ function card_element(element, id) {
   return element.querySelector(`[data-message-id="${id}"]`);
 }
 
-/**
- * Jump anywhere in the history while preserving the shared composer draft; a message still being rendered is jumped to
- * once it is, and one older than any read yet (a room opened first shows its latest messages, then reads the earlier ones,
- * #8131) once the earlier messages arrive.
- */
-function jump_to(id) {
+/** Mount the target directly, even if it is far from the current viewport. */
+async function jump_to(id) {
+  const token = ++jump_align_token;
   awaiting_jump = null;
-  const messages = transcript_messages.value;
-  const first = messages.find((message) => !message.slot_card);
-  if (typeof id === "number" && first && id < Number(first.id) && !messages.some((message) => message.id === id)) {
-    debug_log?.("jump", { message: id, phase: "waiting-history" });
+  const requested = id;
+  if (!view.value.messages.some((message) => message.id === id) && !window_offsets.value.positions.has(id)
+      && typeof id === "number" && bridge.load_messages_until) {
     close_preview();
     awaiting_jump = id;
-    return;
+    try { await bridge.load_messages_until(id, () => awaiting_jump === id && token === jump_align_token); }
+    catch (error) { if (awaiting_jump === id && token === jump_align_token) notify_history_error(error); }
+    if (awaiting_jump !== id || token !== jump_align_token) return;
+    awaiting_jump = null;
+    await nextTick();
   }
-  if (not_rendered(id)) {
-    debug_log?.("jump", { message: id, phase: "waiting-render" });
-    close_preview();
-    pending_jump = id;
-    schedule_preload(true);
-    return;
-  }
-  pending_jump = null;
+  if (token !== jump_align_token) return;
+  clear_locating(requested);
+  id = fold_target(id) ?? id;
+  if (!window_offsets.value.positions.has(id)) return;
+  open_jump_group(requested, id);
+  if (is_share.value) share_limit.value = Math.max(share_limit.value, window_offsets.value.positions.get(id) + 1);
+  gesture_window.value = null;
+  prepend_anchor = null;
+  webkit_shift = null;
+  if (reader_scrolling.value) release_reader();
+  glide.stop();
+  moved_by_hand = true;
+  follow_tail.value = false;
+  window_focus.value = id;
+  await nextTick();
+  if (token !== jump_align_token) return;
   const element = transcript.value;
-  const message = card_element(element, id);
-  if (locating.value === id) { locating.value = null; locating_label.value = ""; clearTimeout(locating_timer); }
+  const row = element?.querySelector('[data-transcript-row="' + CSS.escape(String(id)) + '"]');
+  const nested = requested !== id ? row?.querySelector('[data-message-id="' + CSS.escape(String(requested)) + '"]') : null;
+  const message = nested ?? card_element(element, id) ?? row;
   if (!message) { debug_log?.("jump", { message: id, phase: "missing" }); return; }
   close_preview();
   reader.state.following = false;
@@ -2992,9 +3198,7 @@ function jump_to(id) {
     if (Math.abs(next - element.scrollTop) > 1) write_scroll(element, next);
   };
   align();
-  // Cards above the viewport use content-visibility: auto with estimated heights; their real heights can settle a few
-  // frames after scrolling into view, so re-align briefly if the reader has not scrolled meanwhile.
-  const token = ++jump_align_token;
+  // Layout can settle after mounting nearby rows; re-align unless the reader has moved on.
   const realign = (remaining) => requestAnimationFrame(() => {
     if (token !== jump_align_token || !message.isConnected || reader_busy()) return;
     align();
@@ -3004,10 +3208,27 @@ function jump_to(id) {
   realign(4);
   debug_log?.("jump", { message: id, phase: "landed", actual: element.scrollTop });
   if (typeof id === "number") message.focus({ preventScroll: true });
-  if (located_id === id) { located_id = null; flash_located(message); }
+  if (located_id === requested) { located_id = null; flash_located(message); }
   track_scroll();
 }
 let jump_align_token = 0;
+
+function clear_locating(id) {
+  if (locating.value !== id) return;
+  locating.value = null;
+  locating_label.value = "";
+  clearTimeout(locating_timer);
+}
+
+function open_jump_group(requested, host) {
+  const rewinds = rewound_runs.value.runs.get(host);
+  const notices = notice_runs.value.runs.get(host);
+  if (rewinds) expanded_rewinds.value = new Set([...expanded_rewinds.value, rewinds.at(-1).id]);
+  if (notices || quiet_checkins.value.has(host)) {
+    open_notice_groups.value = new Set([...open_notice_groups.value, notices?.at(-1).id ?? host]);
+  }
+  if (requested !== host && (rewinds || notices)) opened_folded.value = new Set([...opened_folded.value, requested]);
+}
 
 // A share page's reader starts from how the room began, not from its latest message.
 let share_opened = false;
@@ -3015,17 +3236,49 @@ watch(() => Boolean(view.value.share && view.value.messages.length && !view.valu
   if (!ready || share_opened) return;
   share_opened = true;
   follow_tail.value = false;
-  // The whole record is mounted at once: it no longer grows, so no later slice can move what the reader is looking at.
-  render_floor.value = 0;
   nextTick(() => { if (transcript.value) write_scroll(transcript.value, 0); track_scroll(); });
 }, { flush: "post" });
+
+// A share already has the full record. Mount from the start in bounded chunks and never evict old rows,
+// so browser search, copy and printing can see the whole record once mounting finishes.
+let cancel_share_render = null;
+function schedule_share_render() {
+  if (!is_share.value || cancel_share_render || share_limit.value >= transcript_messages.value.length) return;
+  const append = () => {
+    cancel_share_render = null;
+    if (!is_share.value) return;
+    share_limit.value += SHARE_RENDER_BATCH;
+    nextTick(schedule_share_render);
+  };
+  if (window.requestIdleCallback) {
+    const handle = window.requestIdleCallback(append, { timeout: SCROLL_SETTLE_MS });
+    cancel_share_render = () => window.cancelIdleCallback(handle);
+  } else {
+    const frame = requestAnimationFrame(append);
+    cancel_share_render = () => cancelAnimationFrame(frame);
+  }
+}
+watch([is_share, () => transcript_messages.value.length], schedule_share_render, { flush: "post" });
+onMounted(schedule_share_render);
+onBeforeUnmount(() => cancel_share_render?.());
 
 /** Any manual scroll (wheel, touch drag, scroll keys, scrollbar) turns read-aloud following off; only its button turns it back on. */
 function stop_following(event) {
   if (event.type !== "keydown" || ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) moved_by_hand = true;
   // A drag, a wheel turn, a scroll key or a press on the scrollbar: the scroll events right after it are the reader's. A
   // finger that moved is scrolling even with no scroll event: at the very top it only stretches the page (iOS bounce).
-  if (event.type === "touchmove") { touch_at = performance.now(); touch_scrolled = true; }
+  if (event.type === "touchmove") {
+    touch_at = performance.now();
+    if (!touch_scrolled) earlier_intent = true;
+    mark_reader_scroll();
+    if (transcript.value) maybe_load_earlier(transcript.value);
+  }
+  if ((event.type === "wheel" && event.deltaY < 0) || (event.type === "pointerdown" && event.target === event.currentTarget)
+      || (event.type === "keydown" && ["ArrowUp", "PageUp", "Home"].includes(event.key))) {
+    earlier_intent = true;
+    // Wheel and keys can hit the top of a short transcript without emitting a scroll event.
+    if (transcript.value) maybe_load_earlier(transcript.value);
+  }
   if (event.type === "touchmove" || event.type === "wheel" || (event.type === "pointerdown" && event.target === event.currentTarget)
       || (event.type === "keydown" && ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key))) reader_input_at = performance.now();
   if (!reader.state.following) return;
@@ -3050,10 +3303,11 @@ function resume_tracking(event) {
     }
   }
   glide.stop();
-  touch_scroll = touch_active = event.type === "touchstart";
+  touch_active = event.type === "touchstart";
   if (touch_active) { touch_at = performance.now(); touch_scrolled = false; }
   // Scrolling by hand drops a jump still waiting for its card.
-  pending_jump = awaiting_jump = awaiting_member_locate = null;
+  clear_locating(awaiting_jump ?? awaiting_member_locate);
+  awaiting_jump = awaiting_member_locate = null;
   jump_align_token += 1;
   if (is_scroll_input) jump_target.value = null;
 }
@@ -3070,12 +3324,15 @@ function end_touch() {
 }
 
 /** One Tab stop enters the map; arrow keys can inspect every compact tick. */
-function navigate_by_key(event, index) {
+async function navigate_by_key(event, index) {
   const positions = { ArrowUp: index - 1, ArrowDown: index + 1, Home: 0, End: navigation_entries.value.length - 1 };
   if (!Object.hasOwn(positions, event.key)) return;
   event.preventDefault();
   const target = Math.max(0, Math.min(positions[event.key], navigation_entries.value.length - 1));
-  message_map.value.querySelectorAll('button')[target].focus({ preventScroll: true });
+  const entry = navigation_entries.value[target];
+  if (target === 0 && (event.key === "Home" || index === 0)) read_earlier();
+  await show_navigation_entry(entry);
+  message_map.value?.querySelector('[data-nav-index="' + target + '"]')?.focus({ preventScroll: true });
 }
 
 /** Reveal an entry by scrolling only the fixed navigation window. */
@@ -3091,9 +3348,27 @@ function reveal_navigation_entry(entry) {
 /** Follow actual reading changes without undoing independent wheel browsing. */
 async function reveal_reading_position() {
   await nextTick();
-  reveal_navigation_entry(message_map.value?.querySelector(`[data-jump-id="${active_message.value}"]`));
+  const entry = navigation_entries.value.find((item) => !item.round && item.message.id === active_message.value);
+  await show_navigation_entry(entry);
 }
 watch(active_message, reveal_reading_position);
+
+/** Scroll an unmounted tick into the navigation window before focusing it. */
+async function show_navigation_entry(entry) {
+  const nav = message_map.value;
+  if (!nav?.clientHeight || !entry) return;
+  const selector = '[data-nav-index="' + entry.index + '"]';
+  if (!nav.querySelector(selector)) {
+    const group = nav_layout.value.find(({ entries }) => entry.index >= entries[0].index && entry.index <= entries.at(-1).index);
+    if (!group) return;
+    nav.scrollTop = group.top + Math.max(0, entry.index - group.entries[0].index - 1) * NAV_ENTRY_HEIGHT;
+    sync_navigation_window();
+    await nextTick();
+  }
+  const button = nav.querySelector(selector);
+  reveal_navigation_entry(entry.round ? button?.parentElement.querySelector('[data-jump-id]') : button);
+  sync_navigation_window();
+}
 
 /** Keyboard previews use the entry's visible position after revealing it. */
 function focus_preview(item, event) {
@@ -3173,6 +3448,7 @@ function scrub_frame() {
     const down = Math.min(1, Math.max(0, 1 - (bounds.bottom - scrub.y) / NAV_SCRUB_EDGE));
     const before = nav.scrollTop;
     nav.scrollTop += (down - up) * NAV_SCRUB_SPEED;
+    if (up > 0 && nav.scrollTop <= 1 && !scrub.read_earlier) { scrub.read_earlier = true; read_earlier(); }
     if (nav.scrollTop !== before) scrub_to();
   }
   scrub.frame = requestAnimationFrame(scrub_frame);
@@ -3222,12 +3498,24 @@ function navigation_context_menu(event) {
 /** Native wheel scrolling changes only the navigation, with no queued animation. */
 function browse_navigation(event) {
   if (!event.deltaX && !event.deltaY) return;
+  nav_earlier_until = event.deltaY < 0 ? performance.now() + SCROLL_SETTLE_MS : 0;
+  track_navigation_scroll();
   navigation_keyboard.value = false;
   close_preview();
 }
 
+/** Only user wheel events enable paging on the next navigation scroll, not programmatic reveals. */
+function track_navigation_scroll() {
+  sync_navigation_window();
+  if (message_map.value?.scrollTop <= 1 && performance.now() < nav_earlier_until) {
+    nav_earlier_until = 0;
+    read_earlier();
+  }
+}
+
 /** Return to the newest record and resume following newly arriving messages. */
 function return_to_latest() {
+  if (is_share.value) share_limit.value = transcript_messages.value.length;
   peek_origin.value = null;
   sent_position = null;
   send_clipped.value = false;
@@ -3236,7 +3524,10 @@ function return_to_latest() {
   reader.state.following = false;
   jump_target.value = null;
   follow_tail.value = true;
-  pending_jump = awaiting_jump = null;
+  gesture_window.value = null;
+  prepend_anchor = null;
+  awaiting_jump = null;
+  jump_align_token += 1;
   follow_messages();
 }
 
@@ -3250,8 +3541,6 @@ async function show_preview(item, event) {
   preview_left.value = Math.max(PREVIEW_INSET, Math.min(left, innerWidth - width - PREVIEW_INSET));
   preview_message.value = message.id;
   // The card under the pointer is rendered now, so clicking it jumps at once.
-  preload_wanted = message.id;
-  if (not_rendered(message.id)) schedule_preload(true);
   preview_entry.value = item.key;
   preview_is_round.value = item.round;
   preview_open.value = true;
@@ -3286,12 +3575,6 @@ async function refresh_layout() {
   topic_card?.measure();
   await follow_messages();
   await reveal_reading_position();
-}
-
-/** Reuse round groups while the preview stays beyond their hover reach. */
-function section_preview_position(section) {
-  const last = section.entries.length - 1;
-  return Math.max(-NAV_HOVER_REACH, Math.min(last + NAV_HOVER_REACH, preview_index.value - section.entries[0].index));
 }
 
 /**
@@ -3619,12 +3902,8 @@ const can_branch = (message) => free.value && view.value.access?.can_manage && !
   && !(room.value.discussions || []).some((item) => ["active", "paused"].includes(item.status) || item.started_message_id >= message.id);
 /** The owner may take back their own message unless the room is archived. */
 const can_take_back = (message) => can_branch(message) && !message.relay_room && message.author === "用户" && !room.value.archived;
-/**
- * Retracting needs every request on the message still waiting, or the message to be the latest: retracting it then stops
- * the work on it and rewinds to just before it. Otherwise only editing takes it back.
- */
-const can_retract = (message) => can_take_back(message) && (view.value.messages.at(-1)?.id === message.id
-  || !(room.value.free?.requests || []).some((request) => request.message_id === message.id && ["delivering", "completed", "failed"].includes(request.status)));
+/** Use the actual latest message and the known request range, not the current search page. */
+const can_retract = (message) => can_take_back(message) && bridge.can_retract_message(message, room.value);
 
 const NO_EDIT = { id: 0, text: "", plan: null, error: "" };
 const editing = ref(NO_EDIT);
@@ -3708,7 +3987,7 @@ function message_card(message) {
 }
 /**
  * Each message's card, kept until something it read changes: a computed tracks exactly what message_card reads. The
- * transcript re-renders every shown card whenever earlier cards are mounted above (preload_slice); rebuilding all ~600
+ * transcript re-renders shown cards when a new history window mounts; rebuilding
  * cards there cost ~300ms a slice, while a kept card keeps its `deps`, so its MemoBlock is skipped outright.
  */
 const card_cache = new Map();
@@ -3882,15 +4161,14 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <div v-if="room_drop" class="channel-room-drop" aria-hidden="true"><span><UIcon name="i-lucide-hash" />{{ t('松开以引用房间「{title}」', { title: room_drop.title }) }}</span></div>
   <ExternalMemberDialog v-model:open="pending_seat_open" :member="pending_seat" />
     <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? t('正在筛选…') : t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
-    <nav v-if="navigation_sections.length || navigation_working.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
+    <nav v-if="navigation_sections.length || navigation_working.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @scroll.passive="track_navigation_scroll" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
       <div class="channel-map-track">
-        <div v-for="section in navigation_sections" :key="section.entries[0].key"v-memo="[section, preview_open, active_round === section.number ? active_message : null, section_preview_position(section), section === navigation_sections.at(-1) ? navigation_working : null]" class="channel-map-round" :style="{ '--round-message-count': section.count + (section === navigation_sections.at(-1) ? navigation_working.length : 0) }">
-          <!-- A free room is one long section, so each tick keeps its own memo: moving the reading position or the hover redraws only the ticks it reaches. -->
-          <button v-for="item in section.entries" :key="item.key" v-memo="[item.message, item.label, item.index, active_message === item.message.id, item.message.id === (active_message || view.messages[0]?.id), preview_index < 0 ? -1 : Math.min(Math.abs(item.index - preview_index), NAV_HOVER_REACH), preview_open && preview_entry === item.key]" type="button" class="channel-navigation-entry" :class="item.round ? 'channel-round-range' : 'channel-message-jump'" :data-author="item.round ? undefined : item.message.relay_room ? 'relay' : bridge.identities[item.message.author]?.style" :data-jump-id="item.round ? undefined : item.message.id" :data-round-jump="item.round ? item.label : undefined" :aria-label="item.label" :tabindex="!item.round && item.message.id === (active_message || view.messages[0]?.id) ? 0 : -1" :aria-current="!item.round && active_message === item.message.id ? 'location' : undefined" :aria-describedby="preview_open && preview_entry === item.key ? 'channel-navigation-preview' : undefined" @pointerenter="hover_preview(item, $event)" @pointermove="hover_preview(item, $event)" @focus="focus_preview(item, $event)" @keydown="navigate_by_key($event, item.index)" @click="activate_navigation(item, $event)">
+        <div v-for="section in nav_windows" :key="section.top" class="channel-map-round" :style="{ '--round-message-count': section.count }">
+          <button v-for="item in section.entries" :key="item.key" :data-nav-index="item.index" :style="item.round ? undefined : { gridRow: item.index - section.first_index }" v-memo="[item.message, item.label, item.index, active_message === item.message.id, item.message.id === (active_message || view.messages[0]?.id), preview_index < 0 ? -1 : Math.min(Math.abs(item.index - preview_index), NAV_HOVER_REACH), preview_open && preview_entry === item.key]" type="button" class="channel-navigation-entry" :class="item.round ? 'channel-round-range' : 'channel-message-jump'" :data-author="item.round ? undefined : item.message.relay_room ? 'relay' : bridge.identities[item.message.author]?.style" :data-jump-id="item.round ? undefined : item.message.id" :data-round-jump="item.round ? item.label : undefined" :aria-label="item.label" :tabindex="!item.round && item.message.id === (active_message || view.messages[0]?.id) ? 0 : -1" :aria-current="!item.round && active_message === item.message.id ? 'location' : undefined" :aria-describedby="preview_open && preview_entry === item.key ? 'channel-navigation-preview' : undefined" @pointerenter="hover_preview(item, $event)" @pointermove="hover_preview(item, $event)" @focus="focus_preview(item, $event)" @keydown="navigate_by_key($event, item.index)" @click="activate_navigation(item, $event)">
             <span v-if="item.round" class="channel-round-number" aria-hidden="true">{{ item.number || '' }}</span>
             <span v-else class="channel-jump-tick" aria-hidden="true" :style="tick_state(item, item.index)"></span>
           </button>
-          <button v-for="item in section === navigation_sections.at(-1) ? navigation_working : []" :key="`working-${item.id}`" type="button" tabindex="-1" class="channel-navigation-entry channel-message-jump channel-working-jump" :data-author="bridge.identities[item.author]?.style" :aria-label="t('{value1} 正在处理', { value1: bridge.display_name(item.author) })" :title="t('{value1} 正在处理', { value1: bridge.display_name(item.author) })" @click="jump_to_working(item)">
+          <button v-for="item in section.visible_working" :style="{ gridRow: section.count - section.working.length + section.working.indexOf(item) + 1 }" :key="`working-${item.id}`" type="button" tabindex="-1" class="channel-navigation-entry channel-message-jump channel-working-jump" :data-author="bridge.identities[item.author]?.style" :aria-label="t('{value1} 正在处理', { value1: bridge.display_name(item.author) })" :title="t('{value1} 正在处理', { value1: bridge.display_name(item.author) })" @click="jump_to_working(item)">
             <span class="channel-jump-tick" aria-hidden="true"></span>
           </button>
         </div>
@@ -3923,11 +4201,15 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :removable="!mark_editing.touch" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? docked_sheet_style() : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
     <!-- A locate far back waits for the earlier cards to render; the end of the room stays covered meanwhile so it is not taken for the result. -->
     <div v-if="locating !== null" class="channel-locating" role="status"><UIcon name="i-lucide-loader" class="animate-spin" />{{ locating_label || t('正在定位到 #{value1}…', { value1: locating }) }}</div>
-    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, opened_folded, notice_runs, message_groups,view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, room.session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, is_running('rewind_and_send'), is_running('skip_turn'), is_running('pause_discussion'), is_running('retry_delivery'), open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
-      <div v-if="!view_query && !view_source_filter && !topic_anchor && render_start === 0" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
-      <div v-for="group in message_groups" :key="group.key" class="channel-message-group">
-        <USeparator :label="group.label" class="channel-date-divider" />
-        <template v-for="message in group.messages" :key="(message.queued || message.working) && (message.work_message_id || message.request_message_id) ? `work-${message.work_message_id || message.request_message_id}-${message.member_id}` : message.id">
+    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, opened_folded, open_notice_groups, quiet_checkins, notice_runs, mounted_rows, render_window, top_topic_visible, view.has_earlier, view.loading_earlier, view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, is_running('rewind_and_send'), is_running('skip_turn'), is_running('pause_discussion'), is_running('retry_delivery'), open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+      <div v-if="view.loading_earlier" class="channel-history-loading channel-loading-skeleton" role="status">
+        <UIcon name="i-lucide-loader" class="animate-spin" aria-hidden="true" />
+        {{ t('正在读取消息…') }}
+      </div>
+      <div ref="before_window" aria-hidden="true" :style="{ height: render_window.before + 'px', overflowAnchor: 'none' }" />
+      <div v-if="top_topic_visible" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
+      <div v-for="{ message, divider } in mounted_rows" :key="transcript_key(message)" v-measure-row :data-transcript-row="message.id" class="channel-message-group transcript-row" :class="{ 'transcript-row-windowed': !is_share }">
+        <USeparator v-if="divider" :label="divider" class="channel-date-divider" />
         <DiscussionEndCard v-if="message.id === end_anchor && !view_query && !view_source_filter" />
         <TopicCard v-if="message.id === topic_anchor && !view_query && !view_source_filter" :ref="(card) => topic_card = card" @edit="emit('edit')" />
         <!-- A free-room working card holds the slot its answer will take. -->
@@ -3950,21 +4232,34 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #text>{{ message.text }}</template>
           <p>{{ message.text }}</p>
         </ScheduleCard>
-        <ScheduleCard v-else-if="message.source === 'notice' && quiet_checkins.has(message.id)" icon="i-lucide-bell" plain :label="t('定时检查')" :toggle-label="t('展开或收起主持人的检查回复')">
-          <template #text><span class="channel-checkin-line">{{ t('定时检查 · {value1}：{value2}', { value1: bridge.display_name(quiet_checkins.get(message.id).author), value2: quiet_checkins.get(message.id).text.replace(/^定时检查[：:]\s*/, '') }) }}</span></template>
-          <p>{{ message.text }}</p>
-          <p class="channel-checkin-answer">{{ quiet_checkins.get(message.id).text }}</p>
-        </ScheduleCard>
-        <ScheduleCard v-else-if="message.source === 'notice' && notice_runs.runs.get(message.id)?.length > 1" icon="i-lucide-bell" plain :label="t('程序通知主持人')" :toggle-label="t('展开或收起各条程序通知')">
-          <template #text><span class="channel-checkin-line">{{ t('{value1} 条程序通知：{value2}', { value1: notice_runs.runs.get(message.id).length, value2: notice_runs.runs.get(message.id).map((item) => item.text).join('；') }) }}</span></template>
-          <ul class="channel-withdrawn-list">
-            <li v-for="item in notice_runs.runs.get(message.id)" :key="item.id" :data-message-id="item.id">
-              <span class="channel-withdrawn-text" :title="item.text">{{ item.text }}</span>
-              <UButton :label="`#${item.id}`" size="xs" variant="link" color="neutral" :aria-label="t('查看程序通知原文 #{value1}', { value1: item.id })" :aria-expanded="opened_folded.has(item.id)" @click="toggle_folded(item.id)" />
-              <div v-if="opened_folded.has(item.id)" class="markdown-body channel-withdrawn-full" v-html="bridge.render_room_markdown(item.text)"></div>
-            </li>
-          </ul>
-        </ScheduleCard>
+        <template v-else-if="message.source === 'notice' && (drawn_checkins.has(message.id) || drawn_notices.runs.get(message.id)?.length > 1 || clipped_run(message.id) && drawn_notices.runs.has(message.id))">
+          <template v-for="group in [drawn_notices.runs.get(message.id)?.at(-1).id ?? message.id]" :key="group">
+            <div class="channel-schedule-card is-skipped" :class="{ 'is-open': open_notice_groups.has(group) }" :aria-label="drawn_checkins.has(message.id) ? t('定时检查') : t('程序通知主持人')">
+              <UIcon name="i-lucide-bell" class="channel-schedule-icon" />
+              <span class="channel-schedule-text">
+                <template v-if="drawn_checkins.has(message.id)"><span class="channel-checkin-line">{{ t('定时检查 · {value1}：{value2}', { value1: bridge.display_name(drawn_checkins.get(message.id).author), value2: drawn_checkins.get(message.id).text.replace(/^定时检查[：:]\s*/, '') }) }}</span></template>
+                <template v-else><span class="channel-checkin-line">{{ t('{value1} 条程序通知：{value2}', { value1: run_count(drawn_notices.runs.get(message.id), message.id), value2: drawn_notices.runs.get(message.id).map((item) => item.text).join('；') }) }}</span></template>
+              </span>
+              <span class="channel-schedule-actions" />
+              <button type="button" class="channel-schedule-toggle" :aria-expanded="open_notice_groups.has(group)" :aria-label="drawn_checkins.has(message.id) ? t('展开或收起主持人的检查回复') : t('展开或收起各条程序通知')" @click="toggle_notice_group(group)"><UIcon name="i-lucide-chevron-down" /></button>
+              <div v-if="open_notice_groups.has(group)" class="channel-schedule-detail">
+                <template v-if="drawn_checkins.has(message.id)">
+                  <p>{{ message.text }}</p>
+                  <p class="channel-checkin-answer" :data-message-id="drawn_checkins.get(message.id).id">{{ drawn_checkins.get(message.id).text }}</p>
+                </template>
+                <template v-else>
+                  <ul class="channel-withdrawn-list">
+                    <li v-for="item in drawn_notices.runs.get(message.id)" :key="item.id" :data-message-id="item.id">
+                      <span class="channel-withdrawn-text" :title="item.text">{{ item.text }}</span>
+                      <UButton :label="`#${item.id}`" size="xs" variant="link" color="neutral" :aria-label="t('查看程序通知原文 #{value1}', { value1: item.id })" :aria-expanded="opened_folded.has(item.id)" @click="toggle_folded(item.id)" />
+                      <div v-if="opened_folded.has(item.id)" class="markdown-body channel-withdrawn-full" v-html="bridge.render_room_markdown(item.text)"></div>
+                    </li>
+                  </ul>
+                </template>
+              </div>
+            </div>
+          </template>
+        </template>
         <ScheduleCard v-else-if="message.source === 'notice'" icon="i-lucide-bell" plain fold :label="t('程序通知主持人')">
           <template #text>{{ message.text }}</template>
           <p class="channel-checkin-answer">{{ message.text }}</p>
@@ -4042,8 +4337,11 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                   :loading="is_running('change_member') && stopping_member === message.member_id" @click="stop_member(message)"><span v-if="!(is_running('change_member') && stopping_member === message.member_id)" class="channel-stop-square" /></UButton></UTooltip>
             </span>
           </div>
-          <LiveClock :message="message" v-slot="{ work }"><ul v-if="work.tools?.length" class="channel-working-tools" :aria-label="t('工具调用次数')">
+          <LiveClock :message="message" v-slot="{ work }"><ul v-if="work.tools?.length || background_running(message)" class="channel-working-tools" :aria-label="t('工具调用次数')">
             <li v-for="item in work.tools" :key="`${item.phase}:${item.tool}`"><span>{{ tool_label(item) }} ×</span><span class="channel-working-tool-count" role="img" :aria-label="String(item.count)"><FlipDigit v-for="(digit, index) in String(item.count)" :key="String(item.count).length - index" :digit="digit" /></span></li>
+            <!-- Background work shows here only as a count; the list itself is in the private chat (user 2026-11-26, #13168). -->
+            <!-- Its digits turn like the tool counts beside it, so the line reads as one set (user 2026-11-26, #13175). -->
+            <li v-if="background_running(message)" :title="t('后台还有 {value1} 项工作在运行，明细见私聊', { value1: background_running(message) })"><span>{{ t('后台') }} ×</span><span class="channel-working-tool-count" role="img" :aria-label="String(background_running(message))"><FlipDigit v-for="(digit, index) in String(background_running(message))" :key="String(background_running(message)).length - index" :digit="digit" /></span></li>
           </ul></LiveClock>
           <LiveClock v-slot="{ note_map }"><div v-for="notes in [note_map.get(message.execution_id) || []].filter((list) => list.length)" :key="message.execution_id" class="channel-working-notes" :class="{ 'is-open': open_working_notes.has(message.execution_id), 'is-single': notes.length === 1 }">
             <template v-if="open_working_notes.has(message.execution_id)"><p v-for="note in notes.slice(0, -1)" :key="note.seq">{{ note.text }}</p></template>
@@ -4052,7 +4350,6 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <button v-if="notes.length > 1" type="button" class="channel-working-count" :aria-expanded="open_working_notes.has(message.execution_id)" :aria-label="open_working_notes.has(message.execution_id) ? t('收起过程说明') : t('展开全部 {value1} 段过程说明', { value1: notes.length })" @click.stop="toggle_working_notes(message.execution_id)">{{ t('{value1} 段', { value1: notes.length }) }}<UIcon name="i-lucide-chevron-down" /></button>
             </p>
           </div></LiveClock>
-          <BackgroundTaskList v-if="message.background_tasks?.length" :tasks="message.background_tasks" />
         </div>
         <!-- Waiting to redeliver keeps the full card: the reason and its buttons do not fit one line. -->
         <UChatMessage v-else-if="message.slot_card && !message.failure" :id="`execution-${message.id}`" :data-author="bridge.identities[message.author]?.style" role="assistant" :parts="[]" side="left" variant="naked" color="neutral" class="channel-message" :ui="{ header: 'channel-message-header', container: 'channel-message-container', body: 'channel-message-body' }">
@@ -4085,7 +4382,6 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </template>
             <!-- The same row the answer keeps folded after its result: open while working. -->
             <LiveClock v-slot="{ note_map }"><ExecutionNotes v-if="note_map.get(message.execution_id)?.length" live :notes="note_map.get(message.execution_id)" /></LiveClock>
-            <BackgroundTaskList v-if="message.background_tasks?.length" :tasks="message.background_tasks" />
           </template>
         </UChatMessage>
         <section v-else-if="message.failure" :id="message.id" class="channel-message channel-failed-execution" :class="message.marks?.edge" :data-author="bridge.identities[message.author]?.style" :aria-label="`${bridge.display_name(message.author)} ${message.undeliverable ? t('无法投递') : t('执行失败')}`">
@@ -4118,12 +4414,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <UIcon :name="message.withdrawn === 'retracted' ? 'i-lucide-undo-2' : 'i-lucide-history'" class="channel-withdrawn-icon" />
             <span v-if="message.withdrawn === 'retracted'">{{ t('{value1} 撤回了一条消息', { value1: bridge.display_name(message.author) }) }}</span>
             <template v-else>
-              <span>{{ t('已回退 {value1} 条记录', { value1: rewound_runs.runs.get(message.id)?.length }) }}</span>
-              <UButton :label="expanded_rewinds.has(message.id) ? t('收起') : t('展开')" :trailing-icon="expanded_rewinds.has(message.id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" size="xs" variant="link" color="neutral" class="channel-withdrawn-toggle" :aria-expanded="expanded_rewinds.has(message.id)" :aria-label="expanded_rewinds.has(message.id) ? t('收起从 #{value1} 起已回退的记录', { value1: message.id }) : t('展开从 #{value1} 起已回退的记录', { value1: message.id })" @click="toggle_rewound(message.id)" />
+              <span>{{ t('已回退 {value1} 条记录', { value1: run_count(drawn_rewinds.runs.get(message.id), message.id) }) }}</span>
+              <UButton :label="expanded_rewinds.has(drawn_rewinds.runs.get(message.id)?.at(-1).id) ? t('收起') : t('展开')" :trailing-icon="expanded_rewinds.has(drawn_rewinds.runs.get(message.id)?.at(-1).id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" size="xs" variant="link" color="neutral" class="channel-withdrawn-toggle" :aria-expanded="expanded_rewinds.has(drawn_rewinds.runs.get(message.id)?.at(-1).id)" :aria-label="expanded_rewinds.has(drawn_rewinds.runs.get(message.id)?.at(-1).id) ? t('收起从 #{value1} 起已回退的记录', { value1: message.id }) : t('展开从 #{value1} 起已回退的记录', { value1: message.id })" @click="toggle_rewound(drawn_rewinds.runs.get(message.id).at(-1).id)" />
             </template>
           </div>
-          <ul v-if="message.withdrawn === 'rewound' && expanded_rewinds.has(message.id)" class="channel-withdrawn-list">
-            <li v-for="item in rewound_runs.runs.get(message.id)" :key="item.id" :data-message-id="item.id">
+          <ul v-if="message.withdrawn === 'rewound' && expanded_rewinds.has(drawn_rewinds.runs.get(message.id)?.at(-1).id)" class="channel-withdrawn-list">
+            <li v-for="item in drawn_rewinds.runs.get(message.id)" :key="item.id" :data-message-id="item.id">
               <strong>{{ bridge.display_name(item.author) }}</strong><span class="channel-withdrawn-text" :title="item.text">{{ item.text }}</span>
               <UButton :label="`#${item.id}`" size="xs" variant="link" color="neutral" :aria-label="t('查看已回退的原文 #{value1}', { value1: item.id })" :aria-expanded="opened_folded.has(item.id)" @click="toggle_folded(item.id)" />
               <div v-if="opened_folded.has(item.id)" class="markdown-body channel-withdrawn-full" v-html="bridge.render_room_markdown(item.text)"></div>
@@ -4171,10 +4467,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <AnswerSites :message="message" :room-id="current_room_id" :execution-id="message.execution_id || 0" />
             <LiveClock v-if="card.notes_count || card.steps" v-slot="{ note_map }"><ExecutionNotes :count="card.notes_count || 0" :steps="card.steps || 0" :notes="note_map.get(card.execution_id)" :load="() => load_notes(card.execution_id)" :preload="(near) => preload_notes(card.execution_id, near)" /></LiveClock>
             <div v-for="{ report, completed, allowable, failed } in card.report_rows" :key="report.id" class="channel-execution-report" role="group" :aria-label="t('执行报告 #{value1}', { value1: report.id })">
-              <div v-if="report.changes?.length || report.tallying" class="channel-answer-summary channel-execution-files">
+              <div v-if="report.change_count || report.tallying" class="channel-answer-summary channel-execution-files">
                 <small>{{ t('文件改动') }}</small>
                 <div class="channel-message-text">
-                  <ExecutionChanges v-if="report.changes?.length" :report="report" :room-id="current_room_id" />
+                  <ExecutionChanges v-if="report.change_count" :report="report" :room-id="current_room_id" />
                   <p v-else class="channel-execution-tallying" role="status"><UIcon name="i-lucide-loader" class="animate-spin" />{{ t('正在统计文件改动…') }}</p>
                 </div>
               </div>
@@ -4228,8 +4524,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
         </ScheduleCard>
         <SchedulerDecision v-for="decision in scheduler_decisions.get(message.id) || []" :key="`decision-${decision.id}`" :decision="decision" :free="free" />
         </template>
-        </template>
       </div>
+      <div ref="after_window" aria-hidden="true" :style="{ height: render_window.after + 'px', overflowAnchor: 'none' }" />
       <!-- Sends that failed stay as cards in their place, any number of them: each sends its message again or drops it.
            They are this page's own (no one else sees them), so a failed card works as a ready-to-send draft. -->
       <div v-for="card in view.failed_sends" :key="card.id" class="channel-message-group">
@@ -4463,6 +4759,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 </template>
 
 <style scoped>
+/* Keep any child's trailing margin inside the measured box, independent of card style. */
+.channel-message-group.transcript-row { display: flow-root; }
+.channel-history-loading { position: sticky; z-index: 1; top: var(--channel-topbar-height, 0px); height: 0; text-align: center; pointer-events: none; }
+.channel-message-group.transcript-row-windowed :deep([data-message-id]) { content-visibility: visible; }
 .channel-free-recipients { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; font-size: 12px; color: var(--ui-text-muted); }
 .channel-free-recipients button { min-height: 24px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; color: var(--ui-text-muted); transition: background .12s, color .12s; }
 .channel-free-recipients button:hover { background: #ffffff0d; color: var(--ui-text-highlighted); }

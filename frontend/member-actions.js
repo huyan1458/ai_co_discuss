@@ -11,6 +11,28 @@ export const MAX_LABEL = 32;
 /** A member is busy while it has queued requests or a live execution. */
 export const busy = (member) => member.pending > 0 || LIVE.includes(member.execution?.status);
 
+// CLIs and API members this tool grants project access per run; App members are left to their own settings.
+const ACCESS_CLIENTS = ["codex_cli", "claude", "antigravity_cli", "api"];
+
+/**
+ * A member's project file access and whether the owner can switch it here; anything that cannot says why on hover.
+ * The room overview's switch and the rail menu's submenu both read it.
+ * @param {object} member A room member.
+ * @param {object|null} saved This computer's saved choices for the room (`view.launch.room_models`), or null.
+ * @param {object} view The current snapshot.
+ * @returns {{ value?: string, text?: string, hint?: string, editable?: boolean }}
+ */
+export function project_files(member, saved, view) {
+  if (member.access === "manual") return { text: t("自行决定"), hint: t("手动成员的权限由它自己的会话决定") };
+  const profile = saved?.participants?.[member.name];
+  if (!profile) return { text: "—" };
+  if (profile.project_access === "own") return { text: t("自行决定"), hint: t("手动接入的成员，由本机服务投递时仍沿用它自己会话的软件权限") };
+  if (!ACCESS_CLIENTS.includes(profile.adapter)) return { text: t("App 内设置"), hint: t("App 成员的权限在 App 里设置") };
+  if (profile.own_project) return { text: t("agy 内设置"), hint: t("续接它自己的 agy 对话，权限沿用该对话所在项目") };
+  if (profile.defaults_pending) return { value: profile.project_access || "read", hint: t("正在读取 agy 的配置") };
+  return { value: profile.project_access || "read", editable: view.access?.can_manage && view.launch.available };
+}
+
 /**
  * Action groups for one member: taking part (instructions, credentials, description), its place in the room, and removal.
  * @param {object} member A `room.free.members` entry.

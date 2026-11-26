@@ -74,31 +74,39 @@ function locations(named) {
   });
 }
 
-/** The first location of a named path holding a file changed since the execution began, or null. */
-async function delivered(named) {
-  let failed = false;
-  for (const { path, root } of locations(named)) {
-    try {
-      const result = await bridge.read_room_files(props.roomId, path, 0, "", root);
-      if (result.kind === "file" && Date.parse(result.modified_at) >= props.startedAt * 1000) {
-        return { path, root, name: path.split("/").at(-1), kind: "file", size: result.size, modified_at: result.modified_at };
-      }
-    } catch { failed = true; }
-  }
-  return failed ? undefined : null;
+/**
+ * For each named path, its first location holding a file changed since the execution began, or null. One batch request:
+ * a path that does not exist comes back null rather than failing, so an answer that also names files elsewhere (like
+ * `control.md` for a skill's file) is still remembered and its cards show at once on the next visit (user 2026-11-26).
+ */
+async function delivered(named_list) {
+  const places = named_list.map(locations);
+  const items = places.flat();
+  const stats = items.length ? (await bridge.manage_room_files(props.roomId, { op: "stat-batch", items })).items : [];
+  if (stats?.length !== items.length) throw new Error("stat-batch");
+  let index = 0;
+  return places.map((list) => {
+    const found = list.map((place) => ({ place, stat: stats[index++] }))
+      .find(({ stat }) => stat?.kind === "file" && Date.parse(stat.modified_at) >= props.startedAt * 1000);
+    if (!found) return null;
+    const { place: { path, root }, stat } = found;
+    return { path, root, name: path.split("/").at(-1), kind: "file", size: stat.size, modified_at: stat.modified_at };
+  });
 }
 
-// A successful miss (null) can be reused. A failed read (undefined) must retry on the next visit.
+// A completed lookup is reused; a failed request must retry on the next visit.
 watch([lookup_key, nearby], async ([key, visible], _, on_cleanup) => {
   const cached = found_files.get(key);
   files.value = cached ?? found_files.get(message_key.value) ?? [];
   if (!key || cached || !visible) return;
   let active = true;
   on_cleanup(() => { active = false; });
-  const results = await Promise.all(candidates.value.map(delivered));
+  let results;
+  try { results = await delivered(candidates.value); } catch { return; }
   if (!active) return;
   files.value = results.filter(Boolean);
-  if (!results.includes(undefined)) { found_files.set(key, files.value); found_files.set(message_key.value, files.value); }
+  found_files.set(key, files.value);
+  found_files.set(message_key.value, files.value);
 }, { immediate: true });
 
 // A page the answer delivered can go public as a website, after the owner confirms what it holds.

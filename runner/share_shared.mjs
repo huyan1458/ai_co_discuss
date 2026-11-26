@@ -1,5 +1,6 @@
 // While a share page is being assembled, the raw answers of its reads, by route.
 export const SHARE_READ_CONCURRENCY = 6;
+const SHARE_EXECUTION_BATCH_SIZE = 100;
 export const SHARE_UPLOAD_CONCURRENCY = 6;
 // Where a reader of a share page learns about the product.
 export const SHARE_HOME = "https://codiscuss.com";
@@ -118,6 +119,10 @@ export function create_share_core({ t, display_name, collapse_visual_fences, is_
     const result = {};
     for (const [key, item] of Object.entries(value)) {
       if (SHARE_DROPPED_FIELDS.has(key) || SHARE_DROPPED_TEXT.has(key) && typeof item === "string") continue;
+      if (key === "change_summary" && item?.changes) {
+        result[key] = share_clean({ ...item, cwd: value.cwd }, keep_files);
+        continue;
+      }
       result[key] = SHARE_EMPTIED_FIELDS.has(key) && !(keep_files && key === "attachments") ? (Array.isArray(item) ? [] : null) : share_clean(item, keep_files);
     }
     // When a member's quota comes back is the same fact as a quota notice's reset time, as a timestamp.
@@ -333,7 +338,14 @@ export function create_share_core({ t, display_name, collapse_visual_fences, is_
       .flatMap(([, body]) => (body.messages || []).filter(message => message.withdrawn).map(message => message.id)));
     const on_withdrawn = (run) => [run.task_id, run.request_message_id, run.answer_id].some(id => withdrawn.has(id));
     const dropped_runs = new Set();
-    JSON.stringify(raw, (key, item) => { if (key === "executions" && Array.isArray(item)) for (const run of item) if (run && on_withdrawn(run)) dropped_runs.add(run.id); return item; });
+    const execution_cwds = new Map();
+    JSON.stringify(raw, (key, item) => {
+      if (key === "executions" && Array.isArray(item)) for (const run of item) {
+        if (run && on_withdrawn(run)) dropped_runs.add(run.id);
+        if (run?.cwd) execution_cwds.set(run.id, run.cwd);
+      }
+      return item;
+    });
     const without_runs = (value) => {
       if (Array.isArray(value)) return value.map(without_runs);
       if (!value || typeof value !== "object") return value;
@@ -341,12 +353,20 @@ export function create_share_core({ t, display_name, collapse_visual_fences, is_
     };
     const responses = {};
     for (const [path, body] of Object.entries(raw)) {
-      const run = path.match(/\/executions\/(\d+)\/notes$/);
+      if (path.startsWith(`/api/rooms/${room_id}/executions/changes?`)) {
+        for (const [id, details] of Object.entries(body.items || {})) {
+          if (dropped_runs.has(Number(id))) continue;
+          responses[`/api/rooms/${room_id}/executions/${id}/changes`] = strip(share_clean({ ...details, cwd: execution_cwds.get(Number(id)) }));
+        }
+        continue;
+      }
+      const run = path.match(/\/executions\/(\d+)\/(notes|changes)$/);
       if (run && dropped_runs.has(Number(run[1]))) continue;
       let kept = body;
       if (path === "/api/rooms") kept = { rooms: (body.rooms || []).filter(room => room.id === room_id).map(room => ({ ...room, folder_id: "", archived: false })),
         folders: [], uncategorized_position: 0, participants: [], last_room: room_id };
       else if (/\/messages\?/.test(path)) kept = share_batch(body);
+      else if (run?.[2] === "changes") kept = { ...body, cwd: execution_cwds.get(Number(run[1])) };
       responses[path] = strip(share_clean(without_runs(kept), attachments));
     }
     return responses;
@@ -408,13 +428,15 @@ export function create_share_core({ t, display_name, collapse_visual_fences, is_
 
   async function share_collect_reads(room_id, history_batch_path, keep) {
     const base = `/api/rooms/${room_id}`;
-    await Promise.all([keep("/api/rooms"), keep(base)]);
+    const [, room] = await Promise.all([keep("/api/rooms"), keep(base)]);
     const noted = new Set(), runs = new Set();
+    const changed = new Set((room.free?.executions || []).filter(execution => execution.change_summary?.count && !execution.change_summary.changes).map(execution => execution.id));
     for (let after = 0, more = true; more;) {
       const batch = await keep(history_batch_path(room_id, "", after));
       for (const execution of batch.cards?.executions || []) {
         runs.add(execution.id);
         if (execution.notes > 0) noted.add(execution.id);
+        if (execution.change_summary?.count && !execution.change_summary.changes) changed.add(execution.id);
       }
       more = Boolean(batch.has_more) && batch.messages.length > 0;
       after = batch.messages.at(-1)?.id || after;
@@ -427,6 +449,12 @@ export function create_share_core({ t, display_name, collapse_visual_fences, is_
     }
     // Notes are read only for runs that have some; one that cannot be read stops the page rather than leaving it short.
     await share_parallel([...noted], SHARE_READ_CONCURRENCY, id => keep(`${base}/executions/${id}/notes`));
+    const ids = [...changed], batches = [];
+    for (let start = 0; start < ids.length; start += SHARE_EXECUTION_BATCH_SIZE) {
+      batches.push(ids.slice(start, start + SHARE_EXECUTION_BATCH_SIZE));
+    }
+    await share_parallel(batches, SHARE_READ_CONCURRENCY,
+      batch => keep(`${base}/executions/changes?ids=${batch.join(",")}`).catch(() => null));
     return runs.size;
   }
   async function share_find_delivered(responses, room_id, folders, stat) {

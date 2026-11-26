@@ -13,6 +13,8 @@ import ExecutionTimeline from "./ExecutionTimeline.vue";
 import EventLog from "./EventLog.vue";
 import ProjectFiles from "./ProjectFiles.vue";
 import WorkflowLibrary from "./WorkflowLibrary.vue";
+import AnalyticsPage from "./AnalyticsPage.vue";
+import { use_analytics_page } from "./analytics-state.js";
 import InvitedRoomPage from "./InvitedRoomPage.vue";
 import InvitedRoomRail from "./InvitedRoomRail.vue";
 import JoinInvitedDialog from "./JoinInvitedDialog.vue";
@@ -122,7 +124,7 @@ const rail_inline = computed(() => viewport_width.value >= RAIL_BREAKPOINT);
 const nav_docked = computed(() => rail_inline.value && !nav_collapsed.value);
 // The rail and channel tools stay in place without a room so the layout never jumps; room-only controls are disabled.
 // A file preview docked beside the messages takes the rail's place until it closes; the rail's own setting is kept.
-const show_rail = computed(() => (invited_page.value || !workflow_page.value && view.value.tab === "discussion") && !rail_collapsed.value && !file_preview.dock_width);
+const show_rail = computed(() => (invited_page.value || !workflow_page.value && !analytics_page.value && view.value.tab === "discussion") && !rail_collapsed.value && !file_preview.dock_width);
 const rail_toggles = computed(() => rail_inline.value && !file_preview.dock_width);
 const info_label = computed(() => rail_toggles.value && (invited_page.value || view.value.tab === "discussion") ? (rail_collapsed.value ? t("展开房间概览") : t("收起房间概览")) : t("讨论进度"));
 const LIVE_EXECUTION = ["dispatched", "started"];
@@ -247,7 +249,12 @@ watch(nav_open, (open) => { if (open) workflow_library.refresh_list(); });
 // An invited room (a room on another computer this computer's AI joined) also fills the middle in place of the room.
 const invited_rooms = use_invited_rooms();
 const { page_open: invited_page, selected: invited_record } = invited_rooms;
-const middle_page = computed(() => workflow_page.value || invited_page.value);
+const analytics = use_analytics_page();
+const { page_open: analytics_page } = analytics;
+const middle_page = computed(() => workflow_page.value || invited_page.value || analytics_page.value);
+watch(() => !share.value && Boolean(view.value.admin?.local || view.value.admin?.logged_in), (allowed) => {
+  if (!allowed && analytics_page.value && view.value.admin?.loaded) analytics.close();
+});
 // The online explanation page hands its link over as #join=…: open the join dialog with it, once.
 onMounted(() => { const text = take_join_fragment(); if (text) invited_rooms.start_join(text); });
 const workflow_zip = ref(null), workflow_folder = ref(null);
@@ -293,13 +300,16 @@ function open_archives() { nav_open.value = false; modal.value = "archives"; }
 /** Switch the room view (leaving the workflow page) and close the mobile navigation. */
 
 /** The sidebar opened the workflow page: close the mobile navigation. */
-function open_workflows() { nav_open.value = false; invited_rooms.close(); }
+function open_workflows() { nav_open.value = false; invited_rooms.close(); analytics.close(); }
 
 /** The sidebar chose an invited room: show it in the middle (leaving the workflow page) and close the mobile navigation. */
-function open_invited(id) { nav_open.value = false; workflow_library.close_page(() => invited_rooms.open(id)); }
+function open_invited(id) { nav_open.value = false; workflow_library.close_page(() => { analytics.close(); invited_rooms.open(id); }); }
 
-/** Select a shared room (leaving the workflow page) and close the mobile navigation. */
-function choose_room(id) { nav_open.value = false; workflow_library.close_page(() => { invited_rooms.close(); act("room", id); }); }
+/** The sidebar opened the owner analytics page: fill the middle and close the mobile navigation. */
+function open_analytics() { nav_open.value = false; workflow_library.close_page(() => { invited_rooms.close(); analytics.open(); }); }
+
+/** Select a shared room (leaving the workflow/analytics page) and close the mobile navigation. */
+function choose_room(id) { nav_open.value = false; workflow_library.close_page(() => { invited_rooms.close(); analytics.close(); act("room", id); }); }
 
 /** Show a message in place in the transcript for a moment; the transcript offers a way back to where reading (and the tab) was. */
 async function open_detail(id) {
@@ -350,8 +360,8 @@ function create_channel(folder = null) {
   nav_open.value = false;
   bridge.reset_create_form(folder); target_folder.value = folder; modal.value = "create";
 }
-// Leave an invited room only once a new room is actually submitted, not when opening the dialog and cancelling.
-watch(() => view.value.creating_room?.opened, (opened) => { if (opened) invited_rooms.close(); });
+// Leave an invited room or analytics page only once a new room is actually submitted, not when opening the dialog and cancelling.
+watch(() => view.value.creating_room?.opened, (opened) => { if (opened) { invited_rooms.close(); analytics.close(); } });
 
 /** Open folder creation after closing the mobile directory. */
 function create_folder() { target_folder.value = null; nav_open.value = false; modal.value = "folder"; }
@@ -498,7 +508,7 @@ function resize_nav_by_key(event) {
 
 <template>
   <div class="channel-shell" :class="{ 'channel-share': share, 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': !nav_docked, 'channel-has-rail': show_rail }" :style="layout_style">
-    <ChannelSidebar v-if="nav_docked" :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @settings="modal = 'settings'" />
+    <ChannelSidebar v-if="nav_docked" :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @analytics="open_analytics" @settings="modal = 'settings'" />
     <div v-if="nav_docked" class="channel-nav-resizer" role="separator" tabindex="0" :aria-label="t('调整房间栏宽度')" aria-orientation="vertical" aria-controls="channel-sidebar" :aria-valuemin="NAV_MIN" :aria-valuemax="nav_max" :aria-valuenow="effective_nav_width" :aria-valuetext="t('{count} 像素', { count: effective_nav_width })" :title="t('拖动调整房间栏宽度，也可使用方向键')" @pointerdown="start_nav_resize" @pointermove="resize_nav" @pointerup="finish_nav_resize" @pointercancel="finish_nav_resize" @lostpointercapture="finish_nav_resize" @keydown="resize_nav_by_key"></div>
 
     <main class="channel-main">
@@ -517,6 +527,11 @@ function resize_nav_by_key(event) {
             <span class="channel-title-icon"><UIcon name="i-lucide-monitor-smartphone" /></span>
             <div class="channel-title"><div class="channel-title-copy"><h1 :title="invited_record?.room_title">{{ invited_record?.room_title || invited_rooms.pending_join.value?.room_title || t('外部房间') }}</h1></div></div>
             <span class="channel-header-context">{{ t("外部房间") }}<template v-if="invited_record?.machine_name"><span>·</span>{{ invited_record.machine_name }}</template></span>
+          </template>
+          <template v-else-if="analytics_page">
+            <span class="channel-title-icon"><UIcon name="i-lucide-bar-chart-3" /></span>
+            <div class="channel-title"><div class="channel-title-copy"><h1>{{ t("统计") }}</h1></div></div>
+            <span class="channel-header-context">{{ t("全房间行为分析") }}</span>
           </template>
           <template v-else>
             <span class="channel-title-icon"><UIcon name="i-lucide-hash" /></span>
@@ -537,8 +552,8 @@ function resize_nav_by_key(event) {
             <!-- Not modal: a modal menu blocks taps outside it, so on phones the filter icon could not close it again (user 2026-11-25, #10412). -->
             <UDropdownMenu :modal="false" v-if="!share && !middle_page && view.tab === 'discussion'" :items="source_filter_items" :disabled="!room" :content="source_filter_content" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" :aria-label="t('筛选消息与卡片')" :title="t('筛选消息与卡片')" :disabled="!room" /></UDropdownMenu>
           </div>
-          <UTooltip v-if="!workflow_page" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_toggles && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
-          <UTooltip v-else-if="!workflow_stacked && (workflow_draft || workflow_loading)" :text="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md：主持人照它派活')"><UButton icon="i-lucide-panel-right" label="SKILL.md" color="neutral" variant="ghost" size="sm" class="channel-workflow-skill-toggle channel-panel-toggle" :aria-label="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md')" :aria-expanded="workflow_skill_open" :aria-pressed="workflow_skill_open" aria-controls="workflow-skill-panel" @click="workflow_library.set_skill_open(!workflow_skill_open)" /></UTooltip>
+          <UTooltip v-if="!workflow_page && !analytics_page" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_toggles && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
+          <UTooltip v-else-if="workflow_page && !workflow_stacked && (workflow_draft || workflow_loading)" :text="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md：主持人照它派活')"><UButton icon="i-lucide-panel-right" label="SKILL.md" color="neutral" variant="ghost" size="sm" class="channel-workflow-skill-toggle channel-panel-toggle" :aria-label="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md')" :aria-expanded="workflow_skill_open" :aria-pressed="workflow_skill_open" aria-controls="workflow-skill-panel" @click="workflow_library.set_skill_open(!workflow_skill_open)" /></UTooltip>
         </header>
         <div v-if="(room || creating_preview) && !middle_page" class="channel-tabbar">
           <UTabs v-model="selected_tab" :items="room ? tabs : creating_tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" :aria-label="t('房间视图')" />
@@ -558,6 +573,7 @@ function resize_nav_by_key(event) {
       </div>
       <div v-if="workflow_page" class="channel-body channel-workflow-body"><WorkflowLibrary /></div>
       <div v-else-if="invited_page" class="channel-body"><div class="channel-content"><InvitedRoomPage /></div></div>
+      <div v-else-if="analytics_page" class="channel-body"><div class="channel-content"><AnalyticsPage @open-room="choose_room" /></div></div>
       <div v-if="room" v-show="!middle_page" class="channel-body" :class="{ 'channel-body-discussion': view.tab === 'discussion' }">
         <div class="channel-content">
         <ChannelDiscussion ref="discussion_view" v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" />
@@ -648,7 +664,7 @@ function resize_nav_by_key(event) {
 
     <ShareDialog />
     <USlideover v-model:open="nav_open" side="left" :title="t('房间导航')" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-navigation-drawer' }">
-      <template #content><ChannelSidebar :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @settings="nav_open = false; modal = 'settings'" /></template>
+      <template #content><ChannelSidebar :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @analytics="open_analytics" @settings="nav_open = false; modal = 'settings'" /></template>
     </USlideover>
     <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :content="{ onInteractOutside: keep_drawer_for_file_float }" :title="invited_page ? t('外部房间') : room.title" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.host ? t('{value1} 主持', { value1: bridge.display_name(room.host) }) : ''" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
       <template #body><InvitedRoomRail v-if="invited_page" drawer /><div v-else-if="share" inert class="channel-share-inert"><FreeBoard /></div><FreeBoard v-else @history="info_open = false; open_consensus()" @locate="(name) => locate_member(name, { close_drawer: true })" /></template>

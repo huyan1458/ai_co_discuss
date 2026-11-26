@@ -677,7 +677,7 @@ export class DiscussionService {
   enforce_storage() {
     for (const { runner, config } of this.workers.values()) {
       if (!runner?.inbox?.executions?.length && !runner?.children?.size) continue;
-      const reason = this.guard.block_reason(this.storage, basename(config.draft_directory), this.storage_disk);
+      const reason = this.guard.block_reason(this.storage, basename(config.draft_directory), this.storage_disk, { running: true });
       if (!reason || this.storage_stops.has(runner)) continue;
       const stopping = Promise.resolve().then(() => runner.stop_for_storage(reason))
         .catch(error => this.log(error.message)).finally(() => this.storage_stops.delete(runner));

@@ -24,14 +24,16 @@ import SitesPanel from "./SitesPanel.vue";
 import MemoBlock from "./memo-block.js";
 import { use_workflow_library } from "./workflow-library.js";
 import { use_invited_rooms } from "./external-members.js";
+import { use_analytics_page } from "./analytics-state.js";
 import { locale, t } from "./i18n.js";
 
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions"]);
 const { view, bridge, act, is_running } = inject("discussion");
-// While the workflow page or an invited room fills the middle, no room row is shown as the open one.
+// While the workflow page, analytics page or an invited room fills the middle, no room row is shown as the open one.
 const { page_open: workflow_library_open } = use_workflow_library();
 const { page_open: invited_open } = use_invited_rooms();
-const middle_page = computed(() => workflow_library_open.value || invited_open.value);
+const { page_open: analytics_open } = use_analytics_page();
+const middle_page = computed(() => workflow_library_open.value || invited_open.value || analytics_open.value);
 const rooms = computed(() => view.value.rooms.filter((room) => !room.archived));
 const archived_count = computed(() => view.value.rooms.filter((room) => room.archived).length);
 const children = computed(() => {

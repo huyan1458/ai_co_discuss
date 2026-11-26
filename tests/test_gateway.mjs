@@ -349,6 +349,9 @@ test('a protected instance is reached only through a connection on which it prov
   assert.equal((await fetch(`http://127.0.0.1:${port}/api/rooms`)).status, 403, 'the instance refuses a direct request');
   const through = await fetch(`${f.origin}/api/rooms`, { headers: { Cookie: cookie, 'X-CoDiscuss-Entry': 'forged' } });
   assert.equal(through.status, 200, 'the entry proves itself and the instance serves it');
+  const stats = await fetch(f.origin + '/api/analytics', { headers: { Cookie: cookie, Origin: f.origin } });
+  assert.equal(stats.status, 200);
+  assert.equal((await stats.json()).scope.mode, 'all');
   // The administrator's copy of the key is wrong: the instance's proof does not check out, nothing is sent.
   writeFileSync(join(f.data, 'gateway-instance-keys.json'), JSON.stringify({ alice: 'b2'.repeat(32) }));
   assert.equal((await fetch(`${f.origin}/api/rooms`, { headers: { Cookie: cookie } })).status, 502);
@@ -499,6 +502,9 @@ test('a paired device reads, writes and uploads to a protected instance through 
   const listed = await room_api(home, paired, { method: 'GET', path: '/api/rooms' });
   assert.equal(listed.status, 200, JSON.stringify(listed.body));
   assert.ok(listed.body.rooms.some(item => item.id === room.id));
+  const stats = await room_api(home, paired, { method: 'GET', path: '/api/analytics?scope=current' });
+  assert.equal(stats.status, 200);
+  assert.equal(stats.body.scope.mode, 'current');
   const published_sites = await room_api(home, paired, { method: 'GET', path: '/api/sites' });
   assert.equal(published_sites.status, 200, JSON.stringify(published_sites.body));
   assert.ok(Array.isArray(published_sites.body.sites));

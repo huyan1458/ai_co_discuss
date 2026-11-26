@@ -21,11 +21,12 @@ import InviteDialog from "./InviteDialog.vue";
 import WorkflowControl from "./WorkflowControl.vue";
 import { active_workflow } from "./workflow-state.js";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
+import MemberTextDialog from "./MemberTextDialog.vue";
 import MemberNameEdit from "./MemberNameEdit.vue";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import MemoBlock from "./memo-block.js";
-import { member_actions } from "./member-actions.js";
-import { access_label, access_options } from "../runner/expert_prompts.mjs";
+import { member_actions, project_files } from "./member-actions.js";
+import { access_label, access_options, MAX_EXPERT_PROMPT } from "../runner/expert_prompts.mjs";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { t } from "./i18n.js";
 
@@ -33,8 +34,6 @@ const { view, bridge, act } = inject("discussion");
 const ACCESS_LABELS = { manual: t("手动接入") };
 const STATUS_LABELS = { active: t("在场"), away: t("暂离") };
 const unregistered = awaiting_member;
-// CLIs and API members this tool grants project access per run; App members are left to their own settings.
-const ACCESS_CLIENTS = ["codex_cli", "claude", "antigravity_cli", "api"];
 const CODEX_OPTIONS = [{ value: "codex_cli", label: "CLI" }, { value: "codex", label: "App" }];
 const ADAPTER_LABELS = { api: "API", codex: "App", antigravity: "App" };
 const room = computed(() => view.value.room);
@@ -226,14 +225,7 @@ async function switch_adapter(member, adapter) {
 
 /** Project file access, and whether it can be switched here; anything that cannot says why on hover. */
 function files(member) {
-  if (member.access === "manual") return { text: t("自行决定"), hint: t("手动成员的权限由它自己的会话决定") };
-  const profile = saved.value?.participants?.[member.name];
-  if (!profile) return { text: "—" };
-  if (profile.project_access === "own") return { text: t("自行决定"), hint: t("手动接入的成员，由本机服务投递时仍沿用它自己会话的软件权限") };
-  if (!ACCESS_CLIENTS.includes(profile.adapter)) return { text: t("App 内设置"), hint: t("App 成员的权限在 App 里设置") };
-  if (profile.own_project) return { text: t("agy 内设置"), hint: t("续接它自己的 agy 对话，权限沿用该对话所在项目") };
-  if (waiting(member.name)) return { value: profile.project_access || "read", hint: t("正在读取 agy 的配置") };
-  return { value: profile.project_access || "read", editable: view.value.access?.can_manage && view.value.launch.available };
+  return project_files(member, saved.value, view.value);
 }
 
 /** Switch one member's project files; the change applies from its next request and keeps its session. */
@@ -353,6 +345,27 @@ async function narrow_external(member, level) {
 const inviting = ref(false);
 const invite_workflow_id = ref("");
 const describing = ref(""), describing_saving = ref(false);
+// The member whose own prompt (专属提示词) is open, set here with its model and access (user 2026-11-26, #13067): only a
+// member this computer wakes has one; a workflow member's comes from its card and is shown read-only.
+const prompting = ref(""), prompt_draft = ref(""), prompt_saving = ref(false);
+const prompt_profile = (name) => saved.value?.participants?.[name] || null;
+const prompt_saved = computed(() => prompt_profile(prompting.value)?.system_prompt || "");
+const has_prompt = (member) => member.access === "runner" && !external_of(live(member)) && Boolean(prompt_profile(member.name))
+  && prompt_profile(member.name).project_access !== "own";
+const prompt_editable = computed(() => Boolean(view.value.access?.can_manage) && !room.value.archived);
+function edit_prompt(member) {
+  prompt_draft.value = prompt_profile(member.name)?.system_prompt || "";
+  prompting.value = member.name;
+}
+/** Closes at once; the bridge shows the new text until the local service confirms, and a refusal is told and undone. */
+async function save_prompt() {
+  const name = prompting.value, system_prompt = prompt_draft.value.trim();
+  prompting.value = "";
+  prompt_saving.value = true;
+  try { await bridge.set_member_prompt({ name, system_prompt }); }
+  catch (error) { bridge.notify("error", error.message); }
+  finally { prompt_saving.value = false; }
+}
 const trust_submitting = ref(false);
 const trust_prompt = computed(() => {
   const prompt = view.value.launch.workflow_trust_prompt;
@@ -511,6 +524,11 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
             </dd></div>
+            <div v-if="has_prompt(member)" class="overview-span"><dt>{{ t("专属提示词") }}</dt><dd class="overview-model">
+              <span :class="{ 'overview-muted': !prompt_profile(member.name).system_prompt }" :title="prompt_profile(member.name).system_prompt || undefined">{{ prompt_profile(member.name).system_prompt?.split('\n')[0] || t("未设置") }}</span>
+              <UButton v-if="prompt_editable" :icon="in_workflow(member.name) ? 'i-lucide-eye' : 'i-lucide-pencil'" size="xs" variant="ghost" color="neutral"
+                :aria-label="t('编辑 {value1} 的专属提示词', { value1: bridge.display_name(member.name) })" @click="edit_prompt(member)" />
+            </dd></div>
             </template>
             <div v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="bridge.display_path(saved.participants[member.name].outside_directory)">
               <UIcon name="i-lucide-triangle-alert" /><span>{{ t('在 {path} 工作，房间目录{access}', { path: bridge.display_path(saved.participants[member.name].outside_directory), access: saved.participants[member.name].outside_enforced ? t('只读') : t('只读（仅任务要求，程序拦不住）') }) }}</span></div>
@@ -618,6 +636,11 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
       </template>
     </UModal>
     <ExternalMemberDialog v-model:open="external_open" :member="external_member" :reinvite="external_reinvite" />
+    <MemberTextDialog :open="Boolean(prompting)" v-model:draft="prompt_draft" :title="t('{value1} 的专属提示词', { value1: bridge.display_name(prompting || ' ') })"
+      :description="in_workflow(prompting) ? t('来自工作流「{value1}」，每次执行时按工作流里的这张卡片发送；请在“工作流”一行点“编辑”修改，修改会作用于所有启用它的房间。', { value1: workflow?.label || '' }) : t('只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。')"
+      :label="t('{value1} 的专属提示词', { value1: bridge.display_name(prompting || ' ') })" :placeholder="t('例如：回答先给结论，控制在三段以内。')" :max="MAX_EXPERT_PROMPT" :rows="8"
+      :readonly="in_workflow(prompting)" :note="in_workflow(prompting) ? t('只读') : prompt_draft.trim() ? t('只发给这位专家，Ctrl + Enter 保存') : t('留空表示不使用')"
+      :changed="prompt_draft.trim() !== prompt_saved" :saving="prompt_saving" @update:open="(open) => { if (!open) prompting = ''; }" @save="save_prompt" />
     <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
       :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving"
       @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />

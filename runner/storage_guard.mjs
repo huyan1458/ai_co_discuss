@@ -310,7 +310,8 @@ export function storage_disk(home, drafts, check = disk_free, device = path => s
  * @param {{total_bytes?: number, draft_bytes?: number, local_bytes?: number, rooms?: Record<string, number>, truncated?: boolean}|null} snapshot
  * @param {string} [room_key] Room draft folder key under `drafts/`.
  * @param {{available_bytes: number, reserve_bytes: number}|null} [disk] Result of `disk_free()`.
- * @param {object} [options] Optional limit and locale overrides.
+ * @param {object} [options] Optional limit and locale overrides; `running: true` skips the unverified-growth pause,
+ *   which only holds new dispatch and never stops an execution already running.
  * @returns {string}
  */
 export function block_reason(snapshot, room_key = '', disk = null, options = {}) {
@@ -349,7 +350,7 @@ export function block_reason(snapshot, room_key = '', disk = null, options = {})
     return t('本机 .codiscuss 数据占用 {used}（不含语音模型；草稿 {draft}），超过 {limit} 上限，已停止派活。清理旧草稿请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup，或在管理面板“存储”页清理临时文件；若由房间记录与附件占满，请销毁旧房间。',
       { used: format_bytes(snapshot.total_bytes), draft: format_bytes(snapshot.draft_bytes), limit: format_bytes(home_limit) }, locale);
   }
-  if (snapshot.uncertain_growth) {
+  if (snapshot.uncertain_growth && !options.running) {
     return t('磁盘余量下降后复扫发现不可读项增至 {count} 处，已暂停派活，下次扫描将重新判断。', { count: snapshot.unreadable }, locale);
   }
   if (options.stoppable === false && room_bytes >= room_limit * SCRATCH_PRESSURE_RATIO) {

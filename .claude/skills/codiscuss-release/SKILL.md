@@ -66,10 +66,16 @@ W=1; set -o pipefail; retry() { for i in 1 2 3 4 5; do "$@" 2>&1 | tail -3 && re
 **第 4 阶段**（等待 GitHub Actions 发布 npm 并确认上线）。用轮询而不是 `gh run watch`：后者查询时网络一断就退出，会把成功的发布误报成失败（0.5.4、0.5.5 都遇到过）。单次查询失败只等几秒再查，拿到 `completed` 且结论不是 `success` 才算失败：
 
 ```bash
-V=<V>; R=; for i in $(seq 1 24); do R=$(gh run list --workflow publish.yml --branch "$V" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null); [ -n "$R" ] && break; sleep 5; done; [ -n "$R" ] || { echo "publish: 未找到 $V 的工作流运行"; exit 1; }; ok=; for i in $(seq 1 30); do s=$(gh run view "$R" --json status,conclusion --jq '.status+" "+.conclusion' 2>/dev/null) || { sleep 10; continue; }; case "$s" in "completed success") ok=1; break;; completed*) gh run view "$R" --log-failed 2>&1 | tail -30; echo "publish: 失败 ($s, run $R)"; exit 1;; esac; sleep 15; done; [ -n "$ok" ] || { echo "publish: 仍在运行 (run $R)，再跑一次本命令"; exit 1; }; echo "publish: 成功 (run $R)"; T="https://registry.npmjs.org/ai_co_discuss/-/ai_co_discuss-${V#v}.tgz"; code() { curl -sI -o /dev/null -w '%{http_code}' "$1"; }; for i in $(seq 1 30); do [ "$(code "$T?t=$(date +%s)")" = 200 ] && break; sleep 10; done; for i in $(seq 1 30); do [ "$(code "$T")" = 200 ] && { echo "npm: ${V#v} 已上线，安装包可下载"; exit 0; }; sleep 15; done; echo "npm: 安装包暂不可下载，registry 或 CDN 可能仍在同步"
+V=<V>; R=; for i in $(seq 1 24); do R=$(gh run list --workflow publish.yml --branch "$V" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null); [ -n "$R" ] && break; sleep 5; done; [ -n "$R" ] || { echo "publish: 未找到 $V 的工作流运行"; exit 1; }; ok=; for i in $(seq 1 30); do s=$(gh run view "$R" --json status,conclusion --jq '.status+" "+.conclusion' 2>/dev/null) || { sleep 10; continue; }; case "$s" in "completed success") ok=1; break;; completed*) gh run view "$R" --log-failed 2>&1 | tail -30; echo "publish: 失败 ($s, run $R)"; exit 1;; esac; sleep 15; done; [ -n "$ok" ] || { echo "publish: 仍在运行 (run $R)，再跑一次本命令"; exit 1; }; echo "publish: 成功 (run $R)"
 ```
 
-输出“仍在运行”或“暂不可下载”时，再跑一次本命令（工作流已成功的部分很快跳过）；累计 20 分钟仍不可下载才按下面最后一条处理。
+工作流成功后，另起一条命令确认安装包可下载（两条分开，每条都在 600 秒前台超时以内；超时会被挪到后台，在房间里等于执行失败）：
+
+```bash
+V=<V>; T="https://registry.npmjs.org/ai_co_discuss/-/ai_co_discuss-${V#v}.tgz"; code() { curl -sI -o /dev/null -w '%{http_code}' "$1"; }; for i in $(seq 1 20); do [ "$(code "$T?t=$(date +%s)")" = 200 ] && break; sleep 10; done; for i in $(seq 1 20); do [ "$(code "$T")" = 200 ] && { echo "npm: ${V#v} 已上线，安装包可下载"; exit 0; }; sleep 15; done; echo "npm: 安装包暂不可下载，registry 或 CDN 可能仍在同步"
+```
+
+输出“仍在运行”或“暂不可下载”时，再跑一次对应的那条命令；累计 20 分钟仍不可下载才按下面最后一条处理。
 
 “已上线”以安装包能下载为准，不以 `npm view` 查到版本号为准：版本信息比安装包先上线，此时安装会 404，且 CDN 会把这个 404 缓存 5 分钟（`max-age=300`）。所以先带查询参数绕过 CDN 等源站有了安装包，再查正常地址（`npm install` 实际请求的地址），返回 200 才报告；正常地址已被缓存 404 时会多等最多 5 分钟。
 

@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS attachments (
     UNIQUE(room_id, submission_id)
 );
 CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id, position);
+-- Applied to existing databases too by init_database, which reruns this schema at startup.
+CREATE INDEX IF NOT EXISTS attachments_room_message ON attachments(room_id, message_id);
 CREATE TRIGGER IF NOT EXISTS validate_attachment_link BEFORE UPDATE OF message_id ON attachments
 WHEN NEW.message_id IS NOT NULL AND (
     (OLD.message_id IS NOT NULL AND OLD.message_id != NEW.message_id)
@@ -1742,6 +1744,12 @@ CREATE TABLE IF NOT EXISTS stored_texts (
     PRIMARY KEY (owner, owner_id, field)
 );
 CREATE INDEX IF NOT EXISTS room_events_room ON room_events(room_id,id);
+-- Anonymous UTC-day contributions; the key is site-private and never returned by an API.
+CREATE TABLE IF NOT EXISTS analytics_sealed_days (
+    archive_key TEXT NOT NULL, day TEXT NOT NULL, counts TEXT NOT NULL, histograms TEXT NOT NULL,
+    PRIMARY KEY(archive_key,day)
+);
+CREATE INDEX IF NOT EXISTS analytics_sealed_day ON analytics_sealed_days(day);
 -- A destroyed room's cleanup and its receipt; the room's own rows are already gone. While `cleaning`, the title and the
 -- owner credential's hash stay so the page can show the entry and the room's runner can report what it removed on its
 -- computer; once `done`, they and the session IDs are cleared and only the per-category counts remain.

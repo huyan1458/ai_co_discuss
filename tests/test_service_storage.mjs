@@ -13,7 +13,7 @@ function service_home(t) {
   return home;
 }
 
-test('a volume drop shares one early rescan and only its findings stop active runs', async t => {
+test('a volume drop shares one early rescan; unverified growth holds dispatch but never stops active runs', async t => {
   let available = 40 * GIB, scans = 0, finish;
   const stopped = [];
   const service = new DiscussionService(service_home(t), undefined, undefined, {
@@ -45,7 +45,7 @@ test('a volume drop shares one early rescan and only its findings stop active ru
   finish(increased);
   await service.storage_scan;
   await Promise.all(service.storage_stops.values());
-  assert.equal(stopped.length, 1);
+  assert.deepEqual(stopped, []);
   assert.match(block_reason(service.scan_storage(), 'r'), /70/);
   const regular_scan = service.scan_storage(true);
   finish(increased);
@@ -56,7 +56,7 @@ test('a volume drop shares one early rescan and only its findings stop active ru
   finish({ ...snapshot, total_bytes: 11 * GIB });
   await service.storage_scan;
   await Promise.all(service.storage_stops.values());
-  assert.equal(stopped.length, 2);
+  assert.equal(stopped.length, 1);
 });
 
 test('an exhausted budget does not start periodic full scans', async () => {

@@ -1896,20 +1896,88 @@ class MultiMemberTests(FreeRoomTests):
         self.assertEqual(states, {"Antigravity": "completed", "Claude": "pending"})
 
     def test_file_diffs_show_counts_with_the_room_and_patches_to_the_owner(self):
-        """The card lists each file's line counts from the room read; its patch (project content) only the owner reads."""
+        """Only attributed counts travel with cards. File metadata has a separate read from patches."""
         self.say("改首页", to=["Claude"])
         execution = self.reserve_for("Claude")[1]
         diffs = [{"path": "index.html", "added": 2, "removed": 1, "patch": "@@ -1,1 +1,2 @@\n-a\n+b\n+c", "truncated": False},
-                 {"path": "logo.png", "skipped": "binary"}, {"path": "elsewhere.txt", "added": 1, "removed": 0, "patch": "+x"}]
+                 {"path": "logo.png", "skipped": "binary"}, {"path": "other.css", "added": 5, "removed": 0, "patch": "+css"},
+                 {"path": "elsewhere.txt", "added": 1, "removed": 0, "patch": "+x"}]
+        body = {"action": "report", "changes": ["index.html", "logo.png", "other.css"],
+                "edited": ["index.html", "logo.png", "elsewhere.txt"], "diffs": diffs}
         status, saved = self.request(f"{self.path}/executions/{execution['id']}",
-                                     {"action": "report", "changes": ["index.html", "logo.png"], "diffs": diffs}, self.owner)
+                                     {**body, "provisional": True}, self.owner)
         self.assertEqual(status, 200, saved)
         report = next(item for item in self.request(self.path)[1]["free"]["executions"] if item["id"] == execution["id"])
-        self.assertEqual(report["diff_stats"], [{"path": "index.html", "added": 2, "removed": 1, "truncated": False},
-                                                {"path": "logo.png", "skipped": "binary"}], "a path outside the changes is dropped")
+        self.assertEqual(report["change_summary"], {"count": 2, "added": 2, "removed": 1, "counted": True, "provisional": True,
+                                                   "changes": ["index.html", "logo.png"],
+                                                   "diff_stats": [{"path": "index.html", "added": 2, "removed": 1, "truncated": False},
+                                                                  {"path": "logo.png", "skipped": "binary"}]})
+        batch = self.request(f"{self.path}/messages?after=0&cards=1&withdrawn=include")[1]["cards"]
+        history = next(item for item in batch["executions"] if item["id"] == execution["id"])
+        self.assertEqual(history["change_summary"], report["change_summary"])
+        for card in (report, history):
+            self.assertFalse({"changes", "edited", "diff_stats", "diffs"} & card.keys())
+        details_path = f"{self.path}/executions/{execution['id']}/changes"
+        status, details = self.request(details_path, token=self.member)
+        self.assertEqual(status, 200, details)
+        self.assertEqual(details["changes"], ["index.html", "logo.png", "other.css"])
+        self.assertEqual(details["edited"], ["index.html", "logo.png"])
+        self.assertEqual(details["diff_stats"], [{"path": "index.html", "added": 2, "removed": 1, "truncated": False},
+                                                 {"path": "logo.png", "skipped": "binary"},
+                                                 {"path": "other.css", "added": 5, "removed": 0, "truncated": False}])
+        self.assertEqual(self.request(details_path, token=self.codex)[0], 200)
         path = f"{self.path}/executions/{execution['id']}/diff"
         self.assertEqual(self.request(path, token=self.member)[0], 403)
         self.assertEqual(self.request(path, token=self.owner)[1]["diffs"][0]["patch"], diffs[0]["patch"])
+        final_paths = [f"file-{index}.js" for index in range(6)]
+        self.assertEqual(self.request(f"{self.path}/executions/{execution['id']}",
+                                      {**body, "changes": final_paths, "edited": final_paths}, self.owner)[0], 200)
+        final = next(item for item in self.request(self.path)[1]["free"]["executions"] if item["id"] == execution["id"])
+        self.assertEqual(final["change_summary"], {"count": 6, "added": 0, "removed": 0, "counted": False, "provisional": False})
+        self.assertEqual(self.request(details_path, token=self.owner)[1]["changes"], final_paths)
+
+    def test_room_visitors_can_read_file_metadata_but_not_patches(self):
+        """No control credential is needed for filenames in the room's normal read mode."""
+        self.say("检查改动", to=["Codex"])
+        execution = self.reserve_for("Codex")[1]
+        path = f"{self.path}/executions/{execution['id']}"
+        body = {"action": "report", "changes": ["main.js"], "edited": ["main.js"],
+                "diffs": [{"path": "main.js", "added": 1, "removed": 0, "patch": "+new"}]}
+        self.assertEqual(self.request(path, body, self.owner)[0], 200)
+        status, details = self.request(f"{path}/changes")
+        self.assertEqual(status, 200, details)
+        self.assertEqual(details["changes"], ["main.js"])
+        self.assertEqual(details["diff_stats"], [{"path": "main.js", "added": 1, "removed": 0, "truncated": False}])
+        self.assertEqual(self.request(f"{path}/changes", token=self.member)[0], 200)
+        self.assertEqual(self.request(f"{path}/diff")[0], 403)
+        self.start_session()
+        status, blocked = self.request(f"{path}/changes")
+        self.assertEqual((status, blocked["code"]), (403, "reading_boundary"))
+        self.assertEqual(self.request(f"{path}/changes", token=self.member)[0], 403)
+        view = self.request(self.path)[1]["free"]["executions"]
+        summary = next(item["change_summary"] for item in view if item["id"] == execution["id"])
+        self.assertTrue(summary["unavailable"])
+        self.assertFalse({"changes", "diff_stats"} & summary.keys())
+        self.assertEqual(self.request(f"{self.path}/executions/changes?ids={execution['id']}")[1]["items"], {})
+        self.assertEqual(self.request(f"{path}/changes", token=self.owner)[0], 200)
+
+    def test_execution_changes_batch_keeps_valid_rows_when_some_are_unavailable(self):
+        """One batch returns the same patch-free details, even with missing or damaged entries."""
+        self.say("并行修改", to=["Claude", "Codex"])
+        first, damaged = (self.reserve_for(member)[1]["id"] for member in ("Claude", "Codex"))
+        path = f"{self.path}/executions/{first}"
+        report = {"action": "report", "changes": ["main.js"], "edited": ["main.js"],
+                  "diffs": [{"path": "main.js", "added": 1, "removed": 0, "patch": "+private"}]}
+        self.assertEqual(self.request(path, report, self.owner)[0], 200)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE member_executions SET diffs=? WHERE id=?", ("invalid", damaged))
+        batch = f"{self.path}/executions/changes?ids="
+        status, result = self.request(f"{batch}{first},{damaged},{damaged + 100},{first}")
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result, {"items": {str(first): self.request(path + "/changes")[1]}})
+        self.assertNotIn("patch", result["items"][str(first)]["diff_stats"][0])
+        self.assertEqual(self.request(batch + "invalid")[0], 400)
+        self.assertEqual(self.request(batch + ",".join(["1"] * 101))[0], 400)
 
     def test_changes_without_edited_files_are_not_reported_as_conflicts(self):
         """Overlapping snapshots alone cannot tell who wrote a file, so they are not flagged; the report is recorded once."""

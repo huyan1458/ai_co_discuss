@@ -745,7 +745,14 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + "/messages", {**payload, "submission_id": "reuse-message"})[0], 409)
         self.assertEqual(self.request(base + "/messages", {**payload, "text": "changed", "attachment_ids": []})[0], 409)
         if not self.external:
+            # Upgrade a database with already-published files and no room/message index.
+            with closing(connect_db(self.database)) as connection, connection:
+                connection.execute("DROP INDEX attachments_room_message")
             init_database(self.database, seed=False)
+            with closing(connect_db(self.database)) as connection:
+                columns = connection.execute("PRAGMA index_info(attachments_room_message)").fetchall()
+            self.assertEqual([row["name"] for row in columns], ["room_id", "message_id"])
+            self.assertEqual(self.request(base + "/messages")[1]["messages"][0]["attachments"], message["attachments"])
             self.assertEqual(self.attachment_request(file["url"])[2], data)
             orphan = attachment_path(self.database, {"id": "old-orphan"})
             orphan.touch()
@@ -1814,6 +1821,22 @@ class DiscussionTests(unittest.TestCase):
         second = self.request(f"/api/rooms/{self.room['id']}/messages?page=2")[1]
         self.assertEqual((len(first["messages"]), len(second["messages"])), (20, 3))
         self.assertEqual(len({row["id"] for row in first["messages"] + second["messages"]}), 23)
+
+    def test_message_queries_keep_room_scope_for_history_and_search(self):
+        """History, filtered counts, and incremental reads only include the selected room."""
+        room_id = self.room["id"]
+        first = self.post("同一关键词 第一条", "scope-first")[1]["message"]["id"]
+        self.room = self.request("/api/rooms", {"title": "另一间"})[1]
+        self.post("同一关键词 另一间", "scope-other")
+        base = f"/api/rooms/{room_id}/messages"
+        search = self.request(base + "?" + urlencode({"q": "同一关键词", "kind": "chat"}))[1]
+        self.assertEqual((search["total"], [row["id"] for row in search["messages"]]), (1, [first]))
+        history = self.request(base + "?before=0&limit=1")[1]
+        self.assertEqual([row["id"] for row in history["messages"]], [first])
+        incremental = self.request(base + f"?after={first}")[1]
+        self.assertEqual((incremental["total"], incremental["next_after"], incremental["messages"]), (0, first, []))
+        self.assertEqual(self.request("/api/rooms/missing/messages")[0], 404)
+        self.assertEqual(self.request(f"/r/{room_id}/messages?request_id=1")[0], 403)
 
     def prepare_speech(self, author, kind="opinion"):
         """Arrange a session request and return the actual execution or manual request binding."""

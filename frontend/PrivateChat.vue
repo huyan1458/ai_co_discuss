@@ -16,6 +16,8 @@ import { adapter_capabilities } from "../runner/adapters/profiles.mjs";
 import { ENTER_SENDS } from "./enter-sends.js";
 import { private_chat } from "./private-chat.js";
 import { PHASE_LABELS } from "./timeline-model.js";
+import BackgroundTaskList from "./BackgroundTaskList.vue";
+import { background_events } from "./background-tasks.js";
 
 const { view, bridge, act } = inject("discussion");
 const POLL_MS = 2000;
@@ -123,7 +125,10 @@ const items = computed(() => {
 // when_still), so a turn added or dropped, or a room message leaving the page's window, does not move the screen
 // mid-swipe. Polls and the status line use items itself.
 const shown_items = ref([]);
-const snapshot = () => items.value.map((item) => ({ ...item, prompt: prompt_of(item), reply: reply_of(item) }));
+const snapshot = () => items.value.map((item) => {
+  const reply = reply_of(item);
+  return { ...item, prompt: prompt_of(item), reply, tail: tail_of(item, reply) };
+});
 watch(() => [items.value, view.value.messages], () => when_still(() => { shown_items.value = snapshot(); }), { immediate: true });
 const running = (item) => item.chat ? item.chat.status === "running" : ACTIVE.includes(item.execution.status);
 const running_item = computed(() => [...items.value].reverse().find((item) => running(item) || item.chat?.status === "pending") || null);
@@ -276,6 +281,16 @@ function prompt_of(item) {
 /** The member's final words for a turn: the chat reply, or its answer in the room. */
 function reply_of(item) {
   return item.chat ? item.chat.reply : room_text(item.execution.answer_id);
+}
+/**
+ * What closes a turn after its steps: the event lines its background work left (started, ended; background-tasks.js)
+ * and its reply, in time order, so work that ended after the member answered shows under the answer. A line is
+ * `{key, reply: true}` for the reply, else an event.
+ */
+function tail_of(item, reply) {
+  const events = item.execution ? background_events(item.execution.background_tasks) : [];
+  const replied = item.execution && reply ? to_date(view.value.messages?.find((message) => message.id === item.execution.answer_id)?.created_at)?.getTime() ?? Infinity : Infinity;
+  return [...events.filter((event) => event.at <= replied), ...(reply ? [{ key: "reply", reply: true }] : []), ...events.filter((event) => event.at > replied)];
 }
 /** A timestamp as a Date: the chat and executions give seconds, room messages an ISO string. */
 function to_date(value) {
@@ -475,6 +490,25 @@ onMounted(() => {
 });
 onBeforeUnmount(() => { save_session(); observer?.disconnect(); cancelAnimationFrame(anchor_frame); clearTimeout(target_timer); clearTimeout(still_timer); });
 
+/*
+ * The member's background work for its latest room task, as in Claude Code: one line under the input box says how much
+ * runs, and opens the panel (BackgroundTaskList.vue) in the input box's place; Esc or the line closes it again.
+ */
+const background = computed(() => member.value?.execution?.background_tasks || []);
+const background_open = ref(false);
+const field = ref(null);
+watch(name, () => { background_open.value = false; });
+const background_line = computed(() => {
+  const count = background.value.filter((task) => task.state === "running").length;
+  if (count) return background_open.value ? t('{value1} 个后台任务运行中 · 收起', { value1: count }) : t('{value1} 个后台任务运行中 · 查看', { value1: count });
+  const ended = background.value.length;
+  return background_open.value ? t('{value1} 个后台任务已结束 · 收起', { value1: ended }) : t('{value1} 个后台任务已结束 · 查看', { value1: ended });
+});
+function toggle_background() {
+  background_open.value = !background_open.value;
+  if (!background_open.value) nextTick(() => field.value?.focus());
+}
+
 const draft = ref("");
 const sending = ref(false);
 const history = [];
@@ -572,7 +606,7 @@ function recall(event, step) {
       <p v-else class="term-dim">{{ t('房间里还没有 AI 成员') }}</p>
       <div v-if="loading && !shown_items.length" class="grid gap-4 py-4" role="status" :aria-label="t('正在读取私聊')"><USkeleton v-for="row in 4" :key="row" class="h-4" :class="row % 2 ? 'w-2/3' : 'w-full'" /></div>
       <section v-for="item in shown_items" :key="item.key" class="term-turn" :class="{ 'is-target': target === item.key }" :data-key="item.key"
-        v-memo="[item.at, item.prompt, item.reply, running(item), item.chat && chat_note(item.chat), details.get(item.key), errors.get(item.key), open_output, target === item.key]">
+        v-memo="[item.at, item.prompt, item.reply, JSON.stringify(item.tail), running(item), item.chat && chat_note(item.chat), details.get(item.key), errors.get(item.key), open_output, target === item.key]">
         <div v-for="meta in [turn_meta(item)]" :key="'meta'" class="term-meta">
           <time :title="meta.sent_title">{{ meta.sent }}</time><span>{{ meta.source }}</span>
           <span v-if="meta.replied" class="term-meta-end">{{ t('回复于') }} <time :title="meta.replied_title">{{ meta.replied }}</time></span>
@@ -596,7 +630,14 @@ function recall(event, step) {
             </div>
           </div>
         </template>
-        <div v-if="item.reply" class="term-line term-msg"><span class="term-bullet">●</span><span class="term-body">{{ item.reply }}</span></div>
+        <template v-for="line in item.tail" :key="line.key">
+          <div v-if="line.reply" class="term-line term-msg"><span class="term-bullet">●</span><span class="term-body">{{ item.reply }}</span></div>
+          <!-- Background work started or ended, as Claude Code notes it: a green, red or grey `●`, the work it started listed under it. -->
+          <div v-else class="term-block term-event">
+            <div class="term-line"><span class="term-bullet" :class="`is-${line.tone}`">●</span><span class="term-body">{{ line.text }}<span v-if="line.after" class="term-event-after"> · {{ line.after }}</span></span></div>
+            <div v-for="(child, at) in line.children" :key="at" class="term-sub term-tree"><span class="term-corner">{{ at === line.children.length - 1 ? "└" : "├" }}</span><span class="term-body">{{ child }}</span></div>
+          </div>
+        </template>
         <div v-if="item.chat && chat_note(item.chat)" class="term-sub" :class="{ 'term-error': item.chat.status === 'failed' }"><span class="term-corner">⎿</span><span class="term-body">{{ chat_note(item.chat) }}</span></div>
       </section>
       </div>
@@ -606,14 +647,20 @@ function recall(event, step) {
     <div class="term-status" :class="{ 'is-running': running_item && !paused }" role="status">
       <span v-if="running_item && !paused" class="term-spin">{{ SPINNER[frame] }}</span><span>{{ status_line }}</span>
     </div>
-    <div class="term-input">
+    <!-- The background panel takes the input box's place while open, as in Claude Code; the draft is kept. -->
+    <BackgroundTaskList v-if="background_open && background.length" :tasks="background" @close="toggle_background" />
+    <div v-else class="term-input">
       <span class="term-caret" aria-hidden="true">&gt;</span>
-      <textarea v-model="draft" rows="1" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :disabled="Boolean(unsupported) || sending" :placeholder="unsupported ? t('暂不可用') : paused ? t('补充后它接着做…') : running_item ? t('插话引导它…') : t('输入消息…')"
+      <textarea ref="field" v-model="draft" rows="1" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :disabled="Boolean(unsupported) || sending" :placeholder="unsupported ? t('暂不可用') : paused ? t('补充后它接着做…') : running_item ? t('插话引导它…') : t('输入消息…')"
         :aria-label="t('私聊输入')" maxlength="4000" @keydown.enter.exact="on_enter" @keydown.esc.prevent="interrupt"
         @keydown.up="recall($event, -1)" @keydown.down="recall($event, 1)" />
       <!-- Touch keyboards have no Esc and often no Enter that sends, so both keys also have buttons. -->
       <button v-if="can_interrupt" type="button" class="term-button is-stop" :aria-label="stop_label" :title="`${stop_label}（Esc）`" @click="interrupt"><span class="term-stop-square" /></button>
       <button type="button" class="term-button" :aria-label="t('发送')" :title="ENTER_SENDS ? t('发送（Enter）') : t('发送')" :disabled="!draft.trim() || sending || Boolean(unsupported)" @click="send">↑</button>
+    </div>
+    <!-- Background work is only counted on the message page (#13168); here one line under the input opens it. -->
+    <div v-if="background.length" class="term-background-line">
+      <button type="button" class="term-background-toggle" :class="{ 'is-running': background.some((task) => task.state === 'running') }" :aria-expanded="background_open" @click="toggle_background">{{ background_line }}</button>
     </div>
     <div class="term-hint">
       <span v-if="error" class="term-warn">{{ error }}</span>
@@ -742,6 +789,15 @@ function recall(event, step) {
 .term-button:disabled { opacity: .2; cursor: default; }
 .term-button.is-stop { background: var(--term-band); color: var(--term-red); }
 .term-stop-square { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
+/* Background work's event lines reuse the step lines; what it started lists under them like output, the run time is faint. */
+.term-bullet.is-stopped { color: var(--term-dim); }
+.term-event-after { color: var(--term-faint); }
+.term-tree .term-body { overflow: hidden; color: var(--term-dim); white-space: nowrap; text-overflow: ellipsis; }
+/* The line under the input box that opens the background panel, in the column with the hint under it. */
+.term-background-line { width: 100%; max-width: var(--term-width); margin-inline: auto; padding: 6px calc(var(--term-gutter) + 2px) 0; font-size: 12px; line-height: 18px; }
+.term-background-toggle { all: unset; cursor: pointer; color: var(--term-dim); }
+.term-background-toggle.is-running { color: var(--term-blue); }
+.term-background-toggle:is(:hover, :focus-visible) { text-decoration: underline; }
 .term-hint { min-height: 26px; padding: 4px calc(var(--term-gutter) + 2px) calc(10px + env(safe-area-inset-bottom)); color: var(--term-faint); font-size: 11.5px; line-height: 18px; }
 .term-unread { position: absolute; right: max(20px, calc((100% - var(--term-width)) / 2 + 20px)); bottom: 10px; padding: 3px 12px; border: 1px solid var(--term-border); border-radius: 999px;
   background: var(--term-bg); color: var(--term-text); font: inherit; font-size: 12px; cursor: pointer; }

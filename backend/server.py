@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from .entry_guard import (BROWSER_COOKIE_SECONDS, HELLO_PATH, OPEN_PATH, PUBLIC_PATHS, EntryPolicy, answer_hello, browser_admitted,
                           browser_cookie_name, open_link_key, proof, request_proven)
+from .analytics import seal_room, snapshot as analytics_snapshot
 from .texts import BoundaryError, ReadError, Text, error_body, incoming_text, load_texts, save_text, text_payload
 from .admin import (AdminError, admin_status, change_password, list_sessions, login_admin, logout_admin, register_admin,
                     revoke_sessions, session_valid, update_profile)
@@ -49,7 +50,7 @@ from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue
                         host_event, host_hidden_event, room_event_log, withdrawals)
 from .room_trace import message_trace
 from .free_room import review_capability, review_roster, checked_review_plan, save_review_plan, check_review_retry
-from .free_room import review_ready, advance_review, late_answer, execution_diffs
+from .free_room import review_ready, advance_review, late_answer, execution_changes, execution_changes_batch, execution_diffs
 from .free_room import checked_sequence, continue_sequence, sequence_view
 from . import questions
 from .visual_fences import fold_message_visuals
@@ -251,7 +252,7 @@ CASE WHEN messages.author='用户' THEN (
   SELECT CASE WHEN COUNT(parent_id)=COUNT(*) AND MIN(parent_id)=MAX(parent_id) THEN MIN(parent_id) END
   FROM (SELECT (SELECT MIN(original.message_id) FROM member_requests original
       JOIN messages parent ON parent.id=original.message_id AND parent.author='用户'
-      WHERE (original.execution_id=i.execution_id OR original.id IN
+      WHERE original.room_id=messages.room_id AND (original.execution_id=i.execution_id OR original.id IN
         (SELECT request_id FROM retried_requests WHERE execution_id=i.execution_id))
         AND original.message_id<messages.id AND c.steer=1 AND i.status!='failed') AS parent_id
     FROM member_requests target LEFT JOIN execution_interjections i ON i.room_id=messages.room_id
@@ -285,7 +286,8 @@ LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
 LEFT JOIN message_timings AS timing ON timing.message_id=messages.id
 LEFT JOIN (SELECT r.answer_id, MIN(r.execution_id) AS execution_id, MIN(r.message_id) AS request_message_id,
   MAX(""" + LAYOUT_AFTER_SQL + """) AS layout_after, MIN(""" + LAYOUT_AT_SQL + """) AS layout_at
-  FROM member_requests r WHERE r.answer_id IS NOT NULL GROUP BY r.answer_id HAVING MIN(r.execution_id) IS NOT NULL) AS answered
+  FROM member_requests r WHERE r.room_id=? AND r.answer_id IS NOT NULL
+  GROUP BY r.answer_id HAVING MIN(r.execution_id) IS NOT NULL) AS answered
   ON answered.answer_id=messages.id"""
 # Messages the owner took back leave AI reads; the page asks for them with withdrawn=include to keep them in place.
 INCLUDE_WITHDRAWN = "include"
@@ -364,6 +366,12 @@ def room_read_view(connection, room, token=""):
         _hide_after_boundary(request, boundary, ("message_id", "answer_id", "source_message_id", "after_message_id", "layout_after"))
         _hide_question(request, boundary, reader)
     for execution in free.get("executions", []):
+        if reader is None or execution.get("member") != reader:
+            summary = execution.get("change_summary") or {}
+            summary.pop("changes", None)
+            summary.pop("diff_stats", None)
+            if summary.get("count"):
+                summary["unavailable"] = True
         _hide_execution_after_boundary(execution, boundary)
     executions_by_id = {execution.get("id"): execution for execution in free.get("executions", [])}
     for member in free.get("members", []):
@@ -1657,6 +1665,7 @@ def manage_room(connection, room_id, action, payload):
         feedback = connection.execute("SELECT COUNT(*) FROM scheduler_feedback_cases WHERE room_id=?", (room_id,)).fetchone()[0]
         if feedback and not hosted_instance():
             counts.append({"kind": "feedback_cases", "state": "kept", "count": feedback})
+        seal_room(connection, room_id, int(time.time()))
         delete_room_records(connection, room_id, keep_feedback=not hosted_instance())
         connection.execute("""INSERT OR REPLACE INTO room_destructions (room_id,title,control_hash,status,expect_runner,automatic,items,sessions,created_at)
             VALUES (?,?,?,'cleaning',?,?,?,?,?)""", (room_id, room["title"], control[0] if control else "", int(expect_runner),
@@ -2676,7 +2685,7 @@ def append_free_message(connection, room, payload, actor):
         check_captured_reply(payload)
     expected.update(message_summary(payload, expected))
     identifiers = attachment_ids(payload)
-    previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone()
+    previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, room_id, submission_id)).fetchone()
     if previous:
         previous = message_with_attachments(connection, previous)
         if ((previous.get("relay_room") or None) != (payload.get("relay") or {}).get("room_id")
@@ -2725,7 +2734,7 @@ def append_free_message(connection, room, payload, actor):
         after_free_message(connection, room_id, cursor.lastrowid, actor, payload)
     if payload.get("proactive") is not True:
         complete_session_requests(connection, room_id, payload, actor, cursor.lastrowid)
-    saved_message = connection.execute(f"{MESSAGE_QUERY} WHERE messages.id=?", (cursor.lastrowid,)).fetchone()
+    saved_message = connection.execute(f"{MESSAGE_QUERY} WHERE messages.id=?", (room_id, cursor.lastrowid)).fetchone()
     if waiting:
         enqueue_share(connection, room_id, queued_share, cursor.lastrowid, waiting)
         return {"message": message_with_attachments(connection, saved_message), "duplicate": False, "queue": queue_view(connection, room_id)}
@@ -2762,7 +2771,8 @@ def append_free_moderation(connection, room, payload, actor):
                 "submitted_by": author, "source": payload.get("source") if payload.get("source") in ("cli", "api") else "cli"}
     expected.update(message_summary(payload, expected))
     identifiers = attachment_ids(payload)
-    previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room["id"], submission_id)).fetchone()
+    previous = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?",
+                                  (room["id"], room["id"], submission_id)).fetchone()
     if previous:
         previous = message_with_attachments(connection, previous)
         if any(previous[key] != renumbered_expected(expected, payload, previous)[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by")) or [item["id"] for item in previous["attachments"]] != identifiers:
@@ -2777,7 +2787,7 @@ def append_free_moderation(connection, room, payload, actor):
     connection.execute("INSERT INTO message_summaries (message_id,text,author) VALUES (?,?,?)",
                        (cursor.lastrowid, "", ""))
     link_message_attachments(connection, room["id"], cursor.lastrowid, identifiers, text, payload)
-    saved_message = connection.execute(f"{MESSAGE_QUERY} WHERE messages.id=?", (cursor.lastrowid,)).fetchone()
+    saved_message = connection.execute(f"{MESSAGE_QUERY} WHERE messages.id=?", (room["id"], cursor.lastrowid)).fetchone()
     return {"message": message_with_attachments(connection, saved_message), "duplicate": False}
 
 
@@ -3108,7 +3118,8 @@ def latest_messages(connection, room_id, params, where, values, size, bounded=Fa
     if before:
         where += " AND messages.id<?"
         values = [*values, before]
-    rows = connection.execute(f"{MESSAGE_QUERY} WHERE {where} ORDER BY messages.id DESC LIMIT ?", [*values, size + 1]).fetchall()
+    rows = connection.execute(f"{MESSAGE_QUERY} WHERE {where} ORDER BY messages.id DESC LIMIT ?",
+                              [room_id, *values, size + 1]).fetchall()
     has_earlier = len(rows) > size
     shown = member_display_names(connection, room_id)
     messages = [{**message, "author_label": shown.get(message["author"], message["author"])}
@@ -3123,7 +3134,14 @@ def latest_messages(connection, room_id, params, where, values, size, bounded=Fa
 
 def query_messages(connection, room_id, params, token=""):
     """Read one bounded page; incremental cursors advance only through returned rows."""
-    require_room(connection, room_id)
+    room = connection.execute("""SELECT EXISTS(
+        SELECT 1 FROM discussion_sessions WHERE room_id=rooms.id AND status='active'
+        ) AS active_session FROM rooms WHERE id=?""", (room_id,)).fetchone()
+    if room is None:
+        raise LookupError(Text('房间不存在'))
+    # Expiring a discussion can invalidate the execution or request used to read its context.
+    if room["active_session"] and enforce_session_limits(connection, room_id):
+        connection.commit()
     page = max(1, int(params.get("page", 1)))
     size = min(MAX_PAGE_SIZE, max(1, int(params.get("limit", PAGE_SIZE))))
     cutoff = session_message_access(connection, room_id, params, token)
@@ -3136,8 +3154,12 @@ def query_messages(connection, room_id, params, token=""):
         values.append(cutoff)
     if "before" in params:
         return latest_messages(connection, room_id, params, where, values, size, bounded=cutoff is not None)
-    total = connection.execute(f"SELECT COUNT(*) FROM ({MESSAGE_QUERY} WHERE {where})", values).fetchone()[0]
-    rows = connection.execute(f"{MESSAGE_QUERY} WHERE {where} ORDER BY messages.id LIMIT ? OFFSET ?", [*values, size + 1, (page - 1) * size]).fetchall()
+    total = connection.execute(f"""SELECT COUNT(*) FROM messages
+        LEFT JOIN message_details AS details ON details.message_id=messages.id
+        LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
+        WHERE {where}""", values).fetchone()[0]
+    rows = connection.execute(f"{MESSAGE_QUERY} WHERE {where} ORDER BY messages.id LIMIT ? OFFSET ?",
+                              [room_id, *values, size + 1, (page - 1) * size]).fetchall()
     shown = member_display_names(connection, room_id)
     messages = [{**message, "author_label": shown.get(message["author"], message["author"])}
                 for message in (message_with_attachments(connection, row) for row in rows[:size])]
@@ -3269,7 +3291,7 @@ def get_message(connection, room_id, message_id, params=None, token=""):
                             code="reading_boundary", requested_message_id=message_id,
                             read_scope={"request_read_until": cutoff, "boundary_applied": True})
     where, values = message_filters(room_id, params)
-    row = connection.execute(f"{MESSAGE_QUERY} WHERE {where} AND messages.id=?", [*values, message_id]).fetchone()
+    row = connection.execute(f"{MESSAGE_QUERY} WHERE {where} AND messages.id=?", [room_id, *values, message_id]).fetchone()
     if row is None:
         raise ReadError(Text('消息不存在'), code="not_available", requested_message_id=message_id)
     return message_with_attachments(connection, row)
@@ -3560,6 +3582,7 @@ class DiscussionServer(ThreadingHTTPServer):
         make every visitor the administrator, and it never offers local launch.
         """
         self.database = Path(database)
+        self.analytics_cache = {}
         # The server whose update stream this one shares; a site's local and remote entries see the same changes.
         self.hub = hub or self
         self.updates = threading.Condition()
@@ -4263,7 +4286,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if (not self.server.local_site or self.client_address[0] != "127.0.0.1" or not isinstance(expected, str)
                 or not re.fullmatch(r"[a-f0-9]{64}", credential) or not hmac.compare_digest(token_hash(credential), expected)):
             raise PermissionError(Text('本机中转凭据无效，请在电脑上重新连接网站'))
-        if parts[:1] != ["api"] or parts[1:2] not in (["rooms"], ["folders"], ["revisions"], ["sites"]):
+        if parts[:1] != ["api"] or parts[1:2] not in (["rooms"], ["folders"], ["revisions"], ["sites"], ["analytics"]):
             raise PermissionError(Text('本机中转不允许访问该地址'))
         return True
 
@@ -4377,6 +4400,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond({"ok": True})
         if parts[:2] == ["api", "admin"]:
             return self.handle_admin_api(connection, parts, method)
+        if parts == ["api", "analytics"] and method == "GET":
+            if self.headers.get("X-Discussion-Token") is not None or not (self.bridged or self.admin_session(connection)):
+                raise PermissionError(Text('需要管理员身份'))
+            return self.respond(analytics_snapshot(connection, params, self.server.analytics_cache, int(time.time())))
         if parts == ["api", "scheduler-feedback"] and method == "GET":
             if not self.admin_session(connection):
                 raise AdminError(Text('需要登录管理员账号'), 401)
@@ -4614,6 +4641,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = queue_action(connection, room_id, token, self.read_payload(), post_queued, check_queued, interrupt_for_message)
             connection.commit()
             return self.respond(result)
+        if parts[3:] == ["executions", "changes"] and method == "GET":
+            return self.respond(execution_changes_batch(connection, room_id, params.get("ids", ""), token))
         if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"], ["dispatches"], ["host-checkin"], ["room-link"], ["room-relay-sent"], ["host-actions"]):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["attachments"]:
@@ -4965,6 +4994,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = adopt_recommendation(connection, room_id, token, int(parts[4]), self.read_payload())
         elif len(parts) == 6 and parts[3] == "executions" and parts[5] == "notes" and method == "GET":
             result = execution_notes(connection, room_id, int(parts[4]), token)
+        elif len(parts) == 6 and parts[3] == "executions" and parts[5] == "changes" and method == "GET":
+            result = execution_changes(connection, room_id, int(parts[4]), token)
         elif len(parts) == 6 and parts[3] == "executions" and parts[5] == "diff" and method == "GET":
             result = execution_diffs(connection, room_id, int(parts[4]), token)
         elif len(parts) == 6 and parts[3] == "executions" and parts[5] == "late-answer" and method == "GET":

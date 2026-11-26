@@ -137,6 +137,13 @@ class AdminTests(unittest.TestCase):
         locked_until, updated_at = self.sql("SELECT locked_until, updated_at FROM admin_attempts WHERE source='203.0.113.9'")[0]
         self.assertEqual(locked_until - updated_at, 600)
 
+    def test_analytics_requires_site_admin_session(self):
+        self.register()
+        session = self.login()
+        self.assertEqual(self.request("/api/analytics", admin=session)[0], 200)
+        self.assertEqual(self.request("/api/analytics")[0], 403)
+        self.assertEqual(self.request("/api/analytics", admin=session, token="room-member")[0], 403)
+
     def test_logins_expire_list_their_browser_and_can_be_ended(self):
         first = self.register()
         second = self.login()
@@ -342,6 +349,12 @@ class RelayBridgeTests(unittest.TestCase):
             response = error
         with response:
             return response.status, json.load(response)
+
+    def test_analytics_local_and_relayed_owner(self):
+        self.assertEqual(self.request("/api/analytics")[0], 200)
+        self.assertEqual(self.request("/api/analytics", bridge=self.BRIDGE)[0], 200)
+        self.assertEqual(self.request("/api/analytics", bridge=self.BRIDGE, token="room-member")[0], 403)
+        self.assertEqual(self.request("/api/analytics", bridge="ef"*32)[0], 403)
 
     def test_bridge_writes_as_owner_only_with_a_valid_credential_on_room_routes(self):
         owner = "owner-credential" * 3

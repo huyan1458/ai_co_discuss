@@ -889,6 +889,7 @@
   "关闭预览": "Close preview",
   "文件超过 1 MB，只记录了改动，没有保存逐行差异": "Over 1 MB: the change is recorded, its line diff is not",
   "正在读取改动…": "Reading changes…",
+  "暂不可见": "Unavailable for now",
   "读取改动失败：{value1}": "Could not read changes: {value1}",
   "改动较长，只显示前面一部分": "Long change; only the first part is shown",
   "改动太长，无法显示差异": "This change is too long to show",

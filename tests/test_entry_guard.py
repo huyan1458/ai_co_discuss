@@ -99,6 +99,10 @@ class EntryGuardTest(ProtectedInstance):
         status, _, data = read_response(sock)
         return status, json.loads(data or b"null")
 
+    def test_analytics_through_hosted_account_entry(self):
+        self.assertEqual(self.proven("/api/analytics")[0], 200)
+        self.assertEqual(self.proven("/api/analytics", token="room-member")[0], 403)
+
     def test_passing_the_entry_does_not_lift_a_member_to_the_room_owner(self):
         owner, member = secrets.token_hex(16), secrets.token_hex(16)
         status, room = self.proven("/api/rooms", "POST", {"title": "托管房间", "goal": "核对角色", "mode": "free",

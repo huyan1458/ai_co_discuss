@@ -105,11 +105,25 @@ let check_timer;
 let settling = false;
 let rollout_path = '';
 
-/** Track only objects started by the current parent turn. */
+/**
+ * Track only objects started by the current parent turn. A command shows as background work only once it outlives its
+ * turn: Codex turns any command that runs past a few seconds into a terminal the model then polls, and those ordinary
+ * steps would flood the list (user 2026-11-26, #13008). Sub-agents show at once.
+ */
 function background_start(id, kind, title, origin) {
   if (residual || running.has(id)) return;
-  running.set(id, { id, kind, title, origin });
-  emit({ type: 'background.started', id, kind, title });
+  const shown = kind !== 'command' || idle;
+  running.set(id, { id, kind, title, origin, shown });
+  if (shown) emit({ type: 'background.started', id, kind, title });
+}
+
+/** Show the commands still running when the parent turn ended. */
+function show_outliving_commands() {
+  for (const work of running.values()) {
+    if (work.shown) continue;
+    work.shown = true;
+    emit({ type: 'background.started', id: work.id, kind: work.kind, title: work.title });
+  }
 }
 
 /** The provider reports completion on the original turn even after it ended. */
@@ -120,7 +134,7 @@ function background_end(id, origin, status, output = '') {
   if (ended_turns.has(origin) && status !== 'stopped') {
     reports.push({ id, status, summary: String(work.title || id).slice(0, 300), rootTurnId: origin, ...(output ? { output } : {}) });
   }
-  emit({ type: 'background.ended', id, status, pending: Boolean(reports.length || offered.length) });
+  if (work.shown) emit({ type: 'background.ended', id, status, pending: Boolean(reports.length || offered.length) });
   if (idle && !settling) setImmediate(next_report);
 }
 
@@ -200,6 +214,7 @@ async function complete_turn(params) {
   // If an earlier poll was in flight, take a fresh snapshot after the parent turn ended.
   if (checking) await checking;
   await check_terminals(deadline);
+  show_outliving_commands();
   settling = false;
   const waiting = Boolean(task_options.background && (running.size || reports.length));
   emit({ type: 'turn.completed', usage: params.usage || {}, waiting });

@@ -11,6 +11,7 @@ Start with [Concepts and terminology](concepts.md), then follow [Your first room
 | [Discussions](discussion.md) | Start a structured discussion, set limits, pause or skip a turn, and use `discuss-report` to produce a report linked to the original messages. |
 | [Goal](goal.md) | Keep the host working toward a goal, set budgets and idle time, and receive WeChat reminders when a decision needs your input. |
 | [Workflows](workflows.md) | Install bundled workflows, activate one in a room, release its members, and use `workflow-creator` with **Full host control**. |
+| [Analytics](analytics.md) | Review cross-room weekly or monthly reports, folder activity, parallel room peaks, member scorecards, and bottlenecks, and export a local PNG card. |
 | [Members](members.md) | Invite local AI tools or model APIs, resume sessions, change models and prompts, set project permissions, and connect an existing conversation manually. |
 | [Members on other computers](external-members.md) | Lend or borrow an AI, set access and loan duration, and renew or revoke access. |
 | [Using your phone away from home](remote.md) | Bind your computer to an online site, pair a phone or tablet, renew access with a passkey, and see what you can control remotely. |

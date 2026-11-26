@@ -1,93 +1,86 @@
 <script setup>
 /**
- * The background work an execution's software left running or finished (sub-agents, background commands, monitors,
- * schedules), as its adapter reported it, under the working card. Work still running gets a line each; work that has
- * ended folds into one quiet summary line that opens to the list. The list is generic; which software reported it is
- * never shown or interpreted here. It keeps its own minute clock so the rest of the card never re-renders.
+ * The background work panel of the private chat, opened from the line under the input box, laid out as Claude Code's
+ * background panel: a titled block on a coloured rule, the running work grouped by kind (`●`, title, state), the ended
+ * work folded under "较早的 (N)", and a key hint at the foot. It only shows: a single item cannot be stopped from here.
+ * The list is generic; which software reported it is never shown or interpreted here. Its own clock keeps the times
+ * current without re-rendering the page.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { t } from "./i18n.js";
+import { KIND_LABELS, KIND_ORDER, running_text, shown_title } from "./background-tasks.js";
 
 const props = defineProps({
   /** `[{id, kind, title, state, started_at, ended_at, next_at, schedule}]`, times in milliseconds (0 when unknown). */
   tasks: { type: Array, default: () => [] },
 });
-const KIND_LABELS = { agent: t('子代理'), command: t('后台命令'), monitor: t('监视'), schedule: t('定时') };
-const KIND_ICONS = { agent: "i-lucide-bot", command: "i-lucide-terminal", monitor: "i-lucide-radar", schedule: "i-lucide-alarm-clock" };
+const emit = defineEmits(["close"]);
 const STATE_LABELS = { done: t('已完成'), failed: t('失败'), stopped: t('已停止') };
-// Shell set-up a command line opens with (PowerShell encoding and environment settings) says nothing about what it does.
-const SHELL_PREAMBLE = /^(?:\s*(?:\$env:[\w.]+|\$OutputEncoding|\[Console\]::\w+)\s*=\s*(?:'[^']*'|"[^"]*"|[^;]+);)+\s*/i;
 const now = ref(Date.now());
-const open = ref(false);
+const earlier = ref(false);
+const panel = ref(null);
 let timer = 0;
-onMounted(() => { timer = setInterval(() => { now.value = Date.now(); }, 30_000); });
+onMounted(() => {
+  timer = setInterval(() => { now.value = Date.now(); }, 30_000);
+  // Esc closes it, as the panel takes the input's place.
+  nextTick(() => panel.value?.focus());
+});
 onBeforeUnmount(() => clearInterval(timer));
 
 const running = computed(() => props.tasks.filter((task) => task.state === "running"));
 const ended = computed(() => props.tasks.filter((task) => task.state !== "running"));
-const ended_text = computed(() => {
-  const failed = ended.value.filter((task) => task.state === "failed").length;
-  return failed ? t('{value1} 项后台工作已结束，{value2} 项失败', { value1: ended.value.length, value2: failed })
-    : t('{value1} 项后台工作已结束', { value1: ended.value.length });
-});
-
-/** Whole minutes as "3 分钟", under a minute as "不到 1 分钟". */
-function minutes(ms) {
-  const value = Math.floor(Math.max(0, ms) / 60_000);
-  return value ? t('{value1} 分钟', { value1: value }) : t('不到 1 分钟');
-}
-/** What the line shows: a command without its shell set-up, anything else as the software described it. */
-function shown_title(task) {
-  return (task.kind === "command" ? task.title.replace(SHELL_PREAMBLE, "") : task.title) || KIND_LABELS[task.kind] || "";
-}
-/** The task's state in a few words: how long it has run, when a schedule fires next, or how it ended. */
-function state_text(task) {
-  if (task.state !== "running") return STATE_LABELS[task.state] || "";
-  if (task.kind === "schedule") {
-    const next = task.next_at > now.value ? t('下次 {value1}', { value1: new Date(task.next_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }) : "";
-    return [task.schedule, next].filter(Boolean).join(" · ");
-  }
-  return task.started_at ? minutes(now.value - task.started_at) : "";
-}
+const groups = computed(() => KIND_ORDER.map((kind) => ({ kind, label: KIND_LABELS[kind], tasks: running.value.filter((task) => task.kind === kind) }))
+  .filter((group) => group.tasks.length));
+const hover = (task) => `${KIND_LABELS[task.kind] || ""}：${task.title}`;
 </script>
 
 <template>
-  <div class="background-tasks" role="group" :aria-label="t('后台工作')">
-    <ul v-if="running.length" class="background-task-list">
-      <li v-for="task in running" :key="task.id" :class="`is-${task.kind}`" :title="`${KIND_LABELS[task.kind] || KIND_LABELS.command}：${task.title}`">
-        <UIcon :name="KIND_ICONS[task.kind] || KIND_ICONS.command" class="background-task-icon" :aria-label="KIND_LABELS[task.kind] || KIND_LABELS.command" />
-        <span class="background-task-title">{{ shown_title(task) }}</span>
-        <span class="background-task-state">{{ state_text(task) }}</span>
-      </li>
-    </ul>
+  <section ref="panel" class="bg-panel" tabindex="-1" :aria-label="t('后台工作')" @keydown.esc.stop.prevent="emit('close')">
+    <div class="bg-title">{{ t('后台工作') }}</div>
+    <div class="bg-sub">{{ t('{value1} 个运行中 · {value2} 个已结束', { value1: running.length, value2: ended.length }) }}</div>
+    <div v-for="group in groups" :key="group.kind" class="bg-group">
+      <div class="bg-group-name">{{ group.label }}</div>
+      <div v-for="task in group.tasks" :key="task.id" class="bg-row" :title="hover(task)">
+        <span class="bg-bullet">●</span><span class="bg-name">{{ shown_title(task) }}</span><span class="bg-state">{{ running_text(task, now) }}</span>
+      </div>
+    </div>
     <template v-if="ended.length">
-      <button type="button" class="background-task-summary" :class="{ 'is-failed': ended.some((task) => task.state === 'failed') }" :aria-expanded="open" @click="open = !open">
-        <span>{{ ended_text }}</span><UIcon name="i-lucide-chevron-down" class="background-task-chevron" :class="{ 'is-open': open }" />
-      </button>
-      <ul v-if="open" class="background-task-list is-ended">
-        <li v-for="task in ended" :key="task.id" :class="[`is-${task.kind}`, `is-${task.state}`]" :title="`${KIND_LABELS[task.kind] || KIND_LABELS.command}：${task.title}`">
-          <UIcon :name="KIND_ICONS[task.kind] || KIND_ICONS.command" class="background-task-icon" :aria-label="KIND_LABELS[task.kind] || KIND_LABELS.command" />
-          <span class="background-task-title">{{ shown_title(task) }}</span>
-          <span class="background-task-state">{{ state_text(task) }}</span>
-        </li>
-      </ul>
+      <button type="button" class="bg-earlier" :aria-expanded="earlier" @click="earlier = !earlier">{{ t('较早的（{value1}）', { value1: ended.length }) }}<span aria-hidden="true">{{ earlier ? " ⌄" : " ›" }}</span></button>
+      <div v-if="earlier" class="bg-group is-ended">
+        <div v-for="task in ended" :key="task.id" class="bg-row" :title="hover(task)">
+          <span class="bg-bullet" :class="`is-${task.state}`">●</span><span class="bg-name">{{ shown_title(task) }}</span><span class="bg-state">{{ STATE_LABELS[task.state] || "" }}</span>
+        </div>
+      </div>
     </template>
-  </div>
+    <div class="bg-hint">{{ t('esc 关闭 · 单项后台工作不能在这里停止') }}</div>
+  </section>
 </template>
 
 <style scoped>
-.background-tasks { margin-top: 4px; display: grid; gap: 2px; font-size: 12px; line-height: 20px; color: var(--ui-text-muted); }
-.background-task-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.background-task-list li { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.background-task-icon { flex: none; width: 13px; height: 13px; }
-.background-task-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-text); }
-.background-task-list li.is-command .background-task-title, .background-task-list li.is-monitor .background-task-title { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
-.background-task-state { flex: none; font-variant-numeric: tabular-nums; }
-.background-task-list.is-ended .background-task-title { color: var(--ui-text-muted); }
-.background-task-list li.is-failed .background-task-state { color: var(--ui-error); }
-.background-task-summary { display: inline-flex; align-items: center; gap: 2px; justify-self: start; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
-.background-task-summary:hover { color: var(--ui-text); }
-.background-task-summary.is-failed { color: var(--ui-error); }
-.background-task-chevron { width: 12px; height: 12px; transition: transform 0.15s; }
-.background-task-chevron.is-open { transform: rotate(180deg); }
+/* Takes the input box's place in the private chat's column (PrivateChat.vue), on a coloured rule as in Claude Code. The
+   `--term-*` values are that page's own. A long list scrolls inside, the page around it stays. */
+.bg-panel { flex: none; width: calc(100% - 2 * var(--term-gutter, 24px)); max-width: calc(var(--term-width, 960px) - 2 * var(--term-gutter, 24px));
+  max-height: min(60vh, 420px); margin: 0 auto; padding: 10px 2px 2px; overflow-y: auto; scrollbar-width: thin; outline: none;
+  border-top: 1px solid var(--term-blue, var(--ui-primary)); color: var(--term-text, var(--ui-text)); font-size: 13px; line-height: 20px; }
+.bg-title { color: var(--term-blue, var(--ui-primary)); }
+.bg-sub { color: var(--term-dim, var(--ui-text-muted)); }
+.bg-group { margin-top: 14px; padding-left: 2ch; }
+.bg-group-name { color: var(--term-text, var(--ui-text)); }
+/* Bullet, title (cut short), state: the state sits next to the title, not at the far edge. */
+.bg-row { display: grid; grid-template-columns: 2ch minmax(0, 56ch) auto; column-gap: 2ch; justify-content: start; }
+.bg-bullet { color: var(--term-dim, var(--ui-text-muted)); text-align: center; }
+.bg-bullet.is-done { color: var(--term-green); }
+.bg-bullet.is-failed { color: var(--term-red); }
+.bg-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bg-state { color: var(--term-dim, var(--ui-text-muted)); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bg-group.is-ended { margin-top: 4px; }
+.bg-group.is-ended .bg-name { color: var(--term-dim, var(--ui-text-muted)); }
+.bg-earlier { all: unset; display: block; margin-top: 14px; padding-left: 6ch; cursor: pointer; }
+.bg-earlier:hover, .bg-earlier:focus-visible { text-decoration: underline; }
+.bg-hint { margin-top: 14px; color: var(--term-faint, var(--ui-text-dimmed)); font-size: 12px; }
+@media (max-width: 640px) {
+  .bg-row { grid-template-columns: 2ch minmax(0, 1fr) auto; column-gap: 1ch; }
+  .bg-group { padding-left: 0; }
+  .bg-earlier { padding-left: 3ch; }
+}
 </style>

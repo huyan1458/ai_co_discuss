@@ -9,12 +9,15 @@ import ChangelogDialog from "./ChangelogDialog.vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
 import InvitedRooms from "./InvitedRooms.vue";
 import { use_workflow_library, workflow_key, workflow_problem } from "./workflow-library.js";
+import { use_analytics_page } from "./analytics-state.js";
 import { t } from "./i18n.js";
 
 /** The room sidebar, shared by the docked desktop column and the tablet and phone drawer. */
-const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions", "workflows", "invited", "settings"]);
+const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions", "workflows", "invited", "analytics", "settings"]);
 const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
+const { page_open: analytics_open } = use_analytics_page();
+const can_view_analytics = computed(() => !view.value.share && Boolean(view.value.admin?.local || view.value.admin?.logged_in));
 const library = use_workflow_library();
 const {
   workflows, global_workflows, project_workflows, project_roots,
@@ -137,6 +140,14 @@ function row_icon(item) {
         </template>
         <p v-else class="channel-directory-empty">{{ t("连接本机服务后管理工作流") }}</p>
       </nav>
+      <!-- Owner-only cross-room analytics entry, last in the left navigation, below workflows (2026-11-26 user request). -->
+      <nav v-if="can_view_analytics" :aria-label="t('统计')" class="channel-room-list channel-analytics-nav">
+        <div class="channel-room-row" :class="{ active: analytics_open }">
+          <button type="button" class="channel-room-select" :aria-current="analytics_open ? 'page' : undefined" @click="emit('analytics')">
+            <UIcon name="i-lucide-bar-chart-3" /><span>{{ t("统计") }}</span>
+          </button>
+        </div>
+      </nav>
     </div>
   <footer class="channel-sidebar-footer">
     <button type="button" class="channel-self-button" :aria-label="t('账号与设置：{name}', { name: bridge.display_name(author) }) + (account_status ? t('，') + account_status : '')" @click="emit('settings')">
@@ -160,4 +171,8 @@ function row_icon(item) {
 .channel-workflow-group { margin: 8px 0 2px; padding: 0 8px; overflow: hidden; color: var(--ui-text-dimmed); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .channel-workflow-group:first-child { margin-top: 2px; }
 .channel-workflow-empty { margin: 0; padding: 4px 8px 6px; color: var(--ui-text-dimmed); font-size: 12px; }
+.channel-analytics-nav { margin-top: 8px; }
+.channel-analytics-nav .channel-room-row { grid-template-columns: minmax(0, 1fr); padding-left: 8px; }
+.channel-analytics-nav .channel-room-select { gap: 7px; font-weight: 500; }
+.channel-analytics-nav .channel-room-select :deep([class*="icon"]) { width: 14px; height: 14px; flex-shrink: 0; }
 </style>

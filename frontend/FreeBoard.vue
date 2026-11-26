@@ -19,10 +19,9 @@ import { format_duration } from "./LimitPicker.vue";
 import ProgressBoard from "./ProgressBoard.vue";
 import SpeakingOrder from "./SpeakingOrder.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
-import MemberTextDialog from "./MemberTextDialog.vue";
-import { MAX_EXPERT_PROMPT } from "../runner/expert_prompts.mjs";
 import MemberNameEdit from "./MemberNameEdit.vue";
-import { busy, member_actions } from "./member-actions.js";
+import { busy, member_actions, project_files } from "./member-actions.js";
+import { access_label, access_options } from "../runner/expert_prompts.mjs";
 import MemoBlock from "./memo-block.js";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import { copy_seat_link, declined, external_of, external_tag, revoke_member } from "./external-members.js";
@@ -257,18 +256,41 @@ function member_row_key(member, state) {
     view.value.access, room.value.session?.status, view.value.launch.available]);
 }
 
+/**
+ * The member's project files as a submenu, so the owner switches them from the rail without opening 成员与设置
+ * (user 2026-11-26, #13173); the same rules as that page's switch decide whether it can change.
+ */
+function access_menu(member) {
+  const saved = view.value.launch.room_models?.room_id === room.value.id ? view.value.launch.room_models : null;
+  const files = project_files(member, saved, view.value);
+  if (!files.value) return [];
+  const adapter = saved.participants[member.name].adapter;
+  return [{ label: t("项目文件"), icon: "i-lucide-folder-lock", disabled: !files.editable,
+    children: access_options(adapter, bridge.full_only_hint?.(adapter)).map((option) => ({
+      type: "checkbox", label: t(option.label), checked: files.value === option.value, disabled: option.disabled,
+      onSelect: () => switch_access(member, files.value, option.value) })) }];
+}
+
+/** Switch one member's project files; the change applies from its next request and keeps its session. */
+async function switch_access(member, current, project_access) {
+  if (current === project_access) return;
+  try {
+    if (!await bridge.set_member_access({ name: member.name, project_access })) return;
+    bridge.notify("info", t("{name} 已改为{access}，下次处理请求起生效。", { name: bridge.display_name(member.name), access: t(access_label(project_access)) }));
+  } catch (error) { bridge.notify("error", error.message); }
+}
+
 /** The rail's quick entry to a member's actions; the room overview lays the same list out in full. */
 /**
  * The row's menu ("…", right-click, and a tap on the row on a touch screen), led by locating the latest speech: a click
  * on the row no longer does it (user 2026-11-25, #10558). A touch screen has no hover card, so the menu also carries
- * what only the card showed: the description, read-only on top, and the member's own prompt (user 2026-11-25, #11353).
+ * what only the card showed: the description, read-only on top (user 2026-11-25, #11353). The member's own prompt is
+ * set in 成员与设置 with its model and access (user 2026-11-26, #13067).
  */
 function member_menu(member) {
   const locate = { label: t("定位最新发言"), icon: "i-lucide-locate-fixed", onSelect: () => locate_member(member.name) };
   const description = !can_hover && room.value.descriptions?.[member.name];
-  const prompt = !can_hover && can_prompt(member) && !room.value.archived
-    ? [{ label: t("专属提示词"), icon: "i-lucide-scroll-text", onSelect: () => open_prompt(member.name) }] : [];
-  return [...(description ? [[{ type: "label", label: description, class: "pb-menu-description" }]] : []), [locate, ...prompt],
+  return [...(description ? [[{ type: "label", label: description, class: "pb-menu-description" }]] : []), [locate, ...access_menu(member)],
     ...member_actions(member, { view: view.value, act, describe,
     external: (target) => { external_member.value = target; external_reinvite.value = false; external_open.value = true; },
     revoke: (target) => revoke_member(bridge, act, target),
@@ -306,15 +328,6 @@ const describing = ref(""), describing_saving = ref(false);
 const describing_anchor = ref(null);
 const board = ref(null);
 const can_describe = computed(() => Boolean(view.value.access?.can_manage));
-// The member whose own prompt (专属提示词) is open: only a member this computer wakes has one; a workflow member's comes
-// from its card and is shown read-only.
-const prompting = ref(""), prompt_draft = ref(""), prompt_saving = ref(false);
-const local_profile = (name) => view.value.launch.room_models?.participants?.[name] || null;
-const prompt_saved = computed(() => local_profile(prompting.value)?.system_prompt || "");
-function can_prompt(member) {
-  const profile = local_profile(member.name);
-  return Boolean(can_describe.value && member.access === "runner" && profile && profile.project_access !== "own" && !external_of(member));
-}
 const ANCHORED_WIDTH = 420, ANCHORED_HEIGHT = 560, ANCHOR_GAP = 8, ANCHOR_MARGIN = 16;
 
 /** Open the name and description editor of one member. */
@@ -386,24 +399,6 @@ function card_edit() {
   const { name } = card.value;
   card_close();
   describe(name);
-}
-function card_prompt() {
-  const { name } = card.value;
-  card_close();
-  open_prompt(name);
-}
-function open_prompt(name) {
-  prompt_draft.value = local_profile(name)?.system_prompt || "";
-  prompting.value = name;
-}
-/** Closes at once; the bridge shows the new text until the local service confirms, and a refusal is told and undone. */
-async function save_prompt() {
-  const name = prompting.value, system_prompt = prompt_draft.value.trim();
-  prompting.value = "";
-  prompt_saving.value = true;
-  try { await bridge.set_member_prompt({ name, system_prompt }); }
-  catch (error) { bridge.notify("error", error.message); }
-  finally { prompt_saving.value = false; }
 }
 // The member whose row menu a tap opened on a touch screen.
 const menu_open = ref("");
@@ -519,7 +514,6 @@ watch(() => room.value.id, () => { starting.value = false; });
       </ul>
       <UButton v-if="!room.archived" icon="i-lucide-plus" :label="t('邀请 AI 加入')" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block pb-action-add" @click="invite_workflow_id = ''; inviting = true" />
     </section>
-    <LinkedRooms />
     <section v-if="!room.archived && !discussion && !goal" class="pb-actions pb-start-actions" :aria-label="t('操作')">
       <div class="pb-start-pair">
         <UButton icon="i-lucide-messages-square" :label="t('开启讨论')" size="sm" color="neutral" variant="outline" class="pb-action pb-restart" :title="t('由主持人推进成员轮流发言，到上限或结束时停止')" :disabled="!can_start" @click="starting = true" />
@@ -528,6 +522,7 @@ watch(() => room.value.id, () => { starting.value = false; });
       <p v-if="!can_start" class="pb-free-note">{{ t('开启讨论或 Goal 需要一位由本机唤醒的 AI 主持人。') }}</p>
     </section>
     <section v-if="has_history" class="pb-actions pb-history-actions" :aria-label="t('共识与讨论记录')"><UButton icon="i-lucide-history" :label="t('共识与讨论记录')" size="sm" color="neutral" variant="outline" class="pb-action pb-action-block" @click="emit('history')" /></section>
+    <LinkedRooms />
   <StartDiscussionDialog v-model:open="starting" />
   <StartGoalDialog v-model:open="goal_dialog" :edit="Boolean(goal)" :initial="goal" />
   <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" :description="t('新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。')" />
@@ -535,11 +530,6 @@ watch(() => room.value.id, () => { starting.value = false; });
   <MemberDescriptionDialog :open="Boolean(describing)" :name="describing || ' '" :platform="describing ? bridge.default_name(bridge.platform_of(describing)) : ''" :default_label="describing ? bridge.default_name(describing) : ''"
     :text="room.descriptions?.[describing] || ''" :label="room.labels?.[describing] || ''" :template="describing ? bridge.description_template(describing) : ''" :saving="describing_saving" :anchor="describing_anchor"
     @update:open="(open) => { if (!open) describing = ''; }" @save="save_description" />
-  <MemberTextDialog :open="Boolean(prompting)" v-model:draft="prompt_draft" :title="t('{value1} 的专属提示词', { value1: bridge.display_name(prompting || ' ') })"
-    :description="in_workflow(prompting) ? t('来自工作流「{value1}」，每次执行时按工作流里的这张卡片发送；请在“工作流”一行点“编辑”修改，修改会作用于所有启用它的房间。', { value1: workflow?.label || '' }) : t('只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。')"
-    :label="t('{value1} 的专属提示词', { value1: bridge.display_name(prompting || ' ') })" :placeholder="t('例如：回答先给结论，控制在三段以内。')" :max="MAX_EXPERT_PROMPT" :rows="8"
-    :readonly="in_workflow(prompting)" :note="in_workflow(prompting) ? t('只读') : prompt_draft.trim() ? t('只发给这位专家，Ctrl + Enter 保存') : t('留空表示不使用')"
-    :changed="prompt_draft.trim() !== prompt_saved" :saving="prompt_saving" @update:open="(open) => { if (!open) prompting = ''; }" @save="save_prompt" />
   <Teleport to="body">
     <Transition name="pb-card-pop">
       <aside v-if="card && card_member" ref="card_element" class="pb-member-card" :style="{ top: `${card.top}px`, right: `${card.right}px` }" :aria-label="t('{value1} 的成员卡片', { value1: bridge.display_name(card.name) })" @mouseenter="card_keep" @mouseleave="card_leave">
@@ -557,7 +547,6 @@ watch(() => room.value.id, () => { starting.value = false; });
         <div class="pb-card-actions">
           <button type="button" class="pb-card-chip" @click="locate_member(card.name)"><UIcon name="i-lucide-locate-fixed" />{{ t('定位最新发言') }}</button>
           <button v-if="can_describe && !room.archived" type="button" class="pb-card-chip" @click="card_edit"><UIcon name="i-lucide-user-pen" />{{ t('编辑名称与描述') }}</button>
-          <button v-if="can_prompt(card_member) && !room.archived" type="button" class="pb-card-chip" @click="card_prompt"><UIcon name="i-lucide-scroll-text" />{{ t('专属提示词') }}</button>
         </div>
       </aside>
     </Transition>
