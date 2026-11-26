@@ -1,5 +1,6 @@
 <script setup>
 import { t } from './i18n.js';
+import { reference_name } from './attachment-tokens.js';
 /**
  * The room's speaking order, shared by the free-room and discussion boards: who spoke, who speaks now and who is next.
  * The owner drags (or moves with the arrow keys) the members who have not spoken; each row's content comes from the board.
@@ -141,6 +142,23 @@ function step(event, index, direction) {
   if (saving.value) return;
   commit(moved(order.value.movable, index, to), order.value.movable[index], true);
 }
+/**
+ * A member row dragged out carries a `[成员 名称]` token like a dragged room's (user 2026-11-26, #13309), so
+ * dropping it on the composer writes it at the drop point without an @ that would wake it (user 2026-11-26, #13291). Not from the order grip, a control or
+ * the rename field.
+ */
+let drag_blocked = false;
+function row_drag(event, name) {
+  if (drag.value || drag_blocked) { event.preventDefault(); return; }
+  emit("leave");
+  event.dataTransfer.effectAllowed = "copy";
+  event.dataTransfer.setData("text/plain", t("[成员 {name}]", { name: reference_name(bridge.display_name(name)) }));
+}
+function row_press(event) {
+  drag_blocked = Boolean(event.target.closest?.("button, input, textarea, select, a, [contenteditable='true']"));
+  emit("press");
+}
+
 /** A click on a member row, minus clicks on controls or a double-click rename; the board decides what it does. */
 function select_row(name, event) {
   if (drag.value || event.defaultPrevented) return;
@@ -158,8 +176,8 @@ function select_row(name, event) {
       <template v-for="(item, index) in rows" :key="item.key">
         <li v-if="item.outside" class="speaking-order-divider" aria-hidden="true"><span>{{ OUTSIDE_LABELS[order.kind] }}</span></li>
         <li class="pb-member speaking-order-row" :class="[`is-${item.state}`, drop_class(index), { 'is-movable': item.state === movable_state && can_reorder }]"
-          :data-key="item.key" :data-movable="item.state === movable_state ? '' : undefined"
-          @mouseenter="emit('enter', item.name, $event)" @mouseleave="emit('leave')" @pointerdown="emit('press')" @click="select_row(item.name, $event)">
+          :data-key="item.key" :data-movable="item.state === movable_state ? '' : undefined" draggable="true" @dragstart="row_drag($event, item.name)"
+          @mouseenter="emit('enter', item.name, $event)" @mouseleave="emit('leave')" @pointerdown="row_press" @click="select_row(item.name, $event)">
           <button v-if="item.state === movable_state && can_reorder" type="button" class="speaking-order-grip" :aria-disabled="saving"
             :aria-label="t('{value1}，第 {value2} 位；拖动或用上下方向键调整发言顺序', { value1: item.name, value2: item.place })" :title="grip_title"
             @pointerdown="start($event, movable_index(index))" @pointermove="move" @pointerup="finish" @pointercancel="finish($event, true)" @lostpointercapture="finish($event, true)"
@@ -188,8 +206,8 @@ function select_row(name, event) {
           <UIcon :name="away_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t('已离开 {value1}', { value1: props.away.length }) }}
         </button>
       </li>
-      <li v-for="name in away_open ? props.away : []" :key="`away-${name}`" class="pb-member speaking-order-row is-away"
-        @mouseenter="emit('enter', name, $event)" @mouseleave="emit('leave')" @pointerdown="emit('press')" @click="select_row(name, $event)">
+      <li v-for="name in away_open ? props.away : []" :key="`away-${name}`" class="pb-member speaking-order-row is-away" draggable="true" @dragstart="row_drag($event, name)"
+        @mouseenter="emit('enter', name, $event)" @mouseleave="emit('leave')" @pointerdown="row_press" @click="select_row(name, $event)">
         <span class="speaking-order-place"></span>
         <slot :item="{ name, state: 'away' }" :place="0" />
       </li>

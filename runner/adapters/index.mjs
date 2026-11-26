@@ -24,6 +24,7 @@
  *     as a writer of the member's session and stops it, waiting for `close`, before anything resumes that session. An
  *     adapter that does neither does not support follow-ups, and such reports are lost. Schedules: where a schedule the
  *     member set in its own software is seen to fire (profile `schedule_reports`), the adapter calls
+ *     `task.on_schedule_listener(active)` retains the original task files while an idle schedule listener holds them.
  *     `task.on_schedule({id, schedule, prompt, set_at}, handle)` (`set_at`: when the schedule was set, ms) with the latest
  *     room task's callbacks and follows that turn only on `true` (the runner opened a scheduled execution for a host);
  *     `'drop'` forgets that schedule (set before the owner's last stop), `'stop'` ends its listening, anything else

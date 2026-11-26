@@ -275,6 +275,53 @@ def member_stats(rows, requests, revived, by_model=False):
     return list(groups.values())
 
 
+def workflow_stats(connection, rows):
+    """Executions run under a room workflow, grouped by workflow ID (current rooms only).
+
+    The runner reports each delivery's workflow binding into the execution's diagnostics; an execution that reported
+    several keeps its last one. Card and sub-workflow counts say which parts of the workflow actually ran.
+    """
+    ids = [r["id"] for r in rows]
+    bound = {}
+    for offset in range(0, len(ids), 500):
+        chunk = ids[offset:offset + 500]
+        marks = ",".join("?" * len(chunk))
+        for execution_id, details in connection.execute(
+                f"SELECT execution_id,details FROM execution_diagnostics WHERE execution_id IN ({marks})", chunk):
+            try:
+                bindings = [item for item in json.loads(details).get("workflow_bindings") or [] if item]
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if bindings:
+                bound[execution_id] = bindings[-1]
+    groups = {}
+    for r in rows:
+        binding = bound.get(r["id"])
+        if not binding:
+            continue
+        item = groups.setdefault(binding["id"], dict(id=binding["id"], executions=0, completed=0, failed=0, cancelled=0,
+                                                     interrupted=0, rooms=set(), cards=Counter(), sub_workflows=Counter(),
+                                                     durations=[]))
+        item["executions"] += 1
+        if r["status"] in ("completed", "failed", "cancelled"):
+            item[r["status"]] += 1
+        item["interrupted"] += r["status"] == "cancelled" and r["result"] in ("用户打断", "用户停止全部")
+        item["rooms"].add(r["room_id"])
+        if binding.get("card"):
+            item["cards"][binding["card"]] += 1
+        if binding.get("sub_workflow"):
+            item["sub_workflows"][binding["sub_workflow"]] += 1
+        if r["finished_at"] >= r["created_at"] and r["finished_at"]:
+            item["durations"].append(r["finished_at"] - r["created_at"])
+    result = []
+    for item in groups.values():
+        item["rooms"] = len(item["rooms"])
+        item["cards"], item["sub_workflows"] = dict(item["cards"]), dict(item["sub_workflows"])
+        item["duration"] = distribution(item.pop("durations"))
+        result.append(item)
+    return sorted(result, key=lambda item: (-item["executions"], item["id"]))
+
+
 def insights(connection, members, start, end):
     """Return observed counts with denominators and drill-down keys."""
     result = []
@@ -298,15 +345,17 @@ def time_stats(connection, requests, executions, bounds, now, sealed):
     """Summarize folder activity, observed waiting and the current message queue."""
     start, end = bounds
     counts, histograms = sealed
-    folders, room_folder = {}, {}
-    for room, folder, name in connection.execute("""SELECT r.id,f.id,f.name FROM rooms r
+    folders, room_folder, room_rows = {}, {}, {}
+    for room, title, folder, name in connection.execute("""SELECT r.id,r.title,f.id,f.name FROM rooms r
         LEFT JOIN room_folder_assignments a ON a.room_id=r.id LEFT JOIN topic_folders f ON f.id=a.folder_id"""):
         room_folder[room] = folder
         folders.setdefault(folder, dict(folder_id=folder, name=name, initiated=0, execution_seconds=0))
+        room_rows[room] = dict(room_id=room, title=title, folder_id=folder, initiated=0, execution_seconds=0)
     seen, waits = set(), []
     for r in requests:
         if r["initiated"] and start <= r["sent"] < end and r["message_id"] not in seen:
             folders[room_folder[r["room_id"]]]["initiated"] += 1
+            room_rows[r["room_id"]]["initiated"] += 1
             seen.add(r["message_id"])
         if start <= r["created_at"] < end and r["dispatched"] is not None and r["dispatched"] >= r["created_at"]:
             waits.append(r["dispatched"] - r["created_at"])
@@ -318,6 +367,7 @@ def time_stats(connection, requests, executions, bounds, now, sealed):
             spans[r["room_id"]].append((left, right))
             member_spans[(r["room_id"], r["name"])].append((left, right))
             folders[room_folder[r["room_id"]]]["execution_seconds"] += right-left
+            room_rows[r["room_id"]]["execution_seconds"] += right-left
         if start <= r["created_at"] and r["finished_at"] >= r["created_at"] and r["finished_at"]:
             duration = r["finished_at"] - r["created_at"]
             elapsed.append(duration)
@@ -327,7 +377,8 @@ def time_stats(connection, requests, executions, bounds, now, sealed):
     rooms, rooms_at = peak_concurrent(spans)
     members, members_at = peak_concurrent(member_spans)
     peak = {"rooms": rooms, "at": rooms_at, "members": members, "members_at": members_at}
-    return {"folders": list(folders.values()), "peak": peak, "sealed_execution_seconds": counts["execution_seconds"],
+    active_rooms = [room for room in room_rows.values() if room["initiated"] or room["execution_seconds"]]
+    return {"folders": list(folders.values()), "rooms": active_rooms, "peak": peak, "sealed_execution_seconds": counts["execution_seconds"],
             "execution_seconds": sum(f["execution_seconds"] for f in folders.values()) + counts["execution_seconds"],
             "waiting": distribution(waits, histograms["waiting"]),
             "execution": distribution(elapsed, histograms["execution"]), "rework": distribution(rework, histograms["rework"]),
@@ -520,11 +571,12 @@ def snapshot(connection, params, cache, now):
     scope = {"mode": mode, "rooms": len(rooms), "sealed_rooms": retained, "included_rooms": len(rooms) + retained,
              "includes_archived": True, "sealed_day_tz": "UTC", "sealed_counts": SEALED_COUNTS,
              "sealed_distributions": SEALED_DISTRIBUTIONS,
-             "current_only": ["folders", "peak", "queue", "affected_requests", "members", "models", "insights"]}
+             "current_only": ["folders", "rooms", "peak", "queue", "affected_requests", "members", "models", "workflows", "insights"]}
     result = dict(range=dates, scope=scope,
                   overview=overview(facts, start, end, sealed), previous=overview(facts, previous, start, prior),
                   time={**time_stats(connection, requests, executions, (start, end), now, sealed), **activity},
-                  members=members, models=models, insights=insights(connection, members, start, end))
+                  members=members, models=models, workflows=workflow_stats(connection, attempts),
+                  insights=insights(connection, members, start, end))
     result["overview"]["daily"] = daily_overview(dates, facts, executions, sealed_days, now)
     if len(cache) >= CACHE_ENTRIES:
         cache.clear()

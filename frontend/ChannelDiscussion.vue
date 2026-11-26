@@ -37,7 +37,7 @@ import ExecutionChanges from "./ExecutionChanges.vue";
 import MessageVisualBody from "./MessageVisualBody.vue";
 import { add_excerpt, excerpt_mark_place, excerpt_range, inner_scroll_follower, excerpt_source, excerpts_markdown, file_preview, hold_selection, room_quotes, take_excerpts, text_offset } from "./file-preview.js";
 import { keep_reading_position } from "./scroll-anchor.js";
-import { open_attachment_picker, guard_token_edit, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
+import { open_attachment_picker, guard_token_edit, reference_name, snap_caret, step_over_token, token_mirror } from "./attachment-tokens.js";
 import { FILE_MENTION_PATTERN } from "./file-mention.mjs";
 import { slash_insertion } from "../runner/slash_names.mjs";
 import MemoBlock from "./memo-block.js";
@@ -1713,7 +1713,7 @@ function room_drag({ detail }) {
     && Boolean(conversation.value?.contains(document.elementFromPoint(detail.x, detail.y)));
   room_drop.value = over && detail.phase === "move" ? { id: detail.id, title: detail.title } : null;
   if (!over || detail.phase !== "drop") return;
-  const insertion = `${t("「{title}」（房间 {id}）", { title: detail.title, id: detail.id })} `;
+  const insertion = `${t("[房间 {title} #{id}]", { title: reference_name(detail.title), id: detail.id })} `;
   replace_draft(editor.selectionStart, editor.selectionEnd, insertion);
 }
 onMounted(() => window.addEventListener("codiscuss:room-drag", room_drag));

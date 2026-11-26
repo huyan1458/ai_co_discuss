@@ -2,6 +2,11 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.35 (2026-11-26 03:23)
+
+- New: On the "Analytics" page, open a folder to see each room's share, plus new sections for runs by model and for workflows.
+- New: Dragging a room or member into the message box inserts a highlighted reference that one backspace removes whole.
+
 ## 0.5.34 (2026-11-26 02:14)
 
 - New: The "Analytics" page shows weekly and monthly reports, how each member did and where work got stuck, and exports a share image.

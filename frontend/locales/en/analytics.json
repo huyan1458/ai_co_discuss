@@ -106,5 +106,22 @@
   "耗时（通常 · 较慢）": "Duration (usually · slower)",
   "每日发起的已结束任务": "Finished tasks by start day",
   "{date}：当天发起的任务中已结束 {ended} 个，插手 {count} 个": "{date}: of the tasks started this day, {ended} finished, stepped into {count}",
-  "并行峰值、文件夹、成员、洞察只含现存房间": "Peak concurrency, folders, members and insights cover existing rooms only"
+  "{count} 个房间": "{count} rooms",
+  "打开房间": "Open room",
+  "占 {share}": "{share} of folder",
+  "其余 {count} 个房间": "{count} more rooms",
+  "{software} · 未知模型": "{software} · unknown model",
+  "其他 {count} 个模型": "{count} other models",
+  "各模型调用占比": "Share of runs by model",
+  "按运行次数": "By runs",
+  "占比": "Share",
+  "工作流": "Workflows",
+  "按房间启用的工作流统计成员的运行；卡片是这次运行所扮演的角色，子工作流是被调用的分支流程。只含现存房间。": "Member runs grouped by the workflow enabled in the room. A card is the role the run played; a sub-workflow is a branch it called. Existing rooms only.",
+  "工作流中的运行占全部运行的 {share}": "{share} of all runs happened inside a workflow",
+  "{inside} / {runs} 次": "{inside} / {runs} runs",
+  "房间": "Rooms",
+  "打断": "Stopped",
+  "卡片与子工作流": "Cards and sub-workflows",
+  "这段时间没有按工作流进行的运行。": "No runs inside a workflow in this period.",
+  "并行峰值、文件夹、成员、工作流、洞察只含现存房间": "Peak concurrency, folders, members, workflows and insights cover existing rooms only"
 }

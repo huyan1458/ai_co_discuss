@@ -151,9 +151,9 @@ function cache_write(directory, path, value) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   atomic_json(path, value);
   const entries = readdirSync(directory).filter(name => name.endsWith('.json')).map(name => {
-    const { size, mtimeMs } = statSync(join(directory, name));
-    return { name, size, mtimeMs };
-  });
+    const cached = statSync(join(directory, name), { throwIfNoEntry: false });
+    return cached && { name, size: cached.size, mtimeMs: cached.mtimeMs };
+  }).filter(Boolean);
   let total = entries.reduce((sum, entry) => sum + entry.size, 0);
   if (total <= CACHE_LIMIT_BYTES) return;
   for (const entry of entries.sort((a, b) => a.mtimeMs - b.mtimeMs)) {

@@ -25,7 +25,10 @@ const {
   page_open, renaming, rename_text, pending_items,
 } = library;
 
-const has_project_section = computed(() => project_roots.value.length > 0 || project_workflows.value.length > 0);
+// The “当前项目 / 全局” split only appears when the project has workflows (or an unsaved project draft); an empty project
+// group would just say “暂无项目工作流” above the global list (2026-11-26 user request, #13351).
+const has_project_section = computed(() => project_workflows.value.length > 0
+  || (project_roots.value.length > 0 && Boolean(draft.value) && !saved_id.value && active_scope.value === "project"));
 
 /** Show a workflow on the page and close the drawer. */
 function open_workflow(item) {
@@ -141,13 +144,10 @@ function row_icon(item) {
         <p v-else class="channel-directory-empty">{{ t("连接本机服务后管理工作流") }}</p>
       </nav>
       <!-- Owner-only cross-room analytics entry, last in the left navigation, below workflows (2026-11-26 user request). -->
-      <nav v-if="can_view_analytics" :aria-label="t('统计')" class="channel-room-list channel-analytics-nav">
-        <div class="channel-room-row" :class="{ active: analytics_open }">
-          <button type="button" class="channel-room-select" :aria-current="analytics_open ? 'page' : undefined" @click="emit('analytics')">
-            <UIcon name="i-lucide-bar-chart-3" /><span>{{ t("统计") }}</span>
-          </button>
-        </div>
-      </nav>
+      <!-- Styled as a section heading, a peer of “协作房间 / 外部房间 / 工作流”: the icon takes the chevron's place. -->
+      <div v-if="can_view_analytics" class="channel-directory-heading channel-tools-heading channel-analytics-heading" :class="{ 'is-current': analytics_open }">
+        <button type="button" class="channel-section-toggle" :aria-current="analytics_open ? 'page' : undefined" @click="emit('analytics')"><UIcon name="i-lucide-bar-chart-3" />{{ t("统计") }}</button>
+      </div>
     </div>
   <footer class="channel-sidebar-footer">
     <button type="button" class="channel-self-button" :aria-label="t('账号与设置：{name}', { name: bridge.display_name(author) }) + (account_status ? t('，') + account_status : '')" @click="emit('settings')">
@@ -171,8 +171,5 @@ function row_icon(item) {
 .channel-workflow-group { margin: 8px 0 2px; padding: 0 8px; overflow: hidden; color: var(--ui-text-dimmed); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .channel-workflow-group:first-child { margin-top: 2px; }
 .channel-workflow-empty { margin: 0; padding: 4px 8px 6px; color: var(--ui-text-dimmed); font-size: 12px; }
-.channel-analytics-nav { margin-top: 8px; }
-.channel-analytics-nav .channel-room-row { grid-template-columns: minmax(0, 1fr); padding-left: 8px; }
-.channel-analytics-nav .channel-room-select { gap: 7px; font-weight: 500; }
-.channel-analytics-nav .channel-room-select :deep([class*="icon"]) { width: 14px; height: 14px; flex-shrink: 0; }
+.channel-analytics-heading.is-current .channel-section-toggle { color: var(--ui-text-highlighted); }
 </style>

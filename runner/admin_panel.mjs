@@ -11,7 +11,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
-import { clean_storage, storage_details } from './admin_storage.mjs';
+import { panel_clean, panel_storage, panel_repair } from './admin_maintenance.mjs';
 import { homedir, tmpdir } from 'node:os';
 import tls from 'node:tls';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -784,8 +784,9 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (!response.ok) throw new Error(result.error);
       return result;
     }
-    if (path === '/api/storage' && method === 'GET') return storage_details(data);
-    if (path === '/api/storage/clean' && method === 'POST') return clean_storage(data, body);
+    if (path === '/api/storage' && method === 'GET') return panel_storage(data, site_url(data));
+    if (path === '/api/storage/clean' && method === 'POST') return panel_clean(data, site_url(data), body);
+    if (path === '/api/storage/repair' && method === 'POST') return panel_repair(data, site_url(data), body);
     if (method === 'GET' && section === 'state') {
       const windows = process.platform === 'win32';
       const service = op.service_overview(data), bound = bound_site(data);

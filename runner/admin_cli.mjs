@@ -87,7 +87,7 @@ API 密钥、技能、工作流、系统提示词（目标同上）
   prompt default get  /  prompt default set --file <文件>             新托管账号的默认系统提示词
 
 结果以 JSON 输出。--data 指定管理员服务目录（默认 ~/.codiscuss）。
-`) + t('  room-links A    查看父子房间') + '\n' + t('  storage [clean]                          查看存储用量，或清理已确认结束的执行临时目录') + '\n'
+`) + t('  room-links A    查看父子房间') + '\n' + t('  storage [clean | repair [logs --confirm]]  查看用量、安全清理或深度修理日志') + '\n'
   + t('  account add <名> --project-data-root <目录>   将新账号的项目、工作区和成员草稿放在指定目录') + '\n'
   + t('  account migrate-data <名> --project-data-root <目录>   停止实例并迁移项目数据') + '\n'
   + t('  account migration-backups <名>   查看各迁移备份的位置与字节数') + '\n'
@@ -431,6 +431,8 @@ export async function admin_cli(args, { client = panel_client, print = text => p
   const commands = {
     storage: () => {
       if (!rest.length) return call('storage');
+      if (rest.join(' ') === 'repair') return call('storage/repair', {});
+      if (rest.join(' ') === 'repair logs' && values.confirm) return call('storage/repair', { logs: true, confirm: true });
       if (rest.length === 1 && rest[0] === 'clean') return call('storage/clean', {});
       throw new Error(HELP);
     },

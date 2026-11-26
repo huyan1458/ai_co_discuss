@@ -14,6 +14,7 @@ import {
 } from "./analytics-state.js";
 import { analytics_card_blob, draw_analytics_card } from "./analytics-card.js";
 import { entrance, use_spring, wave } from "./analytics-motion.js";
+import { use_workflow_library } from "./workflow-library.js";
 import { locale, t } from "./i18n.js";
 
 const emit = defineEmits(["open-room"]);
@@ -201,6 +202,17 @@ const folders = computed(() => {
       slot: 0,
     });
   }
+  // Each folder carries its rooms, largest first; a room's share is of its folder's time (rooms of folded folders join “其他”).
+  const rooms = report.value?.time?.rooms || [];
+  const kept = new Set(head.filter((row) => row.slot).map((row) => row.folder_id));
+  for (const row of head) {
+    row.key = row.folder_id ?? "__unfiled__";
+    const members = rooms.filter((room) => (row.slot ? room.folder_id === row.folder_id : !kept.has(room.folder_id)));
+    const folder_seconds = members.reduce((sum, room) => sum + (room.execution_seconds || 0), 0);
+    row.rooms = members
+      .map((room) => ({ ...room, share: folder_seconds ? (room.execution_seconds / folder_seconds) * 100 : 0 }))
+      .sort((a, b) => (b.execution_seconds - a.execution_seconds) || (b.initiated - a.initiated));
+  }
   const total = head.reduce((sum, row) => sum + (row.execution_seconds || 0), 0);
   const shares = head.map((row) => (total ? (row.execution_seconds / total) * 100 : 0));
   // Bar weights sum to exactly 1, so while the grow spring rises the filled length is the spring's own fraction.
@@ -209,13 +221,65 @@ const folders = computed(() => {
   return head.map((row, index) => ({ ...row, share: shares[index], weight: visible[index] / weight_total }));
 });
 
+const ROOM_PREVIEW = 8;
+const open_folders = ref(new Set());
+const all_rooms = ref(new Set());
+/** Add or remove a folder key in a reactive set; the choice survives period switches since folders keep their keys. */
+function toggle_set(store, key) {
+  const next = new Set(store.value);
+  if (next.has(key)) next.delete(key); else next.add(key);
+  store.value = next;
+}
+const toggle_folder = (key) => toggle_set(open_folders, key);
+const toggle_all_rooms = (key) => toggle_set(all_rooms, key);
+
 /** Folder share as a whole percent; a non-zero share under 1% reads “<1%” rather than “0%”. */
 function share_text(share) {
   return share > 0 && share < 1 ? "<1%" : `${Math.round(share)}%`;
 }
 
 /** Report rows by software × model × effort, largest workload first; no rank numbers are shown. */
-const model_rows = computed(() => group_model_rows(report.value));
+const model_rows = computed(() => {
+  const rows = group_model_rows(report.value);
+  const total = rows.reduce((sum, row) => sum + row.executions, 0);
+  return rows.map((row) => ({ ...row, run_share: total ? (row.executions / total) * 100 : 0 }));
+});
+
+/**
+ * Share of runs per model across software and effort (claude-opus-5-5 at medium and at high are one model): the six
+ * largest keep a colour slot and the rest fold into “其他”. Weights sum to 1 so the bar grows with the grow spring.
+ */
+const model_mix = computed(() => {
+  const by_model = new Map();
+  for (const row of model_rows.value) {
+    const key = row.model || `?${row.adapter}`;
+    const item = by_model.get(key) || { key, label: row.model || t("{software} · 未知模型", { software: adapter_display_label(row.adapter) }), runs: 0 };
+    item.runs += row.executions;
+    by_model.set(key, item);
+  }
+  const sorted = [...by_model.values()].filter((item) => item.runs).sort((a, b) => b.runs - a.runs);
+  const total = sorted.reduce((sum, item) => sum + item.runs, 0) || 1;
+  const head = sorted.slice(0, FOLDER_SLOTS).map((item, index) => ({ ...item, slot: index + 1 }));
+  const rest = sorted.slice(FOLDER_SLOTS);
+  if (rest.length) head.push({ key: "__other__", label: t("其他 {count} 个模型", { count: rest.length }), runs: rest.reduce((sum, item) => sum + item.runs, 0), slot: 0 });
+  return head.map((item) => ({ ...item, share: (item.runs / total) * 100, weight: item.runs / total }));
+});
+const model_slot = computed(() => new Map(model_mix.value.filter((item) => item.slot).map((item) => [item.key, item.slot])));
+const row_slot = (row) => model_slot.value.get(row.model || `?${row.adapter}`) ?? 0;
+
+// Workflows: the backend reports IDs; names come from this computer's workflow library when it has the workflow.
+const workflow_library = use_workflow_library();
+const all_runs = computed(() => model_rows.value.reduce((sum, row) => sum + row.executions, 0));
+const workflow_rows = computed(() => (report.value?.workflows || []).map((row) => ({
+  ...row,
+  label: workflow_library.workflows.value.find((item) => item.id === row.id)?.label || row.id,
+  card_entries: Object.entries(row.cards || {}).sort((a, b) => b[1] - a[1]),
+  sub_entries: Object.entries(row.sub_workflows || {}).sort((a, b) => b[1] - a[1]),
+})));
+const workflow_share = computed(() => {
+  const inside = workflow_rows.value.reduce((sum, row) => sum + row.executions, 0);
+  return { inside, runs: all_runs.value, share: all_runs.value ? (inside / all_runs.value) * 100 : 0 };
+});
 const visible_models = computed(() => (members_expanded.value ? model_rows.value : model_rows.value.slice(0, MEMBER_PREVIEW)));
 
 /** Width of the completion bar, or null when the sample is too small to show a percentage. */
@@ -450,13 +514,41 @@ async function copy_share_card() {
                 />
               </div>
               <table class="analytics-legend">
-                <tbody>
-                  <tr v-for="folder in folders" :key="folder.folder_id ?? '__unfiled__'">
-                    <td><span class="analytics-swatch" :class="`slot-${folder.slot}`" />{{ folder.display_name }}</td>
+                <tbody v-for="folder in folders" :key="folder.folder_id ?? '__unfiled__'" :class="{ 'is-open': open_folders.has(folder.key) }">
+                  <tr class="analytics-folder-row">
+                    <td>
+                      <button type="button" class="analytics-folder-toggle" :aria-expanded="open_folders.has(folder.key)" :disabled="!folder.rooms.length" @click="toggle_folder(folder.key)">
+                        <UIcon :name="open_folders.has(folder.key) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="analytics-folder-chevron" />
+                        <span class="analytics-swatch" :class="`slot-${folder.slot}`" />
+                        <span class="analytics-folder-name">{{ folder.display_name }}</span>
+                        <small class="analytics-dim">{{ t("{count} 个房间", { count: folder.rooms.length }) }}</small>
+                      </button>
+                    </td>
                     <td class="num">{{ share_text(folder.share) }}</td>
                     <td class="num">{{ format_duration(folder.execution_seconds) }}</td>
                     <td class="num analytics-dim">{{ t("发起 {count} 次", { count: folder.initiated }) }}</td>
                   </tr>
+                  <template v-if="open_folders.has(folder.key)">
+                    <tr v-for="room in (all_rooms.has(folder.key) ? folder.rooms : folder.rooms.slice(0, ROOM_PREVIEW))" :key="room.room_id" class="analytics-room-row">
+                      <td>
+                        <button type="button" class="analytics-room-link" :title="t('打开房间')" @click="open_room(room.room_id)">
+                          <span class="analytics-room-bar" aria-hidden="true"><i :class="`slot-${folder.slot}`" :style="{ width: `${room.share}%` }" /></span>
+                          <span class="analytics-folder-name">{{ room.title || room.room_id }}</span>
+                          <UIcon name="i-lucide-arrow-up-right" class="analytics-room-jump" />
+                        </button>
+                      </td>
+                      <td class="num analytics-dim">{{ t("占 {share}", { share: share_text(room.share) }) }}</td>
+                      <td class="num">{{ format_duration(room.execution_seconds) }}</td>
+                      <td class="num analytics-dim">{{ t("发起 {count} 次", { count: room.initiated }) }}</td>
+                    </tr>
+                    <tr v-if="folder.rooms.length > ROOM_PREVIEW" class="analytics-room-row">
+                      <td colspan="4">
+                        <button type="button" class="analytics-room-more" @click="toggle_all_rooms(folder.key)">
+                          {{ all_rooms.has(folder.key) ? t("收起") : t("其余 {count} 个房间", { count: folder.rooms.length - ROOM_PREVIEW }) }}
+                        </button>
+                      </td>
+                    </tr>
+                  </template>
                 </tbody>
               </table>
             </template>
@@ -471,11 +563,24 @@ async function copy_share_card() {
             </h2>
           </div>
           <div v-if="model_rows.length" class="analytics-panel analytics-table-wrap">
+            <div class="analytics-mix">
+              <div class="analytics-mix-head"><span>{{ t("各模型调用占比") }}</span><span class="analytics-dim">{{ t("按运行次数") }}</span></div>
+              <div class="analytics-stack" role="img" :aria-label="t('各模型调用占比')">
+                <i v-for="(item, index) in model_mix" :key="item.key" :class="`slot-${item.slot}`" :style="{ flexGrow: item.weight * wave(grow.value.value, index, model_mix.length, 0.4) }" :title="`${item.label} · ${share_text(item.share)}`" />
+              </div>
+              <ul class="analytics-mix-legend">
+                <li v-for="item in model_mix" :key="item.key">
+                  <span class="analytics-swatch" :class="`slot-${item.slot}`" /><span class="analytics-mix-name">{{ item.label }}</span>
+                  <strong class="num">{{ share_text(item.share) }}</strong>
+                </li>
+              </ul>
+            </div>
             <table class="analytics-table">
               <thead>
                 <tr>
                   <th>{{ t("成员") }}</th>
                   <th class="num"><UPopover :content="{ side: 'top' }"><button type="button" class="analytics-hint">{{ t("运行") }}</button><template #content><p class="analytics-popover">{{ t('成员每运行一次算一次，一次运行可能同时处理几条消息。') }}</p></template></UPopover></th>
+                  <th class="num">{{ t("占比") }}</th>
                   <th>{{ t("完成率") }}</th>
                   <th><UPopover :content="{ side: 'top' }"><button type="button" class="analytics-hint">{{ t("耗时（通常 · 较慢）") }}</button><template #content><p class="analytics-popover">{{ t('一半的运行在“通常”以内结束，九成在“较慢”以内结束。') }}</p></template></UPopover></th>
                   <th class="num">{{ t("打断 / 重试") }}</th>
@@ -491,6 +596,7 @@ async function copy_share_card() {
                     </div>
                   </td>
                   <td class="num">{{ row.executions }}</td>
+                  <td class="num"><span class="analytics-swatch" :class="`slot-${row_slot(row)}`" />{{ share_text(row.run_share) }}</td>
                   <td>
                     <div class="analytics-rate">
                       <div v-if="completion(row).width !== null" class="analytics-meter" aria-hidden="true"><i :style="{ width: `${completion(row).width * grow.value.value}%` }" /></div>
@@ -515,6 +621,57 @@ async function copy_share_card() {
         </section>
 
         <section class="analytics-block" :style="block_style(4)">
+          <div class="analytics-block-head">
+            <h2>{{ t("工作流") }}
+              <UPopover :content="{ side: 'top' }"><button type="button" class="analytics-info" :aria-label="t('统计口径')"><UIcon name="i-lucide-info" /></button><template #content><p class="analytics-popover">{{ t("按房间启用的工作流统计成员的运行；卡片是这次运行所扮演的角色，子工作流是被调用的分支流程。只含现存房间。") }}</p></template></UPopover>
+            </h2>
+          </div>
+          <div v-if="workflow_rows.length" class="analytics-panel analytics-table-wrap">
+            <div class="analytics-mix">
+              <div class="analytics-mix-head">
+                <span>{{ t("工作流中的运行占全部运行的 {share}", { share: share_text(workflow_share.share) }) }}</span>
+                <span class="analytics-dim">{{ t("{inside} / {runs} 次", { inside: workflow_share.inside, runs: workflow_share.runs }) }}</span>
+              </div>
+              <div class="analytics-meter analytics-meter-wide" aria-hidden="true"><i :style="{ width: `${workflow_share.share * grow.value.value}%` }" /></div>
+            </div>
+            <table class="analytics-table is-workflow">
+              <thead>
+                <tr>
+                  <th>{{ t("工作流") }}</th>
+                  <th class="num">{{ t("运行") }}</th>
+                  <th class="num">{{ t("房间") }}</th>
+                  <th>{{ t("完成率") }}</th>
+                  <th>{{ t("耗时（通常 · 较慢）") }}</th>
+                  <th class="num">{{ t("打断") }}</th>
+                  <th>{{ t("卡片与子工作流") }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in workflow_rows" :key="row.id">
+                  <td><div class="analytics-who"><strong>{{ row.label }}</strong><span v-if="row.label !== row.id">{{ row.id }}</span></div></td>
+                  <td class="num">{{ row.executions }}</td>
+                  <td class="num">{{ row.rooms }}</td>
+                  <td>
+                    <div class="analytics-rate">
+                      <div v-if="completion(row).width !== null" class="analytics-meter" aria-hidden="true"><i :style="{ width: `${completion(row).width * grow.value.value}%` }" /></div>
+                      <span class="num">{{ completion(row).primary }}</span>
+                    </div>
+                  </td>
+                  <td class="analytics-typical"><span>{{ format_duration(row.duration?.p50) }}</span><span>{{ format_duration(row.duration?.p90) }}</span></td>
+                  <td class="num" :class="{ 'analytics-dim': !row.interrupted }">{{ row.interrupted }}</td>
+                  <td>
+                    <span v-for="[card, count] in row.card_entries" :key="`c-${card}`" class="analytics-chip">{{ card }} {{ count }}</span>
+                    <span v-for="[branch, count] in row.sub_entries" :key="`s-${branch}`" class="analytics-chip is-sub"><UIcon name="i-lucide-git-branch" />{{ branch }} {{ count }}</span>
+                    <span v-if="!row.card_entries.length && !row.sub_entries.length" class="analytics-dim">—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="analytics-calm analytics-calm-plain"><UIcon name="i-lucide-network" />{{ t("这段时间没有按工作流进行的运行。") }}</p>
+        </section>
+
+        <section class="analytics-block" :style="block_style(5)">
           <details class="analytics-panel analytics-friction" :open="blockers_open" @toggle="blockers_open = $event.target.open">
             <summary>
               <h2><UIcon :name="blockers_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t("耗时与卡点") }}</h2>
@@ -552,13 +709,13 @@ async function copy_share_card() {
           </details>
         </section>
 
-        <footer class="analytics-foot" :style="block_style(5)">
+        <footer class="analytics-foot" :style="block_style(6)">
           <span>{{ scope_text }}</span>
           <button v-if="report.scope?.sealed_rooms || scope === 'current'" type="button" class="analytics-scope-toggle" @click="scope = scope === 'all' ? 'current' : 'all'">
             {{ scope === "all" ? t("只看现存房间") : t("包含已删除房间") }}
           </button>
           <span>{{ t("时区：{tz}", { tz: report.range?.tz || tz }) }}</span>
-          <span v-if="report.scope?.mode === 'all' && report.scope?.sealed_rooms">{{ t("并行峰值、文件夹、成员、洞察只含现存房间") }}</span>
+          <span v-if="report.scope?.mode === 'all' && report.scope?.sealed_rooms">{{ t("并行峰值、文件夹、成员、工作流、洞察只含现存房间") }}</span>
         </footer>
       </template>
     </div>
@@ -691,10 +848,40 @@ async function copy_share_card() {
 .analytics-legend tr:first-child td { border-top: 0; }
 .analytics-legend td:first-child { max-width: 0; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .analytics-legend td + td { padding-left: 24px; }
+.analytics-legend tbody + tbody .analytics-folder-row td { border-top: 1px solid var(--ui-border-muted); }
+.analytics-folder-toggle, .analytics-room-link { display: flex; align-items: center; gap: 0; width: 100%; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+.analytics-folder-toggle:disabled { cursor: default; }
+.analytics-folder-toggle:disabled .analytics-folder-chevron { visibility: hidden; }
+.analytics-folder-toggle:not(:disabled):hover .analytics-folder-name, .analytics-room-link:hover .analytics-folder-name { color: var(--ui-text-highlighted); text-decoration: underline; text-underline-offset: 3px; }
+.analytics-folder-chevron { width: 13px; height: 13px; flex-shrink: 0; margin-right: 6px; color: var(--ui-text-dimmed); }
+.analytics-folder-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.analytics-folder-toggle small { flex-shrink: 0; margin-left: 8px; font-size: 11.5px; }
+.analytics-room-row td { padding: 4px 0; border-top: 0; font-size: 12.5px; }
+.analytics-room-row td:first-child { padding-left: 19px; }
+.analytics-room-link { color: var(--ui-text-toned); }
+.analytics-room-bar { flex-shrink: 0; width: 48px; height: 4px; margin-right: 10px; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 8%, transparent); overflow: hidden; }
+.analytics-room-bar i { display: block; height: 100%; border-radius: 999px; }
+.analytics-room-jump { width: 12px; height: 12px; flex-shrink: 0; margin-left: 6px; color: var(--ui-text-dimmed); opacity: 0; }
+.analytics-room-link:hover .analytics-room-jump, .analytics-room-link:focus-visible .analytics-room-jump { opacity: 1; }
+.analytics-legend tbody.is-open .analytics-room-row:last-child td { padding-bottom: 10px; }
+.analytics-room-more { padding: 2px 0; border: 0; background: none; color: var(--channel-accent); font-size: 12px; }
+.analytics-room-more:hover { text-decoration: underline; text-underline-offset: 3px; }
 .analytics-swatch { display: inline-block; width: 9px; height: 9px; margin-right: 9px; border-radius: 3px; vertical-align: 0; }
 
 /* Team table */
 .analytics-table-wrap { padding: 4px 0 0; overflow-x: auto; }
+.analytics-mix { display: grid; gap: 10px; padding: 14px 20px 16px; border-bottom: 1px solid var(--ui-border-muted); }
+.analytics-mix-head { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--ui-text-muted); }
+.analytics-mix .analytics-stack { margin-bottom: 0; }
+.analytics-mix-legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--ui-text); }
+.analytics-mix-legend li { display: inline-flex; align-items: center; min-width: 0; }
+.analytics-mix-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.analytics-meter-wide { height: 6px; }
+.analytics-chip { display: inline-flex; align-items: center; gap: 3px; margin: 1px 4px 1px 0; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 7%, transparent); color: var(--ui-text-toned); font-size: 11px; white-space: nowrap; }
+.analytics-chip.is-sub { background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
+.analytics-chip :deep([class*="icon"]) { width: 11px; height: 11px; }
+.analytics-calm-plain :deep([class*="icon"]) { color: var(--ui-text-dimmed); }
+.analytics-mix-legend strong { margin-left: 8px; font-weight: 600; color: var(--ui-text-highlighted); }
 .analytics-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .analytics-table th { padding: 10px 14px; font-size: 11.5px; font-weight: 500; color: var(--ui-text-muted); text-align: left; white-space: nowrap; border-bottom: 1px solid var(--ui-border-muted); }
 .analytics-table th.num { text-align: right; }
@@ -761,5 +948,41 @@ async function copy_share_card() {
   .analytics-hero-side, .analytics-hero.is-compact .analytics-hero-side { grid-template-columns: minmax(0, 1fr); }
   .analytics-stat + .analytics-stat, .analytics-hero.is-compact .analytics-stat + .analytics-stat { border-left: 0; border-top: 1px solid var(--ui-border-muted); }
   .analytics-panel { padding: 16px; }
+  /* Phones: tables keep the columns needed to compare at a glance instead of scrolling sideways (2026-11-26 #13416).
+     Member scorecard keeps member, runs, share and completion; workflows keep name, runs, completion and cards;
+     the folder legend drops the started count so folder and room names stay readable. */
+  .analytics-legend td + td { padding-left: 12px; }
+  .analytics-legend td:nth-child(4) { display: none; }
+  .analytics-folder-toggle small { display: none; }
+  .analytics-room-bar { width: 28px; margin-right: 8px; }
+  .analytics-table-wrap { overflow-x: visible; }
+  .analytics-table th, .analytics-table td { padding: 9px 8px; }
+  .analytics-table th:first-child, .analytics-table td:first-child { padding-left: 14px; }
+  .analytics-table th:last-child, .analytics-table td:last-child { padding-right: 14px; }
+  .analytics-who { min-width: 0; }
+  .analytics-who strong, .analytics-who span { overflow-wrap: break-word; }
+  .analytics-table.is-workflow td:first-child { min-width: 120px; }
+  .analytics-rate { grid-template-columns: auto; min-width: 0; }
+  .analytics-rate .analytics-meter { display: none; }
+  .analytics-rate .num { grid-column: 1; text-align: right; }
+  .analytics-table:not(.is-workflow) :is(th, td):nth-child(n+5) { display: none; }
+  .analytics-table.is-workflow :is(th, td):is(:nth-child(3), :nth-child(5), :nth-child(6)) { display: none; }
+  .analytics-table.is-workflow td:last-child { white-space: normal; }
+  .analytics-mix { padding: 12px 14px 14px; }
+  .analytics-mix-legend { gap: 4px 14px; font-size: 12px; }
+  .analytics-mix-name { max-width: 150px; }
+  /* The folded friction block is a one-line summary, not a card: title and figures stack tightly. */
+  .analytics-panel.analytics-friction { padding: 0; }
+  .analytics-friction summary { display: grid; gap: 2px; padding: 11px 14px; }
+  .analytics-friction h2 { font-size: 14px; }
+  .analytics-friction summary > span { padding-left: 20px; font-size: 11.5px; }
+  .analytics-friction-body { gap: 14px; padding: 4px 14px 14px; }
+  .analytics-segment { padding: 6px 0; }
+  .analytics-segment-values { flex-wrap: wrap; gap: 4px 12px; }
+  .analytics-tiles { gap: 8px; }
+  .analytics-tiles > div { padding: 10px 12px; }
+  .analytics-tiles strong { font-size: 19px; }
+  .analytics-calm { padding: 9px 12px; font-size: 12.5px; }
+  .analytics-foot { gap: 2px 12px; }
 }
 </style>

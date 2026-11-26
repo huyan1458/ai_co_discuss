@@ -9,6 +9,7 @@ test('room-owned reasons carry source templates while replies and truncated text
   assert.deepEqual(room_payload({ text: reason }), { text: reason });
   assert.deepEqual(room_payload({ reason: reason.slice(0, 4) }), { reason: reason.slice(0, 4) });
 });
+import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readdirSync, rmSync, existsSync, readFileSync, symlinkSync, utimesSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1916,8 +1917,10 @@ test('a schedule a Claude window host set comes back as a scheduled execution wh
   const cron_delete = id => line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_del', name: 'CronDelete', input: { id } }] } })
     + line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_del', content: 'Deleted' }] } });
   const wait_for = async check => { for (let waited = 0; !check() && waited < 2000; waited += 20) await delay(20); await delay(60); };
+  const held_tasks = new Set();
   const room_task = (file, marker, seen, answers) => watch_window_turn({ file, offset: 0, pid: process.pid, marker, log_path: join(home, 'window.log') }, {
     on_output: () => {}, on_note: text => seen.push(text), on_exit: reason => seen.push(reason || 'exit'),
+    on_schedule_listener: active => active ? held_tasks.add(marker) : held_tasks.delete(marker),
     on_schedule: async (schedule, handle) => { seen.push(`schedule:${schedule.id}:${schedule.schedule}:${schedule.prompt}:${typeof handle.kill}`); return answers.shift(); },
   }, { interval: 10, env: { CLAUDE_CONFIG_DIR: home } });
   // Idle host: the fire opens a scheduled execution and its turn is followed there, through the same callbacks.
@@ -1926,6 +1929,7 @@ test('a schedule a Claude window host set comes back as a scheduled execution wh
   room_task(idle, 'free-9.task.json', seen, [true]);
   appendFileSync(idle, prompt('free-9.task.json') + cron('7ba9b755') + remark('已设定时') + turn_end);
   await wait_for(() => seen.includes('exit'));
+  assert.deepEqual([...held_tasks], ['free-9.task.json']);
   appendFileSync(idle, fire('7ba9b755') + remark('线上还是 0.4.52') + turn_end);
   await wait_for(() => seen.length >= 5);
   assert.deepEqual(seen, ['已设定时', 'exit', 'schedule:7ba9b755:Every 5 minutes:用 npm view 查线上版本:function', '线上还是 0.4.52', 'exit']);
@@ -1936,6 +1940,7 @@ test('a schedule a Claude window host set comes back as a scheduled execution wh
   await delay(60);
   appendFileSync(idle, fire('7ba9b755') + remark('顺便查了版本'));
   await wait_for(() => busy.length);
+  assert.deepEqual([...held_tasks], ['free-10.task.json']);
   assert.deepEqual([busy, seen.length], [['顺便查了版本'], 5]);
   appendFileSync(idle, turn_end);
   await wait_for(() => busy.includes('exit'));
@@ -1945,6 +1950,7 @@ test('a schedule a Claude window host set comes back as a scheduled execution wh
   appendFileSync(idle, fire('7ba9b755') + remark('不该被收') + turn_end);
   await delay(120);
   assert.equal(seen.length, 5);
+  assert.equal(held_tasks.size, 0);
   // The member is no longer the host: 'stop' ends the listener too.
   const stopped = join(home, 'stopped.jsonl'), told = [];
   writeFileSync(stopped, '');
@@ -2507,7 +2513,11 @@ function room_config(directory, site, room, name = room) {
 test('the housekeeping sweep removes week-old files of ended executions and keeps current or recent ones', t => {
   const home = mkdtempSync(join(tmpdir(), 'discussion-sweep-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  const path = room_config(home, 'http://127.0.0.1:1', 'room1');
+  const path = room_config(home, 'http://127.0.0.1:8765', 'room1');
+  mkdirSync(join(home, 'local'));
+  const db = new DatabaseSync(join(home, 'local', 'discuss.sqlite3'));
+  db.exec('CREATE TABLE member_executions(id, room_id, status)');
+  db.close();
   register_room(home, path);
   const config = load_config(path);
   const store = new DiscussionStore(config.directory);

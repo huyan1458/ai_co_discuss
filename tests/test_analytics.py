@@ -1,4 +1,5 @@
 """End-to-end owner analytics against an isolated collaborative room."""
+import json
 from contextlib import closing
 from datetime import datetime, timezone
 from unittest.mock import patch
@@ -106,7 +107,16 @@ class AnalyticsTests(HostRoomTests):
                 db.execute("""INSERT INTO member_executions(room_id,member_id,client_id,status,created_at,finished_at,model,effort)
                     SELECT room_id,id,?,'completed',?,?,?,'high' FROM room_members WHERE room_id=? AND name='Claude'""",
                            (str(offset), start+offset, start+offset+duration, model, room))
+            # Two of the "M" runs ran under workflow "wf"; the first also reported an unbound delivery before it.
+            ids = [row[0] for row in db.execute("SELECT id FROM member_executions WHERE model='M' ORDER BY id LIMIT 2")]
+            bindings = [[None, {"id": "wf", "card": "writer", "sub_workflow": None}], [{"id": "wf", "card": "editor", "sub_workflow": "polish"}]]
+            for execution_id, items in zip(ids, bindings):
+                db.execute("INSERT INTO execution_diagnostics(execution_id,details) VALUES (?,?)",
+                           (execution_id, json.dumps({"workflow_bindings": items})))
         report = self.report("&from=2026-03-07&to=2026-03-11&tz=America%2FLos_Angeles")
+        workflow, = report["workflows"]
+        self.assertEqual((workflow["id"], workflow["executions"], workflow["completed"], workflow["rooms"]), ("wf", 2, 2, 1))
+        self.assertEqual((workflow["cards"], workflow["sub_workflows"]), ({"writer": 1, "editor": 1}, {"polish": 1}))
         models = {m["model"]: m for m in report["models"]}
         self.assertEqual(models["M"]["duration"], {"samples": 3, "p50": 4, "p90": 80.8, "approximate": False})
         self.assertEqual(models["M"]["completed"], 3)
@@ -116,6 +126,11 @@ class AnalyticsTests(HostRoomTests):
         self.assertEqual([d["date"] for d in days], ["2026-03-07","2026-03-08","2026-03-09","2026-03-10"])
         self.assertEqual([d["execution_seconds"] for d in days], [4, 7, 98, 0])
         self.assertEqual(sum(d["execution_seconds"] for d in days), report["time"]["execution_seconds"])
+        # Per-room rows break each folder down: their totals match the folder rows exactly.
+        rooms, folders = report["time"]["rooms"], report["time"]["folders"]
+        for key in ("initiated", "execution_seconds"):
+            self.assertEqual(sum(r[key] for r in rooms), sum(f[key] for f in folders))
+        self.assertTrue(all(r["title"] and "folder_id" in r for r in rooms))
 
     def test_dst_and_concurrency(self):
         instant = datetime(2026, 3, 8, 12, tzinfo=timezone.utc).timestamp()

@@ -48,7 +48,11 @@ export function inclusive_date_range(from, to) {
   return t("{from} 至 {to}", { from, to: last_day });
 }
 
-/** Format a duration in seconds for compact display; null becomes an em dash. */
+/**
+ * Format a duration in seconds for compact display; null becomes an em dash. The smaller unit is always shown once the
+ * larger one appears ("11 小时 0 分", not "11 小时"), so a value that lands on a whole hour does not look truncated and the
+ * text keeps its shape while a number counts up.
+ */
 export function format_duration(seconds) {
   if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) return "—";
   const total = Math.max(0, Math.round(Number(seconds)));
@@ -56,11 +60,11 @@ export function format_duration(seconds) {
   if (total < 3600) {
     const minutes = Math.floor(total / 60);
     const rem = total % 60;
-    return rem ? t("{minutes} 分 {seconds} 秒", { minutes, seconds: rem }) : t("{count} 分钟", { count: minutes });
+    return t("{minutes} 分 {seconds} 秒", { minutes, seconds: rem });
   }
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
-  return minutes ? t("{hours} 小时 {minutes} 分", { hours, minutes }) : t("{count} 小时", { count: hours });
+  return t("{hours} 小时 {minutes} 分", { hours, minutes });
 }
 
 /** Format a Unix timestamp in seconds using the browser locale and report timezone. */

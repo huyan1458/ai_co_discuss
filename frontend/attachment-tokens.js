@@ -1,5 +1,5 @@
 /**
- * `[图片 #n]` / `[文件 #n]` in a composer behave as one token, as a pasted screenshot's placeholder does in Claude Code's
+ * `[图片 #n]` / `[文件 #n]` and dropped room or member references in a composer behave as one token, as a pasted screenshot's placeholder does in Claude Code's
  * prompt: an edit that touches any part of one removes all of it, the caret never stops inside, and the composer's
  * mirror paints it as a tag. The text stays plain text, so sending, drafts and the classic page are unchanged.
  */
@@ -24,9 +24,18 @@ export function open_attachment_picker(event) {
   requestAnimationFrame(open_when_ready);
 }
 
-/** `[start, end]` of every draft placeholder present in the text, in order. */
+/**
+ * A room or member reference dropped into the composer (`[房间 标题 #编号]`, `[成员 名称]`, or the English `[room …]`,
+ * `[member …]`) is a token too (user 2026-11-26, #13309); its name never holds brackets (see `reference_name`).
+ */
+const REFERENCE = /\[(?:房间|room) [^[\]\n]+ #[0-9a-f]{12}\]|\[(?:成员|member) [^[\]\n]+\]/g;
+
+/** A title or display name made safe to sit inside a reference token: no brackets or line breaks. */
+export const reference_name = (name) => String(name || "").replace(/[[\]]/g, "").replace(/\s+/g, " ").trim();
+
+/** `[start, end]` of every draft placeholder and dropped reference present in the text, in order. */
 export function token_ranges(text, drafts) {
-  const ranges = [];
+  const ranges = [...text.matchAll(REFERENCE)].map((match) => [match.index, match.index + match[0].length]);
   for (const { placeholder } of drafts) {
     if (!placeholder) continue;
     for (let at = text.indexOf(placeholder); at >= 0; at = text.indexOf(placeholder, at + 1)) ranges.push([at, at + placeholder.length]);

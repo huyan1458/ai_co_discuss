@@ -871,7 +871,14 @@ function listen_schedules(file, pid, setup) {
   let offset = statSync(file).size, pending = Buffer.alloc(0), asking = false, held = [];
   const timer = setInterval(tick, setup.interval || WINDOW_POLL_MS);
   timer.unref();
-  const listener = { crons, add: (id, cron) => crons.set(id, cron), adopt: next => Object.assign(setup, next), end };
+  setup.task.on_schedule_listener?.(true);
+  const listener = { crons, add: (id, cron) => crons.set(id, cron), adopt(next) {
+    if (setup.task.on_schedule_listener !== next.task.on_schedule_listener) {
+      next.task.on_schedule_listener?.(true);
+      setup.task.on_schedule_listener?.(false);
+    }
+    Object.assign(setup, next);
+  }, end };
   schedule_listeners.set(file, listener);
   return listener;
   function tick() {
@@ -940,7 +947,10 @@ function listen_schedules(file, pid, setup) {
   function end() {
     clearInterval(timer);
     crons.clear();
-    if (schedule_listeners.get(file) === listener) schedule_listeners.delete(file);
+    if (schedule_listeners.get(file) === listener) {
+      schedule_listeners.delete(file);
+      setup.task.on_schedule_listener?.(false);
+    }
   }
 }
 

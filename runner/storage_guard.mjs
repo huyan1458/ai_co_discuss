@@ -1,9 +1,19 @@
 /** Local storage and disk-reserve guard for the service home (`~/.codiscuss`). */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { statfsSync, statSync } from 'node:fs';
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { t } from './i18n.mjs';
 import { speech_model_directories } from './speech_directories.mjs';
+
+const directory_breakdown = new AsyncLocalStorage();
+
+/** Collect directory totals from the report's home scan, isolated from concurrent panel requests. */
+export async function with_directory_breakdown(read_report) {
+  const groups = { local: 0, drafts: 0, launches: 0, 'panel-window': 0, pi: 0, other: 0 };
+  const report = await directory_breakdown.run(groups, read_report);
+  return { ...report, groups };
+}
 
 export const KIB = 1024;
 export const MIB = 1024 ** 2;
@@ -171,6 +181,7 @@ async function scan_directory(frame, queue, state, config) {
       if (!item) continue;
       const { entry, full_path, stat } = item;
       const top_key = frame.depth === 0 ? path_key(entry.name) : '';
+      const group = frame.group || (stat.isDirectory() && [DRAFTS_DIR, LOCAL_DIR, 'launches', 'panel-window', 'pi'].includes(top_key) ? top_key : 'other');
       const in_drafts = frame.in_drafts || top_key === DRAFTS_DIR;
       const in_local = frame.in_local || top_key === LOCAL_DIR;
       const room_key = frame.room_key || (frame.in_drafts && frame.depth === 1 && stat.isDirectory() ? entry.name : '');
@@ -178,11 +189,13 @@ async function scan_directory(frame, queue, state, config) {
       if (stat.isDirectory()) {
         if (room_key && !Object.hasOwn(state.rooms, room_key)) state.rooms[room_key] = 0;
         const scratch = frame.scratch || config.scratch?.get(path_key(full_path));
-        queue.push({ path: full_path, depth: frame.depth + 1, in_drafts, in_local, room_key, member, scratch });
+        queue.push({ path: full_path, depth: frame.depth + 1, group, in_drafts, in_local, room_key, member, scratch });
       } else if (stat.isFile()) {
         state.files += 1;
         if (state.files > config.max_files) { state.truncated = true; return; }
+        const before = state.total_bytes;
         record_file(stat, room_key, in_drafts, in_local, state);
+        if (state.groups) state.groups[group] += state.total_bytes - before;
         if (frame.scratch && stat.nlink === 1n) frame.scratch.bytes += Number(stat.size);
         if (member && state.members) {
           const totals = state.members[room_key] ||= Object.create(null);
@@ -221,6 +234,7 @@ export async function measure(home, options = {}) {
     room_unreadable: Object.create(null),
     truncated: false,
     files: 0,
+    groups: options.members && directory_breakdown.getStore(),
     seen_total: new Set(),
     seen_local: new Set(),
     seen_draft: new Set(),
@@ -248,7 +262,7 @@ export async function measure(home, options = {}) {
   if (options.drafts_root && relative(join(logical_root, DRAFTS_DIR), options.drafts_root)) {
     const external = resolve(options.drafts_root);
     if (relative(external, await realpath_fn(external))) throw new Error('Redirected project drafts directory');
-    queue.push({ path: external, depth: 1, in_drafts: true, in_local: false, room_key: '' });
+    queue.push({ path: external, group: DRAFTS_DIR, depth: 1, in_drafts: true, in_local: false, room_key: '' });
   }
   while (queue.length && !state.truncated) {
     await scan_directory(queue.shift(), queue, state, config);

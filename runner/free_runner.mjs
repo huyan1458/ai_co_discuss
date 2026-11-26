@@ -64,7 +64,7 @@ const RESTART_REASON = room_text("重启后无法确认上次执行结果");
 // Recognize older versions' pending restart retries so upgrading cannot redeliver them.
 const RESTART_REASON_CODE = 'runner_restarted';
 const MAX_RETRY_REASON = 500;
-const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait', 'storage_stopping'];
+export const LIVE = ['reserving', 'delivering', 'sidecar_pending', 'running', 'retry_wait', 'storage_stopping'];
 // The longest private chat reply the site keeps.
 const CHAT_REPLY_LIMIT = 20000;
 const MAX_HASHED_BYTES = 5 * 1024 * 1024;
@@ -1296,6 +1296,7 @@ export class FreeRoomRunner {
     this.generations.set(execution.id, generation);
     // The turn's events follow it when a keep_working dispatch moves it onto a new execution.
     const live = () => this.live_id(execution.id);
+    const listener_key = `schedule-listener:${execution.id}:${randomUUID()}`;
     const current = () => this.generations.get(live()) === generation;
     const binding = this.store.binding(member.name);
     let invoked = false;
@@ -1370,6 +1371,11 @@ export class FreeRoomRunner {
         // Background work this execution left started a new turn of the software: see `follow_up`.
         on_followup: (reports, handle, options) => this.follow_up(member.name, live(), reports, handle, options),
         // A schedule the member set in its own software fired: see `schedule_fire`.
+        on_schedule_listener: active => {
+          if (this.store.db.isOpen === false) return;
+          if (active) this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run(listener_key, this.instance);
+          else this.store.db.prepare('DELETE FROM metadata WHERE key=?').run(listener_key);
+        },
         on_schedule: (schedule, handle) => this.schedule_fire(member.name, live(), schedule, handle),
         on_output: (path, chunk) => { appendFileSync(path, chunk, { mode: 0o600 }); this.touch(live()); this.segments.mark(live()); },
         on_activity: (phase, tool, call, { synthetic = false } = {}) => {
@@ -1676,6 +1682,7 @@ export class FreeRoomRunner {
    * and progress as they stand; the new one watches from now.
    */
   async carry_on(name, old, id) {
+    this.store.db.prepare('INSERT OR REPLACE INTO metadata VALUES (?,?)').run('execution-source:' + id, String(old));
     this.continued.set(old, id);
     for (const map of [this.generations, this.steers, this.activity, this.replies, this.exited, this.execution_processes, this.refusal_hints, this.refusal_retries, this.delivery_caps]) {
       if (map.has(old)) { map.set(id, map.get(old)); map.delete(old); }
@@ -1751,6 +1758,8 @@ export class FreeRoomRunner {
   sweep_lingering() {
     if (this.lingering_swept) return;
     this.lingering_swept = true;
+    this.store.db.prepare("INSERT OR REPLACE INTO metadata VALUES ('tracks-schedule-listeners','1')").run();
+    this.store.db.prepare("DELETE FROM metadata WHERE key LIKE 'schedule-listener:%' AND value<>?").run(this.instance);
     for (const { key, value } of this.store.db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'lingering:%'").all()) {
       const pid = Number(key.slice('lingering:'.length)), record = JSON.parse(value);
       if (record.instance === this.instance) continue;

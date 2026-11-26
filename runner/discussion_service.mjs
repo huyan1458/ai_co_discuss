@@ -17,7 +17,7 @@ import * as storage_guard from './storage_guard.mjs';
 import { relay_health_writer } from './relay_health.mjs';
 import { t } from './i18n.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
-import { FreeRoomRunner, member_drafts, write_proactive_access } from './free_runner.mjs';
+import { FreeRoomRunner, LIVE, member_drafts, write_proactive_access } from './free_runner.mjs';
 import { can_notify, notice_sent, receive_replies, send_notice } from './weixin.mjs';
 import { answer_by_weixin } from './question_weixin.mjs';
 import { OPERATOR_EVENTS_FILE, account_space, drafts_root } from './account_space.mjs';
@@ -947,28 +947,64 @@ function trim_log(path, limit = LOG_LIMIT_BYTES, keep = LOG_KEEP_BYTES) {
   return true;
 }
 
-/** The execution each member's delivery record still names; its files may be in use however old they are. */
-function current_executions(directory) {
-  const path = join(directory, 'runtime.sqlite3');
-  if (!existsSync(path)) return new Set();
-  const db = new DatabaseSync(path, { readOnly: true });
-  try {
-    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='free_deliveries'").get()) return new Set();
-    return new Set(db.prepare('SELECT execution_id FROM free_deliveries').all().map(row => row.execution_id));
-  } finally { db.close(); }
+/** Return execution IDs and live member folders whose files can still be used by the runner. */
+export function execution_file_protection(directory, site_db, room) {
+  const ids = new Set(), members = new Set(), sources = new Map();
+  const remember = (child, parent) => {
+    if (!sources.has(child)) sources.set(child, new Set());
+    sources.get(child).add(parent);
+  };
+  let tracks_listeners = false;
+  const runtime_path = join(directory, 'runtime.sqlite3');
+  if (existsSync(runtime_path)) {
+    const runtime = new DatabaseSync(runtime_path, { readOnly: true });
+    try {
+      const tables = new Set(runtime.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
+      if (tables.has('free_deliveries')) for (const row of runtime.prepare('SELECT * FROM free_deliveries').all()) {
+        ids.add(row.execution_id);
+        if (LIVE.includes(row.status)) members.add(basename(member_drafts({ directory }, row.member)));
+      }
+      if (tables.has('metadata')) tracks_listeners = Boolean(runtime.prepare("SELECT 1 FROM metadata WHERE key='tracks-schedule-listeners'").get());
+      if (tables.has('metadata')) for (const { key, value } of runtime.prepare(
+        "SELECT key,value FROM metadata WHERE key LIKE 'lingering:%' OR key LIKE 'schedule-listener:%' OR key LIKE 'execution-source:%'").all()) {
+        const [kind, id] = key.split(':');
+        if (kind === 'execution-source') remember(Number(id), Number(value));
+        else ids.add(kind === 'lingering' ? JSON.parse(value).execution_id : Number(id));
+      }
+    } finally { runtime.close(); }
+  }
+  if (site_db) {
+    const tables = new Set(site_db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
+    for (const row of site_db.prepare("SELECT id FROM member_executions WHERE room_id=? AND status IN ('dispatched','started')").all(room)) ids.add(row.id);
+    if (tables.has('member_requests')) for (const row of site_db.prepare(
+      "SELECT DISTINCT e.id FROM member_executions e JOIN member_requests r ON r.execution_id=e.id WHERE e.room_id=? AND e.status='failed' AND r.status='failed'").all(room)) ids.add(row.id);
+    for (const [table, child, parent] of [['execution_followups','execution_id','source_id'],
+      ['execution_schedules','execution_id','source_id'], ['execution_continuations','next_id','execution_id']]) {
+      if (!tables.has(table)) continue;
+      for (const row of site_db.prepare(`SELECT ${child} AS child, ${parent} AS parent FROM ${table} JOIN member_executions e ON e.id=${child} WHERE e.room_id=?`).all(room)) {
+        if (row.parent) remember(row.child, row.parent);
+      }
+    }
+    if (!tracks_listeners && tables.has('execution_background_tasks')) for (const row of site_db.prepare('SELECT execution_id,tasks FROM execution_background_tasks WHERE room_id=?').all(room)) {
+      if (JSON.parse(row.tasks).some(task => task.kind === 'schedule' && !task.ended_at && !['completed','cancelled','failed'].includes(task.state))) ids.add(row.execution_id);
+    }
+  }
+  // Set iteration visits newly added ancestors and terminates even for a cycle.
+  for (const id of ids) for (const parent of sources.get(id) || []) ids.add(parent);
+  return { ids, members };
 }
 
 /** Remove a room's per-execution files once they are a week old and no member's delivery still names the execution. */
-function sweep_execution_files(directory, now, removed_logs) {
+function sweep_execution_files(directory, now, removed_logs, site_db, room) {
   if (!existsSync(directory)) return 0;
-  const current = current_executions(directory);
+  const protected_files = execution_file_protection(directory, site_db, room);
   let removed = 0;
   // Credential and task files sit in each member's runtime folder (`members/<key>`), logs in the runtime directory.
   const members = join(directory, 'members');
   const folders = [directory];
   if (lstatSync(members, { throwIfNoEntry: false })?.isDirectory()) {
     for (const entry of readdirSync(members, { withFileTypes: true })) {
-      if (entry.isDirectory()) folders.push(join(members, entry.name));
+      if (entry.isDirectory() && !protected_files.members.has(entry.name)) folders.push(join(members, entry.name));
     }
   }
   for (const folder of folders) for (const name of readdirSync(folder)) {
@@ -977,14 +1013,29 @@ function sweep_execution_files(directory, now, removed_logs) {
     const path = join(folder, name);
     const entry = lstatSync(path, { throwIfNoEntry: false });
     if (!entry?.isFile() || entry.nlink > 1) continue;
-    if (current.has(Number(id)) || now - entry.mtimeMs < STALE_LAUNCH_MS) {
+    if (protected_files.ids.has(Number(id))) continue;
+    if (now - entry.mtimeMs < STALE_LAUNCH_MS) {
       if (name.endsWith('.log') && trim_log(path, storage_guard.LOG_TAIL, storage_guard.LOG_TAIL)) removed_logs.push(path);
       continue;
     }
+    // A foreign or unavailable site cannot confirm the room's continuation ancestry.
+    if (!site_db && /(?:^|-)free-/.test(name)) continue;
     rmSync(path, { force: true });
     removed += 1;
   }
   return removed;
+}
+
+// rmdir also checks emptiness at deletion time, preserving files created during inspection.
+function prune_empty_orphan(path) {
+  try {
+    if (resolve(realpathSync.native(path)) !== resolve(path) || !lstatSync(path).isDirectory()) return false;
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      if (entry.isDirectory()) prune_empty_orphan(join(path, entry.name));
+    }
+    rmdirSync(path);
+    return true;
+  } catch { return false; }
 }
 
 /** The newest change time of a launch folder's own records, which a pending launch still updates. */
@@ -997,32 +1048,62 @@ function launch_touched(folder) {
  * never confirmed, once they are a week old and no process holds them; answer drafts whose folder is gone; registered
  * rooms' task, credential and log files of executions that ended a week ago; and the oversized part of the service's logs. Registered rooms, settings and the local website's database are never touched.
  */
-export function sweep_service_home(home, now = Date.now(), log = () => {}) {
+export function sweep_service_home(home, now = Date.now(), log = () => {}, orphan_only = false) {
   const registered = read_registry(home).map(path => dirname(resolve(path)));
   const launches = join(home, 'launches'), removed = { launches: [], drafts: [], logs: [], execution_files: 0, adapter_files: 0, failures: 0 };
+  if (orphan_only) removed.freed_bytes = 0;
   const failed = (path, error) => { removed.failures++; log(path + ": " + error.message); };
   const resolved_home = resolve(home);
-  if (basename(resolved_home) === '.codiscuss') {
+  if (!orphan_only && basename(resolved_home) === '.codiscuss') {
     try { removed.adapter_files = sweep_adapters(resolved_home, dirname(resolved_home)); } catch (error) { failed(resolved_home, error); }
   }
   for (const name of existsSync(launches) ? readdirSync(launches) : []) {
     const folder = join(launches, name);
     if (registered.includes(folder) || service_pid(folder) || service_pid(join(folder, 'runtime')) || now - launch_touched(folder) < STALE_LAUNCH_MS) continue;
+    if (orphan_only) {
+      try {
+        if (resolve(realpathSync.native(folder)) !== resolve(folder)) continue;
+        const records = readdirSync(folder, { withFileTypes: true });
+        if (records.every(entry => entry.isFile() && ['config.json', 'launch.json'].includes(entry.name))) {
+          for (const entry of records) {
+            const path = join(folder, entry.name), stat = lstatSync(path);
+            if (!stat.isFile() || stat.nlink !== 1) continue;
+            unlinkSync(path);
+            removed.freed_bytes += stat.size;
+          }
+        }
+        if (prune_empty_orphan(folder)) removed.launches.push(name);
+      } catch (error) { failed(folder, error); }
+      continue;
+    }
     try { remove_room_files(home, join(folder, 'config.json')); removed.launches.push(name); } catch (error) { failed(folder, error); }
   }
   // A draft folder is keyed by its room's data directory; one matching no remaining folder or registered room is orphaned.
-  const live = new Set(), runtimes = new Set();
+  const live = new Set(), runtimes = new Map();
   for (const path of read_registry(home)) {
     const folder = dirname(resolve(path));
     for (const directory of [folder, join(folder, 'runtime')]) live.add(service_drafts(home, directory));
     try {
-      const { directory } = validate_config(JSON.parse(readFileSync(path, 'utf8')), folder);
+      const config = JSON.parse(readFileSync(path, 'utf8'));
+      const directory = orphan_only
+        ? resolve(folder, config.data_directory || 'discussion-' + config.room)
+        : validate_config(config, folder).directory;
       live.add(service_drafts(home, directory));
-      runtimes.add(resolve(directory));
+      runtimes.set(resolve(directory), config);
     } catch (error) { failed(path, error); }
   }
-  for (const directory of runtimes) {
-    try { removed.execution_files += sweep_execution_files(directory, now, removed.logs); } catch (error) { failed(directory, error); }
+  for (const [directory, config] of orphan_only ? [] : runtimes) {
+    let db;
+    try {
+      const settings = join(home, 'local-settings.json');
+      const port = existsSync(settings) ? JSON.parse(readFileSync(settings, 'utf8')).port || 8765 : 8765;
+      const database = join(home, 'local', 'discuss.sqlite3');
+      const site = new URL(config.site);
+      if (site.hostname === 'localhost') site.hostname = '127.0.0.1';
+      if (site.origin === 'http://127.0.0.1:' + port && existsSync(database)) db = new DatabaseSync(database, { readOnly: true });
+      removed.execution_files += sweep_execution_files(directory, now, removed.logs, db, config.room);
+    } catch (error) { failed(directory, error); }
+    finally { db?.close(); }
   }
   for (const name of existsSync(launches) ? readdirSync(launches) : []) {
     for (const directory of [join(launches, name), join(launches, name, 'runtime')]) live.add(service_drafts(home, directory));
@@ -1030,9 +1111,14 @@ export function sweep_service_home(home, now = Date.now(), log = () => {}) {
   const drafts = drafts_root(home);
   for (const name of existsSync(drafts) ? readdirSync(drafts) : []) {
     if (live.has(join(drafts, name))) continue;
+    if (orphan_only) {
+      if (!removed.failures && prune_empty_orphan(join(drafts, name))) removed.drafts.push(name);
+      continue;
+    }
     try { remove_tree(join(drafts, name)); removed.drafts.push(name); }
     catch (error) { failed(join(drafts, name), error); }
   }
+  if (orphan_only) return removed;
   for (const name of SERVICE_LOGS) {
     try { if (trim_log(join(home, name))) removed.logs.push(name); }
     catch (error) { failed(join(home, name), error); }
