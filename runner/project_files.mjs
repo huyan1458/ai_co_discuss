@@ -271,6 +271,9 @@ export function read_project_folders(cwd, folders) {
 
 // An HTML page with the files it refers to inlined stays within this size; references past it are left as they are.
 export const PAGE_MAX_BYTES = 8 * 1024 * 1024;
+// The largest HTML file shown in full; a self-contained page (images inlined) is often far past PAGE_MAX_BYTES itself,
+// and then nothing it refers to is inlined (2026-11-26: a 38 MB catalogue page only showed its first 128 KB as text).
+export const PAGE_FILE_MAX_BYTES = 64 * 1024 * 1024;
 // Media types of the files a page may refer to; others are left as they are.
 const PAGE_TYPES = {
   css: 'text/css', js: 'text/javascript', mjs: 'text/javascript', json: 'application/json', txt: 'text/plain', csv: 'text/csv',
@@ -354,10 +357,10 @@ export function bundle_project_page(cwd, path) {
   if (!/\.html?$/i.test(target)) throw new Error('只能打开 HTML 文件');
   const info = statSync(target);
   if (!info.isFile()) throw new Error('只能预览普通文件');
-  if (info.size > PAGE_MAX_BYTES) throw new Error('HTML 文件超过 8 MiB，无法完整显示');
+  if (info.size > PAGE_FILE_MAX_BYTES) throw new Error('HTML 文件超过 64 MiB，无法完整显示');
   const normalized = path.replaceAll('\\', '/').split('/').filter(part => part && part !== '.').join('/');
   const base = posix.dirname(normalized);
-  const state = { root, budget: PAGE_MAX_BYTES - info.size, inlined: new Map(), missing: new Set(), skipped: new Set() };
+  const state = { root, budget: Math.max(0, PAGE_MAX_BYTES - info.size), inlined: new Map(), missing: new Set(), skipped: new Set() };
   const html = readFileSync(target, 'utf8').replace(PAGE_PARTS, (whole, script_open, script_body, script_close, style_open, style_body, style_close, comment, tag) => {
     if (script_open) return page_tag(script_open, base, state) + script_body + script_close;
     if (style_open) return style_open + page_css(style_body, base, state, 0) + style_close;

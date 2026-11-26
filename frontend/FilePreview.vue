@@ -308,7 +308,9 @@ async function load(item) {
         return;
       }
     }
-    if (item.attachment && !item.attachment.url && !item.archive) item.attachment.url = await bridge.attachment_url(item.attachment);
+    // A PDF attachment through the relay is read in pieces as its pages are shown, not whole first.
+    const pdf_range = item.attachment && !item.attachment.url && !item.archive && document_kind_of(item.path) === "pdf" ? bridge.attachment_range_reader(item.attachment) : null;
+    if (item.attachment && !item.attachment.url && !item.archive && !pdf_range) item.attachment.url = await bridge.attachment_url(item.attachment);
     // An Office attachment is read whole by its preview, never decoded as text.
     const binary = media_of(item.path) || document_kind_of(item.path);
     const result = binary ? { text: null, reason: "", size: item.attachment?.size ?? item.metadata?.size, modified_at: item.attachment?.created_at || item.metadata?.modified_at }
@@ -322,7 +324,7 @@ async function load(item) {
     // for Markdown it reads the images the file shows.
     await page_read;
     if (item.request === request && !item.attachment && (media_of(item.path) || document_kind_of(item.path))) await load_media(item, request);
-    if (item.request === request && item.attachment && binary) item.media = { url: item.attachment.url, blob: false };
+    if (item.request === request && item.attachment && binary) item.media = { url: item.attachment.url || "", blob: false, ...(pdf_range ? { range: pdf_range } : {}) };
     if (item.request === request && document_kind_of(item.path) === "prproj" && item.media) await unpack_project(item, request);
   } catch (error) {
     if (item.request === request) item.error = error.message;
@@ -1113,7 +1115,7 @@ onMounted(() => {
   file_preview.open_visual = open_visual;
   window.addEventListener("message", frame_selection);
   bridge.set_text_preview(open_attachment);
-  bridge.set_image_viewer((file) => open_image_viewer(file, () => bridge.attachment_url(file)));
+  bridge.set_image_viewer((files, index) => open_image_viewer(files, index, (file) => bridge.attachment_url(file), (file) => bridge.attachment_thumbnail_url(file)));
   place_float();
   measure_dock();
   window.addEventListener("resize", measure_dock);
@@ -1221,7 +1223,7 @@ onBeforeUnmount(() => {
         </template>
         <template v-else-if="office_kind">
           <div v-if="tab.media_error" class="project-editor-state"><UIcon name="i-lucide-circle-alert" /><p>{{ tab.media_error }}</p><UButton :label="t('重试')" color="neutral" variant="outline" class="pb-action" size="sm" @click="load(tab)" /></div>
-          <OfficeViewer v-else-if="tab.media" :kind="office_kind" :url="tab.media.url" :scale="font_scale" />
+          <OfficeViewer v-else-if="tab.media" :kind="office_kind" :url="tab.media.url" :range="tab.media.range || null" :scale="font_scale" />
           <PreviewLoading v-else :label="tab.media_progress ? t('正在经电脑读取… {value1}%', { value1: Math.round(tab.media_progress * 100) }) : t('正在打开…')" :progress="tab.media_progress || 0" />
         </template>
         <template v-else-if="document_kind === 'zip'">

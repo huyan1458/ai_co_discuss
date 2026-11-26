@@ -2,6 +2,12 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.29 (2026-11-25 18:37)
+
+- New: When viewing an image, the side buttons or left and right arrow keys step through the other images in the message.
+- Changed: Large images in messages show a thumbnail first so they load faster, then switch to the original.
+- New: Web pages in a project can open in a new tab, with their images and scripts working.
+
 ## 0.5.28 (2026-11-25 07:24)
 
 - Changed: Hosts can message other rooms' hosts directly without linking first; "Parent and child rooms" on the right shows related rooms.

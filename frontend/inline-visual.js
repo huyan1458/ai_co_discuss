@@ -220,8 +220,12 @@ export function visual_tab_document(title, source, theme, restricted = false) {
   return shell + `<script>(${start_visual_tab.toString()})(${initial},${inline_visual_theme.toString()},${observe_visual_theme.toString()},${send_visual_theme.toString()});</script>`;
 }
 
-/** Open a trusted wrapper whose only content runs in its own opaque-origin iframe. */
-export function open_html_preview_tab(title, source, theme, restricted = false) {
+/**
+ * Open a trusted wrapper whose only content runs in its own opaque-origin iframe. `target` is a tab opened at the click
+ * while the file was still being read (a tab opened after waiting is blocked as a pop-up); it is sent to the wrapper.
+ */
+export function open_html_preview_tab(title, source, theme, restricted = false, target = null) {
   const url = URL.createObjectURL(new Blob([visual_tab_document(title, source, theme, restricted)], { type: "text/html" }));
-  window.open(url, "_blank");
+  if (target && !target.closed) target.location.replace(url);
+  else window.open(url, "_blank");
 }

@@ -13,7 +13,10 @@ import { attach_pinch_zoom } from "./pinch-zoom.js";
 import { t } from './i18n.js';
 
 // `scale` is the preview's size step for Word and Excel (1 = Word fitted to the width, Excel at its normal size).
-const props = defineProps({ kind: { type: String, required: true }, url: { type: String, required: true }, scale: { type: Number, default: 1 } });
+// `range` ({ length, read(begin, end) }) reads a PDF piece by piece instead of from `url` whole: the pages first shown
+// need only their own parts, so a large PDF through the relay opens without waiting for all of it (2026-11-26).
+const props = defineProps({ kind: { type: String, required: true }, url: { type: String, required: true }, scale: { type: Number, default: 1 },
+  range: { type: Object, default: null } });
 const MODULES = { docx: "/office/docx.js", sheet: "/office/xlsx.js", slides: "/office/pptx.js", pdf: "/pdfjs/pdf.min.mjs" };
 const LABELS = { docx: t('正在排版 Word 文档…'), sheet: t('正在读取表格…'), slides: t('正在绘制幻灯片…'), pdf: t('正在打开 PDF…') };
 // The Word frame may be reached from this page to lay the document out, but runs no scripts of its own.
@@ -28,6 +31,8 @@ const SHEET_STYLE = "<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"w
 const PDF_MAX_PIXEL_RATIO = 2;
 const PDF_MAX_SCALE = 2;
 const PDF_GUTTER = 24;
+// The size PDF.js asks a ranged PDF for at a time: each ask is one trip through the relay, so it is large.
+const PDF_RANGE_CHUNK_BYTES = 512 * 1024;
 // The longest side of a drawn page: iOS leaves a larger canvas blank.
 const PDF_MAX_CANVAS_SIDE = 4096;
 // PDF and slides have no size steps, so two fingers zoom them, up to this many times their fitted size.
@@ -149,7 +154,7 @@ function pinch_scroller() {
 /** Lay out every PDF page at the window's width; each is drawn as it comes into view, the first shown at once. */
 async function show_pdf(module, data, run) {
   module.GlobalWorkerOptions.workerSrc = "/pdfjs/pdf.worker.min.mjs";
-  pdf_task = module.getDocument({ data, cMapUrl: "/pdfjs/cmaps/", cMapPacked: true, standardFontDataUrl: "/pdfjs/standard_fonts/",
+  pdf_task = module.getDocument({ ...(props.range ? pdf_range_source(module) : { data }), cMapUrl: "/pdfjs/cmaps/", cMapPacked: true, standardFontDataUrl: "/pdfjs/standard_fonts/",
     wasmUrl: "/pdfjs/wasm/", iccUrl: "/pdfjs/iccs/", isEvalSupported: false, enableXfa: false });
   pdf_document = await pdf_task.promise;
   if (run !== version) return;
@@ -168,6 +173,16 @@ async function show_pdf(module, data, run) {
     page_observer.observe(canvas);
     if (number === 1) { await draw_pdf_page(canvas); state.value = "ready"; }
   }
+}
+
+/** PDF.js options reading the PDF through `props.range`, only the parts the shown pages need. */
+function pdf_range_source(module) {
+  const { length, read } = props.range;
+  const transport = new module.PDFDataRangeTransport(length, null);
+  transport.requestDataRange = (begin, end) => {
+    read(begin, end).then((chunk) => transport.onDataRange(begin, chunk)).catch(() => transport.abort());
+  };
+  return { range: transport, rangeChunkSize: PDF_RANGE_CHUNK_BYTES, disableAutoFetch: true, disableStream: true };
 }
 
 /** Draw a deck's slides in one scrolling view; it fits the slides to the container's width itself. */
@@ -205,7 +220,7 @@ async function render() {
       return;
     }
     // The renderer and the file come in parallel; the deck viewer reads its URL itself.
-    const [module, data] = await Promise.all([import(/* @vite-ignore */ MODULES[props.kind]), props.kind === "slides" ? null : file_bytes()]);
+    const [module, data] = await Promise.all([import(/* @vite-ignore */ MODULES[props.kind]), props.kind === "slides" || (props.kind === "pdf" && props.range) ? null : file_bytes()]);
     if (run !== version) return;
     if (props.kind === "docx") await show_docx(module, data, run);
     else if (props.kind === "pdf") await show_pdf(module, data, run);
@@ -218,7 +233,7 @@ async function render() {
   }
 }
 
-watch(() => [props.kind, props.url], render, { immediate: true });
+watch(() => [props.kind, props.url, props.range], render, { immediate: true });
 watch(() => props.scale, () => (props.kind === "docx" ? fit_docx() : scale_sheet()));
 onMounted(() => {
   detach_pinch = attach_pinch_zoom(root.value, { scroller: pinch_scroller, get_zoom: () => pinch_zoom, max_zoom: MAX_PINCH_ZOOM,

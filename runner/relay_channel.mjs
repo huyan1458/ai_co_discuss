@@ -50,7 +50,7 @@ const BACKLOG_LOG_MS = 60000;
 const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions|sites)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
 const RELAY_READ_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Attachment uploads arrive in parts and are sent to the local website whole, as one browser upload would be.
-const UPLOAD_PATH = /^\/api\/rooms\/[A-Za-z0-9_-]+\/attachments(\/[A-Za-z0-9_-]+\/import)?(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
+const UPLOAD_PATH = /^\/api\/rooms\/[A-Za-z0-9_-]+\/attachments(\/[A-Za-z0-9_-]+\/(import|thumbnail))?(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
 const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 const UPLOAD_TTL_MS = 10 * 60 * 1000;
 const uploads = new Map();
@@ -135,8 +135,10 @@ export async function room_api(home, site, payload, { fetcher = site_fetch, devi
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   // A read the device already holds is asked conditionally; unchanged, the answer is a bare 304 with no body.
   if (method === 'GET' && typeof etag === 'string' && /^"[0-9a-f]{1,64}"$/.test(etag)) headers['If-None-Match'] = etag;
-  const zip_range = method === 'GET' && /^\/api\/rooms\/[\w-]+\/attachments\/[\w-]+\/zip\?entry=/.test(path);
-  if (zip_range) headers.Range = 'bytes=' + offset + '-' + (offset + RESPONSE_MAX_BYTES - 1);
+  // An attachment's bytes and a zip entry are asked from the local website for the part needed alone, not whole for
+  // every part (a 20 MB PDF read in pieces would read 20 MB per piece).
+  const ranged = method === 'GET' && /^\/api\/rooms\/[\w-]+\/attachments\/[\w-]+\/(zip\?entry=|(content|thumbnail)$)/.test(path);
+  if (ranged) headers.Range = 'bytes=' + offset + '-' + (offset + RESPONSE_MAX_BYTES - 1);
   const on_request = timing?.route ? () => { timing.local_request_at = performance.now(); } : undefined;
   if (on_request) headers['X-CoDiscuss-Relay-Request-Id'] = timing.id;
   const response = await fetcher(`${local_origin(home)}${path}`, { method, headers, redirect: 'error',
@@ -147,7 +149,11 @@ export async function room_api(home, site, payload, { fetcher = site_fetch, devi
   if (type.startsWith('application/json')) return { status: response.status, body: await response.json(), ...(tag ? { etag: tag } : {}) };
   // A file larger than one frame comes back in parts; the device asks again from where the previous part ended.
   const bytes = Buffer.from(await response.arrayBuffer());
-  if (zip_range && response.status === 206) {
+  // Asked from past the end (an empty file): no bytes, and the size the website gives.
+  if (ranged && response.status === 416) {
+    return { status: 200, content_type: type, offset, total: Number(/\/(\d+)$/.exec(response.headers.get('Content-Range') || '')?.[1] || 0), body_base64: '' };
+  }
+  if (ranged && response.status === 206) {
     const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('Content-Range') || '');
     if (!range || Number(range[1]) !== offset || Number(range[2]) - offset + 1 !== bytes.length
         || Number(range[3]) <= Number(range[2])) throw new Error(t('无法读取这个压缩包条目'));

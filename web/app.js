@@ -644,6 +644,8 @@ const UPLOAD_PERCENT_BEFORE_SAVED = 99;
 // (2026-11-16: opening a room with 51 screenshots read 46 MB at once; message reads and sends timed out, and the retried
 // parts were sent again).
 const RELAY_FILE_CONCURRENCY = 2;
+// Parts of a file the user opened that are asked at once; such a file also does not wait for one of the slots above.
+const RELAY_URGENT_PARTS = 3;
 // Images and media of the computer's rooms are read once they come this near the screen, not all when a room opens.
 const RELAY_MEDIA_MARGIN = "1000px 0px";
 // How long a relayed image or media element may keep its spinner before it says it failed; a file arriving later still shows.
@@ -658,7 +660,7 @@ let relay_machine = null;
 const relay_files = new Map();
 /** Room files are read as bytes and shown from object URLs: the computer's rooms through the relay, a share page from what it carries. */
 const files_by_blob = () => state.remote_rooms || Boolean(SHARE);
-// Relay file reads waiting for a free slot, and how many are running (RELAY_FILE_CONCURRENCY).
+// Relay file reads waiting for a free slot as { path, job }, and how many are running (RELAY_FILE_CONCURRENCY).
 const relay_file_queue = [];
 let relay_file_running = 0;
 // The room list and room views last read, with their ETags, by route; an unchanged read is answered 304 and reuses them.
@@ -3455,8 +3457,12 @@ async function finish_message(result, job) {
   job.preview = { ...job.preview, saved_id };
   // The receipt carries only counts (text_chars, attachments); the card keeps the text and files this page sent,
   // so it does not turn empty between the sending card and the room's next read.
-  const attachments = job.drafts.filter(item => item.uploaded).map(item => ({ id: item.uploaded, room_id, message_id: saved_id, file_name: item.file.name,
-    content_type: item.file.type || "application/octet-stream", size: item.file.size,
+  // Numbered from where this page numbered them and sized as measured here, so placeholders and the image grid lay out
+  // as on the copy the room reads next (2026-11-26: two images showed on two lines, then side by side).
+  const attachment_start = job.preview.attachment_start || 1;
+  const attachments = job.drafts.filter(item => item.uploaded).map((item, index) => ({ id: item.uploaded, room_id, message_id: saved_id, file_name: item.file.name,
+    content_type: item.file.type || "application/octet-stream", size: item.file.size, number: attachment_start + index,
+    ...(item.width ? { width: item.width, height: item.height } : {}),
     url: `/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(item.uploaded)}/content` }));
   const sent_message = { ...result.message, text: job.payload.text || "", attachments, reply_to: job.payload.reply_to ?? result.message.reply_to ?? null,
     ...(job.payload.attachment_start ? { attachment_start: job.payload.attachment_start } : {}), source: "user", just_sent: true };
@@ -3553,7 +3559,7 @@ function take_into_composer(item, files) {
     notify("info", t('输入框原有草稿已暂存，这条发出后恢复'));
   }
   const drafts = files.map(({ id, file }, index) => {
-    const draft = { id: new_submission_id(), file, preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: id, actor: "用户" };
+    const draft = measure_draft_image({ id: new_submission_id(), file, preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: id, actor: "用户" });
     const placeholder = draft_placeholder(draft, index + 1);
     if (item.text.includes(placeholder)) draft.placeholder = placeholder;
     return draft;
@@ -3727,7 +3733,8 @@ async function send_message(event) {
   const id = new_submission_id();
   payload.submission_id = id;
   const preview = { id, author: payload.author, text: payload.text, created_at: new Date().toISOString(), attachment_start: draft_start(drafts) || 1,
-    files: drafts.map(file => ({ id: file.id, name: file.file.name, preview_url: file.preview_url, uploaded: Boolean(file.uploaded) })) };
+    files: drafts.map(file => ({ id: file.id, name: file.file.name, preview_url: file.preview_url, uploaded: Boolean(file.uploaded),
+      content_type: file.file.type, size: file.file.size, width: file.width, height: file.height })) };
   const job = { id, room_id: state.room.id, room_title: state.room.title || state.room.id, drafts, payload, preview };
   element("message-input").value = "";
   state.attachment_drafts = [];
@@ -3891,7 +3898,7 @@ function add_attachments(files, target = null) {
   if (state.attachment_drafts.length + selected.length > MAX_MESSAGE_ATTACHMENTS) notify("warning", t('每条消息最多 10 个附件'));
   else if (selected.some(file => file.size > MAX_ATTACHMENT_BYTES && !can_compress_video(file))) notify("warning", t('单个附件最多 20 MiB'));
   else {
-    const added = selected.map(file => ({ id: new_submission_id(), file,
+    const added = selected.map(file => measure_draft_image({ id: new_submission_id(), file,
       preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: null, actor: null }));
     state.attachment_drafts.push(...added);
     // Files already in the draft move to the room's current numbers first, so the whole draft counts from one start.
@@ -4057,6 +4064,15 @@ async function prepare_draft_file(item) {
   item.prepared = true;
 }
 
+/** Note a draft image's pixel size once its local copy decodes, so the sending card sizes it as the saved card will. */
+function measure_draft_image(draft) {
+  if (!draft.preview_url || typeof Image !== "function") return draft;
+  const image = new Image();
+  image.onload = () => { draft.width = image.naturalWidth; draft.height = image.naturalHeight; };
+  image.src = draft.preview_url;
+  return draft;
+}
+
 /** Upload one draft file as `actor`; an earlier upload under another actor is replaced by a fresh submission. */
 async function upload_draft(room_id, actor, item) {
   await prepare_draft_file(item);
@@ -4073,6 +4089,7 @@ async function upload_draft(room_id, actor, item) {
     .catch((error) => { report_upload_percent(item, null); throw error; });
   item.uploaded = result.attachment.id;
   if (item.upload_percent != null) report_upload_percent(item, 100);
+  if (/^image\/(png|jpeg|webp)$/.test(result.attachment.content_type)) createImageBitmap(item.file).then(bitmap => store_attachment_thumbnail(result.attachment, bitmap)).catch(() => {});
 }
 
 /**
@@ -4174,7 +4191,7 @@ function paste_attachments(event) {
 /** What a preview button carries, so the preview opens at once instead of first asking the site about the file. */
 function attachment_preview_attributes(file) {
   const name = escape_html(file.file_name);
-  return `data-preview-attachment="${escape_html(file.id)}" data-attachment-room="${escape_html(file.room_id)}" data-file-name="${name}" data-content-type="${escape_html(file.content_type)}" data-file-size="${Number(file.size) || 0}" data-created-at="${escape_html(file.created_at || "")}" data-message-id="${Number(file.message_id) || 0}" aria-label="${escape_html(t("预览 {name}", { name: file.file_name }))}"`;
+  return `data-preview-attachment="${escape_html(file.id)}" data-attachment-room="${escape_html(file.room_id)}" data-file-name="${name}" data-content-type="${escape_html(file.content_type)}" data-file-size="${Number(file.size) || 0}" data-created-at="${escape_html(file.created_at || "")}" data-message-id="${Number(file.message_id) || 0}"${file.thumbnail_url && !SHARE ? ' data-thumbnail="1"' : ""} aria-label="${escape_html(t("预览 {name}", { name: file.file_name }))}"`;
 }
 
 /** A download link's attributes; files of the computer's rooms are read through the relay. */
@@ -4303,10 +4320,18 @@ function attachment_image_style(file) {
 }
 
 /** Render immutable file cards shared by messages, original-message dialogs, and themes. */
+/** Where the smaller copy of an image attachment is read. */
+function attachment_thumbnail_route(file) {
+  return `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/thumbnail`;
+}
+
 /** A message image as its preview button, shown in the list or where the answer refers to it. */
 function attachment_image_markup(file, { inline = false, badge = "" } = {}) {
-  const url = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
-  const local_preview = relay_files.get(url);
+  const original = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
+  // The smaller copy, where the image has one, unless the original is already here (a share page carries originals only).
+  const url = file.thumbnail_url && !SHARE && typeof relay_files.get(original) !== "string" ? attachment_thumbnail_route(file) : original;
+  // `local_url`: this page's own copy of a file still being sent (the sending card).
+  const local_preview = file.local_url || relay_files.get(url);
   const source = typeof local_preview === "string" ? `src="${escape_html(local_preview)}"` : files_by_blob() ? `data-relay-src="${url}"` : `src="${url}"`;
   const inline_attr = inline ? ` data-inline-image="${escape_html(file.id)}"` : "";
   const badge_attr = badge ? ` data-image-badge="${escape_html(badge)}"` : "";
@@ -4402,6 +4427,54 @@ async function attachment_url(file) {
   return files_by_blob() ? relay_file_url(path, { urgent: true }) : path;
 }
 
+/**
+ * A reader of byte ranges of an attachment of the computer's rooms through the relay ({ length, read(begin, end) }, `read`
+ * resolving to a Uint8Array), or null where the file is read whole (this website, a share page).
+ */
+function attachment_range_reader(file) {
+  if (!state.remote_rooms || SHARE || !(Number(file.size) > 0)) return null;
+  const path = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
+  return { length: Number(file.size), read: (begin, end) => relay_room_range(path, begin, end) };
+}
+
+/** Read bytes `begin` up to `end` of a room file through the relay, in as many parts as the relay's frame needs. */
+async function relay_room_range(path, begin, end) {
+  const parts = [];
+  for (let offset = begin; offset < end;) {
+    const answer = await relay_file_part(path, offset);
+    if (answer.status >= 400) throw Object.assign(new Error(server_text(answer.body?.error_text, answer.body?.error) || t('文件读取失败')), { status: answer.status });
+    if (typeof answer.body_base64 !== "string") throw new Error(t('文件读取失败'));
+    const bytes = base64_to_bytes(answer.body_base64).subarray(0, end - offset);
+    if (!bytes.length) throw new Error(t('文件读取失败'));
+    parts.push(bytes);
+    offset += bytes.length;
+  }
+  const result = new Uint8Array(end - begin);
+  parts.reduce((offset, bytes) => { result.set(bytes, offset); return offset + bytes.length; }, 0);
+  return result;
+}
+
+/** The address of an image attachment's smaller copy, or "" when it has none; read as attachment_url reads files. */
+async function attachment_thumbnail_url(file) {
+  if (!file.thumbnail_url || SHARE) return "";
+  const path = attachment_thumbnail_route(file);
+  return files_by_blob() ? relay_file_url(path, { urgent: true }) : path;
+}
+
+/** The image attachments of the shown messages of a file's room, in transcript order, for stepping through in the viewer. */
+function room_images(file) {
+  const images = [];
+  for (const message of state.messages) {
+    if (message.withdrawn) continue;
+    for (const item of message.attachments || []) {
+      if (item.room_id !== file.room_id || !String(item.content_type || "").startsWith("image/") || images.some(image => image.id === item.id)) continue;
+      images.push({ room_id: item.room_id, id: item.id, file_name: item.file_name, content_type: item.content_type, size: Number(item.size) || 0,
+        created_at: message.created_at || "", message_id: message.id, ...(item.thumbnail_url && !SHARE ? { thumbnail_url: item.thumbnail_url } : {}) });
+    }
+  }
+  return images;
+}
+
 async function preview_attachment(input) {
   const { room_id, id } = input;
   // DOM datasets use camelCase; API records use snake_case.
@@ -4413,7 +4486,8 @@ async function preview_attachment(input) {
   state.attachment_preview = preview;
   // A button rendered by attachment_markup names the file; an older caller passes only its ID.
   const known = file_name && content_type;
-  const file = known ? { room_id, id, file_name, content_type, size: Number(file_size) || 0, created_at: created_at || "", message_id }
+  const thumbnail = input.thumbnail_url || (input.thumbnail === "1" ? attachment_thumbnail_route({ room_id, id }) : "");
+  const file = known ? { room_id, id, file_name, content_type, size: Number(file_size) || 0, created_at: created_at || "", message_id, ...(thumbnail ? { thumbnail_url: thumbnail } : {}) }
     : await request_json(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(id)}`);
   if (state.attachment_preview !== preview) return;
   // The Vue workspace opens the preview window at once and reads the file there, with its loading animation; PDF
@@ -4426,7 +4500,9 @@ async function preview_attachment(input) {
   }
   if (file.content_type.startsWith("image/") && state.image_viewer) {
     state.attachment_preview = null;
-    state.image_viewer(file);
+    const images = room_images(file);
+    const index = images.findIndex(item => item.id === file.id);
+    state.image_viewer(index >= 0 ? images : [file], Math.max(0, index));
     return;
   }
   file.url = file.download_url = files_by_blob() ? await attachment_url(file) : file.url || await attachment_url(file);
@@ -5323,22 +5399,35 @@ async function relay_file_part(path, offset) {
   }
 }
 
-/** Read a whole file of the computer's rooms through the relay; larger files come in several parts. */
-async function relay_room_bytes(path) {
+/**
+ * Read a whole file of the computer's rooms through the relay; larger files come in several parts of the first part's
+ * size. `parallel` parts after the first are asked at once: a file the user opened waits for the network once per
+ * round, not once per part (2026-11-26: a phone opening a 1 MB screenshot or a large PDF waited part after part).
+ */
+async function relay_room_bytes(path, { parallel = 1 } = {}) {
   if (SHARE) return share_file_blob(path);
-  const parts = [];
-  let offset = 0, total = 0, type = "";
-  do {
+  const read_part = async (offset) => {
     const answer = await relay_file_part(path, offset);
     if (answer.status >= 400) throw Object.assign(new Error(server_text(answer.body?.error_text, answer.body?.error) || t('文件读取失败')), { status: answer.status });
     if (typeof answer.body_base64 !== "string") throw new Error(t('文件读取失败'));
-    const bytes = base64_to_bytes(answer.body_base64);
-    if (!bytes.length && offset < answer.total) throw new Error(t('文件读取失败'));
-    parts.push(bytes);
-    offset += bytes.length;
-    ({ total, content_type: type } = answer);
-  } while (offset < total);
-  return new Blob(parts, { type });
+    return { bytes: base64_to_bytes(answer.body_base64), total: answer.total, type: answer.content_type };
+  };
+  const first = await read_part(0), step = first.bytes.length;
+  if (step >= first.total) return new Blob([first.bytes], { type: first.type });
+  if (!step) throw new Error(t('文件读取失败'));
+  const offsets = [];
+  for (let offset = step; offset < first.total; offset += step) offsets.push(offset);
+  const parts = new Array(offsets.length);
+  let next = 0;
+  const read_rest = async () => {
+    for (let index; (index = next++) < offsets.length;) {
+      const part = await read_part(offsets[index]);
+      if (part.total !== first.total || part.bytes.length !== Math.min(step, first.total - offsets[index])) throw new Error(t('文件读取失败'));
+      parts[index] = part.bytes;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(parallel, offsets.length)) }, read_rest));
+  return new Blob([first.bytes, ...parts], { type: first.type });
 }
 
 /** Send one part of an upload, again after a loss on the way (network, timeout, the relay reconnecting). */
@@ -5396,6 +5485,57 @@ async function relay_upload(path, data, on_progress) {
   throw new Error(t('附件上传失败'));
 }
 
+// Images larger than THUMBNAIL_MIN_BYTES get a smaller copy for messages, THUMBNAIL_WIDTH wide and at most
+// THUMBNAIL_MAX_SIDE tall (the site's limit), kept when it is under half the original (2026-11-26: phone screenshots of
+// about 1 MB each filled the relay while a room opened).
+const THUMBNAIL_MIN_BYTES = 200 * 1024, THUMBNAIL_WIDTH = 720, THUMBNAIL_MAX_SIDE = 1600, THUMBNAIL_QUALITY = 0.82;
+// Attachments a smaller copy was tried for on this page; copies are made and sent one at a time.
+const thumbnail_attempts = new Set();
+let thumbnail_chain = Promise.resolve();
+
+/**
+ * Encode the smaller copy of a decoded image (an <img> or ImageBitmap): WebP, or JPEG for a JPEG original where the
+ * browser cannot write WebP (Safari), since JPEG would lose a PNG's transparency. Null when it saves too little.
+ */
+async function encode_thumbnail(source, file) {
+  const width = source.naturalWidth || source.width, height = source.naturalHeight || source.height;
+  if (!(width > 0 && height > 0)) return null;
+  const scale = Math.min(1, THUMBNAIL_WIDTH / width, THUMBNAIL_MAX_SIDE / height);
+  const canvas = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) });
+  canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
+  const encode = (type) => new Promise(resolve => canvas.toBlob(resolve, type, THUMBNAIL_QUALITY));
+  let blob = await encode("image/webp");
+  if (blob?.type !== "image/webp") blob = file.content_type === "image/jpeg" ? await encode("image/jpeg") : null;
+  return blob && blob.size < file.size / 2 ? blob : null;
+}
+
+/**
+ * Make and store the smaller copy of one image attachment from the image already decoded on this page, once per page.
+ * The site keeps the first copy any participant's page sends; a page without the right to send one is refused quietly.
+ */
+function store_attachment_thumbnail(file, source) {
+  if (SHARE || file.thumbnail_url || thumbnail_attempts.has(file.id) || !/^image\/(png|jpeg|webp)$/.test(file.content_type || "")
+      || !(Number(file.size) > THUMBNAIL_MIN_BYTES)) return;
+  thumbnail_attempts.add(file.id);
+  thumbnail_chain = thumbnail_chain.then(async () => {
+    const blob = await encode_thumbnail(source, file);
+    if (!blob) return;
+    const path = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/thumbnail`;
+    await post_room_file(path, blob, localStorage.getItem(`discuss-access:${file.room_id}`));
+  }).catch(() => {});
+}
+
+/** An original message image that has shown on the page and has no smaller copy yet gets one from what was decoded. */
+function thumbnail_from_shown_image(event) {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement)) return;
+  const button = image.closest(".attachment-image[data-preview-attachment]");
+  if (!button || button.dataset.thumbnail || !image.currentSrc) return;
+  store_attachment_thumbnail({ id: button.dataset.previewAttachment, room_id: button.dataset.attachmentRoom,
+    content_type: button.dataset.contentType, size: Number(button.dataset.fileSize) }, image);
+}
+if (typeof document !== "undefined" && document.addEventListener) document.addEventListener("load", thumbnail_from_shown_image, true);
+
 /** Send file bytes to a room route on this website, or on the paired computer while its rooms are shown. */
 async function post_room_file(path, body, token, on_progress) {
   if (state.remote_rooms) return relay_upload(path, body, on_progress);
@@ -5414,16 +5554,21 @@ async function read_room_file(path) {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-/** Run one relay file read when a slot is free; a file the user opened (`urgent`) goes ahead of images on the page. */
-function queue_relay_file(read, urgent) {
+/**
+ * Read one room file through the relay: images on the page wait for one of RELAY_FILE_CONCURRENCY slots, a file the
+ * user opened (`urgent`) starts at once with RELAY_URGENT_PARTS parts in flight. `read(parallel)` reads the file.
+ */
+function queue_relay_file(path, read, urgent) {
   return new Promise((resolve, reject) => {
-    const job = () => {
+    const start = (now_urgent) => {
       relay_file_running += 1;
-      read().then(resolve, reject).finally(() => { relay_file_running -= 1; relay_file_queue.shift()?.(); });
+      read(now_urgent ? RELAY_URGENT_PARTS : 1).then(resolve, reject).finally(() => {
+        relay_file_running -= 1;
+        if (relay_file_running < RELAY_FILE_CONCURRENCY) relay_file_queue.shift()?.start(false);
+      });
     };
-    if (relay_file_running < RELAY_FILE_CONCURRENCY) job();
-    else if (urgent) relay_file_queue.unshift(job);
-    else relay_file_queue.push(job);
+    if (urgent || relay_file_running < RELAY_FILE_CONCURRENCY) start(urgent);
+    else relay_file_queue.push({ path, start });
   });
 }
 
@@ -5432,9 +5577,14 @@ function relay_file_url(path, { urgent = false } = {}) {
   if (!relay_files.has(path)) {
     // A share page reads its files from the page or the share site, not through the relay: nothing to wait in line for,
     // so an HTML demo is not held behind the room's images and recordings (user 2026-11-23: five seconds of white).
-    const read = SHARE ? relay_room_bytes(path) : queue_relay_file(() => relay_room_bytes(path), urgent);
+    const read = SHARE ? relay_room_bytes(path) : queue_relay_file(path, (parallel) => relay_room_bytes(path, { parallel }), urgent);
     relay_files.set(path, read.then(blob => URL.createObjectURL(blob))
       .catch(error => { relay_files.delete(path); throw error; }));
+  } else if (urgent) {
+    // Opening an image whose thumbnail is still waiting in line starts that read now, instead of after every image
+    // queued before it (2026-11-26, iPhone: an opened screenshot kept loading behind the room's other images).
+    const index = relay_file_queue.findIndex(entry => entry.path === path);
+    if (index >= 0) relay_file_queue.splice(index, 1)[0].start(true);
   }
   return Promise.resolve(relay_files.get(path));
 }
@@ -6197,6 +6347,17 @@ async function read_room_media(room_id, path, root = 0, on_progress = () => {}, 
     answer = await local_launch_request("room-media", { room_id, path, root, offset, token, ...flag });
   }
   return { url: URL.createObjectURL(new Blob(parts, { type: answer.content_type })), content_type: answer.content_type, size: answer.total, blob: true };
+}
+
+/**
+ * The address of one HTML file of the room's project opened straight from this computer's disk, with the files beside
+ * it, sandboxed (the local website's page ticket); null where the page is not this computer's own (another device, a
+ * connected website), which reads the page through `read_room_page` instead (user 2026-11-26, #12397).
+ */
+async function local_page_url(room_id, path, root = 0) {
+  if (state.remote_rooms || SHARE) return null;
+  const answer = await local_launch_request("room-media", { room_id, path, root, page: true, token: localStorage.getItem(`discuss-access:${room_id}`) });
+  return answer.url && answer.url.startsWith("/api/local/page/") ? `${local_connection?.endpoint || ""}${answer.url}` : null;
 }
 
 /**
@@ -7420,7 +7581,7 @@ async function message_draft_parts(room_id, message, text) {
     return { number: file.number, file: new File([bytes], file.file_name, { type: file.content_type || "" }) };
   }));
   const drafts = files.map(({ number, file }) => {
-    const draft = { id: new_submission_id(), file, preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: null, actor: null };
+    const draft = measure_draft_image({ id: new_submission_id(), file, preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: null, actor: null });
     draft.placeholder = [`[图片 #${number}]`, `[文件 #${number}]`].find(placeholder => text.includes(placeholder));
     return draft;
   });
@@ -9458,7 +9619,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, clear_card_drafts, preset_origin, preset_origin_info, preset_skilled, describe_member, set_chain_rounds, continue_chain, expert_presets, project_presets, load_project_presets, clear_project_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, trust_expert_preset, workflow_key, preset_key, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, remove_launch_projects, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, write_create_relay_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
   start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
-  attachment_markup, attachment_download_link, attachment_size, attachment_file_icon, add_attachments, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url, read_zip_directory,
+  attachment_markup, link_attachment_placeholders, attachment_download_link, attachment_size, attachment_file_icon, add_attachments, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url, attachment_thumbnail_url, attachment_range_reader, read_zip_directory,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   reload_workflows, trust_project_workflow, confirm_workflow_trust, dismiss_workflow_trust, save_card_preset, import_expert, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_auto_destroy, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,
   admin: { register: register_admin, login: login_admin, logout: logout_admin,
@@ -9467,7 +9628,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   device: { request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, identities: IDENTITIES, platform_identity: name => PLATFORM_IDENTITIES[name], display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, set_member_prompt, read_system_prompts, save_system_prompts, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, set_member_prompt, read_system_prompts, save_system_prompts, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, local_page_url, read_room_media, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

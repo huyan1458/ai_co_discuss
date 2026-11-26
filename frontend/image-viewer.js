@@ -115,20 +115,54 @@ function centered(viewer) {
 // A local placeholder lets Viewer build its full-screen controls before a relayed image has an address.
 const EMPTY_IMAGE = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/%3E";
 
-/** Open immediately, resolve the image address in the background, and release the viewer when closed. */
-export function open_image_viewer({ url, file_name = "" }, load_url = () => Promise.resolve(url)) {
+/**
+ * Open immediately, resolve the image address in the background, and release the viewer when closed. `files` are the
+ * images that can be stepped through, `index` the one shown first; side buttons and the left / right arrow keys step
+ * between them (user 2026-11-26, #12354). `load_url(file)` resolves one file's address; `load_thumbnail(file)` its
+ * smaller copy's, or "" when it has none: that copy shows first and the original takes its place once read.
+ */
+export function open_image_viewer(files, index, load_url, load_thumbnail = () => Promise.resolve("")) {
   const image = document.createElement("img");
   const source = document.createElement("div"), cover = document.createElement("div");
   source.append(image);
   image.src = EMPTY_IMAGE;
-  image.alt = file_name;
-  let closed = false, loaded_url = "";
+  // `shown_url` is the address on screen (a smaller copy for a moment), `loaded_url` the original, the one saved.
+  let closed = false, loaded_url = "", shown_url = "", current = index, reading = 0;
+  const file_name = () => files[current].file_name || "";
+  const title = () => files.length > 1 ? t('{name} · {index}/{total}', { name: file_name(), index: current + 1, total: files.length }) : file_name();
   cover.style.cssText = "position:absolute;inset:40px 0 70px;display:flex;justify-content:center;pointer-events:none;z-index:1";
-  const viewer = new Viewer(image, { navbar: false, title: [1, () => file_name], toolbar: image_toolbar(() => ({ url: loaded_url, name: file_name })), transition: false,
+  const steps = files.length > 1 ? [-1, 1].map((step) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `viewer-step viewer-step-${step < 0 ? "prev" : "next"}`;
+    button.setAttribute("aria-label", step < 0 ? t('上一张') : t('下一张'));
+    button.title = button.getAttribute("aria-label");
+    button.addEventListener("click", () => go(step));
+    return button;
+  }) : [];
+  const on_key = (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    // Viewer.js would also take the arrow keys; here they only step between the images.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    go(event.key === "ArrowLeft" ? -1 : 1);
+  };
+  const viewer = new Viewer(image, { navbar: false, title: [1, title], toolbar: image_toolbar(() => ({ url: loaded_url, name: file_name() })), transition: false,
     toggleOnDblclick: true, ...IMAGE_ZOOM,
-    shown() { viewer.viewer.append(cover); },
-    viewed() { if (loaded_url && viewer.image?.src === loaded_url) render(null, cover); },
-    hidden() { closed = true; render(null, cover); viewer.destroy(); } });
+    shown() { viewer.viewer.append(cover, ...steps); },
+    viewed() { if (shown_url && viewer.image?.src === shown_url) render(null, cover); },
+    hidden() { closed = true; document.removeEventListener("keydown", on_key, true); render(null, cover); viewer.destroy(); } });
+  /** Show the image `step` places away; the first and last image have no further step. */
+  function go(step) {
+    const next = current + step;
+    if (closed || next < 0 || next >= files.length) return;
+    current = next;
+    show_steps();
+    load();
+  }
+  function show_steps() {
+    if (steps.length) { steps[0].hidden = current === 0; steps[1].hidden = current === files.length - 1; }
+  }
   function failed(error) {
     if (closed) return;
     render(h("div", { style: "align-self:center;text-align:center;color:var(--ui-text)" }, [
@@ -136,18 +170,39 @@ export function open_image_viewer({ url, file_name = "" }, load_url = () => Prom
       h("button", { type: "button", style: "pointer-events:auto;text-decoration:underline", onClick: load }, t('重新读取图片')),
     ]), cover);
   }
-  async function load() {
-    render(h(PreviewLoading, { label: t('正在载入图片…') }), cover);
-    try {
-      const address = await load_url();
-      if (closed) return;
-      image.src = address;
-      loaded_url = image.src;
-      viewer.update();
-      viewer.view(0);
-      viewer.image?.addEventListener("error", () => failed(new Error(t('图片读取失败'))), { once: true });
-    } catch (error) { failed(error); }
+  /** Put one address on screen, fitted to the view. */
+  function show(address) {
+    image.src = address;
+    image.alt = file_name();
+    shown_url = image.src;
+    viewer.update();
+    viewer.view(0);
   }
+  async function load() {
+    const read = ++reading, file = files[current];
+    loaded_url = "";
+    render(h(PreviewLoading, { label: t('正在载入图片…') }), cover);
+    const original = Promise.resolve().then(() => load_url(file));
+    original.catch(() => {});
+    try {
+      const thumbnail = await Promise.resolve().then(() => load_thumbnail(file)).catch(() => "");
+      // Stepping on while an image was read shows the later one only.
+      if (closed || read !== reading) return;
+      if (thumbnail) show(thumbnail);
+      const address = await original;
+      if (closed || read !== reading) return;
+      // The original takes the smaller copy's place where it is, keeping any zoom or turn made meanwhile.
+      if (thumbnail && viewer.image) {
+        image.src = viewer.image.src = address;
+        shown_url = viewer.image.src;
+      } else show(address);
+      loaded_url = image.src;
+      viewer.image?.addEventListener("error", () => failed(new Error(t('图片读取失败'))), { once: true });
+    } catch (error) { if (read === reading) failed(error); }
+  }
+  image.alt = file_name();
+  show_steps();
+  document.addEventListener("keydown", on_key, true);
   viewer.show();
   load();
 }

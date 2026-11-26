@@ -27,7 +27,7 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from .entry_guard import (BROWSER_COOKIE_SECONDS, HELLO_PATH, OPEN_PATH, PUBLIC_PATHS, EntryPolicy, answer_hello, browser_admitted,
                           browser_cookie_name, open_link_key, proof, request_proven)
@@ -78,6 +78,13 @@ MAX_BODY_BYTES = 512 * 1024
 MAX_FILE_PART_BODY_BYTES = 5 * 1024 * 1024
 MAX_IMPORT_BYTES = 32 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+# A smaller copy of an image a page made (WebP or JPEG), shown in messages in place of the original: at most this many
+# bytes and this many pixels on its longer side, and its shape within THUMBNAIL_RATIO_TOLERANCE of the original's.
+MAX_THUMBNAIL_BYTES = 512 * 1024
+MAX_THUMBNAIL_SIDE = 1600
+THUMBNAIL_RATIO_TOLERANCE = 0.03
+THUMBNAIL_TYPES = ("image/webp", "image/jpeg")
+THUMBNAIL_SUFFIX = ".thumbnail"
 # Files uploaded while the message is still being written are dropped if never sent within this time.
 UNSENT_ATTACHMENT_TTL = timedelta(hours=24)
 ATTACHMENT_SWEEP_SECONDS = 6 * 60 * 60
@@ -105,6 +112,12 @@ DIRECTORY_PICKER_TIMEOUT = 600  # the folder dialog waits for the person at the 
 FILE_CHUNK_BYTES = 1024 * 1024
 # A project media file the local page plays is served by a random ticket for this long after the runner checked access.
 MEDIA_TICKET_SECONDS = 600
+# A project page the computer's own browser opens in a tab keeps reading the files beside it (lazy images, scripts) for
+# this long; its address is a random ticket naming the project folder, never a path.
+PAGE_TICKET_SECONDS = 12 * 3600
+# The page runs as an opaque origin (no allow-same-origin), so it can read nothing of this site; it may run its scripts,
+# open pop-ups and dialogs, and load anything from the folder or the web. No forms: a write to this site needs its origin.
+PAGE_POLICY = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"
 MAX_MEDIA_TICKETS = 64
 MAX_TEXT_LENGTH = 32000
 SESSION_ID_PATTERN = re.compile(r"[0-9A-Za-z_-]{8,128}")
@@ -574,6 +587,8 @@ def init_database(database, seed=True):
             for name in ("width", "height"):
                 if name not in attachment_columns:
                     connection.execute(f"ALTER TABLE attachments ADD COLUMN {name} INTEGER")
+            if "thumbnail_type" not in attachment_columns:
+                connection.execute("ALTER TABLE attachments ADD COLUMN thumbnail_type TEXT")
             if connection.execute("INSERT OR IGNORE INTO site_preferences (key,value) VALUES ('child_folders_migrated','1')").rowcount:
                 connection.execute("""UPDATE room_folder_assignments AS child SET folder_id=parent.folder_id
                     FROM room_links l JOIN room_folder_assignments parent ON parent.room_id=l.other_room_id
@@ -1839,6 +1854,7 @@ def finish_destruction_files(database, room_id):
         for file_id in files.get("ids", []):
             path = attachment_path(database, {"id": file_id})
             try:
+                thumbnail_path(database, {"id": file_id}).unlink(missing_ok=True)
                 path.unlink(missing_ok=True)
             except OSError:
                 logging.exception("Attachment cleanup failed: %s", file_id)
@@ -2321,6 +2337,8 @@ def attachment_view(row):
     result = dict(row)
     base = f"/api/rooms/{result['room_id']}/attachments/{result['id']}/content"
     result.update(url=base, download_url=base + "?download=1")
+    if result.get("thumbnail_type"):
+        result["thumbnail_url"] = f"/api/rooms/{result['room_id']}/attachments/{result['id']}/thumbnail"
     return result
 
 
@@ -2440,6 +2458,43 @@ def attachment_path(database, attachment):
     return root / attachment["id"]
 
 
+def thumbnail_path(database, attachment):
+    """Where the smaller copy of an image attachment is kept, beside the original."""
+    return attachment_path(database, {"id": attachment["id"] + THUMBNAIL_SUFFIX})
+
+
+def store_attachment_thumbnail(connection, database, room_id, identifier, token, data):
+    """Keep the smaller copy of an image attachment a room participant's page made; the first one stored stays.
+
+    The site cannot decode images, so it checks what it can read from the headers: a WebP or JPEG no larger than
+    MAX_THUMBNAIL_SIDE pixels, smaller than the original, with the original's shape.
+
+    Returns:
+        {"attachment": the attachment with its thumbnail_url, "duplicate": whether a thumbnail was already kept}.
+    """
+    begin_write(connection)
+    try:
+        require_owner(connection, room_id, token)
+    except PermissionError:
+        require_member(connection, room_id, token)
+    attachment = get_attachment(connection, room_id, identifier)
+    if attachment.get("thumbnail_type"):
+        return {"attachment": attachment, "duplicate": True}
+    content_type = attachment_content_type(data)
+    width, height = image_size(io.BytesIO(data))
+    original_width, original_height = attachment.get("width") or 0, attachment.get("height") or 0
+    if (attachment["content_type"] not in SIZED_IMAGE_TYPES or content_type not in THUMBNAIL_TYPES or not width
+            or max(width, height) > MAX_THUMBNAIL_SIDE or len(data) >= attachment["size"] or not original_width
+            or abs(width / height - original_width / original_height) > THUMBNAIL_RATIO_TOLERANCE * original_width / original_height):
+        raise ValueError(Text('缩略图不符合要求'))
+    path = thumbnail_path(database, attachment)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    connection.execute("UPDATE attachments SET thumbnail_type=? WHERE id=?", (content_type, identifier))
+    connection.commit()
+    return {"attachment": get_attachment(connection, room_id, identifier), "duplicate": False}
+
+
 def store_attachment(connection, database, room_id, metadata, data):
     """Persist one immutable upload; exact retries return the original file."""
     begin_write(connection)
@@ -2484,6 +2539,7 @@ def remove_attachment_files(connection, database, rows):
     for row in rows:
         connection.execute("DELETE FROM attachments WHERE id=? AND message_id IS NULL", (row["id"],))
         attachment_path(database, row).unlink(missing_ok=True)
+        thumbnail_path(database, row).unlink(missing_ok=True)
 
 
 def prune_unsent_attachments(connection, database, room_id):
@@ -2517,11 +2573,13 @@ def sweep_attachments(database):
                 registered = {os.path.normcase(row[0]) for row in connection.execute("SELECT id FROM attachments")}
                 cutoff = time.time() - ORPHAN_ATTACHMENT_GRACE_SECONDS
                 for path in root.iterdir():
-                    if os.path.normcase(path.name) in registered:
+                    # A thumbnail goes with its original.
+                    name = path.name.removesuffix(THUMBNAIL_SUFFIX)
+                    if os.path.normcase(name) in registered:
                         continue
                     try:
                         info = path.lstat()
-                        if stat.S_ISREG(info.st_mode) and (path.name in expired or info.st_mtime < cutoff):
+                        if stat.S_ISREG(info.st_mode) and (name in expired or info.st_mtime < cutoff):
                             path.unlink()
                     except FileNotFoundError:
                         pass
@@ -3450,6 +3508,8 @@ class DiscussionServer(ThreadingHTTPServer):
         self.local_launch = local_launch
         # Project media the local page may play: ticket -> (path, size, mtime_ns, content_type, name, expires).
         self.media_tickets = {}
+        # Project pages opened in a tab of the computer's own browser: ticket -> (project folder, expires).
+        self.page_tickets = {}
         self.media_lock = threading.Lock()
         self.local_site = not hub and address[0] in ("127.0.0.1", "::1", "localhost")
         self.admin_setup_key = os.getenv("DISCUSS_ADMIN_SETUP_KEY") or secrets.token_urlsafe(18)
@@ -3692,6 +3752,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             self.bridged = self.relay_bridge(parts)
             if parts[:3] == ["api", "local", "media"] and len(parts) == 4 and method == "GET":
                 return self.serve_media_ticket(parts[3])
+            if parts[:3] == ["api", "local", "page"] and len(parts) >= 5 and method == "GET":
+                return self.serve_page_ticket(parts[3], parts[4:])
             if parts[:2] == ["api", "local"]:
                 return self.handle_local_launch(parts, method)
             if parts == ["api", "updates"] and method == "GET":
@@ -3927,9 +3989,12 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
         The page never learns the file's path; the ticket names one file as it was checked and expires.
         """
+        if payload.get("page") is True:
+            return self.issue_page_ticket(payload)
         status, result = self.local_command_result("room-media", payload)
         if status != 200:
             return self.respond(result, status)
+        result.pop("directory", None)
         path = Path(result.pop("file"))
         info = path.stat()
         ticket = secrets.token_urlsafe(32)
@@ -3944,6 +4009,48 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             disposition = "attachment" if payload.get("download") is True else "inline"
             tickets[ticket] = (path, info.st_size, info.st_mtime_ns, result["content_type"], path.name, now + MEDIA_TICKET_SECONDS, disposition)
         return self.respond({**result, "url": f"/api/local/media/{ticket}"})
+
+    def issue_page_ticket(self, payload):
+        """Open a project HTML file in a tab of this computer's browser straight from disk, with the files beside it.
+
+        The runner checks the member's access to the file as for media; the ticket names the project folder, and the
+        address mirrors the file's place in it, so relative references resolve inside the folder.
+        """
+        if not re.search(r"\.html?$", str(payload.get("path", "")), re.I):
+            raise ValueError(Text('只能打开 HTML 文件'))
+        status, result = self.local_command_result("room-media", {**{key: value for key, value in payload.items() if key != "page"}, "download": True})
+        if status != 200:
+            return self.respond(result, status)
+        root, path = Path(result["directory"]).resolve(), Path(result["file"]).resolve()
+        ticket = secrets.token_urlsafe(32)
+        now = time.time()
+        with self.server.media_lock:
+            tickets = self.server.page_tickets
+            for key in [key for key, item in tickets.items() if item[1] <= now]:
+                del tickets[key]
+            while len(tickets) >= MAX_MEDIA_TICKETS:
+                del tickets[next(iter(tickets))]
+            tickets[ticket] = (root, now + PAGE_TICKET_SECONDS)
+        relative = "/".join(quote(part) for part in path.relative_to(root).parts)
+        return self.respond({"url": f"/api/local/page/{ticket}/{relative}"})
+
+    def serve_page_ticket(self, ticket, parts):
+        """Serve one file of the project folder a page ticket names, sandboxed; nothing outside the folder."""
+        with self.server.media_lock:
+            item = self.server.page_tickets.get(ticket)
+        if not item or item[1] <= time.time():
+            raise LookupError(Text('页面地址已过期，请重新打开文件'))
+        root = item[0]
+        names = [unquote(part) for part in parts]
+        if any(name in ("", ".", "..") or ":" in name or "\\" in name for name in names):
+            raise LookupError(Text('文件不存在'))
+        path = root.joinpath(*names).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise LookupError(Text('文件不存在'))
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        if content_type.startswith("text/") or content_type in ("application/javascript", "application/json"):
+            content_type += "; charset=utf-8"
+        self.send_file(path, content_type, path.name, "inline", policy=PAGE_POLICY)
 
     def serve_media_ticket(self, ticket):
         """Stream the project media file a ticket names, refusing it once expired or changed since it was checked."""
@@ -4565,6 +4672,15 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(discard_attachment(connection, self.server.database, room_id, parts[4], self.headers.get("X-Discussion-Token", "")))
         if method == "POST" and len(parts) == 6 and parts[5] == "import":
             return self.import_attachment(connection, room_id, parts[4])
+        if method == "POST" and len(parts) == 6 and parts[5] == "thumbnail":
+            length = int(self.headers.get("Content-Length", "-1"))
+            if not 0 < length <= MAX_THUMBNAIL_BYTES:
+                return self.respond({"error": Text('缩略图不符合要求')}, 413)
+            data = self.rfile.read(length)
+            if len(data) != length:
+                raise ValueError(Text('附件内容不完整'))
+            return self.respond(store_attachment_thumbnail(connection, self.server.database, room_id, parts[4],
+                                                         self.headers.get("X-Discussion-Token", ""), data))
         if method == "GET" and len(parts) in (5, 6):
             attachment = get_attachment(connection, room_id, parts[4], params, self.headers.get("X-Discussion-Token", ""),
                                         content=len(parts) == 6)
@@ -4572,6 +4688,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 return self.respond(attachment)
             if parts[5] == "content":
                 return self.respond_attachment(attachment, params.get("download") == "1")
+            if parts[5] == "thumbnail":
+                path = thumbnail_path(self.server.database, attachment)
+                if not attachment.get("thumbnail_type") or not path.is_file():
+                    raise LookupError(Text('附件不存在'))
+                return self.send_file(path, attachment["thumbnail_type"], attachment["file_name"], "inline")
             if parts[5] == "zip":
                 path = attachment_path(self.server.database, attachment)
                 if not path.is_file():
@@ -4606,8 +4727,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         disposition = "attachment" if download or attachment["content_type"] == "application/octet-stream" else "inline"
         self.send_file(path, attachment["content_type"], attachment["file_name"], disposition, {"X-Content-SHA256": attachment["sha256"]})
 
-    def send_file(self, path, content_type, file_name, disposition, extra=None, data=None):
-        """Send one stored file, or the single byte range a player asks for, never as executable content."""
+    def send_file(self, path, content_type, file_name, disposition, extra=None, data=None, policy="default-src 'none'; sandbox"):
+        """Send one stored file, or the single byte range a player asks for, never as executable content.
+
+        `policy` is the Content-Security-Policy; a project page opened in its own tab runs sandboxed (PAGE_POLICY).
+        """
         size = path.stat().st_size if data is None else len(data)
         start, end, status = 0, size - 1, 200
         match = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", "").strip())
@@ -4633,7 +4757,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         for name, value in (extra or {}).items():
             self.send_header(name, value)
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", "default-src 'none'; sandbox")
+        self.send_header("Content-Security-Policy", policy)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()

@@ -1252,7 +1252,7 @@ test('attachment button metadata reaches preview without a metadata or relay rea
   });
   context.test_state.remote_rooms = true;
   context.test_state.text_preview = file => opened.push(file);
-  context.test_state.image_viewer = file => opened.push(file);
+  context.test_state.image_viewer = (files, index) => opened.push(files[index]);
   for (const [fileName, contentType] of [['table.xlsx', 'application/octet-stream'], ['image.png', 'image/png'], ['moon.html', 'application/octet-stream']]) {
     const opening = context.preview_attachment({ room_id: 'one', id: 'attachment', fileName, contentType, fileSize: '42', createdAt: '2026-11-10' });
     assert.equal(opened.at(-1).file_name, fileName);
@@ -2484,24 +2484,41 @@ test("relayed reads are asked again after a lost answer, writes never; a dropped
   assert.equal(timers.at(-1).delay, 2000, "a success resets the back-off");
 });
 
-test("relayed room files are read two at a time, a file the user opens first, and each only once", async () => {
+test("relayed room files are read two at a time, a file the user opens at once, and each only once", async () => {
   const f = update_fixture(), started = [], finish = new Map();
   f.context.URL = { createObjectURL: (blob) => `blob:${blob}` };
-  f.context.relay_room_bytes = (path) => { started.push(path); return new Promise((resolve) => finish.set(path, () => resolve(path))); };
+  f.context.relay_room_bytes = (path, { parallel }) => { started.push(`${path}:${parallel}`); return new Promise((resolve) => finish.set(path, () => resolve(path))); };
   const reads = ["a", "b", "c", "d"].map((name) => f.context.relay_file_url(`/files/${name}`));
+  assert.equal(started.join(), "/files/a:1,/files/b:1", "a room full of images does not read them all at once");
   const opened = f.context.relay_file_url("/files/opened", { urgent: true });
-  assert.equal(started.join(), "/files/a,/files/b", "a room full of images does not read them all at once");
+  assert.equal(started.at(-1), "/files/opened:3", "the file the user opened does not wait for the images");
+  f.context.relay_file_url("/files/d", { urgent: true });
+  assert.equal(started.at(-1), "/files/d:3", "opening an image still waiting in line starts its read now");
   f.context.relay_file_url("/files/a");
-  finish.get("/files/a")();
-  await reads[0];
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(started.join(), "/files/a,/files/b,/files/opened", "the file the user opened goes ahead of the waiting images");
-  for (const path of ["/files/b", "/files/opened"]) finish.get(path)();
+  for (const path of ["/files/a", "/files/b", "/files/opened", "/files/d"]) finish.get(path)();
   await opened;
   await new Promise((resolve) => setImmediate(resolve));
-  for (const path of ["/files/c", "/files/d"]) finish.get(path)();
+  finish.get("/files/c")();
   assert.equal(JSON.stringify(await Promise.all(reads)), JSON.stringify(["a", "b", "c", "d"].map((name) => `blob:/files/${name}`)));
   assert.equal(started.length, 5, "a file already read is not read again");
+});
+
+test("a relayed file is put together from parts asked several at a time", async () => {
+  const f = update_fixture(), asked = [], data = "abcdefghij";
+  Object.assign(f.context, { atob, Blob });
+  f.context.relay_file_part = async (path, offset) => {
+    asked.push(offset);
+    await new Promise((resolve) => setImmediate(resolve));
+    return { status: 200, total: data.length, content_type: "image/png", body_base64: Buffer.from(data.slice(offset, offset + 3)).toString("base64") };
+  };
+  const blob = await f.context.relay_room_bytes("/files/a", { parallel: 3 });
+  assert.equal(Buffer.from(await blob.arrayBuffer()).toString(), data);
+  assert.equal(blob.type, "image/png");
+  assert.equal(asked.join(), "0,3,6,9");
+  asked.length = 0;
+  const range = await f.context.relay_room_range("/files/a", 2, 7);
+  assert.equal(Buffer.from(range).toString(), "cdefg", "a PDF piece is read from where it starts to where it ends");
+  assert.equal(asked.join(), "2,5");
 });
 
 test("@ names a member by its on-screen nickname or its member name, longest first, never by an ambiguous nickname", () => {

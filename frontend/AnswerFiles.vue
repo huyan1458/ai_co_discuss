@@ -13,6 +13,7 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { t } from "./i18n.js";
 import { file_preview } from "./file-preview.js";
 import { open_deploy } from "./sites.js";
+import { open_html_preview_tab } from "./inline-visual.js";
 
 // What counts as a deliverable: documents, tables, slides, pages and media, not source code.
 const DELIVERABLE = /\.(docx?|xlsx?|ods|csv|tsv|pptx?|pdf|md|txt|html?|png|jpe?g|gif|webp|svg|mp3|wav|m4a|mp4|webm|mov|srt|vtt)$/i;
@@ -105,6 +106,32 @@ const deployable = (file) => /\.html?$/i.test(file.name);
 const deploy_file = (file) => open_deploy(bridge, { room_id: props.roomId, message_id: props.message.id, execution_id: props.message.execution_id || 0, member: props.message.author, file });
 const open_file = (file) => file_preview.open?.(file.path, directories.value[file.root] || "", file.root, file);
 
+/**
+ * Show an HTML file in a new tab, sandboxed as the preview shows it: the tab opens at the click and receives the page
+ * once the computer has put it together (user 2026-11-26, #12386).
+ */
+async function open_tab(file) {
+  const target = window.open("", "_blank");
+  if (target) {
+    target.document.title = file.name;
+    target.document.body.textContent = t('正在读取 {value1}…', { value1: file.name });
+  }
+  try {
+    // On this computer the page opens from disk with the files beside it, without passing through the network.
+    const local = await bridge.local_page_url(props.roomId, file.path, file.root);
+    if (local) {
+      if (target && !target.closed) target.location.replace(local);
+      else window.open(local, "_blank");
+      return;
+    }
+    const page = await bridge.read_room_page(props.roomId, file.path, file.root);
+    open_html_preview_tab(file.name, page.text, null, false, target);
+  } catch (error) {
+    target?.close();
+    bridge.notify("error", error.message);
+  }
+}
+
 onMounted(() => {
   observer = new IntersectionObserver((entries) => {
     if (!entries.some((entry) => entry.isIntersecting)) return;
@@ -126,10 +153,15 @@ onBeforeUnmount(() => observer?.disconnect());
           <small>{{ t('项目文件 · {path}', { path: file.path }) }}</small>
         </span>
       </button>
-      <UTooltip v-if="deployable(file)" :text="t('部署为网站')"><UButton icon="i-lucide-rocket" size="xs" color="neutral" variant="ghost" class="answer-file-deploy" :aria-label="t('把 {value1} 部署为网站', { value1: file.name })" @click="deploy_file(file)" /></UTooltip>
-      <button type="button" class="attachment-download" :title="t('在文件预览中打开 {value1}', { value1: file.path })" :aria-label="t('打开文件 {value1}', { value1: file.name })" @click="open_file(file)">
-        <UIcon name="i-lucide-arrow-up-right" />
-      </button>
+      <!-- One row of same-sized icon buttons: look (preview, new tab), then, set apart, publish (user 2026-11-26, #12393). -->
+      <div class="answer-file-actions">
+        <UTooltip :text="t('预览')"><button type="button" class="attachment-download" :aria-label="t('在文件预览中打开 {value1}', { value1: file.path })" @click="open_file(file)"><UIcon name="i-lucide-eye" /></button></UTooltip>
+        <UTooltip v-if="/\.html?$/i.test(file.name)" :text="t('在新标签页打开')"><button type="button" class="attachment-download" :aria-label="t('在新标签页打开 {value1}', { value1: file.name })" @click="open_tab(file)"><UIcon name="i-lucide-square-arrow-out-up-right" /></button></UTooltip>
+        <template v-if="deployable(file)">
+          <span class="answer-file-divider" aria-hidden="true"></span>
+          <UTooltip :text="t('部署为网站')"><button type="button" class="attachment-download answer-file-deploy" :aria-label="t('把 {value1} 部署为网站', { value1: file.name })" @click="deploy_file(file)"><UIcon name="i-lucide-rocket" /></button></UTooltip>
+        </template>
+      </div>
     </div>
   </div>
 </template>
@@ -143,6 +175,10 @@ onBeforeUnmount(() => observer?.disconnect());
 .answer-file { background: transparent; border-color: color-mix(in srgb, currentColor 14%, transparent); }
 .answer-file:hover { background: color-mix(in srgb, currentColor 4%, transparent); }
 .answer-file .attachment-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.answer-file .attachment-download { font-size: 18px; }
-.answer-file-deploy { align-self: center; }
+.answer-file-actions { display: flex; flex: none; align-items: center; gap: 2px; }
+.answer-file .attachment-download { width: 30px; height: 30px; border-radius: 7px; font-size: 17px; transition: color .12s, background-color .12s; }
+.answer-file .attachment-download:focus-visible { outline: 2px solid #5865f2; outline-offset: 1px; }
+.answer-file-divider { width: 1px; height: 16px; margin: 0 4px; background: color-mix(in srgb, currentColor 16%, transparent); }
+/* Deploying publishes the page, so its button takes the deploy card's accent when pointed at. */
+.answer-file .answer-file-deploy:hover { color: #6366f1; background: color-mix(in srgb, #6366f1 12%, transparent); }
 </style>

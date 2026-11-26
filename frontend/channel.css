@@ -2016,6 +2016,16 @@ html[data-theme^="channel"] .content-page > .timeline-switch { max-width: 1280px
 .viewer-container .viewer-toolbar > ul > .viewer-rotate-right::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e6e8ec' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/%3E%3Cpath d='M21 3v5h-5'/%3E%3C/svg%3E"); }
 .viewer-container .viewer-toolbar > ul > .viewer-save::before { content: "Save"; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e6e8ec' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3'/%3E%3C/svg%3E"); }
 
+/* A sending card's images are this browser's own copies, not yet the room's files: nothing to open until it is saved. */
+.channel-sending-message .attachment-image { pointer-events: none; }
+/* Previous / next image: round buttons centered on each side, hidden at the first and last image. */
+.viewer-container .viewer-step { position: absolute; top: 50%; z-index: 2; display: grid; place-items: center; width: var(--viewer-tool-size); height: var(--viewer-tool-size); padding: 0; border: 1px solid #ffffff1f; border-radius: 50%; background: #1e2024eb center / var(--viewer-tool-icon) no-repeat; box-shadow: 0 6px 20px #00000059; transform: translateY(-50%); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.viewer-container .viewer-step[hidden] { display: none; }
+.viewer-container .viewer-step-prev { left: 16px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e6e8ec' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m15 18-6-6 6-6'/%3E%3C/svg%3E"); }
+.viewer-container .viewer-step-next { right: 16px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e6e8ec' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E"); }
+@media (hover: hover) { .viewer-container .viewer-step:hover { background-color: #2c2f35f0; } }
+.viewer-container .viewer-step:focus-visible { outline: 2px solid #5865f2; outline-offset: 1px; }
+
 /* Phones: notices sit just below the room tabs, measured by App.vue's place_notices(). */
 @media (max-width: 700px) {
   ol[data-slot="viewport"] { top: var(--notice-top, 1rem); }

@@ -706,8 +706,14 @@ export async function remote_room_files(home, input) {
   return room_files(home, input, { trust: true });
 }
 
-// A relayed answer carries this much of a page at a time, within the relay's encrypted envelope after base64.
-const PAGE_PART_BYTES = 192 * 1024;
+// A relayed answer carries this much of a page at a time, within the relay's encrypted envelope after base64
+// (gzip takes back the inner base64, so a part of this size stays near 700 KB in a frame of 1 MB).
+const PAGE_PART_BYTES = 512 * 1024;
+// The page another device is reading part by part: put together when it asks for the first part and reused for the
+// rest, instead of again for every part (a 38 MB page in 512 KB parts), and dropped once its last part is sent. A file
+// changing meanwhile shows when the page is read again; `version` is the same for every part of one read.
+let reading_page = null;
+
 
 /**
  * One HTML file of the room's project with the files it refers to inlined (see `bundle_project_page`), or the images a
@@ -722,8 +728,11 @@ export async function room_page(home, raw, { trust = false, parts = false } = {}
   const directory = files_root(home, config, root);
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('页面读取位置无效');
   const bundle = /\.(md|markdown)$/i.test(String(input.path || '')) ? bundle_project_markdown : bundle_project_page;
-  const { bytes, ...page } = bundle(directory, input.path);
+  const key = `${directory}\n${input.path}`;
+  const reuse = parts && offset > 0 && reading_page?.key === key;
+  const { bytes, ...page } = reuse ? reading_page.page : bundle(directory, input.path);
   const part = bytes.subarray(offset, parts ? offset + PAGE_PART_BYTES : bytes.length);
+  if (parts) reading_page = offset + part.length < bytes.length ? { key, page: { bytes, ...page } } : null;
   return { room_id: input.room_id, root, ...page, total: bytes.length, offset, data: part.toString('base64') };
 }
 
@@ -744,7 +753,8 @@ export async function room_media(home, raw, { trust = false, parts = false } = {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('文件读取位置无效');
   // `download` reads any regular file for saving, not only the kinds the preview shows.
   const { file, ...media } = project_media(directory, input.path, { download: input.download === true });
-  if (!parts) return { room_id: input.room_id, root, ...media, file };
+  // The folder goes to the computer's own website alone, for a page opened in a tab (it never reaches a page).
+  if (!parts) return { room_id: input.room_id, root, ...media, file, directory };
   if (media.size > REMOTE_MEDIA_MAX_BYTES) {
     throw new Error(input.download === true
       ? `文件 ${Math.ceil(media.size / 1024 / 1024)} MB，超过其他设备可下载的 ${REMOTE_MEDIA_MAX_BYTES / 1024 / 1024} MB 上限；请在这台电脑上取用，或让 AI 处理`
@@ -3585,7 +3595,6 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
       ? { ...input, extra_directories: input.extra_directories.map(item => typeof item === 'string' ? item : item?.path) } : input;
     const kept = await kept_directories(home, positionals[0], input, { folders: Boolean(values.remote) && !restricted });
     guard_remote_request(positionals[0], guard_input, { projects: granted_projects(home), participants: launch_settings(home).participants, home, kept });
-    if (values.remote && positionals[0] === 'room-workflow' && input?.action === 'host') throw new Error('主持人权限只能在电脑上开启');
     if (restricted && positionals[0] === 'pick-directory') throw new Error('此账号只能使用自己的项目文件夹');
     // Another device repeats the saved program locations it cannot see; keep them rather than dropping them.
     if (positionals[0] === 'settings' && input?.participants) input.participants = keep_saved_locations(home, input.participants);

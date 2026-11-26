@@ -2853,10 +2853,21 @@ function sending_upload_text(percent, phase) {
   if (phase === "compress") return t('正在压缩视频 {percent}%…', { percent });
   return total === 1 ? t('正在上传附件 {percent}%…', { percent }) : t('正在上传附件 {current}/{total} · {percent}%…', { current: done + 1, total, percent });
 }
+/**
+ * The sending card's text, laid out as the saved card will be: images its placeholders name sit in the same grid, from
+ * this browser's own copies (2026-11-26: two images showed on two lines, then side by side once saved).
+ */
 function sending_html(preview) {
-  return bridge.render_room_markdown(preview.text).replace(/\[(图片|文件) #(\d{1,2})\]/g, (match, kind, number) => !preview.files[number - preview.attachment_start] ? match
-    : `<span class="attachment-placeholder">${kind === "图片" ? t("[图片 #{number}]", { number }) : t("[文件 #{number}]", { number })}</span>`);
+  const files = preview.files.map((file, index) => ({ id: file.id, room_id: "", file_name: file.name, content_type: file.preview_url ? file.content_type || "image/png" : file.content_type || "application/octet-stream",
+    size: file.size, number: preview.attachment_start + index, local_url: file.preview_url, ...(file.width ? { width: file.width, height: file.height } : {}) }));
+  const inlined = new Set();
+  const html = bridge.link_attachment_placeholders(bridge.render_room_markdown(preview.text), files, inlined);
+  sending_inlined.set(preview, inlined);
+  return html;
 }
+// The images each sending card shows in its text grid, so the list below leaves them out.
+const sending_inlined = new WeakMap();
+const sending_listed = (card) => card.files.filter((file) => file.preview_url && !sending_inlined.get(card)?.has(file.id));
 /** Write the entrance onto the saved card that took over from the sending card. */
 function paint_rising(value) {
   const card = rising_id && transcript.value?.querySelector(`[data-message-id="${rising_id}"]`);
@@ -4254,8 +4265,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </div>
             <div class="channel-answer"><div class="channel-message-text markdown-body" v-html="sending_html(card)"></div></div>
             <!-- The files show at once from this browser's own copy while they upload. -->
-            <div v-if="card.files.some((file) => file.preview_url)" class="message-attachments">
-              <span v-for="file in card.files.filter((item) => item.preview_url)" :key="file.preview_url" class="attachment-image is-uploading"><img :src="file.preview_url" :alt="file.name"><AttachmentUploadRing :id="file.id" pending :done="file.uploaded || Boolean(card.saved_id)" /></span>
+            <div v-if="sending_listed(card).length" class="message-attachments">
+              <span v-for="file in sending_listed(card)" :key="file.preview_url" class="attachment-image is-uploading"><img :src="file.preview_url" :alt="file.name"><AttachmentUploadRing :id="file.id" pending :done="file.uploaded || Boolean(card.saved_id)" /></span>
             </div>
             <div v-if="card.files.some((file) => !file.preview_url)" class="channel-message-provenance">{{ t('附件：{value1}', { value1: card.files.filter((file) => !file.preview_url).map((file) => file.name).join('、') }) }}</div>
           </template>

@@ -476,7 +476,7 @@ test('a room page inlines only the project files it refers to, for the owner, in
   await assert.rejects(room_page(f.home, { ...input, path: 'site/app.js' }), /HTML/);
   await assert.rejects(room_page(f.home, { ...input, token: 'invalid-owner' }), /403/);
   // Through the relay the page comes in parts that join into the same bytes.
-  writeFileSync(join(project, 'site', 'img', 'bg.png'), Buffer.alloc(300 * 1024, 1));
+  writeFileSync(join(project, 'site', 'img', 'bg.png'), Buffer.alloc(600 * 1024, 1));
   const whole = await room_page(f.home, input);
   const parts = [];
   for (let offset = 0; offset < whole.total;) {
@@ -487,6 +487,12 @@ test('a room page inlines only the project files it refers to, for the owner, in
   }
   assert.ok(parts.length > 1);
   assert.equal(Buffer.concat(parts).toString('base64'), whole.data);
+  // A self-contained page past 8 MiB still shows whole; what it refers to is no longer inlined.
+  const big = `<!doctype html><img src="img/bg.png"><p>${'x'.repeat(9 * 1024 * 1024)}</p>`;
+  writeFileSync(join(project, 'site', 'big.html'), big);
+  const large = await room_page(f.home, { ...input, path: 'site/big.html' });
+  assert.equal(large.total, Buffer.byteLength(big));
+  assert.deepEqual(large.skipped, ['site/img/bg.png']);
 });
 
 test('a Markdown preview gets the project images it shows, keyed as the page resolves the rendered image paths', async t => {
@@ -519,7 +525,7 @@ test('a project media file is named to the local site, and reaches another devic
   const f = await fixture(t);
   const project = join(f.directory, 'project');
   mkdirSync(join(project, 'media'), { recursive: true });
-  const clip = Buffer.alloc(300 * 1024, 7);
+  const clip = Buffer.alloc(1200 * 1024, 7);
   writeFileSync(join(project, 'media', 'clip.mp4'), clip);
   writeFileSync(join(project, 'media', 'notes.txt'), 'text');
   writeFileSync(join(project, 'media', 'huge.webm'), '');
@@ -1288,9 +1294,12 @@ test('only the host of a room whose owner allowed it adopts a workflow, inviting
     + '<!-- workflow-file: agents/writer.md -->\n---\nname: Claude-writer\nlabel: 写手\nproject_access: write\n---\n按任务书写。\n');
   await assert.rejects(adopt_workflow(f.home, { access_file: host_access, draft_file: draft }), /主持人权限/);
   assert.equal(list_workflows(f.home).length, 0);
-  // A browser of the local site without the room credential grants it with the site's administrator authority.
-  const granted = await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', allowed: true }, { 'X-CoDiscuss-Local': '1' });
-  assert.equal(granted.status, 200, JSON.stringify(granted.body));
+  // Another paired device, already unlocked for the day, may grant it too.
+  const granted = spawnSync(process.execPath, [join(ROOT, 'runner/discussion_launch.mjs'), 'room-workflow', '--remote', '--stdin'], {
+    input: JSON.stringify({ site: f.site, room_id: config.room, token: config.token, action: 'host', allowed: true }), encoding: 'utf8',
+    env: { ...process.env, DISCUSS_SERVICE_HOME: f.home }, windowsHide: true,
+  });
+  assert.equal(granted.status, 0, granted.stderr);
   assert.equal(load_config(launched.config_path).host_workflows, true);
   const changed = await request(f.site, '/api/local/room-member-model', { room_id: config.room, name: 'Codex', model: 'local-model', effort: '' }, { 'X-CoDiscuss-Local': '1' });
   assert.equal(changed.status, 200, JSON.stringify(changed.body));
@@ -2033,6 +2042,14 @@ test('the relay channel reads and sends files in parts, and runs computer-room o
   } });
   assert.equal(selected.total, 9);
   assert.equal(Buffer.from(selected.body_base64, 'base64').toString(), 'rest');
+  // An attachment's bytes are asked by range too; an empty file answers no bytes rather than an error.
+  const piece = await room_api(home, 'https://site.test', { path, offset: 3 }, { fetcher: async (url, options) => {
+    assert.match(options.headers.Range, /^bytes=3-\d+$/);
+    return new Response('def', { status: 206, headers: { 'Content-Type': 'application/pdf', 'Content-Range': 'bytes 3-5/6' } });
+  } });
+  assert.deepEqual([piece.total, piece.content_type, Buffer.from(piece.body_base64, 'base64').toString()], [6, 'application/pdf', 'def']);
+  const empty = await room_api(home, 'https://site.test', { path }, { fetcher: async () => new Response(null, { status: 416, headers: { 'Content-Range': 'bytes */0' } }) });
+  assert.deepEqual([empty.status, empty.total, empty.body_base64], [200, 0, '']);
 
   // An upload reaches the local website once, whole, after every part has arrived; a resent part is not counted twice.
   const sent = [];

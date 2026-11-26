@@ -755,6 +755,61 @@ class DiscussionTests(unittest.TestCase):
         if not self.external:
             self.assertEqual(list(Path(str(self.database) + ".attachments").iterdir()), [])
 
+    def test_image_thumbnail_is_kept_once_with_the_original_shape_and_goes_with_it(self):
+        """A page's smaller copy of an image is checked, kept once, served beside the original and removed with it."""
+        base = f"/api/rooms/{self.room['id']}"
+        original = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + struct.pack(">II", 1000, 2000) + bytes(300 * 1024)
+        params = urlencode({"actor": "用户", "file_name": "shot.png", "submission_id": "thumbnail-original"})
+        file = json.loads(self.attachment_request(base + "/attachments?" + params, original)[2])["attachment"]
+
+        def webp(width, height):
+            return b"RIFF" + struct.pack("<I", 1000) + b"WEBPVP8X" + struct.pack("<I", 10) + bytes(4) + (width - 1).to_bytes(3, "little") + (height - 1).to_bytes(3, "little") + bytes(1000)
+        route = base + f"/attachments/{file['id']}/thumbnail"
+        anonymous = Request(self.base + route, data=webp(360, 720), headers={"Content-Type": "application/octet-stream"})
+        with self.assertRaises(HTTPError) as refused:
+            urlopen(anonymous, timeout=10)
+        self.assertEqual(refused.exception.code, 403)
+        refused.exception.close()
+        self.assertEqual(self.attachment_request(route, webp(360, 360))[0], 400, "another shape is refused")
+        self.assertEqual(self.attachment_request(route, b"\x89PNG\r\n\x1a\n" + bytes(100))[0], 400, "only WebP or JPEG")
+        self.assertEqual(self.attachment_request(route)[0], 404)
+        status, _, body = self.attachment_request(route, webp(360, 720))
+        self.assertEqual(status, 200, body)
+        kept = json.loads(body)["attachment"]
+        self.assertEqual((kept["thumbnail_type"], kept["thumbnail_url"]), ("image/webp", route))
+        self.assertTrue(json.loads(self.attachment_request(route, webp(720, 1440))[2])["duplicate"], "the first copy stays")
+        status, headers, content = self.attachment_request(route)
+        self.assertEqual((status, content, headers["Content-Type"]), (200, webp(360, 720), "image/webp"))
+        status, headers, content = self.attachment_request(file["url"], headers={"Range": "bytes=0-7"})
+        self.assertEqual((status, content, headers["Content-Range"]), (206, original[:8], f"bytes 0-7/{len(original)}"))
+        if not self.external:
+            sweep_attachments(self.database)
+            self.assertEqual(self.attachment_request(route)[0], 200, "the sweep keeps a registered original's copy")
+        self.assertEqual(self.request(base + f"/attachments/{file['id']}/discard", {"actor": "用户"})[0], 200)
+        if not self.external:
+            self.assertEqual(list(Path(str(self.database) + ".attachments").iterdir()), [])
+
+    def test_page_ticket_serves_its_folder_sandboxed_and_nothing_outside(self):
+        """A project page opened in a tab reads the files beside it, as an opaque origin; no path leaves the folder."""
+        if self.external:
+            self.skipTest("page tickets belong to the local site")
+        root = Path(str(self.database) + ".page")
+        (root / "img").mkdir(parents=True)
+        (root / "index.html").write_text('<img src="img/a.png">', encoding="utf-8")
+        (root / "img" / "a.png").write_bytes(b"\x89PNG")
+        Path(str(self.database) + ".secret").write_text("secret", encoding="utf-8")
+        self.server.page_tickets["good"] = (root.resolve(), time.time() + 60)
+        self.server.page_tickets["old"] = (root.resolve(), time.time() - 1)
+        status, headers, body = self.attachment_request("/api/local/page/good/index.html")
+        self.assertEqual((status, body), (200, b'<img src="img/a.png">'))
+        self.assertTrue(headers["Content-Type"].startswith("text/html"))
+        self.assertIn("sandbox allow-scripts", headers["Content-Security-Policy"])
+        self.assertNotIn("allow-same-origin", headers["Content-Security-Policy"])
+        self.assertEqual(self.attachment_request("/api/local/page/good/img/a.png")[2], b"\x89PNG")
+        name = Path(str(self.database) + ".secret").name
+        for path in (f"/api/local/page/good/%2E%2E/{name}", f"/api/local/page/good/..%5C{name}", "/api/local/page/old/index.html", "/api/local/page/none/index.html"):
+            self.assertEqual(self.attachment_request(path)[0], 404, path)
+
     def test_media_ticket_streams_only_its_checked_file_until_it_expires_or_changes(self):
         """A local page plays a project file by a random ticket; an unknown, expired or outdated ticket reads nothing."""
         if self.external:
