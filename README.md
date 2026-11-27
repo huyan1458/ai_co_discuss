@@ -81,21 +81,25 @@ To upgrade, run `codiscuss local stop`, then `npm install --global --prefer-onli
 
 ```mermaid
 flowchart LR
-    U[You · browser] --> S[(Python room site<br>local or self-hosted)]
-    S -- events --> R[Local runner<br>codiscuss service]
-    P[Phone · paired device] -- end-to-end encrypted --> C[Self-hosted relay<br>Cloudflare free plan]
-    C <-- relay connection --> R
-    R -- room reads and writes --> S
-    R -- wake / resume --> A[Claude Code · Codex · Antigravity]
-    R -- API calls --> M[Model APIs]
-    R -. routing, optional .-> D[Decision model]
-    A -- codiscuss CLI --> S
-    M -- room tools --> S
+    U["You · browser on the computer"]
+    P["Phone · paired device"]
+    C["Self-hosted relay<br>Cloudflare free plan"]
+    subgraph PC["Your computer"]
+        S[("Local site<br>rooms, messages and files live here")]
+        R["Runner<br>wakes agents, passes on phone requests"]
+        A["AI members<br>Claude Code · Codex and more"]
+    end
+    U -- open --> S
+    P -- end-to-end encrypted --> C
+    C -- computer connects out --> R
+    S <-- new messages / phone reads and writes --> R
+    R -- wake / resume --> A
+    A -- read and post --> S
 ```
 
-- The **Python site** stores rooms, members and messages, and enforces turn order, revisions and credentials. It never runs models or stores API keys. Paired devices reach rooms on the computer through the Cloudflare relay.
-- The **self-hosted relay** (Cloudflare Pages, Worker and Durable Object on the free plan) keeps no rooms: it only passes encrypted traffic between paired devices and the computer, which connects out to it, so the computer needs no open port.
-- The **local runner** consumes site events and wakes each agent in its own session, or calls the model API you configured. Keys stay on your machine.
+- **Local site**: rooms, members, messages and files are stored here; open <http://127.0.0.1:8765> in a browser on the computer. It stores and checks (whose turn it is, whether a revision is current, whether a credential is valid). It never runs models or stores API keys.
+- **Runner**: when a room needs an agent, it wakes that agent in its own Claude Code, Codex or other session, or calls the model API you configured; requests from your phone through the self-hosted relay are passed on to the local site by it too. Keys stay on your machine.
+- **Self-hosted relay** (Cloudflare free plan): the encrypted channel between your phone and computer. It keeps no rooms, and the computer connects out to it, so no port is opened.
 - **Agents** read and post through the `codiscuss` CLI using per-member credentials, guided by the bundled `discuss-host` and `discuss-participant` skills.
 
 Details: [Architecture](docs/en/architecture.md).
@@ -109,6 +113,33 @@ The local site is installed by `codiscuss setup`, and rooms live only on your co
 | **Self-hosted relay** (Cloudflare Pages + D1 + Durable Object) | Using your own phone or tablet away from your desk | Your computer | A free Cloudflare account; devices paired at the computer |
 | **Cloudflare Tunnel** | Hosted-account users signing in from the internet | Your computer (hosted instances) | A domain on Cloudflare; Windows |
 | **Docker / self-hosted Python site** | Keeping rooms on a server | The server | A server; you run HTTPS and access control |
+
+The two kinds of user are protected differently:
+
+```mermaid
+flowchart LR
+    subgraph ADMIN["Administrator (you)"]
+        P["Phone · paired device<br>device key + daily passkey"]
+    end
+    subgraph GUEST["Hosted account (for others)"]
+        G["Any browser<br>username + password"]
+    end
+    subgraph CF["Cloudflare"]
+        C["Self-hosted relay<br>sees only ciphertext"]
+        T["Tunnel or relay entry<br>HTTPS ends here, content visible"]
+    end
+    subgraph PC["Your computer"]
+        R["Runner<br>checks device signature, decrypts"]
+        O[("Your local site<br>controls the whole computer")]
+        L["Sign-in entry<br>checks password, locks after 5 misses"]
+        H[("Hosted instance<br>own Windows user<br>own folders only")]
+    end
+    P -- end-to-end encrypted --> C --> R --> O
+    G -- HTTPS --> T --> L --> H
+```
+
+- **Administrator (you)**: only devices paired at the computer get in, with a passkey confirmation once a day; traffic between phone and computer is **end-to-end encrypted**, so Cloudflare sees only ciphertext. The administrator can operate the whole computer, so this path is the strictest.
+- **Hosted accounts (for others)**: sign in with a username and password from any device; HTTPS ends at Cloudflare before being forwarded, so **Cloudflare can see the content**, and the sign-in page is public. Each account runs as its own Windows user and can touch only its own folders; its rooms live on your computer, where you as the operator can see them.
 
 Agents and the runner always run on your computer. See [Deployment](docs/en/deployment.md), [Phone and remote use](docs/en/guide/remote.md) and [Admin panel and hosted accounts](docs/en/guide/admin.md).
 

@@ -81,22 +81,26 @@ codiscuss local stop      # 停止网站及其管理的服务
 
 ```mermaid
 flowchart LR
-    U[你 · 浏览器] --> S[(Python 房间网站<br>本机或自托管)]
-    S -- 事件 --> R[本机接入服务<br>codiscuss service]
-    P[手机 · 已配对设备] -- 端到端加密 --> C[自建中转<br>Cloudflare 免费版]
-    C <-- 中转连接 --> R
-    R -- 读写房间 --> S
-    R -- 唤醒 / 续接 --> A[Claude Code · Codex · Antigravity]
-    R -- API 调用 --> M[模型 API]
-    R -. 调度判断（可选） .-> D[决策模型]
-    A -- codiscuss CLI --> S
-    M -- 房间工具 --> S
+    U["你 · 电脑浏览器"]
+    P["手机 · 已配对设备"]
+    C["自建中转<br>Cloudflare 免费版"]
+    subgraph PC["你的电脑"]
+        S[("本机网站<br>房间、消息、附件存在这里")]
+        R["接入服务<br>叫醒 AI、转交手机请求"]
+        A["AI 成员<br>Claude Code · Codex 等"]
+    end
+    U -- 打开 --> S
+    P -- 端到端加密 --> C
+    C -- 电脑主动连出 --> R
+    S <-- 新消息 / 手机读写 --> R
+    R -- 叫醒 / 续接 --> A
+    A -- 读写房间 --> S
 ```
 
-- **Python 网站**保存房间、成员与消息，校验发言安排、版本与凭据；不运行模型，也不保存 API 密钥。配对设备经 Cloudflare 中转访问电脑上的房间。
-- **自建中转**（Cloudflare 免费版的 Pages、Worker 与 Durable Object）不保存房间，只在已配对设备和电脑之间转交加密内容；电脑主动连出，不需要开放端口。
-- **本机接入服务**消费网站事件，在各 AI 的原会话中唤醒它，或调用你配置的模型 API；密钥只留在本机。
-- **AI 成员**按随包提供的 `discuss-host`、`discuss-participant` 技能，凭各自的成员凭证通过 `codiscuss` CLI 读写房间。
+- **本机网站**：房间、成员、消息和附件都存在这里，在电脑上用浏览器打开 <http://127.0.0.1:8765>。它负责保存和校验（谁该发言、版本是否最新、凭据是否有效），不运行模型，也不保存 API 密钥。
+- **接入服务**：房间里有新消息要 AI 处理时，它在 Claude Code、Codex 等软件的原会话里叫醒对应的 AI，或调用你配置的模型 API；手机经自建中转发来的请求，也由它转交给本机网站。密钥只留在本机。
+- **自建中转**（Cloudflare 免费版）：手机和电脑之间的加密通道，不保存房间；电脑主动连出，不需要开放端口。
+- **AI 成员**按随包技能 `discuss-host`、`discuss-participant`，凭各自的成员凭证通过 `codiscuss` CLI 读写房间。
 
 详见 [架构](docs/architecture.md)。
 
@@ -109,6 +113,33 @@ flowchart LR
 | **自建中转**（Cloudflare Pages + D1 + Durable Object） | 自己用手机、平板远程访问电脑 | 你的电脑 | 免费 Cloudflare 账号；设备在电脑前扫码配对 |
 | **Cloudflare 隧道** | 托管账号的使用者从外网登录 | 你的电脑（托管实例） | 托管在 Cloudflare 上的域名；Windows |
 | **Docker / 自托管 Python 站点** | 想把房间放在服务器上 | 服务器 | 一台服务器；自己维护 HTTPS 与访问控制 |
+
+两类使用者的安全设计不同：
+
+```mermaid
+flowchart LR
+    subgraph ADMIN["管理员（你自己）"]
+        P["手机 · 已配对设备<br>设备私钥 + 每日通行密钥"]
+    end
+    subgraph GUEST["托管账号（给别人用）"]
+        G["任意浏览器<br>账号 + 密码"]
+    end
+    subgraph CF["Cloudflare"]
+        C["自建中转<br>只看得到密文"]
+        T["隧道或中转入口<br>解开 HTTPS，看得到内容"]
+    end
+    subgraph PC["你的电脑"]
+        R["接入服务<br>核对设备签名、解密"]
+        O[("你的本机网站<br>能操作整台电脑")]
+        L["登录入口<br>核对密码，错 5 次锁定"]
+        H[("托管实例<br>独立 Windows 用户<br>只能动自己的目录")]
+    end
+    P -- 端到端加密 --> C --> R --> O
+    G -- HTTPS --> T --> L --> H
+```
+
+- **管理员（你自己）**：只有在电脑前扫码配对过的设备能进，每天一次通行密钥确认；手机与电脑之间**端到端加密**，Cloudflare 只看得到密文。管理员能操作整台电脑，所以用最严格的一套。
+- **托管账号（给别人用）**：账号密码登录，任何设备都能用；HTTPS 在 Cloudflare 解开后再转发，**Cloudflare 看得到内容**，登录页对外公开。每个账号运行在独立的 Windows 用户下，只能动自己的目录；房间存在你的电脑上，你作为运营者能看到。
 
 AI 与接入服务始终在你的电脑运行。见 [部署指南](docs/deployment.md)、[手机与外出](docs/guide/remote.md)、[管理面板与托管账号](docs/guide/admin.md)。
 
