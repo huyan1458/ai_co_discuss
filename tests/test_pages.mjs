@@ -387,7 +387,7 @@ test('Worker hands relay sockets and requests to the computer relay only after c
   const timed = (await f.signed(path, request)).body;
   assert.ok(timed.worker_ms >= 0);
   assert.equal(timed.status, 'unknown');
-  assert.deepEqual(seen.map(item => [item.id, item.role]), [[f.machine_id, 'machine'], [f.machine_id, 'device'], [f.machine_id, 'request']]);
+  assert.deepEqual(seen.map(item => [item.id, item.role]), [[`${f.machine_id}:apac`, 'machine'], [`${f.machine_id}:apac`, 'device'], [`${f.machine_id}:apac`, 'request']]);
   assert.deepEqual(seen[2].body, request);
   assert.equal(timed.machine_colo, 'SJC');
   const link = (await import('../runner/remote_launch.mjs')).machine_links(f.home).sites['https://discussion.test'];

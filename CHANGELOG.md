@@ -2,6 +2,11 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.39 (2026-11-26 17:27)
+
+- Changed: Phones and other devices in Asia reaching the computer through the online site now relay through a nearby data center, so responses come faster.
+- Fixed: On phones, long-pressing a file to open its menu also opened the file on release, and the menu could no longer be closed.
+
 ## 0.5.38 (2026-11-26 10:05)
 
 - New: The "Files" tab can switch to "Icon view", showing image thumbnails (on Windows computers for now).

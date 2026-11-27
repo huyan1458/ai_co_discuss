@@ -41,7 +41,7 @@ const storage_warning_reason = computed(() => {
   const snap = storage_snapshot.value;
   if (snap?.warning_reason) return snap.warning_reason;
   if (snap && (snap.warning || snap.over_limit)) {
-    return t("本机 .codiscuss 数据已占 {used}（不含语音模型），接近 {limit} 上限（预警线 {warn}）。请及时清理临时文件或旧草稿。",
+    return t("本机 .codiscuss 数据已占 {used}，接近 {limit} 上限（预警线 {warn}）。请及时清理临时文件或旧草稿。",
       { used: format_storage_bytes(snap.total_bytes), limit: format_storage_bytes(snap.limits.home_limit_bytes), warn: format_storage_bytes(snap.limits.home_warn_bytes) });
   }
   return state.value.storage?.warning_reason || state.value.service?.storage?.warning_reason || "";

@@ -127,7 +127,7 @@ watch(refreshed, () => load_storage());
       </p>
       <p v-else-if="snapshot.warning" class="panel-note is-amber storage-banner" role="status">
         <UIcon name="i-lucide-triangle-alert" />
-        <span>{{ snapshot.warning_reason || t("本机 .codiscuss 数据已占 {used}（不含语音模型），接近 {limit} 上限（预警线 {warn}）。请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或清理临时文件。", { used: format_storage_bytes(snapshot.total_bytes), limit: format_storage_bytes(snapshot.limits.home_limit_bytes), warn: format_storage_bytes(snapshot.limits.home_warn_bytes) }) }}</span>
+        <span>{{ snapshot.warning_reason || t("本机 .codiscuss 数据已占 {used}，接近 {limit} 上限（预警线 {warn}）。请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或清理临时文件。", { used: format_storage_bytes(snapshot.total_bytes), limit: format_storage_bytes(snapshot.limits.home_limit_bytes), warn: format_storage_bytes(snapshot.limits.home_warn_bytes) }) }}</span>
       </p>
       <p v-if="snapshot.unreadable > 0" class="panel-note is-amber storage-banner" role="status">
         <UIcon name="i-lucide-shield-alert" />

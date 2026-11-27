@@ -6664,7 +6664,7 @@ function apply_storage_snapshot(result) {
   if (!warning) { storage_warn_announced = false; return; }
   if (storage_warn_announced) return;
   storage_warn_announced = true;
-  notify("warning", result?.warning_reason || t("本机 .codiscuss 数据已占 {used}（不含语音模型），接近 {limit} 上限，请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或清理临时文件。",
+  notify("warning", result?.warning_reason || t("本机 .codiscuss 数据已占 {used}，接近 {limit} 上限，请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或清理临时文件。",
     { used: format_storage_size(total_bytes), limit: format_storage_size(limit_bytes) }));
 }
 

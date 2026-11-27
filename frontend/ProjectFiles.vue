@@ -395,25 +395,61 @@ function root_lock(item) {
 }
 
 const deleted_time = (value) => modified_time(value);
+
+/** The rarely used tools of the heading: refreshing what is shown, and going into or out of the recycle area. */
+const more_items = computed(() => [
+  { label: t('刷新'), icon: "i-lucide-refresh-cw", disabled: loading.value || busy.value,
+    onSelect: () => mode.value === "roots" ? show_roots() : mode.value === "trash" ? show_trash() : (read_directory(current_path.value), sweep_folders()) },
+  mode.value === "trash" ? { label: t('返回文件夹'), icon: "i-lucide-folder-open", onSelect: () => open_project(current_path.value) }
+    : { label: t('回收区'), icon: "i-lucide-trash", onSelect: show_trash },
+]);
+
+// Only one entry's menu is open at a time: a menu opened by a long press cannot be closed from outside, so the one open
+// before is shown again from scratch (its key changes), which closes it (user 2026-11-27, #13813).
+const menu_keys = ref({});
+let open_menu = "";
+
+// On a touch screen a long press opens an entry's menu, and lifting the finger then also clicks the entry: that click
+// opened the file over its own menu, which could no longer be closed (user 2026-11-27, #13795). It is ignored.
+const LONG_PRESS_CLICK_MS = 800;
+let menu_opened_at = 0;
+
+/** Remember when an entry's menu opened, and close the one open before it. */
+function note_menu(entry, open) {
+  if (!open) { if (open_menu === entry.path) open_menu = ""; return; }
+  menu_opened_at = Date.now();
+  if (open_menu && open_menu !== entry.path) menu_keys.value = { ...menu_keys.value, [open_menu]: (menu_keys.value[open_menu] || 0) + 1 };
+  open_menu = entry.path;
+}
+
+/** Open a folder or preview a file, unless this click is the end of the long press that opened its menu. */
+function open_entry(entry) {
+  if (Date.now() - menu_opened_at < LONG_PRESS_CLICK_MS) return;
+  if (entry.kind === "directory") read_directory(entry.path);
+  else file_preview.open?.(entry.path, account_root.value ? account_root.value.name : directory.value, root.value, entry);
+}
 </script>
 
 <template>
   <section class="project-files">
     <header class="project-files-heading">
-      <div><h2>{{ t('项目文件') }}</h2><p>{{ mode === 'roots' ? t('项目与草稿') : mode === 'trash' ? t('回收区（保留 30 天）') : root_name }}</p></div>
+      <!-- A folder's name is in the path bar below; only the other sections say here what they are. -->
+      <div><h2>{{ t('项目文件') }}</h2><p v-if="mode !== 'folder'">{{ mode === 'roots' ? t('项目与草稿') : t('回收区（保留 30 天）') }}</p></div>
       <div class="project-files-tools">
+        <!-- Adding files first, then how they are shown; refreshing (the list also refreshes itself) and the recycle
+             area, used rarely, sit under "更多操作" (user 2026-11-27, #13813). -->
         <template v-if="mode === 'folder'">
-          <UButton icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="sm" :aria-label="t('新建文件夹')" :title="t('新建文件夹')" :disabled="busy" @click="start_naming('mkdir')" />
-          <UButton icon="i-lucide-upload" color="neutral" variant="ghost" size="sm" :aria-label="t('上传文件')" :title="t('上传文件（单个不超过 20 MB）')" :disabled="busy" @click="file_input?.click()" />
           <UButton v-if="clipboard" icon="i-lucide-clipboard-paste" color="neutral" variant="soft" size="sm" :label="t('粘贴')" :title="t('粘贴 {value1}', { value1: clipboard.name })" :disabled="busy" @click="paste" />
+          <UButton icon="i-lucide-upload" color="neutral" variant="ghost" size="sm" :aria-label="t('上传文件')" :title="t('上传文件（单个不超过 20 MB）')" :disabled="busy" @click="file_input?.click()" />
+          <UButton icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="sm" :aria-label="t('新建文件夹')" :title="t('新建文件夹')" :disabled="busy" @click="start_naming('mkdir')" />
           <input ref="file_input" type="file" multiple hidden @change="upload_files($event.target.files)" />
           <UButton :icon="layout === 'icons' ? 'i-lucide-list' : 'i-lucide-layout-grid'" color="neutral" variant="ghost" size="sm"
             :aria-label="layout === 'icons' ? t('列表视图') : t('图标视图')" :title="layout === 'icons' ? t('列表视图') : t('图标视图')" @click="layout = layout === 'icons' ? 'list' : 'icons'" />
         </template>
         <UButton v-if="mode === 'roots' && roots?.can_create_project" icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="sm" :label="t('新建项目')" :disabled="loading || busy" @click="start_naming('project')" />
-        <UButton icon="i-lucide-trash-2" color="neutral" :variant="mode === 'trash' ? 'soft' : 'ghost'" size="sm" :aria-label="t('回收区')" :title="t('回收区')" @click="mode === 'trash' ? open_project(current_path) : show_trash()" />
-        <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" :aria-label="t('刷新')" :title="t('刷新')" :loading="loading || busy"
-          @click="mode === 'roots' ? show_roots() : mode === 'trash' ? show_trash() : (read_directory(current_path), sweep_folders())" />
+        <UDropdownMenu :items="more_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+          <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('更多操作')" :title="t('更多操作')" :loading="loading || busy" />
+        </UDropdownMenu>
       </div>
     </header>
 
@@ -510,11 +546,11 @@ const deleted_time = (value) => modified_time(value);
       <template v-else-if="mode === 'folder'">
         <div v-if="layout === 'list'" class="project-files-columns" aria-hidden="true"><span>{{ t('名称') }}</span><span>{{ t('大小') }}</span><span>{{ t('修改时间') }}</span></div>
         <!-- Tiles change only with the listing; each loads its own thumbnail once it scrolls into view. -->
-        <div v-if="layout === 'icons' && listing?.entries.length" v-memo="[listing, directory, root, busy]" class="project-files-tiles">
-          <UContextMenu v-for="entry in listing.entries" :key="entry.path" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu' }">
+        <div v-if="layout === 'icons' && listing?.entries.length" v-memo="[listing, directory, root, busy, menu_keys]" class="project-files-tiles">
+          <UContextMenu v-for="entry in listing.entries" :key="`${entry.path}#${menu_keys[entry.path] || 0}`" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu' }" @update:open="(open) => note_menu(entry, open)">
           <div class="project-file-tile" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable' }">
             <button type="button" :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? t('{value1}（无法读取或指向项目外）', { value1: entry.name }) : entry.name"
-              @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, account_root ? account_root.name : directory, root, entry)">
+              @click="open_entry(entry)">
               <ProjectFileThumbnail :key="`${entry.size}:${entry.modified_at}`" :entry="entry" :root="root" :icon="entry_icon(entry)" />
               <span class="project-file-tile-name">{{ entry.name }}</span>
             </button>
@@ -525,12 +561,12 @@ const deleted_time = (value) => modified_time(value);
           </UContextMenu>
         </div>
         <!-- Rows change only with the listing; the room's directories arrive as a new array on every view publish. -->
-        <div v-memo="[listing, loading, directory, root, busy, layout]" class="project-files-rows">
+        <div v-memo="[listing, loading, directory, root, busy, layout, menu_keys]" class="project-files-rows">
           <template v-if="layout === 'list'">
-          <UContextMenu v-for="entry in listing?.entries || []" :key="entry.path" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu' }">
+          <UContextMenu v-for="entry in listing?.entries || []" :key="`${entry.path}#${menu_keys[entry.path] || 0}`" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu' }" @update:open="(open) => note_menu(entry, open)">
           <div class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable' }">
             <button type="button" class="project-file-name" :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? t('{value1}（无法读取或指向项目外）', { value1: entry.name }) : entry.name"
-              @click="entry.kind === 'directory' ? read_directory(entry.path) : file_preview.open?.(entry.path, account_root ? account_root.name : directory, root, entry)">
+              @click="open_entry(entry)">
               <UIcon :name="entry_icon(entry)[0]" class="project-file-icon" :class="entry_icon(entry)[1]" /><span>{{ entry.name }}</span>
             </button>
             <span class="project-file-size">{{ file_size(entry.size) }}</span>
@@ -618,6 +654,9 @@ const deleted_time = (value) => modified_time(value);
   text-align: center; overflow-wrap: anywhere; }
 .project-file-tile.is-hidden .project-file-tile-name { color: var(--ui-text-muted); }
 .project-file-tile-menu { position: absolute; top: 4px; right: 4px; }
+/* As in the room list, pressing an entry opens it or (held) its menu and never selects its name or picture. */
+.project-file-row .project-file-name, .project-file-tile > button { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: pan-y; }
+@media (hover: none) { .project-file-tile-menu { display: none; } }
 @media (hover: hover) {
   .project-file-tile-menu { opacity: 0; }
   .project-file-tile:hover .project-file-tile-menu, .project-file-tile:focus-within .project-file-tile-menu, .project-file-tile-menu[data-state="open"] { opacity: 1; }

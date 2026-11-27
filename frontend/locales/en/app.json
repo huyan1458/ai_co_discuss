@@ -646,7 +646,7 @@
   "{count} 个文件 · {size}": "{count} files · {size}",
   "第 {version} 版 · {count} 个文件 · {size}": "Version {version} · {count} files · {size}",
   "{time} 到期": "expires {time}",
-  "本机 .codiscuss 数据已占 {used}（不含语音模型），接近 {limit} 上限，请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或清理临时文件。": "Local .codiscuss data uses {used} (excluding speech models), approaching the {limit} limit. Run $codiscuss-draft-cleanup in an AI chat outside the room or clear temporary files.",
+  "本机 .codiscuss 数据已占 {used}，接近 {limit} 上限，请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或清理临时文件。": "Local .codiscuss data uses {used}, approaching the {limit} limit. Run $codiscuss-draft-cleanup in an AI chat outside the room or clear temporary files.",
   "固定「{value1}」": "Pinning “{value1}”",
   "取消固定「{value1}」": "Unpinning “{value1}”"
 }

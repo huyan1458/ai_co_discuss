@@ -44,7 +44,8 @@ function machine_cookie(request) {
   return match ? match[1] : "";
 }
 
-const relay_of = (env, machine) => env.RELAY.get(env.RELAY.idFromName(machine));
+// Same naming and region as machine_relay in backend/worker.mjs: both must reach the same object.
+const relay_of = (env, machine) => env.RELAY.get(env.RELAY.idFromName(`${machine}:apac`), { locationHint: "apac" });
 
 export default {
   async fetch(request, env) {

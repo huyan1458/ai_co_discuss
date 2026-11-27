@@ -13,6 +13,15 @@ class HttpError extends Error {
   }
 }
 
+// Each computer's relay object. An object is created where it is first reached and never moves; without a hint the
+// first caller was the computer, whose proxy exits in the US, so phones in Asia crossed the Pacific twice (2026-11-27,
+// relay-timing: device SEA, computer IAD). The `apac` name starts new objects in Asia; old ones keep no data.
+// backend/entry_worker.mjs names the same objects and must match.
+const RELAY_REGION = "apac";
+function machine_relay(namespace, machine_id) {
+  return namespace.get(namespace.idFromName(`${machine_id}:${RELAY_REGION}`), { locationHint: RELAY_REGION });
+}
+
 /** Return a no-store response suitable for JSON APIs or plain-text readers. */
 function respond(body, status = 200, text_mode = false) {
   return new Response(text_mode ? body : JSON.stringify(body), {
@@ -379,7 +388,7 @@ async function machine_sync(database, machine_id, token, payload, now, relay = n
       .bind(machine_id, payload.devices.body, payload.devices.signature, list.issued_at).run();
     // A changed list closes the live sockets of devices it no longer holds; an unchanged one writes nothing and leaves the relay asleep.
     if (relay && stored?.meta?.changes) {
-      await relay.get(relay.idFromName(machine_id)).fetch("https://relay.internal/", { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Role": "devices" },
+      await machine_relay(relay, machine_id).fetch("https://relay.internal/", { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Role": "devices" },
         body: JSON.stringify({ devices: list.devices.filter(item => item.kind !== "external").map(item => ({ id: item.id, expires_at: item.expires_at })) }) }).catch(() => {});
     }
   }
@@ -470,7 +479,7 @@ async function handle_relay(env, request, machine_id) {
   const started = performance.now();
   if (!env.RELAY) throw new HttpError(404, "中转未配置");
   const database = env.DB;
-  const relay = env.RELAY.get(env.RELAY.idFromName(machine_id));
+  const relay = machine_relay(env.RELAY, machine_id);
   if (request.headers.get("Upgrade") === "websocket") {
     const offered = (request.headers.get("Sec-WebSocket-Protocol") ?? "").split(",").map(item => item.trim());
     if (!offered.includes(RELAY_PROTOCOL)) throw new HttpError(400, "中转协议不受支持");
@@ -529,7 +538,7 @@ async function handle_pairing(env, request, machine_id) {
   await limit_pairing(database, request);
   await require_paired_machine(database, machine_id);
   const payload = await read_payload(request);
-  if (env.RELAY) return forward_relay(env.RELAY.get(env.RELAY.idFromName(machine_id)), payload);
+  if (env.RELAY) return forward_relay(machine_relay(env.RELAY, machine_id), payload);
   return respond(await submit_machine_command(database, machine_id, payload, now_seconds()));
 }
 

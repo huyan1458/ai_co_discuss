@@ -358,10 +358,10 @@ export function block_reason(snapshot, room_key = '', disk = null, options = {})
   if (Number(snapshot.total_bytes || 0) > home_limit) {
     const local_bytes = Number(snapshot.local_bytes || 0);
     if (local_bytes > 0) {
-      return t('本机 .codiscuss 数据占用 {used}（不含语音模型；草稿 {draft}，房间记录与附件 {local}），超过 {limit} 上限，已停止派活。房间记录与附件不会自动删除，请先销毁不需要的旧房间；清理旧草稿请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup。',
+      return t('本机 .codiscuss 数据占用 {used}（草稿 {draft}，房间记录与附件 {local}），超过 {limit} 上限，已停止派活。房间记录与附件不会自动删除，请先销毁不需要的旧房间；清理旧草稿请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup。',
         { used: format_bytes(snapshot.total_bytes), draft: format_bytes(snapshot.draft_bytes), local: format_bytes(local_bytes), limit: format_bytes(home_limit) }, locale);
     }
-    return t('本机 .codiscuss 数据占用 {used}（不含语音模型；草稿 {draft}），超过 {limit} 上限，已停止派活。清理旧草稿请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup，或在管理面板“存储”页清理临时文件；若由房间记录与附件占满，请销毁旧房间。',
+    return t('本机 .codiscuss 数据占用 {used}（草稿 {draft}），超过 {limit} 上限，已停止派活。清理旧草稿请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup，或在管理面板“存储”页清理临时文件；若由房间记录与附件占满，请销毁旧房间。',
       { used: format_bytes(snapshot.total_bytes), draft: format_bytes(snapshot.draft_bytes), limit: format_bytes(home_limit) }, locale);
   }
   if (snapshot.uncertain_growth && !options.running) {
@@ -387,10 +387,10 @@ export function warn_reason(snapshot, options = {}) {
   if (!snapshot || Number(snapshot.total_bytes || 0) < home_warn) return '';
   const unreadable = Number(snapshot.unreadable || 0);
   if (unreadable > 0) {
-    return t('本机 .codiscuss 数据已占 {used}（不含语音模型，另有 {unreadable} 处因权限无法读取未计入），接近 {limit} 上限（预警线 {warn}）。请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或在管理面板“存储”页清理临时文件。',
+    return t('本机 .codiscuss 数据已占 {used}（另有 {unreadable} 处因权限无法读取未计入），接近 {limit} 上限（预警线 {warn}）。请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或在管理面板“存储”页清理临时文件。',
       { used: format_bytes(snapshot.total_bytes), unreadable, limit: format_bytes(home_limit), warn: format_bytes(home_warn) }, locale);
   }
-  return t('本机 .codiscuss 数据已占 {used}（不含语音模型），接近 {limit} 上限（预警线 {warn}）。请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或在管理面板“存储”页清理临时文件。',
+  return t('本机 .codiscuss 数据已占 {used}，接近 {limit} 上限（预警线 {warn}）。请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或在管理面板“存储”页清理临时文件。',
     { used: format_bytes(snapshot.total_bytes), limit: format_bytes(home_limit), warn: format_bytes(home_warn) }, locale);
 }
 
