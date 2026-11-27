@@ -341,6 +341,8 @@ export async function request_attachments(config, execution, member_directory = 
       const number = Number.isInteger(file.number) ? file.number : index + 1;
       const entry = { message_id, number, placeholder: attachment_placeholder(file, number), file_name: file.file_name,
         content_type: file.content_type, size: file.size, id: file.id, path: '' };
+      // The owner freed this file's bytes; say so instead of failing a download.
+      if (file.cleared_at) { entry.error = '附件已被房主清理，原文件不可用'; result.push(entry); continue; }
       try { entry.path = await save_attachment(config, member_directory, execution.id, message_id, entry, file.sha256); }
       catch (error) { entry.error = error.message; }
       result.push(entry);

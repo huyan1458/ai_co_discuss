@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { storage_details, clean_storage } from './admin_storage.mjs';
 import { execution_file_protection, read_registry, sweep_service_home } from './discussion_service.mjs';
 import { t } from './i18n.mjs';
+import { site_fetch } from './entry_client.mjs';
 import { with_directory_breakdown } from './storage_guard.mjs';
 
 function local_database(home, action) {
@@ -28,7 +29,37 @@ export async function panel_storage(home, local) {
       for (const room of report.rooms) if (room.site && matches_site(room.site, local)) room.title = title.get(room.room_id)?.title;
     });
   } catch { /* A room ID remains available when titles cannot be read. */ }
+  try {
+    local_database(home, db => {
+      // Sent files still holding their bytes, per room, largest first: what clearing attachments can free.
+      report.attachment_rooms = db.prepare(`SELECT a.room_id,r.title,COUNT(*) AS count,SUM(a.size) AS bytes,MAX(a.created_at) AS latest_at
+        FROM attachments a JOIN rooms r ON r.id=a.room_id WHERE a.message_id IS NOT NULL AND a.cleared_at IS NULL
+        GROUP BY a.room_id ORDER BY bytes DESC`).all().map(row => ({ ...row }));
+    });
+  } catch { /* An older site without cleared files has no list; the page shows none. */ }
   return report;
+}
+
+const ROOM_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Ask the local site, as this computer's administrator, for one room's attachments or to clear some of them. */
+async function room_attachments_request(local, room_id, action, body) {
+  if (typeof room_id !== 'string' || !ROOM_ID.test(room_id)) throw new Error(t('房间编号无效'));
+  const response = await site_fetch(`${local}/api/rooms/${room_id}/attachments/${action}`, body === undefined ? {}
+    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || t('附件请求失败（HTTP {status}）', { status: response.status }));
+  return result;
+}
+
+/** One room's sent files with sizes and cleared state, for picking what to clear. */
+export function panel_room_attachments(local, body) {
+  return room_attachments_request(local, body.room_id, 'usage');
+}
+
+/** Clear the original bytes of the chosen files of one room; records and thumbnails stay. */
+export function panel_clear_attachments(local, body) {
+  return room_attachments_request(local, body.room_id, 'clear', { ids: body.ids });
 }
 
 function account_file(path, apply, result) {

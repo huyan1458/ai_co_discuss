@@ -217,7 +217,8 @@ export function create_share_core({ t, display_name, collapse_visual_fences, is_
     for (const [path, body] of Object.entries(responses)) {
       if (!/\/messages\?/.test(path)) continue;
       for (const message of body.messages || []) for (const file of message.attachments || []) {
-        if (file.room_id !== room_id) continue;
+        // A cleared file has no bytes to copy; the page shows its card as cleared, as the room does.
+        if (file.room_id !== room_id || file.cleared_at) continue;
         const route = share_file_route(file);
         // A data URL names the plain type; parameters such as a charset would not survive the share site's check.
         files.set(route, { route, room_id, id: file.id, created_at: message.created_at, author: message.author_label || message.author, file_name: file.file_name, size: Number(file.size) || 0, message_id: message.id, ...share_site_file(file.file_name),

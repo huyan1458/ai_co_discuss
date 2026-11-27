@@ -1,3 +1,4 @@
+import { read_relay_region, relay_in_region } from "./worker.mjs";
 /**
  * The hosted accounts' sign-in entry over the online relay: a Worker on a workers.dev address of its own that hands each
  * request to a computer's relay (backend/updates.mjs, `MachineRelay`), which passes it to that computer's sign-in entry
@@ -10,6 +11,26 @@
  * Which computer: the link the owner hands out carries it (`?m=<computer id>`); it is kept in a cookie of this address,
  * and every later request goes to that computer.
  */
+
+const CACHE_SECONDS = 30;
+const CACHE_LIMIT = 512;
+const relay_caches = new WeakMap();
+
+/** Cache each computer's resolved relay briefly within this Worker isolate. */
+async function entry_relay(env, machine) {
+  let cache = relay_caches.get(env);
+  if (!cache) {
+    cache = new Map();
+    relay_caches.set(env, cache);
+  }
+  const now = Date.now();
+  const cached = cache.get(machine);
+  if (cached?.expires > now) return relay_in_region(env.RELAY, machine, cached.region);
+  const region = await read_relay_region(env, machine);
+  if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value);
+  cache.set(machine, { region, expires: now + CACHE_SECONDS * 1000 });
+  return relay_in_region(env.RELAY, machine, region);
+}
 
 const MACHINE_PATTERN = /^[0-9a-f]{32}$/;
 const MACHINE_COOKIE = "codiscuss_machine";
@@ -44,9 +65,6 @@ function machine_cookie(request) {
   return match ? match[1] : "";
 }
 
-// Same naming and region as machine_relay in backend/worker.mjs: both must reach the same object.
-const relay_of = (env, machine) => env.RELAY.get(env.RELAY.idFromName(`${machine}:apac`), { locationHint: "apac" });
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -54,7 +72,7 @@ export default {
     if (url.pathname === "/_codiscuss/status") {
       const machine = url.searchParams.get("machine") || "";
       if (!MACHINE_PATTERN.test(machine)) return Response.json(entry_error("电脑编号无效"), { status: 400 });
-      const answer = await relay_of(env, machine).fetch("https://relay.internal/", { headers: { "X-Relay-Role": "entry-status" } });
+      const answer = await (await entry_relay(env, machine)).fetch("https://relay.internal/", { headers: { "X-Relay-Role": "entry-status" } });
       return Response.json({ service: "codiscuss-entry", ...(await answer.json()) }, { headers: { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" } });
     }
     // The link handed out: keep its computer and continue without it in the address.
@@ -72,7 +90,7 @@ export default {
     const headers = [...request.headers].filter(([name]) => !DROPPED_HEADERS.has(name) && name !== "host" && !name.startsWith("cf-")).concat([["host", url.host]]);
     const meta = encodeURIComponent(JSON.stringify({ method: request.method, path: `${url.pathname}${url.search}`, headers }));
     const streamed = !["GET", "HEAD"].includes(request.method);
-    return relay_of(env, machine).fetch("https://relay.internal/", { method: "POST", headers: { "X-Relay-Role": "entry", "X-Entry-Request": meta, "Accept-Language": request.headers.get("Accept-Language") || "zh" },
+    return (await entry_relay(env, machine)).fetch("https://relay.internal/", { method: "POST", headers: { "X-Relay-Role": "entry", "X-Entry-Request": meta, "Accept-Language": request.headers.get("Accept-Language") || "zh" },
       ...(streamed ? { body: request.body, duplex: "half" } : {}) });
   },
 };

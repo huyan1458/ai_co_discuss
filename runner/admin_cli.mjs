@@ -52,6 +52,7 @@ export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面
   site status                              本地网页与线上网站的地址
   site connect <接入码|站点> [绑定令牌]     绑定线上网站（管理员外出、邀请外部专家用）；在部署该网站的电脑上只填站点即可
   site disconnect                          解绑线上网站，已配对的设备不能再连到这台电脑
+  site region [地区]                       查看或设置中转地区（auto、apac、apac-ne、apac-se、wnam、enam、weur、eeur、oc、sam、afr、me）
   site reconnect                           立即重连已绑定网站的中转
 
 登录入口与访问方式（需打开托管管理）
@@ -60,6 +61,7 @@ export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面
   entry join <接入码>                       用接入码接入线上站点并开启线上网站
   entry code [--config <wrangler.jsonc>] [--site <地址>]   在部署线上站点的电脑上生成接入码（不填用上次的）
   entry tunnel <域名> [隧道名]              设置自有域名（Cloudflare 隧道），输出授权链接；域名须已托管在 Cloudflare
+  entry tunnel reconnect                   重新连接隧道，保留登录会话
   entry tunnel status                      查看自有域名设置的进度
   runtime sync                             同步隔离账号的程序副本
   drives restrict                          只允许隔离账号用系统盘：其他固定磁盘对它们的 Windows 用户拒绝访问（需管理员权限，之后重启它们的实例）
@@ -88,6 +90,7 @@ API 密钥、技能、工作流、系统提示词（目标同上）
 
 结果以 JSON 输出。--data 指定管理员服务目录（默认 ~/.codiscuss）。
 `) + t('  room-links A    查看父子房间') + '\n' + t('  storage [clean | repair [logs --confirm]]  查看用量、安全清理或深度修理日志') + '\n'
+  + t('  storage attachments [ROOM [clear ID... --confirm]]  按房间查看附件占用、列出某房间附件或清理所选附件原件') + '\n'
   + t('  account add <名> --project-data-root <目录>   将新账号的项目、工作区和成员草稿放在指定目录') + '\n'
   + t('  account migrate-data <名> --project-data-root <目录>   停止实例并迁移项目数据') + '\n'
   + t('  account migration-backups <名>   查看各迁移备份的位置与字节数') + '\n'
@@ -344,6 +347,7 @@ async function entry_command(call, [action, first, second], values) {
   if (action === 'open' || action === 'close') return call('entry/way', { way: need(first, 'relay|tunnel'), enabled: action === 'open' });
   if (action === 'join') return call('relay/join', { code: need(first, t('接入码')) });
   if (action === 'code') return call('site/code', { config: values.config || '', site: values.site || '' });
+  if (action === 'tunnel' && first === 'reconnect') return call('tunnel/reconnect', {});
   if (action === 'tunnel') return first === 'status' ? call('tunnel/setup') : setup_tunnel(call, need(first, t('域名')), second || '');
   throw new Error(HELP);
 }
@@ -356,6 +360,7 @@ async function site_command(call, [action, first, second]) {
   }
   if (action === 'connect') return call('site/connect', { site: need(first, t('站点')), setup_key: second || '' });
   if (action === 'disconnect') return call('site/disconnect', {});
+  if (action === 'region') return call('site/region', first === undefined ? undefined : { region: first });
   if (action === 'reconnect') return call('site/reconnect', {});
   throw new Error(HELP);
 }
@@ -434,6 +439,12 @@ export async function admin_cli(args, { client = panel_client, print = text => p
       if (rest.join(' ') === 'repair') return call('storage/repair', {});
       if (rest.join(' ') === 'repair logs' && values.confirm) return call('storage/repair', { logs: true, confirm: true });
       if (rest.length === 1 && rest[0] === 'clean') return call('storage/clean', {});
+      if (rest[0] === 'attachments') {
+        const [, room_id, action, ...ids] = rest;
+        if (!room_id) return call('storage').then(report => report.attachment_rooms || []);
+        if (!action) return call('storage/attachments', { room_id });
+        if (action === 'clear' && ids.length && values.confirm) return call('storage/attachments/clear', { room_id, ids });
+      }
       throw new Error(HELP);
     },
     status: async () => {

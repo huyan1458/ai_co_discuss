@@ -1,4 +1,5 @@
 {
+  "中转地区无效": "Invalid relay region",
   "请求内容过大": "Request body is too large",
   "请求必须是 JSON 对象": "Request must be a JSON object",
   "用户名须为 1–30 个字符": "Username must be 1–30 characters long",

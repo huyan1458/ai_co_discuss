@@ -7,6 +7,7 @@ import { LEVELS, LEVEL_SHORT, awaiting_member, copy_seat_link, external_ai, exte
 import { computed, inject, onBeforeUnmount, ref, shallowRef, watch } from "vue";
 import { find_room_storage, format_storage_bytes, normalize_storage_snapshot, storage_ratio, storage_tone } from "./storage-format.js";
 import ApiRequestsField from "./ApiRequestsField.vue";
+import AttachmentCleaner from "./AttachmentCleaner.vue";
 import AutoDestroyField from "./AutoDestroyField.vue";
 import ImageService from "./ImageService.vue";
 import SchedulerSettings from "./SchedulerSettings.vue";
@@ -343,6 +344,10 @@ async function narrow_external(member, level) {
 }
 
 const inviting = ref(false);
+const managing_attachments = ref(false);
+function attachments_cleared(result) {
+  bridge.notify("info", t("已释放 {size}", { size: format_storage_bytes(result.freed_bytes) }));
+}
 const invite_workflow_id = ref("");
 const describing = ref(""), describing_saving = ref(false);
 // The member whose own prompt (专属提示词) is open, set here with its model and access (user 2026-11-26, #13067): only a
@@ -600,6 +605,10 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
         </div>
         <div class="pb-bar"><i :style="{ width: `${Math.round(room_storage.ratio * 100)}%` }"></i></div>
       </div>
+      <p v-if="room.attachment_bytes > 0" class="pb-storage-note pb-storage-attachments">
+        {{ t('本房间附件 {size}，存于房间记录，不计入草稿配额。', { size: format_storage_bytes(room.attachment_bytes) }) }}
+        <UButton v-if="view.access?.can_manage" :label="t('管理附件')" icon="i-lucide-images" size="xs" color="neutral" variant="link" class="pb-attachments-manage" @click="managing_attachments = true" />
+      </p>
       <p v-if="room_storage.room_tone === 'error'" class="pb-storage-note">
         {{ t('本房间草稿已超限，派活已暂停；请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup，或点击下方清理临时文件。') }}
       </p>
@@ -619,6 +628,12 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
           :loading="cleaning_storage" :disabled="cleaning_storage" @click="clean_room_temp" />
       </div>
     </details>
+    <UModal v-model:open="managing_attachments" :title="t('管理本房间附件')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
+      <template #body>
+        <AttachmentCleaner :load="() => bridge.read_attachment_usage(room.id)" :clear="(ids) => bridge.clear_attachments(room.id, ids)"
+          @cleared="attachments_cleared" @failed="(message) => bridge.notify('error', message)" />
+      </template>
+    </UModal>
     <InviteDialog v-model:open="inviting" :workflow-id="invite_workflow_id" @update:open="(value) => { if (!value) invite_workflow_id = ''; }" :description="free ? t('新成员加入后不打断其他成员；点卡片翻面可设置软件、模型、项目权限和要续接的已有会话。') : t('新专家由程序按本机软件配置启动，或由你手动启动，加入本轮发言队列。')" />
     <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" :open="Boolean(model_edit)" :title="model_edit ? t('{name} 的模型与强度', { name: bridge.display_name(model_edit.name) }) : ''" :description="t('下次处理请求起生效，保留原会话。')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }" @update:open="(open) => { if (!open) model_edit = null; }">
       <template #body>
@@ -822,5 +837,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
 .pb-storage.is-error .pb-bar > i { background: #f05252; }
 .pb-storage-note { margin: 6px 0 0; color: var(--ui-text-dimmed); font-size: 11px; line-height: 1.5; }
 .pb-storage-unreadable { color: #e5a50a; }
+.pb-storage .pb-storage-note.pb-storage-attachments { color: var(--ui-text-dimmed); }
+.pb-attachments-manage { padding: 0 2px; font-size: 11px; vertical-align: baseline; }
 .pb-storage-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 </style>

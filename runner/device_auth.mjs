@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import { atomic_json } from './files.mjs';
 import { b64url, from_b64url, verify_assertion, verify_registration } from './webauthn.mjs';
 
+// The site enforces the matching list in backend/worker.mjs.
+export const RELAY_REGIONS = ['auto', 'apac', 'apac-ne', 'apac-se', 'wnam', 'enam', 'weur', 'eeur', 'oc', 'sam', 'afr', 'me'];
 const DEVICES_FILE = 'devices.json';
 // What other devices did here: trust changes and every remote write, never content. Shown in the device list, so an
 // unexpected entry (a device you did not add, a write you did not make) can be noticed and revoked.
@@ -247,11 +249,12 @@ export async function signed_device_list(home, link, now = Date.now(), externals
     ...externals.map(({ id, x, y, room, expires_at }) => ({ id, x, y, kind: 'external', room, expires_at }))];
   // An unchanged list keeps its signature and issued_at, so the heartbeat that carries it is the same each time and
   // the website neither rewrites it nor wakes the relay (2026-11-19, #5500); issued_at is when the content last changed.
-  const content = JSON.stringify({ machine: link.id, devices: listed });
+  const region = RELAY_REGIONS.includes(link.relay_region) ? link.relay_region : 'apac';
+  const content = JSON.stringify({ machine: link.id, relay_region: region, devices: listed });
   const cache_key = [home, link.id, link.sign_private_key?.x || ''].join('|');
   const cached = signed_lists.get(cache_key);
   if (cached?.content === content) return cached.signed;
-  const body = JSON.stringify({ machine: link.id, issued_at: Math.max(now, (cached?.issued_at || 0) + 1), devices: listed });
+  const body = JSON.stringify({ machine: link.id, relay_region: region, issued_at: Math.max(now, (cached?.issued_at || 0) + 1), devices: listed });
   const key = await crypto.subtle.importKey('jwk', link.sign_private_key, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
   const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(body));
   const signed = { body, signature: b64url(new Uint8Array(signature)) };

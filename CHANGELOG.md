@@ -2,6 +2,11 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.40 (2026-11-26 18:54)
+
+- New: "Manage attachments" on the "Room" tab lets you clear attachment originals to free up space.
+- New: The "Files" tab has back and forward buttons, including mouse side buttons on computers; on phones, swipe sideways to go back, forward or return to the folder.
+
 ## 0.5.39 (2026-11-26 17:27)
 
 - Changed: Phones and other devices in Asia reaching the computer through the online site now relay through a nearby data center, so responses come faster.

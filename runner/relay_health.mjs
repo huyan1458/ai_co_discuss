@@ -72,13 +72,14 @@ export function request_relay_reconnect(home, bound, pid) {
 }
 
 /** Consume each request once, ignoring requests for a replaced service or binding. */
-export function reconnect_reader(home) {
+export function reconnect_reader(home, synced_region = () => undefined) {
   let seen;
   return sites => {
     let request;
     try { request = JSON.parse(readFileSync(join(home, RECONNECT_FILE), 'utf8')); }
     catch { return; } // A manual request must not prevent the normal channels starting.
     if (!request?.id || request.id === seen || request.pid !== process.pid) return;
+    if (request.wait_region && synced_region(request.site) !== request.wait_region) return;
     seen = request.id;
     if (sites[request.site]?.id === request.machine) return request.site;
   };

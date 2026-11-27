@@ -142,10 +142,10 @@ def record_statements(tables, room_id, maps):
                    (messages[row["message_id"]], remap_text(row["text"], messages), row["author"])) for row in tables.get("message_summaries", [])]
     statements += [("INSERT INTO message_timings (message_id,elapsed_seconds) VALUES (?,?)", (messages[row["message_id"]], row["elapsed_seconds"]))
                    for row in tables.get("message_timings", [])]
-    statements += [("""INSERT INTO attachments (id,room_id,message_id,position,file_name,content_type,size,sha256,actor,submission_id,created_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (maps["attachments"][row["id"]], room_id, messages[row["message_id"]], row["position"], row["file_name"],
+    statements += [("""INSERT INTO attachments (id,room_id,message_id,position,file_name,content_type,size,sha256,actor,submission_id,created_at,cleared_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (maps["attachments"][row["id"]], room_id, messages[row["message_id"]], row["position"], row["file_name"],
                                                            row["content_type"], row["size"], row["sha256"], row["actor"], row["submission_id"],
-                                                           row["created_at"])) for row in tables.get("attachments", [])]
+                                                           row["created_at"], row.get("cleared_at"))) for row in tables.get("attachments", [])]
     statements += [("""INSERT INTO member_requests (id,room_id,member_id,message_id,status,answer_id,created_at,chain_id,batch_id,purpose,created_by)
                        VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (requests[row["id"]], room_id, members[row["member_id"]], messages[row["message_id"]],
                                                            "cancelled" if row["status"] in OPEN_REQUESTS else row["status"],

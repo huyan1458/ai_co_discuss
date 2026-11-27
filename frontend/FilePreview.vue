@@ -4,6 +4,7 @@ import { use_read_aloud } from "./read-aloud.js";
 import ExcerptEditCard from "./ExcerptEditCard.vue";
 import MediaViewer from "./MediaViewer.vue";
 import { open_image_viewer } from "./image-viewer.js";
+import { moves_sideways, side_swipe } from "./side-swipe.js";
 import OfficeViewer from "./OfficeViewer.vue";
 import PreviewLoading from "./PreviewLoading.vue";
 import ZipViewer from "./ZipViewer.vue";
@@ -843,6 +844,38 @@ function pull_end() {
   if (element) delete element.dataset.pull;
 }
 
+// On a touch screen a swipe to the right anywhere on the window goes back: the window follows the finger, and once let
+// go far or fast enough it slides away, the file closes and the file list shows its folder. A swipe to the left does
+// nothing: going forward is for folders only (user 2026-11-27, #13918). Images and media keep their own gestures.
+const swipe = side_swipe({
+  start: (event) => open.value && !docked.value && !folding && !commenting.value && !media_kind.value
+    && !event.target.closest?.(".project-editor-head, .file-selection-offer, .file-listen-dock")
+    && !moves_sideways(event.target, frame.value),
+  move: (dx) => {
+    const width = frame.value?.offsetWidth || window.innerWidth, shown = Math.max(0, dx);
+    set_frame(shown ? `translateX(${shown}px)` : "", { opacity: shown ? String(1 - Math.min(1, shown / width) / 2) : "", transition: false });
+  },
+  end(dx, passed) {
+    if (!passed || dx <= 0) { set_frame("", {}); return; }
+    set_frame(`translateX(${frame.value?.offsetWidth || window.innerWidth}px)`, { opacity: "0" });
+    window.setTimeout(back_to_folder, FOLD_MS);
+  },
+});
+
+/** Close the file shown and show its folder in the room's file list; the window folds away with any other files. */
+async function back_to_folder() {
+  const item = tab.value;
+  minimize();
+  set_frame("", { transition: false });
+  if (!item) return;
+  close_tab(item.id);
+  if (item.attachment || item.visual || !await to_tab_room(item.room_id)) return;
+  file_preview.reveal_root = item.root || 0;
+  file_preview.reveal_name = item.directory || "";
+  file_preview.reveal_path = item.path.split("/").slice(0, -1).join("/");
+  act("tab", "files");
+}
+
 function close_all() {
   const closing = new Set(shown_tabs.value);
   for (const item of closing) { item.request++; release_media(item); }
@@ -1217,7 +1250,8 @@ onBeforeUnmount(() => {
   <UModal :open="open" :title="preview_name" :description="active_path" :content="modal_content" :modal="!can_dock" :overlay="!can_dock" :transition="!can_dock"
     :ui="{ content: `project-editor${can_dock ? ' is-switchable' : ''}${docked ? ' is-docked' : ''}` }" @update:open="value => value ? (open = true) : fold()">
     <template #content>
-     <div ref="frame" class="project-editor-frame" :class="{ 'is-docked': docked }" :data-preview-room="tab?.room_id" @touchstart.passive="pull_start" @touchmove="pull_move" @touchend="pull_end" @touchcancel="pull_end">
+     <div ref="frame" class="project-editor-frame" :class="{ 'is-docked': docked }" :data-preview-room="tab?.room_id" @touchstart.passive="pull_start($event); swipe.touchstart($event)" @touchmove="pull_move($event); swipe.touchmove($event)"
+       @touchend="pull_end(); swipe.touchend()" @touchcancel="pull_end(); swipe.touchend()">
       <div v-if="docked" class="file-dock-resizer" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="t('调整文件预览宽度')" :aria-valuemin="DOCK_MIN" :aria-valuemax="dock_max" :aria-valuenow="dock_width"
         :title="t('拖动调整文件预览宽度，也可使用左右方向键')" @pointerdown="dock_press" @pointermove="dock_move" @pointerup="dock_release" @pointercancel="dock_release" @keydown="dock_key"></div>
       <div ref="head_element" class="project-editor-head" :class="{ 'is-tight': tight_head && !folded_actions }">

@@ -225,7 +225,8 @@ function create_share_core({ t, display_name, collapse_visual_fences, is_text_at
     for (const [path, body] of Object.entries(responses)) {
       if (!/\/messages\?/.test(path)) continue;
       for (const message of body.messages || []) for (const file of message.attachments || []) {
-        if (file.room_id !== room_id) continue;
+        // A cleared file has no bytes to copy; the page shows its card as cleared, as the room does.
+        if (file.room_id !== room_id || file.cleared_at) continue;
         const route = share_file_route(file);
         // A data URL names the plain type; parameters such as a charset would not survive the share site's check.
         files.set(route, { route, room_id, id: file.id, created_at: message.created_at, author: message.author_label || message.author, file_name: file.file_name, size: Number(file.size) || 0, message_id: message.id, ...share_site_file(file.file_name),
@@ -4379,13 +4380,14 @@ function link_attachment_placeholders(html, files = [], inlined = null) {
     const file = by_id ? files.find(item => item.id === reference) : by_number ? files.find(item => item.number === Number(reference)) : files[Number(reference) - 1];
     const number = by_id ? file?.number ?? (files.indexOf(file) + 1) : reference;
     if (!file) return SHARE && !by_id ? omitted(kind, number) : match;
-    if (pending && kind === "图片" && file.content_type.startsWith("image/") && !inlined.has(file.id)) {
+    if (pending && kind === "图片" && file.content_type.startsWith("image/") && !file.cleared_at && !inlined.has(file.id)) {
       inlined.add(file.id);
       pending.push({ file, number });
     }
     const previewable = file.content_type.startsWith("image/") || file.content_type === "application/pdf" || is_text_attachment(file);
     // The stored `[图片 #n]` / `[文件 #n]` is protocol text; only the shown label follows the page language.
     const label = escape_html(kind === "图片" ? t("[图片 #{number}]", { number }) : t("[文件 #{number}]", { number }));
+    if (file.cleared_at) return `<span class="attachment-placeholder is-cleared" title="${escape_html(t("原文件已由房主清理以释放空间"))}">${label}</span>`;
     return previewable ? `<button type="button" class="attachment-placeholder" ${attachment_preview_attributes(file)} title="${escape_html(file.file_name)}">${label}</button>`
       : `<a class="attachment-placeholder" ${attachment_download_attributes(file)} download title="${escape_html(t("下载 {name}", { name: file.file_name }))}">${label}</a>`;
   };
@@ -4469,8 +4471,19 @@ function attachment_thumbnail_route(file) {
   return `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/thumbnail`;
 }
 
+/** A file whose bytes the owner cleared: name, size and an image's kept thumbnail; nothing to open or download. */
+function cleared_attachment_markup(file) {
+  const name = escape_html(file.file_name);
+  const thumb = file.thumbnail_url && !SHARE ? attachment_thumbnail_route(file) : "";
+  const local = thumb && relay_files.get(thumb);
+  const source = !thumb ? "" : typeof local === "string" ? `src="${escape_html(local)}"` : files_by_blob() ? `data-relay-src="${thumb}"` : `src="${thumb}"`;
+  const icon = source ? `<img ${source} alt="${name}" loading="lazy" class="attachment-cleared-thumb">` : attachment_file_icon(file.file_name);
+  return `<div class="attachment-file is-cleared" title="${escape_html(t("原文件已由房主清理以释放空间"))}"><span class="attachment-file-main">${icon}<span class="attachment-name"><span>${name}</span><small>${escape_html(t("已清理 · {size}", { size: attachment_size(file.size) }))}</small></span></span></div>`;
+}
+
 /** A message image as its preview button, shown in the list or where the answer refers to it. */
 function attachment_image_markup(file, { inline = false, badge = "" } = {}) {
+  if (file.cleared_at) return cleared_attachment_markup(file);
   const original = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
   // The smaller copy, where the image has one, unless the original is already here (a share page carries originals only).
   const url = file.thumbnail_url && !SHARE && !relay_files.own?.has(original) ? attachment_thumbnail_route(file) : original;
@@ -4486,6 +4499,7 @@ function attachment_image_markup(file, { inline = false, badge = "" } = {}) {
 function attachment_markup(files = []) {
   if (!files.length) return "";
   return `<div class="message-attachments">${files.map(file => {
+    if (file.cleared_at) return cleared_attachment_markup(file);
     const url = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
     const name = escape_html(file.file_name);
     const preview_attributes = attachment_preview_attributes(file);
@@ -4619,7 +4633,7 @@ function room_images(file) {
   for (const message of state.messages) {
     if (message.withdrawn) continue;
     for (const item of message.attachments || []) {
-      if (item.room_id !== file.room_id || !String(item.content_type || "").startsWith("image/") || images.some(image => image.id === item.id)) continue;
+      if (item.cleared_at || item.room_id !== file.room_id || !String(item.content_type || "").startsWith("image/") || images.some(image => image.id === item.id)) continue;
       images.push({ room_id: item.room_id, id: item.id, file_name: item.file_name, content_type: item.content_type, size: Number(item.size) || 0,
         created_at: message.created_at || "", message_id: message.id, ...(item.thumbnail_url && !SHARE ? { thumbnail_url: item.thumbnail_url } : {}) });
     }
@@ -6692,6 +6706,16 @@ async function load_storage(force = false) {
 }
 
 /** Clean finished execution temp files on the local or paired computer, refreshing the snapshot afterwards. */
+/** Every sent file of a room with its size and whether it was cleared; the owner's view for choosing what to free. */
+async function read_attachment_usage(room_id) {
+  return request_json(`/api/rooms/${encodeURIComponent(room_id)}/attachments/usage`);
+}
+
+/** Free the original bytes of the chosen sent files; their records, numbers and thumbnails stay. */
+async function clear_attachments(room_id, ids) {
+  return request_json(`/api/rooms/${encodeURIComponent(room_id)}/attachments/clear`, { ids });
+}
+
 async function clean_storage(target = {}) {
   if (SHARE || !state.launch.available) return false;
   const payload = target && typeof target === "object"
@@ -10228,7 +10252,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   device: { recent_timings: () => recent_relay_times.slice(), request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, load_earlier_messages, load_messages_until, can_retract_message, identities: IDENTITIES, platform_identity: name => PLATFORM_IDENTITIES[name], display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, set_member_prompt, read_system_prompts, save_system_prompts, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, local_page_url, read_room_media, read_room_thumbnail, project_media_route, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, set_member_prompt, read_system_prompts, save_system_prompts, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_attachment_usage, clear_attachments, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, local_page_url, read_room_media, read_room_thumbnail, project_media_route, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

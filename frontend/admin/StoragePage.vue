@@ -7,6 +7,7 @@ import { computed, inject, onMounted, ref, watch } from "vue";
 import { call } from "./api.js";
 import { t } from "../i18n.js";
 import { format_storage_bytes, normalize_storage_snapshot, storage_ratio, storage_tone } from "../storage-format.js";
+import AttachmentCleaner from "../AttachmentCleaner.vue";
 
 const { notify, refreshed, reload, storage_raw: raw, storage_loading: loading, storage_error: error, load_storage } = inject("panel");
 const preview = ref(null);
@@ -32,6 +33,12 @@ async function repair(apply = false) {
 }
 const cleaning = ref(new Set());
 const expanded = ref(new Set());
+// The room whose attachments are open for clearing; one at a time, as each lists every file of its room.
+const attachment_room = ref("");
+function attachments_cleared(result) {
+  notify("info", t("已释放 {size}", { size: format_storage_bytes(result.freed_bytes) }));
+  load_storage();
+}
 
 const snapshot = computed(() => normalize_storage_snapshot(raw.value));
 const total_tone = computed(() => {
@@ -204,10 +211,38 @@ watch(refreshed, () => load_storage());
               {{ t("房间记录与附件（local/）") }}
               <span class="panel-tag is-gray">{{ format_storage_bytes(snapshot.local_bytes) }}</span>
             </div>
-            <span class="panel-sub">{{ t("保存房间消息、事件与附件原件，计入 10 GiB 数据上限；程序不会自动删除，如需释放空间请先导出备份再销毁旧房间。") }}</span>
+            <span class="panel-sub">{{ t("保存房间消息、事件与附件原件，计入 10 GiB 数据上限；程序不会自动删除。可在下方按房间清理附件原件，或销毁旧房间。") }}</span>
           </div>
         </div>
       </div>
+
+      <template v-if="raw?.attachment_rooms?.length">
+        <h3 class="panel-section-title"><UIcon name="i-lucide-images" />{{ t("房间附件") }}</h3>
+        <div class="panel-rows">
+          <template v-for="item in raw.attachment_rooms" :key="item.room_id">
+            <div class="panel-row">
+              <div class="panel-tile"><UIcon name="i-lucide-paperclip" /></div>
+              <div class="panel-main">
+                <div class="panel-title">
+                  <span>{{ item.title || item.room_id }}</span>
+                  <span class="panel-tag is-gray">{{ format_storage_bytes(item.bytes) }}</span>
+                </div>
+                <span class="panel-sub">{{ t("{count} 个附件 · 最近 {date}", { count: item.count, date: new Date(item.latest_at).toLocaleDateString() }) }}</span>
+              </div>
+              <div class="panel-side">
+                <button type="button" class="panel-button is-outline is-small" @click="attachment_room = attachment_room === item.room_id ? '' : item.room_id">
+                  {{ attachment_room === item.room_id ? t("收起") : t("管理附件") }}
+                </button>
+              </div>
+            </div>
+            <div v-if="attachment_room === item.room_id" class="panel-row-extra storage-attachments">
+              <AttachmentCleaner :load="() => call('storage/attachments', { room_id: item.room_id })"
+                :clear="(ids) => call('storage/attachments/clear', { room_id: item.room_id, ids })"
+                @cleared="attachments_cleared" @failed="(message) => notify('error', message)" />
+            </div>
+          </template>
+        </div>
+      </template>
 
       <h3 class="panel-section-title"><UIcon name="i-lucide-audio-lines" />{{ t("语音模型（不计入 10 GiB 上限）") }}</h3>
       <div class="panel-rows">
@@ -296,6 +331,7 @@ watch(refreshed, () => load_storage());
 .storage-sub-row { min-height: 54px; padding: 10px 0 10px 54px; }
 .storage-sub-title { font-size: 14px; font-weight: 500; }
 .storage-members { padding-top: 2px; }
+.storage-attachments { display: block; padding: 4px 0 12px 54px; }
 .storage-member-list { display: flex; flex: 1; flex-direction: column; gap: 6px; margin: 0; padding: 8px 12px; list-style: none; border-radius: 12px; background: var(--panel-tint); font-size: 13px; }
 .storage-member-list li { display: flex; align-items: center; gap: 8px; }
 .storage-member-name { color: var(--panel-text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

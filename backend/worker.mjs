@@ -13,13 +13,30 @@ class HttpError extends Error {
   }
 }
 
-// Each computer's relay object. An object is created where it is first reached and never moves; without a hint the
-// first caller was the computer, whose proxy exits in the US, so phones in Asia crossed the Pacific twice (2026-11-27,
-// relay-timing: device SEA, computer IAD). The `apac` name starts new objects in Asia; old ones keep no data.
-// backend/entry_worker.mjs names the same objects and must match.
-const RELAY_REGION = "apac";
-function machine_relay(namespace, machine_id) {
-  return namespace.get(namespace.idFromName(`${machine_id}:${RELAY_REGION}`), { locationHint: RELAY_REGION });
+// Keep the runner choices in runner/device_auth.mjs aligned with this authoritative list.
+const RELAY_REGIONS = ['auto', 'apac', 'apac-ne', 'apac-se', 'wnam', 'enam', 'weur', 'eeur', 'oc', 'sam', 'afr', 'me'];
+
+function valid_region(value) {
+  return RELAY_REGIONS.includes(value) ? value : 'apac';
+}
+
+export function relay_in_region(namespace, machine, region) {
+  const id = namespace.idFromName(`${machine}:${region}`);
+  return region === 'auto' ? namespace.get(id) : namespace.get(id, { locationHint: region });
+}
+
+/** Both site entrypoints route using the computer's previously verified signed manifest. */
+export async function read_relay_region(env, machine) {
+  let region;
+  try {
+    const row = await env.DB?.prepare("SELECT json_extract(body, '$.relay_region') AS region FROM machine_devices WHERE machine_id=?").bind(machine).first();
+    region = row?.region;
+  } catch { /* Keep the legacy relay available if D1 is temporarily unavailable. */ }
+  return valid_region(region);
+}
+
+async function machine_relay(env, machine) {
+  return relay_in_region(env.RELAY, machine, await read_relay_region(env, machine));
 }
 
 /** Return a no-store response suitable for JSON APIs or plain-text readers. */
@@ -147,11 +164,13 @@ async function device_identity(database, credential, method, path, { renewing = 
     .bind(machine_id).first();
   if (!row) return null;
   const algorithm = { name: "ECDSA", namedCurve: "P-256" }, hash = { name: "ECDSA", hash: "SHA-256" };
-  let expires_at, kind;
+  let expires_at, kind, region;
   try {
     const signer = await crypto.subtle.importKey("jwk", JSON.parse(row.sign_key), algorithm, false, ["verify"]);
     if (!await crypto.subtle.verify(hash, signer, b64url_bytes(row.signature), new TextEncoder().encode(row.body))) return null;
-    const device = JSON.parse(row.body).devices.find(item => item.id === device_id);
+    const manifest = JSON.parse(row.body);
+    region = valid_region(manifest.relay_region);
+    const device = manifest.devices.find(item => item.id === device_id);
     if (!device || (device.kind === "external" && !external)) return null;
     if (device.expires_at <= Date.now() && !(renewing && device.kind !== "external" && device.renew_until > Date.now())) return null;
     const key = await crypto.subtle.importKey("jwk", { kty: "EC", crv: "P-256", x: device.x, y: device.y }, algorithm, false, ["verify"]);
@@ -159,7 +178,7 @@ async function device_identity(database, credential, method, path, { renewing = 
     expires_at = device.expires_at;
     kind = device.kind === "external" ? "external" : "device";
   } catch { return null; }
-  return { machine_id, device_id, expires_at, kind };
+  return { machine_id, device_id, expires_at, kind, region };
 }
 
 /** Require a paired device's signed request (`X-CoDiscuss-Device`). */
@@ -366,29 +385,45 @@ async function machine_sync(database, machine_id, token, payload, now, relay = n
   const projects = valid_projects(payload.projects), clients = valid_clients(payload.clients);
   const public_key = "public_key" in payload ? valid_public_key(payload.public_key) : null;
   const sign_key = "sign_key" in payload ? valid_public_key(payload.sign_key) : null;
+  if ('relay_region' in payload || (payload.devices && (!sign_key || !payload.devices.signature || !payload.devices.body))) {
+    throw new HttpError(400, "设备名单签名无效");
+  }
+  let list;
+  if (sign_key && payload.devices && typeof payload.devices.body === "string" && typeof payload.devices.signature === "string") {
+    const key = await crypto.subtle.importKey("jwk", sign_key, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+    const valid = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, b64url_bytes(payload.devices.signature), new TextEncoder().encode(payload.devices.body));
+    list = valid ? JSON.parse(payload.devices.body) : null;
+    if (!list || list.machine !== machine_id || !Array.isArray(list.devices)) throw new HttpError(400, "设备名单签名无效");
+    if ('relay_region' in list && !RELAY_REGIONS.includes(list.relay_region)) throw new HttpError(400, "中转地区无效");
+  }
   let key_changed = false;
   if (sign_key) {
     const saved = await database.prepare("INSERT INTO machine_sign_keys (machine_id,sign_key) VALUES (?,?) ON CONFLICT(machine_id) DO UPDATE SET sign_key=excluded.sign_key WHERE machine_sign_keys.sign_key IS NOT excluded.sign_key")
       .bind(machine_id, JSON.stringify(sign_key)).run();
     key_changed = Boolean(saved.meta?.changes);
   }
-  if (sign_key && payload.devices && typeof payload.devices.body === "string" && typeof payload.devices.signature === "string") {
-    const key = await crypto.subtle.importKey("jwk", sign_key, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
-    const valid = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, b64url_bytes(payload.devices.signature), new TextEncoder().encode(payload.devices.body));
-    const list = valid ? JSON.parse(payload.devices.body) : null;
-    if (!list || list.machine !== machine_id || !Array.isArray(list.devices)) throw new HttpError(400, "设备名单签名无效");
+  if (list) {
     // Judged by content, not issued_at: an older computer re-signs the same list on every heartbeat, which would
     // otherwise write a row and wake the relay each time (#5500).
     const current = await database.prepare("SELECT body FROM machine_devices WHERE machine_id=?").bind(machine_id).first();
+    const previous_region = valid_region(current && JSON.parse(current.body).relay_region);
+    const region = list.relay_region ?? 'apac';
     let unchanged = false;
     // A new signing key needs the list it signed: devices are checked against the stored signature with the current key.
-    try { unchanged = !key_changed && Boolean(current) && JSON.stringify(JSON.parse(current.body).devices) === JSON.stringify(list.devices); } catch { unchanged = false; }
+    try { unchanged = previous_region === region && !key_changed && Boolean(current) && JSON.stringify(JSON.parse(current.body).devices) === JSON.stringify(list.devices); } catch { unchanged = false; }
     const stored = unchanged ? null : await database.prepare(`INSERT INTO machine_devices (machine_id,body,signature,issued_at) VALUES (?,?,?,?) ON CONFLICT(machine_id) DO UPDATE SET
       body=excluded.body, signature=excluded.signature, issued_at=excluded.issued_at WHERE excluded.issued_at>machine_devices.issued_at`)
       .bind(machine_id, payload.devices.body, payload.devices.signature, list.issued_at).run();
     // A changed list closes the live sockets of devices it no longer holds; an unchanged one writes nothing and leaves the relay asleep.
     if (relay && stored?.meta?.changes) {
-      await machine_relay(relay, machine_id).fetch("https://relay.internal/", { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Role": "devices" },
+      if (region !== previous_region) {
+        try {
+          await relay_in_region(relay, machine_id, previous_region).fetch("https://relay.internal/", {
+            method: "POST", headers: { "X-Relay-Role": "relocate" }
+          });
+        } catch { /* The computer also reconnects when its local setting changes. */ }
+      }
+      await relay_in_region(relay, machine_id, region).fetch("https://relay.internal/", { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Role": "devices" },
         body: JSON.stringify({ devices: list.devices.filter(item => item.kind !== "external").map(item => ({ id: item.id, expires_at: item.expires_at })) }) }).catch(() => {});
     }
   }
@@ -479,7 +514,6 @@ async function handle_relay(env, request, machine_id) {
   const started = performance.now();
   if (!env.RELAY) throw new HttpError(404, "中转未配置");
   const database = env.DB;
-  const relay = machine_relay(env.RELAY, machine_id);
   if (request.headers.get("Upgrade") === "websocket") {
     const offered = (request.headers.get("Sec-WebSocket-Protocol") ?? "").split(",").map(item => item.trim());
     if (!offered.includes(RELAY_PROTOCOL)) throw new HttpError(400, "中转协议不受支持");
@@ -499,7 +533,8 @@ async function handle_relay(env, request, machine_id) {
     forwarded.headers.set("X-Relay-Colo", request.cf?.colo || "");
     // The relay keeps which device holds each socket and until when, so it can close it on expiry or revocation.
     if (identity) forwarded.headers.set("X-Relay-Device", JSON.stringify({ id: identity.device_id, expires_at: identity.expires_at }));
-    return relay.fetch(forwarded);
+    const target = identity ? relay_in_region(env.RELAY, machine_id, identity.region) : await machine_relay(env, machine_id);
+    return target.fetch(forwarded);
   }
   if (request.method !== "POST") throw new HttpError(404, "地址不存在");
   // An expired device that may still renew reaches the computer one request at a time; the computer lets only renewal through.
@@ -507,7 +542,7 @@ async function handle_relay(env, request, machine_id) {
   const identity = await require_device(database, request, { renewing: true, external: true });
   if (identity.machine_id !== machine_id) throw new HttpError(403, "这台设备配对的是另一台电脑");
   await require_paired_machine(database, machine_id);
-  return forward_relay(relay, await read_payload(request), started, identity.kind === "device" ? request.cf?.colo || null : undefined);
+  return forward_relay(relay_in_region(env.RELAY, machine_id, identity.region), await read_payload(request), started, identity.kind === "device" ? request.cf?.colo || null : undefined);
 }
 
 /** Hand one sealed request to the computer's relay object and return its answer. */
@@ -538,7 +573,7 @@ async function handle_pairing(env, request, machine_id) {
   await limit_pairing(database, request);
   await require_paired_machine(database, machine_id);
   const payload = await read_payload(request);
-  if (env.RELAY) return forward_relay(machine_relay(env.RELAY, machine_id), payload);
+  if (env.RELAY) return forward_relay(await machine_relay(env, machine_id), payload);
   return respond(await submit_machine_command(database, machine_id, payload, now_seconds()));
 }
 

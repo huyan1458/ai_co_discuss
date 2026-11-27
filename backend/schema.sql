@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS attachments (
     width INTEGER, height INTEGER,
     -- The type (image/webp or image/jpeg) of a smaller copy a page made for showing in messages; NULL when none.
     thumbnail_type TEXT,
+    -- When the owner cleared the original bytes to free space (the record and thumbnail stay); NULL while kept.
+    cleared_at TEXT,
     UNIQUE(room_id, submission_id)
 );
 CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id, position);

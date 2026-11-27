@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 
@@ -170,7 +170,7 @@ test('npm tarball installs outside the checkout and launches both entries with p
       'runner/discuss.py', 'runner/discussion_setup.mjs', 'runner/i18n.mjs', 'runner/i18n_en.mjs', '.agents/skills/discuss-host/references/manual.md',
       '.agents/skills/discuss-host/references/launch.md',
       '.agents/skills/discuss-report/assets/Discussion_Report_Template.md']) assert(files.includes(required), required);
-    assert(!files.some(path => /(^|\/)(data|node_modules|__pycache__|\.wrangler|\.dev|tests|frontend)(\/|$)|\.sqlite3$|\.pyc$/.test(path)));
+    assert(!files.filter(path => !/^frontend\/locales\/en\/[^/]+\.json$/.test(path)).some(path => /(^|\/)(data|node_modules|__pycache__|\.wrangler|\.dev|tests|frontend)(\/|$)|\.sqlite3$|\.pyc$/.test(path)));
     const installed = execute(NPM, ['exec', '--offline', '--cache', join(temporary, 'npm-cache'), '--yes',
       '--package', join(temporary, tarball.filename), '--', 'codiscuss', 'install', '--prefix', prefix,
       '--yes', '--clients', 'none', '--no-start', '--skills-home', temporary]);
@@ -183,6 +183,9 @@ test('npm tarball installs outside the checkout and launches both entries with p
     env.PATH = `${command_directory}${delimiter}${process.env.PATH || ''}`;
     const global_root = process.platform === 'win32' ? join(prefix, 'node_modules') : join(prefix, 'lib/node_modules');
     const package_path = join(global_root, 'ai_co_discuss');
+    const panel_import = execute('--input-type=module', ['-e', 'await import(process.argv[1])',
+      new URL('runner/admin_panel.mjs', pathToFileURL(package_path + '/')).href]);
+    assert.equal(panel_import.status, 0, panel_import.stderr);
     const manifest = JSON.parse(readFileSync(join(package_path, 'package.json'), 'utf8'));
     assert(!manifest.dependencies || Object.keys(manifest.dependencies).length === 0);
     assert(!existsSync(join(package_path, 'node_modules/vue')));

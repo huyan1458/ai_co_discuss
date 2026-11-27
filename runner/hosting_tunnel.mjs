@@ -203,6 +203,9 @@ export async function ensure_tunnel(data, tunnel, port, want = true) {
   mkdirSync(data, { recursive: true });
   writeFileSync(path, config);
   const metrics = await free_port();
+  // Another caller may have started the same tunnel while the metrics port was being allocated.
+  const concurrent = read_state(data);
+  if (concurrent?.pid && alive(concurrent.pid)) return 'running';
   const log = openSync(join(data, LOG_FILE), 'a');
   // Detached and outside the package folder: it runs on after the panel, and never holds a folder npm replaces.
   const child = spawn(cloudflared, ['tunnel', '--config', path, '--metrics', `127.0.0.1:${metrics}`, 'run', tunnel.name],

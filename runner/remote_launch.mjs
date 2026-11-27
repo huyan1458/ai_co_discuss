@@ -214,12 +214,17 @@ export async function sync_remote_launches(home, { log = () => {}, throttle = fa
     try { ({ launches, sync_seconds } = await machine_request(site, link, '/sync', payload, { health })); }
     catch (error) { log(`${site}: 同步电脑状态失败：${error.message}`); continue; }
     const interval = Number.isFinite(sync_seconds) ? Math.min(Math.max(sync_seconds, SYNC_MIN_SECONDS), SYNC_MAX_SECONDS) : SYNC_MIN_SECONDS;
-    last_syncs.set(key, { content, at: Date.now(), interval });
+    last_syncs.set(key, { content, at: Date.now(), interval, region: link.relay_region ?? 'apac' });
     if (launches?.length) log(`${site}: 网站返回了 ${launches.length} 个旧格式启动任务，已忽略；远程启动须由已配对设备签名`);
   }
 }
 // The last state each service directory sent each site: { content, at, interval }.
 const last_syncs = new Map();
+
+/** Region acknowledged by the site in this service process. */
+export function synced_relay_region(home, site) {
+  return last_syncs.get([home, site].join('|'))?.region;
+}
 const SYNC_MIN_SECONDS = 3;
 const SYNC_MAX_SECONDS = 600;
 

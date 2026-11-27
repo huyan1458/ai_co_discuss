@@ -16,6 +16,20 @@ const site = computed(() => state.value.online_site || "");
 const relay = computed(() => relay_health_text(site.value, state.value.relay_health, t));
 // The own domain counts as on as the hosted accounts' entry cards judge it (HostingCards.vue): set up and switched on.
 const own_domain = computed(() => Boolean(state.value.entry?.tunnel_enabled && state.value.entry?.tunnel));
+const regions = computed(() => [
+  { value: 'auto', label: t('自动') },
+  { value: 'apac', label: t('亚太') },
+  { value: 'apac-ne', label: t('亚太东北部') },
+  { value: 'apac-se', label: t('亚太东南部') },
+  { value: 'wnam', label: t('北美西部') },
+  { value: 'enam', label: t('北美东部') },
+  { value: 'weur', label: t('欧洲西部') },
+  { value: 'eeur', label: t('欧洲东部') },
+  { value: 'oc', label: t('大洋洲') },
+  { value: 'sam', label: t('南美洲') },
+  { value: 'afr', label: t('非洲') },
+  { value: 'me', label: t('中东') },
+]);
 const usage = computed(() => !state.value.hosting ? t('在外面用其他设备使用这台电脑、邀请外部专家时需要')
   // With the relay on beside the domain, accounts get the domain's address yet the relay's still signs them in (#5789).
   : own_domain.value ? (state.value.entry?.relay_enabled ? t('你在外面使用这台电脑、邀请外部专家时经过它；托管账号默认走自有域名，也可以经它登录')
@@ -70,6 +84,13 @@ const close = (open) => { if (!open) dialog.value = ""; };
     <div class="panel-main">
       <div class="panel-title">{{ t('线上网站') }} <span class="panel-tag" :class="relay.tone">{{ relay.label }}</span></div>
       <span class="panel-sub"><template v-if="site">{{ site }} · </template>{{ usage }}</span>
+      <label v-if="site" class="panel-field">{{ t('中转地区') }}
+        <select class="panel-input" :value="state.relay_region || 'apac'" :disabled="busy === 'region'"
+          @change="change('region', { region: $event.target.value }, t('电脑和已配对设备会自动重连到新的中转位置'))">
+          <option v-for="region in regions" :key="region.value" :value="region.value">{{ region.label }}</option>
+        </select>
+        <small>{{ t('请在没有操作进行时切换。') }}</small>
+      </label>
       <span v-if="relay.detail" class="panel-sub">{{ relay.detail }}</span>
     </div>
     <div class="panel-side">

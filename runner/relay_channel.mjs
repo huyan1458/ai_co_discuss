@@ -17,7 +17,7 @@ import { t } from './i18n.mjs';
 import { granted_projects, room_share_job, remote_execution_details, remote_room_files, remote_room_media, remote_room_page } from './discussion_launch.mjs';
 import { acquire_lock } from './discussion_runner.mjs';
 import { local_settings } from './discussion_setup.mjs';
-import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, sync_remote_launches, unseal } from './remote_launch.mjs';
+import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, synced_relay_region, sync_remote_launches, unseal } from './remote_launch.mjs';
 import { claim_relayed_command, guard_remote_directories } from './remote_policy.mjs';
 import { audit, DEVICE_ACTIONS, device_command, open_signed_request } from './device_auth.mjs';
 import { answer_external, INVITE_COMMANDS, is_external_request } from './external_gateway.mjs';
@@ -598,7 +598,7 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
  */
 export function start_relay_channels(home, { log = () => {}, signal, health }) {
   const connected = new Set(), held = new Map();
-  const requested_site = reconnect_reader(home);
+  const requested_site = reconnect_reader(home, site => synced_relay_region(home, site));
   function start(site, link) {
     const controller = new AbortController(), channel_signal = AbortSignal.any([signal, controller.signal]);
     const record = { controller, machine: link.id, token: link.token, timer: null, confirmed: false };

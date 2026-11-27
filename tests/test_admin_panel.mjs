@@ -6,13 +6,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { add_account, instance_home, read_accounts, save_entry_settings, set_account_disabled, set_instance_wanted, stop_entry } from '../gateway/gateway.mjs';
+import { ensure_tunnel, stop_tunnel } from '../runner/hosting_tunnel.mjs';
+import { add_account, entry_status, start_entry, instance_home, read_accounts, save_entry_settings, set_account_disabled, set_instance_wanted, stop_entry } from '../gateway/gateway.mjs';
 import { managed_api_keys, save_api_key } from '../runner/discussion_api.mjs';
 import { create_panel, instance_conforms, instance_state, list_keys, protect_account, relay_operator_events, update_step } from '../runner/admin_panel.mjs';
 import { blocking_paths, instance_key_file, os_user_name, place_instance_key, secure_folder, secure_shared_root } from '../runner/os_users.mjs';
 import { tray_script } from '../runner/tray.mjs';
 import { admin_cli } from '../runner/admin_cli.mjs';
-import { read_relay_health, relay_health_writer, request_relay_reconnect } from '../runner/relay_health.mjs';
+import { read_relay_health, reconnect_reader, relay_health_writer, request_relay_reconnect } from '../runner/relay_health.mjs';
 import { start_relay_channels } from '../runner/relay_channel.mjs';
 import { relay_commands, relayed_command } from '../runner/remote_launch.mjs';
 import { DatabaseSync } from 'node:sqlite';
@@ -289,6 +290,42 @@ async function serve(data, ops) {
     body: body === undefined ? undefined : JSON.stringify(body) });
   return { request, port };
 }
+
+test('tunnel reconnect replaces cloudflared and keeps the sign-in entry process', async t => {
+  const { data, ops } = fixture();
+  const { request } = await serve(data, ops);
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  const reconnect = () => request('/api/tunnel/reconnect', { cookie, body: {} });
+  assert.equal((await reconnect()).status, 400);
+  const probe = http.createServer();
+  await new Promise(done => probe.listen(0, '127.0.0.1', done));
+  const port = probe.address().port;
+  await new Promise(done => probe.close(done));
+  const tunnel = { host: 'accounts.example', name: 'test', id: 'test', credentials: 'unused' };
+  save_entry_settings(data, { tunnel, tunnel_enabled: true, port, running: true });
+  assert.equal((await reconnect()).status, 400);
+  const entry = await start_entry(data);
+  t.after(() => stop_entry(data));
+  // Node receives "tunnel" as its script argument and serves cloudflared's readiness endpoint.
+  writeFileSync(join(data, 'tunnel'), `const http = require('node:http');
+    const address = process.argv[process.argv.indexOf('--metrics') + 1];
+    http.createServer((req, res) => res.writeHead(req.url === '/ready' ? 200 : 404).end()).listen(Number(address.split(':')[1]), '127.0.0.1');`);
+  const previous = process.env.CODISCUSS_CLOUDFLARED;
+  process.env.CODISCUSS_CLOUDFLARED = process.execPath;
+  t.after(() => {
+    stop_tunnel(data);
+    if (previous === undefined) delete process.env.CODISCUSS_CLOUDFLARED;
+    else process.env.CODISCUSS_CLOUDFLARED = previous;
+  });
+  await ensure_tunnel(data, tunnel, port);
+  const tunnel_pid = () => JSON.parse(readFileSync(join(data, 'tunnel.json'), 'utf8')).pid;
+  const old_pid = tunnel_pid();
+  const response = await reconnect();
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).connected, true);
+  assert.notEqual(tunnel_pid(), old_pid);
+  assert.equal((await entry_status(data)).pid, entry.pid);
+});
 
 test('the panel opens only with the owner key, only for its own address, and refuses cross-site writes', async () => {
   const { data, ops } = fixture();
@@ -681,6 +718,7 @@ test('the owner binds and leaves the online site without hosting, and never from
   writeFileSync(join(data, 'local-settings.json'), JSON.stringify({ hosting: false }));
   const links = (site) => writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: site ? { [site]: { id: 'a'.repeat(32), private_key: 'key' } } : {} }));
   let bound = null;
+  ops.service_overview = () => ({ running: true, pid: process.pid });
   ops.connect_site = async (_data, site) => { if (site === 'https://not-a-site.example') return null; links(site); bound = { site, machine: 'a'.repeat(32) }; return bound; };
   const { request } = await serve(data, ops);
   const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
@@ -692,6 +730,18 @@ test('the owner binds and leaves the online site without hosting, and never from
   assert.equal((await post('connect', { site: 'https://site.example/path' })).status, 200);
   assert.equal(await online(), 'https://site.example', 'kept as the site itself, with hosting off');
   assert.match((await post('connect', { site: 'https://other.example' })).body.error, /已绑定 https:\/\/site\.example/);
+  const region = async () => (await (await request('/api/site/region', { cookie })).json()).region;
+  assert.equal(await region(), 'apac');
+  assert.equal((await post('region', { region: 'nowhere' })).status, 400);
+  assert.equal((await post('region', { region: 'weur' })).status, 200);
+  assert.equal(await region(), 'weur');
+  let acknowledged = 'apac';
+  const reconnect = reconnect_reader(data, () => acknowledged);
+  const sites = { [bound.site]: { id: bound.machine } };
+  assert.equal(reconnect(sites), undefined);
+  acknowledged = 'weur';
+  assert.equal(reconnect(sites), bound.site);
+  assert.equal(reconnect(sites), undefined);
   // The hosted accounts' address runs over this binding: leaving it would cut them off silently.
   save_entry_settings(data, { relay_enabled: true });
   assert.match((await post('disconnect', {})).body.error, /请先关闭它/);

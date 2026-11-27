@@ -11,7 +11,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
-import { panel_clean, panel_storage, panel_repair } from './admin_maintenance.mjs';
+import { panel_clean, panel_clear_attachments, panel_room_attachments, panel_storage, panel_repair } from './admin_maintenance.mjs';
 import { homedir, tmpdir } from 'node:os';
 import tls from 'node:tls';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -23,8 +23,9 @@ import { account_home, add_account, data_home, entry_settings, entry_status, ins
 import { signed_site_url, site_fetch, verified_connection } from './entry_client.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
-import { ensure_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } from './hosting_tunnel.mjs';
-import { machine_links } from './remote_launch.mjs';
+import { ensure_tunnel, stop_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } from './hosting_tunnel.mjs';
+import { RELAY_REGIONS } from './device_auth.mjs';
+import { machine_links, save_machine_links } from './remote_launch.mjs';
 import { read_relay_health, request_relay_reconnect } from './relay_health.mjs';
 import { instance_recovery } from './instance_recovery.mjs';
 import { mark_backup_release, reserve_project_root, set_project_migration } from '../gateway/gateway.mjs';
@@ -68,6 +69,8 @@ const UPDATE_STALE_MS = 10 * 60 * 1000;
 const UPDATE_FINISH_CHECK_MS = 3000;
 const OWNER_ENV_TIMEOUT_MS = 120_000;
 // How often the panel makes sure the entry's tunnel runs as set, and how long an update waits for the entry to be back.
+const TUNNEL_CONNECT_MS = 30_000;
+const TUNNEL_POLL_MS = 500;
 const TUNNEL_CHECK_MS = 60_000;
 const ENTRY_BACK_MS = 15_000;
 // How long the panel waits for the relay's entry Worker to answer whether it is reachable.
@@ -763,6 +766,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     login_status, apply_login, logout, start_login, login_progress, submit_login, cancel_login, install_runtime, prepare_account, account_env, account_skills, account_workflows, owner_env, owner_skills, shared_cli_state,
     save_api_key, list_keys, remove_key, use_shared_programs, service_overview, run_owner_service, latest_version, check_package, begin_update,
     set_account_external, reconcile_external, autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_way, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
+  let reconnecting_tunnel;
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
   const recovery = instance_recovery(data, { wanted: name => wanted_port(data, name, ops.instance_flag_set || instance_flag_set),
     probe: ops.instance_state || instance_state, start: name => op.start_verified(data, name), now: ops.now,
@@ -787,11 +791,13 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (path === '/api/storage' && method === 'GET') return panel_storage(data, site_url(data));
     if (path === '/api/storage/clean' && method === 'POST') return panel_clean(data, site_url(data), body);
     if (path === '/api/storage/repair' && method === 'POST') return panel_repair(data, site_url(data), body);
+    if (path === '/api/storage/attachments' && method === 'POST') return panel_room_attachments(site_url(data), body);
+    if (path === '/api/storage/attachments/clear' && method === 'POST') return panel_clear_attachments(site_url(data), body);
     if (method === 'GET' && section === 'state') {
       const windows = process.platform === 'win32';
       const service = op.service_overview(data), bound = bound_site(data);
       const restarts = hosting ? recovery.status() : {};
-      return { hosting, version: VERSION, service, online_site: bound?.site || '', platform: process.platform,
+      return { hosting, version: VERSION, service, online_site: bound?.site || '', relay_region: bound?.region ?? 'apac', platform: process.platform,
         relay_health: read_relay_health(data, bound, service.running && service.pid),
         launcher: windows && existsSync(launcher_path(data)), autostart: windows && op.autostart_enabled(), login_methods: LOGIN_METHODS, providers: API_PROVIDERS,
         ...(hosting ? { accounts: (await op.list_accounts(data)).map(item => ({ ...item, last_restart: restarts[item.name] })), clis: op.shared_cli_state(), entry: await op.entry_overview(data, { reach: false }) }
@@ -856,6 +862,20 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // The owner's own online site: bound, checked and left here whether or not this computer hosts accounts.
     if (method === 'POST' && section === 'site' && name === 'connect') { const bound = await bind_online_site(data, body, op.connect_site); after_change(); return bound; }
     if (method === 'POST' && section === 'site' && name === 'disconnect') { const left = await disconnect_site(data); after_change(); return left; }
+    if (section === 'site' && name === 'region' && ['GET', 'POST'].includes(method)) {
+      const bound = bound_site(data);
+      if (!bound) throw panel_error('尚未绑定线上网站');
+      if (method === 'GET') return { region: bound.region };
+      if (!RELAY_REGIONS.includes(body.region)) throw panel_error('中转地区无效');
+      if (bound.region === body.region) return { region: bound.region };
+      const links = machine_links(data);
+      links.sites[bound.site].relay_region = body.region;
+      save_machine_links(data, links);
+      const service = op.service_overview(data);
+      if (service.pid) request_relay_reconnect(data, { ...bound, wait_region: body.region }, service.pid);
+      after_change();
+      return { region: body.region };
+    }
     if (method === 'POST' && section === 'site' && name === 'reconnect') {
       const bound = bound_site(data), service = op.service_overview(data);
       if (!bound) throw panel_error('尚未绑定线上网站');
@@ -892,6 +912,10 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && section === 'site' && name === 'code') return op.make_access_code(data, body);
     if (method === 'POST' && section === 'relay' && name === 'join') return op.join_relay(data, body.code);
     // The outside address: a Cloudflare tunnel set up by a job of its own (it waits for the owner in the browser).
+    if (method === 'POST' && section === 'tunnel' && name === 'reconnect') {
+      reconnecting_tunnel ??= reconnect_tunnel(data).finally(() => { reconnecting_tunnel = null; });
+      return reconnecting_tunnel;
+    }
     if (section === 'tunnel' && name === 'setup') {
       if (method === 'GET') return tunnel_setup_state(data);
       if (method === 'POST') return op.start_tunnel_setup(data, body.host, body.name);
@@ -1008,6 +1032,23 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
 }
 
 /** The account entry as the hosting page shows it: whether it runs, its loopback port and the address customers open. */
+/** Restart only cloudflared and return the final readiness probe. */
+async function reconnect_tunnel(data) {
+  const entry = await entry_status(data);
+  const { tunnel, tunnel_enabled } = entry_settings(data);
+  if (!tunnel) throw panel_error('请先配置自有域名');
+  if (!tunnel_enabled) throw panel_error('请先开启自有域名');
+  if (!entry.running) throw panel_error('请先启动登录入口');
+  stop_tunnel(data);
+  await ensure_tunnel(data, tunnel, entry.port);
+  const deadline = Date.now() + TUNNEL_CONNECT_MS;
+  while (true) {
+    const status = await tunnel_status(data);
+    if (status.connected || Date.now() >= deadline) return status;
+    await new Promise(resolve => setTimeout(resolve, TUNNEL_POLL_MS));
+  }
+}
+
 /** Keep the entry's tunnel as the settings say: running while hosting is on and the entry is meant to run. */
 function keep_tunnel(data) {
   const { tunnel, port, running, tunnel_enabled } = entry_settings(data);
@@ -1017,7 +1058,7 @@ function keep_tunnel(data) {
 /** The online site this computer is bound to (`codiscuss local connect`) and its id there, or null. */
 function bound_site(data) {
   const [site, link] = Object.entries(machine_links(data).sites || {}).find(([, item]) => item?.id && item?.private_key) || [];
-  return site ? { site, machine: link.id } : null;
+  return site ? { site, machine: link.id, region: RELAY_REGIONS.includes(link.relay_region) ? link.relay_region : 'apac' } : null;
 }
 
 /** Ask the relay's entry Worker whether it is one and whether this computer is connected to it. */

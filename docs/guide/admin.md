@@ -9,11 +9,14 @@
   - **本机**：查看“共议服务”运行状态，点启动、重启、停止或“打开网站”；开启托管管理后还显示供隔离账号使用的“程序副本”。
   - **管理员入口 / 线上网站**：查看本地网页和已绑定的线上网站地址，可“绑定”、“解绑”或“生成接入码”。
     “线上网站”和 `codiscuss admin status` 均在收到本次连接的心跳回应后显示“中转已连接”，遇到断线、重连或连续 HTTP 请求失败会说明原因，服务停止或记录过期时显示“状态未知”。中转连续 3 分钟未获心跳确认时，服务会重建该网站的连接。也可以点“立即重连”或运行 `codiscuss admin site reconnect`。
+
+    在“概览 → 本机 → 线上网站”的“中转地区”选择部署位置，默认亚太。选“自动”时，Cloudflare 在最先发起连接的一方附近创建对象，通常靠近电脑的网络出口，建好后位置固定；其他选项是位置提示。服务同步设置后，电脑和已配对设备自动重连。命令行用 `codiscuss admin site region` 查看，用 `codiscuss admin site region weur` 切换到欧洲西部。
   - **托管账号入口**（开启托管管理后显示）：启停“登录入口”，开关“经线上网站中转”或配置“自有域名”（Cloudflare Tunnel）。
   - **设置**：查看当前版本、“检查更新”与“更新并重启”（同步更新房间技能和隔离账号）、开关“登录 Windows 时自动启动”，以及切换管理面板语言。
 - **“存储”页**：
   - 查看本机 `.codiscuss` 数据总量（上限 10 GiB，不含语音模型）、全机草稿区占用（上限 3 GiB，单房间 1 GiB）、**房间记录与附件（`local/`）**占用、所在磁盘剩余空间与安全线，以及按房间与成员拆分的草稿占用和权限不可读条目计数；本机朗读与语音识别模型单独列出，不计入 10 GiB 上限（兼容旧目录与自定义模型目录，服务根目录为目录联接时也可正常计量）。
   - 当 `.codiscuss` 数据达到 8 GiB 预警线时，“存储”标签显示提示圆点并弹出警告；超过上限或磁盘低于安全线时停止新的派活。总量分为五个具名目录和“其他”。“安全清理”回收已登记的失败执行临时目录、朗读缓存、无主空目录和仅剩登记文件的过期启动目录，以及本机站点已结束超过 24 小时的执行文件。清除朗读缓存后，用云端语音重听旧内容会重新合成并计费。“深度修理”先预估容量，勾选并确认后可删除含最近一天在内的已结束执行日志。
+  - “房间附件”按占用从大到小列出各房间已发出、尚未清理的附件；点“管理附件”展开，与房间页的附件管理相同（见[管理房间](rooms.md)“草稿空间与存储上限”）。
   - **超限脱困与边界**：房间被拦截时主持人也无法运行，清理历史旧草稿需在**房间外的 AI 对话**（如本机 Claude Code / Codex / Antigravity）中调用 `$codiscuss-draft-cleanup`（默认只盘点，经你确认才删除可重建副本）；若由 `local/` 房间记录与附件占满，请先导出备份再在网页销毁旧房间。沙箱创建的不可读目录不计入配额，页面会标出数量；所有限额均为定期采样检查（有执行时每 2 秒查磁盘余量、每 30 秒扫描占用），并非文件系统写入层硬拦截，不能保证磁盘绝不写满。
   服务执行期间，每 2 秒检查服务目录所在卷的可用空间。10 GiB 预算还有余量时，卷上可用空间的下降量达到该余量就提前复扫。执行结束时更新相应成员的草稿占用。清理后手动重试会按原拦截原因复核；全机超限时重新统计全机用量。其他程序写盘时，若可测用量未超限且不可读项数量稳定，运行继续。提前复扫发现不可读项增多时暂停派活，并请求停止可停执行。后续扫描确认数量稳定且各项限额与磁盘余量正常时，恢复派活。低于磁盘安全线仍独立触发保护。房间草稿达到 80% 时，守卫提前暂停无法确认可停止的新执行。采样之间及扫描期间仍可写入，已运行的不可停成员可继续写入。项目目录、系统临时目录与第三方 AI 自身数据在服务目录外时不计入预算。按失败卡上的原因清理后，在卡片上点“重试”。本机和已配对设备都可手动重试。
 - **“账号”页**：
@@ -38,7 +41,7 @@ Windows 可以从托盘打开面板。macOS 和 Linux 的命令行入口见下�
    - **入口保护**：在托管账号详情页默认开启“入口保护”（仅支持 Windows），开启后只有经登录入口验证的使用者和它自己的 AI 能访问该实例网站，防止本机其他程序直接访问。
 3. **配置外网入口（二选一或同时开启）**：
    - **经线上网站中转（无需自有域名）**：先按[部署指南](../deployment.md#托管账号的入口可选)部署好入口 Worker；在部署电脑的“概览 → 本机 → 线上网站”生成接入码后，在这台电脑的管理面板“概览 → 线上网站”绑定并打开“托管账号入口”里的“经线上网站中转”（命令行一步完成：`codiscuss admin entry join <接入码>`）。
-   - **自有域名**：在“托管账号入口 → 自有域名”点配置，按提示授权 Cloudflare 隧道并绑定托管在 Cloudflare 上的域名（命令行 `codiscuss admin entry tunnel <域名>`）。
+   - **自有域名**：在“托管账号入口 → 自有域名”点配置，按提示授权 Cloudflare 隧道并绑定托管在 Cloudflare 上的域名（命令行 `codiscuss admin entry tunnel <域名>`）。更改代理或网络设置后，点“重新连接”或运行 `codiscuss admin entry tunnel reconnect` 让隧道使用新路由。切换时访问可能短暂中断，已登录的客户保留会话。
 4. **管理账号**：在托管账号页面可以启动/停止实例、停用/启用账号、重设密码、删除账号、配置由管理员提供的 API 密钥（对方界面只显示“管理员提供”，无法查看或更换），并复制登录地址与账号发给对方。邀请外部专家需要该实例具备可用的线上中转入口。面板每分钟检查已要求运行的实例，端口拒绝连接时自动重启，10 分钟内最多 3 次。达到上限仍失败时，账号行显示最后原因，`codiscuss admin status` 可查最近一次尝试。修好原因后手动启动可恢复巡检。
 
 ### 把已有账号的项目数据迁到另一块盘
@@ -62,8 +65,9 @@ Windows 可以从托盘打开面板。macOS 和 Linux 的命令行入口见下�
 | 启动、退出、重启、更新（**无需面板已运行**） | `codiscuss admin start` / `stop` / `restart` / `update [check]` |
 | 查看状态、启停服务、开机自启 | `codiscuss admin status [--full]`、`service start\|stop\|restart`、`autostart on\|off` |
 | 查看存储占用与清理临时文件 | `codiscuss admin storage`、`storage clean`、`storage repair`（预览）、`storage repair logs --confirm` |
+| 按房间查看与清理附件 | `codiscuss admin storage attachments`（各房间占用）、`storage attachments ROOM`（列出附件）、`storage attachments ROOM clear ID... --confirm` |
 | 绑定/解绑线上网站、生成接入码 | `codiscuss admin site status`、`site connect <接入码\|站点>`、`site disconnect`、`entry code` |
-| 托管入口与隧道 | `codiscuss admin entry start\|stop`、`entry join <接入码>`、`entry open\|close relay\|tunnel`、`entry tunnel <域名>` |
+| 托管入口与隧道 | `codiscuss admin entry start\|stop`、`entry join <接入码>`、`entry open\|close relay\|tunnel`、`entry tunnel <域名>`、`entry tunnel reconnect` |
 | 托管账号生命周期 | `codiscuss admin account list`、`account add <名>`、`account start\|stop\|disable\|enable\|remove\|password <名>`、`account isolate\|protect <名>` |
 | 登录、密钥、技能与提示词 | `codiscuss admin login status <对象>`、`key add <对象> --base-url … --key …`、`skill install <对象> <技能>`、`workflow install <对象>`、`workflow update <对象>`、`prompt set <对象> --file …` |
 

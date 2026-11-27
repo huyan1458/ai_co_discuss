@@ -736,6 +736,7 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + f"/messages/{message['id']}")[1]["attachments"], message["attachments"])
         self.assertEqual(self.request(base + "/messages")[1]["messages"][0]["attachments"], message["attachments"])
         self.assertEqual(self.request(base + "/attachments")[1]["total"], 1)
+        self.assertEqual(self.request(base)[1]["attachment_bytes"], len(data))
         self.assertIn(file["download_url"], self.request(f"/r/{self.room['id']}/messages/{message['id']}")[1])
         status, headers, content = self.attachment_request(file["url"])
         self.assertEqual((status, content), (200, data))
@@ -903,6 +904,27 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.attachment_request("/api/local/media/old")[0], 404)
         path.write_bytes(b"ID3" + bytes(10))
         self.assertEqual(self.attachment_request("/api/local/media/good")[0], 409)
+
+    def test_owner_clears_attachment_bytes_and_keeps_the_record(self):
+        """Clearing frees a sent file's bytes for the owner only; the message, number and size record stay."""
+        base = f"/api/rooms/{self.room['id']}"
+        data = b"%PDF-1.4 clear-me"
+        params = urlencode({"actor": "用户", "file_name": "证据包.pdf", "submission_id": "upload-clear"})
+        file = json.loads(self.attachment_request(base + "/attachments?" + params, data)[2])["attachment"]
+        message = self.request(base + "/messages", {"author": "用户", "text": "", "attachment_ids": [file["id"]],
+                                                    "submission_id": "clear-message"})[1]["message"]
+        self.assertEqual(self.request(base + "/attachments/clear", {"ids": [file["id"]]}, token="anonymous")[0], 403)
+        self.assertEqual(self.request(base + "/attachments/clear", {"ids": ["0" * 32]})[0], 404)
+        status, result = self.request(base + "/attachments/clear", {"ids": [file["id"]]})
+        self.assertEqual((status, result["cleared"], result["freed_bytes"]), (200, [file["id"]], len(data)), result)
+        self.assertEqual(self.request(base + "/attachments/clear", {"ids": [file["id"]]})[1]["cleared"], [])
+        self.assertEqual(self.attachment_request(file["url"])[0], 404)
+        shown = self.request(base + f"/messages/{message['id']}")[1]["attachments"][0]
+        self.assertTrue(shown["cleared_at"])
+        self.assertEqual((shown["size"], shown["number"]), (len(data), message["attachments"][0]["number"]))
+        self.assertEqual(self.request(base)[1]["attachment_bytes"], 0)
+        usage = self.request(base + "/attachments/usage")[1]
+        self.assertEqual((usage["bytes"], [item["id"] for item in usage["attachments"]]), (0, [file["id"]]))
 
     def test_attachment_numbers_run_across_the_room(self):
         """`[图片 #n]` names one file room-wide: a sender's own numbering is moved to the numbers its files took."""

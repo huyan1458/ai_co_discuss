@@ -170,8 +170,12 @@ Older versions also had the live-update object `DiscussionUpdates` (binding `UPD
 If you use hosting and want hosted accounts' users to sign in from outside without your own domain, also deploy the entry Worker (after the relay, since it uses the relay's Durable Object):
 
 ```sh
-npx wrangler deploy --config deploy/entry.wrangler.jsonc
+node scripts/entry_config.mjs
+npx wrangler deploy --dry-run --config .wrangler/entry.json
+npx wrangler deploy --config .wrangler/entry.json
 ```
+
+The generator copies the Pages DB binding, including its required database_id, from `.wrangler/deploy/wrangler.jsonc` into the private `.wrangler/entry.json`. Check that the dry run lists the same DB and the RELAY binding before deploying.
 
 It gets its own `workers.dev` address (such as `https://codiscuss-entry.<account-subdomain>.workers.dev`), on a different origin from the online site, so hosted accounts' pages can't reach your paired devices' keys. Put this address in the `vars` of your private configuration and redeploy Pages; the online site then hands it to hosted computers that connect:
 

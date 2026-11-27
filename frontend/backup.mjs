@@ -39,6 +39,9 @@ function message_markdown(message, details, summary, attachments) {
   if (summary?.text) lines.push(`简述（作者：${summary.author}）：`, original_block(summary.text));
   lines.push("原文：", original_block(message.text));
   for (const file of attachments) {
+    if (file.cleared_at) { lines.push(`附件：${original_block(file.file_name)}
+
+已清理（${file.cleared_at}），原文件不在资料包中 · ${file.size} 字节 · SHA-256: ${file.sha256}`); continue; }
     const path = attachment_archive_path(file).split("/").map(part => encodeURIComponent(part).replace(/[()]/g,
       char => `%${char.charCodeAt(0).toString(16)}`)).join("/");
     lines.push(`附件：${original_block(file.file_name)}\n\n[下载原文件](${path}) · ${file.size} 字节 · SHA-256: ${file.sha256}`);
@@ -115,7 +118,8 @@ export function room_html(snapshot) {
   const card = (who, when, text) => `<article><header><b>${escape_html(who)}</b><time>${escape_html(when)}</time></header><div>${escape_html(text)}</div></article>`;
   const messages = tables.messages.filter(message => !task_messages.has(message.id)).map(message => {
     const files = (tables.attachments || []).filter(file => file.message_id === message.id)
-      .map(file => `<a href="${escape_html(attachment_archive_path(file))}">${escape_html(file.file_name)}</a>`).join(" ");
+      .map(file => file.cleared_at ? `<span>${escape_html(file.file_name)}（已清理）</span>`
+        : `<a href="${escape_html(attachment_archive_path(file))}">${escape_html(file.file_name)}</a>`).join(" ");
     return card(`#${message.id} ${message.author}`, message.created_at, message.text) + (files ? `<p class="files">${files}</p>` : "");
   });
   const chats = (tables.private_chats || []).map(chat => card(`私聊 · ${members.get(chat.member_id) || chat.member_id}`,
@@ -164,7 +168,8 @@ async function add_room_files(files, full_snapshot, prefix, load_attachment) {
   // Files members wrote in their draft folders and never posted; they go when the room is destroyed.
   for (const draft of local_drafts?.files || []) files[`${prefix}草稿/${draft.path}`] = base64_bytes(draft.data);
   if (local_drafts?.omitted?.length) files[`${prefix}草稿/未包含的文件.txt`] = strToU8(`以下文件超过资料包上限，未包含：\n${local_drafts.omitted.join("\n")}\n`);
-  for (const file of snapshot.tables.attachments || []) files[prefix + attachment_archive_path(file)] = [await load_attachment(file), { level: 0 }];
+  // Cleared files have no bytes left; their records stay in 完整数据.json.
+  for (const file of (snapshot.tables.attachments || []).filter(item => !item.cleared_at)) files[prefix + attachment_archive_path(file)] = [await load_attachment(file), { level: 0 }];
 }
 
 /** Compress archive entries, resolving only once the whole package exists. */

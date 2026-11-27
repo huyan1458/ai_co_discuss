@@ -603,6 +603,8 @@ def init_database(database, seed=True):
                     connection.execute(f"ALTER TABLE attachments ADD COLUMN {name} INTEGER")
             if "thumbnail_type" not in attachment_columns:
                 connection.execute("ALTER TABLE attachments ADD COLUMN thumbnail_type TEXT")
+            if "cleared_at" not in attachment_columns:
+                connection.execute("ALTER TABLE attachments ADD COLUMN cleared_at TEXT")
             if connection.execute("INSERT OR IGNORE INTO site_preferences (key,value) VALUES ('child_folders_migrated','1')").rowcount:
                 connection.execute("""UPDATE room_folder_assignments AS child SET folder_id=parent.folder_id
                     FROM room_links l JOIN room_folder_assignments parent ON parent.room_id=l.other_room_id
@@ -651,6 +653,9 @@ def require_room(connection, room_id):
     queued_files = sum(len(json.loads(row[0]).get("attachment_ids") or []) for row in
                        connection.execute("SELECT payload FROM queued_messages WHERE room_id=?", (room_id,)))
     room["next_attachment_number"] = attachment_number_before(connection, room_id, None) + queued_files
+    # Bytes of this room's stored files (sent and not-yet-sent uploads), shown beside the draft meter on the room page.
+    room["attachment_bytes"] = connection.execute(
+        "SELECT COALESCE(SUM(size),0) FROM attachments WHERE room_id=? AND cleared_at IS NULL", (room_id,)).fetchone()[0]
     settings = connection.execute("SELECT host,background,boundaries,experts,focus FROM topic_settings WHERE room_id=?",
                                   (room_id,)).fetchone()
     room.update(dict(settings) if settings else topic_defaults())
@@ -2661,6 +2666,54 @@ def discard_attachment(connection, database, room_id, identifier, token):
     remove_attachment_files(connection, database, [row])
     connection.commit()
     return {"discarded": identifier}
+
+
+def attachment_usage(connection, room_id, token):
+    """List every sent file of the room with its size and state, for the owner choosing what to clear."""
+    require_room(connection, room_id)
+    require_owner(connection, room_id, token)
+    rows = connection.execute("""SELECT * FROM attachments WHERE room_id=? AND message_id IS NOT NULL
+        ORDER BY message_id,position,id""", (room_id,)).fetchall()
+    files = [{**attachment_view(row), "number": index + 1} for index, row in enumerate(rows)]
+    return {"attachments": files, "bytes": sum(item["size"] for item in files if not item["cleared_at"])}
+
+
+def clear_attachments(connection, database, room_id, payload, token):
+    """Delete the original bytes of chosen sent files to free space; records, numbers and thumbnails stay.
+
+    Args:
+        payload: ``{"ids": [attachment ID, ...]}``; IDs already cleared are skipped.
+
+    Returns:
+        ``{"cleared": [IDs cleared now], "freed_bytes": int}``.
+    """
+    begin_write(connection)
+    require_room(connection, room_id)
+    require_owner(connection, room_id, token)
+    identifiers = payload.get("ids")
+    if not isinstance(identifiers, list) or not identifiers or not all(isinstance(item, str) for item in identifiers):
+        raise ValueError(Text('ids 须为非空的附件 ID 列表'))
+    marks = ",".join("?" * len(set(identifiers)))
+    rows = connection.execute(f"""SELECT * FROM attachments WHERE room_id=? AND message_id IS NOT NULL
+        AND cleared_at IS NULL AND id IN ({marks})""", (room_id, *set(identifiers))).fetchall()
+    known = {row[0] for row in connection.execute(f"SELECT id FROM attachments WHERE room_id=? AND message_id IS NOT NULL AND id IN ({marks})",
+                                                  (room_id, *set(identifiers)))}
+    missing = sorted(set(identifiers) - known)
+    if missing:
+        raise LookupError(Text('附件不存在：{ids}', ids="、".join(missing)))
+    now = utc_iso_now()
+    for row in rows:
+        connection.execute("UPDATE attachments SET cleared_at=? WHERE id=?", (now, row["id"]))
+    if rows:
+        # Messages show the change, so the room's readers refresh as after an edited message.
+        connection.execute("UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=?", (room_id,))
+    connection.commit()
+    for row in rows:
+        try:
+            attachment_path(database, row).unlink(missing_ok=True)
+        except OSError:
+            logging.warning("Could not remove cleared attachment %s", row["id"], exc_info=True)
+    return {"cleared": [row["id"] for row in rows], "freed_bytes": sum(row["size"] for row in rows)}
 
 
 def check_message_attachments(connection, room_id, actor, identifiers):
@@ -4811,6 +4864,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def handle_attachments(self, connection, parts, params, method):
         """Handle bounded upload, discovery, metadata, and binary download."""
         room_id = parts[2]
+        if parts[4:] == ["usage"] and method == "GET":
+            return self.respond(attachment_usage(connection, room_id, self.headers.get("X-Discussion-Token", "")))
+        if parts[4:] == ["clear"] and method == "POST":
+            result = clear_attachments(connection, self.server.database, room_id, self.read_payload(),
+                                       self.headers.get("X-Discussion-Token", ""))
+            self.server.hub.notify_update(room_id)
+            return self.respond(result)
         if len(parts) == 4:
             if method == "GET":
                 return self.respond(query_attachments(connection, room_id, params, self.headers.get("X-Discussion-Token", "")))
@@ -4846,6 +4906,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                                         content=len(parts) == 6)
             if len(parts) == 5:
                 return self.respond(attachment)
+            if parts[5] in ("content", "zip") and attachment.get("cleared_at"):
+                raise LookupError(Text('附件已被清理'))
             if parts[5] == "content":
                 return self.respond_attachment(attachment, params.get("download") == "1")
             if parts[5] == "thumbnail":

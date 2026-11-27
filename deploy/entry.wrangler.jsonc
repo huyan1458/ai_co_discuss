@@ -7,6 +7,7 @@
   "compatibility_date": "2026-10-14",
   "workers_dev": true,
   "preview_urls": false,
+  // scripts/entry_config.mjs supplies the site's private D1 binding before deployment.
   "durable_objects": {
     "bindings": [
       { "name": "RELAY", "class_name": "MachineRelay", "script_name": "ai-co-discuss-updates" }

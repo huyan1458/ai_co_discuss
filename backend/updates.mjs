@@ -46,6 +46,12 @@ export class MachineRelay {
     if (request.method === "POST" && role === "request") return Response.json(await this.relay(await request.json()));
     if (request.method === "POST" && role === "entry") return this.entry(request);
     if (request.method === "GET" && role === "entry-status") return Response.json({ online: this.machine() !== null });
+    if (request.method === "POST" && role === "relocate") {
+      for (const id of this.pending.keys()) this.settle(id, { id, status: "offline" });
+      for (const id of this.entries.keys()) this.entry_finish(id, 503);
+      for (const socket of this.ctx.getWebSockets()) socket.close(1012, "relay region changed");
+      return new Response(null, { status: 204 });
+    }
     if (request.method === "POST" && role === "devices") return Response.json(this.devices((await request.json()).devices));
     return new Response(null, { status: 404 });
   }
@@ -137,13 +143,14 @@ export class MachineRelay {
   }
 
   /** End an entry request: a started one closes its body, one not started yet answers `status`. */
-  entry_finish(id, status = 502) {
+  entry_finish(id, status) {
     const entry = this.entries.get(id);
     if (!entry) return;
     this.entries.delete(id);
     clearTimeout(entry.timer);
-    if (entry.started) entry.writer.close().catch(() => {});
-    else entry.resolve(new Response(null, { status }));
+    if (entry.started && status) entry.writer.abort(new Error('Relay disconnected')).catch(() => {});
+    else if (entry.started) entry.writer.close().catch(() => {});
+    else entry.resolve(new Response(null, { status: status ?? 502 }));
   }
 
   entry_cancel(id) {

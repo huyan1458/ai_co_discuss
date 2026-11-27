@@ -8,6 +8,7 @@
 import { computed, inject, ref } from "vue";
 import { call } from "./api.js";
 import EntryWayCard from "./EntryWayCard.vue";
+import RelayReconnect from "./RelayReconnect.vue";
 import TunnelDialog from "./TunnelDialog.vue";
 import { t } from '../i18n.js';
 
@@ -97,6 +98,7 @@ async function copy(text) {
         <!-- Binding is the computer's (shared with the administrator's entry); the same dialog as "本机 → 线上网站" opens here. -->
         <button v-if="item.key === 'relay' && !prepared('relay')" type="button" class="panel-button is-outline is-small" @click="binding++"><UIcon name="i-lucide-link" />{{ t('绑定') }}</button>
         <button v-if="enabled(item.key) && detail(item.key)?.address" type="button" class="panel-button is-outline is-small" @click="copy(detail(item.key).address)"><UIcon name="i-lucide-copy" />{{ t('复制地址') }}</button>
+        <RelayReconnect v-if="item.key === 'tunnel'" tunnel :disabled="entry_busy === 'tunnel'" />
         <button v-if="item.key === 'tunnel'" type="button" class="panel-button is-small" :class="prepared(item.key) ? 'is-plain' : 'is-outline'" @click="configure"><UIcon :name="prepared(item.key) ? 'i-lucide-pencil' : 'i-lucide-settings-2'" />{{ prepared(item.key) ? t('修改') : t('配置') }}</button>
       </template>
     </EntryWayCard>

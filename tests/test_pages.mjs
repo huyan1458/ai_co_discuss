@@ -276,7 +276,7 @@ function relay_context() {
   const sockets = [];
   const ctx = {
     acceptWebSocket: (socket, tags) => { socket.tags = tags; sockets.push(socket); },
-    getWebSockets: tag => sockets.filter(socket => socket.tags.includes(tag) && socket.readyState !== 3),
+    getWebSockets: tag => sockets.filter(socket => (!tag || socket.tags.includes(tag)) && socket.readyState !== 3),
   };
   const socket = () => {
     const sent = [];
@@ -620,4 +620,71 @@ test('file relay timings survive routine reads and validate reported durations',
   assert.equal(api.recent_relay_times[0].site, 19);
   assert.equal(api.recent_relay_times[0].bytes, 100);
   assert.equal(api.relay_time_reports.at(-1).worker, null);
+});
+
+test('relocating ends device and hosted entry requests including started streams', async () => {
+  const { ctx, socket } = relay_context();
+  const relay = new MachineRelay(ctx);
+  const machine = socket();
+  relay.accept(machine, 'machine');
+  const waiting = relay.relay({ id: 'inflight', envelope: {} });
+  const request = () => new Request('https://relay.internal/', { headers: { 'X-Entry-Request': '{}' } });
+  const headers = relay.entry(request());
+  const stream = relay.entry(request());
+  relay.entry_frame({ type: 'entry-head', id: machine.sent.at(-1).id, status: 200 });
+  const reader = (await stream).body.getReader();
+  const closed = relay.fetch(new Request('https://relay.internal/', { method: 'POST', headers: { 'X-Relay-Role': 'relocate' } }));
+  assert.equal((await closed).status, 204);
+  assert.equal((await waiting).status, 'offline');
+  assert.equal((await headers).status, 503);
+  await assert.rejects(reader.read());
+  assert.equal(machine.readyState, 3);
+});
+
+test('only a signed relay location moves both entrypoints, with APAC for legacy manifests', async t => {
+  const f = await bound_fixture(t);
+  const link = (await import('../runner/remote_launch.mjs')).machine_links(f.home).sites['https://discussion.test'];
+  const { signed_device_list } = await import('../runner/device_auth.mjs');
+  const { default: entry } = await import('../backend/entry_worker.mjs');
+  const calls = [];
+  f.env.RELAY = { idFromName: name => name, get(name, options) {
+    calls.push([name, options?.locationHint]);
+    return { fetch: async (_url, options) => {
+      if (options?.headers?.['X-Relay-Role'] === 'relocate') throw new Error('old relay unavailable');
+      return Response.json({ online: true });
+    } };
+  } };
+  const sync = extra => call(f, `/api/machines/${link.id}/sync`, { projects: [], clients: {}, ...extra }, { 'X-Machine-Token': link.token });
+  async function check(region) {
+    const url = `https://entry.test/_codiscuss/status?machine=${link.id}`;
+    const expected = [link.id + ':' + region, region === 'auto' ? undefined : region];
+    assert.equal((await entry.fetch(new Request(url), f.env)).status, 200);
+    assert.deepEqual(calls.at(-1), expected);
+    const socket = new Request(`https://site.test/api/machines/${link.id}/relay`, {headers: {
+      Upgrade: 'websocket', 'Sec-WebSocket-Protocol': 'codiscuss-relay, m.' + link.token }});
+    assert.equal((await worker.fetch(socket, f.env)).status, 200);
+    assert.deepEqual(calls.at(-1), expected);
+  }
+  await f.env.DB.prepare("UPDATE machine_devices SET body=json_remove(body,'$.relay_region') WHERE machine_id=?").bind(link.id).run();
+  await check('apac');
+  assert.equal((await sync({relay_region: 'enam'})).status, 400);
+  const signed = region => signed_device_list(f.home, { ...link, relay_region: region });
+  let clock = Date.now();
+  t.mock.method(Date, 'now', () => clock);
+  const west = await signed('weur');
+  assert.equal((await sync({ sign_key: link.sign_public_key, devices: { ...west, body: west.body.replace('weur','enam') } })).status, 400);
+  await check('apac');
+  assert.equal((await sync({ sign_key: link.sign_public_key, devices: west })).status, 200);
+  const status_url = `https://entry.test/_codiscuss/status?machine=${link.id}`;
+  await entry.fetch(new Request(status_url), f.env);
+  assert.deepEqual(calls.at(-1), [link.id + ':apac', 'apac']);
+  clock += 31_000;
+  await check('weur');
+  assert.equal((await sync({ sign_key: link.sign_public_key, devices: await signed('auto') })).status, 200);
+  clock += 31_000;
+  await check('auto');
+  const { read_relay_region } = await import('../backend/worker.mjs');
+  await f.env.DB.prepare("UPDATE machine_devices SET body=json_set(body,'$.relay_region','unknown') WHERE machine_id=?").bind(link.id).run();
+  assert.equal(await read_relay_region(f.env, link.id), 'apac');
+  assert.equal(await read_relay_region({ DB: { prepare() { throw new Error('unavailable'); } } }, link.id), 'apac');
 });

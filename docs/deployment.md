@@ -172,8 +172,12 @@ npx wrangler deploy --config deploy/updates.wrangler.jsonc
 开了托管管理、想让托管账号的使用者不用自有域名就能从外网登录时，再部署入口 Worker（在中转之后部署，它使用中转的 Durable Object）：
 
 ```sh
-npx wrangler deploy --config deploy/entry.wrangler.jsonc
+node scripts/entry_config.mjs
+npx wrangler deploy --dry-run --config .wrangler/entry.json
+npx wrangler deploy --config .wrangler/entry.json
 ```
+
+入口配置从 `.wrangler/deploy/wrangler.jsonc` 复制 Pages 的 DB 绑定（必须含 database_id），写入私有的 `.wrangler/entry.json`。演练输出应列出同一个 DB 和中转 RELAY，演练不会上传。
 
 它有自己的 `workers.dev` 地址（如 `https://codiscuss-entry.<账号子域>.workers.dev`），与线上站点不同源，托管账号的网页碰不到你已配对设备的密钥。把这个地址写进私有配置的 `vars`，重新部署 Pages，线上站点就会把它告诉来接入的托管电脑：
 

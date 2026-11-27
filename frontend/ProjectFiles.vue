@@ -3,6 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } fr
 import { file_preview, file_size, file_type, folder_listings, modified_time, shown_folders } from "./file-preview.js";
 import { t } from './i18n.js';
 import ProjectFileThumbnail from "./ProjectFileThumbnail.vue";
+import { moves_sideways, side_swipe } from "./side-swipe.js";
 
 // The room's project directories, the main one first; with more than one, a switch above the list picks which is shown.
 // Above them, "项目" lists the account's projects and drafts (runner `account_roots`), each opened by its id.
@@ -396,12 +397,101 @@ function root_lock(item) {
 
 const deleted_time = (value) => modified_time(value);
 
+// Where the list was before each move (opening a folder, the path bar, the project list, the recycle area, another
+// directory) and, after going back, where it came from, so it steps back and forward as a file manager does, also with
+// a mouse's side buttons (user 2026-11-27, #13904, #13906).
+const VISITED_LIMIT = 50;
+const visited = ref([]);
+const ahead = ref([]);
+// The side buttons of a mouse: `MouseEvent.button` 3 is back, 4 is forward.
+const MOUSE_BACK = 3, MOUSE_FORWARD = 4;
+
+/** Where the list is now. */
+function here() {
+  return { mode: mode.value, account: account_root.value, root: root.value, path: current_path.value };
+}
+
+/** Move the list somewhere the user chose, remembering where it was; a new move drops the way forward. */
+function navigate(move) {
+  const before = here();
+  move();
+  visited.value = [...visited.value, before].slice(-VISITED_LIMIT);
+  ahead.value = [];
+}
+
+/** Show one remembered place. */
+function show_place(place) {
+  if (place.mode === "roots") return show_roots();
+  if (place.mode === "trash") return show_trash();
+  account_root.value = place.account;
+  root.value = place.account ? place.account.id : place.root;
+  open_project(place.path);
+}
+
+/** Show the place the list was before its last move. */
+function go_back() {
+  const place = visited.value.at(-1);
+  if (!place) return;
+  visited.value = visited.value.slice(0, -1);
+  ahead.value = [...ahead.value, here()];
+  show_place(place);
+}
+
+/** Show again the place the list went back from. */
+function go_forward() {
+  const place = ahead.value.at(-1);
+  if (!place) return;
+  ahead.value = ahead.value.slice(0, -1);
+  visited.value = [...visited.value, here()].slice(-VISITED_LIMIT);
+  show_place(place);
+}
+
+// On a touch screen a sideways swipe anywhere on the page does what the side buttons do: the list follows the finger to
+// the right to go back and to the left to go forward, and resists where there is nowhere to go.
+const SWIPE_SLIDE_MS = 180;
+const SWIPE_RESIST = 0.25;
+// The new place slides in from this share of the width on the other side.
+const SWIPE_ENTER_SHARE = 0.3;
+const explorer = ref(null);
+
+/** Place the list `dx` pixels sideways, sliding there over `ms` (0: at once). */
+function slide_list(dx, ms = 0, opacity = "") {
+  if (!explorer.value) return;
+  Object.assign(explorer.value.style, { transition: ms ? `transform ${ms}ms ease, opacity ${ms}ms ease` : "none",
+    transform: dx ? `translateX(${dx}px)` : "", opacity, willChange: dx ? "transform" : "" });
+}
+
+const list_swipe = side_swipe({
+  start: (event) => !naming.value && !moves_sideways(event.target, event.currentTarget),
+  move: (dx) => slide_list((dx > 0 ? visited.value.length : ahead.value.length) ? dx : dx * SWIPE_RESIST),
+  end(dx, passed) {
+    const back = dx > 0;
+    if (!passed || !(back ? visited.value.length : ahead.value.length)) { slide_list(0, SWIPE_SLIDE_MS); return; }
+    const width = explorer.value?.offsetWidth || window.innerWidth;
+    slide_list(back ? width : -width, SWIPE_SLIDE_MS, "0");
+    window.setTimeout(() => {
+      if (back) go_back(); else go_forward();
+      slide_list((back ? -width : width) * SWIPE_ENTER_SHARE, 0, "0");
+      requestAnimationFrame(() => requestAnimationFrame(() => slide_list(0, SWIPE_SLIDE_MS)));
+    }, SWIPE_SLIDE_MS);
+  },
+});
+
+/** A mouse's side buttons over the file page step back and forward here instead of leaving the page. */
+function side_button(event) {
+  if (event.button !== MOUSE_BACK && event.button !== MOUSE_FORWARD) return;
+  event.preventDefault();
+  if (event.type !== "mouseup") return;
+  if (event.button === MOUSE_BACK) go_back();
+  else go_forward();
+}
+
 /** The rarely used tools of the heading: refreshing what is shown, and going into or out of the recycle area. */
 const more_items = computed(() => [
   { label: t('刷新'), icon: "i-lucide-refresh-cw", disabled: loading.value || busy.value,
     onSelect: () => mode.value === "roots" ? show_roots() : mode.value === "trash" ? show_trash() : (read_directory(current_path.value), sweep_folders()) },
-  mode.value === "trash" ? { label: t('返回文件夹'), icon: "i-lucide-folder-open", onSelect: () => open_project(current_path.value) }
-    : { label: t('回收区'), icon: "i-lucide-trash", onSelect: show_trash },
+  mode.value === "trash" ? { label: t('返回文件夹'), icon: "i-lucide-folder-open", onSelect: () => navigate(() => open_project(current_path.value)) }
+    : { label: t('回收区'), icon: "i-lucide-trash", onSelect: () => navigate(show_trash) },
 ]);
 
 // Only one entry's menu is open at a time: a menu opened by a long press cannot be closed from outside, so the one open
@@ -425,13 +515,14 @@ function note_menu(entry, open) {
 /** Open a folder or preview a file, unless this click is the end of the long press that opened its menu. */
 function open_entry(entry) {
   if (Date.now() - menu_opened_at < LONG_PRESS_CLICK_MS) return;
-  if (entry.kind === "directory") read_directory(entry.path);
+  if (entry.kind === "directory") navigate(() => read_directory(entry.path));
   else file_preview.open?.(entry.path, account_root.value ? account_root.value.name : directory.value, root.value, entry);
 }
 </script>
 
 <template>
-  <section class="project-files">
+  <section class="project-files" @mousedown="side_button" @mouseup="side_button"
+    @touchstart.passive="list_swipe.touchstart" @touchmove="list_swipe.touchmove" @touchend="list_swipe.touchend" @touchcancel="list_swipe.touchend">
     <header class="project-files-heading">
       <!-- A folder's name is in the path bar below; only the other sections say here what they are. -->
       <div><h2>{{ t('项目文件') }}</h2><p v-if="mode !== 'folder'">{{ mode === 'roots' ? t('项目与草稿') : t('回收区（保留 30 天）') }}</p></div>
@@ -454,7 +545,7 @@ function open_entry(entry) {
     </header>
 
     <div v-if="directories.length > 1 && mode === 'folder' && !account_root" class="project-roots" role="tablist" :aria-label="t('项目目录')">
-      <button v-for="(path, index) in directories" :key="path" type="button" role="tab" :aria-selected="index === root" @click="switch_root(index)">
+      <button v-for="(path, index) in directories" :key="path" type="button" role="tab" :aria-selected="index === root" @click="navigate(() => switch_root(index))">
         <UIcon :name="index ? 'i-lucide-folder' : 'i-lucide-folder-root'" />{{ folder_name(path) }}
       </button>
     </div>
@@ -477,21 +568,30 @@ function open_entry(entry) {
       </div>
     </div>
 
-    <div class="project-explorer" :aria-busy="loading || busy">
+    <div ref="explorer" class="project-explorer" :aria-busy="loading || busy">
+      <!-- Back and forward stay in place beside the path, which scrolls to its end on a narrow screen (user #13910). -->
+      <div class="project-explorer-bar">
+      <div class="project-explorer-steps">
+        <UButton icon="i-lucide-arrow-left" color="neutral" variant="ghost" size="sm" :aria-label="t('返回上一个位置')" :title="t('返回上一个位置')"
+          :disabled="!visited.length" @click="go_back" />
+        <UButton icon="i-lucide-arrow-right" color="neutral" variant="ghost" size="sm" class="project-explorer-forward" :aria-label="t('前进')" :title="t('前进')"
+          :disabled="!ahead.length" @click="go_forward" />
+      </div>
       <nav ref="path_nav" class="project-explorer-path" :aria-label="t('文件路径')">
-        <button type="button" :aria-current="mode === 'roots' ? 'location' : undefined" :disabled="mode === 'roots'" :title="t('所有项目与草稿')" @click="show_roots()">
+        <button type="button" :aria-current="mode === 'roots' ? 'location' : undefined" :disabled="mode === 'roots'" :title="t('所有项目与草稿')" @click="navigate(show_roots)">
           {{ t('项目') }}
         </button>
         <template v-if="mode === 'folder'">
           <template v-for="(part, index) in breadcrumbs" :key="part.path">
             <UIcon name="i-lucide-chevron-right" class="project-crumb-separator" />
-            <button type="button" :disabled="index === breadcrumbs.length - 1" :aria-current="index === breadcrumbs.length - 1 ? 'location' : undefined" @click="read_directory(part.path)">
+            <button type="button" :disabled="index === breadcrumbs.length - 1" :aria-current="index === breadcrumbs.length - 1 ? 'location' : undefined" @click="navigate(() => read_directory(part.path))">
               {{ part.name }}
             </button>
           </template>
         </template>
         <template v-else-if="mode === 'trash'"><UIcon name="i-lucide-chevron-right" class="project-crumb-separator" /><button type="button" disabled aria-current="location">{{ t('回收区') }}</button></template>
       </nav>
+      </div>
 
       <form v-if="naming" class="project-files-naming" @submit.prevent="finish_naming">
         <UIcon :name="naming.kind === 'rename' ? 'i-lucide-pencil' : 'i-lucide-folder-plus'" />
@@ -514,7 +614,7 @@ function open_entry(entry) {
           <template v-for="group in [{ key: 'projects', label: t('项目') }, { key: 'drafts', label: t('草稿') }]" :key="group.key">
             <p class="project-files-group">{{ group.label }}</p>
             <div v-for="item in roots?.[group.key] || []" :key="item.id" class="project-file-row is-root">
-              <button type="button" class="project-file-name" @click="open_account_root(item)">
+              <button type="button" class="project-file-name" @click="navigate(() => open_account_root(item))">
                 <UIcon :name="group.key === 'projects' ? 'i-lucide-folder-kanban' : 'i-lucide-folder-pen'" class="project-file-icon is-folder" /><span>{{ item.name }}</span>
               </button>
               <span class="project-file-size">{{ item.rooms.length ? t('{value1} 个房间', { value1: item.rooms.length }) : '' }}</span>
@@ -619,7 +719,9 @@ function open_entry(entry) {
 .project-files-upload-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ui-text); }
 .project-files-upload-error { color: var(--ui-error); }
 .project-explorer { overflow: hidden; border: 1px solid var(--ui-border); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); }
-.project-explorer-path { display: flex; flex-wrap: nowrap; align-items: center; gap: 1px; min-height: 38px; padding: 4px 10px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--ui-border); font-size: 13px; }
+.project-explorer-bar { display: flex; align-items: center; border-bottom: 1px solid var(--ui-border); }
+.project-explorer-steps { display: flex; flex-shrink: 0; align-items: center; padding: 0 2px 0 6px; }
+.project-explorer-path { display: flex; flex: 1; min-width: 0; flex-wrap: nowrap; align-items: center; gap: 1px; min-height: 38px; padding: 4px 10px 4px 4px; overflow-x: auto; scrollbar-width: none; font-size: 13px; }
 .project-explorer-path > * { flex-shrink: 0; }
 .project-explorer-path button { display: inline-flex; align-items: center; padding: 3px 5px; border-radius: 5px; color: var(--ui-text-muted); white-space: nowrap; cursor: pointer; }
 @media (hover: hover) { .project-explorer-path button:hover:not(:disabled) { background: var(--ui-bg-accented); color: var(--ui-text); } }
@@ -656,7 +758,7 @@ function open_entry(entry) {
 .project-file-tile-menu { position: absolute; top: 4px; right: 4px; }
 /* As in the room list, pressing an entry opens it or (held) its menu and never selects its name or picture. */
 .project-file-row .project-file-name, .project-file-tile > button { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: pan-y; }
-@media (hover: none) { .project-file-tile-menu { display: none; } }
+@media (hover: none) { .project-file-tile-menu, .project-explorer-forward { display: none; } }
 @media (hover: hover) {
   .project-file-tile-menu { opacity: 0; }
   .project-file-tile:hover .project-file-tile-menu, .project-file-tile:focus-within .project-file-tile-menu, .project-file-tile-menu[data-state="open"] { opacity: 1; }
@@ -666,7 +768,8 @@ function open_entry(entry) {
 .project-files-empty.is-small { padding: 8px 12px; justify-content: flex-start; font-size: 12px; }
 
 @media (max-width: 640px) {
-  .project-explorer-path { min-height: 36px; padding: 4px 8px; font-size: 12px; }
+  .project-explorer-path { min-height: 36px; padding: 4px 8px 4px 2px; font-size: 12px; }
+  .project-explorer-steps { padding-left: 2px; }
   .project-explorer-path button { padding: 3px 4px; }
   .project-files-columns, .project-file-row { grid-template-columns: minmax(0, 1fr) 64px auto; gap: 8px; }
   .project-files-columns > :last-child, .project-file-row time, .project-file-date { display: none; }
