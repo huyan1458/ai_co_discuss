@@ -847,15 +847,33 @@ function pull_end() {
 // On a touch screen a swipe to the right anywhere on the window goes back: the window follows the finger, and once let
 // go far or fast enough it slides away, the file closes and the file list shows its folder. A swipe to the left does
 // nothing: going forward is for folders only (user 2026-11-27, #13918). Images and media keep their own gestures.
+// As in WeChat, a quarter circle shows in the bottom-right corner while swiping: letting go with the finger in it folds
+// the window into the floating button instead, the file kept open (user 2026-11-27, #14172).
+const FOLD_CORNER_RADIUS = 150;
+// While the finger is in the corner the window shrinks to this, to show it will fold.
+const FOLD_CORNER_SCALE = 0.9;
+// `{ active }` while a swipe to the right shows the corner; `active` while the finger is in it.
+const fold_corner = ref(null);
+const in_fold_corner = (point) => Math.hypot(window.innerWidth - point.x, window.innerHeight - point.y) < FOLD_CORNER_RADIUS;
+
 const swipe = side_swipe({
   start: (event) => open.value && !docked.value && !folding && !commenting.value && !media_kind.value
     && !event.target.closest?.(".project-editor-head, .file-selection-offer, .file-listen-dock")
     && !moves_sideways(event.target, frame.value),
-  move: (dx) => {
+  move: (dx, point) => {
     const width = frame.value?.offsetWidth || window.innerWidth, shown = Math.max(0, dx);
-    set_frame(shown ? `translateX(${shown}px)` : "", { opacity: shown ? String(1 - Math.min(1, shown / width) / 2) : "", transition: false });
+    const active = shown > 0 && in_fold_corner(point);
+    fold_corner.value = shown ? { active } : null;
+    const transform = shown ? `translateX(${shown}px)${active ? ` scale(${FOLD_CORNER_SCALE})` : ""}` : "";
+    set_frame(transform, { opacity: shown ? String(1 - Math.min(1, shown / width) / 2) : "", radius: active ? "14px" : "", transition: false });
+    if (frame.value) frame.value.dataset.pull = transform;
   },
-  end(dx, passed) {
+  end(dx, passed, point) {
+    const into_corner = Boolean(fold_corner.value) && dx > 0 && in_fold_corner(point);
+    fold_corner.value = null;
+    const element = frame.value;
+    if (into_corner) { fold(); if (element) delete element.dataset.pull; return; }
+    if (element) delete element.dataset.pull;
     if (!passed || dx <= 0) { set_frame("", {}); return; }
     set_frame(`translateX(${frame.value?.offsetWidth || window.innerWidth}px)`, { opacity: "0" });
     window.setTimeout(back_to_folder, FOLD_MS);
@@ -1252,6 +1270,11 @@ onBeforeUnmount(() => {
     <template #content>
      <div ref="frame" class="project-editor-frame" :class="{ 'is-docked': docked }" :data-preview-room="tab?.room_id" @touchstart.passive="pull_start($event); swipe.touchstart($event)" @touchmove="pull_move($event); swipe.touchmove($event)"
        @touchend="pull_end(); swipe.touchend()" @touchcancel="pull_end(); swipe.touchend()">
+      <Teleport to="body">
+        <div v-if="fold_corner" class="file-fold-corner" :class="{ 'is-active': fold_corner.active }" aria-hidden="true">
+          <UIcon name="i-lucide-chevron-down" /><span>{{ t('收起') }}</span>
+        </div>
+      </Teleport>
       <div v-if="docked" class="file-dock-resizer" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="t('调整文件预览宽度')" :aria-valuemin="DOCK_MIN" :aria-valuemax="dock_max" :aria-valuenow="dock_width"
         :title="t('拖动调整文件预览宽度，也可使用左右方向键')" @pointerdown="dock_press" @pointermove="dock_move" @pointerup="dock_release" @pointercancel="dock_release" @keydown="dock_key"></div>
       <div ref="head_element" class="project-editor-head" :class="{ 'is-tight': tight_head && !folded_actions }">
@@ -1503,6 +1526,13 @@ onBeforeUnmount(() => {
 .project-editor-status-spacer { flex: 1; }
 
 /* Folded window: stuck to the screen's right edge by default, below the room header, like a mini-program's floating window. */
+/* The corner a swipe can fold the window into; drawn above the window, never taking a touch. */
+.file-fold-corner { position: fixed; right: 0; bottom: 0; z-index: 80; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  width: 150px; height: 150px; padding: 34px 0 0 34px; border-top-left-radius: 150px; color: #fff; background: #2a2d35eb; font-size: 12px; pointer-events: none;
+  transform-origin: 100% 100%; animation: file-fold-corner-in .16s ease-out; transition: transform .12s ease, background .12s ease; }
+.file-fold-corner > span:first-child { width: 28px; height: 28px; }
+.file-fold-corner.is-active { transform: scale(1.12); background: #3d414deb; }
+@keyframes file-fold-corner-in { from { transform: scale(.4); opacity: 0; } }
 .file-float { position: fixed; z-index: 45; display: flex; align-items: center; height: 40px; padding: 0 4px 0 12px; border: 1px solid var(--ui-border-accented);
   border-left: 0; border-radius: 0 999px 999px 0; background: var(--ui-bg-elevated); box-shadow: 0 6px 20px #0006; animation: file-float-in .2s ease-out;
   touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }

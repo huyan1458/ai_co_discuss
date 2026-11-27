@@ -193,6 +193,13 @@ const VISUAL_CSP = `<meta http-equiv="Content-Security-Policy" content="default-
 /** Runs inside the sandbox. Reports body height independently of the frame's current height. */
 function start_visual_frame(measure, submit) {
   const root = document.documentElement;
+  // The room page blocks pinch and double-tap zoom on touch screens, but gestures inside this opaque-origin frame never
+  // reach it and zoomed the whole page (user 2026-11-27, #14151). The frame blocks them the same way.
+  if (globalThis.matchMedia?.("(pointer: coarse)").matches || globalThis.navigator?.maxTouchPoints > 1) {
+    root.style.touchAction = "pan-x pan-y";
+    for (const type of ["gesturestart", "gesturechange"]) document.addEventListener(type, (event) => event.preventDefault(), { passive: false });
+    document.addEventListener("touchmove", (event) => { if (event.touches.length > 1) event.preventDefault(); }, { passive: false });
+  }
   // A panel hands the reader's choice to the room page, which shows it above the composer for the reader to send.
   if (submit) Object.defineProperty(window, "codiscuss", { value: Object.freeze({
     submit(text, fields) {

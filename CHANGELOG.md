@@ -2,6 +2,12 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.42 (2026-11-26 22:30)
+
+- New: On phones, swipe right on a file preview and let go in the corner circle at the bottom right to fold the window into a floating button, keeping the file open.
+- Changed: Renewing a published website now offers 1, 3 or 7 days.
+- Fixed: On phones, a file's long-press menu would not close when tapping elsewhere.
+
 ## 0.5.41 (2026-11-26 20:52)
 
 - Changed: The "Analytics" page is redesigned: it opens with workload and a timeline, and "Needs a look" lists issues to handle, each linking to the message that assigned the work.

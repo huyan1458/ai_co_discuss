@@ -6,7 +6,7 @@
  */
 import { computed, inject, onMounted, ref } from "vue";
 import { locale, t } from "./i18n.js";
-import { load_room_sites, open_deploy, site_command, sites_state } from "./sites.js";
+import { load_room_sites, open_deploy, renew_items, site_command, sites_state } from "./sites.js";
 
 const props = defineProps({
   message: { type: Object, required: true },
@@ -42,14 +42,14 @@ async function copy(site) {
 async function run(site, action, payload = {}) {
   busy.value = site.site_id;
   try {
-    await site_command(bridge, action, props.roomId, { site_id: site.site_id, ...payload });
-    bridge.notify("info", { renew: t("已续期，{time} 前有效", { time: expiry_text({ expires_at: Date.now() + 7 * 864e5 }) }), rollback: t("已回滚到上一版"), revoke: t("网站已撤销，地址立即失效") }[action]);
+    const result = await site_command(bridge, action, props.roomId, { site_id: site.site_id, ...payload });
+    bridge.notify("info", { renew: t("已续期，{time} 前有效", { time: expiry_text(result) }), rollback: t("已回滚到上一版"), revoke: t("网站已撤销，地址立即失效") }[action]);
   } catch (error) { bridge.notify("error", error.message); }
   finally { busy.value = ""; }
 }
 
 const menu = (site) => [[
-  { label: t("续期 7 天"), icon: "i-lucide-clock", disabled: site.status !== "active", onSelect: () => run(site, "renew") },
+  { label: t("续期"), icon: "i-lucide-timer-reset", disabled: site.status !== "active", children: [renew_items((days) => run(site, "renew", { days }))] },
   ...(site.previous_version ? [{ label: t("回滚到上一版"), icon: "i-lucide-undo-2", disabled: site.status !== "active", onSelect: () => run(site, "rollback", { version: site.previous_version }) }] : []),
 ], [{ label: t("撤销网站"), icon: "i-lucide-link-2-off", color: "error", disabled: site.status !== "active", onSelect: () => run(site, "revoke") }]];
 

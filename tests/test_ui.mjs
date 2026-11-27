@@ -1159,15 +1159,29 @@ test('video compression plans a readable copy that fits the site, or declines', 
   assert.equal(plan_compression({ ...recording, duration: 3600, size: 900 * MIB }, limit), null, 'too long to stay readable');
 });
 
+test('a local sending preview skips thumbnail upload until it has a room', async () => {
+  const { context } = theme_fixture(), paths = [];
+  context.encode_thumbnail = async () => new Uint8Array([1]);
+  context.post_room_file = async path => paths.push(path);
+  const file = { id: 'attachment-a', size: 2 * 1024 * 1024, content_type: 'image/png' };
+  context.store_attachment_thumbnail({ ...file, room_id: '' }, {});
+  context.store_attachment_thumbnail({ ...file, room_id: 'room-a' }, {});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(paths, ['/api/rooms/room-a/attachments/attachment-a/thumbnail']);
+});
+
 test('a relayed upload resends only lost parts, and a try after a failure carries on where it stopped', async () => {
   const { context } = theme_fixture();
   Object.assign(context, { Blob, btoa, atob, setTimeout: (resolve) => { resolve(); return 0; } });
   // The computer keeps parts by upload id and number, answers which it lacks, and keeps a finished file's answer.
   const computer = { parts: new Map(), finished: new Map() }, sent = [];
-  let lose = () => false;
+  let lose = () => false, active = 0, peak = 0;
   context.relay_exchange = async (action, payload) => {
     assert.equal(action, 'room-upload');
     sent.push(payload.index);
+    peak = Math.max(peak, ++active);
+    await new Promise(resolve => setImmediate(resolve));
+    active--;
     if (lose(payload)) throw Object.assign(new Error('lost on the way'), { unconfirmed: true });
     if (computer.finished.has(payload.id)) return computer.finished.get(payload.id);
     const parts = computer.parts.get(payload.id) || new Map();
@@ -1182,12 +1196,13 @@ test('a relayed upload resends only lost parts, and a try after a failure carrie
   const file = (fill) => new Uint8Array(3 * 128 * 1024 + 10).fill(fill);
 
   // A part lost once is sent again; every other part goes once, and the file arrives whole.
-  const first = file(1);
+  const first = Uint8Array.from({ length: 5 * 128 * 1024 + 10 }, (_, offset) => offset % 251);
   lose = (payload) => payload.index === 1 && sent.filter((index) => index === 1).length === 1;
   const shares = [];
   const done = await context.relay_upload('/api/rooms/r/attachments?submission_id=a', first, (share) => shares.push(share));
-  assert.deepEqual([...sent].sort(), [0, 1, 1, 2, 3]);
-  assert.deepEqual(shares, [0, 0.25, 0.5, 0.75, 1], 'progress counts the parts the computer confirmed');
+  assert.equal(peak, 4, "four transfers overlap and queued parts wait for a slot");
+  assert.deepEqual([...sent].sort(), [0, 1, 1, 2, 3, 4, 5]);
+  assert.deepEqual(shares, [0, 1/6, 2/6, 3/6, 4/6, 5/6, 1], 'progress counts the parts the computer confirmed');
   assert.ok(whole(done.attachment.id).equals(Buffer.from(first)));
 
   // A part that keeps getting lost fails the try; the next try of the same file sends only what the computer lacks.

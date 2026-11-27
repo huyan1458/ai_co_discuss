@@ -654,8 +654,8 @@ const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions|sites|analytics)(\/|\?
 // out of time failed the whole file, which then started over from its first part (2026-11-17: a 12 MiB recording
 // arrived on the fifth try, after 72 parts had been sent for nothing).
 const RELAY_UPLOAD_PART_BYTES = 128 * 1024;
-// Parts in flight at once: each pays a round trip through the relay to the computer, and two overlap it.
-const RELAY_UPLOAD_PARALLEL = 2;
+// Four parts overlap relay round trips, with at most 512 KiB of original data in flight per file.
+const RELAY_UPLOAD_PARALLEL = 4;
 // How long (ms) the relay waits for the computer to take one part; the page allows this plus its margin, which also
 // covers sending the part over a slow network.
 const RELAY_UPLOAD_WAIT_MS = 30000;
@@ -5720,8 +5720,8 @@ async function relay_upload(path, data, on_progress) {
       }
     };
     await Promise.all(Array.from({ length: Math.min(RELAY_UPLOAD_PARALLEL, queue.length) }, send));
-    if (failure) throw failure;
     if (finished) { relay_uploads.delete(data); return finished; }
+    if (failure) throw failure;
     if (missing) for (const index of missing) upload.done.delete(index);
     else relay_uploads.set(data, upload = { path, total, id: crypto.randomUUID(), done: new Set() });
   }
@@ -5766,7 +5766,8 @@ async function encode_thumbnail(source, file) {
  * The site keeps the first copy any participant's page sends; a page without the right to send one is refused quietly.
  */
 function store_attachment_thumbnail(file, source) {
-  if (SHARE || file.thumbnail_url || thumbnail_attempts.has(file.id) || !/^image\/(png|jpeg|webp)$/.test(file.content_type || "")
+  // The sending card's local preview has no room-scoped attachment yet.
+  if (SHARE || !file.room_id || !file.id || file.thumbnail_url || thumbnail_attempts.has(file.id) || !/^image\/(png|jpeg|webp)$/.test(file.content_type || "")
       || !(Number(file.size) > THUMBNAIL_MIN_BYTES)) return;
   thumbnail_attempts.add(file.id);
   thumbnail_chain = thumbnail_chain.then(async () => {

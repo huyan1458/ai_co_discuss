@@ -3,8 +3,9 @@
  * edge: the file list steps back and forward with it, the file preview goes back to the file's folder.
  *
  * `side_swipe({ start, move, end })` returns touch handlers for one element. `start(event)` says whether a touch may
- * become a swipe; `move(dx)` follows the finger once the touch is plainly sideways; `end(dx, passed)` reports where it
- * was let go and whether it went far or fast enough to count. A touch that starts mostly up or down stays a scroll.
+ * become a swipe; `move(dx, point)` follows the finger once the touch is plainly sideways; `end(dx, passed, point)`
+ * reports where it was let go and whether it went far or fast enough to count. `point` is the finger's `{ x, y }` on the
+ * screen. A touch that starts mostly up or down stays a scroll.
  */
 
 // The touch has to move this far before its direction is decided, so a tap's drift stays a tap.
@@ -39,7 +40,7 @@ export function side_swipe({ start, move, end }) {
       if (touch.clientX < SWIPE_EDGE || touch.clientX > window.innerWidth - SWIPE_EDGE) return;
       const selection = document.getSelection();
       if ((selection && !selection.isCollapsed) || !start(event)) return;
-      swipe = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, dx: 0, speed: 0, sideways: null };
+      swipe = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, dx: 0, speed: 0, sideways: null, point: { x: touch.clientX, y: touch.clientY } };
     },
     touchmove(event) {
       if (!swipe || event.touches.length !== 1) { swipe = null; return; }
@@ -53,7 +54,8 @@ export function side_swipe({ start, move, end }) {
       swipe.speed = (dx - swipe.dx) / Math.max(1, event.timeStamp - swipe.time);
       swipe.time = event.timeStamp;
       swipe.dx = dx;
-      move(dx);
+      swipe.point = { x: touch.clientX, y: touch.clientY };
+      move(dx, swipe.point);
     },
     touchend() {
       const done = swipe;
@@ -61,7 +63,7 @@ export function side_swipe({ start, move, end }) {
       if (!done?.sideways) return;
       const far = Math.abs(done.dx) > window.innerWidth * SWIPE_SHARE;
       const fast = Math.abs(done.speed) > SWIPE_SPEED && Math.abs(done.dx) > SWIPE_MIN && Math.sign(done.speed) === Math.sign(done.dx);
-      end(done.dx, far || fast);
+      end(done.dx, far || fast, done.point);
     },
   };
 }

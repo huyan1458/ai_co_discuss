@@ -447,7 +447,8 @@ function go_forward() {
 }
 
 // On a touch screen a sideways swipe anywhere on the page does what the side buttons do: the list follows the finger to
-// the right to go back and to the left to go forward, and resists where there is nowhere to go.
+// the right to go back and to the left to go forward, and resists where there is nowhere to go. "Anywhere" is the whole
+// 文件 tab (its scrolling page), not only the list: a short folder leaves most of the screen empty below it.
 const SWIPE_SLIDE_MS = 180;
 const SWIPE_RESIST = 0.25;
 // The new place slides in from this share of the width on the other side.
@@ -461,8 +462,10 @@ function slide_list(dx, ms = 0, opacity = "") {
     transform: dx ? `translateX(${dx}px)` : "", opacity, willChange: dx ? "transform" : "" });
 }
 
+const section = ref(null);
+let swipe_area = null;
 const list_swipe = side_swipe({
-  start: (event) => !naming.value && !moves_sideways(event.target, event.currentTarget),
+  start: (event) => !naming.value && !moves_sideways(event.target, swipe_area),
   move: (dx) => slide_list((dx > 0 ? visited.value.length : ahead.value.length) ? dx : dx * SWIPE_RESIST),
   end(dx, passed) {
     const back = dx > 0;
@@ -475,6 +478,16 @@ const list_swipe = side_swipe({
       requestAnimationFrame(() => requestAnimationFrame(() => slide_list(0, SWIPE_SLIDE_MS)));
     }, SWIPE_SLIDE_MS);
   },
+});
+
+const SWIPE_EVENTS = [["touchstart", "touchstart", { passive: true }], ["touchmove", "touchmove", { passive: false }],
+  ["touchend", "touchend", {}], ["touchcancel", "touchend", {}]];
+onMounted(() => {
+  swipe_area = section.value?.closest(".content-page") || section.value;
+  for (const [type, handler, options] of SWIPE_EVENTS) swipe_area?.addEventListener(type, list_swipe[handler], options);
+});
+onBeforeUnmount(() => {
+  for (const [type, handler, options] of SWIPE_EVENTS) swipe_area?.removeEventListener(type, list_swipe[handler], options);
 });
 
 /** A mouse's side buttons over the file page step back and forward here instead of leaving the page. */
@@ -494,35 +507,58 @@ const more_items = computed(() => [
     : { label: t('回收区'), icon: "i-lucide-trash", onSelect: () => navigate(show_trash) },
 ]);
 
-// Only one entry's menu is open at a time: a menu opened by a long press cannot be closed from outside, so the one open
-// before is shown again from scratch (its key changes), which closes it (user 2026-11-27, #13813).
-const menu_keys = ref({});
-let open_menu = "";
+// An entry's menu (long press, right click) closes on a press anywhere outside it, which does nothing else, and only one
+// is open at a time. The menu's own open state is not reported by UContextMenu, and on a phone a press outside it was
+// not seen (user 2026-11-27, #13795, #14141): this page closes its menus itself, by showing the entries again from
+// scratch (`menu_epoch` is in their keys).
+const menu_epoch = ref(0);
+// On a touch screen lifting the finger after a long press also clicks the entry: that click opened the file over its
+// own menu. A press held this long is a long press, and the click that ends it is dropped, as is the click of the press
+// that closed a menu. Only that one click: the next press starts clean, so a quick tap right after still opens.
+const LONG_PRESS_MS = 500;
+let drop_click = false, press_started = 0;
 
-// On a touch screen a long press opens an entry's menu, and lifting the finger then also clicks the entry: that click
-// opened the file over its own menu, which could no longer be closed (user 2026-11-27, #13795). It is ignored.
-const LONG_PRESS_CLICK_MS = 800;
-let menu_opened_at = 0;
-
-/** Remember when an entry's menu opened, and close the one open before it. */
-function note_menu(entry, open) {
-  if (!open) { if (open_menu === entry.path) open_menu = ""; return; }
-  menu_opened_at = Date.now();
-  if (open_menu && open_menu !== entry.path) menu_keys.value = { ...menu_keys.value, [open_menu]: (menu_keys.value[open_menu] || 0) + 1 };
-  open_menu = entry.path;
+/** A press on the page: it starts clean, and one outside an open entry menu closes the menu and does nothing else. */
+function close_menus_outside(event) {
+  drop_click = false;
+  if (!document.querySelector(".project-file-menu[data-state='open']") || event.target.closest?.(".project-file-menu")) return;
+  menu_epoch.value++;
+  drop_click = true;
 }
 
-/** Open a folder or preview a file, unless this click is the end of the long press that opened its menu. */
+/** Drop the click marked by `drop_click` before anything on the page sees it. */
+function drop_marked_click(event) {
+  if (!drop_click) return;
+  drop_click = false;
+  event.stopPropagation();
+  event.preventDefault();
+}
+onMounted(() => {
+  document.addEventListener("pointerdown", close_menus_outside, true);
+  document.addEventListener("click", drop_marked_click, true);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", close_menus_outside, true);
+  document.removeEventListener("click", drop_marked_click, true);
+});
+
+/** Time each touch, so the click that ends a long press is dropped. */
+function time_press(event) {
+  if (event.type === "touchstart") { press_started = event.timeStamp; return; }
+  if (press_started && event.timeStamp - press_started >= LONG_PRESS_MS) drop_click = true;
+  press_started = 0;
+}
+
+/** Open a folder or preview a file. */
 function open_entry(entry) {
-  if (Date.now() - menu_opened_at < LONG_PRESS_CLICK_MS) return;
   if (entry.kind === "directory") navigate(() => read_directory(entry.path));
   else file_preview.open?.(entry.path, account_root.value ? account_root.value.name : directory.value, root.value, entry);
 }
 </script>
 
 <template>
-  <section class="project-files" @mousedown="side_button" @mouseup="side_button"
-    @touchstart.passive="list_swipe.touchstart" @touchmove="list_swipe.touchmove" @touchend="list_swipe.touchend" @touchcancel="list_swipe.touchend">
+  <section ref="section" class="project-files" @mousedown="side_button" @mouseup="side_button"
+    @touchstart.passive="time_press" @touchend="time_press" @touchcancel="time_press">
     <header class="project-files-heading">
       <!-- A folder's name is in the path bar below; only the other sections say here what they are. -->
       <div><h2>{{ t('项目文件') }}</h2><p v-if="mode !== 'folder'">{{ mode === 'roots' ? t('项目与草稿') : t('回收区（保留 30 天）') }}</p></div>
@@ -646,24 +682,26 @@ function open_entry(entry) {
       <template v-else-if="mode === 'folder'">
         <div v-if="layout === 'list'" class="project-files-columns" aria-hidden="true"><span>{{ t('名称') }}</span><span>{{ t('大小') }}</span><span>{{ t('修改时间') }}</span></div>
         <!-- Tiles change only with the listing; each loads its own thumbnail once it scrolls into view. -->
-        <div v-if="layout === 'icons' && listing?.entries.length" v-memo="[listing, directory, root, busy, menu_keys]" class="project-files-tiles">
-          <UContextMenu v-for="entry in listing.entries" :key="`${entry.path}#${menu_keys[entry.path] || 0}`" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu' }" @update:open="(open) => note_menu(entry, open)">
+        <div v-if="layout === 'icons' && listing?.entries.length" v-memo="[listing, directory, root, busy, menu_epoch]" class="project-files-tiles">
+          <UContextMenu v-for="entry in listing.entries" :key="`${entry.path}#${menu_epoch}`" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu project-file-menu' }">
           <div class="project-file-tile" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable' }">
             <button type="button" :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? t('{value1}（无法读取或指向项目外）', { value1: entry.name }) : entry.name"
               @click="open_entry(entry)">
               <ProjectFileThumbnail :key="`${entry.size}:${entry.modified_at}`" :entry="entry" :root="root" :icon="entry_icon(entry)" />
               <span class="project-file-tile-name">{{ entry.name }}</span>
             </button>
-            <UDropdownMenu v-if="entry.kind !== 'unavailable'" :items="entry_menu(entry)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
-              <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="project-file-tile-menu" :aria-label="t('{value1} 的操作', { value1: entry.name })" :disabled="busy" />
-            </UDropdownMenu>
+            <span v-if="entry.kind !== 'unavailable'" class="project-file-more project-file-tile-menu">
+              <UDropdownMenu :items="entry_menu(entry)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+                <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" :aria-label="t('{value1} 的操作', { value1: entry.name })" :disabled="busy" />
+              </UDropdownMenu>
+            </span>
           </div>
           </UContextMenu>
         </div>
         <!-- Rows change only with the listing; the room's directories arrive as a new array on every view publish. -->
-        <div v-memo="[listing, loading, directory, root, busy, layout, menu_keys]" class="project-files-rows">
+        <div v-memo="[listing, loading, directory, root, busy, layout, menu_epoch]" class="project-files-rows">
           <template v-if="layout === 'list'">
-          <UContextMenu v-for="entry in listing?.entries || []" :key="`${entry.path}#${menu_keys[entry.path] || 0}`" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu' }" @update:open="(open) => note_menu(entry, open)">
+          <UContextMenu v-for="entry in listing?.entries || []" :key="`${entry.path}#${menu_epoch}`" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu project-file-menu' }">
           <div class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable' }">
             <button type="button" class="project-file-name" :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? t('{value1}（无法读取或指向项目外）', { value1: entry.name }) : entry.name"
               @click="open_entry(entry)">
@@ -672,9 +710,11 @@ function open_entry(entry) {
             <span class="project-file-size">{{ file_size(entry.size) }}</span>
             <span class="project-file-actions">
               <time :datetime="entry.modified_at">{{ modified_time(entry.modified_at) }}</time>
-              <UDropdownMenu v-if="entry.kind !== 'unavailable'" :items="entry_menu(entry)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
-                <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" :aria-label="t('{value1} 的操作', { value1: entry.name })" :disabled="busy" />
-              </UDropdownMenu>
+              <span v-if="entry.kind !== 'unavailable'" class="project-file-more">
+                <UDropdownMenu :items="entry_menu(entry)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+                  <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" :aria-label="t('{value1} 的操作', { value1: entry.name })" :disabled="busy" />
+                </UDropdownMenu>
+              </span>
             </span>
           </div>
           </UContextMenu>
@@ -758,10 +798,11 @@ function open_entry(entry) {
 .project-file-tile-menu { position: absolute; top: 4px; right: 4px; }
 /* As in the room list, pressing an entry opens it or (held) its menu and never selects its name or picture. */
 .project-file-row .project-file-name, .project-file-tile > button { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: pan-y; }
-@media (hover: none) { .project-file-tile-menu, .project-explorer-forward { display: none; } }
+/* Phones open an entry's menu by a long press alone (user 2026-11-27, #14141). */
+@media (hover: none) { .project-file-more, .project-explorer-forward { display: none; } }
 @media (hover: hover) {
   .project-file-tile-menu { opacity: 0; }
-  .project-file-tile:hover .project-file-tile-menu, .project-file-tile:focus-within .project-file-tile-menu, .project-file-tile-menu[data-state="open"] { opacity: 1; }
+  .project-file-tile:hover .project-file-tile-menu, .project-file-tile:focus-within .project-file-tile-menu, .project-file-tile-menu:has([data-state="open"]) { opacity: 1; }
 }
 .project-files-footer { display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 14px; border-top: 1px solid var(--ui-border); color: var(--ui-text-dimmed); font-size: 12px; }
 .project-files-empty { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 40px 12px; font-size: 13px; color: var(--ui-text-muted); }

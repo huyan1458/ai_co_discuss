@@ -5,6 +5,7 @@
  * through the relay the same way.
  */
 import { reactive } from "vue";
+import { locale, t } from "./i18n.js";
 
 export const sites_state = reactive({
   /** room id -> { sites, stages, read_for }: `read_for` is the newest message id the read covers. */
@@ -48,6 +49,12 @@ async function refresh(bridge, room_id) {
   if (room_id && sites_state.rooms[room_id]) sites_state.rooms[room_id].read_for = -1;
   await Promise.all([room_id ? load_room_sites(bridge, room_id) : null, sites_state.all ? load_all_sites(bridge) : null]);
 }
+
+/** Renewal choices, the same as a share link's: the site lives this many days from now. */
+export const renew_items = (on_select) => [1, 3, 7].map((days) => ({
+  label: t("从现在起 {count} 天（到 {time}）", { count: days, time: new Date(Date.now() + days * 864e5).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) }),
+  onSelect: () => on_select(days),
+}));
 
 /** Run one local site command for a room and read its sites again afterwards. */
 export async function site_command(bridge, action, room_id, payload) {

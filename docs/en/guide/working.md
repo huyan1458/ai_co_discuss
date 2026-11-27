@@ -99,7 +99,7 @@ A page a member delivers can go to a public address, `https://<id>.bimcanvas.com
 
 1. Under the answer, select the rocket button, “Deploy as website”, on an HTML file card. A whole folder a member prepared with `codiscuss site stage` (such as a built `dist/`) shows as a “Ready to deploy” card; select “Deploy as website” on it.
 2. The confirmation lists the file count, size and any files that look like they contain keys or tokens; those are left out by default. Select “Deploy”. The new version goes live only after every file is uploaded; if the upload fails, the live version stays as it was.
-3. Once live, the card shows the address to copy or open; its “…” menu renews for 7 days, rolls back to the previous version or revokes the site. “Published” in the sidebar lists every live website.
+3. Once live, the card shows the address to copy or open; its “…” menu renews for 1, 3 or 7 days from now, rolls back to the previous version or revokes the site. “Published” in the sidebar lists every live website.
 
 To have a member put its work online directly, say “deploy” or “publish as a website” in your message; otherwise members only prepare it and upload nothing.
 

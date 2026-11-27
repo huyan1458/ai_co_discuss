@@ -61,6 +61,7 @@ const actions = computed(() => [
       <pre v-if="showing_source"><code v-text="visual.source"></code></pre>
       <InlineHtmlFrame v-else :visual="visual" />
       <div class="channel-visual-tools" role="toolbar" :aria-label="t('交互式可视化')">
+        <span class="channel-visual-tools-label" aria-hidden="true"><UIcon name="i-lucide-chart-spline" />{{ t('交互式可视化') }}</span>
         <UButton v-for="action in actions" :key="action.icon" class="channel-visual-tool" color="neutral" variant="ghost" size="xs" :icon="action.icon"
           :aria-label="action.label" :title="action.label" @click="action.onSelect" />
         <UDropdownMenu :items="actions" :content="{ align: 'end', sideOffset: 6 }" :ui="{ content: 'channel-menu' }">

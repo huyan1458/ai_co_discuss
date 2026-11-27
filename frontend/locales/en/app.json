@@ -610,7 +610,7 @@
   "已续期，{time} 前有效": "Renewed, live until {time}",
   "已回滚到上一版": "Rolled back to the previous version",
   "网站已撤销，地址立即失效": "Website revoked; the address no longer works",
-  "续期 7 天": "Renew for 7 days",
+  "续期网站 {value1}": "Renew website {value1}",
   "回滚到上一版": "Roll back to the previous version",
   "撤销网站": "Revoke website",
   "待部署 · {count} 个文件 · {size}": "Ready to deploy · {count} files · {size}",

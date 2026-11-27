@@ -506,7 +506,7 @@ function actions(room) {
                   @click="shares_open = false; emit('manage', { room, action: 'share_open' })" />
                 <UTooltip :text="t('复制链接')"><UButton icon="i-lucide-copy" size="xs" color="neutral" variant="ghost" :aria-label="t('复制「{name}」的分享链接', { name: room.title })" @click="act('share_copy', room.id)" /></UTooltip>
                 <UTooltip :text="t('打开分享页')"><UButton icon="i-lucide-external-link" size="xs" color="neutral" variant="ghost" :aria-label="t('打开「{name}」的分享页', { name: room.title })" :to="room.share_link.url" target="_blank" rel="noopener noreferrer" /></UTooltip>
-                <UDropdownMenu :items="renew_items(room)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+                <UDropdownMenu :items="renew_items(room)" :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
                   <UButton icon="i-lucide-timer-reset" :label="t('续期')" size="xs" color="neutral" variant="soft" :aria-label="t('续期「{name}」的分享链接', { name: room.title })" /></UDropdownMenu>
                 <UTooltip :text="t('撤销链接')"><UButton icon="i-lucide-link-2-off" size="xs" color="neutral" variant="ghost" class="shared-room-revoke" :aria-label="t('撤销「{name}」的分享链接', { name: room.title })" @click="revoking = room" /></UTooltip>
               </div>

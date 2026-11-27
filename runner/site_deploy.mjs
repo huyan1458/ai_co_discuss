@@ -865,9 +865,10 @@ export async function site_command(home, command, input = {}, { fetcher = fetch,
   }
 
   if (command === 'site-renew') {
-    const res = await worker_api(origin, `/api/sites/${site_id}/renew`, {
-      method: 'POST', token: identity.device_token, body: {}, fetcher,
-    });
+    const body = input.days !== undefined ? { days: Number(input.days) } : {};
+    // Renewing is idempotent, so a dropped connection (ECONNRESET through a proxy) is retried once.
+    const renew = () => worker_api(origin, `/api/sites/${site_id}/renew`, { method: 'POST', token: identity.device_token, body, fetcher });
+    const res = await renew().catch(error => (error.code === 'network_error' ? renew() : Promise.reject(error)));
     if (conn.room_id && conn.site) {
       await room_api_request(conn.site, `/api/rooms/${encodeURIComponent(conn.room_id)}/sites`, {
         method: 'POST',
@@ -933,7 +934,7 @@ const SITE_CLI_HELP = () => t(`AI CoDiscuss 网站部署
   codiscuss site publish (--dir 目录 | --file 文件.html | --stage 编号) [--site 站点编号] [--room 房间] [--title 标题] [--exclude 路径]
   codiscuss site list [--room 房间]
   codiscuss site diagnose <站点编号> [--room 房间]
-  codiscuss site renew <站点编号> [--room 房间]
+  codiscuss site renew <站点编号> [--days 1|3|7] [--room 房间]
   codiscuss site rollback <站点编号> [--version 版本号] [--room 房间]
   codiscuss site revoke <站点编号> [--room 房间]
 
@@ -948,6 +949,7 @@ const SITE_CLI_HELP = () => t(`AI CoDiscuss 网站部署
   --title TEXT          站点标题
   --exclude PATH        排除的相对文件路径（可重复传多次）
   --version N           回滚目标版本号（省略则回滚到上一版）
+  --days N              续期天数，从现在起算（1、3 或 7，默认 7）
   --json                以 JSON 输出（默认）
   -h, --help            显示帮助
 `);
@@ -978,6 +980,7 @@ export async function site_cli(args, { home = service_home(), fetcher = fetch } 
       title: { type: 'string' },
       exclude: { type: 'string', multiple: true },
       version: { type: 'string' },
+      days: { type: 'string' },
       'sites-origin': { type: 'string' },
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
@@ -1015,6 +1018,7 @@ export async function site_cli(args, { home = service_home(), fetcher = fetch } 
     title: values.title || undefined,
     exclude: values.exclude || undefined,
     version: values.version !== undefined ? Number(values.version) : undefined,
+    days: values.days !== undefined ? Number(values.days) : undefined,
     sites_origin: values['sites-origin'] || undefined,
   };
   try {

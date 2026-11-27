@@ -360,23 +360,34 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-message-visual:has(.channel-inline-html.is-hovered) .channel-visual-tools,
 .channel-visual-content:focus-within .channel-visual-tools,
 .channel-visual-tools:has([data-state="open"]) { opacity: 1; pointer-events: auto; transform: none; }
-.channel-visual-more { display: none !important; }
-/* Touch has no hover, so the tools always show: only the menu and collapse, sitting across the visual's top edge. The
-   frame's top inset is as tall as the half that hangs inside, so the tools never cover what the visual draws. */
-@media (max-width: 700px), (hover: none), (pointer: coarse) {
-  .channel-message-visual { margin-top: 1.1em; }
-  .channel-visual-content .channel-inline-html { padding-top: 17px; }
-  .channel-visual-tools { top: -13px; right: 10px; padding: 1px; opacity: 1; pointer-events: auto; transform: none; transition: none;
-    border-color: var(--ui-border); background: var(--ui-bg-elevated); backdrop-filter: none; box-shadow: none; }
-  .channel-visual-tools button { width: 30px; height: 26px; }
-  .channel-visual-tools button > [class*="icon"] { width: 15px; height: 15px; }
-  .channel-visual-tool { display: none !important; }
-  .channel-visual-more { display: inline-flex !important; }
-}
+.channel-visual-more, .channel-visual-tools-label { display: none !important; }
 .channel-visual-collapsed { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; padding: 3px 4px 3px 10px;
   border: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent); border-radius: 8px; color: var(--ui-text-muted); font-size: 12px; }
 .channel-visual-collapsed-icon { flex: none; width: 14px; height: 14px; }
 .channel-visual-name { min-width: 0; overflow-wrap: anywhere; margin-inline-end: 2px; }
+/* Touch has no hover, so the tools always show, as the frame's own first row: the name on the left, the menu and collapse
+   in the top right corner. The row is in the flow, so it never covers what the visual draws, and the collapsed bar has
+   the same shape, so the toggle stays where the finger is. */
+@media (max-width: 700px), (hover: none), (pointer: coarse) {
+  .channel-visual-content { display: flex; flex-direction: column; margin-top: 8px;
+    border: 1px solid color-mix(in srgb, var(--ui-border) 55%, transparent); border-radius: var(--ui-radius); }
+  .channel-visual-content > .channel-inline-html { margin-top: 0; padding-top: 6px; border: 0; }
+  .channel-answer .markdown-body .channel-visual-content > pre, .channel-visual-content > pre { margin: 3px 0 0; border-radius: 0 0 var(--ui-radius) var(--ui-radius); }
+  .channel-visual-tools { position: static; order: -1; gap: 2px; padding: 3px 4px 0 12px; border: 0; border-radius: 0; background: none;
+    backdrop-filter: none; box-shadow: none; opacity: 1; pointer-events: auto; transform: none; transition: none; }
+  .channel-visual-tools button, .channel-visual-collapsed button { min-width: 32px; height: 30px; }
+  .channel-visual-tools button { width: 32px; }
+  .channel-visual-tools button > [class*="icon"] { width: 15px; height: 15px; }
+  .channel-visual-tools-divider { display: none; }
+  .channel-visual-tool { display: none !important; }
+  .channel-visual-more { display: inline-flex !important; }
+  .channel-visual-tools-label { display: flex !important; align-items: center; gap: 6px; min-width: 0; margin-inline-end: auto;
+    color: var(--ui-text-dimmed); font-size: 12px; }
+  .channel-visual-tools-label > [class*="icon"] { flex: none; width: 14px; height: 14px; }
+  .channel-visual-collapsed { width: auto; margin-top: 8px; padding: 3px 4px 3px 12px; gap: 2px;
+    border-color: color-mix(in srgb, var(--ui-border) 55%, transparent); border-radius: var(--ui-radius); color: var(--ui-text-dimmed); }
+  .channel-visual-collapsed > .channel-visual-name { flex: 1; margin-inline-start: 4px; }
+}
 .channel-visual-slot:not(:has(.channel-message-visual)) { color: var(--ui-text-muted); }
 .channel-visual-slot:has(.channel-message-visual) > .channel-visual-caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .channel-answer .markdown-body pre { border: 0; border-radius: 6px; padding: 12px 14px; background: #27292e; }

@@ -5,7 +5,7 @@
  */
 import { computed, inject, ref, watch } from "vue";
 import { locale, t } from "./i18n.js";
-import { close_deploy, confirm_deploy, load_all_sites, site_command, sites_state } from "./sites.js";
+import { close_deploy, confirm_deploy, load_all_sites, renew_items, site_command, sites_state } from "./sites.js";
 import ConfirmDialog from "./ConfirmDialog.vue";
 
 defineProps({ visible: { type: Boolean, default: true } });
@@ -36,11 +36,11 @@ async function copy(site) {
   await navigator.clipboard.writeText(site.url);
   bridge.notify("info", t("已复制 {value1}", { value1: host(site) }));
 }
-async function run(site, action) {
+async function run(site, action, payload = {}) {
   busy.value = site.site_id;
   try {
-    await site_command(bridge, action, site.room_id, { site_id: site.site_id });
-    if (action === "renew") bridge.notify("info", t("已续期，{time} 前有效", { time: time_text(Date.now() + LIFETIME_MS) }));
+    const result = await site_command(bridge, action, site.room_id, { site_id: site.site_id, ...payload });
+    if (action === "renew") bridge.notify("info", t("已续期，{time} 前有效", { time: time_text(result.expires_at) }));
   } catch (error) { bridge.notify("error", error.message); }
   finally { busy.value = ""; }
 }
@@ -79,7 +79,8 @@ watch(sites_ready, (ready) => { if (ready) load_all_sites(bridge); }, { immediat
             <div class="shared-room-actions">
               <UTooltip :text="t('复制链接')"><UButton icon="i-lucide-copy" size="xs" color="neutral" variant="ghost" :aria-label="t('复制网站地址')" @click="copy(site)" /></UTooltip>
               <UTooltip :text="t('在新窗口打开')"><UButton icon="i-lucide-external-link" size="xs" color="neutral" variant="ghost" :aria-label="t('打开网站')" :to="site.url" target="_blank" rel="noopener noreferrer" /></UTooltip>
-              <UTooltip :text="t('续期 7 天')"><UButton icon="i-lucide-clock-plus" size="xs" color="neutral" variant="ghost" :loading="busy === site.site_id" :aria-label="t('续期 7 天')" @click="run(site, 'renew')" /></UTooltip>
+              <UDropdownMenu :items="[renew_items((days) => run(site, 'renew', { days }))]" :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+                <UButton icon="i-lucide-timer-reset" :label="t('续期')" size="xs" color="neutral" variant="soft" :loading="busy === site.site_id" :aria-label="t('续期网站 {value1}', { value1: host(site) })" /></UDropdownMenu>
               <UTooltip :text="t('撤销网站')"><UButton icon="i-lucide-link-2-off" size="xs" color="neutral" variant="ghost" class="shared-room-revoke" :aria-label="t('撤销网站')" @click="revoking = site" /></UTooltip>
             </div>
           </div>
