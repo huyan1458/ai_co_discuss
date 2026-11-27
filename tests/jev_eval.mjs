@@ -78,8 +78,10 @@ async function run_case(item) {
  */
 function status_of(expect, choice, acted, accept = []) {
   const fine = [expect, ...accept];
-  if (fine.includes(choice) && fine.includes(acted)) return 'PASS';
-  return fine.includes(choice) || fine.includes(acted) ? 'WEAK' : 'FAIL';
+  // A no-reply suggestion is deliberately handed to the host.
+  const applied = expect === '__none__' ? acted === '__host__' : fine.includes(acted);
+  if (fine.includes(choice) && applied) return 'PASS';
+  return fine.includes(choice) || applied ? 'WEAK' : 'FAIL';
 }
 
 /** Check both the intended first speaker and the actual continuation, including a deliberate handback. */

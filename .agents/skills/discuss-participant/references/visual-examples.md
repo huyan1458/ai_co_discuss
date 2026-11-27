@@ -1,27 +1,27 @@
 # 交互式可视化示例
 
-写页面前按需读一个，照结构改，不必照抄题材。规则与约束见 [交付交互式可视化](interactive-html.md)。
+写页面前按需读一个，照结构改，不必照抄题材。优先用统一样式（`cd-*` 类，见规则页），示例 3 的权重滑块要在轨道上画“第一名不变”的区间，统一滑块表达不了，才自己画。规则与约束见 [交付交互式可视化](interactive-html.md)。
 
 ## 1. 展示：一个量变了，图跟着变
+
+全部用统一样式：`cd-stats` 放关键数字，`cd-field` 放滑块，几乎不写自己的 CSS。
 
 ````markdown
 年数越长，复利效果越明显：默认 20 年，1000 元变成约 3870 元。
 
 ```visual
 <style>
-.wrap { max-width: 560px; margin: 0 auto; }
-.muted { color: var(--codiscuss-text-muted, #6b7280); }
-.result { font-size: 1.8em; font-weight: 600; font-variant-numeric: tabular-nums; margin: 0; }
-.bar { height: 6px; margin: .8em 0; border-radius: 3px; background: var(--codiscuss-border, #d4d4d8); }
+.bar { height: 6px; margin: .9em 0; border-radius: 3px; background: color-mix(in srgb, var(--codiscuss-border, #d4d4d8) 70%, transparent); }
 .bar i { display: block; height: 100%; border-radius: 3px; background: var(--codiscuss-accent, #2563eb); }
-.row { display: flex; gap: 1em; align-items: center; }
-.row input { flex: 1; }
 </style>
-<div class="wrap">
-  <p class="result" id="result"></p>
-  <p class="muted">本金 1000，年化 7%</p>
+<div class="cd-wrap">
+  <div class="cd-stats">
+    <div class="cd-stat"><b id="result"></b><span>到期金额（元）</span></div>
+    <div class="cd-stat"><b id="times"></b><span>本金倍数</span></div>
+  </div>
   <div class="bar"><i id="fill"></i></div>
-  <label class="row"><span>年数</span><input id="years" type="range" min="1" max="40" value="20"><output id="out" class="muted"></output></label>
+  <label class="cd-field"><span>年数</span><input id="years" type="range" min="1" max="40" value="20"><output id="out"></output></label>
+  <p class="cd-hint">本金 1000，年化 7%</p>
 </div>
 <script>
 const PRINCIPAL = 1000, RATE = 0.07, MAX_YEARS = 40;
@@ -30,6 +30,7 @@ function render() {
   const count = Number(years.value), value = PRINCIPAL * (1 + RATE) ** count;
   document.getElementById('out').textContent = count + ' 年';
   document.getElementById('result').textContent = Math.round(value).toLocaleString();
+  document.getElementById('times').textContent = (value / PRINCIPAL).toFixed(1) + '×';
   document.getElementById('fill').style.width = 100 * value / (PRINCIPAL * (1 + RATE) ** MAX_YEARS) + '%';
 }
 years.oninput = render;
@@ -40,7 +41,31 @@ render();
 拖到 40 年约 14975 元：后 20 年多赚的钱，是前 20 年的近 4 倍。
 ````
 
-## 2. 提问面板：调权重看方案排名
+## 2. 静态图示：流程或结构
+
+图文并茂不一定要能操作。用 SVG 加 `cd-*` 类画，`viewBox` 宽度取 400–480；没有脚本也行。
+
+````markdown
+一条消息从发出到被回答，经过三步：
+
+```visual
+<svg class="cd-chart" viewBox="0 0 460 104" role="img" aria-label="消息处理流程">
+  <defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" class="cd-fill-muted"/></marker></defs>
+  <rect x="4" y="14" width="120" height="48" rx="8" class="cd-box"/>
+  <text x="64" y="38" text-anchor="middle" dominant-baseline="central" class="cd-label">用户发消息</text>
+  <rect x="170" y="14" width="120" height="48" rx="8" class="cd-box"/>
+  <text x="230" y="38" text-anchor="middle" dominant-baseline="central" class="cd-label">主持人分派</text>
+  <rect x="336" y="14" width="120" height="48" rx="8" class="cd-box-accent"/>
+  <text x="396" y="38" text-anchor="middle" dominant-baseline="central" class="cd-label" style="font-weight:600">成员回答</text>
+  <path d="M126 38H166M292 38H332" class="cd-axis" marker-end="url(#arrow)"/>
+  <text x="230" y="90" text-anchor="middle" class="cd-tick">点名某位成员时跳过分派</text>
+</svg>
+```
+````
+
+节点默认用中性的 `cd-box`，只给关键节点 `cd-box-accent` 加粗体文字；文字不要压在实心强调色（`cd-fill`）上，深色主题下看不清。图里的文字在手机上不随图形缩小，所以文字与相邻图形之间留出余量（这里说明文字离节点底边 20 多个单位），文字用 `dominant-baseline="central"` 对准节点中线。
+
+## 3. 提问面板：调权重看方案排名
 
 属于问题卡做不到的“联动计算”：用户拖权重，排名当场重算，每个权重的轨道上标出第一名不变的区间；点按钮交回权重与选择。要点：
 
@@ -78,10 +103,10 @@ render();
 .slider input { position: absolute; inset: 0; width: 100%; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; }
 .slider input::-webkit-slider-runnable-track { height: 22px; background: transparent; }
 .slider input::-moz-range-track { height: 22px; background: transparent; }
-.slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: 4px; border-radius: 50%; background: var(--codiscuss-accent, #2563eb); border: 2px solid var(--codiscuss-card, #fff); box-shadow: 0 0 0 1px var(--codiscuss-accent, #2563eb); }
-.slider input::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--codiscuss-accent, #2563eb); border: 2px solid var(--codiscuss-card, #fff); box-shadow: 0 0 0 1px var(--codiscuss-accent, #2563eb); }
+.slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: 4px; border: 0; border-radius: 50%; background: var(--codiscuss-accent, #2563eb); }
+.slider input::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: var(--codiscuss-accent, #2563eb); }
 .slider input:focus-visible { outline: none; }
-.slider input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 1px var(--codiscuss-accent, #2563eb), 0 0 0 5px color-mix(in srgb, var(--codiscuss-accent, #2563eb) 25%, transparent); }
+.slider input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 5px color-mix(in srgb, var(--codiscuss-accent, #2563eb) 24%, transparent); }
 .weight .note { margin-top: .15em; font-size: .78em; color: var(--codiscuss-text-hint, #9ca3af); }
 details { margin-top: 1.2em; font-size: .85em; color: var(--codiscuss-text-muted, #6b7280); }
 summary { cursor: pointer; width: fit-content; }
@@ -91,8 +116,6 @@ th { color: var(--codiscuss-text-hint, #9ca3af); }
 .basis { margin: .5em 0 0; line-height: 1.6; }
 .foot { display: flex; gap: 1em; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 1.2em; }
 .foot .hint { font-size: .82em; color: var(--codiscuss-text-hint, #9ca3af); }
-.primary { border-color: var(--codiscuss-accent, #2563eb) !important; background: var(--codiscuss-accent, #2563eb) !important; color: #fff; padding: .4em 1em !important; }
-.primary:hover { filter: brightness(1.08); }
 </style>
 <div class="wrap">
   <p class="eyebrow">按你的权重，主持人最适合</p>
@@ -111,7 +134,7 @@ th { color: var(--codiscuss-text-hint, #9ca3af); }
 
   <div class="foot">
     <span class="hint" id="hint">满分 10 分，按权重加权平均</span>
-    <button id="submit" class="primary" type="button">按这组权重交给主持人</button>
+    <button id="submit" class="cd-primary" type="button">按这组权重交给主持人</button>
   </div>
 </div>
 <script>

@@ -147,7 +147,7 @@ image-check 检查这台电脑已保存的生图服务：用密钥读取地址�
 image 成员按任务凭据生图（房间须添加了生图卡片）：REQUEST 为 JSON，必填 action（generate 生成 / edit 改图）与 prompt；可选 size（auto、1024x1024、1536x1024、1024x1536 或 16 倍数的 宽x高）、quality（auto/low/medium/high，2.5、2.6 系列另有 xhigh/max）、n（1–10 张）、output_format（png/jpeg/webp/gif，生成另可 svg）、background（auto/opaque/transparent）、file_name（附件名）、save_path（另存进可写项目）；edit 另需 images（1–16 个 {attachment_id} 或 {file_path}，第一张为主图），可加 mask 或 markup（同样格式，二选一）。图片存为成员的附件，返回附件 ID，再用 message post --attachment 附上。
 tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：local（本机，由 local-tts-setup 技能安装）/ volcengine / aliyun / azure / openai，语速 speech_rate，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，本机、火山引擎与 OpenAI 另有语气提示 context（各自默认不同），Azure 另有 region；语音输入服务 stt_provider：local / volcengine / openai）。
 tts 用朗读设置把 text（不超过 300 字）合成为音频（本机服务为 m4a，其余为 MP3），返回 base64。
-weixin 微信通知：action 为 status（默认，读取绑定状态）、login（生成扫码内容）、complete（等待扫码确认，约 20 秒）、test（发一条测试通知）或 unbind（解除本机绑定）。Goal 待确认 5 分钟仍未回复时通知房主，房主在微信回复即作为房主发言发回该房间；只用本机服务目录保存凭据。
+weixin 微信通知：action 为 status（默认，读取绑定状态）、login（生成扫码内容）、complete（等待扫码确认，约 20 秒）、test（发一条测试通知）或 unbind（解除本机绑定）。Goal 待确认或阻塞提问 3 分钟仍未回复时通知房主，房主在微信回复即作为房主发言发回该房间；只用本机服务目录保存凭据。
 tts-release 用户停止朗读：所选服务释放在这台电脑上占用的资源（本机语音在 5 秒内结束、释放显存），云端服务无操作。
 local-speech 读取本机朗读（tts，yovoice）与语音识别（stt，crispasr）服务的运行状态（state：running / stopped / other（端口被其他程序占用），及 pid、进程名）；内容为 {"stop": "tts" | "stt"} 时强行结束该服务（连同子进程），只结束端口上属于该服务程序的进程。
 stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道、final）；最后一段时识别整段录音并返回 text。
@@ -3796,7 +3796,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     // The QR code opens the paired website and carries this computer's key fingerprint for the new device to check.
     const { keyed_links } = await import('./remote_launch.mjs');
     const [site, link] = Object.entries(keyed_links(home).sites).find(([origin]) => !input?.site || origin === input.site) || [];
-    if (!link) throw new Error('这台电脑未绑定线上网站，请在管理面板“本机 → 线上网站”处绑定');
+    if (!link) throw new Error('这台电脑未绑定自建中转，请在管理面板“本机 → 自建中转”处绑定');
     result = start_pairing(home, { site, fingerprint: machine_fingerprint(link), temporary: input?.temporary === true, without_passkey: input?.without_passkey === true });
   }
   else if (positionals[0] === 'devices' && !values.remote) {

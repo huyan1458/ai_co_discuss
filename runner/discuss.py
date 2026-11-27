@@ -357,7 +357,7 @@ def room_commands(subcommands, registry):
 
 def message_commands(subcommands, registry):
     """Register bounded search, exact reads, and attributed message writes."""
-    listing = add_leaf(subcommands, registry, "message list", "检索原文：每次最多 20 条且不超过约 8000 字符（含元数据），未列完时按 next_after 用 --after 续读；remaining 是本次之后还剩的匹配条数；"
+    listing = add_leaf(subcommands, registry, "message list", "检索原文：每次最多 20 条且不超过约 8000 字符（含元数据），未列完时按 next_after 用 --after 续读；remaining 是本次之后还剩的匹配条数；值为空的字段不输出，message view 给完整字段；"
                     "过长的单条只给开头并标 text_complete=false，用 message view 编号 --offset 续读全文；"
                     "```visual 交互式可视化代码块折叠成一行并注明字符数，要看源码用 message view", True)
     paging = listing.add_mutually_exclusive_group()

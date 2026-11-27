@@ -15,7 +15,7 @@ export const GOAL_CONFIDENCE = 0.7;
  * gains correct picks without any new wrong one (2026-10-31). Review, sequence and Goal keep their own.
  */
 export const ROUTE_CONFIDENCE = 0.6;
-/** Waking several members, everyone or no one costs more when wrong (N runs, or an ignored message), so it needs more certainty. */
+/** Waking multiple members requires more certainty because a wrong choice starts several runs. */
 export const ROUTE_WIDE_CONFIDENCE = 0.8;
 /**
  * The wording recorded with each decision. Only the guided wording (purpose and facts in prose, no checklist) is kept;
@@ -23,9 +23,9 @@ export const ROUTE_WIDE_CONFIDENCE = 0.8;
  */
 export const SCHEDULER_MODE = 'guided';
 /** Bump when the routing question, its options or the state it reads change, so ratings can be compared across wordings. */
-export const ROUTE_GUIDED_PROMPT_VERSION = 12;
+export const ROUTE_GUIDED_PROMPT_VERSION = 14;
 /** The same for the three discussion questions (interjection, next speaker, next round). */
-export const DISCUSSION_GUIDED_PROMPT_VERSION = 2;
+export const DISCUSSION_GUIDED_PROMPT_VERSION = 4;
 /** Completion of a preauthorized implementation batch is separate from routing and discussion. */
 export const REVIEW_PROMPT_VERSION = 1;
 export const REVIEW_CONFIDENCE = 0.85;
@@ -47,6 +47,7 @@ const CONTEXT_MESSAGES = 10;
 /** A free-room route sees a longer stretch, enough to tell who has not spoken for a while. */
 export const ROUTE_CONTEXT_MESSAGES = 20;
 const MAX_MESSAGE_CHARS = 600;
+const PREVIOUS_MESSAGE_CHARS = 1500;
 const MAX_BRIEF_CHARS = 1200;
 const MAX_PROFILE_CHARS = 500;
 /** Normalize a launch's scheduler choice and prove its key exists for that provider's root. */
@@ -137,11 +138,14 @@ function unsure_label(lean, action = 'host') {
   return lean ? room_text('倾向{lean}，把握不足，交给主持人', { lean }) : room_text('拿不准，交给主持人');
 }
 
-/** Shorten a message so recent context stays small; the decision never needs whole answers. */
-function excerpt(message) {
+/** Preserve both ends of long messages, including decisions often requested in the closing paragraph. */
+function excerpt(message, max_chars = MAX_MESSAGE_CHARS) {
   const text = String(message.text || '').replace(/\s+/g, ' ').trim();
   const reply = message.reply_to ? `（回复 #${message.reply_to}）` : '';
-  return `#${message.id} ${message.author}${reply}：${text.length > MAX_MESSAGE_CHARS ? `${text.slice(0, MAX_MESSAGE_CHARS)}…` : text}`;
+  const half = max_chars / 2;
+  const body = text.length > max_chars
+    ? `${text.slice(0, half)}〔中间省略 ${text.length - max_chars} 字〕${text.slice(-half)}` : text;
+  return `#${message.id} ${message.author}${reply}：${body}`;
 }
 
 /** The room's purpose in the user's words, so a decision can tell drifting from progress. */
@@ -172,7 +176,10 @@ export function profile_lines(profiles) {
 
 /** State shared by both uses: the room, a few earlier messages, and the message to place. */
 export function scheduler_state(title, context, message, goal = '', user_request = '', extra = {}, limit = CONTEXT_MESSAGES) {
-  const earlier = context.filter(item => item.id < message.id).slice(-limit).map(excerpt);
+  const previous = context.filter(item => item.id < message.id).slice(-limit);
+  const last_reply = previous.findLast(item => item.author !== '用户');
+  const earlier = previous.map(item => excerpt(item,
+    item === last_reply ? PREVIOUS_MESSAGE_CHARS : MAX_MESSAGE_CHARS));
   return [topic_lines(title, goal, user_request, extra), earlier.length ? `近期消息（旧→新）：\n${earlier.join('\n')}` : '近期没有其他消息。', `待处理的用户消息：\n${excerpt(message)}`].join('\n\n');
 }
 
@@ -233,7 +240,7 @@ function route_question(host, members, text) {
 /**
  * Decide who answers one unnamed free-room message: whether its addressee is already settled by the text or the thread.
  * Members are [{name, description}] without the host; host is {name, description}. Returns action member (with member),
- * all, sequential, some, none, or host for anything unsettled or not confident enough.
+ * all, sequential, some, or host (including no-reply suggestions).
  */
 export async function route_free_message(home, scheduler, { title, goal, context, message, host, members }, fetch_impl) {
   const { choices, instructions, extra } = route_question(host, members, message.text);
@@ -243,13 +250,11 @@ export async function route_free_message(home, scheduler, { title, goal, context
   const judged = judged_of(state, questions, answers);
   const choice = answers.handler?.choice ?? null;
   const confidence = certainty(answers.handler);
-  // Waking several members, everyone or no one costs more when wrong than moving the message to one member.
   const group = some_members(choice);
-  const wide = [ALL_CHOICE, ALL_SEQUENTIAL_CHOICE, NONE_CHOICE].includes(choice) || Boolean(group);
+  const wide = [ALL_CHOICE, ALL_SEQUENTIAL_CHOICE].includes(choice) || Boolean(group);
   const sure = confidence !== null && confidence >= (wide ? ROUTE_WIDE_CONFIDENCE : ROUTE_CONFIDENCE);
   if (sure && choice === ALL_CHOICE) return { action: 'all', choice, confidence, ...judged };
   if (sure && choice === ALL_SEQUENTIAL_CHOICE) return { action: 'sequential', choice, confidence, ...judged };
-  if (sure && choice === NONE_CHOICE) return { action: 'none', choice, confidence, ...judged };
   if (sure && group) return { action: 'some', members: group, choice, confidence, ...judged };
   if (sure && members.some(item => item.name === choice)) return { action: 'member', member: choice, choice, confidence, ...judged };
   return { action: 'host', choice, confidence, ...judged };
@@ -282,7 +287,7 @@ export async function decide_interjection(home, scheduler, { title, goal, user_r
 }
 
 /** Scene 7 wording version, versioned apart from routing like the review question. */
-export const GOAL_PROMPT_VERSION = 2;
+export const GOAL_PROMPT_VERSION = 4;
 const GOAL_WAIT = 'wait';
 const GOAL_CONTINUE = 'continue';
 // What a member of the room would know about a goal: who drives it and what an unneeded wake-up costs.
@@ -300,7 +305,8 @@ export async function decide_goal_wake(home, scheduler, { title, objective, cont
     { value: GOAL_WAIT, description: '不唤醒，转为等用户确认：最近的回答已经向用户提问、请用户授权或拍板，或已经向用户汇报目标完成；用户这句话回来之前，主持人做不了更多。用户回复后接着推进；一小时没回复时唤醒主持人一次，评估能否不等用户自行决定' }],
     instructions: '目标进行中，房间刚空闲下来。读最近的消息，判断现在唤醒主持人能不能让目标往前走，还是房间在等用户。' }];
   const people = members.length ? `成员：\n${members.map(member => `- ${member.role === 'host' ? '主持人' : '专家'} ${member.description}`).join('\n')}` : '';
-  const recent = context.slice(-ROUTE_CONTEXT_MESSAGES).map(excerpt);
+  const recent = context.slice(-ROUTE_CONTEXT_MESSAGES).map(item =>
+    excerpt(item, item === context.at(-1) ? PREVIOUS_MESSAGE_CHARS : MAX_MESSAGE_CHARS));
   const state = [topic_lines(title, objective, '', { guide: GOAL_GUIDE, people }),
     recent.length ? `近期消息（旧→新）：\n${recent.join('\n')}` : '近期没有其他消息。'].join('\n\n');
   const answers = await decide(home, scheduler, state, questions, fetch_impl);
@@ -369,7 +375,7 @@ export async function decide_sequence_checkpoint(home, scheduler, sequence, fetc
  * this round, or hand back to the host when unsure or when the discussion needs steering.
  */
 export async function decide_next_speaker(home, scheduler, { title, goal, user_request, context, host, candidates, spoken = [], ...extra }, fetch_impl) {
-  const recent = context.slice(-CONTEXT_MESSAGES).map(excerpt);
+  const recent = context.slice(-CONTEXT_MESSAGES).map(item => excerpt(item));
   const state = [topic_lines(title, goal, user_request, { ...extra, progress: round_progress(spoken, candidates), guide: DISCUSSION_GUIDED_GUIDE }),
     recent.length ? `本轮及最近发言（旧→新）：\n${recent.join('\n')}` : '还没有发言。'].join('\n\n');
   // Having not spoken yet is no reason to speak: the host's plan may have ended on purpose, so a candidate needs an explicit basis.
@@ -394,7 +400,7 @@ export async function decide_round(home, scheduler, { title, goal, user_request,
   const candidates = experts.filter(name => name !== last_speaker);
   if (!candidates.length) return { action: 'host', confidence: null, label: room_text("没有可选的下一轮首位，交给主持人") };
   // Telling repetition or drift needs at least the last two rounds side by side.
-  const recent = context.slice(-ROUTE_CONTEXT_MESSAGES).map(excerpt);
+  const recent = context.slice(-ROUTE_CONTEXT_MESSAGES).map(item => excerpt(item));
   const state = [topic_lines(title, goal, user_request, { ...extra, guide: DISCUSSION_GUIDED_GUIDE }),
     recent.length ? `本轮及最近发言（旧→新）：\n${recent.join('\n')}` : '还没有发言。'].join('\n\n');
   const questions = [

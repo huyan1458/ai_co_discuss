@@ -37,7 +37,7 @@ const MAX_CAPTURED_REPLY = 32000;
 export const GOAL_IDLE_MS = 120_000;
 // A goal waiting on the owner reaches their Weixin only after this long: right after the question they may be typing.
 // How long the owner is left waiting (a goal's pending phase, a blocking question) before Weixin tells them.
-export const PENDING_NOTICE_MS = 5 * 60_000;
+export const PENDING_NOTICE_MS = 3 * 60_000;
 // A failed Weixin notice is tried again after this long instead of on every tick.
 const NOTICE_RETRY_MS = 60_000;
 // Background reports one follow-up (续报) carries at most (MAX_FOLLOWUP_REPORTS in backend/free_room.py), and the report
@@ -664,9 +664,10 @@ function member_work(requests, name, message_id) {
 
 /** Why a message stayed with the host: the scheduler chose the host, or leaned elsewhere without enough certainty. */
 function route_host_label(decision, host, members) {
+  if (decision.choice === '__none__') return room_text("建议无需回应，交给主持人 {host}", { host });
   if (decision.choice === '__host__' || decision.confidence === null) return `交给主持人 ${host}`;
   const group = some_members(decision.choice);
-  const lean = decision.choice === '__all__' ? '全体各自回应' : decision.choice === '__all_seq__' ? '全体依次回应' : decision.choice === '__none__' ? '无需回应' : group ? `请 ${group.join('、')} 各自回应`
+  const lean = decision.choice === '__all__' ? '全体各自回应' : decision.choice === '__all_seq__' ? '全体依次回应' : group ? `请 ${group.join('、')} 各自回应`
     : members.some(member => member.name === decision.choice) ? `请 ${decision.choice} 回答` : '';
   return lean ? `倾向${lean}，把握不足，交给主持人 ${host}` : `交给主持人 ${host}`;
 }
@@ -1089,7 +1090,7 @@ export class FreeRoomRunner {
   }
   /** The room's latest message from a person or member, for a pending goal nobody wrote a note for. */
   async latest_excerpt(room) {
-    const page = await api(this.config, `/messages?after=${Math.max(0, (room.latest_id || 0) - 5)}`);
+    const page = await api(this.config, `/messages?before=${room.latest_id ? room.latest_id + 1 : 0}&limit=5`);
     const latest = (page.messages || []).filter(message => message.author !== '系统').at(-1);
     if (!latest) return ['房间在等你的决定或补充信息，详情见房间。'];
     const text = latest.text.length > NOTICE_EXCERPT ? `${latest.text.slice(0, NOTICE_EXCERPT)}…` : latest.text;
@@ -1097,7 +1098,7 @@ export class FreeRoomRunner {
   }
   /** Ask the decision model whether the idle goal room needs its host, from the latest messages and who is in it. */
   async judge_goal(room, goal) {
-    const page = await api(this.config, `/messages?after=${Math.max(0, (room.latest_id || 0) - ROUTE_CONTEXT_MESSAGES)}`);
+    const page = await api(this.config, `/messages?before=${room.latest_id ? room.latest_id + 1 : 0}&limit=${ROUTE_CONTEXT_MESSAGES}`);
     const context = page.messages || [];
     const everyone = [...(this.inbox?.members || []), ...(this.inbox?.observers || [])];
     const described = this.route_members(everyone, room, (context.at(-1)?.id || 0) + 1);
@@ -1201,9 +1202,9 @@ export class FreeRoomRunner {
     this.save_suggestion(request, { action: decision.action, actual_action: applied ? decision.action : 'host', applied,
       model_judgment: true, ...(record?.id ? { decision_id: record.id } : {}), reason: label });
   }
-  /** Decide one message and apply a confident pick: one member, everyone, or no one; otherwise the host keeps it. */
+  /** Read the target and its preceding room messages; a no-reply suggestion stays with the host. */
   async recommend(request, room, everyone) {
-    const page = await api(this.config, `/messages?after=${Math.max(0, request.message_id - ROUTE_CONTEXT_MESSAGES)}`);
+    const page = await api(this.config, `/messages?before=${request.message_id + 1}&limit=${ROUTE_CONTEXT_MESSAGES + 1}`);
     const message = page.messages.find(item => item.id === request.message_id);
     if (!message) throw new Error('读取不到这条消息');
     const described = this.route_members(everyone, room, message.id);
@@ -1216,11 +1217,11 @@ export class FreeRoomRunner {
     this.log(`智能调度 #${message.id}：${decision.action}${decision.member ? ` ${decision.member}` : ''}（选择 ${decision.choice ?? '-'}，置信度 ${decision.confidence ?? '-'}）`);
     if (decision.action === 'host') return this.record_route(request, decision, route_host_label(decision, host.name, members), false);
     if (decision.action !== 'member') {
-      // Everyone, the named few or no one replaces the host's request in one step; a host that already started keeps the message.
+      // A group recommendation replaces the host's request in one step; a host that already started keeps the message.
       const applied = await api(this.config, `/recommendations/${message.id}`, { action: decision.action, ...(decision.members ? { members: decision.members } : {}) })
         .then(() => true, error => { this.log(`智能调度 #${message.id} 未能改派：${error.message}`); return false; });
       const names = described.map(member => member.name).join('、');
-      const label = decision.action === 'all' ? room_text('请全体各自回应（{names}）', { names }) : decision.action === 'sequential' ? room_text('请全体按发言顺序依次回应') : decision.action === 'some' ? room_text('请 {names} 各自回应', { names: decision.members.join('、') }) : room_text('无需回应，未唤醒任何成员');
+      const label = decision.action === 'all' ? room_text('请全体各自回应（{names}）', { names }) : decision.action === 'sequential' ? room_text('请全体按发言顺序依次回应') : room_text('请 {names} 各自回应', { names: decision.members.join('、') });
       return this.record_route(request, decision, applied ? label : `${label}（未生效，仍由主持人处理）`, applied);
     }
     try {

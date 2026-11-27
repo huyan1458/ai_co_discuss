@@ -1,12 +1,14 @@
 <script setup>
 /**
- * Weixin notifications kept by the local service: bind the owner's Weixin by QR code; a goal waiting for the owner's
- * input reaches it after five minutes, and a reply there is posted back to that room as the owner. The login token stays
+ * The settings' "Notifications" section, whose only channel for now is Weixin, kept by the local service: bind the
+ * owner's Weixin by QR code; a goal waiting for the owner's
+ * input reaches it after three minutes, and a reply there is posted back to that room as the owner. The login token stays
  * on this computer; the page only sees the binding state and the QR content to draw.
  */
 import { computed, inject, onBeforeUnmount, onMounted, ref } from "vue";
 import { renderSVG } from "uqr";
 import { t } from './i18n.js';
+import { weixin_failure_text } from './weixin-failure.js';
 
 const { bridge } = inject("discussion");
 const status = ref(null), unavailable = ref(""), busy = ref(""), open = ref(false);
@@ -55,20 +57,22 @@ async function act(action, message) {
   <section class="channel-reading-setting">
     <UCollapsible v-model:open="open">
       <button type="button" class="weixin-header" :aria-expanded="open">
-        <h3>{{ t('微信通知') }}</h3><small>{{ t('Goal 等你确认时') }}</small><span :class="{ 'is-ready': status?.context_ready }">{{ summary }}</span><UIcon :name="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
+        <h3>{{ t('通知') }}</h3><small>{{ t('有事等你处理时提醒你') }}</small><span :class="{ 'is-ready': status?.context_ready }">{{ t('微信 · {value1}', { value1: summary }) }}</span><UIcon :name="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
       </button>
       <template #content>
         <div class="weixin-settings">
+          <p class="fine-print">{{ t('Goal 待你确认、或成员向你提的问题等你 3 分钟未答时，经下面的渠道提醒你。') }}</p>
+          <h4 class="weixin-channel">{{ t('微信') }}</h4>
           <p v-if="unavailable" class="fine-print">{{ t('微信通知由这台电脑的本机服务收发，需要连接本机服务或已配对电脑：{value1}', { value1: unavailable }) }}</p>
           <template v-else-if="status">
-            <p class="fine-print">{{ t('主持人声明 Goal 待你确认后，5 分钟内你没在房间回复，就发到微信；直接回复微信消息即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间。成员向你提的问题等你 5 分钟未答也会发来，回复选项编号即直接作答，其他文字交给主持人代为选择。只转发文字，登录凭据只存这台电脑。') }}</p>
+            <p class="fine-print">{{ t('用个人微信扫码绑定。直接回复通知即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间；回复问题通知的选项编号即直接作答，其他文字交给主持人代为选择。只转发文字，登录凭据只存这台电脑。') }}</p>
             <template v-if="qr">
               <!-- eslint-disable-next-line vue/no-v-html -- an SVG this page rendered from the service's QR content -->
               <div class="weixin-qr" :aria-label="t('微信绑定二维码')" v-html="qr" />
               <p class="fine-print">{{ t('用微信扫码并在手机上确认。') }}</p>
             </template>
             <p v-else-if="status.bound && !status.context_ready" class="fine-print weixin-warning">{{ t('请先在微信里给机器人发一条任意消息：微信要求先收到你的消息，才能给你发通知。') }}</p>
-            <p v-if="status.last_error" class="fine-print weixin-warning">{{ t('上次失败：{value1}', { value1: status.last_error }) }}</p>
+            <p v-if="status.last_failure" class="fine-print weixin-warning">{{ status.last_failure.at ? t('{value1} 发送失败：{value2}', { value1: new Date(status.last_failure.at).toLocaleString(), value2: weixin_failure_text(status.last_failure) }) : t('上次失败：{value1}', { value1: weixin_failure_text(status.last_failure) }) }}</p>
             <div class="weixin-actions">
               <UButton v-if="!status.bound" :label="t('扫码绑定')" icon="i-lucide-qr-code" size="sm" :loading="busy === 'bind'" :disabled="Boolean(busy)" @click="bind" />
               <template v-else>
@@ -95,6 +99,7 @@ async function act(action, message) {
 .weixin-settings { display: grid; gap: 10px; padding-top: 10px; }
 .weixin-settings .fine-print { margin: 0; }
 .weixin-warning { color: var(--ui-warning); }
+.weixin-channel { margin: 4px 0 0; font-size: 13px; font-weight: 600; }
 .weixin-qr { width: 180px; padding: 8px; border-radius: 8px; background: #fff; }
 .weixin-qr :deep(svg) { display: block; width: 100%; height: auto; }
 .weixin-actions { display: flex; flex-wrap: wrap; gap: 8px; }

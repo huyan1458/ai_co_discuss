@@ -42,21 +42,22 @@ WeChat notifications use Tencent’s iLink bot channel with your **personal WeCh
 
 ### Set up WeChat
 
-1. Open “Settings → WeChat notifications” on the local site and click “Scan to link.”
+1. Open “Settings → Notifications” on the local site and click “Scan to link” under “WeChat.”
 2. Scan the code with your personal WeChat account and confirm the login.
 3. **Send a test message:** After scanning, send any message from your phone to the newly bound bot so it can establish the conversation.
 4. Return to the site and click “Send test.” Linking is complete when the site says “Test notification sent” and you receive the test in WeChat. Click “Unlink” if you no longer need it.
 
 ### Notifications and replies
 
-- **Goal awaiting confirmation for five minutes:** If the host marks Goal as “Awaiting your confirmation” and you do not reply in the room for five minutes, the local service sends a WeChat reminder. When the computer is bound to an online site, the message includes a room link. A direct reply goes to the room associated with the most recent notification. If several rooms are waiting, reply to the notification for the room you mean.
-- **A member’s question waiting for five minutes:** Whether or not Goal is active, the service sends the question and numbered options after a question card has waited five minutes. Recommended options are marked “(recommended).”
+- **Goal awaiting confirmation for three minutes:** If the host marks Goal as “Awaiting your confirmation” and you do not reply in the room for three minutes, the local service sends a WeChat reminder. When the computer is bound to an online site, the message includes a room link. A direct reply goes to the room associated with the most recent notification. If several rooms are waiting, reply to the notification for the room you mean.
+- **A member’s question waiting for three minutes:** Whether or not Goal is active, the service sends the question and numbered options after a question card has waited three minutes. Recommended options are marked “(recommended).”
   - Reply with an option number. For multiple selections, separate numbers with spaces or commas. For several questions, answer in order, for example 1 2. You can also reply with text that exactly matches an option. The answer goes directly to the member who asked.
   - Other text goes to the host, who interprets it or asks you a follow-up in the room.
   - If the question was answered, canceled, or updated, WeChat explains why and does not submit a stale answer.
+- **When a notification cannot be sent:** If the room is waiting for your answer or Goal confirmation and the latest WeChat notification failed, a dashed line above the question card on the Messages page gives the reason and how to fix it. “Settings → Notifications” also shows the time and reason of the failure. The most common cause is not having messaged the bot in WeChat for a long time, after which WeChat stops accepting notifications; send the bot any message in WeChat to restore it.
 
 ## Things to know
 
 - **The local service must be online:** Read aloud, voice input, and WeChat notifications run through the local service. If the computer is off or the service is stopped, paired devices cannot use them.
-- **Expired WeChat login:** If the login expires after a long period without use, open “Settings → WeChat notifications” and click “Scan to link” again.
+- **Expired WeChat login:** If the login expires after a long period without use, open “Settings → Notifications” and, under “WeChat,” click “Scan to link” again.
 - **Speech recognition can mishear identifiers:** Local Qwen3-ASR handles mixed Chinese and English, punctuation, and capitalization well. It may misrecognize letter-by-letter abbreviations such as N-P-M or code identifiers. Review the draft before sending.

@@ -311,6 +311,16 @@ function open_analytics() { nav_open.value = false; workflow_library.close_page(
 /** Select a shared room (leaving the workflow/analytics page) and close the mobile navigation. */
 function choose_room(id) { nav_open.value = false; workflow_library.close_page(() => { invited_rooms.close(); analytics.close(); act("room", id); }); }
 
+/** From the analytics page: open a room and show the message that asked for one run, once that room is on screen. */
+async function open_room_message({ room_id, message_id }) {
+  choose_room(room_id);
+  // Switching rooms is asynchronous; wait (bounded) until this room is the one shown before locating the message.
+  for (let tries = 0; tries < 50 && room.value?.id !== room_id; tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+  if (room.value?.id !== room_id) return;
+  await nextTick();
+  open_detail(message_id);
+}
+
 /** Show a message in place in the transcript for a moment; the transcript offers a way back to where reading (and the tab) was. */
 async function open_detail(id) {
   info_open.value = false;
@@ -573,7 +583,7 @@ function resize_nav_by_key(event) {
       </div>
       <div v-if="workflow_page" class="channel-body channel-workflow-body"><WorkflowLibrary /></div>
       <div v-else-if="invited_page" class="channel-body"><div class="channel-content"><InvitedRoomPage /></div></div>
-      <div v-else-if="analytics_page" class="channel-body"><div class="channel-content"><AnalyticsPage @open-room="choose_room" /></div></div>
+      <div v-else-if="analytics_page" class="channel-body"><div class="channel-content"><AnalyticsPage @open-room="choose_room" @open-message="open_room_message" /></div></div>
       <div v-if="room" v-show="!middle_page" class="channel-body" :class="{ 'channel-body-discussion': view.tab === 'discussion' }">
         <div class="channel-content">
         <ChannelDiscussion ref="discussion_view" v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" />

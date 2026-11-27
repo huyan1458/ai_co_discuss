@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from backend.analytics import peak_concurrent, period
+from backend.analytics_issues import concurrency_series
 from backend.server import connect_db, destroy_expired_rooms
 from tests.test_free_room import FreeRoomTests, HostRoomTests
 
@@ -113,7 +114,29 @@ class AnalyticsTests(HostRoomTests):
             for execution_id, items in zip(ids, bindings):
                 db.execute("INSERT INTO execution_diagnostics(execution_id,details) VALUES (?,?)",
                            (execution_id, json.dumps({"workflow_bindings": items})))
+            # Three runs the owner stopped make an “interrupted” issue whose runs point back to their room.
+            for index in range(3):
+                db.execute("""INSERT INTO member_executions(room_id,member_id,client_id,status,result,created_at,finished_at,model,effort)
+                    SELECT room_id,id,?,'cancelled','用户打断',?,?,'S','low' FROM room_members WHERE room_id=? AND name='Claude'""",
+                           (f"stop-{index}", start+index*60, start+index*60+5, first))
+            # The same runner fault on two models is one issue grouped by its reason, naming both members.
+            for index, model in enumerate(("T", "T", "U", "U")):
+                db.execute("""INSERT INTO member_executions(room_id,member_id,client_id,status,result,created_at,finished_at,model,effort)
+                    SELECT room_id,id,?,'failed','执行租约到期，接入程序未续租',?,?,?,'' FROM room_members WHERE room_id=? AND name='Claude'""",
+                           (f"lease-{index}", start+500+index, start+500+index, model, first))
         report = self.report("&from=2026-03-07&to=2026-03-11&tz=America%2FLos_Angeles")
+        lease = [item for item in report["issues"] if item["rule"] == "not_finished" and "续租" in item["params"]["reason"]]
+        self.assertEqual(len(lease), 1)
+        self.assertEqual((lease[0]["count"], lease[0]["total"], lease[0]["level"]), (4, 4, "high"))
+        self.assertEqual(sorted(member["model"] for member in lease[0]["members"]), ["T", "U"])
+        self.assertEqual(sum(report["time"]["concurrency"]["unfinished"]), 4)
+        self.assertIn("peak_members", report["previous"])
+        stopped = [item for item in report["issues"] if item["rule"] == "interrupted"]
+        self.assertEqual(len(stopped), 1)
+        self.assertEqual((stopped[0]["count"], stopped[0]["total"], stopped[0]["params"]["model"]), (3, 3, "S"))
+        self.assertEqual({run["room_id"] for run in stopped[0]["runs"]}, {first})
+        self.assertTrue(all(run["title"] for run in stopped[0]["runs"]))
+        self.assertEqual(max(report["time"]["concurrency"]["points"]), report["time"]["peak"]["members"])
         workflow, = report["workflows"]
         self.assertEqual((workflow["id"], workflow["executions"], workflow["completed"], workflow["rooms"]), ("wf", 2, 2, 1))
         self.assertEqual((workflow["cards"], workflow["sub_workflows"]), ({"writer": 1, "editor": 1}, {"polish": 1}))
@@ -124,7 +147,7 @@ class AnalyticsTests(HostRoomTests):
         self.assertNotIn("room_id", models["M"])
         days = report["overview"]["daily"]
         self.assertEqual([d["date"] for d in days], ["2026-03-07","2026-03-08","2026-03-09","2026-03-10"])
-        self.assertEqual([d["execution_seconds"] for d in days], [4, 7, 98, 0])
+        self.assertEqual([d["execution_seconds"] for d in days], [6, 20, 98, 0])  # +3 stopped 5 s runs, the first split at midnight
         self.assertEqual(sum(d["execution_seconds"] for d in days), report["time"]["execution_seconds"])
         # Per-room rows break each folder down: their totals match the folder rows exactly.
         rooms, folders = report["time"]["rooms"], report["time"]["folders"]
@@ -141,3 +164,7 @@ class AnalyticsTests(HostRoomTests):
         # Experts are keyed by room and member: two members in one room count twice, one member's overlaps once.
         experts = {("r1", "A"): [(10, 20), (12, 15)], ("r1", "B"): [(14, 22)], ("r2", "A"): [(14, 16)]}
         self.assertEqual(peak_concurrent(experts), (3, 14))
+        # The share card's timeline keeps the same peak; hourly buckets over a short window.
+        series = concurrency_series(experts, 0, 7200)
+        self.assertEqual(series["step"], 3600)
+        self.assertEqual(series["points"], [3, 0])

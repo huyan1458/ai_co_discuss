@@ -756,7 +756,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
   -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow-wrap: anywhere; }
 .expert-card-summary.is-empty { color: var(--ui-text-dimmed); }
 .expert-card-identity strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
-.expert-card-badge { flex-shrink: 0; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, #e0b44a 16%, transparent); color: #e0b44a; font-size: 10px; font-weight: 500; line-height: 16px; }
+.expert-card-badge { flex-shrink: 0; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, #e0b44a 16%, transparent); color: light-dark(#9a6700, #e0b44a); font-size: 10px; font-weight: 500; line-height: 16px; }
 .expert-card-facts .expert-card-status > i { display: inline-block; margin: 0 5px 1px 0; vertical-align: middle; width: 5px; height: 5px; border-radius: 50%; background: var(--ui-text-dimmed); }
 .expert-card-facts .expert-card-status.is-ready > i { background: var(--ui-success, #3fb27f); }
 .expert-card-facts .expert-card-status.is-warn > i { background: var(--ui-warning, #e0a33a); }
@@ -785,7 +785,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-tools > button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--ui-text-dimmed); }
 .expert-card-tools > button > span { width: 13px; height: 13px; }
 .expert-card-tools > button:hover { background: var(--ui-bg-accented); color: var(--ui-text-highlighted); }
-.expert-card-tools > .expert-card-host[aria-pressed="true"] { color: #e0b44a; }
+.expert-card-tools > .expert-card-host[aria-pressed="true"] { color: light-dark(#9a6700, #e0b44a); }
 .expert-card-tools > .is-set { color: var(--ui-text-muted); }
 .expert-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .expert-card-heading strong { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; white-space: nowrap; }

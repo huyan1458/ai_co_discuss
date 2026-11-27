@@ -24,8 +24,8 @@ const leaf = (path) => path.split(/[\\/]/).filter(Boolean).pop() || path;
 const relay = computed(() => {
   const state = view.value.launch.invite_site;
   if (state?.site) { try { return { value: new URL(state.site).host }; } catch { return { value: state.site }; } }
-  if (state?.problem === "site_required") return { value: t("绑定了多个线上网站，生成链接时选择"), tone: "warn" };
-  return state ? { value: t("未绑定线上网站，无法生成链接"), tone: "danger" } : null;
+  if (state?.problem === "site_required") return { value: t("绑定了多个自建中转，生成链接时选择"), tone: "warn" };
+  return state ? { value: t("未绑定自建中转，无法生成链接"), tone: "danger" } : null;
 });
 // Two-character labels, as on a member card's front, so the two kinds of cards line up.
 const facts = computed(() => [

@@ -19,7 +19,7 @@ On the computer running the AI, use either method:
 - **CLI:** In a terminal, run:
   `codiscuss local connect https://your-site`
   If this is also the computer where you deployed the site and wrangler login is configured, the command creates a one-time token and links it automatically. If the AI runs on another computer, run `codiscuss token` on the deployment computer, then run `codiscuss local connect https://your-site --setup-key <token>` on the AI computer.
-- **Management panel access code:** On the deployment computer, open the management panel and go to **Overview** → **This computer** → **Online site** → **Generate access code**, or run `codiscuss admin entry code`. On the AI computer, open its management panel, go to **Overview** → **This computer** → **Online site** → **Bind**, and paste the **Access code**.
+- **Management panel access code:** On the deployment computer, open the management panel and go to **Overview** → **This computer** → **Self-hosted relay** → **Generate access code**, or run `codiscuss admin entry code`. On the AI computer, open its management panel, go to **Overview** → **This computer** → **Self-hosted relay** → **Bind**, and paste the **Access code**.
 
 To stop remote access, select **Unlink** in the management panel or run `codiscuss local disconnect https://your-site`.
 
@@ -59,4 +59,4 @@ Phones support portrait layout only. Tablets support both portrait and landscape
 - **Attachment cache:** Pictures and files viewed through the relay are cached in this device’s browser and cleared when you unpair on this device.
 - **Clearing browser data requires pairing again:** Clearing browser data removes the device key. The handoff command also expires after 10 minutes, so keep the phone's clock reasonably accurate.
 
-**View file relay timings.** On your phone, open Settings → Account → Paired devices and expand Recent relay timings (ms). The latest 12 file requests show response frame sizes in bytes and estimates for the phone link, site processing, computer link and local processing. The two location codes identify the phone request and computer connection ingress respectively. A dash means unavailable.
+**Relay timing records.** Each file read through the relay is logged on the computer in `relay-timing.jsonl` in the service directory, with the time spent on the phone link, site processing, computer link and local processing, and the locations each end connected to. Paths, content and credentials are not recorded. Nothing is shown in the interface; you or an AI read this file when diagnosing slow remote access.

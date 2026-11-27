@@ -2,6 +2,13 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.41 (2026-11-26 20:52)
+
+- Changed: The "Analytics" page is redesigned: it opens with workload and a timeline, and "Needs a look" lists issues to handle, each linking to the message that assigned the work.
+- Changed: The share image now shows the AI team's workload: total hours worked, the most experts running at once and a running curve.
+- Changed: WeChat settings moved to Settings → "Notifications"; a Goal waiting for your confirmation sends a WeChat reminder after 3 minutes.
+- Changed: When smart scheduling finds a message needs no reply, it now hands it to the host.
+
 ## 0.5.40 (2026-11-26 18:54)
 
 - New: "Manage attachments" on the "Room" tab lets you clear attachment originals to free up space.

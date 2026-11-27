@@ -561,10 +561,11 @@ def answer_text(row, action, choices, text, customs=None):
     elif action == "delegate":
         head = Text("交给主持人决定（问题 #{id}）", id=row["id"])
     else:
-        picked = "；".join(f"{item['question'].rstrip('？?：:')}：" + "、".join(
+        lines = [f"{item['question'].rstrip('？?：:')}：" + "、".join(
             [f"{option['id']}（{option['label']}）" for option in item["options"] if option["id"] in choices.get(key, [])]
             + ([customs[key]] if key in customs else []))
-            for key, item in items.items() if key in choices or key in customs)
+            for key, item in items.items() if key in choices or key in customs]
+        picked = "".join(f"\n- {line}" for line in lines) if len(lines) > 1 else "".join(lines)
         head = Text("回答问题 #{id}：{picked}", id=row["id"], picked=picked) if picked else Text("回答问题 #{id}", id=row["id"])
     return f"{head}\n\n{text.strip()}" if (text or "").strip() else str(head)
 

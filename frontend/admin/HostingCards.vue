@@ -16,15 +16,15 @@ const { state, reload, notify, binding } = inject("panel");
 const entry = computed(() => state.value.entry || { running: false, port: 0, public_url: "", relay_enabled: false, tunnel_enabled: false, relay: {} });
 const entry_busy = ref(""), tunnel_open = ref(false);
 const WAYS = [
-  { key: "relay", icon: "i-lucide-cloud", label: t('经线上网站中转'), note: t('不需要域名：经共议线上网站中转到这台电脑，手机和外地的电脑都能打开。需要先把这台电脑绑定到线上网站。'), turned_on: t('已开启经线上网站中转'), turned_off: t('已关闭经线上网站中转') },
-  { key: "tunnel", icon: "i-lucide-globe", label: t('自有域名'), note: t('用你托管在 Cloudflare 的域名，经 Cloudflare 隧道连到这台电脑。需要有自己的域名。'), turned_on: t('已开启自有域名'), turned_off: t('已关闭自有域名') },
+  { key: "relay", icon: "i-lucide-cloud", label: t('自建中转'), note: t('使用本机的自建中转。请先在“本机 → 自建中转”绑定。'), turned_on: t('已开启自建中转'), turned_off: t('已关闭自建中转') },
+  { key: "tunnel", icon: "i-lucide-globe", label: t('Cloudflare 隧道'), note: t('通过 Cloudflare 隧道访问这台电脑，需要有托管在 Cloudflare 上的域名。'), turned_on: t('已开启 Cloudflare 隧道'), turned_off: t('已关闭 Cloudflare 隧道') },
 ];
 const enabled = (way) => Boolean(entry.value[`${way}_enabled`]);
 const ways_on = computed(() => WAYS.filter((item) => enabled(item.key)));
 // With both on, new accounts are given the owner's domain: direct, and outside the Workers quota.
 const default_way = computed(() => (ways_on.value.length > 1 ? "tunnel" : ""));
 // The relay needs this computer bound to an online site (its entry address is fetched on turning it on); the tunnel, its setup.
-// The relay needs only the computer's binding ("本机 → 线上网站", #5494); turning it on fetches the entry address itself.
+// The relay needs only the computer's binding ("本机 → 自建中转", #5494); turning it on fetches the entry address itself.
 const prepared = (way) => (way === "relay" ? Boolean(state.value.online_site) : Boolean(entry.value.tunnel));
 // The tunnel as cloudflared reports it: connected to Cloudflare, running but not (yet) connected, or not running.
 // Shown on a way that is on until the panel's check over the network answers.
@@ -45,7 +45,7 @@ const relay_state = computed(() => {
 // What the row of a way shows under its explanation: its address and state once prepared.
 function detail(way) {
   if (way === "relay" && prepared("relay")) {
-    // Until turned on there is no entry address yet; the site itself is shown in "本机 → 线上网站".
+    // Until turned on there is no entry address yet; the site itself is shown in "本机 → 自建中转".
     return entry.value.relay?.link ? { text: entry.value.relay.link, address: entry.value.relay.link, state: enabled("relay") ? relay_state.value : null } : null;
   }
   if (way === "tunnel" && prepared("tunnel")) return { text: entry.value.public_url, address: entry.value.public_url, state: enabled("tunnel") ? tunnel_state.value : null };
@@ -84,18 +84,18 @@ async function copy(text) {
 </script>
 
 <template>
-  <p v-if="!ways_on.length" class="panel-note entry-state"><UIcon name="i-lucide-info" />{{ t('登录入口没有开启线上网站或自有域名，其他设备打不开') }}</p>
+  <p v-if="!ways_on.length" class="panel-note entry-state"><UIcon name="i-lucide-info" />{{ t('登录入口没有开启自建中转或 Cloudflare 隧道，其他设备打不开') }}</p>
   <p v-else-if="!entry.running" class="panel-note is-amber entry-state"><UIcon name="i-lucide-triangle-alert" /><span>{{ t('登录入口未运行，使用者暂时无法登录') }}</span>
     <button type="button" class="panel-button is-primary is-small" :disabled="Boolean(entry_busy)" @click="entry_act('start', {}, t('登录入口已启动'))">{{ t('启动') }}</button></p>
   <div class="entry-grid">
-    <EntryWayCard icon="i-lucide-monitor" :title="t('本地网页')" :tag="t('不支持')" unsupported :note="t('托管账号只能从线上网站或自有域名登录。')" />
+    <EntryWayCard icon="i-lucide-monitor" :title="t('本地网页')" :tag="t('不支持')" unsupported :note="t('托管账号只能从自建中转或 Cloudflare 隧道登录。')" />
     <EntryWayCard v-for="item in WAYS" :key="item.key" :icon="item.icon" :title="item.label" :active="enabled(item.key)" :tag="way_state(item.key).label" :tone="way_state(item.key).tag"
-      :mark="item.key === default_way ? t('默认') : ''" :note="item.key === 'relay' && prepared('relay') ? t('不需要域名：经共议线上网站中转到这台电脑，手机和外地的电脑都能打开。') : item.note" :value="detail(item.key)?.text || ''" :hint="detail(item.key)?.state?.hint || ''">
+      :mark="item.key === default_way ? t('默认') : ''" :note="item.key === 'relay' && prepared('relay') ? t('使用本机的自建中转。') : item.note" :value="detail(item.key)?.text || ''" :hint="detail(item.key)?.state?.hint || ''">
       <template v-if="prepared(item.key)" #corner>
         <USwitch :model-value="enabled(item.key)" :loading="entry_busy === item.key" :disabled="Boolean(entry_busy)" :aria-label="t('开启或关闭{value1}', { value1: item.label })" @update:model-value="(on) => toggle_way(item, on)" />
       </template>
       <template #actions>
-        <!-- Binding is the computer's (shared with the administrator's entry); the same dialog as "本机 → 线上网站" opens here. -->
+        <!-- Binding is the computer's (shared with the administrator's entry); the same dialog as "本机 → 自建中转" opens here. -->
         <button v-if="item.key === 'relay' && !prepared('relay')" type="button" class="panel-button is-outline is-small" @click="binding++"><UIcon name="i-lucide-link" />{{ t('绑定') }}</button>
         <button v-if="enabled(item.key) && detail(item.key)?.address" type="button" class="panel-button is-outline is-small" @click="copy(detail(item.key).address)"><UIcon name="i-lucide-copy" />{{ t('复制地址') }}</button>
         <RelayReconnect v-if="item.key === 'tunnel'" tunnel :disabled="entry_busy === 'tunnel'" />

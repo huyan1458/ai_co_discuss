@@ -135,7 +135,7 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await route_free_message(home, jev, input, reply('__host__', 0.99))).action, 'host');
   assert.equal((await route_free_message(home, jev, input, reply('__all__', limits.wide))).action, 'all');
   assert.equal((await route_free_message(home, jev, input, reply('__all__', limits.wide - 0.01))).action, 'host');
-  assert.equal((await route_free_message(home, jev, input, reply('__none__', 0.99))).action, 'none');
+  assert.equal((await route_free_message(home, jev, input, reply('__none__', 0.99))).action, 'host');
   // Everyone in turn is a choice with the wide threshold.
   assert.equal((await route_free_message(home, jev, input, reply('__all_seq__', limits.wide))).action, 'sequential');
   assert.equal((await route_free_message(home, jev, input, reply('__all_seq__', limits.wide - 0.01))).action, 'host');
@@ -148,6 +148,12 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.equal((await route_free_message(home, jev, pair, reply('__some__:Codex、Antigravity', limits.wide - 0.01))).action, 'host');
   await route_free_message(home, jev, input, async (url, init) => { named_sent = JSON.parse(init.body); return reply('__host__', 0.9)(); });
   assert.ok(!Object.keys(named_sent.questions.handler.criteria).some(key => key.startsWith('__some__')));
+  const long = { id: 1, author: '成员', text: '首'.repeat(800) + '尾'.repeat(800) };
+  const current = { ...long, id: 2 };
+  const excerpted = scheduler_state('房间', [long, { id: 2, author: '用户', text: '还有一件事' }], { ...current, id: 3 });
+  assert.ok(excerpted.includes('首'.repeat(750) + '〔中间省略 100 字〕' + '尾'.repeat(750)));
+  assert.ok(excerpted.endsWith('首'.repeat(300) + '〔中间省略 1000 字〕' + '尾'.repeat(300)));
+  assert.equal((excerpted.match(/[首尾]/g) || []).length, 2100);
   assert.match(scheduler_state('房间', [], input.message), /#3 用户（回复 #2）：修一下登录/);
   // The state describes the room and each member; options say what each choice leads to.
   let sent_to_model;
@@ -541,7 +547,7 @@ async function fixture(t) {
       result = { archived: false, members: [member], observers, executions: active_executions(), execution_minutes: 60 };
     } else if (route === '/' || route === '') result = { ...room, limits: { ...limits, ...room.limits } };
     else if (route === '/room-links') result = { links: [] };
-    else if (route.startsWith('/messages?after=')) result = { messages: [] };
+    else if (route.startsWith('/messages?before=')) result = { messages: [] };
     else if (route === '/executions' && request.method === 'POST') {
       calls.push('reserve');
       const failure = failures.reserve;
@@ -3072,11 +3078,11 @@ async function free_fixture(t) {
       if (body?.action === 'retry_start') execution.retry.retry_at = 0;
       if (body?.action === 'segments') { (state.segments ||= []).push(body.segments); if (body.notes) (state.notes ||= []).push(body.notes); }
       result = execution;
-    } else if (url.startsWith('/messages?after=')) {
+    } else if (url.startsWith('/messages?before=')) {
       if (state.fail_messages) { response.writeHead(503, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: 'context unavailable' })); return; }
-      // Like the website: one page of at most 20 messages after the cursor.
-      const after = Number(url.split('=')[1]);
-      result = { messages: (state.messages || []).filter(item => item.id > after).slice(0, 20) };
+      const params = new URL(request.url, 'http://localhost').searchParams;
+      const before = Number(params.get('before'));
+      result = { messages: (state.messages || []).filter(item => !before || item.id < before).slice(-Number(params.get('limit'))) };
     } else if (url === '/messages' && request.method === 'POST') {
       // Like the website: an answer bound to a live execution completes it.
       (state.posts ||= []).push({ body, token: request.headers['x-discussion-token'] });
@@ -3573,7 +3579,8 @@ for (const [answer, posted] of [[{ choice: 'wait', probabilities: { wait: 0.9, c
     const f = await free_fixture(t);
     f.config = { ...with_scheduler(f.config), goal_idle_ms: 0 };
     f.state.pending = [];
-    f.state.messages = [{ id: 11, author: 'Codex', text: '前四项已修复。要不要继续修后四项，请你决定。' }];
+    const report = '首'.repeat(500) + '要不要继续修后四项，请你决定。' + '尾'.repeat(500);
+    f.state.messages = [{ id: 11, author: 'Codex', text: report }];
     f.state.room.latest_id = 11;
     f.state.room.goal_state = { goal: { id: 1, status: 'active', idle: true, armed: 1, objective: '修完 8 项问题' }, revision: 'goal-r1' };
     const runner = new FreeRoomRunner(f.config, f.store, async () => ({ status: 'accepted' }), () => {},
@@ -3584,6 +3591,7 @@ for (const [answer, posted] of [[{ choice: 'wait', probabilities: { wait: 0.9, c
     assert.equal(f.state.decisions.length, 1);
     assert.equal(f.state.decisions[0].after_message_id, 11);
     assert.equal(f.state.decisions[0].context.scene, 'goal');
+    assert.ok(f.state.decisions[0].input.state.includes(report));
     if (answer.choice === 'wait' && posted === 'continue') {
       assert.deepEqual(f.state.decisions[0].label_text, {
         template: '倾向等用户回复，把握不足，唤醒主持人', params: {},
@@ -3942,6 +3950,21 @@ test('with smart scheduling configured, @全体成员 still answers at once with
   await Promise.all(runner.decisions);
   assert.deepEqual(state.group_posts.map(item => [item.action, item.revision]), [['all', 'group-r1']]);
   assert.equal(state.calls.some(call => call === 'POST /scheduler-routing'), false);
+});
+
+test('unnamed routing retains twenty room messages across gaps in global IDs', async t => {
+  const { state, config, store } = await group_fixture(t);
+  const history = Array.from({ length: 21 }, (_, index) => ({
+    id: 100 * (index + 1), author: 'Claude', text: '此前的回答',
+  }));
+  state.messages = [...history, { id: 2300, author: '用户', text: '继续' }, { id: 2500, author: '用户', text: '晚到' }];
+  state.pending = [{ id: 1, message_id: 2300, purpose: 'route' }];
+  const model = scheduler_fetch({ handler: { type: 'choice', choice: '__host__', confidence: 0.99 } });
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), () => {}, model);
+  await runner.tick();
+  await Promise.all(runner.decisions);
+  const ids = [...state.decisions[0].input.state.matchAll(/^#(\d+) /gm)].map(match => Number(match[1]));
+  assert.deepEqual(ids, [...history.slice(1).map(item => item.id), 2300]);
 });
 
 test('an unnamed route waits for model failure and records it before host delivery', async t => {

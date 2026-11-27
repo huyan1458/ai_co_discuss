@@ -2,7 +2,7 @@
 /**
  * The administrator's three ways in: the local page, the online site reached from paired devices, and the owner's domain,
  * which is not offered because the local page has no sign-in of its own to put on the internet. Binding to the online
- * site lives in "本机 → 线上网站" (#5494), since more than this entry needs it.
+ * site lives in "本机 → 自建中转" (#5494), since more than this entry needs it.
  */
 import { computed, inject } from "vue";
 import { call } from "./api.js";
@@ -30,14 +30,14 @@ async function open_local() {
         <button v-if="service.url" type="button" class="panel-button is-outline is-small" @click="open_local"><UIcon name="i-lucide-external-link" />{{ t('打开') }}</button>
       </template>
     </EntryWayCard>
-    <EntryWayCard icon="i-lucide-cloud" :title="t('线上网站')" :active="Boolean(online_site)" :tag="relay.label" :tone="relay.tone"
-      :note="online_site ? t('扫码配对过的设备可以在外面使用这台电脑') : t('需先在“本机 → 线上网站”绑定')" :value="online_site"
+    <EntryWayCard icon="i-lucide-cloud" :title="t('自建中转')" :active="Boolean(online_site)" :tag="relay.label" :tone="relay.tone"
+      :note="online_site ? t('使用本机的自建中转') : t('需先在“本机 → 自建中转”绑定')" :value="online_site"
       :hint="relay.detail">
       <template #actions>
         <a v-if="online_site" class="panel-button is-outline is-small" :href="online_site" target="_blank" rel="noopener"><UIcon name="i-lucide-external-link" />{{ t('打开') }}</a>
         <RelayReconnect />
       </template>
     </EntryWayCard>
-    <EntryWayCard icon="i-lucide-globe" :title="t('自有域名')" :tag="t('不支持')" unsupported :note="t('管理员权限最高，不开放到自有域名；在外面请用线上网站。')" />
+    <EntryWayCard icon="i-lucide-globe" :title="t('Cloudflare 隧道')" :tag="t('不支持')" unsupported :note="t('管理员远程访问请使用自建中转。')" />
   </div>
 </template>

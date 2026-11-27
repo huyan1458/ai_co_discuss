@@ -79,6 +79,6 @@ To see what changed in this version, click the version number after "AI CoDiscus
 | Reading → Lines shown when folded | Fewer, Medium, More | A folded answer keeps about 0.35, 0.6 or 0.9 of the screen, converted to lines from the screen height, so phones, tablets and computers each differ. Medium is the default; the choice applies to this device only. |
 | Room preferences → Host's default access | Read-only, Can write, Automatic, Full access | The project access the first member added to a new room (the host by default) starts with; Read-only by default. If its software doesn't support the chosen level, it stays read-only. Saved in the local service, kept across updates; needs the local service connected. |
 | Speech | Text-to-speech service, General voice, voices by platform and for files, Speed, Tone, Voice input, Local process | [Local and cloud speech](voice.md#read-aloud-and-voice-input-local-and-cloud-options) |
-| WeChat notifications | Scan to link, Send test, Unlink | [WeChat notifications](voice.md#wechat-notifications) |
+| Notifications | WeChat: Scan to link, Send test, Unlink | [WeChat notifications](voice.md#wechat-notifications) |
 
 The site controls animations for work status, member card flips, and opening, minimizing, or switching the layout of the file preview window. Your system's reduced-motion setting does not change these animations. The hosted sign-in page always plays its brand animation.

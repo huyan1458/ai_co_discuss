@@ -5,7 +5,7 @@ Connect a lightweight decision model to handle routine assignment and turn hando
 ## What it can and cannot do
 
 - **It can:**
-  - Route an unnamed message directly to a member when the request is clearly addressed to them, ask everyone to answer together or in speaking order, or determine that no reply is needed. Uncertain decisions go back to the host.
+  - Route an unnamed message directly to a member when the request is clearly addressed to them, ask everyone to answer together or in speaking order, or suggest that no reply is needed. The host handles no-reply suggestions and uncertain decisions.
   - During a discussion, turn a local follow-up into an ordinary question that does not count as a discussion turn and preserves the discussion queue. It can also choose the next speaker between rounds.
   - During Goal, when the room is idle, determine whether a recent answer is waiting for your reply. If confident, it can hold off waking the host.
   - At the end of each loop in a recurring relay, determine whether the final member, such as a reviewer, explicitly requested rework. If confident, it can start another loop. Acceptance or a decision requiring judgment goes to the host.

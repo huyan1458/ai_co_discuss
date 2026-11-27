@@ -23,6 +23,7 @@ import UploadPercent from "./UploadPercent.vue";
 import AttachmentUploadRing from "./AttachmentUploadRing.vue";
 import QueuedMessages from "./QueuedMessages.vue";
 import QuestionCard from "./QuestionCard.vue";
+import WeixinFailureNotice from "./WeixinFailureNotice.vue";
 import { active_workflow } from "./workflow-state.js";
 import { workflow_problem } from "./workflow-library.js";
 import { open_private_chat } from "./private-chat.js";
@@ -1718,6 +1719,30 @@ function room_drag({ detail }) {
 }
 onMounted(() => window.addEventListener("codiscuss:room-drag", room_drag));
 onBeforeUnmount(() => window.removeEventListener("codiscuss:room-drag", room_drag));
+
+// A member row dragged from the speaking order (SpeakingOrder.vue) drops its `[成员 名称]` anywhere on the messages or
+// the composer, as a room does; over the message box itself the browser's own drop puts it at the drop point.
+const member_dragged = ref(null), member_drop = ref(false);
+function member_drag({ detail }) { member_dragged.value = detail; if (!detail) member_drop.value = false; }
+onMounted(() => window.addEventListener("codiscuss:member-drag", member_drag));
+onBeforeUnmount(() => window.removeEventListener("codiscuss:member-drag", member_drag));
+function member_drag_over(event) {
+  const editor = prompt.value?.textareaRef;
+  if (!member_dragged.value || !editor || editor.disabled) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+  member_drop.value = event.target !== editor;
+}
+function member_drag_leave(event) {
+  if (!conversation.value?.contains(event.relatedTarget)) member_drop.value = false;
+}
+function member_drop_here(event) {
+  const editor = prompt.value?.textareaRef;
+  member_drop.value = false;
+  if (!member_dragged.value || !editor || editor.disabled || event.target === editor) return;
+  event.preventDefault();
+  replace_draft(editor.selectionStart, editor.selectionEnd, `${event.dataTransfer.getData("text/plain")} `);
+}
 
 /** Where the replacement ends: also swallow one space after the token when the insertion already ends with one. */
 const replace_end = (end, insertion) => insertion.endsWith(" ") && text.value[end] === " " ? end + 1 : end;
@@ -4157,8 +4182,10 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 
 <template>
   <!-- One root element: the workspace hides this tab with v-show, which a fragment root would ignore. -->
-  <section ref="conversation" class="channel-conversation" :class="{ 'is-filtered': view.query || view.source_filter }" role="tabpanel" :aria-label="t('消息')">
+  <section ref="conversation" class="channel-conversation" :class="{ 'is-filtered': view.query || view.source_filter }" role="tabpanel" :aria-label="t('消息')"
+    @dragover="member_drag_over" @dragleave="member_drag_leave" @drop="member_drop_here">
     <div v-if="room_drop" class="channel-room-drop" aria-hidden="true"><span><UIcon name="i-lucide-hash" />{{ t('松开以引用房间「{title}」', { title: room_drop.title }) }}</span></div>
+    <div v-else-if="member_drop && member_dragged" class="channel-room-drop" aria-hidden="true"><span><UIcon name="i-lucide-user" />{{ t('松开以引用成员「{name}」', { name: member_dragged.name }) }}</span></div>
   <ExternalMemberDialog v-model:open="pending_seat_open" :member="pending_seat" />
     <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? t('正在筛选…') : t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
     <nav v-if="navigation_sections.length || navigation_working.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @scroll.passive="track_navigation_scroll" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
@@ -4652,6 +4679,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           </div>
         </template>
       </UPopover>
+      <WeixinFailureNotice :room="room" />
       <QuestionCard v-if="room.free?.questions?.length" :questions="room.free.questions" />
       <QueuedMessages v-if="room.free?.queued_messages" :queue="room.free.queued_messages" :room-id="room.id" />
       <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="relay_waits_owner ? t('接力在等你回答问题卡…') : t('发消息到 # {value1}', { value1: room.title })" :aria-label="t('留言正文')" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
@@ -4765,7 +4793,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 .channel-message-group.transcript-row-windowed :deep([data-message-id]) { content-visibility: visible; }
 .channel-free-recipients { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; font-size: 12px; color: var(--ui-text-muted); }
 .channel-free-recipients button { min-height: 24px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; color: var(--ui-text-muted); transition: background .12s, color .12s; }
-.channel-free-recipients button:hover { background: #ffffff0d; color: var(--ui-text-highlighted); }
+.channel-free-recipients button:hover { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
 .channel-free-recipients button.is-on { border-color: color-mix(in srgb, var(--channel-accent) 40%, transparent); background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
 .channel-working-warning { color: var(--ui-warning); }
 .channel-working-background { flex-shrink: 0; width: 14px; height: 14px; color: var(--ui-text-dimmed); }
@@ -4777,8 +4805,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 /* A dark red disc reads as a heavy blot on a white card: light uses the pale tint of 全部停止. */
 :root[data-theme="channel-light"] .channel-stop-button { background: color-mix(in srgb, var(--ui-error) 12%, transparent); color: var(--ui-error); }
 :root[data-theme="channel-light"] .channel-stop-button:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-error) 20%, transparent); }
-.channel-retry-button { background: #ffffff14; color: var(--ui-text-highlighted); }
-.channel-retry-button:hover:not(:disabled) { background: #ffffff24; }
+.channel-retry-button { background: var(--channel-ghost-active); color: var(--ui-text-highlighted); }
+.channel-retry-button:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-text) 14%, transparent); }
 .channel-stop-square { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
 /* Pressed, the spinner takes the square's place at the centre of the key. */
 .channel-stop-button :deep([data-slot="leadingIcon"]) { flex-shrink: 0; width: 14px; height: 14px; }

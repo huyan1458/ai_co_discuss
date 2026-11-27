@@ -4,7 +4,7 @@
  * the protocol used by coder_notifier (Tencent/openclaw-weixin 2.4.10), copied here so this repository stands alone.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { atomic_json } from './files.mjs';
@@ -28,9 +28,10 @@ const SOURCE = 'CoDiscuss';
 
 /** An explicit API rejection, distinguishable from an uncertain transport outcome. */
 export class IlinkError extends Error {
-  constructor(message, code = null) {
+  constructor(message, code = null, detail = '') {
     super(message);
     this.code = code;
+    this.detail = detail;
     this.session_expired = code === -14;
   }
 }
@@ -92,7 +93,9 @@ export class IlinkClient {
     if (!result || typeof result !== 'object' || Array.isArray(result)) throw new IlinkError('iLink 返回格式无效');
     const codes = [result.ret, result.errcode].filter(value => value != null).map(Number);
     const code = codes.includes(-14) ? -14 : codes.find(value => value !== 0);
-    if (code !== undefined) throw new IlinkError(code === -14 ? '微信登录已过期，请重新扫码绑定' : `iLink 拒绝请求（${code}）`, code);
+    const detail = typeof result.errmsg === 'string' ? result.errmsg.trim() : '';
+    if (code !== undefined) throw new IlinkError(code === -14 ? '微信登录已过期，请重新扫码绑定'
+      : `iLink 拒绝请求（${code}${detail ? `：${detail}` : ''}）`, code, detail);
     return result;
   }
 
@@ -184,6 +187,23 @@ export function split_text(text, limit = CHUNK_BYTES) {
 const directory = home => join(home, 'weixin');
 const account_path = home => join(directory(home), 'account.json');
 const state_path = home => join(directory(home), 'state.json');
+// One line per notice sent or refused, with how old the reply context was, to learn how long iLink accepts one.
+const sends_path = home => join(directory(home), 'sends.jsonl');
+
+/** The state fields for the latest failure, or for none: the page shows `last_failure`, older readers `last_error`. */
+function failure_fields(error, context_at = 0) {
+  if (!error) return { last_error: '', last_failure: null };
+  return { last_error: error.message, last_failure: { at: Date.now(), message: error.message, code: error.code ?? null,
+    detail: error.detail || '', context_at } };
+}
+
+/** Record one send attempt for measuring how long a reply context stays usable. */
+function record_send(home, context_at, error = null) {
+  const now = Date.now();
+  const entry = { at: now, ok: !error, context_at, context_age_ms: context_at ? now - context_at : null,
+    ...(error ? { code: error.code ?? null, detail: error.detail || '', message: error.message } : {}) };
+  try { appendFileSync(sends_path(home), `${JSON.stringify(entry)}\n`, { mode: 0o600 }); } catch { /* the log is only for measuring */ }
+}
 const login_path = home => join(directory(home), 'login.json');
 
 function read_json(path) {
@@ -213,7 +233,8 @@ export function weixin_status(home) {
   if (!account) return { bound: false, login_pending: Boolean(read_json(login_path(home))) };
   const state = read_state(home);
   return { bound: true, owner_id: account.owner_id, context_ready: Boolean(state.context_token), context_at: state.context_at,
-    last_notice_at: state.notices.at(-1)?.sent_at || 0, last_error: state.last_error || '' };
+    last_notice_at: state.notices.at(-1)?.sent_at || 0, last_error: state.last_error || '',
+    last_failure: state.last_error ? state.last_failure || { message: state.last_error, code: null, detail: '' } : null };
 }
 
 /** Start binding: a fresh QR challenge whose content the page draws as a QR code. */
@@ -239,7 +260,7 @@ export async function complete_login(home, { client = new IlinkClient(), timeout
         throw new Error('微信确认响应缺少账号或凭据，未绑定');
       }
       write_json(account_path(home), account);
-      write_json(state_path(home), { ...read_state(home), cursor: '', context_token: '', context_at: 0, last_error: '' });
+      write_json(state_path(home), { ...read_state(home), cursor: '', context_token: '', context_at: 0, ...failure_fields(null) });
       rmSync(login_path(home), { force: true });
       return { status: 'connected' };
     }
@@ -282,14 +303,16 @@ export async function send_notice(home, { key, room = null, paragraphs, question
       if (String(result.message_id ?? '').trim()) server_ids.push(String(result.message_id));
     }
   } catch (error) {
-    write_json(state_path(home), { ...read_state(home), last_error: error.message });
+    write_json(state_path(home), { ...read_state(home), ...failure_fields(error, state.context_at) });
+    record_send(home, state.context_at, error);
     throw error;
   }
   const latest = read_state(home);
   // A question's notice also names the question and version, so a reply to it can answer that question.
   latest.notices = [...latest.notices, { number, key: key || '', site: room?.site || '', room: room?.room || '', sent_at: Date.now(),
     server_ids, text: body, ...(question ? { question_id: question.id, version: question.version } : {}) }].slice(-RECENT_NOTICES);
-  write_json(state_path(home), { ...latest, next_notice: number + 1, last_error: '' });
+  write_json(state_path(home), { ...latest, next_notice: number + 1, ...failure_fields(null) });
+  record_send(home, state.context_at);
   return { status: 'sent', number };
 }
 
@@ -339,12 +362,12 @@ export async function receive_replies(home, { on_reply, log = () => {}, signal, 
       const latest = read_state(home);
       const context = texts.map(item => item.context_token).filter(Boolean).at(-1);
       write_json(state_path(home), { ...latest, cursor: typeof response.get_updates_buf === 'string' && response.get_updates_buf ? response.get_updates_buf : latest.cursor,
-        ...(context ? { context_token: context, context_at: Date.now(), last_error: '' } : {}) });
+        ...(context ? { context_token: context, context_at: Date.now(), ...failure_fields(null) } : {}) });
       for (const item of texts) await answer(home, account, client, item, on_reply, log);
     } catch (error) {
       if (signal?.aborted) break;
       log(`微信收件失败：${error.message}`);
-      if (error.session_expired) write_json(state_path(home), { ...read_state(home), last_error: error.message });
+      if (error.session_expired) write_json(state_path(home), { ...read_state(home), ...failure_fields(error, read_state(home).context_at) });
       await sleep(RECEIVE_RETRY_MS, null, { signal }).catch(() => {});
     }
   }

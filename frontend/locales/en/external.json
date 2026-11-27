@@ -1,4 +1,7 @@
 {
+  "链接只在生成时显示；请重新生成。未绑定自建中转时，需先在设置中绑定。": "Links are shown only when generated. Generate a new one; if no self-hosted relay is bound, bind one in Settings first.",
+  "绑定了多个自建中转，生成链接时选择": "Several self-hosted relays are bound; choose one when making the link",
+  "未绑定自建中转，无法生成链接": "No self-hosted relay is bound; a link cannot be made",
   "对方未同意": "Not accepted by the other side",
   "外部房间": "External rooms",
   "已离开的外部专家": "External experts who left",

@@ -193,8 +193,8 @@ async function invite_site(home, site_url) {
   if (direct && (!site_url || site_url === direct.site)) return { site: direct.site, link: direct };
   const sites = Object.entries(keyed_links(home).sites);
   const found = site_url ? sites.find(([origin]) => origin === site_url) : sites.length === 1 ? sites[0] : null;
-  if (!found) throw sites.length ? new GatewayError(400, '这台电脑绑定了多个线上网站，请指定邀请使用的网站', {}, 'site_required')
-    : new GatewayError(400, '这台电脑未绑定线上网站，请在管理面板“本机 → 线上网站”处绑定', {}, 'site_missing');
+  if (!found) throw sites.length ? new GatewayError(400, '这台电脑绑定了多个自建中转，请指定邀请使用的网站', {}, 'site_required')
+    : new GatewayError(400, '这台电脑未绑定自建中转，请在管理面板“本机 → 自建中转”处绑定', {}, 'site_missing');
   return { site: found[0], link: found[1] };
 }
 

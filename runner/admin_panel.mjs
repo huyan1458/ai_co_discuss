@@ -551,7 +551,7 @@ function run_instance(data, name, command) {
   // An account without its own Windows user runs as the owner and could read everything the owner can; it is not let
   // run while people outside can reach the entry.
   if (command === 'start' && process.platform === 'win32' && !read_os_users(data)[name] && (entry_settings(data).relay_enabled || entry_settings(data).tunnel_enabled)) {
-    throw panel_error('外网访问已开启，{value1} 未隔离（以你的身份运行），不能启动：请先隔离该账号，或关闭登录入口的线上网站和自有域名', { value1: name });
+    throw panel_error('外网访问已开启，{value1} 未隔离（以你的身份运行），不能启动：请先隔离该账号，或关闭登录入口的自建中转和 Cloudflare 隧道', { value1: name });
   }
   if (command === 'start' && read_os_users(data)[name]) {
     const { local_script } = shared_paths();
@@ -864,7 +864,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && section === 'site' && name === 'disconnect') { const left = await disconnect_site(data); after_change(); return left; }
     if (section === 'site' && name === 'region' && ['GET', 'POST'].includes(method)) {
       const bound = bound_site(data);
-      if (!bound) throw panel_error('尚未绑定线上网站');
+      if (!bound) throw panel_error('尚未绑定自建中转');
       if (method === 'GET') return { region: bound.region };
       if (!RELAY_REGIONS.includes(body.region)) throw panel_error('中转地区无效');
       if (bound.region === body.region) return { region: bound.region };
@@ -878,7 +878,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     }
     if (method === 'POST' && section === 'site' && name === 'reconnect') {
       const bound = bound_site(data), service = op.service_overview(data);
-      if (!bound) throw panel_error('尚未绑定线上网站');
+      if (!bound) throw panel_error('尚未绑定自建中转');
       if (!service.pid) throw panel_error('请先启动共议服务，再重连中转');
       request_relay_reconnect(data, bound, service.pid);
       return { requested: true, site: bound.site };
@@ -1036,8 +1036,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
 async function reconnect_tunnel(data) {
   const entry = await entry_status(data);
   const { tunnel, tunnel_enabled } = entry_settings(data);
-  if (!tunnel) throw panel_error('请先配置自有域名');
-  if (!tunnel_enabled) throw panel_error('请先开启自有域名');
+  if (!tunnel) throw panel_error('请先配置 Cloudflare 隧道');
+  if (!tunnel_enabled) throw panel_error('请先开启 Cloudflare 隧道');
   if (!entry.running) throw panel_error('请先启动登录入口');
   stop_tunnel(data);
   await ensure_tunnel(data, tunnel, entry.port);
@@ -1109,7 +1109,7 @@ async function prepare_entry_way(data, way) {
     const users = read_os_users(data), accounts = read_accounts(data);
     const exposed = [];
     for (const [name, account] of Object.entries(accounts)) if (!users[name] && await instance_running(account.port)) exposed.push(name);
-    if (exposed.length) throw panel_error('未隔离的账号正在运行（{value1}），它们以你的身份运行，开启线上网站或自有域名前请先停止或隔离', { value1: exposed.join('、') });
+    if (exposed.length) throw panel_error('未隔离的账号正在运行（{value1}），它们以你的身份运行，开启自建中转或 Cloudflare 隧道前请先停止或隔离', { value1: exposed.join('、') });
   }
 }
 
@@ -1160,7 +1160,7 @@ function make_access_code(data, { config, site }) {
   const path = resolve(String(config || saved.config || '').trim() || '.');
   if (!existsSync(path) || !/\.jsonc?$/.test(path)) throw panel_error('找不到线上站点的部署配置：填写源码仓库里 .wrangler\\deploy\\wrangler.jsonc 的完整路径');
   let origin;
-  try { origin = new URL(String(site || saved.site || bound_site(data)?.site || '').trim()).origin; } catch { throw panel_error('站点地址格式不对，例如 https://xxx.pages.dev'); }
+  try { origin = new URL(String(site || saved.site || bound_site(data)?.site || '').trim()).origin; } catch { throw panel_error('线上网站地址格式不对，例如 https://xxx.pages.dev'); }
   return new Promise((done, fail) => {
     const child = spawn(process.execPath, [installed_script('codiscuss.mjs'), 'token', '--config', path], { cwd: wrangler_folder(path), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '', errors = '';
@@ -1192,7 +1192,7 @@ async function join_relay(data, text) {
   await set_relay_url(data, entry_url);
   steps.push(t('入口地址 {value1}', { value1: entry_url }));
   const overview = await set_entry_way(data, 'relay', true);
-  steps.push(t('已开启线上网站'));
+  steps.push(t('已开启自建中转'));
   return { steps, entry: overview };
 }
 
@@ -1233,7 +1233,7 @@ async function bind_online_site(data, { site, setup_key }, connect) {
   const text = String(site || '').trim(), at = text.indexOf(BIND_MARK);
   if (at >= 0) { setup_key = text.slice(at + BIND_MARK.length); site = text.slice(0, at); }
   let origin;
-  try { origin = new URL(String(site || '').trim()).origin; } catch { throw panel_error('站点地址格式不对，例如 https://xxx.pages.dev'); }
+  try { origin = new URL(String(site || '').trim()).origin; } catch { throw panel_error('线上网站地址格式不对，例如 https://xxx.pages.dev'); }
   if (bound && bound.site !== origin) throw panel_error('这台电脑已绑定 {value1}，请先解绑', { value1: bound.site });
   const result = await connect(data, origin, setup_key);
   if (!result) throw panel_error('这个地址不是共议线上站点：{value1}', { value1: origin });
@@ -1244,7 +1244,7 @@ async function bind_online_site(data, { site, setup_key }, connect) {
 async function disconnect_site(data) {
   const bound = bound_site(data);
   if (!bound) return { disconnected: '' };
-  if (entry_settings(data).relay_enabled) throw panel_error('托管账号入口的线上网站还开着，请先关闭它');
+  if (entry_settings(data).relay_enabled) throw panel_error('托管账号入口的自建中转还开着，请先关闭它');
   // The accounts bound under this computer are released first (a failure stops here, to be retried); those reached on
   // the owner's domain do not use the online site (#5617, #5660).
   for (const [name, record] of Object.entries(read_account_sites(data))) if (!record.direct) await change_external(data, name, false);
@@ -1309,7 +1309,7 @@ async function set_account_external(data, name, on, bind = bind_account_site, { 
     return { external: true, site };
   }
   const bound = bound_site(data);
-  if (!bound) throw panel_error('这台电脑未绑定线上网站，请在管理面板“本机 → 线上网站”处绑定');
+  if (!bound) throw panel_error('这台电脑未绑定自建中转，请在管理面板“本机 → 自建中转”处绑定');
   const answer = await fetch_outside(`${bound.site}/api/machines/${bound.machine}/setup`, OUTSIDE_TIMEOUT_MS,
     { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Machine-Token': machine_links(data).sites[bound.site].token }, body: '{}' });
   const given = await answer.json().catch(() => ({}));

@@ -725,7 +725,7 @@ test('the owner binds and leaves the online site without hosting, and never from
   const post = async (path, body) => { const answer = await request(`/api/site/${path}`, { cookie, body }); return { status: answer.status, body: await answer.json() }; };
   const online = async () => (await (await request('/api/state', { cookie })).json()).online_site;
   assert.equal(await online(), '');
-  assert.match((await post('connect', { site: 'not an address' })).body.error, /站点地址格式不对/);
+  assert.match((await post('connect', { site: 'not an address' })).body.error, /线上网站地址格式不对/);
   assert.match((await post('connect', { site: 'https://not-a-site.example' })).body.error, /不是共议线上站点/);
   assert.equal((await post('connect', { site: 'https://site.example/path' })).status, 200);
   assert.equal(await online(), 'https://site.example', 'kept as the site itself, with hosting off');

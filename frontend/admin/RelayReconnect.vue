@@ -10,8 +10,8 @@ const busy = ref(false);
 const reason = computed(() => {
   if (!props.tunnel) return '';
   const entry = state.value.entry;
-  if (!entry?.tunnel) return t('请先配置自有域名');
-  if (!entry.tunnel_enabled) return t('请先开启自有域名');
+  if (!entry?.tunnel) return t('请先配置 Cloudflare 隧道');
+  if (!entry.tunnel_enabled) return t('请先开启 Cloudflare 隧道');
   return entry.running ? '' : t('请先启动登录入口');
 });
 async function reconnect() {

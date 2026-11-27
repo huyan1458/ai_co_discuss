@@ -597,18 +597,21 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
         <div v-if="created"><dt>{{ t("创建时间") }}</dt><dd>{{ created }}</dd></div>
       </dl>
     </section>
-    <details v-if="room_storage" :key="room.id" open class="pb-storage" :class="`is-${room_storage.tone}`" :aria-label="t('草稿空间')">
-      <summary>{{ t('草稿空间') }}</summary>
+    <details v-if="room_storage" :key="room.id" open class="pb-storage" :class="`is-${room_storage.tone}`" :aria-label="t('存储空间')">
+      <summary>{{ t('存储空间') }}</summary>
       <div class="pb-meter" :title="t('本房间成员草稿与临时文件占用；按周期采样检查，并非写入层硬拦截，达到 80% 时提示，超过上限将停止派活')">
         <div class="pb-meter-label">
+          <span class="pb-meter-name">{{ t('草稿') }}</span>
           <b>{{ format_storage_bytes(room_storage.used) }} / {{ format_storage_bytes(room_storage.limit) }}</b>
         </div>
         <div class="pb-bar"><i :style="{ width: `${Math.round(room_storage.ratio * 100)}%` }"></i></div>
       </div>
-      <p v-if="room.attachment_bytes > 0" class="pb-storage-note pb-storage-attachments">
-        {{ t('本房间附件 {size}，存于房间记录，不计入草稿配额。', { size: format_storage_bytes(room.attachment_bytes) }) }}
-        <UButton v-if="view.access?.can_manage" :label="t('管理附件')" icon="i-lucide-images" size="xs" color="neutral" variant="link" class="pb-attachments-manage" @click="managing_attachments = true" />
-      </p>
+      <div v-if="room.attachment_bytes > 0" class="pb-meter pb-attachments" :title="t('消息附件原文件，存于房间记录，不计入草稿配额')">
+        <div class="pb-meter-label">
+          <span class="pb-meter-name">{{ t('附件') }}<small class="pb-meter-hint">{{ t('不计入草稿配额') }}</small></span>
+          <b>{{ format_storage_bytes(room.attachment_bytes) }}</b>
+        </div>
+      </div>
       <p v-if="room_storage.room_tone === 'error'" class="pb-storage-note">
         {{ t('本房间草稿已超限，派活已暂停；请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup，或点击下方清理临时文件。') }}
       </p>
@@ -623,9 +626,10 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
       <p v-if="room_storage.unreadable > 0" class="pb-storage-note pb-storage-unreadable">
         {{ t('另有 {count} 处因权限无法读取，未计入配额。', { count: room_storage.unreadable }) }}
       </p>
-      <div v-if="view.access?.can_manage && (room_storage.scratch_bytes > 0 || room_storage.tone !== 'normal')" class="pb-storage-actions">
-        <UButton icon="i-lucide-trash-2" :label="room_storage.scratch_bytes > 0 ? t('清理临时文件（{size}）', { size: format_storage_bytes(room_storage.scratch_bytes) }) : t('清理临时文件')" :title="t('仅删除已确认结束执行的 .scratch 临时目录，不删除房间记录、成品或旧草稿')" size="xs" color="neutral" variant="outline" class="pb-action"
+      <div v-if="view.access?.can_manage && (room_storage.scratch_bytes > 0 || room_storage.tone !== 'normal' || room.attachment_bytes > 0)" class="pb-storage-actions">
+        <UButton v-if="room_storage.scratch_bytes > 0 || room_storage.tone !== 'normal'" icon="i-lucide-trash-2" :label="room_storage.scratch_bytes > 0 ? t('清理临时文件（{size}）', { size: format_storage_bytes(room_storage.scratch_bytes) }) : t('清理临时文件')" :title="t('仅删除已确认结束执行的 .scratch 临时目录，不删除房间记录、成品或旧草稿')" size="xs" color="neutral" variant="outline" class="pb-action"
           :loading="cleaning_storage" :disabled="cleaning_storage" @click="clean_room_temp" />
+        <UButton v-if="room.attachment_bytes > 0" icon="i-lucide-paperclip" :label="t('管理附件')" :title="t('按类型、时间与大小挑选附件，清理原文件以释放空间')" size="xs" color="neutral" variant="outline" class="pb-action" @click="managing_attachments = true" />
       </div>
     </details>
     <UModal v-model:open="managing_attachments" :title="t('管理本房间附件')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
@@ -831,13 +835,14 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
 .pb-storage { color: var(--ui-text-dimmed); font-size: 12px; }
 .pb-storage summary { cursor: pointer; }
 .pb-storage[open] summary { margin-bottom: 8px; }
-.pb-storage.is-warning .pb-meter-label b, .pb-storage.is-warning .pb-storage-note { color: #e5a50a; }
+.pb-storage.is-warning .pb-meter-label b, .pb-storage.is-warning .pb-storage-note { color: light-dark(#9a6700, #e5a50a); }
 .pb-storage.is-warning .pb-bar > i { background: #e5a50a; }
 .pb-storage.is-error .pb-meter-label b, .pb-storage.is-error .pb-storage-note { color: #f05252; }
 .pb-storage.is-error .pb-bar > i { background: #f05252; }
 .pb-storage-note { margin: 6px 0 0; color: var(--ui-text-dimmed); font-size: 11px; line-height: 1.5; }
-.pb-storage-unreadable { color: #e5a50a; }
-.pb-storage .pb-storage-note.pb-storage-attachments { color: var(--ui-text-dimmed); }
-.pb-attachments-manage { padding: 0 2px; font-size: 11px; vertical-align: baseline; }
+.pb-storage-unreadable { color: light-dark(#9a6700, #e5a50a); }
+.pb-meter-name { min-width: 0; }
+.pb-attachments { margin-top: 8px; }
+.pb-meter-hint { margin-left: 6px; font-size: 11px; opacity: .8; }
 .pb-storage-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 </style>

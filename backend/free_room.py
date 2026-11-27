@@ -523,22 +523,31 @@ def member_value(member):
 
 
 def batch_outcome(connection, room_id, batch_id):
-    """How each member of a dispatch ended: display name, request status, execution, and a failure's reason and class."""
+    """How each member of a dispatch ended: display name, request status, execution, answer message, and a failure's reason and class."""
     names = member_display_names(connection, room_id)
-    rows = connection.execute("""SELECT m.name,r.status,r.execution_id,e.status AS execution_status,e.result,f.failure_class,f.resets
+    rows = connection.execute("""SELECT m.name,r.status,r.execution_id,r.answer_id,e.status AS execution_status,e.result,f.failure_class,f.resets
         FROM member_requests r JOIN room_members m ON m.id=r.member_id LEFT JOIN member_executions e ON e.id=r.execution_id
         LEFT JOIN execution_failures f ON f.execution_id=r.execution_id
         WHERE r.room_id=? AND r.batch_id=? ORDER BY r.id""", (room_id, batch_id)).fetchall()
     return [{"member": names.get(row["name"], row["name"]), "status": row["status"], "execution_id": row["execution_id"],
+             **({"message_id": row["answer_id"]} if row["answer_id"] else {}),
              **({"reason": str(row["result"] or "")[:200]} if row["status"] in ("failed", "cancelled") else {}),
              **({"failure_class": row["failure_class"], "resets": row["resets"] or None} if row["failure_class"] else {})}
             for row in rows]
 
 
 def handoff_notice(connection, room_id, batch_id, retried):
-    """The notice a hand-back reaches a still-working host with: who did not finish and their own reasons, when any."""
-    failed = "；".join(f"{item['member']}（{item.get('reason', '')}）" for item in batch_outcome(connection, room_id, batch_id)
-                      if item["status"] in ("failed", "cancelled"))
+    """The notice a hand-back reaches a still-working host with: each answer by number, and who did not finish and why.
+
+    The answers are named so the host reads each one directly instead of paging the room to find them."""
+    outcome = batch_outcome(connection, room_id, batch_id)
+    failed = "；".join(f"{item['member']}（{item.get('reason', '')}）" for item in outcome if item["status"] in ("failed", "cancelled"))
+    answers = "、".join(f"{item['member']} #{item['message_id']}" for item in outcome if item.get("message_id"))
+    if answers:
+        facts = {"batch_id": batch_id, "answers": answers, "failed": failed}
+        if retried:
+            return Text("#{batch_id} 派出的工作重试后已结束，回答：{answers}；其中未完成：{failed}。请主持人按编号读回答，接着处理。", **facts)                 if failed else Text("#{batch_id} 派出的工作重试后已结束，回答：{answers}。请主持人按编号读回答，接着处理。", **facts)
+        return Text("#{batch_id} 派出的工作已结束，回答：{answers}；其中未完成：{failed}。请主持人按编号读回答，接着处理。", **facts)             if failed else Text("#{batch_id} 派出的工作已结束，回答：{answers}。请主持人按编号读回答，接着处理。", **facts)
     if retried:
         return Text("#{batch_id} 派出的工作重试后已结束，其中未完成：{failed}。请主持人接着处理。", batch_id=batch_id, failed=failed) \
             if failed else Text("#{batch_id} 派出的工作重试后已结束，请主持人接着处理。", batch_id=batch_id)
@@ -2182,7 +2191,7 @@ def summarize_groups(connection, room_id):
     when the chain was halted; a room without a present host just drops the row.
     """
     for row in connection.execute("SELECT * FROM group_summaries WHERE room_id=?", (room_id,)).fetchall():
-        answers = connection.execute("""SELECT m.name,r.status FROM member_requests r JOIN room_members m ON m.id=r.member_id
+        answers = connection.execute("""SELECT m.name,r.status,r.answer_id FROM member_requests r JOIN room_members m ON m.id=r.member_id
             WHERE r.message_id=? AND r.purpose='all' ORDER BY r.id""", (row["message_id"],)).fetchall()
         if any(answer["status"] not in TERMINAL for answer in answers):
             continue
@@ -2192,9 +2201,12 @@ def summarize_groups(connection, room_id):
             continue
         names = member_display_names(connection, room_id)
         unfinished = "、".join(names.get(answer["name"], answer["name"]) for answer in answers if answer["status"] != "completed")
-        facts = {"message_id": row["message_id"], "unfinished": unfinished}
-        text = Text("#{message_id} 全体成员已回答完毕，其中未完成：{unfinished}。请主持人读各成员的回答，汇总共识与分歧，需要时安排后续工作。", **facts) \
-            if unfinished else Text("#{message_id} 全体成员已回答完毕。请主持人读各成员的回答，汇总共识与分歧，需要时安排后续工作。", **facts)
+        # The answers are named by number, so the host reads each one directly instead of paging the room to find them.
+        answered = "、".join(f"{names.get(answer['name'], answer['name'])} #{answer['answer_id']}"
+                            for answer in answers if answer["status"] == "completed" and answer["answer_id"])
+        facts = {"message_id": row["message_id"], "unfinished": unfinished, "answers": answered}
+        text = Text("#{message_id} 全体成员已回答完毕，回答：{answers}；其中未完成：{unfinished}。请主持人按编号读各成员的回答，汇总共识与分歧，需要时安排后续工作。", **facts) \
+            if unfinished else Text("#{message_id} 全体成员已回答完毕，回答：{answers}。请主持人按编号读各成员的回答，汇总共识与分歧，需要时安排后续工作。", **facts)
         wake_host(connection, room_id, row["chain_id"], text, f"group:{row['message_id']}")
 
 

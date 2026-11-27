@@ -1350,7 +1350,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 :deep(.workflow-edge.is-selected) { stroke: var(--channel-accent, var(--ui-primary)); stroke-width: 2.2; }
 .workflow-edge-note { position: absolute; display: flex; align-items: center; gap: 4px; padding: 1px 7px; border: 1px solid var(--ui-border-muted); border-radius: 999px;
   background: var(--ui-bg-elevated); color: var(--ui-text-toned); font-size: 11px; line-height: 18px; white-space: nowrap; pointer-events: all; }
-.workflow-edge-note.is-loop { border-color: color-mix(in srgb, #e0b44a 55%, var(--ui-border)); color: #c99a2e; }
+.workflow-edge-note.is-loop { border-color: color-mix(in srgb, #e0b44a 55%, var(--ui-border)); color: light-dark(#9a6700, #c99a2e); }
 .workflow-edge-note.is-selected { padding: 2px 2px 2px 6px; border-color: var(--channel-accent, var(--ui-primary)); }
 .workflow-note-input { min-width: 0; height: 20px; padding: 0 4px; border: 0; border-radius: 4px; background: var(--ui-bg); color: var(--ui-text-highlighted); font-size: 11px; outline: none; }
 .workflow-edge-delete { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--ui-border-accented); border-radius: 50%;

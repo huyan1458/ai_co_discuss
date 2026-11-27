@@ -160,7 +160,7 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-destruction-records { display: grid; gap: 10px; max-height: 60vh; overflow: auto; }
 .channel-destroy-all { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid #e5484d66; border-radius: 8px; font-size: 13px; line-height: 1.55; }
 .channel-destroy-all p { margin: 0; }
-.channel-destruction-record { border: 1px solid var(--channel-border, rgba(255,255,255,.14)); border-radius: 8px; padding: 10px 12px; }
+.channel-destruction-record { border: 1px solid var(--ui-border); border-radius: 8px; padding: 10px 12px; }
 .channel-destruction-record header { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; font-size: 13px; }
 .channel-destruction-record header small { color: var(--channel-muted, #8b93a1); }
 .channel-destroy-scope, .channel-destroy-progress { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; line-height: 1.55; }
@@ -169,7 +169,7 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-destroy-progress small { flex: none; color: var(--channel-muted, #8b93a1); }
 .channel-destroy-progress li[data-state="deleted"] small { color: #22a35a; }
 .channel-destroy-progress li[data-state="failed"] small { color: #e5484d; }
-.channel-destroy-export { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; margin-bottom: 4px; border: 1px dashed var(--channel-border, rgba(255,255,255,.14)); border-radius: 8px; font-size: 13px; }
+.channel-destroy-export { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; margin-bottom: 4px; border: 1px dashed var(--ui-border); border-radius: 8px; font-size: 13px; }
 .directory-dragging, .directory-dragging * { cursor: grabbing !important; }
 .channel-drag-preview { position: fixed; top: 0; left: 0; z-index: 100; max-width: min(240px, calc(100vw - 24px)); padding: 7px 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; border: 1px solid #ffffff24; border-radius: 7px; background: #34373f; color: #eef0f5; box-shadow: 0 6px 18px #0005; font: 12px/1.5 var(--font-sans); }
 /* Touch drags start after a hold (web/app.js), so swipes over grips and folder headings still scroll. */
@@ -345,16 +345,38 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-inline-html > .channel-inline-html-loading { position: absolute; inset: 0; }
 .channel-visual-slot, .channel-message-visual { display: block; min-width: 0; }
 .channel-message-visual { margin: .4em 0 .65em; }
-.channel-visual-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 4px; margin-top: 4px; color: var(--ui-text-muted); font-size: 12px; }
-/* The tools stay out of sight beside a shown visual so it reads as part of the answer; they keep their space, so
-   pointing at the visual does not move the text below. A collapsed visual and touch screens always show them. */
-@media (hover: hover) and (pointer: fine) and (min-width: 701px) {
-  .channel-message-visual:not(.is-collapsed) .channel-visual-actions { opacity: 0; transition: opacity .15s; }
-  .channel-message-visual:not(.is-collapsed):hover .channel-visual-actions,
-  .channel-message-visual:has(.channel-inline-html.is-hovered) .channel-visual-actions,
-  .channel-message-visual:not(.is-collapsed):focus-within .channel-visual-actions { opacity: 1; }
+.channel-visual-content { position: relative; }
+/* The tools float in the visual's top corner, apart from the answer text: a pointer sees them on hover, touch gets one
+   menu button. Neither takes space, so showing them never moves the text. */
+.channel-visual-tools { position: absolute; top: 6px; right: 6px; z-index: 2; display: flex; align-items: center; gap: 1px; padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--ui-border) 85%, transparent); border-radius: 8px;
+  background: color-mix(in srgb, var(--ui-bg-elevated) 88%, transparent); backdrop-filter: blur(12px); box-shadow: 0 2px 8px rgb(0 0 0 / .12);
+  opacity: 0; pointer-events: none; transform: translateY(-2px); transition: opacity .12s, transform .12s; }
+.channel-visual-tools button { width: 26px; height: 26px; padding: 0; justify-content: center; border-radius: 6px; color: var(--ui-text-dimmed); }
+.channel-visual-tools button > [class*="icon"] { width: 14px; height: 14px; }
+.channel-visual-tools button:hover { color: var(--ui-text-highlighted); }
+.channel-visual-tools-divider { width: 1px; height: 14px; margin: 0 3px; background: var(--ui-border); }
+.channel-message-visual:hover .channel-visual-tools,
+.channel-message-visual:has(.channel-inline-html.is-hovered) .channel-visual-tools,
+.channel-visual-content:focus-within .channel-visual-tools,
+.channel-visual-tools:has([data-state="open"]) { opacity: 1; pointer-events: auto; transform: none; }
+.channel-visual-more { display: none !important; }
+/* Touch has no hover, so the tools always show: only the menu and collapse, sitting across the visual's top edge. The
+   frame's top inset is as tall as the half that hangs inside, so the tools never cover what the visual draws. */
+@media (max-width: 700px), (hover: none), (pointer: coarse) {
+  .channel-message-visual { margin-top: 1.1em; }
+  .channel-visual-content .channel-inline-html { padding-top: 17px; }
+  .channel-visual-tools { top: -13px; right: 10px; padding: 1px; opacity: 1; pointer-events: auto; transform: none; transition: none;
+    border-color: var(--ui-border); background: var(--ui-bg-elevated); backdrop-filter: none; box-shadow: none; }
+  .channel-visual-tools button { width: 30px; height: 26px; }
+  .channel-visual-tools button > [class*="icon"] { width: 15px; height: 15px; }
+  .channel-visual-tool { display: none !important; }
+  .channel-visual-more { display: inline-flex !important; }
 }
-.channel-visual-name { min-width: 0; overflow-wrap: anywhere; margin-inline-end: 4px; }
+.channel-visual-collapsed { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; padding: 3px 4px 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent); border-radius: 8px; color: var(--ui-text-muted); font-size: 12px; }
+.channel-visual-collapsed-icon { flex: none; width: 14px; height: 14px; }
+.channel-visual-name { min-width: 0; overflow-wrap: anywhere; margin-inline-end: 2px; }
 .channel-visual-slot:not(:has(.channel-message-visual)) { color: var(--ui-text-muted); }
 .channel-visual-slot:has(.channel-message-visual) > .channel-visual-caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .channel-answer .markdown-body pre { border: 0; border-radius: 6px; padding: 12px 14px; background: #27292e; }
@@ -1396,6 +1418,9 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   --ui-border: #dedede;
   --ui-border-muted: #ebebeb;
   --ui-border-accented: #b7b7b7;
+  /* The default yellow and green read at about 2:1 on white; these keep warning and ready text legible. */
+  --ui-warning: #9a6700;
+  --ui-success: #1a7f37;
   --channel-accent: #0969da;
   --channel-line: #ebebeb;
 
@@ -1411,8 +1436,10 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-nav-preview-round, .channel-empty h2, .channel-management-target,
   .page-heading h2, .turn-header h3, .turn-expert strong, .access-section h3 { color: var(--ui-text-highlighted); }
   .channel-message-text, .channel-answer-summary > .channel-message-text, .channel-person,
-  .channel-current-focus > span, .channel-reading-setting h3, .channel-editor,
+  .channel-current-focus > span, .channel-reading-setting h3, .channel-setting-row h3, .channel-editor,
   .info-section p, .topic-brief p, .turn-question, .message-prose, .access-address code { color: var(--ui-text); }
+  /* Failure, stop and late notes stay secondary to the answers around them, as in the dark theme. */
+  :is(.channel-failure-reason, .channel-stop-reason, .channel-stop-note, .channel-late-answer) { color: var(--ui-text-muted); }
   .channel-brand-text > span, .channel-directory-heading,
   .channel-room-row,
   .channel-connection, .channel-room-grip,
@@ -1423,7 +1450,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-nav-preview-header > span:last-child, .channel-nav-preview-meta, .channel-message-round,
   .channel-message-provenance, .channel-message-id, .channel-answer-summary > small,
   .channel-answer-summary > small > span, .channel-message-actions button,
-  .channel-empty p,
+  .channel-empty p, .channel-room-more,
   .channel-composer-note, .channel-note-divider, .channel-draft-length,
   .channel-management-target > span,
   .studio-modal [data-slot="description"], .dialog-form label[data-slot="label"],
@@ -1431,6 +1458,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .form-footer > span, .info-section h3, .topic-brief h3, .turn-expert small, .turn-empty,
   .subtle-link, .access-section p, .expert-row small, .original-meta > span { color: var(--ui-text-muted); }
   .channel-count, .channel-source { color: var(--ui-text-muted) !important; }
+  .channel-room-count { opacity: 1; }
   .channel-editor::placeholder, .channel-search-input input::placeholder { color: var(--ui-text-dimmed); }
   .channel-person:hover,
   .channel-message-actions button:hover { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); }
@@ -1465,7 +1493,7 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-tabs [data-slot="trigger"] { color: var(--ui-text-muted); }
   .channel-tabs [data-slot="trigger"][data-state="active"] { color: var(--channel-accent); }
   .channel-tabs [data-slot="indicator"] { background: #ebebeb; }
-  .channel-tabbar, .channel-overview, .channel-reading-setting, .access-section, .advanced-fields { border-color: var(--ui-border-muted); }
+  .channel-tabbar, .channel-overview, .channel-reading-setting, .channel-setting-row, .access-section, .advanced-fields { border-color: var(--ui-border-muted); }
   :is(.channel-nav-resizer, .channel-rail-resizer)::after { background: var(--ui-border); }
   /* The sidebar's own border already divides the left edge. */
   .channel-nav-resizer::after { background: transparent; }
@@ -1475,7 +1503,10 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-phase { color: var(--ui-text-muted); background: #f2f2f2; }
   .channel-phase-dot.discussing, .channel-connection > span.connected { background: #1a7f37; }
   .channel-phase-dot.concluded { background: var(--channel-accent); }
-  .channel-person-label strong [class*="icon"] { color: #8c6d1f; }
+  .channel-person-label strong [class*="icon"], .pb-member-name [class*="icon"] { color: #8c6d1f; }
+  .pb-free-note.is-warning { color: var(--ui-warning); }
+  .channel-sending-status { color: var(--ui-text-muted); }
+  .channel-room-name > .channel-room-pin { color: var(--channel-accent); }
   .channel-filter-summary { color: #0969da; background: #f3f7fd; border-color: #cddff5; }
   .channel-map-round + .channel-map-round::before { border-color: var(--ui-border-accented); }
   .channel-round-number { color: var(--ui-text-toned); }
@@ -1555,6 +1586,8 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   .channel-person-label small { color: #666666; }
   .channel-avatar:is(.codex, .claude, .gemini, .deepseek, .qwen, .grok, .external, .custom) { background: #fafafa; box-shadow: inset 0 0 0 1px #e8e8e8; }
   .channel-message-byline { gap: 12px; margin-bottom: 14px; }
+  /* The working strip keeps its tight head: the card spacing above would push the status line away from the name. */
+  .channel-working-head > .channel-message-byline { margin-bottom: 0; column-gap: 8px; }
   .channel-message-byline strong { color: var(--speaker-accent); font-size: 16px; font-weight: 650; letter-spacing: 0; }
   .channel-message-provenance, .channel-message-id, .channel-message-round { color: #666666; font-size: 11px; }
   .channel-source { color: #666666 !important; font-size: 11px !important; }
@@ -1585,7 +1618,6 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
     .channel-composer-dock { padding-top: 12px; padding-bottom: 15px; }
   }
   @media (min-width: 1600px) {
-    .channel-message-text { font-size: calc(16px * var(--card-text-scale, 1)); }
     .channel-message-byline strong { font-size: 16px; }
     .channel-message-provenance, .channel-message-round, .channel-message-id { font-size: 11px; }
     .channel-source { font-size: 11px !important; }
@@ -1814,8 +1846,9 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* The avatar matches the message byline's at each width, so a member looks the same working and answered. */
 .channel-working-strip { --working-avatar: 28px; }
 /* Lines of work (user 2026-11-20): the host's cards and branch cards differ from main-line ones only by a thin left edge. */
-.channel-message.is-host-line, .channel-working-strip.is-host-line { border-left: 2px solid color-mix(in srgb, var(--ui-primary) 70%, transparent); }
-.channel-message.is-branch-line, .channel-working-strip.is-branch-line { border-left: 2px dashed var(--ui-border-accented); }
+/* :not(#line) lifts these above the theme-wide card edges (border, hover border-color), which would otherwise erase the mark. */
+:root[data-theme^="channel"] :is(.channel-message, .channel-working-strip).is-host-line:not(#line) { border-left: 2px solid color-mix(in srgb, var(--ui-primary) 70%, transparent); }
+:root[data-theme^="channel"] :is(.channel-message, .channel-working-strip).is-branch-line:not(#line) { border-left: 2px dashed var(--ui-border-accented); }
 .channel-line-badge { flex: none; }
 .channel-working-strip .channel-avatar { flex-shrink: 0; width: var(--working-avatar); height: var(--working-avatar); font-size: 9px; }
 /* The head is the answered card's byline (user 2026-11-20, #6140): same name size, plain tags, time, and the elapsed

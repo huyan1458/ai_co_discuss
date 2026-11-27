@@ -7,6 +7,7 @@
  */
 import { computed, inject, ref, watch } from "vue";
 import { call } from "./api.js";
+import RelayRegion from "./RelayRegion.vue";
 import RelayReconnect from "./RelayReconnect.vue";
 import { t } from '../i18n.js';
 import { relay_health_text } from '../../runner/relay_health_text.mjs';
@@ -16,24 +17,10 @@ const site = computed(() => state.value.online_site || "");
 const relay = computed(() => relay_health_text(site.value, state.value.relay_health, t));
 // The own domain counts as on as the hosted accounts' entry cards judge it (HostingCards.vue): set up and switched on.
 const own_domain = computed(() => Boolean(state.value.entry?.tunnel_enabled && state.value.entry?.tunnel));
-const regions = computed(() => [
-  { value: 'auto', label: t('自动') },
-  { value: 'apac', label: t('亚太') },
-  { value: 'apac-ne', label: t('亚太东北部') },
-  { value: 'apac-se', label: t('亚太东南部') },
-  { value: 'wnam', label: t('北美西部') },
-  { value: 'enam', label: t('北美东部') },
-  { value: 'weur', label: t('欧洲西部') },
-  { value: 'eeur', label: t('欧洲东部') },
-  { value: 'oc', label: t('大洋洲') },
-  { value: 'sam', label: t('南美洲') },
-  { value: 'afr', label: t('非洲') },
-  { value: 'me', label: t('中东') },
-]);
 const usage = computed(() => !state.value.hosting ? t('在外面用其他设备使用这台电脑、邀请外部专家时需要')
   // With the relay on beside the domain, accounts get the domain's address yet the relay's still signs them in (#5789).
-  : own_domain.value ? (state.value.entry?.relay_enabled ? t('你在外面使用这台电脑、邀请外部专家时经过它；托管账号默认走自有域名，也可以经它登录')
-    : t('只供你自己在外面使用这台电脑、邀请外部专家；托管账号走自有域名，不经过它'))
+  : own_domain.value ? (state.value.entry?.relay_enabled ? t('你在外面使用这台电脑、邀请外部专家时经过它；托管账号默认走 Cloudflare 隧道，也可以经它登录')
+    : t('只供你自己在外面使用这台电脑、邀请外部专家；托管账号走 Cloudflare 隧道，不经过它'))
     : t('你在外面使用这台电脑，以及托管账号的登录和邀请外部专家，都经过它'));
 // The dialog open: "bind", "unbind" or "make".
 const dialog = ref(""), busy = ref(""), code = ref("");
@@ -82,19 +69,13 @@ const close = (open) => { if (!open) dialog.value = ""; };
   <div class="panel-row">
     <div class="panel-tile"><UIcon name="i-lucide-cloud" /></div>
     <div class="panel-main">
-      <div class="panel-title">{{ t('线上网站') }} <span class="panel-tag" :class="relay.tone">{{ relay.label }}</span></div>
+      <div class="panel-title">{{ t('自建中转') }} <span class="panel-tag" :class="relay.tone">{{ relay.label }}</span></div>
       <span class="panel-sub"><template v-if="site">{{ site }} · </template>{{ usage }}</span>
-      <label v-if="site" class="panel-field">{{ t('中转地区') }}
-        <select class="panel-input" :value="state.relay_region || 'apac'" :disabled="busy === 'region'"
-          @change="change('region', { region: $event.target.value }, t('电脑和已配对设备会自动重连到新的中转位置'))">
-          <option v-for="region in regions" :key="region.value" :value="region.value">{{ region.label }}</option>
-        </select>
-        <small>{{ t('请在没有操作进行时切换。') }}</small>
-      </label>
       <span v-if="relay.detail" class="panel-sub">{{ relay.detail }}</span>
     </div>
     <div class="panel-side">
       <template v-if="site">
+        <RelayRegion />
         <RelayReconnect :disabled="Boolean(busy)" />
         <button type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" :title="t('在部署线上网站的电脑上，为其他电脑生成绑定用的接入码')" @click="start_making"><UIcon name="i-lucide-ticket" />{{ t('生成接入码') }}</button>
         <button type="button" class="panel-button is-plain is-small is-danger" :disabled="Boolean(busy)" @click="dialog = 'unbind'">{{ t('解绑') }}</button>
@@ -103,11 +84,11 @@ const close = (open) => { if (!open) dialog.value = ""; };
     </div>
   </div>
 
-  <UModal :open="dialog === 'bind'" :title="t('绑定线上网站')" :description="t('绑定共议线上网站（形如 https://xxx.pages.dev），不是你的自有域名')" @update:open="close">
+  <UModal :open="dialog === 'bind'" :title="t('绑定自建中转')" :description="t('填写接入码，或在部署电脑上填写线上网站地址（如 https://xxx.pages.dev）')" @update:open="close">
     <template #body>
-      <form class="site-form" @submit.prevent="change('connect', { site: code.trim() }, t('已绑定线上网站'))">
+      <form class="site-form" @submit.prevent="change('connect', { site: code.trim() }, t('已绑定自建中转'))">
         <label class="panel-field">{{ t('接入码') }}<textarea v-model="code" class="panel-input site-code" rows="3" placeholder="https://xxx.pages.dev/#codiscuss-bind=…" autocomplete="off" spellcheck="false"></textarea>
-          <small>{{ t('在部署线上网站的电脑上生成（它的管理面板“本机 → 线上网站 → 生成接入码”，或运行 codiscuss admin entry code），只能用一次。就在那台电脑上绑定时，只填站点地址即可。') }}</small></label>
+          <small>{{ t('在部署线上网站的电脑上生成（它的管理面板“本机 → 自建中转 → 生成接入码”，或运行 codiscuss admin entry code），只能用一次。就在那台电脑上绑定时，只填线上网站地址即可。') }}</small></label>
         <div class="panel-form-foot">
           <button type="button" class="panel-button is-plain" @click="dialog = ''">{{ t('取消') }}</button>
           <button type="submit" class="panel-button is-primary" :disabled="!code.trim() || Boolean(busy)"><UIcon v-if="busy === 'connect'" name="i-lucide-loader" class="animate-spin" />{{ t('绑定') }}</button>
@@ -116,12 +97,12 @@ const close = (open) => { if (!open) dialog.value = ""; };
     </template>
   </UModal>
 
-  <UModal :open="dialog === 'unbind'" :title="t('解绑线上网站')" @update:open="close">
+  <UModal :open="dialog === 'unbind'" :title="t('解绑自建中转')" @update:open="close">
     <template #body>
       <p class="panel-note"><UIcon name="i-lucide-triangle-alert" />{{ t('解绑后，已配对的设备不能再从 {value1} 连到这台电脑；之后重新绑定需要新的绑定令牌。', { value1: site }) }}</p>
       <div class="panel-form-foot">
         <button type="button" class="panel-button is-plain" @click="dialog = ''">{{ t('取消') }}</button>
-        <button type="button" class="panel-button is-primary" :disabled="Boolean(busy)" @click="change('disconnect', {}, t('已解绑线上网站'))"><UIcon v-if="busy === 'disconnect'" name="i-lucide-loader" class="animate-spin" />{{ t('解绑') }}</button>
+        <button type="button" class="panel-button is-primary" :disabled="Boolean(busy)" @click="change('disconnect', {}, t('已解绑自建中转'))"><UIcon v-if="busy === 'disconnect'" name="i-lucide-loader" class="animate-spin" />{{ t('解绑') }}</button>
       </div>
     </template>
   </UModal>
@@ -131,10 +112,10 @@ const close = (open) => { if (!open) dialog.value = ""; };
       <div class="site-form">
         <label class="panel-field">{{ t('部署配置') }}<input v-model="maker.config" class="panel-input" placeholder="D:\…\ai_co_discuss\.wrangler\deploy\wrangler.jsonc" spellcheck="false" />
           <small>{{ t('源码仓库里线上站点的私有部署配置；这台电脑须已登录 wrangler。') }}</small></label>
-        <label class="panel-field">{{ t('站点地址') }}<input v-model="maker.site" class="panel-input" placeholder="https://xxx.pages.dev" spellcheck="false" /></label>
+        <label class="panel-field">{{ t('线上网站地址') }}<input v-model="maker.site" class="panel-input" placeholder="https://xxx.pages.dev" spellcheck="false" /></label>
         <div v-if="maker.made" class="panel-secret site-made"><span>{{ maker.made }}</span>
           <button type="button" class="panel-icon-button" :aria-label="t('复制接入码')" @click="copy(maker.made)"><UIcon name="i-lucide-copy" /></button></div>
-        <small v-if="maker.made" class="site-hint">{{ t('发给要绑定的电脑，在它的管理面板“本机 → 线上网站 → 绑定”里粘贴。只能用一次；再生成一个会让之前没用过的作废。') }}</small>
+        <small v-if="maker.made" class="site-hint">{{ t('发给要绑定的电脑，在它的管理面板“本机 → 自建中转 → 绑定”里粘贴。只能用一次；再生成一个会让之前没用过的作废。') }}</small>
         <div class="panel-form-foot">
           <button type="button" class="panel-button is-plain" @click="dialog = ''">{{ t('关闭') }}</button>
           <button type="button" class="panel-button is-primary" :disabled="!maker.config.trim() || !maker.site.trim() || Boolean(busy)" @click="make">

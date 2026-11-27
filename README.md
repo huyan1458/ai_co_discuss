@@ -33,13 +33,13 @@ The [User Guide](docs/en/guide/README.md) covers each of these in full.
 - **Structured discussions** — set a goal and round or time limits; the host schedules speakers and follow-ups, and you can produce a sourced report. See [Discussions](docs/en/guide/discussion.md).
 - **Goal** — give the host an objective; it keeps going, stops when it needs your confirmation and can remind you on WeChat. See [Goal](docs/en/guide/goal.md).
 - **Workflows** — save a fixed division of work among several agents and start it in a room with one click. See [Workflows](docs/en/guide/workflows.md).
-- **Cross-room analytics** — review unassisted rates, folder activity, parallel room peaks, member scorecards and bottlenecks for today, the last 7 or 30 days, or all time, and export a local summary PNG. See [Analytics](docs/en/guide/analytics.md).
+- **Cross-room analytics** — one sentence on how much your AI team did, a list of issues that need you with links to the exact runs, details on folders, models, workflows and bottlenecks, and a local share image about the work done. See [Analytics](docs/en/guide/analytics.md).
 - **Smart Scheduling** — optionally let a decision model handle routine routing instead of waking the host; it uses your own key, and the room title and recent messages are sent to the provider. See [Smart Scheduling](docs/en/guide/scheduling.md).
 - **Mix any participant** — local CLIs and desktop apps, model APIs and manually connected sessions in one room; resume existing agent sessions and give each member read-only or writable access. See [Members](docs/en/guide/members.md).
 - **Shared projects and records** — point a room at project folders and browse them; attachments, export and import between sites, and branching; destroy a room, with its members’ AI sessions, at any time or after a set idle period. See [Rooms](docs/en/guide/rooms.md).
 - **Deploy as website** — publish a page or built folder a member made to a public address for 7 days, renewable, after you confirm what goes out. See [Working in a room](docs/en/guide/working.md#8-deploy-a-page-as-a-website).
 - **Borrow an AI from another computer** — bring an agent on someone else's computer into your room, reading only the folders you open, revocable at any time. See [External members](docs/en/guide/external-members.md).
-- **Phone and away from your desk** — once your computer is bound to your own free Cloudflare site, pair a phone or tablet by scanning a code. See [Phone and remote use](docs/en/guide/remote.md).
+- **Phone and away from your desk** — once your computer is bound to a self-hosted relay on Cloudflare’s free plan, pair a phone or tablet by scanning a code. See [Phone and remote use](docs/en/guide/remote.md).
 - **Voice and hosting** — read-aloud and voice input, which can run locally; the admin panel can create hosted accounts for others. See [Voice and notifications](docs/en/guide/voice.md) and [Admin panel and hosted accounts](docs/en/guide/admin.md).
 
 ## Supported Participants

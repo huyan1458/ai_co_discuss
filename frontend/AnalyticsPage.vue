@@ -10,14 +10,13 @@ import {
   format_timestamp,
   group_model_rows,
   inclusive_date_range,
-  inline_ratio,
 } from "./analytics-state.js";
 import { analytics_card_blob, draw_analytics_card } from "./analytics-card.js";
 import { entrance, use_spring, wave } from "./analytics-motion.js";
 import { use_workflow_library } from "./workflow-library.js";
-import { locale, t } from "./i18n.js";
+import { t } from "./i18n.js";
 
-const emit = defineEmits(["open-room"]);
+const emit = defineEmits(["open-room", "open-message"]);
 const { view, bridge } = inject("discussion");
 
 const PRESETS = [
@@ -26,7 +25,8 @@ const PRESETS = [
   { value: "30d", label: t("近 30 天") },
   { value: "all", label: t("全部时间") },
 ];
-const DAILY_LABELS = 8;
+const ISSUE_PREVIEW = 3;
+const AXIS_LABELS = 8;
 const FOLDER_SLOTS = 6;
 const MEMBER_PREVIEW = 8;
 
@@ -35,9 +35,11 @@ const scope = ref("all");
 const report = ref(null);
 const loading = ref(false);
 const error = ref("");
-const blockers_open = ref(false);
 const members_expanded = ref(false);
-const hovered_day = ref(-1);
+const issues_expanded = ref(false);
+const open_issues = ref(new Set());
+const model_sort = ref("executions");
+const hovered_slot = ref(-1);
 const share_open = ref(false);
 const share_canvas = ref(null);
 const copied_image = ref(false);
@@ -51,9 +53,8 @@ const tz = browser_timezone();
 // `grow` rises 0→1 whenever the period or scope changes and drives every bar; the numbers are springs to their value.
 const enter = use_spring(1);
 const grow = use_spring(0);
-const hero_percent = use_spring(0);
-const started_count = use_spring(0);
-const peak_rooms = use_spring(0);
+const task_count = use_spring(0);
+const unassisted_percent = use_spring(0);
 const peak_members = use_spring(0);
 const execution_total = use_spring(0);
 const block_style = (index) => entrance(enter.value.value, index);
@@ -85,72 +86,177 @@ async function load(manual = false) {
 }
 
 onMounted(() => load(false));
-watch([preset, scope], () => { members_expanded.value = false; regrow = true; load(false); });
+watch([preset, scope], () => { members_expanded.value = false; issues_expanded.value = false; open_issues.value = new Set(); regrow = true; load(false); });
 
 const overview = computed(() => report.value?.overview || null);
-const previous = computed(() => report.value?.previous || null);
 const unassisted = computed(() => format_ratio(overview.value?.unassisted, overview.value?.ended));
-const unassisted_prev = computed(() => format_ratio(previous.value?.unassisted, previous.value?.ended));
 const peak = computed(() => report.value?.time?.peak || { rooms: 0, at: null, members: 0, members_at: null });
 
-/** Signed change against the previous period, or null when either side lacks a comparable value. */
-function delta(now, before) {
-  if (now === null || now === undefined || before === null || before === undefined) return null;
-  return Number(now) - Number(before);
-}
 
-const unassisted_delta = computed(() => (
-  unassisted.value.has_percent && unassisted_prev.value.has_percent ? delta(unassisted.value.percent, unassisted_prev.value.percent) : null
-));
-// Today is still running, so its count is not compared with yesterday's full day.
-const initiated_delta = computed(() => (preset.value !== "today" && previous.value?.initiated ? delta(overview.value?.initiated, previous.value.initiated) : null));
-const answered_percent = computed(() => {
-  const total = Number(overview.value?.initiated || 0);
-  return total ? Math.round((Number(overview.value?.answered || 0) / total) * 100) : 0;
-});
 const approx = (dist) => (dist?.approximate ? "≈ " : "");
 const execution_seconds = computed(() => report.value?.time?.execution_seconds || 0);
+const issue_list = computed(() => report.value?.issues || []);
+const visible_issues = computed(() => (issues_expanded.value ? issue_list.value : issue_list.value.slice(0, ISSUE_PREVIEW)));
 
 watch(report, (data, before) => {
   if (!data) return;
   if (!before) enter.to(0);
   if (regrow) { grow.jump(0); grow.to(1); regrow = false; }
-  hero_percent.to(unassisted.value.percent ?? 0);
-  started_count.to(Number(data.overview?.initiated || 0));
-  peak_rooms.to(Number(peak.value.rooms || 0));
+  task_count.to(Number(data.overview?.initiated || 0));
+  unassisted_percent.to(unassisted.value.percent ?? 0);
   peak_members.to(Number(peak.value.members || 0));
   execution_total.to(execution_seconds.value);
 });
 
-const hero_text = computed(() => (unassisted.value.has_percent ? `${Math.round(hero_percent.value.value)}%` : unassisted.value.primary));
-
-/** Daily finished tasks, split into those you left alone and those you stepped into; hidden for a single day. */
-const daily = computed(() => {
-  const rows = overview.value?.daily || [];
-  if (rows.length < 2) return [];
-  const max = Math.max(1, ...rows.map((row) => Number(row.ended || 0)));
-  const week = rows.length <= 7;
-  const step = Math.ceil(rows.length / DAILY_LABELS);
-  return rows.map((row, index) => {
-    const [year, mon, day] = String(row.date).split("-").map(Number);
-    const date = new Date(Date.UTC(year, mon - 1, day));
-    const ended = Number(row.ended || 0);
-    const alone = Math.min(ended, Number(row.unassisted || 0));
-    return {
-      ...row,
-      ended,
-      stepped_in: ended - alone,
-      height: ended ? Math.max(6, (ended / max) * 100) : 0,
-      alone_share: ended ? (alone / ended) * 100 : 0,
-      label: week
-        ? date.toLocaleDateString(locale, { weekday: "short", timeZone: "UTC" })
-        : date.toLocaleDateString(locale, { month: "numeric", day: "numeric", timeZone: "UTC" }),
-      full: date.toLocaleDateString(locale, { month: "numeric", day: "numeric", weekday: "short", timeZone: "UTC" }),
-      show_label: week || (rows.length - 1 - index) % step === 0,
-    };
-  });
+/**
+ * One line under the title, built by a fixed template (no model). The page leads with figures and a chart; the
+ * sentence is a caption, and the share card carries the story to others (Fable #14109).
+ */
+const conclusion = computed(() => {
+  const params = { tasks: overview.value?.initiated || 0, hours: format_duration(execution_seconds.value), experts: peak.value.members || 0 };
+  return {
+    today: t("今天，AI 替你推进了 {tasks} 个任务，累计工作 {hours}，最多 {experts} 位专家同时在跑。", params),
+    "7d": t("这 7 天，AI 替你推进了 {tasks} 个任务，累计工作 {hours}，最多 {experts} 位专家同时在跑。", params),
+    "30d": t("这 30 天，AI 替你推进了 {tasks} 个任务，累计工作 {hours}，最多 {experts} 位专家同时在跑。", params),
+    all: t("至今，AI 替你推进了 {tasks} 个任务，累计工作 {hours}，最多 {experts} 位专家同时在跑。", params),
+  }[preset.value];
 });
-const bar_height = (day, index) => `${day.height * wave(grow.value.value, index, daily.value.length)}%`;
+const previous = computed(() => report.value?.previous || null);
+const comparable = computed(() => Boolean(prev_range_label.value) && preset.value !== "today");
+
+/**
+ * The change against the previous period as `{ diff, text }`; null without a previous period or for today (still
+ * running). `phrase(diff)` returns the whole translated sentence for this figure's unit.
+ */
+function change(now, before, phrase = (diff) => t("较上期 {diff}", { diff })) {
+  if (!comparable.value || before === null || before === undefined) return null;
+  const diff = Math.round(Number(now || 0) - Number(before || 0));
+  return { diff, text: diff ? phrase(`${diff > 0 ? "+" : "−"}${Math.abs(diff)}`) : t("与上期持平") };
+}
+
+/** The four figures that open the page, each with its change against the previous period. */
+const figures = computed(() => {
+  const before = previous.value || {};
+  const before_rate = format_ratio(before.unassisted, before.ended);
+  const hours = execution_seconds.value / 3600;
+  return [
+    { key: "hours", label: t("AI 累计工作"), value: format_duration(execution_total.value.value),
+      change: change(hours, before.execution_seconds === undefined ? null : before.execution_seconds / 3600, (diff) => t("较上期 {diff} 小时", { diff })) },
+    { key: "tasks", label: t("推进的任务"), value: Math.round(task_count.value.value), change: change(overview.value?.initiated, before.initiated) },
+    { key: "experts", label: t("最多同时在跑"), value: t("{count} 位", { count: Math.round(peak_members.value.value) }),
+      note: t("{count} 个房间", { count: peak.value.rooms || 0 }), change: change(peak.value.members, before.peak_members) },
+    { key: "rate", label: t("不用再管"), value: unassisted.value.has_percent ? `${Math.round(unassisted_percent.value.value)}%` : unassisted.value.primary,
+      note: t("你插手了 {count} 次", { count: stepped_in.value }),
+      change: unassisted.value.has_percent && before_rate.has_percent && comparable.value
+        ? change(unassisted.value.percent, before_rate.percent, (diff) => t("较上期 {diff} 个百分点", { diff })) : null },
+  ];
+});
+
+/**
+ * The timeline: experts running at once per time step, with the runs that did not finish as red marks on the same
+ * axis, so a burst of failures reads as one incident at a glance (Fable #14109). Coordinates are in a 1000-wide box.
+ */
+const CHART_W = 1000;
+const CHART_H = 150;
+const MARK_H = 22;
+const timeline = computed(() => {
+  const series = report.value?.time?.concurrency;
+  const points = series?.points || [];
+  const unfinished = series?.unfinished || [];
+  if (points.length < 2) return null;
+  const peak_value = Math.max(1, ...points);
+  const worst = Math.max(1, ...unfinished);
+  const slot = CHART_W / points.length;
+  const [year, month, day] = String(report.value.range.from).split("-").map(Number);
+  const origin = Date.UTC(year, month - 1, day);
+  const stamp = (index) => new Date(origin + index * series.step * 1000);
+  const label_every = Math.max(1, Math.ceil((points.length * series.step) / 86400 / AXIS_LABELS)) * Math.max(1, Math.round(86400 / series.step));
+  return {
+    peak_value, slot, step: series.step, points, unfinished,
+    area: (scale) => {
+      const y = (value) => CHART_H - (value / peak_value) * (CHART_H - 8) * scale;
+      const line = points.map((value, index) => `${(index + 0.5) * slot},${y(value).toFixed(1)}`).join(" L");
+      return { fill: `M0,${CHART_H} L${line} L${CHART_W},${CHART_H} Z`, stroke: `M${line}` };
+    },
+    marks: unfinished.map((count, index) => (count ? { x: index * slot, h: Math.max(3, (count / worst) * MARK_H), count, index } : null)).filter(Boolean),
+    labels: points.map((_, index) => index).filter((index) => index % label_every === 0)
+      .map((index) => ({ x: (index / points.length) * 100, text: stamp(index).toLocaleDateString(undefined, { month: "numeric", day: "numeric", timeZone: "UTC" }) })),
+    when: (index) => {
+      const date = stamp(index);
+      const text = date.toLocaleDateString(undefined, { month: "numeric", day: "numeric", timeZone: "UTC" });
+      return series.step < 86400 ? `${text} ${String(date.getUTCHours()).padStart(2, "0")}:00` : text;
+    },
+  };
+});
+/** Which time step the pointer is over, from its position across the chart. */
+function hover_timeline(event) {
+  const box = event.currentTarget.getBoundingClientRect();
+  const count = timeline.value?.points.length || 0;
+  hovered_slot.value = count ? Math.min(count - 1, Math.max(0, Math.floor(((event.clientX - box.left) / box.width) * count))) : -1;
+}
+const stepped_in = computed(() => Math.max(0, Number(overview.value?.ended || 0) - Number(overview.value?.unassisted || 0)));
+
+/** Who an issue is about: software, model and effort, or the software alone. */
+function issue_who(params) {
+  const software = adapter_display_label(params.adapter);
+  if (!("model" in params)) return software;
+  return [software, params.model || t("未知模型"), params.effort].filter(Boolean).join(" · ");
+}
+
+/** What went wrong in a run-did-not-finish issue: the failure class when the adapter classified it, else its note. */
+function issue_reason(params) {
+  if (params.failure_class) return failure_class_label(params.failure_class);
+  return params.reason || t("没有留下说明");
+}
+
+/** One sentence per issue rule, stating what happened and how often; never a recommendation to switch models. */
+function issue_title(item) {
+  const who = issue_who(item.params);
+  const count = item.count;
+  switch (item.rule) {
+    case "not_finished": return t("「{reason}」：{count} 次运行没有完成", { reason: issue_reason(item.params), count });
+    case "interrupted": return t("你打断了 {who} {count} 次", { who, count });
+    case "permission": return t("{who} 有 {count} 次运行被权限拦下", { who, count });
+    case "late_recovery": return t("{who} 有 {count} 次先被判失败、后来又交回了回答", { who, count });
+    case "unknown_model": return t("{software} 有 {count} 次运行没有记录模型", { software: who, count });
+    case "scheduler": return t("「{room}」的智能调度收到 {count} 个差评", { room: item.params.title || item.params.room_id, count });
+    default: return t("{rule}：{count} 次", { rule: item.rule, count });
+  }
+}
+
+/** The facts under a title: who it touched, when it happened, its share of the related runs and last period's count. */
+function issue_meta(item) {
+  const parts = [];
+  if (item.rule === "not_finished" && item.members?.length) {
+    const named = item.members.slice(0, 2).map((member) => `${issue_who(member)} ${member.count}`).join("、");
+    parts.push(item.members.length > 2
+      ? t("涉及 {members} 等 {count} 组", { members: named, count: item.members.length })
+      : t("涉及 {members}", { members: named }));
+  }
+  if (item.first_at && report.value) {
+    const from = format_timestamp(item.first_at, report.value.range?.tz);
+    const to = format_timestamp(item.last_at, report.value.range?.tz);
+    parts.push(from === to ? from : t("{from} 至 {to}", { from, to }));
+  }
+  if (item.total) parts.push(t("占相关 {total} 次运行的 {share}", { total: item.total, share: share_text((item.count / item.total) * 100) }));
+  if (comparable.value && item.previous) parts.push(t("上期 {count} 次", { count: item.previous }));
+  return parts.join(" · ");
+}
+
+const ISSUE_ICONS = {
+  not_finished: "i-lucide-circle-x", interrupted: "i-lucide-hand", permission: "i-lucide-shield-alert",
+  late_recovery: "i-lucide-clock-alert", unknown_model: "i-lucide-circle-help", scheduler: "i-lucide-thumbs-down",
+};
+const issue_level = (item) => ({ high: "is-critical", normal: "is-normal", info: "is-info" })[item.level] || "is-normal";
+const toggle_issue = (key) => toggle_set(open_issues, key);
+const issue_key = (item) => `${item.rule}:${JSON.stringify(item.params)}`;
+const RUN_STATUS = { completed: t("完成"), failed: t("失败"), cancelled: t("取消"), started: t("进行中"), dispatched: t("进行中") };
+
+/** Open the room of one run at the message that asked for it (or just the room when that message is unknown). */
+function open_run(run) {
+  if (run.message_id) emit("open-message", { room_id: run.room_id, message_id: run.message_id });
+  else open_room(run.room_id);
+}
 
 /** Resolve a room's title from the loaded directory; falls back to its id. */
 function room_label(room_id) {
@@ -158,32 +264,6 @@ function room_label(room_id) {
   const found = (view.value.rooms || []).find((item) => item.id === room_id);
   return found?.title || bridge.room_title?.(room_id) || room_id;
 }
-
-/** One-sentence description for each backend insight rule. */
-function insight_text(item) {
-  const room = room_label(item.target?.room_id);
-  const member = item.target?.member ? bridge.display_name(item.target.member) : "";
-  const ratio = inline_ratio(item.numerator, item.denominator);
-  switch (item.rule) {
-    case "failure_cluster":
-      return t("「{room}」中 {member} 的「{kind}」失败集中出现：{ratio}", { room, member, kind: failure_class_label(item.params?.failure_class || ""), ratio });
-    case "permission_denial":
-      return t("「{room}」中 {member} 多次触发权限拦截：{ratio}，可按需调整项目权限", { room, member, ratio });
-    case "late_recovery":
-      return t("「{room}」中 {member} 出现失败后迟到补交：{ratio}，可能存在超时误判", { room, member, ratio });
-    case "scheduler_feedback":
-      return t("「{room}」的智能调度收到较多负评：{ratio}", { room, ratio });
-    default:
-      return t("「{room}」触发异常规则 {rule}：{ratio}", { room, rule: item.rule, ratio });
-  }
-}
-
-const INSIGHT_ICONS = {
-  failure_cluster: "i-lucide-circle-alert",
-  permission_denial: "i-lucide-shield-alert",
-  late_recovery: "i-lucide-clock-alert",
-  scheduler_feedback: "i-lucide-thumbs-down",
-};
 
 /** Folder share of execution time: the largest six keep their own colour slot, the rest fold into “其他”. */
 const folders = computed(() => {
@@ -245,29 +325,35 @@ const model_rows = computed(() => {
   return rows.map((row) => ({ ...row, run_share: total ? (row.executions / total) * 100 : 0 }));
 });
 
-/**
- * Share of runs per model across software and effort (claude-opus-5-5 at medium and at high are one model): the six
- * largest keep a colour slot and the rest fold into “其他”. Weights sum to 1 so the bar grows with the grow spring.
- */
-const model_mix = computed(() => {
-  const by_model = new Map();
-  for (const row of model_rows.value) {
-    const key = row.model || `?${row.adapter}`;
-    const item = by_model.get(key) || { key, label: row.model || t("{software} · 未知模型", { software: adapter_display_label(row.adapter) }), runs: 0 };
-    item.runs += row.executions;
-    by_model.set(key, item);
-  }
-  const sorted = [...by_model.values()].filter((item) => item.runs).sort((a, b) => b.runs - a.runs);
-  const total = sorted.reduce((sum, item) => sum + item.runs, 0) || 1;
-  const head = sorted.slice(0, FOLDER_SLOTS).map((item, index) => ({ ...item, slot: index + 1 }));
-  const rest = sorted.slice(FOLDER_SLOTS);
-  if (rest.length) head.push({ key: "__other__", label: t("其他 {count} 个模型", { count: rest.length }), runs: rest.reduce((sum, item) => sum + item.runs, 0), slot: 0 });
-  return head.map((item) => ({ ...item, share: (item.runs / total) * 100, weight: item.runs / total }));
-});
-const model_slot = computed(() => new Map(model_mix.value.filter((item) => item.slot).map((item) => [item.key, item.slot])));
-const row_slot = (row) => model_slot.value.get(row.model || `?${row.adapter}`) ?? 0;
+const MODEL_SORTS = {
+  executions: (row) => row.executions,
+  failed: (row) => row.failed,
+  interrupted: (row) => row.interrupted + row.retries,
+  duration: (row) => row.duration?.p50 ?? -1,
+};
+/** Rows ordered by the chosen column, largest first; runs break ties so the order stays stable. */
+const sorted_models = computed(() => [...model_rows.value].sort((a, b) => (MODEL_SORTS[model_sort.value](b) - MODEL_SORTS[model_sort.value](a)) || (b.executions - a.executions)));
 
-// Workflows: the backend reports IDs; names come from this computer's workflow library when it has the workflow.
+/**
+ * How the runs of one row ended: completed, failed, stopped by you, cancelled otherwise and still running. The
+ * completion rate alone hid why a row was low (a 75% row showed no failure type at all).
+ */
+function outcomes(row) {
+  const stopped = Math.min(row.interrupted || 0, row.cancelled || 0);
+  const parts = [
+    { key: "done", count: row.completed || 0, label: t("完成") },
+    { key: "failed", count: row.failed || 0, label: t("失败") },
+    { key: "stopped", count: stopped, label: t("你停止") },
+    { key: "cancelled", count: (row.cancelled || 0) - stopped, label: t("其他取消") },
+  ];
+  const running = Math.max(0, (row.executions || 0) - parts.reduce((sum, part) => sum + part.count, 0));
+  parts.push({ key: "running", count: running, label: t("进行中") });
+  const total = Math.max(1, row.executions || 0);
+  return parts.filter((part) => part.count).map((part) => ({ ...part, share: (part.count / total) * 100 }));
+}
+const outcome_title = (row) => outcomes(row).map((part) => `${part.label} ${part.count}`).join(" · ");
+
+// Workflows: the backend reports IDs// Workflows: the backend reports IDs; names come from this computer's workflow library when it has the workflow.
 const workflow_library = use_workflow_library();
 const all_runs = computed(() => model_rows.value.reduce((sum, row) => sum + row.executions, 0));
 const workflow_rows = computed(() => (report.value?.workflows || []).map((row) => ({
@@ -280,7 +366,7 @@ const workflow_share = computed(() => {
   const inside = workflow_rows.value.reduce((sum, row) => sum + row.executions, 0);
   return { inside, runs: all_runs.value, share: all_runs.value ? (inside / all_runs.value) * 100 : 0 };
 });
-const visible_models = computed(() => (members_expanded.value ? model_rows.value : model_rows.value.slice(0, MEMBER_PREVIEW)));
+const visible_models = computed(() => (members_expanded.value ? sorted_models.value : sorted_models.value.slice(0, MEMBER_PREVIEW)));
 
 /** Width of the completion bar, or null when the sample is too small to show a percentage. */
 function completion(row) {
@@ -318,6 +404,8 @@ const delivery_note = computed(() => {
 const corrections = computed(() => report.value?.time?.corrections || { stops: 0, withdrawals: 0, rewinds: 0, affected_requests: 0 });
 const additions = computed(() => report.value?.time?.additions || { interjections: 0 });
 const queue_info = computed(() => report.value?.time?.queue || { count: 0, oldest_seconds: null });
+const top_folder = computed(() => folders.value[0] || null);
+const top_model = computed(() => model_rows.value[0] || null);
 const correction_total = computed(() => (corrections.value.stops || 0) + (corrections.value.withdrawals || 0) + (corrections.value.rewinds || 0));
 
 const scope_text = computed(() => {
@@ -403,107 +491,96 @@ async function copy_share_card() {
       </section>
 
       <template v-else-if="report">
-        <!-- Hero: the one number the page is about, the chart that explains it, and the three facts that show the team's size. -->
-        <section class="analytics-hero" :class="{ 'is-compact': !daily.length }" :style="block_style(0)">
-          <div class="analytics-hero-main">
-            <div class="analytics-eyebrow">{{ t("免介入率") }}</div>
-            <div class="analytics-hero-number">
-              <strong>{{ hero_text }}</strong>
-              <span v-if="unassisted_delta !== null" class="analytics-delta" :class="unassisted_delta > 0 ? 'is-up' : unassisted_delta < 0 ? 'is-down' : ''">
-                <UIcon :name="unassisted_delta > 0 ? 'i-lucide-arrow-up-right' : unassisted_delta < 0 ? 'i-lucide-arrow-down-right' : 'i-lucide-minus'" />
-                {{ unassisted_delta ? t("较上期 {diff} 个百分点", { diff: Math.abs(unassisted_delta) }) : t("与上期持平") }}
+        <!-- The opening: four figures and the timeline, analysis first; the sentence is a caption (Fable #14109). -->
+        <section class="analytics-overview" :style="block_style(0)">
+          <p class="analytics-caption">{{ conclusion }}</p>
+          <div class="analytics-figures">
+            <article v-for="figure in figures" :key="figure.key" class="analytics-figure">
+              <span class="analytics-figure-label">{{ figure.label }}</span>
+              <strong class="analytics-figure-value">{{ figure.value }}</strong>
+              <span class="analytics-figure-foot">
+                <span v-if="figure.change" class="analytics-change" :class="figure.change.diff > 0 ? 'is-up' : figure.change.diff < 0 ? 'is-down' : ''">{{ figure.change.text }}</span>
+                <span v-if="figure.note" class="analytics-dim">{{ figure.note }}</span>
               </span>
-            </div>
-            <p class="analytics-hero-sentence">
-              <template v-if="overview.ended > 0">{{ t("已结束的 {total} 个任务中，{count} 个你没有再停止、撤回或回退", { count: overview.unassisted, total: overview.ended }) }}</template>
-              <template v-else>{{ t("这段时间还没有已结束的任务") }}</template>
-            </p>
-            <p v-if="overview.ended > 0 && !unassisted.has_percent" class="analytics-dim analytics-small">{{ t("任务不足 10 个，只显示个数") }}</p>
-
-            <div v-if="daily.length" class="analytics-daily" :aria-label="t('每日发起的已结束任务')">
-              <div class="analytics-daily-head">
-                <span class="analytics-legend-inline">
-                  <span><i class="analytics-key is-alone" />{{ t("没再插手") }}</span>
-                  <span><i class="analytics-key is-stepped" />{{ t("插手过") }}</span>
-                </span>
-                <span v-if="hovered_day >= 0" class="analytics-daily-readout">
-                  {{ t("{date}：当天发起的任务中已结束 {ended} 个，插手 {count} 个", { date: daily[hovered_day].full, ended: daily[hovered_day].ended, count: daily[hovered_day].stepped_in }) }}
-                </span>
-                <span v-else class="analytics-dim">{{ t("每日发起的已结束任务") }}</span>
-              </div>
-              <div class="analytics-daily-plot" @mouseleave="hovered_day = -1">
-                <div
-                  v-for="(day, index) in daily"
-                  :key="day.date"
-                  class="analytics-daily-col"
-                  :class="{ 'is-hover': hovered_day === index }"
-                  @mouseenter="hovered_day = index"
-                >
-                  <div class="analytics-daily-bar" :style="{ height: bar_height(day, index) }">
-                    <i class="is-stepped" :style="{ flexGrow: 100 - day.alone_share, minHeight: day.stepped_in ? '3px' : 0 }" />
-                    <i class="is-alone" :style="{ flexGrow: day.alone_share }" />
-                  </div>
-                  <span class="analytics-daily-label">{{ day.show_label ? day.label : "" }}</span>
-                </div>
-              </div>
-            </div>
+            </article>
           </div>
-
-          <div class="analytics-hero-side">
-            <article class="analytics-stat">
-              <div class="analytics-eyebrow">{{ t("发起") }}</div>
-              <div class="analytics-stat-number">
-                <strong>{{ Math.round(started_count.value.value) }}</strong>
-                <span v-if="initiated_delta !== null" class="analytics-dim">{{ t("较上期 {diff}", { diff: initiated_delta >= 0 ? `+${initiated_delta}` : initiated_delta }) }}</span>
-              </div>
-              <div class="analytics-meter" aria-hidden="true"><i :style="{ width: `${answered_percent * grow.value.value}%` }" /></div>
-              <p>{{ t("其中 {count} 次已获回复", { count: overview.answered }) }}</p>
-            </article>
-            <article class="analytics-stat">
-              <div class="analytics-eyebrow">
-                {{ t("同时并行峰值") }}
-                <UPopover :content="{ side: 'top' }"><button type="button" class="analytics-info" :aria-label="t('统计口径')"><UIcon name="i-lucide-info" /></button><template #content><p class="analytics-popover">{{ t('同一时刻最多有几个房间、几位专家在运行。同一房间几位成员同时运行只算一个房间，专家则每位各算一位。') }}</p></template></UPopover>
-              </div>
-              <div class="analytics-peak-pair">
-                <div class="analytics-stat-number"><strong>{{ Math.round(peak_rooms.value.value) }}</strong><span class="analytics-dim">{{ t("个房间") }}</span></div>
-                <div class="analytics-stat-number"><strong>{{ Math.round(peak_members.value.value) }}</strong><span class="analytics-dim">{{ t("位专家") }}</span></div>
-              </div>
-              <p v-if="peak.members_at" class="analytics-dim">{{ t("专家峰值出现于 {time}", { time: format_timestamp(peak.members_at, report.range?.tz) }) }}</p>
-            </article>
-            <article class="analytics-stat">
-              <div class="analytics-eyebrow">
-                {{ t("AI 执行总时长") }}
-                <UPopover :content="{ side: 'top' }"><button type="button" class="analytics-info" :aria-label="t('统计口径')"><UIcon name="i-lucide-info" /></button><template #content><p class="analytics-popover">{{ t('各成员执行时长相加，几位同时运行时会超过实际经过的时间。') }}</p></template></UPopover>
-              </div>
-              <div class="analytics-stat-number"><strong>{{ format_duration(execution_total.value.value) }}</strong></div>
-            </article>
+          <div v-if="timeline" class="analytics-timeline">
+            <div class="analytics-timeline-head">
+              <span class="analytics-legend-inline">
+                <span><i class="analytics-key is-run" />{{ t("同时在跑的专家") }}</span>
+                <span><i class="analytics-key is-fail" />{{ t("没有完成的运行") }}</span>
+              </span>
+              <span v-if="hovered_slot >= 0" class="analytics-timeline-readout">
+                {{ t("{when}：{experts} 位专家在跑，{count} 次没有完成", { when: timeline.when(hovered_slot), experts: timeline.points[hovered_slot], count: timeline.unfinished[hovered_slot] || 0 }) }}
+              </span>
+              <span v-else class="analytics-dim">{{ t("峰值 {count} 位", { count: timeline.peak_value }) }}</span>
+            </div>
+            <div class="analytics-timeline-plot" @mousemove="hover_timeline" @mouseleave="hovered_slot = -1">
+              <svg :viewBox="`0 0 ${CHART_W} ${CHART_H + MARK_H + 6}`" preserveAspectRatio="none" role="img" :aria-label="t('同时在跑的专家')">
+                <path class="analytics-area" :d="timeline.area(grow.value.value).fill" />
+                <path class="analytics-line" :d="timeline.area(grow.value.value).stroke" vector-effect="non-scaling-stroke" />
+                <line :x1="0" :x2="CHART_W" :y1="CHART_H" :y2="CHART_H" class="analytics-axis" vector-effect="non-scaling-stroke" />
+                <rect v-for="mark in timeline.marks" :key="mark.index" class="analytics-fail-mark" :x="mark.x" :y="CHART_H + 4" :width="Math.max(2, timeline.slot - 1)" :height="mark.h * grow.value.value" />
+                <line v-if="hovered_slot >= 0" class="analytics-guide" vector-effect="non-scaling-stroke"
+                  :x1="(hovered_slot + 0.5) * timeline.slot" :x2="(hovered_slot + 0.5) * timeline.slot" y1="0" :y2="CHART_H + MARK_H + 6" />
+              </svg>
+              <span v-for="label in timeline.labels" :key="label.x" class="analytics-axis-label" :style="{ left: `${label.x}%` }">{{ label.text }}</span>
+            </div>
           </div>
         </section>
 
-        <section class="analytics-block" :style="block_style(1)">
+        <p v-if="!issue_list.length" class="analytics-calm" :style="block_style(1)"><UIcon name="i-lucide-circle-check" />{{ t("这段时间一切正常，没有需要你处理的事") }}</p>
+        <section v-else class="analytics-block" :style="block_style(1)">
           <div class="analytics-block-head">
-            <h2>{{ t("值得留意") }}
-              <UPopover :content="{ side: 'top' }"><button type="button" class="analytics-info" :aria-label="t('统计口径')"><UIcon name="i-lucide-info" /></button><template #content><p class="analytics-popover">{{ t('按固定规则挑出的异常：至少 10 次运行里出现 3 次以上才会列出。') }}</p></template></UPopover>
+            <h2>{{ t("需要你看一下") }}<span class="analytics-count">{{ issue_list.length }}</span>
+              <UPopover :content="{ side: 'top' }"><button type="button" class="analytics-info" :aria-label="t('统计口径')"><UIcon name="i-lucide-info" /></button><template #content><p class="analytics-popover">{{ t("按固定规则从这段时间的运行里挑出：没完成的运行按原因合并，同一原因影响几个模型也只算一条。占相关运行 5% 以上或比上期翻倍才列出，占 10% 以上或翻倍的标红。只写发生了什么，不判断哪个模型更好。点开可以看到具体是哪几次，并跳到房间里对应的消息。") }}</p></template></UPopover>
             </h2>
           </div>
-          <ul v-if="report.insights?.length" class="analytics-insights">
-            <li v-for="(item, idx) in report.insights" :key="`${item.rule}-${idx}`">
-              <button type="button" @click="open_room(item.target?.room_id)">
-                <UIcon :name="INSIGHT_ICONS[item.rule] || 'i-lucide-sparkles'" class="analytics-insight-icon" />
-                <span>{{ insight_text(item) }}</span>
-                <UIcon name="i-lucide-arrow-up-right" class="analytics-insight-jump" aria-hidden="true" />
+          <ul class="analytics-issues">
+            <li v-for="item in visible_issues" :key="issue_key(item)" class="analytics-issue" :class="[issue_level(item), { 'is-open': open_issues.has(issue_key(item)) }]">
+              <button type="button" class="analytics-issue-head" :aria-expanded="open_issues.has(issue_key(item))" @click="toggle_issue(issue_key(item))">
+                <UIcon :name="ISSUE_ICONS[item.rule] || 'i-lucide-circle-alert'" class="analytics-issue-icon" />
+                <span class="analytics-issue-main">
+                  <strong>{{ issue_title(item) }}</strong>
+                  <small v-if="issue_meta(item)">{{ issue_meta(item) }}</small>
+                </span>
+                <span v-if="comparable && item.previous && item.count !== item.previous" class="analytics-issue-trend" :class="item.count > item.previous ? 'is-more' : 'is-less'">
+                  <UIcon :name="item.count > item.previous ? 'i-lucide-arrow-up-right' : 'i-lucide-arrow-down-right'" />{{ Math.abs(item.count - item.previous) }}
+                </span>
+                <UIcon :name="open_issues.has(issue_key(item)) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" class="analytics-issue-chevron" />
               </button>
+              <div v-if="open_issues.has(issue_key(item))" class="analytics-issue-body">
+                <ul v-if="item.runs?.length" class="analytics-runs">
+                  <li v-for="run in item.runs" :key="run.execution_id">
+                    <button type="button" class="analytics-run" :title="t('打开房间')" @click="open_run(run)">
+                      <span class="analytics-run-time">{{ format_timestamp(run.created_at, report.range?.tz) }}</span>
+                      <span class="analytics-run-room">{{ run.title || run.room_id }}</span>
+                      <span class="analytics-run-member">{{ run.label || run.member }}</span>
+                      <span class="analytics-run-status" :class="`is-${run.status}`">{{ RUN_STATUS[run.status] || run.status }}</span>
+                      <span class="analytics-run-result">{{ run.failure_class ? failure_class_label(run.failure_class) : (run.result.startsWith('message:') ? '' : run.result) }}</span>
+                      <UIcon name="i-lucide-arrow-up-right" class="analytics-run-jump" />
+                    </button>
+                  </li>
+                </ul>
+                <p v-if="item.runs?.length && item.runs.length < item.count" class="analytics-dim analytics-small">{{ t("只列出最近 {shown} 次，共 {count} 次", { shown: item.runs.length, count: item.count }) }}</p>
+                <p v-if="item.rule === 'scheduler'" class="analytics-small"><button type="button" class="analytics-scope-toggle" @click="open_room(item.params.room_id)">{{ t("打开房间") }}</button></p>
+              </div>
             </li>
           </ul>
-          <p v-else class="analytics-calm"><UIcon name="i-lucide-circle-check" />{{ t("这段时间没有需要留意的异常。") }}</p>
+          <button v-if="issue_list.length > ISSUE_PREVIEW" type="button" class="analytics-more analytics-more-plain" @click="issues_expanded = !issues_expanded">
+            {{ issues_expanded ? t("收起") : t("其余 {count} 条", { count: issue_list.length - ISSUE_PREVIEW }) }}
+            <UIcon :name="issues_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
+          </button>
         </section>
 
-        <section class="analytics-block" :style="block_style(2)">
-          <div class="analytics-block-head">
-            <h2>{{ t("时间去哪了") }}
-              <UPopover :content="{ side: 'top' }"><button type="button" class="analytics-info" :aria-label="t('统计口径')"><UIcon name="i-lucide-info" /></button><template #content><p class="analytics-popover">{{ t('按房间当前所在的文件夹统计；几位成员同时运行的时间分别计入。') }}</p></template></UPopover>
-            </h2>
-          </div>
+        <div class="analytics-details-head" :style="block_style(2)">{{ t("明细") }}</div>
+
+        <details class="analytics-detail" open :style="block_style(3)">
+          <summary>
+            <h2><UIcon name="i-lucide-chevron-right" class="analytics-detail-chevron" />{{ t("哪些项目在吃时间") }}</h2>
+            <span v-if="top_folder" class="analytics-dim">{{ t("{name} 占 {share}", { name: top_folder.display_name, share: share_text(top_folder.share) }) }}</span>
+          </summary>
+          <p class="analytics-detail-note">{{ t('按房间当前所在的文件夹统计；几位成员同时运行的时间分别计入。') }}</p>
           <div class="analytics-panel">
             <template v-if="folders.length">
               <div class="analytics-stack" role="img" :aria-label="t('文件夹精力分布')">
@@ -556,36 +633,24 @@ async function copy_share_card() {
             </template>
             <p v-else class="analytics-dim analytics-small">{{ t("本期暂无文件夹活动记录。") }}</p>
           </div>
-        </section>
+        </details>
 
-        <section class="analytics-block" :style="block_style(3)">
-          <div class="analytics-block-head">
-            <h2>{{ t("成员成绩单") }}
-              <UPopover :content="{ side: 'top' }"><button type="button" class="analytics-info" :aria-label="t('统计口径')"><UIcon name="i-lucide-info" /></button><template #content><p class="analytics-popover">{{ t('按软件、模型与强度汇总所有房间，按运行次数排列，不评名次。') }}</p></template></UPopover>
-            </h2>
-          </div>
+        <details class="analytics-detail" open :style="block_style(4)">
+          <summary>
+            <h2><UIcon name="i-lucide-chevron-right" class="analytics-detail-chevron" />{{ t("哪个模型值得多用") }}</h2>
+            <span v-if="top_model" class="analytics-dim">{{ t("{who} 承担了 {share} 的运行", { who: issue_who(top_model), share: share_text(top_model.run_share) }) }}</span>
+          </summary>
+          <p class="analytics-detail-note">{{ t('按软件、模型与强度汇总所有房间。点表头可排序；完成率旁的小条拆开了完成、失败、你停止、其他取消和进行中。不同模型接的活不一样，完成率不能直接比较好坏。') }}</p>
           <div v-if="model_rows.length" class="analytics-panel analytics-table-wrap">
-            <div class="analytics-mix">
-              <div class="analytics-mix-head"><span>{{ t("各模型调用占比") }}</span><span class="analytics-dim">{{ t("按运行次数") }}</span></div>
-              <div class="analytics-stack" role="img" :aria-label="t('各模型调用占比')">
-                <i v-for="(item, index) in model_mix" :key="item.key" :class="`slot-${item.slot}`" :style="{ flexGrow: item.weight * wave(grow.value.value, index, model_mix.length, 0.4) }" :title="`${item.label} · ${share_text(item.share)}`" />
-              </div>
-              <ul class="analytics-mix-legend">
-                <li v-for="item in model_mix" :key="item.key">
-                  <span class="analytics-swatch" :class="`slot-${item.slot}`" /><span class="analytics-mix-name">{{ item.label }}</span>
-                  <strong class="num">{{ share_text(item.share) }}</strong>
-                </li>
-              </ul>
-            </div>
             <table class="analytics-table">
               <thead>
                 <tr>
                   <th>{{ t("成员") }}</th>
-                  <th class="num"><UPopover :content="{ side: 'top' }"><button type="button" class="analytics-hint">{{ t("运行") }}</button><template #content><p class="analytics-popover">{{ t('成员每运行一次算一次，一次运行可能同时处理几条消息。') }}</p></template></UPopover></th>
+                  <th class="num"><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'executions'" @click="model_sort = 'executions'">{{ t("运行") }}<UIcon v-if="model_sort === 'executions'" name="i-lucide-arrow-down" /></button></th>
                   <th class="num">{{ t("占比") }}</th>
-                  <th>{{ t("完成率") }}</th>
-                  <th><UPopover :content="{ side: 'top' }"><button type="button" class="analytics-hint">{{ t("耗时（通常 · 较慢）") }}</button><template #content><p class="analytics-popover">{{ t('一半的运行在“通常”以内结束，九成在“较慢”以内结束。') }}</p></template></UPopover></th>
-                  <th class="num">{{ t("打断 / 重试") }}</th>
+                  <th><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'failed'" @click="model_sort = 'failed'">{{ t("结果") }}<UIcon v-if="model_sort === 'failed'" name="i-lucide-arrow-down" /></button></th>
+                  <th><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'duration'" @click="model_sort = 'duration'">{{ t("耗时（通常 · 较慢）") }}<UIcon v-if="model_sort === 'duration'" name="i-lucide-arrow-down" /></button></th>
+                  <th class="num"><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'interrupted'" @click="model_sort = 'interrupted'">{{ t("打断 / 重试") }}<UIcon v-if="model_sort === 'interrupted'" name="i-lucide-arrow-down" /></button></th>
                   <th>{{ t("失败类型") }}</th>
                 </tr>
               </thead>
@@ -598,10 +663,12 @@ async function copy_share_card() {
                     </div>
                   </td>
                   <td class="num">{{ row.executions }}</td>
-                  <td class="num"><span class="analytics-swatch" :class="`slot-${row_slot(row)}`" />{{ share_text(row.run_share) }}</td>
+                  <td class="num">{{ share_text(row.run_share) }}</td>
                   <td>
-                    <div class="analytics-rate">
-                      <div v-if="completion(row).width !== null" class="analytics-meter" aria-hidden="true"><i :style="{ width: `${completion(row).width * grow.value.value}%` }" /></div>
+                    <div class="analytics-rate" :title="outcome_title(row)">
+                      <div class="analytics-outcome" aria-hidden="true">
+                        <i v-for="part in outcomes(row)" :key="part.key" :class="`is-${part.key}`" :style="{ flexGrow: (part.share / 100) * grow.value.value }" />
+                      </div>
                       <span class="num">{{ completion(row).primary }}</span>
                     </div>
                   </td>
@@ -620,14 +687,14 @@ async function copy_share_card() {
             </button>
           </div>
           <p v-else class="analytics-dim analytics-small">{{ t("本期暂无成员执行记录。") }}</p>
-        </section>
+        </details>
 
-        <section class="analytics-block" :style="block_style(4)">
-          <div class="analytics-block-head">
-            <h2>{{ t("工作流") }}
-              <UPopover :content="{ side: 'top' }"><button type="button" class="analytics-info" :aria-label="t('统计口径')"><UIcon name="i-lucide-info" /></button><template #content><p class="analytics-popover">{{ t("按房间启用的工作流统计成员的运行；卡片是这次运行所扮演的角色，子工作流是被调用的分支流程。只含现存房间。") }}</p></template></UPopover>
-            </h2>
-          </div>
+        <details class="analytics-detail" :style="block_style(5)">
+          <summary>
+            <h2><UIcon name="i-lucide-chevron-right" class="analytics-detail-chevron" />{{ t("工作流用得怎样") }}</h2>
+            <span class="analytics-dim">{{ workflow_rows.length ? t("工作流中的运行占 {share}", { share: share_text(workflow_share.share) }) : t("没有工作流运行") }}</span>
+          </summary>
+          <p class="analytics-detail-note">{{ t("按房间启用的工作流统计成员的运行；卡片是这次运行所扮演的角色，子工作流是被调用的分支流程。只含现存房间。") }}</p>
           <div v-if="workflow_rows.length" class="analytics-panel analytics-table-wrap">
             <div class="analytics-mix">
               <div class="analytics-mix-head">
@@ -671,18 +738,18 @@ async function copy_share_card() {
             </table>
           </div>
           <p v-else class="analytics-calm analytics-calm-plain"><UIcon name="i-lucide-network" />{{ t("这段时间没有按工作流进行的运行。") }}</p>
-        </section>
+        </details>
 
-        <section class="analytics-block" :style="block_style(5)">
-          <details class="analytics-panel analytics-friction" :open="blockers_open" @toggle="blockers_open = $event.target.open">
-            <summary>
-              <h2><UIcon :name="blockers_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t("耗时与卡点") }}</h2>
-              <span class="analytics-dim">
-                {{ t("交付通常 {duration}", { duration: format_duration(overview.delivery?.p50) }) }} ·
-                {{ t("纠正 {count} 次", { count: correction_total }) }} ·
-                {{ t("当前排队 {count} 条", { count: queue_info.count || 0 }) }}
-              </span>
-            </summary>
+        <details class="analytics-detail" :style="block_style(6)">
+          <summary>
+            <h2><UIcon name="i-lucide-chevron-right" class="analytics-detail-chevron" />{{ t("哪里卡住了") }}</h2>
+            <span class="analytics-dim">
+              {{ t("交付通常 {duration}", { duration: format_duration(overview.delivery?.p50) }) }} ·
+              {{ t("纠正 {count} 次", { count: correction_total }) }} ·
+              {{ t("当前排队 {count} 条", { count: queue_info.count || 0 }) }}
+            </span>
+          </summary>
+          <div class="analytics-panel analytics-friction">
             <div class="analytics-friction-body">
               <div class="analytics-segments">
                 <div v-for="seg in waiting_segments" :key="seg.key" class="analytics-segment" :class="{ 'is-subset': seg.subset }">
@@ -701,6 +768,7 @@ async function copy_share_card() {
                 </div>
               </div>
               <div class="analytics-tiles">
+                <div class="is-neutral"><span>{{ t("免介入率") }}</span><strong>{{ unassisted.primary }}</strong><small>{{ t("{count} / {total} 个已结束任务", { count: overview.unassisted, total: overview.ended }) }}</small></div>
                 <div><span>{{ t("停止与打断") }}</span><strong>{{ corrections.stops || 0 }}</strong></div>
                 <div><span>{{ t("撤回消息") }}</span><strong>{{ corrections.withdrawals || 0 }}</strong></div>
                 <div><span>{{ t("回退对话") }}</span><strong>{{ corrections.rewinds || 0 }}</strong><small>{{ t("影响 {count} 条请求", { count: corrections.affected_requests || 0 }) }}</small></div>
@@ -708,16 +776,16 @@ async function copy_share_card() {
                 <div class="is-neutral"><span>{{ t("当前排队") }}</span><strong>{{ queue_info.count || 0 }}</strong><small v-if="queue_info.count">{{ t("最久已等 {duration}", { duration: format_duration(queue_info.oldest_seconds) }) }}</small></div>
               </div>
             </div>
-          </details>
-        </section>
+          </div>
+        </details>
 
-        <footer class="analytics-foot" :style="block_style(6)">
+        <footer class="analytics-foot" :style="block_style(7)">
           <span>{{ scope_text }}</span>
           <button v-if="report.scope?.sealed_rooms || scope === 'current'" type="button" class="analytics-scope-toggle" @click="scope = scope === 'all' ? 'current' : 'all'">
             {{ scope === "all" ? t("只看现存房间") : t("包含已删除房间") }}
           </button>
           <span>{{ t("时区：{tz}", { tz: report.range?.tz || tz }) }}</span>
-          <span v-if="report.scope?.mode === 'all' && report.scope?.sealed_rooms">{{ t("并行峰值、文件夹、成员、工作流、洞察只含现存房间") }}</span>
+          <span v-if="report.scope?.mode === 'all' && report.scope?.sealed_rooms">{{ t("问题清单、并行峰值、文件夹、成员、工作流只含现存房间") }}</span>
         </footer>
       </template>
     </div>
@@ -783,64 +851,115 @@ async function copy_share_card() {
 .analytics-error { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--ui-error) 35%, var(--ui-border)); border-radius: 12px; background: color-mix(in srgb, var(--ui-error) 8%, transparent); font-size: 13px; }
 .analytics-error p { margin: 0; flex: 1; }
 
-/* Hero */
-.analytics-hero { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); border: 1px solid var(--ui-border-muted); border-radius: 14px; background: var(--ui-bg-elevated); overflow: hidden; }
-.analytics-hero-main { display: grid; align-content: start; gap: 8px; padding: 24px 26px 20px; }
-.analytics-hero-number { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; }
-.analytics-hero-number strong { font-size: 60px; line-height: 1; font-weight: 700; letter-spacing: -.03em; color: var(--ui-text-highlighted); font-variant-numeric: tabular-nums; }
-.analytics-delta { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px 2px 6px; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 6%, transparent); color: var(--ui-text-toned); font-size: 12px; font-variant-numeric: tabular-nums; }
-.analytics-delta.is-up { color: var(--viz-up); background: color-mix(in srgb, var(--viz-up) 12%, transparent); }
-.analytics-delta.is-down { color: var(--viz-down); background: color-mix(in srgb, var(--viz-down) 12%, transparent); }
-.analytics-delta :deep([class*="icon"]) { width: 13px; height: 13px; }
-.analytics-hero-sentence { margin: 2px 0 0; max-width: 46ch; font-size: 14px; line-height: 1.55; color: var(--ui-text-toned); }
-
-.analytics-daily { display: grid; gap: 8px; margin-top: 14px; padding-bottom: 18px; }
-.analytics-daily-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 18px; font-size: 12px; color: var(--ui-text-muted); }
-.analytics-daily-readout { color: var(--ui-text-highlighted); font-variant-numeric: tabular-nums; }
-.analytics-legend-inline { display: inline-flex; gap: 14px; }
-.analytics-legend-inline > span { display: inline-flex; align-items: center; gap: 6px; }
-.analytics-key { display: inline-block; width: 9px; height: 9px; border-radius: 3px; }
-.analytics-key.is-alone, .analytics-daily-bar .is-alone { background: color-mix(in srgb, var(--channel-accent) 80%, transparent); }
-.analytics-key.is-stepped, .analytics-daily-bar .is-stepped { background: var(--viz-2); }
-.analytics-daily-plot { display: flex; align-items: stretch; gap: 3px; height: 96px; border-bottom: 1px solid var(--ui-border); }
-.analytics-daily-col { position: relative; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; min-width: 0; cursor: default; }
-.analytics-daily-col::before { content: ""; position: absolute; inset: 0 -1.5px; border-radius: 4px; }
-.analytics-daily-col.is-hover::before { background: color-mix(in srgb, var(--ui-text) 5%, transparent); }
-.analytics-daily-bar { position: relative; display: flex; flex-direction: column; gap: 0; width: 100%; max-width: 40px; border-radius: 4px 4px 0 0; overflow: hidden; }
-.analytics-daily-bar i { display: block; min-height: 0; flex-basis: 0; }
-.analytics-daily-bar .is-stepped + .is-alone { box-shadow: 0 -2px 0 var(--ui-bg-elevated); }
-.analytics-daily-col.is-hover .analytics-daily-bar { filter: brightness(1.12); }
-.analytics-daily-label { position: absolute; top: calc(100% + 5px); left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--ui-text-dimmed); white-space: nowrap; }
-
-.analytics-hero-side { display: grid; grid-template-rows: repeat(3, auto); align-content: stretch; border-left: 1px solid var(--ui-border-muted); background: color-mix(in srgb, var(--ui-text) 2%, transparent); }
-.analytics-stat { display: grid; align-content: center; gap: 7px; padding: 18px 24px; }
-.analytics-stat + .analytics-stat { border-top: 1px solid var(--ui-border-muted); }
-.analytics-stat p { margin: 0; font-size: 12.5px; color: var(--ui-text-toned); font-variant-numeric: tabular-nums; }
-.analytics-stat-number { display: flex; align-items: baseline; gap: 8px; }
-.analytics-stat-number strong { font-size: 28px; line-height: 1.1; font-weight: 650; letter-spacing: -.02em; color: var(--ui-text-highlighted); font-variant-numeric: tabular-nums; }
-.analytics-stat-number span { font-size: 13px; font-variant-numeric: tabular-nums; }
-.analytics-peak-pair { display: flex; flex-wrap: wrap; gap: 4px 22px; }
 .analytics-meter { height: 4px; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 9%, transparent); overflow: hidden; }
 .analytics-meter i { display: block; height: 100%; border-radius: 999px; background: var(--channel-accent); }
 
-/* Today has no daily chart: the number takes one row and the three facts sit beside each other under it. */
-.analytics-hero.is-compact { grid-template-columns: minmax(0, 1fr); }
-.analytics-hero.is-compact .analytics-hero-side { grid-template-rows: none; grid-template-columns: repeat(3, minmax(0, 1fr)); border-left: 0; border-top: 1px solid var(--ui-border-muted); }
-.analytics-hero.is-compact .analytics-stat + .analytics-stat { border-top: 0; border-left: 1px solid var(--ui-border-muted); }
+/* Overview: figures and the timeline lead the page (Fable #14109); the sentence above them is a caption. */
+.analytics-overview { display: grid; gap: 16px; }
+.analytics-caption { margin: -6px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--ui-text-toned); }
+.analytics-figures { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--ui-border-muted); border-radius: 14px; background: var(--ui-bg-elevated); overflow: hidden; }
+.analytics-figure { display: grid; align-content: start; gap: 6px; padding: 18px 20px 16px; min-width: 0; }
+.analytics-figure + .analytics-figure { border-left: 1px solid var(--ui-border-muted); }
+.analytics-figure-label { font-size: 12px; font-weight: 500; color: var(--ui-text-muted); }
+.analytics-figure-value { font-size: 30px; line-height: 1.1; font-weight: 700; letter-spacing: -.02em; color: var(--ui-text-highlighted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.analytics-figure:first-child .analytics-figure-value { color: var(--channel-accent); }
+.analytics-figure-foot { display: flex; flex-wrap: wrap; gap: 2px 10px; min-height: 18px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.analytics-change { color: var(--ui-text-toned); }
+.analytics-change.is-up { color: var(--viz-up); }
+.analytics-change.is-down { color: var(--viz-down); }
+.analytics-figure:last-child .analytics-change.is-up { color: var(--viz-up); }
+
+.analytics-timeline { display: grid; gap: 8px; padding: 16px 20px 26px; border: 1px solid var(--ui-border-muted); border-radius: 14px; background: var(--ui-bg-elevated); }
+.analytics-timeline-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px 12px; min-height: 18px; font-size: 12px; color: var(--ui-text-muted); }
+.analytics-timeline-readout { color: var(--ui-text-highlighted); font-variant-numeric: tabular-nums; }
+.analytics-legend-inline { display: inline-flex; gap: 14px; }
+.analytics-legend-inline > span { display: inline-flex; align-items: center; gap: 6px; }
+.analytics-key { display: inline-block; width: 9px; height: 9px; border-radius: 3px; }
+.analytics-key.is-run { background: var(--channel-accent); }
+.analytics-key.is-fail { background: var(--ui-error); }
+.analytics-timeline-plot { position: relative; height: 180px; cursor: crosshair; }
+.analytics-timeline-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.analytics-area { fill: color-mix(in srgb, var(--channel-accent) 22%, transparent); }
+.analytics-line { fill: none; stroke: var(--channel-accent); stroke-width: 2px; stroke-linejoin: round; }
+.analytics-axis { stroke: var(--ui-border); stroke-width: 1px; }
+.analytics-fail-mark { fill: var(--ui-error); opacity: .85; }
+.analytics-guide { stroke: var(--ui-text-dimmed); stroke-width: 1px; stroke-dasharray: 3 3; }
+.analytics-axis-label { position: absolute; top: calc(100% + 4px); transform: translateX(-2px); font-size: 11px; color: var(--ui-text-dimmed); white-space: nowrap; }
+.analytics-calm { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 14px; border: 1px dashed var(--ui-border); border-radius: 10px; font-size: 13px; color: var(--ui-text-muted); }
+.analytics-calm :deep([class*="icon"]) { width: 15px; height: 15px; color: var(--viz-up); }
+.analytics-count { margin-left: 2px; padding: 0 7px; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 8%, transparent); font-size: 12px; font-weight: 600; color: var(--ui-text-toned); }
+
+/* Issues: the part of the page to act on. */
+.analytics-issues { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.analytics-issue { border: 1px solid var(--ui-border-muted); border-left-width: 3px; border-radius: 10px; background: var(--ui-bg-elevated); overflow: hidden; }
+.analytics-issue.is-critical { border-left-color: var(--ui-error); }
+.analytics-issue.is-normal { border-left-color: var(--ui-border-accented); }
+.analytics-issue.is-info { border-left-color: var(--ui-border-accented); }
+.analytics-issue-head { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 0; background: transparent; color: var(--ui-text); text-align: left; }
+.analytics-issue-head:hover { background: color-mix(in srgb, var(--ui-text) 3%, transparent); }
+.analytics-issue-icon { width: 17px; height: 17px; flex-shrink: 0; }
+.is-critical .analytics-issue-icon { color: var(--ui-error); }
+.is-normal .analytics-issue-icon { color: var(--ui-text-toned); }
+.is-info .analytics-issue-icon { color: var(--ui-text-dimmed); }
+.analytics-issue-main { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.analytics-issue-main strong { font-size: 14px; font-weight: 600; color: var(--ui-text-highlighted); }
+.analytics-issue-main small { font-size: 12px; color: var(--ui-text-muted); font-variant-numeric: tabular-nums; }
+.analytics-issue-trend { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.analytics-issue-trend :deep([class*="icon"]) { width: 13px; height: 13px; }
+.analytics-issue-trend.is-more { color: var(--viz-down); background: color-mix(in srgb, var(--viz-down) 12%, transparent); }
+.analytics-issue-trend.is-less { color: var(--viz-up); background: color-mix(in srgb, var(--viz-up) 12%, transparent); }
+.analytics-issue-chevron { width: 15px; height: 15px; flex-shrink: 0; color: var(--ui-text-dimmed); }
+.analytics-issue-body { display: grid; gap: 10px; padding: 2px 16px 14px 45px; }
+.analytics-reasons { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 12px; }
+.analytics-reason { display: inline-flex; align-items: baseline; min-width: 0; gap: 6px; max-width: 100%; padding: 2px 9px; border-radius: 6px; background: color-mix(in srgb, var(--ui-text) 6%, transparent); color: var(--ui-text-toned); }
+.analytics-reason span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.analytics-reason b { flex-shrink: 0; white-space: nowrap; }
+.analytics-reason b { font-weight: 600; color: var(--ui-text-highlighted); font-variant-numeric: tabular-nums; }
+.analytics-runs { list-style: none; margin: 0; padding: 0; display: grid; max-height: 320px; overflow-y: auto; border-top: 1px solid var(--ui-border-muted); }
+.analytics-run { width: 100%; display: grid; grid-template-columns: 92px minmax(0, 1.2fr) minmax(0, .8fr) 52px minmax(0, 2fr) 14px; align-items: center; gap: 10px; padding: 7px 0; border: 0; border-bottom: 1px solid var(--ui-border-muted); background: transparent; color: var(--ui-text); font-size: 12.5px; text-align: left; }
+.analytics-run:hover .analytics-run-room { color: var(--ui-text-highlighted); text-decoration: underline; text-underline-offset: 3px; }
+.analytics-run > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.analytics-run-time { color: var(--ui-text-muted); font-variant-numeric: tabular-nums; }
+.analytics-run-member, .analytics-run-result { color: var(--ui-text-muted); }
+.analytics-run-status { font-size: 11.5px; }
+.analytics-run-status.is-failed { color: var(--ui-error); }
+.analytics-run-status.is-cancelled { color: var(--ui-warning); }
+.analytics-run-status.is-completed { color: var(--viz-up); }
+.analytics-run-jump { width: 12px; height: 12px; color: var(--ui-text-dimmed); }
+.analytics-more-plain { border-top: 0; justify-content: flex-start; padding: 8px 2px 0; width: auto; }
+
+/* Details: everything else, folded under a title phrased as the owner's question. */
+.analytics-details-head { margin-top: 8px; font-size: 12px; font-weight: 600; letter-spacing: .04em; color: var(--ui-text-dimmed); }
+.analytics-detail { border-top: 1px solid var(--ui-border-muted); }
+.analytics-detail summary { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 14px; padding: 14px 2px; cursor: pointer; list-style: none; }
+.analytics-detail summary::-webkit-details-marker { display: none; }
+.analytics-detail summary h2 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 15px; font-weight: 600; color: var(--ui-text-highlighted); }
+.analytics-detail summary > span { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.analytics-detail summary:hover h2 { color: var(--channel-accent); }
+.analytics-detail-chevron { width: 15px; height: 15px; color: var(--ui-text-dimmed); }
+.analytics-detail[open] .analytics-detail-chevron { transform: rotate(90deg); }
+.analytics-detail[open] { padding-bottom: 18px; }
+.analytics-detail-note { margin: -4px 0 12px 21px; font-size: 12px; line-height: 1.55; color: var(--ui-text-dimmed); }
+.analytics-detail + .analytics-foot { border-top: 1px solid var(--ui-border-muted); padding-top: 14px; }
+.analytics-friction { padding: 18px 20px; }
+
+/* Outcome bar: completed / failed / stopped by you / cancelled otherwise / running. */
+.analytics-outcome { display: flex; gap: 1px; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 9%, transparent); overflow: hidden; }
+.analytics-outcome i { display: block; flex-basis: 0; min-width: 0; }
+.analytics-outcome .is-done { background: var(--channel-accent); }
+.analytics-outcome .is-failed { background: var(--ui-error); }
+.analytics-outcome .is-stopped { background: var(--ui-warning); }
+.analytics-outcome .is-cancelled { background: var(--viz-other); }
+.analytics-outcome .is-running { background: color-mix(in srgb, var(--channel-accent) 35%, transparent); }
+.analytics-sort { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: none; color: inherit; font: inherit; }
+.analytics-sort:hover, .analytics-sort[aria-pressed="true"] { color: var(--ui-text-highlighted); }
+.analytics-sort :deep([class*="icon"]) { width: 11px; height: 11px; }
 
 /* Section blocks */
 .analytics-block { display: grid; gap: 12px; }
 .analytics-block-head h2 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 15px; font-weight: 600; color: var(--ui-text-highlighted); }
 .analytics-panel { border: 1px solid var(--ui-border-muted); border-radius: 12px; background: var(--ui-bg-elevated); padding: 18px 20px; }
 
-.analytics-insights { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.analytics-insights button { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: var(--ui-bg-elevated); color: var(--ui-text); font-size: 13px; text-align: left; }
-.analytics-insights button:hover { border-color: var(--ui-border-accented); }
-.analytics-insights button > span { flex: 1; min-width: 0; }
-.analytics-insight-icon { width: 16px; height: 16px; flex-shrink: 0; color: var(--ui-warning); }
-.analytics-insight-jump { width: 14px; height: 14px; flex-shrink: 0; color: var(--ui-text-dimmed); }
-.analytics-calm { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 14px; border: 1px dashed var(--ui-border); border-radius: 10px; font-size: 13px; color: var(--ui-text-muted); }
-.analytics-calm :deep([class*="icon"]) { width: 15px; height: 15px; color: var(--viz-up); }
 
 /* Time */
 .analytics-stack { display: flex; gap: 2px; height: 12px; margin-bottom: 16px; }
@@ -879,15 +998,11 @@ async function copy_share_card() {
 .analytics-mix { display: grid; gap: 10px; padding: 14px 20px 16px; border-bottom: 1px solid var(--ui-border-muted); }
 .analytics-mix-head { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--ui-text-muted); }
 .analytics-mix .analytics-stack { margin-bottom: 0; }
-.analytics-mix-legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--ui-text); }
-.analytics-mix-legend li { display: inline-flex; align-items: center; min-width: 0; }
-.analytics-mix-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .analytics-meter-wide { height: 6px; }
 .analytics-chip { display: inline-flex; align-items: center; gap: 3px; margin: 1px 4px 1px 0; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 7%, transparent); color: var(--ui-text-toned); font-size: 11px; white-space: nowrap; }
 .analytics-chip.is-sub { background: color-mix(in srgb, var(--channel-accent) 14%, transparent); color: var(--ui-text-highlighted); }
 .analytics-chip :deep([class*="icon"]) { width: 11px; height: 11px; }
 .analytics-calm-plain :deep([class*="icon"]) { color: var(--ui-text-dimmed); }
-.analytics-mix-legend strong { margin-left: 8px; font-weight: 600; color: var(--ui-text-highlighted); }
 .analytics-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .analytics-table th { padding: 10px 14px; font-size: 11.5px; font-weight: 500; color: var(--ui-text-muted); text-align: left; white-space: nowrap; border-bottom: 1px solid var(--ui-border-muted); }
 .analytics-table th.num { text-align: right; }
@@ -910,11 +1025,7 @@ async function copy_share_card() {
 
 /* Durations and friction */
 .analytics-friction { padding: 0; }
-.analytics-friction summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 14px; padding: 14px 20px; cursor: pointer; list-style: none; }
-.analytics-friction summary::-webkit-details-marker { display: none; }
-.analytics-friction h2 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 15px; font-weight: 600; color: var(--ui-text-highlighted); }
-.analytics-friction summary > span { font-size: 12px; font-variant-numeric: tabular-nums; }
-.analytics-friction-body { display: grid; gap: 20px; padding: 6px 20px 20px; border-top: 1px solid var(--ui-border-muted); }
+.analytics-friction-body { display: grid; gap: 20px; }
 .analytics-segments { display: grid; gap: 4px; padding-top: 12px; }
 .analytics-segment { display: grid; grid-template-columns: 240px minmax(0, 1fr) 260px; align-items: center; gap: 18px; padding: 8px 0; }
 .analytics-segment.is-subset .analytics-segment-name { padding-left: 14px; border-left: 2px solid var(--ui-border-accented); }
@@ -941,19 +1052,29 @@ async function copy_share_card() {
 .analytics-share-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
 
 @media (max-width: 900px) {
-  .analytics-hero { grid-template-columns: minmax(0, 1fr); }
-  .analytics-hero-side { grid-template-rows: none; grid-template-columns: repeat(3, minmax(0, 1fr)); border-left: 0; border-top: 1px solid var(--ui-border-muted); }
-  .analytics-stat + .analytics-stat { border-top: 0; border-left: 1px solid var(--ui-border-muted); }
+  .analytics-figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-figure:nth-child(3) { border-left: 0; }
+  .analytics-figure:nth-child(n+3) { border-top: 1px solid var(--ui-border-muted); }
   .analytics-segment { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .analytics-segment-values { justify-content: flex-start; }
   .analytics-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 600px) {
-  .analytics-hero-main { padding: 20px 18px 16px; }
-  .analytics-hero-number strong { font-size: 48px; }
-  .analytics-hero-side, .analytics-hero.is-compact .analytics-hero-side { grid-template-columns: minmax(0, 1fr); }
-  .analytics-stat + .analytics-stat, .analytics-hero.is-compact .analytics-stat + .analytics-stat { border-left: 0; border-top: 1px solid var(--ui-border-muted); }
   .analytics-panel { padding: 16px; }
+  .analytics-figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-figure:nth-child(3) { border-left: 0; }
+  .analytics-figure:nth-child(n+3) { border-top: 1px solid var(--ui-border-muted); }
+  .analytics-figure { padding: 14px 14px 12px; }
+  .analytics-figure-value { font-size: 22px; white-space: normal; }
+  .analytics-timeline { padding: 12px 12px 24px; }
+  .analytics-timeline-plot { height: 140px; }
+  .analytics-issue-head { padding: 11px 12px; gap: 10px; }
+  .analytics-issue-body { padding: 2px 12px 12px; }
+  .analytics-run { grid-template-columns: minmax(0, 1fr) 44px 12px; row-gap: 2px; }
+  .analytics-run-time, .analytics-run-member { display: none; }
+  .analytics-run-result { grid-column: 1 / -1; grid-row: 2; }
+  .analytics-detail-note { margin-left: 0; }
+  .analytics-friction { padding: 14px; }
   /* Phones: period switch, refresh and share sit on one row; the share button keeps only its icon (#13468). */
   .analytics-controls { flex-wrap: nowrap; gap: 4px; width: 100%; }
   .analytics-segmented button { padding: 4px 8px; }
@@ -980,14 +1101,7 @@ async function copy_share_card() {
   .analytics-table.is-workflow :is(th, td):is(:nth-child(3), :nth-child(5), :nth-child(6)) { display: none; }
   .analytics-table.is-workflow td:last-child { white-space: normal; }
   .analytics-mix { padding: 12px 14px 14px; }
-  .analytics-mix-legend { gap: 4px 14px; font-size: 12px; }
-  .analytics-mix-name { max-width: 150px; }
   /* The folded friction block is a one-line summary, not a card: title and figures stack tightly. */
-  .analytics-panel.analytics-friction { padding: 0; }
-  .analytics-friction summary { display: grid; gap: 2px; padding: 11px 14px; }
-  .analytics-friction h2 { font-size: 14px; }
-  .analytics-friction summary > span { padding-left: 20px; font-size: 11.5px; }
-  .analytics-friction-body { gap: 14px; padding: 4px 14px 14px; }
   .analytics-segment { padding: 6px 0; }
   .analytics-segment-values { flex-wrap: wrap; gap: 4px 12px; }
   .analytics-tiles { gap: 8px; }

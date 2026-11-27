@@ -14,7 +14,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from backend.server import DiscussionServer, init_database
+from backend.server import DiscussionServer, init_database, without_empty_fields
 from runner import discuss
 
 # shutdown() waits for the server loop to notice; the default 0.5 s poll made every test end half a second late.
@@ -587,7 +587,8 @@ class CliTests(unittest.TestCase):
         original = self.cli("message", "view", self.room, first["message"]["id"])
         self.assertEqual(original["text"], "@Antigravity 成本 &= #1\n原文")
         found = self.cli("message", "list", self.room, "--submission-id", "retry-original")
-        self.assertEqual(found["messages"], [original])
+        # The list leaves out empty fields to save the agent's output budget; everything else matches the exact read.
+        self.assertEqual(found["messages"], [without_empty_fields(original)])
         self.assertEqual(self.cli("message", "list", self.room, "--submission-id", "unknown-result")["messages"], [])
         args[4] = "换了内容"
         self.assertEqual(self.rejected(args, 1)["http_status"], 409)

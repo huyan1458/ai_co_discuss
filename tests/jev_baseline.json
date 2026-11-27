@@ -3,13 +3,111 @@
   "model": "jev-latest",
   "mode": "guided",
   "repeat": 3,
-  "route_prompt": 12,
-  "discussion_prompt": 2,
+  "route_prompt": 13,
+  "discussion_prompt": 3,
   "review_prompt": 1,
   "sequence_prompt": 3,
-  "goal_prompt": 2,
-  "ran_at": "2026-11-21T11:23:34.482Z",
+  "goal_prompt": 3,
+  "ran_at": "2026-11-27T03:35:59.838Z",
   "results": [
+    {
+      "id": "T1",
+      "scene": "route",
+      "note": "#1733 脱敏，待决提问位于末尾",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.97,
+      "expected_probability": 0.98,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.98,
+        "__all__": 0,
+        "__all_seq__": 0,
+        "__none__": 0.02
+      },
+      "duration_ms": 353,
+      "status": "PASS",
+      "expected_range": [
+        0.97,
+        0.98
+      ]
+    },
+    {
+      "id": "T2",
+      "scene": "route",
+      "note": "#1733 脱敏，待决提问位于中段",
+      "expect": "__host__",
+      "choice": "__host__",
+      "acted": "__host__",
+      "runs": 3,
+      "confidence": 0.93,
+      "expected_probability": 0.93,
+      "probabilities": {
+        "Claude": 0,
+        "DeepSeek": 0,
+        "__host__": 0.93,
+        "__all__": 0,
+        "__all_seq__": 0,
+        "__none__": 0.07
+      },
+      "duration_ms": 361,
+      "status": "PASS",
+      "expected_range": [
+        0.93,
+        0.93
+      ]
+    },
+    {
+      "id": "T3",
+      "scene": "route",
+      "note": "#1654 脱敏，无前文的设置调整",
+      "expect": "__host__",
+      "choice": "Writer",
+      "acted": "Writer",
+      "runs": 3,
+      "confidence": 0.88,
+      "expected_probability": 0.1,
+      "probabilities": {
+        "Writer": 0.89,
+        "__host__": 0.1,
+        "__all__": 0,
+        "__all_seq__": 0,
+        "__none__": 0.01
+      },
+      "duration_ms": 322,
+      "status": "FAIL",
+      "expected_range": [
+        0.09,
+        0.11
+      ]
+    },
+    {
+      "id": "T4",
+      "scene": "route",
+      "note": "直接要求写手改写",
+      "expect": "Writer",
+      "choice": "Writer",
+      "acted": "Writer",
+      "runs": 3,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
+      "probabilities": {
+        "Writer": 0.99,
+        "__host__": 0.01,
+        "__all__": 0,
+        "__all_seq__": 0,
+        "__none__": 0
+      },
+      "duration_ms": 323,
+      "status": "PASS",
+      "expected_range": [
+        0.99,
+        0.99
+      ]
+    },
     {
       "id": "S1a",
       "scene": "route",
@@ -18,17 +116,17 @@
       "choice": "Claude",
       "acted": "Claude",
       "runs": 3,
-      "confidence": 0.98,
-      "expected_probability": 0.98,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
       "probabilities": {
-        "Claude": 0.98,
+        "Claude": 0.99,
         "DeepSeek": 0,
-        "__host__": 0.02,
+        "__host__": 0.01,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 298,
+      "duration_ms": 361,
       "status": "PASS",
       "expected_range": [
         0.98,
@@ -53,10 +151,10 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 332,
+      "duration_ms": 341,
       "status": "PASS",
       "expected_range": [
-        0.98,
+        0.97,
         0.98
       ]
     },
@@ -78,7 +176,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 348,
+      "duration_ms": 327,
       "status": "PASS",
       "expected_range": [
         1,
@@ -103,7 +201,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 331,
+      "duration_ms": 348,
       "status": "PASS",
       "expected_range": [
         1,
@@ -128,7 +226,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 341,
+      "duration_ms": 362,
       "status": "PASS",
       "expected_range": [
         1,
@@ -153,7 +251,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 319,
+      "duration_ms": 328,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -168,20 +266,20 @@
       "choice": "__all__",
       "acted": "__all__",
       "runs": 3,
-      "confidence": 0.98,
-      "expected_probability": 0.99,
+      "confidence": 1,
+      "expected_probability": 1,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
         "__host__": 0,
-        "__all__": 0.99,
-        "__all_seq__": 0.01,
+        "__all__": 1,
+        "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 309,
+      "duration_ms": 315,
       "status": "PASS",
       "expected_range": [
-        0.98,
+        1,
         1
       ]
     },
@@ -193,7 +291,7 @@
       "choice": "__all__",
       "acted": "__all__",
       "runs": 3,
-      "confidence": 0.98,
+      "confidence": 0.99,
       "expected_probability": 0.99,
       "probabilities": {
         "Claude": 0,
@@ -203,10 +301,10 @@
         "__all_seq__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 305,
+      "duration_ms": 337,
       "status": "PASS",
       "expected_range": [
-        0.98,
+        0.99,
         0.99
       ]
     },
@@ -228,10 +326,10 @@
         "__all_seq__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 319,
+      "duration_ms": 348,
       "status": "PASS",
       "expected_range": [
-        0.93,
+        0.94,
         0.94
       ]
     },
@@ -243,21 +341,21 @@
       "choice": "__all__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.76,
-      "expected_probability": 0.18,
+      "confidence": 0.59,
+      "expected_probability": 0.2,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.18,
-        "__all__": 0.7,
-        "__all_seq__": 0.12,
+        "__host__": 0.2,
+        "__all__": 0.67,
+        "__all_seq__": 0.13,
         "__none__": 0
       },
-      "duration_ms": 318,
+      "duration_ms": 328,
       "status": "WEAK",
       "expected_range": [
-        0.13,
-        0.22
+        0.15,
+        0.26
       ]
     },
     {
@@ -266,7 +364,7 @@
       "note": "致谢",
       "expect": "__none__",
       "choice": "__none__",
-      "acted": "__none__",
+      "acted": "__host__",
       "runs": 3,
       "confidence": 0.99,
       "expected_probability": 0.99,
@@ -278,7 +376,7 @@
         "__all_seq__": 0,
         "__none__": 0.99
       },
-      "duration_ms": 313,
+      "duration_ms": 344,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -291,7 +389,7 @@
       "note": "确认成员的完成报告",
       "expect": "__none__",
       "choice": "__none__",
-      "acted": "__none__",
+      "acted": "__host__",
       "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
@@ -303,7 +401,7 @@
         "__all_seq__": 0,
         "__none__": 1
       },
-      "duration_ms": 296,
+      "duration_ms": 325,
       "status": "PASS",
       "expected_range": [
         1,
@@ -328,7 +426,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 288,
+      "duration_ms": 359,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -344,19 +442,19 @@
       "acted": "__host__",
       "runs": 3,
       "confidence": 0.74,
-      "expected_probability": 0.73,
+      "expected_probability": 0.7,
       "probabilities": {
-        "Claude": 0.22,
+        "Claude": 0.24,
         "DeepSeek": 0.02,
-        "__host__": 0.73,
-        "__all__": 0.03,
+        "__host__": 0.7,
+        "__all__": 0.04,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 305,
+      "duration_ms": 329,
       "status": "PASS",
       "expected_range": [
-        0.72,
+        0.66,
         0.74
       ]
     },
@@ -368,21 +466,21 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.96,
-      "expected_probability": 0.97,
+      "confidence": 0.95,
+      "expected_probability": 0.96,
       "probabilities": {
         "Claude": 0.02,
         "DeepSeek": 0.01,
-        "__host__": 0.97,
+        "__host__": 0.96,
         "__all__": 0.01,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 306,
+      "duration_ms": 347,
       "status": "PASS",
       "expected_range": [
-        0.96,
-        0.97
+        0.95,
+        0.96
       ]
     },
     {
@@ -394,20 +492,20 @@
       "acted": "__host__",
       "runs": 3,
       "confidence": 0.9,
-      "expected_probability": 0.9,
+      "expected_probability": 0.92,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.9,
+        "__host__": 0.92,
         "__all__": 0.01,
         "__all_seq__": 0,
-        "__none__": 0.09
+        "__none__": 0.07
       },
-      "duration_ms": 301,
+      "duration_ms": 347,
       "status": "PASS",
       "expected_range": [
         0.9,
-        0.91
+        0.93
       ]
     },
     {
@@ -419,19 +517,19 @@
       "acted": "__host__",
       "runs": 3,
       "confidence": 0.95,
-      "expected_probability": 0.94,
+      "expected_probability": 0.95,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.94,
-        "__all__": 0.04,
+        "__host__": 0.95,
+        "__all__": 0.03,
         "__all_seq__": 0,
         "__none__": 0.02
       },
-      "duration_ms": 330,
+      "duration_ms": 347,
       "status": "PASS",
       "expected_range": [
-        0.92,
+        0.94,
         0.95
       ]
     },
@@ -443,21 +541,21 @@
       "choice": "Claude",
       "acted": "Claude",
       "runs": 3,
-      "confidence": 0.67,
-      "expected_probability": 0.68,
+      "confidence": 0.74,
+      "expected_probability": 0.72,
       "probabilities": {
-        "Claude": 0.68,
+        "Claude": 0.72,
         "DeepSeek": 0,
-        "__host__": 0.31,
+        "__host__": 0.27,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0.01
       },
-      "duration_ms": 320,
+      "duration_ms": 348,
       "status": "PASS",
       "expected_range": [
-        0.66,
-        0.7
+        0.67,
+        0.76
       ]
     },
     {
@@ -468,22 +566,22 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.83,
-      "expected_probability": 0.15,
+      "confidence": 0.79,
+      "expected_probability": 0.16,
       "probabilities": {
-        "Claude": 0.15,
+        "Claude": 0.16,
         "DeepSeek": 0,
-        "__host__": 0.84,
+        "__host__": 0.83,
         "__some__:Codex、Claude": 0.01,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 299,
+      "duration_ms": 397,
       "status": "FAIL",
       "expected_range": [
         0.14,
-        0.16
+        0.2
       ]
     },
     {
@@ -504,11 +602,11 @@
         "__all_seq__": 0.02,
         "__none__": 0.01
       },
-      "duration_ms": 293,
+      "duration_ms": 352,
       "status": "PASS",
       "expected_range": [
         0.96,
-        0.97
+        0.96
       ]
     },
     {
@@ -519,21 +617,21 @@
       "choice": "Claude",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.5,
+      "confidence": 0.46,
       "expected_probability": 0.07,
       "probabilities": {
-        "Claude": 0.52,
+        "Claude": 0.48,
         "DeepSeek": 0,
         "__host__": 0.07,
-        "__all__": 0.37,
-        "__all_seq__": 0.04,
+        "__all__": 0.4,
+        "__all_seq__": 0.05,
         "__none__": 0
       },
-      "duration_ms": 323,
+      "duration_ms": 326,
       "status": "WEAK",
       "expected_range": [
-        0.06,
-        0.07
+        0.04,
+        0.09
       ]
     },
     {
@@ -544,7 +642,7 @@
       "choice": "Claude",
       "acted": "Claude",
       "runs": 3,
-      "confidence": 0.84,
+      "confidence": 0.83,
       "expected_probability": 0.82,
       "probabilities": {
         "Claude": 0.82,
@@ -553,11 +651,11 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 308,
+      "duration_ms": 583,
       "status": "PASS",
       "expected_range": [
-        0.79,
-        0.84
+        0.81,
+        0.83
       ]
     },
     {
@@ -568,21 +666,21 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.41,
-      "expected_probability": 0.41,
+      "confidence": 0.33,
+      "expected_probability": 0.33,
       "probabilities": {
-        "Claude": 0.12,
-        "DeepSeek": 0.17,
-        "__host__": 0.41,
-        "__all__": 0.28,
+        "Claude": 0.14,
+        "DeepSeek": 0.21,
+        "__host__": 0.33,
+        "__all__": 0.32,
         "__all_seq__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 351,
+      "duration_ms": 355,
       "status": "PASS",
       "expected_range": [
-        0.39,
-        0.44
+        0.32,
+        0.33
       ]
     },
     {
@@ -593,17 +691,17 @@
       "choice": "DeepSeek",
       "acted": "DeepSeek",
       "runs": 3,
-      "confidence": 0.87,
+      "confidence": 0.89,
       "expected_probability": 0.88,
       "probabilities": {
-        "Claude": 0.03,
+        "Claude": 0.02,
         "DeepSeek": 0.88,
         "__host__": 0.09,
         "__all__": 0.01,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 326,
+      "duration_ms": 346,
       "status": "PASS",
       "expected_range": [
         0.87,
@@ -619,19 +717,19 @@
       "acted": "Claude",
       "runs": 3,
       "confidence": 0.93,
-      "expected_probability": 0.92,
+      "expected_probability": 0.93,
       "probabilities": {
-        "Claude": 0.92,
+        "Claude": 0.93,
         "DeepSeek": 0,
         "__host__": 0.07,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 356,
+      "duration_ms": 336,
       "status": "PASS",
       "expected_range": [
-        0.92,
+        0.93,
         0.93
       ]
     },
@@ -653,11 +751,11 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 289,
+      "duration_ms": 342,
       "status": "PASS",
       "expected_range": [
         0.99,
-        0.99
+        1
       ]
     },
     {
@@ -678,7 +776,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 316,
+      "duration_ms": 326,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -703,7 +801,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 292,
+      "duration_ms": 344,
       "status": "PASS",
       "expected_range": [
         1,
@@ -716,23 +814,23 @@
       "note": "对完成结果的简短认可",
       "expect": "__none__",
       "choice": "__none__",
-      "acted": "__none__",
+      "acted": "__host__",
       "runs": 3,
-      "confidence": 0.97,
-      "expected_probability": 0.97,
+      "confidence": 0.96,
+      "expected_probability": 0.96,
       "probabilities": {
-        "Claude": 0.03,
+        "Claude": 0.04,
         "DeepSeek": 0,
         "__host__": 0,
         "__all__": 0,
         "__all_seq__": 0,
-        "__none__": 0.97
+        "__none__": 0.96
       },
-      "duration_ms": 306,
+      "duration_ms": 327,
       "status": "PASS",
       "expected_range": [
-        0.97,
-        0.98
+        0.96,
+        0.97
       ]
     },
     {
@@ -741,7 +839,7 @@
       "note": "全体答完后致谢",
       "expect": "__none__",
       "choice": "__none__",
-      "acted": "__none__",
+      "acted": "__host__",
       "runs": 3,
       "confidence": 1,
       "expected_probability": 1,
@@ -753,7 +851,7 @@
         "__all_seq__": 0,
         "__none__": 1
       },
-      "duration_ms": 306,
+      "duration_ms": 342,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -769,21 +867,21 @@
       "acted": "Claude",
       "runs": 3,
       "confidence": 0.98,
-      "expected_probability": 0.97,
+      "expected_probability": 0.99,
       "probabilities": {
-        "Claude": 0.97,
+        "Claude": 0.99,
         "DeepSeek": 0,
         "__host__": 0,
-        "__some__:Claude、DeepSeek": 0.02,
+        "__some__:Claude、DeepSeek": 0.01,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 312,
+      "duration_ms": 351,
       "status": "PASS",
       "expected_range": [
-        0.96,
-        0.98
+        0.98,
+        0.99
       ]
     },
     {
@@ -794,20 +892,20 @@
       "choice": "__all__",
       "acted": "__all__",
       "runs": 3,
-      "confidence": 0.97,
-      "expected_probability": 0.98,
+      "confidence": 0.99,
+      "expected_probability": 0.99,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.01,
-        "__all__": 0.98,
-        "__all_seq__": 0.02,
+        "__host__": 0,
+        "__all__": 0.99,
+        "__all_seq__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 306,
+      "duration_ms": 324,
       "status": "PASS",
       "expected_range": [
-        0.97,
+        0.98,
         0.99
       ]
     },
@@ -820,20 +918,20 @@
       "acted": "__all__",
       "runs": 3,
       "confidence": 0.96,
-      "expected_probability": 0.96,
+      "expected_probability": 0.95,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
         "__host__": 0.01,
-        "__all__": 0.96,
-        "__all_seq__": 0.03,
+        "__all__": 0.95,
+        "__all_seq__": 0.04,
         "__none__": 0
       },
-      "duration_ms": 319,
+      "duration_ms": 323,
       "status": "PASS",
       "expected_range": [
         0.95,
-        0.98
+        0.96
       ]
     },
     {
@@ -844,20 +942,20 @@
       "choice": "__all__",
       "acted": "__all__",
       "runs": 3,
-      "confidence": 0.88,
-      "expected_probability": 0.88,
+      "confidence": 0.9,
+      "expected_probability": 0.89,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.1,
-        "__all__": 0.88,
-        "__all_seq__": 0.02,
+        "__host__": 0.08,
+        "__all__": 0.89,
+        "__all_seq__": 0.03,
         "__none__": 0
       },
-      "duration_ms": 319,
+      "duration_ms": 324,
       "status": "PASS",
       "expected_range": [
-        0.86,
+        0.88,
         0.9
       ]
     },
@@ -869,7 +967,7 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.99,
+      "confidence": 0.98,
       "expected_probability": 0.99,
       "probabilities": {
         "Claude": 0,
@@ -879,10 +977,10 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 295,
+      "duration_ms": 353,
       "status": "PASS",
       "expected_range": [
-        0.99,
+        0.98,
         0.99
       ]
     },
@@ -904,7 +1002,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 306,
+      "duration_ms": 329,
       "status": "PASS",
       "expected_range": [
         0.97,
@@ -929,7 +1027,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 916,
+      "duration_ms": 330,
       "status": "PASS",
       "expected_range": [
         0.96,
@@ -944,21 +1042,21 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.99,
-      "expected_probability": 0.99,
+      "confidence": 1,
+      "expected_probability": 1,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.99,
-        "__all__": 0.01,
+        "__host__": 1,
+        "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 340,
+      "duration_ms": 364,
       "status": "PASS",
       "expected_range": [
         0.99,
-        0.99
+        1
       ]
     },
     {
@@ -969,7 +1067,7 @@
       "choice": "__some__:Claude、DeepSeek",
       "acted": "__some__:Claude、DeepSeek",
       "runs": 3,
-      "confidence": 0.99,
+      "confidence": 0.98,
       "expected_probability": 0.98,
       "probabilities": {
         "Claude": 0,
@@ -983,11 +1081,11 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 330,
+      "duration_ms": 357,
       "status": "PASS",
       "expected_range": [
-        0.97,
-        0.99
+        0.98,
+        0.98
       ]
     },
     {
@@ -998,21 +1096,21 @@
       "choice": "Claude",
       "acted": "Claude",
       "runs": 3,
-      "confidence": 0.93,
-      "expected_probability": 0.92,
+      "confidence": 0.92,
+      "expected_probability": 0.9,
       "probabilities": {
-        "Claude": 0.92,
+        "Claude": 0.9,
         "DeepSeek": 0,
-        "__host__": 0.06,
+        "__host__": 0.07,
         "__all__": 0,
         "__all_seq__": 0,
-        "__none__": 0.02
+        "__none__": 0.03
       },
-      "duration_ms": 344,
+      "duration_ms": 355,
       "status": "PASS",
       "expected_range": [
-        0.9,
-        0.93
+        0.89,
+        0.92
       ]
     },
     {
@@ -1023,20 +1121,20 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.88,
-      "expected_probability": 0.89,
+      "confidence": 0.87,
+      "expected_probability": 0.88,
       "probabilities": {
         "Claude": 0.01,
         "DeepSeek": 0,
-        "__host__": 0.89,
+        "__host__": 0.88,
         "__all__": 0.06,
         "__all_seq__": 0,
-        "__none__": 0.04
+        "__none__": 0.05
       },
-      "duration_ms": 310,
+      "duration_ms": 328,
       "status": "PASS",
       "expected_range": [
-        0.88,
+        0.87,
         0.9
       ]
     },
@@ -1046,22 +1144,22 @@
       "note": "单字附和",
       "expect": "__none__",
       "choice": "__none__",
-      "acted": "__none__",
+      "acted": "__host__",
       "runs": 3,
-      "confidence": 0.8,
-      "expected_probability": 0.8,
+      "confidence": 0.78,
+      "expected_probability": 0.79,
       "probabilities": {
         "Claude": 0,
-        "DeepSeek": 0.18,
+        "DeepSeek": 0.19,
         "__host__": 0.02,
         "__all__": 0,
         "__all_seq__": 0,
-        "__none__": 0.8
+        "__none__": 0.79
       },
-      "duration_ms": 347,
+      "duration_ms": 346,
       "status": "PASS",
       "expected_range": [
-        0.79,
+        0.78,
         0.81
       ]
     },
@@ -1083,10 +1181,10 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 334,
+      "duration_ms": 356,
       "status": "PASS",
       "expected_range": [
-        0.99,
+        0.98,
         0.99
       ]
     },
@@ -1099,20 +1197,20 @@
       "acted": "__host__",
       "runs": 3,
       "confidence": 0.68,
-      "expected_probability": 0.64,
+      "expected_probability": 0.7,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.64,
+        "__host__": 0.7,
         "__all__": 0.02,
         "__all_seq__": 0,
-        "__none__": 0.34
+        "__none__": 0.28
       },
-      "duration_ms": 300,
+      "duration_ms": 332,
       "status": "PASS",
       "expected_range": [
-        0.58,
-        0.68
+        0.68,
+        0.74
       ]
     },
     {
@@ -1123,17 +1221,17 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.94,
-      "expected_probability": 0.94,
+      "confidence": 0.95,
+      "expected_probability": 0.95,
       "probabilities": {
-        "Claude": 0.04,
+        "Claude": 0.03,
         "DeepSeek": 0,
-        "__host__": 0.94,
+        "__host__": 0.95,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0.02
       },
-      "duration_ms": 294,
+      "duration_ms": 346,
       "status": "PASS",
       "expected_range": [
         0.94,
@@ -1149,19 +1247,19 @@
       "acted": "Claude",
       "runs": 3,
       "confidence": 0.99,
-      "expected_probability": 0.98,
+      "expected_probability": 0.99,
       "probabilities": {
-        "Claude": 0.98,
+        "Claude": 0.99,
         "DeepSeek": 0,
-        "__host__": 0.02,
+        "__host__": 0.01,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 310,
+      "duration_ms": 320,
       "status": "PASS",
       "expected_range": [
-        0.98,
+        0.99,
         0.99
       ]
     },
@@ -1183,7 +1281,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 321,
+      "duration_ms": 337,
       "status": "PASS",
       "expected_range": [
         0.98,
@@ -1209,7 +1307,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 324,
+      "duration_ms": 359,
       "status": "PASS",
       "expected_range": [
         1,
@@ -1221,24 +1319,24 @@
       "scene": "route",
       "note": "问谁在线，未指向任何人",
       "expect": "__all__",
-      "choice": "__host__",
+      "choice": "__all__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.53,
-      "expected_probability": 0.45,
+      "confidence": 0.52,
+      "expected_probability": 0.5,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.51,
-        "__all__": 0.45,
-        "__all_seq__": 0.05,
+        "__host__": 0.46,
+        "__all__": 0.5,
+        "__all_seq__": 0.04,
         "__none__": 0
       },
-      "duration_ms": 308,
-      "status": "FAIL",
+      "duration_ms": 361,
+      "status": "WEAK",
       "expected_range": [
-        0.41,
-        0.5
+        0.49,
+        0.52
       ]
     },
     {
@@ -1260,7 +1358,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 327,
+      "duration_ms": 344,
       "status": "PASS",
       "expected_range": [
         1,
@@ -1275,21 +1373,21 @@
       "choice": "Antigravity",
       "acted": "Antigravity",
       "runs": 3,
-      "confidence": 0.94,
+      "confidence": 0.93,
       "expected_probability": 0.93,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
         "Antigravity": 0.93,
         "__host__": 0.03,
-        "__all__": 0.04,
+        "__all__": 0.03,
         "__all_seq__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 302,
+      "duration_ms": 337,
       "status": "PASS",
       "expected_range": [
-        0.92,
+        0.93,
         0.94
       ]
     },
@@ -1301,21 +1399,21 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.89,
+      "confidence": 0.85,
       "expected_probability": 0.87,
       "probabilities": {
-        "Claude": 0.08,
+        "Claude": 0.07,
         "DeepSeek": 0.04,
         "__host__": 0.87,
-        "__all__": 0.01,
+        "__all__": 0.02,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 336,
+      "duration_ms": 320,
       "status": "PASS",
       "expected_range": [
-        0.84,
-        0.89
+        0.85,
+        0.88
       ]
     },
     {
@@ -1324,7 +1422,7 @@
       "note": "表情认可",
       "expect": "__none__",
       "choice": "__none__",
-      "acted": "__none__",
+      "acted": "__host__",
       "runs": 3,
       "confidence": 1,
       "expected_probability": 0.99,
@@ -1336,7 +1434,7 @@
         "__all_seq__": 0,
         "__none__": 0.99
       },
-      "duration_ms": 298,
+      "duration_ms": 358,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -1349,7 +1447,7 @@
       "note": "英文简短确认",
       "expect": "__none__",
       "choice": "__none__",
-      "acted": "__none__",
+      "acted": "__host__",
       "runs": 3,
       "confidence": 0.99,
       "expected_probability": 0.99,
@@ -1361,7 +1459,7 @@
         "__all_seq__": 0,
         "__none__": 0.99
       },
-      "duration_ms": 313,
+      "duration_ms": 345,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -1374,9 +1472,9 @@
       "note": "叫名字但只是致谢",
       "expect": "__none__",
       "choice": "__none__",
-      "acted": "__none__",
+      "acted": "__host__",
       "runs": 3,
-      "confidence": 0.93,
+      "confidence": 0.95,
       "expected_probability": 0.94,
       "probabilities": {
         "Claude": 0.06,
@@ -1386,11 +1484,11 @@
         "__all_seq__": 0,
         "__none__": 0.94
       },
-      "duration_ms": 311,
+      "duration_ms": 339,
       "status": "PASS",
       "expected_range": [
         0.93,
-        0.94
+        0.95
       ]
     },
     {
@@ -1399,9 +1497,9 @@
       "note": "英文致谢带名字",
       "expect": "__none__",
       "choice": "__none__",
-      "acted": "__none__",
+      "acted": "__host__",
       "runs": 3,
-      "confidence": 0.97,
+      "confidence": 0.98,
       "expected_probability": 0.97,
       "probabilities": {
         "Claude": 0.03,
@@ -1411,11 +1509,11 @@
         "__all_seq__": 0,
         "__none__": 0.97
       },
-      "duration_ms": 298,
+      "duration_ms": 320,
       "status": "PASS",
       "expected_range": [
         0.97,
-        0.97
+        0.98
       ]
     },
     {
@@ -1426,22 +1524,22 @@
       "choice": "DeepSeek",
       "acted": "DeepSeek",
       "runs": 3,
-      "confidence": 0.86,
+      "confidence": 0.91,
       "expected_probability": 0.89,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0.89,
-        "__host__": 0.1,
+        "__host__": 0.11,
         "__some__:Claude、DeepSeek": 0,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0.01
       },
-      "duration_ms": 310,
+      "duration_ms": 355,
       "status": "PASS",
       "expected_range": [
-        0.86,
-        0.9
+        0.87,
+        0.91
       ]
     },
     {
@@ -1462,11 +1560,11 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 320,
+      "duration_ms": 323,
       "status": "PASS",
       "expected_range": [
         0.98,
-        0.99
+        0.98
       ]
     },
     {
@@ -1487,7 +1585,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 323,
+      "duration_ms": 317,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -1502,22 +1600,22 @@
       "choice": "__some__:Claude、DeepSeek",
       "acted": "__some__:Claude、DeepSeek",
       "runs": 3,
-      "confidence": 0.96,
-      "expected_probability": 0.96,
+      "confidence": 0.98,
+      "expected_probability": 0.97,
       "probabilities": {
         "Claude": 0.02,
         "DeepSeek": 0,
-        "__host__": 0.02,
-        "__some__:Claude、DeepSeek": 0.96,
+        "__host__": 0.01,
+        "__some__:Claude、DeepSeek": 0.97,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 323,
+      "duration_ms": 364,
       "status": "PASS",
       "expected_range": [
         0.96,
-        0.96
+        0.98
       ]
     },
     {
@@ -1538,11 +1636,11 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 327,
+      "duration_ms": 333,
       "status": "PASS",
       "expected_range": [
         0.99,
-        1
+        0.99
       ]
     },
     {
@@ -1563,7 +1661,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 312,
+      "duration_ms": 340,
       "status": "PASS",
       "expected_range": [
         1,
@@ -1588,7 +1686,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 329,
+      "duration_ms": 344,
       "status": "PASS",
       "expected_range": [
         1,
@@ -1604,20 +1702,20 @@
       "acted": "__host__",
       "runs": 3,
       "confidence": 0.58,
-      "expected_probability": 0.59,
+      "expected_probability": 0.57,
       "probabilities": {
         "Claude": 0.03,
         "DeepSeek": 0,
-        "__host__": 0.34,
-        "__all__": 0.59,
+        "__host__": 0.36,
+        "__all__": 0.57,
         "__all_seq__": 0.04,
         "__none__": 0
       },
-      "duration_ms": 314,
+      "duration_ms": 343,
       "status": "WEAK",
       "expected_range": [
-        0.58,
-        0.61
+        0.56,
+        0.58
       ]
     },
     {
@@ -1638,10 +1736,10 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 303,
+      "duration_ms": 342,
       "status": "PASS",
       "expected_range": [
-        0.98,
+        0.99,
         0.99
       ]
     },
@@ -1653,21 +1751,21 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.74,
-      "expected_probability": 0.7,
+      "confidence": 0.64,
+      "expected_probability": 0.65,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.7,
-        "__all__": 0.21,
-        "__all_seq__": 0.09,
+        "__host__": 0.65,
+        "__all__": 0.25,
+        "__all_seq__": 0.1,
         "__none__": 0
       },
-      "duration_ms": 301,
+      "duration_ms": 354,
       "status": "PASS",
       "expected_range": [
-        0.67,
-        0.74
+        0.63,
+        0.67
       ]
     },
     {
@@ -1688,7 +1786,7 @@
         "__all_seq__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 352,
+      "duration_ms": 394,
       "status": "PASS",
       "expected_range": [
         0.98,
@@ -1713,7 +1811,7 @@
         "__all_seq__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 340,
+      "duration_ms": 349,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -1738,7 +1836,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 308,
+      "duration_ms": 343,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -1751,23 +1849,23 @@
       "note": "告知自己的安排，不需要回应",
       "expect": "__none__",
       "choice": "__none__",
-      "acted": "__none__",
+      "acted": "__host__",
       "runs": 3,
-      "confidence": 0.97,
-      "expected_probability": 0.97,
+      "confidence": 0.96,
+      "expected_probability": 0.96,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.03,
+        "__host__": 0.04,
         "__all__": 0,
         "__all_seq__": 0,
-        "__none__": 0.97
+        "__none__": 0.96
       },
-      "duration_ms": 321,
+      "duration_ms": 329,
       "status": "PASS",
       "expected_range": [
-        0.97,
-        0.97
+        0.96,
+        0.96
       ]
     },
     {
@@ -1778,21 +1876,21 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.87,
-      "expected_probability": 0.15,
+      "confidence": 0.85,
+      "expected_probability": 0.13,
       "probabilities": {
         "Claude": 0.01,
         "DeepSeek": 0,
-        "__host__": 0.83,
+        "__host__": 0.85,
         "__all__": 0.01,
         "__all_seq__": 0,
-        "__none__": 0.15
+        "__none__": 0.13
       },
-      "duration_ms": 319,
+      "duration_ms": 336,
       "status": "PASS",
       "expected_range": [
-        0.11,
-        0.18
+        0.12,
+        0.14
       ]
     },
     {
@@ -1803,20 +1901,20 @@
       "choice": "DeepSeek",
       "acted": "DeepSeek",
       "runs": 3,
-      "confidence": 0.9,
-      "expected_probability": 0.92,
+      "confidence": 0.94,
+      "expected_probability": 0.93,
       "probabilities": {
         "Claude": 0.01,
-        "DeepSeek": 0.92,
-        "__host__": 0.07,
+        "DeepSeek": 0.93,
+        "__host__": 0.06,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 312,
+      "duration_ms": 340,
       "status": "PASS",
       "expected_range": [
-        0.9,
+        0.93,
         0.94
       ]
     },
@@ -1826,23 +1924,23 @@
       "note": "用户自己接手，不需要成员",
       "expect": "__none__",
       "choice": "__none__",
-      "acted": "__none__",
+      "acted": "__host__",
       "runs": 3,
-      "confidence": 0.84,
-      "expected_probability": 0.82,
+      "confidence": 0.86,
+      "expected_probability": 0.85,
       "probabilities": {
-        "Claude": 0.11,
+        "Claude": 0.08,
         "DeepSeek": 0,
-        "__host__": 0.04,
+        "__host__": 0.03,
         "__all__": 0.03,
         "__all_seq__": 0,
-        "__none__": 0.82
+        "__none__": 0.85
       },
-      "duration_ms": 339,
+      "duration_ms": 342,
       "status": "PASS",
       "expected_range": [
-        0.8,
-        0.84
+        0.83,
+        0.87
       ]
     },
     {
@@ -1853,21 +1951,21 @@
       "choice": "Claude",
       "acted": "Claude",
       "runs": 3,
-      "confidence": 0.98,
-      "expected_probability": 0.98,
+      "confidence": 0.97,
+      "expected_probability": 0.97,
       "probabilities": {
-        "Claude": 0.98,
+        "Claude": 0.97,
         "DeepSeek": 0,
-        "__host__": 0.02,
+        "__host__": 0.03,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 334,
+      "duration_ms": 336,
       "status": "PASS",
       "expected_range": [
         0.97,
-        0.98
+        0.97
       ]
     },
     {
@@ -1888,10 +1986,10 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 331,
+      "duration_ms": 329,
       "status": "PASS",
       "expected_range": [
-        0.99,
+        1,
         1
       ]
     },
@@ -1903,21 +2001,21 @@
       "choice": "Claude",
       "acted": "Claude",
       "runs": 3,
-      "confidence": 0.86,
-      "expected_probability": 0.87,
+      "confidence": 0.85,
+      "expected_probability": 0.83,
       "probabilities": {
-        "Claude": 0.87,
+        "Claude": 0.83,
         "DeepSeek": 0.01,
-        "__host__": 0.12,
+        "__host__": 0.16,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 322,
+      "duration_ms": 317,
       "status": "PASS",
       "expected_range": [
-        0.86,
-        0.88
+        0.8,
+        0.85
       ]
     },
     {
@@ -1928,21 +2026,21 @@
       "choice": "__all__",
       "acted": "__all__",
       "runs": 3,
-      "confidence": 0.98,
-      "expected_probability": 0.98,
+      "confidence": 0.97,
+      "expected_probability": 0.97,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.01,
-        "__all__": 0.98,
+        "__host__": 0.02,
+        "__all__": 0.97,
         "__all_seq__": 0,
         "__none__": 0.01
       },
-      "duration_ms": 309,
+      "duration_ms": 327,
       "status": "PASS",
       "expected_range": [
         0.97,
-        0.98
+        0.97
       ]
     },
     {
@@ -1953,21 +2051,21 @@
       "choice": "DeepSeek",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.51,
-      "expected_probability": 0.48,
+      "confidence": 0.39,
+      "expected_probability": 0.37,
       "probabilities": {
-        "Claude": 0.04,
-        "DeepSeek": 0.48,
-        "__host__": 0.3,
-        "__all__": 0.17,
+        "Claude": 0.05,
+        "DeepSeek": 0.37,
+        "__host__": 0.35,
+        "__all__": 0.22,
         "__all_seq__": 0.01,
-        "__none__": 0.01
+        "__none__": 0
       },
-      "duration_ms": 311,
+      "duration_ms": 546,
       "status": "WEAK",
       "expected_range": [
-        0.32,
-        0.6
+        0.3,
+        0.42
       ]
     },
     {
@@ -1978,7 +2076,7 @@
       "choice": "__all_seq__",
       "acted": "__all_seq__",
       "runs": 3,
-      "confidence": 0.94,
+      "confidence": 0.91,
       "expected_probability": 0.92,
       "probabilities": {
         "Claude": 0,
@@ -1988,11 +2086,11 @@
         "__all_seq__": 0.92,
         "__none__": 0
       },
-      "duration_ms": 313,
+      "duration_ms": 352,
       "status": "PASS",
       "expected_range": [
-        0.9,
-        0.94
+        0.91,
+        0.92
       ]
     },
     {
@@ -2003,21 +2101,21 @@
       "choice": "__all_seq__",
       "acted": "__all_seq__",
       "runs": 3,
-      "confidence": 0.91,
+      "confidence": 0.94,
       "expected_probability": 0.92,
       "probabilities": {
         "Claude": 0,
         "DeepSeek": 0,
-        "__host__": 0.06,
+        "__host__": 0.05,
         "__all__": 0.03,
         "__all_seq__": 0.92,
         "__none__": 0
       },
-      "duration_ms": 314,
+      "duration_ms": 329,
       "status": "PASS",
       "expected_range": [
-        0.91,
-        0.93
+        0.9,
+        0.94
       ]
     },
     {
@@ -2038,7 +2136,7 @@
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 326,
+      "duration_ms": 335,
       "status": "PASS",
       "expected_range": [
         0.01,
@@ -2063,7 +2161,7 @@
         "__all_seq__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 330,
+      "duration_ms": 348,
       "status": "PASS",
       "expected_range": [
         0.98,
@@ -2078,21 +2176,21 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.93,
-      "expected_probability": 0.94,
+      "confidence": 0.94,
+      "expected_probability": 0.95,
       "probabilities": {
-        "Critic": 0.06,
+        "Critic": 0.05,
         "Writer": 0,
-        "__host__": 0.94,
+        "__host__": 0.95,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 315,
+      "duration_ms": 353,
       "status": "PASS",
       "expected_range": [
-        0.93,
-        0.96
+        0.94,
+        0.95
       ]
     },
     {
@@ -2103,21 +2201,21 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.7,
-      "expected_probability": 0.73,
+      "confidence": 0.73,
+      "expected_probability": 0.74,
       "probabilities": {
         "Critic": 0,
-        "Writer": 0.27,
-        "__host__": 0.73,
+        "Writer": 0.26,
+        "__host__": 0.74,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 343,
+      "duration_ms": 348,
       "status": "PASS",
       "expected_range": [
-        0.7,
-        0.74
+        0.71,
+        0.77
       ]
     },
     {
@@ -2128,22 +2226,22 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.76,
-      "expected_probability": 0.82,
+      "confidence": 0.78,
+      "expected_probability": 0.8,
       "probabilities": {
         "Critic": 0,
-        "Screenwriter": 0.18,
+        "Screenwriter": 0.2,
         "Writer": 0,
-        "__host__": 0.82,
+        "__host__": 0.8,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 321,
+      "duration_ms": 335,
       "status": "PASS",
       "expected_range": [
-        0.76,
-        0.87
+        0.78,
+        0.82
       ]
     },
     {
@@ -2155,21 +2253,21 @@
       "acted": "__host__",
       "runs": 3,
       "confidence": 0.55,
-      "expected_probability": 0.55,
+      "expected_probability": 0.56,
       "probabilities": {
-        "Critic": 0.23,
-        "Screenwriter": 0.17,
+        "Critic": 0.22,
+        "Screenwriter": 0.16,
         "Writer": 0.01,
-        "__host__": 0.55,
-        "__all__": 0.03,
+        "__host__": 0.56,
+        "__all__": 0.04,
         "__all_seq__": 0.01,
         "__none__": 0
       },
-      "duration_ms": 334,
+      "duration_ms": 365,
       "status": "PASS",
       "expected_range": [
-        0.54,
-        0.55
+        0.55,
+        0.57
       ]
     },
     {
@@ -2180,13 +2278,13 @@
       "choice": "Screenwriter",
       "acted": "Screenwriter",
       "runs": 3,
-      "confidence": 0.62,
-      "expected_probability": 0.38,
+      "confidence": 0.61,
+      "expected_probability": 0.4,
       "probabilities": {
-        "Critic": 0,
-        "Screenwriter": 0.61,
+        "Critic": 0.01,
+        "Screenwriter": 0.58,
         "Writer": 0,
-        "__host__": 0.38,
+        "__host__": 0.4,
         "__all__": 0.01,
         "__all_seq__": 0,
         "__none__": 0
@@ -2194,8 +2292,8 @@
       "duration_ms": 351,
       "status": "FAIL",
       "expected_range": [
-        0.37,
-        0.4
+        0.36,
+        0.46
       ]
     },
     {
@@ -2206,22 +2304,22 @@
       "choice": "Critic",
       "acted": "Critic",
       "runs": 3,
-      "confidence": 0.63,
-      "expected_probability": 0.67,
+      "confidence": 0.75,
+      "expected_probability": 0.69,
       "probabilities": {
-        "Critic": 0.67,
+        "Critic": 0.69,
         "Screenwriter": 0,
         "Writer": 0,
-        "__host__": 0.33,
+        "__host__": 0.31,
         "__all__": 0,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 369,
+      "duration_ms": 327,
       "status": "PASS",
       "expected_range": [
-        0.63,
-        0.72
+        0.54,
+        0.77
       ]
     },
     {
@@ -2232,20 +2330,20 @@
       "choice": "Fable",
       "acted": "Fable",
       "runs": 3,
-      "confidence": 0.77,
-      "expected_probability": 0.71,
+      "confidence": 0.71,
+      "expected_probability": 0.7,
       "probabilities": {
-        "Fable": 0.71,
+        "Fable": 0.7,
         "__host__": 0.28,
         "__all__": 0.01,
         "__all_seq__": 0,
-        "__none__": 0
+        "__none__": 0.01
       },
-      "duration_ms": 320,
+      "duration_ms": 340,
       "status": "PASS",
       "expected_range": [
-        0.67,
-        0.77
+        0.66,
+        0.72
       ]
     },
     {
@@ -2256,21 +2354,21 @@
       "choice": "Claude-2",
       "acted": "Claude-2",
       "runs": 3,
-      "confidence": 0.91,
-      "expected_probability": 0.91,
+      "confidence": 0.94,
+      "expected_probability": 0.93,
       "probabilities": {
-        "Claude-2": 0.91,
+        "Claude-2": 0.93,
         "DeepSeek": 0,
-        "__host__": 0.08,
+        "__host__": 0.06,
         "__all__": 0.01,
         "__all_seq__": 0,
         "__none__": 0
       },
-      "duration_ms": 317,
+      "duration_ms": 342,
       "status": "PASS",
       "expected_range": [
-        0.91,
-        0.92
+        0.93,
+        0.94
       ]
     },
     {
@@ -2282,20 +2380,20 @@
       "acted": "__note__",
       "runs": 3,
       "confidence": 0.97,
-      "expected_probability": 0.98,
+      "expected_probability": 0.97,
       "probabilities": {
         "Antigravity": 0.01,
-        "DeepSeek": 0.01,
+        "DeepSeek": 0.02,
         "Codex": 0,
         "Claude": 0,
         "__host__": 0,
-        "__note__": 0.98
+        "__note__": 0.97
       },
-      "duration_ms": 313,
+      "duration_ms": 326,
       "status": "PASS",
       "expected_range": [
         0.97,
-        0.99
+        0.98
       ]
     },
     {
@@ -2306,7 +2404,7 @@
       "choice": "__note__",
       "acted": "__note__",
       "runs": 3,
-      "confidence": 0.97,
+      "confidence": 0.96,
       "expected_probability": 0.97,
       "probabilities": {
         "Antigravity": 0.03,
@@ -2316,11 +2414,11 @@
         "__host__": 0,
         "__note__": 0.97
       },
-      "duration_ms": 324,
+      "duration_ms": 347,
       "status": "PASS",
       "expected_range": [
         0.96,
-        0.97
+        0.98
       ]
     },
     {
@@ -2331,21 +2429,21 @@
       "choice": "Codex",
       "acted": "Codex",
       "runs": 3,
-      "confidence": 0.62,
-      "expected_probability": 0.63,
+      "confidence": 0.65,
+      "expected_probability": 0.65,
       "probabilities": {
-        "Antigravity": 0.01,
+        "Antigravity": 0,
         "DeepSeek": 0,
-        "Codex": 0.63,
+        "Codex": 0.65,
         "Claude": 0,
         "__host__": 0.01,
-        "__note__": 0.36
+        "__note__": 0.34
       },
-      "duration_ms": 339,
+      "duration_ms": 354,
       "status": "PASS",
       "expected_range": [
-        0.59,
-        0.67
+        0.61,
+        0.69
       ]
     },
     {
@@ -2356,20 +2454,20 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.9,
-      "expected_probability": 0.89,
+      "confidence": 0.83,
+      "expected_probability": 0.86,
       "probabilities": {
         "Antigravity": 0,
         "DeepSeek": 0,
         "Codex": 0,
         "Claude": 0,
-        "__host__": 0.89,
-        "__note__": 0.11
+        "__host__": 0.86,
+        "__note__": 0.14
       },
-      "duration_ms": 306,
+      "duration_ms": 355,
       "status": "PASS",
       "expected_range": [
-        0.87,
+        0.83,
         0.91
       ]
     },
@@ -2391,7 +2489,7 @@
         "__host__": 0,
         "__note__": 1
       },
-      "duration_ms": 312,
+      "duration_ms": 337,
       "status": "PASS",
       "expected_range": [
         1,
@@ -2406,21 +2504,21 @@
       "choice": "Claude",
       "acted": "Claude",
       "runs": 3,
-      "confidence": 0.53,
-      "expected_probability": 0.62,
+      "confidence": 0.64,
+      "expected_probability": 0.68,
       "probabilities": {
-        "Codex": 0,
+        "Codex": 0.01,
         "Antigravity": 0,
         "DeepSeek": 0,
-        "Claude": 0.62,
+        "Claude": 0.68,
         "__host__": 0.01,
-        "__note__": 0.36
+        "__note__": 0.31
       },
-      "duration_ms": 321,
+      "duration_ms": 330,
       "status": "PASS",
       "expected_range": [
-        0.53,
-        0.68
+        0.64,
+        0.71
       ]
     },
     {
@@ -2431,21 +2529,21 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.91,
-      "expected_probability": 0.91,
+      "confidence": 0.93,
+      "expected_probability": 0.93,
       "probabilities": {
         "Antigravity": 0,
         "DeepSeek": 0,
-        "Codex": 0.07,
+        "Codex": 0.05,
         "Claude": 0,
-        "__host__": 0.91,
+        "__host__": 0.93,
         "__note__": 0.02
       },
-      "duration_ms": 306,
+      "duration_ms": 318,
       "status": "PASS",
       "expected_range": [
-        0.89,
-        0.92
+        0.92,
+        0.94
       ]
     },
     {
@@ -2456,7 +2554,7 @@
       "choice": "__note__",
       "acted": "__note__",
       "runs": 3,
-      "confidence": 0.93,
+      "confidence": 0.95,
       "expected_probability": 0.94,
       "probabilities": {
         "Antigravity": 0,
@@ -2466,10 +2564,10 @@
         "__host__": 0,
         "__note__": 0.94
       },
-      "duration_ms": 342,
+      "duration_ms": 324,
       "status": "PASS",
       "expected_range": [
-        0.93,
+        0.94,
         0.95
       ]
     },
@@ -2481,21 +2579,21 @@
       "choice": "__note__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.53,
-      "expected_probability": 0.44,
+      "confidence": 0.59,
+      "expected_probability": 0.41,
       "probabilities": {
         "Antigravity": 0.01,
         "DeepSeek": 0,
         "Codex": 0,
         "Claude": 0,
-        "__host__": 0.44,
-        "__note__": 0.55
+        "__host__": 0.41,
+        "__note__": 0.58
       },
-      "duration_ms": 292,
+      "duration_ms": 356,
       "status": "WEAK",
       "expected_range": [
-        0.34,
-        0.52
+        0.39,
+        0.43
       ]
     },
     {
@@ -2506,21 +2604,21 @@
       "choice": "__note__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.43,
-      "expected_probability": 0.38,
+      "confidence": 0.42,
+      "expected_probability": 0.39,
       "probabilities": {
         "Antigravity": 0,
-        "DeepSeek": 0.18,
+        "DeepSeek": 0.21,
         "Codex": 0,
         "Claude": 0,
-        "__host__": 0.38,
-        "__note__": 0.44
+        "__host__": 0.39,
+        "__note__": 0.4
       },
-      "duration_ms": 327,
+      "duration_ms": 319,
       "status": "WEAK",
       "expected_range": [
-        0.38,
-        0.39
+        0.34,
+        0.42
       ]
     },
     {
@@ -2541,7 +2639,7 @@
         "__host__": 0,
         "__note__": 0.99
       },
-      "duration_ms": 313,
+      "duration_ms": 358,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -2563,7 +2661,7 @@
         "DeepSeek": 0,
         "__host__": 0
       },
-      "duration_ms": 315,
+      "duration_ms": 332,
       "status": "PASS",
       "expected_range": [
         1,
@@ -2584,7 +2682,7 @@
         "DeepSeek": 0.99,
         "__host__": 0.01
       },
-      "duration_ms": 300,
+      "duration_ms": 322,
       "status": "PASS",
       "expected_range": [
         0.98,
@@ -2599,17 +2697,17 @@
       "choice": "DeepSeek",
       "acted": "DeepSeek",
       "runs": 3,
-      "confidence": 0.78,
-      "expected_probability": 0.2,
+      "confidence": 0.79,
+      "expected_probability": 0.26,
       "probabilities": {
-        "DeepSeek": 0.8,
-        "__host__": 0.2
+        "DeepSeek": 0.74,
+        "__host__": 0.26
       },
-      "duration_ms": 307,
+      "duration_ms": 330,
       "status": "FAIL",
       "expected_range": [
-        0.16,
-        0.23
+        0.21,
+        0.31
       ]
     },
     {
@@ -2627,7 +2725,7 @@
         "DeepSeek": 0,
         "__host__": 0
       },
-      "duration_ms": 304,
+      "duration_ms": 335,
       "status": "PASS",
       "expected_range": [
         1,
@@ -2642,17 +2740,17 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.84,
-      "expected_probability": 0.86,
+      "confidence": 0.93,
+      "expected_probability": 0.91,
       "probabilities": {
-        "DeepSeek": 0.14,
-        "__host__": 0.86
+        "DeepSeek": 0.09,
+        "__host__": 0.91
       },
-      "duration_ms": 295,
+      "duration_ms": 336,
       "status": "PASS",
       "expected_range": [
-        0.84,
-        0.87
+        0.9,
+        0.93
       ]
     },
     {
@@ -2663,17 +2761,17 @@
       "choice": "continue",
       "acted": "continue",
       "runs": 3,
-      "confidence": 0.95,
+      "confidence": 0.94,
       "expected_probability": 0.94,
       "probabilities": {
         "continue": 0.94,
         "__host__": 0.06
       },
-      "duration_ms": 328,
+      "duration_ms": 326,
       "status": "PASS",
       "expected_range": [
-        0.92,
-        0.95
+        0.94,
+        0.94
       ],
       "expect_first": "Codex",
       "first_choice": "Codex",
@@ -2698,7 +2796,7 @@
         "continue": 0,
         "__host__": 1
       },
-      "duration_ms": 296,
+      "duration_ms": 331,
       "status": "PASS",
       "expected_range": [
         1,
@@ -2714,16 +2812,16 @@
       "acted": "__host__",
       "runs": 3,
       "confidence": 0.99,
-      "expected_probability": 1,
+      "expected_probability": 0.99,
       "probabilities": {
-        "continue": 0,
-        "__host__": 1
+        "continue": 0.01,
+        "__host__": 0.99
       },
-      "duration_ms": 303,
+      "duration_ms": 313,
       "status": "PASS",
       "expected_range": [
         0.99,
-        1
+        0.99
       ]
     },
     {
@@ -2740,7 +2838,7 @@
         "review": 0.98,
         "__host__": 0.02
       },
-      "duration_ms": 308,
+      "duration_ms": 343,
       "status": "PASS",
       "expected_range": [
         0.98,
@@ -2761,11 +2859,11 @@
         "review": 0.98,
         "__host__": 0.02
       },
-      "duration_ms": 301,
+      "duration_ms": 324,
       "status": "PASS",
       "expected_range": [
         0.98,
-        0.99
+        0.98
       ]
     },
     {
@@ -2782,7 +2880,7 @@
         "review": 0,
         "__host__": 1
       },
-      "duration_ms": 332,
+      "duration_ms": 349,
       "status": "PASS",
       "expected_range": [
         1,
@@ -2803,7 +2901,7 @@
         "review": 0,
         "__host__": 1
       },
-      "duration_ms": 286,
+      "duration_ms": 343,
       "status": "PASS",
       "expected_range": [
         1,
@@ -2824,7 +2922,7 @@
         "review": 0,
         "__host__": 1
       },
-      "duration_ms": 335,
+      "duration_ms": 343,
       "status": "PASS",
       "expected_range": [
         1,
@@ -2839,16 +2937,16 @@
       "choice": "review",
       "acted": "review",
       "runs": 3,
-      "confidence": 0.95,
-      "expected_probability": 0.96,
+      "confidence": 0.96,
+      "expected_probability": 0.95,
       "probabilities": {
-        "review": 0.96,
-        "__host__": 0.04
+        "review": 0.95,
+        "__host__": 0.05
       },
-      "duration_ms": 296,
+      "duration_ms": 329,
       "status": "PASS",
       "expected_range": [
-        0.95,
+        0.94,
         0.96
       ]
     },
@@ -2866,10 +2964,10 @@
         "review": 0,
         "__host__": 1
       },
-      "duration_ms": 338,
+      "duration_ms": 315,
       "status": "PASS",
       "expected_range": [
-        1,
+        0.99,
         1
       ]
     },
@@ -2881,25 +2979,25 @@
       "choice": "continue",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.59,
+      "confidence": 0.62,
       "expected_probability": 0.62,
       "probabilities": {
         "continue": 0.62,
         "__host__": 0.38
       },
-      "duration_ms": 302,
+      "duration_ms": 341,
       "status": "PASS",
       "expected_range": [
-        0.59,
-        0.64
+        0.61,
+        0.63
       ],
       "expect_first": "__host__",
       "first_choice": "__host__",
       "first": null,
       "first_probabilities": {
         "Codex": 0.02,
-        "Antigravity": 0.1,
-        "__host__": 0.88
+        "Antigravity": 0.09,
+        "__host__": 0.89
       }
     },
     {
@@ -2910,25 +3008,25 @@
       "choice": "continue",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.72,
-      "expected_probability": 0.73,
+      "confidence": 0.73,
+      "expected_probability": 0.71,
       "probabilities": {
-        "continue": 0.73,
-        "__host__": 0.27
+        "continue": 0.71,
+        "__host__": 0.29
       },
-      "duration_ms": 296,
+      "duration_ms": 318,
       "status": "FAIL",
       "expected_range": [
-        0.72,
-        0.74
+        0.68,
+        0.73
       ],
       "expect_first": "Antigravity",
       "first_choice": "__host__",
       "first": null,
       "first_probabilities": {
-        "Codex": 0.08,
-        "Antigravity": 0.21,
-        "__host__": 0.71
+        "Codex": 0.07,
+        "Antigravity": 0.19,
+        "__host__": 0.74
       }
     },
     {
@@ -2939,17 +3037,17 @@
       "choice": "__host__",
       "acted": "__host__",
       "runs": 3,
-      "confidence": 0.98,
+      "confidence": 0.99,
       "expected_probability": 0.98,
       "probabilities": {
         "continue": 0.02,
         "__host__": 0.98
       },
-      "duration_ms": 299,
+      "duration_ms": 337,
       "status": "PASS",
       "expected_range": [
         0.98,
-        0.98
+        0.99
       ]
     },
     {
@@ -2966,11 +3064,11 @@
         "continue": 0.97,
         "wait": 0.03
       },
-      "duration_ms": 320,
+      "duration_ms": 321,
       "status": "PASS",
       "expected_range": [
         0.97,
-        0.97
+        0.98
       ]
     },
     {
@@ -2981,17 +3079,17 @@
       "choice": "wait",
       "acted": "wait",
       "runs": 3,
-      "confidence": 0.9,
-      "expected_probability": 0.9,
+      "confidence": 0.95,
+      "expected_probability": 0.92,
       "probabilities": {
-        "continue": 0.1,
-        "wait": 0.9
+        "continue": 0.08,
+        "wait": 0.92
       },
-      "duration_ms": 305,
+      "duration_ms": 334,
       "status": "PASS",
       "expected_range": [
-        0.89,
-        0.92
+        0.91,
+        0.95
       ]
     },
     {
@@ -3002,17 +3100,17 @@
       "choice": "wait",
       "acted": "wait",
       "runs": 3,
-      "confidence": 0.88,
-      "expected_probability": 0.87,
+      "confidence": 0.85,
+      "expected_probability": 0.86,
       "probabilities": {
-        "continue": 0.13,
-        "wait": 0.87
+        "continue": 0.14,
+        "wait": 0.86
       },
-      "duration_ms": 294,
+      "duration_ms": 347,
       "status": "PASS",
       "expected_range": [
-        0.84,
-        0.88
+        0.85,
+        0.87
       ]
     },
     {
@@ -3029,7 +3127,7 @@
         "continue": 0.99,
         "wait": 0.01
       },
-      "duration_ms": 313,
+      "duration_ms": 339,
       "status": "PASS",
       "expected_range": [
         0.99,
@@ -3044,17 +3142,17 @@
       "choice": "wait",
       "acted": "wait",
       "runs": 3,
-      "confidence": 0.89,
-      "expected_probability": 0.89,
+      "confidence": 0.87,
+      "expected_probability": 0.88,
       "probabilities": {
-        "continue": 0.11,
-        "wait": 0.89
+        "continue": 0.12,
+        "wait": 0.88
       },
-      "duration_ms": 302,
+      "duration_ms": 319,
       "status": "PASS",
       "expected_range": [
-        0.89,
-        0.9
+        0.87,
+        0.89
       ]
     },
     {
@@ -3066,16 +3164,16 @@
       "acted": "continue",
       "runs": 3,
       "confidence": 0.95,
-      "expected_probability": 0.96,
+      "expected_probability": 0.95,
       "probabilities": {
-        "continue": 0.96,
-        "wait": 0.04
+        "continue": 0.95,
+        "wait": 0.05
       },
-      "duration_ms": 298,
+      "duration_ms": 330,
       "status": "PASS",
       "expected_range": [
         0.95,
-        0.97
+        0.96
       ]
     },
     {
@@ -3092,11 +3190,11 @@
         "continue": 0.97,
         "wait": 0.03
       },
-      "duration_ms": 339,
+      "duration_ms": 327,
       "status": "PASS",
       "expected_range": [
         0.97,
-        0.97
+        0.98
       ]
     },
     {
@@ -3113,7 +3211,7 @@
         "continue": 1,
         "__host__": 0
       },
-      "duration_ms": 314,
+      "duration_ms": 356,
       "status": "PASS",
       "expected_range": [
         1,
@@ -3134,7 +3232,7 @@
         "continue": 0,
         "__host__": 1
       },
-      "duration_ms": 290,
+      "duration_ms": 319,
       "status": "PASS",
       "expected_range": [
         1,
@@ -3155,7 +3253,7 @@
         "continue": 0.03,
         "__host__": 0.97
       },
-      "duration_ms": 316,
+      "duration_ms": 330,
       "status": "PASS",
       "expected_range": [
         0.96,
@@ -3176,7 +3274,7 @@
         "continue": 1,
         "__host__": 0
       },
-      "duration_ms": 381,
+      "duration_ms": 371,
       "status": "PASS",
       "expected_range": [
         1,
@@ -3197,7 +3295,7 @@
         "continue": 0,
         "__host__": 1
       },
-      "duration_ms": 299,
+      "duration_ms": 330,
       "status": "PASS",
       "expected_range": [
         1,
@@ -3218,7 +3316,7 @@
         "continue": 0,
         "__host__": 1
       },
-      "duration_ms": 282,
+      "duration_ms": 315,
       "status": "PASS",
       "expected_range": [
         1,

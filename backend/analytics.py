@@ -10,6 +10,7 @@ from math import floor
 from time import monotonic
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .analytics_issues import concurrency_series, issues as attention_issues, unfinished_series
 from .texts import Text
 
 CACHE_SECONDS = 60
@@ -377,8 +378,9 @@ def time_stats(connection, requests, executions, bounds, now, sealed):
     rooms, rooms_at = peak_concurrent(spans)
     members, members_at = peak_concurrent(member_spans)
     peak = {"rooms": rooms, "at": rooms_at, "members": members, "members_at": members_at}
+    concurrency = concurrency_series(member_spans, start, end)
     active_rooms = [room for room in room_rows.values() if room["initiated"] or room["execution_seconds"]]
-    return {"folders": list(folders.values()), "rooms": active_rooms, "peak": peak, "sealed_execution_seconds": counts["execution_seconds"],
+    return {"folders": list(folders.values()), "rooms": active_rooms, "peak": peak, "concurrency": concurrency, "sealed_execution_seconds": counts["execution_seconds"],
             "execution_seconds": sum(f["execution_seconds"] for f in folders.values()) + counts["execution_seconds"],
             "waiting": distribution(waits, histograms["waiting"]),
             "execution": distribution(elapsed, histograms["execution"]), "rework": distribution(rework, histograms["rework"]),
@@ -533,6 +535,22 @@ def daily_overview(dates, facts, executions, sealed_days, now):
     return rows
 
 
+def previous_work(rows, start, end, now):
+    """Execution time and peak concurrency of the previous period, so the page's figures can show a change.
+
+    Same rules as the current period (clipped to the window, overlaps merged per room and per room + member), over
+    existing rooms only.
+    """
+    seconds, rooms, members = 0, defaultdict(list), defaultdict(list)
+    for r in rows:
+        left, right = max(start, r["created_at"]), min(end, r["finished_at"] or now, now)
+        if left < right:
+            seconds += right - left
+            rooms[r["room_id"]].append((left, right))
+            members[(r["room_id"], r["name"])].append((left, right))
+    return {"execution_seconds": seconds, "peak_rooms": peak_concurrent(rooms)[0], "peak_members": peak_concurrent(members)[0]}
+
+
 def snapshot(connection, params, cache, now):
     """Build one SQLite read snapshot, caching only within the same server and room scope."""
     earliest = None
@@ -559,6 +577,7 @@ def snapshot(connection, params, cache, now):
     revived = {r[0] for r in connection.execute("""SELECT DISTINCT json_extract(data,'$.execution_id') FROM room_events
         WHERE kind='execution.changed' AND json_extract(data,'$.from_status')='failed' AND json_extract(data,'$.status')='started'""")}
     attempts = [r for r in executions if r["created_at"] >= start]
+    earlier_attempts = [r for r in connection.execute(EXECUTIONS, (start, previous, previous)) if r["created_at"] >= previous]
     assigned = [r for r in requests if start <= r["created_at"] < end]
     members = member_stats(attempts, assigned, revived)
     models = member_stats(attempts, assigned, revived, by_model=True)
@@ -571,13 +590,16 @@ def snapshot(connection, params, cache, now):
     scope = {"mode": mode, "rooms": len(rooms), "sealed_rooms": retained, "included_rooms": len(rooms) + retained,
              "includes_archived": True, "sealed_day_tz": "UTC", "sealed_counts": SEALED_COUNTS,
              "sealed_distributions": SEALED_DISTRIBUTIONS,
-             "current_only": ["folders", "rooms", "peak", "queue", "affected_requests", "members", "models", "workflows", "insights"]}
+             "current_only": ["folders", "rooms", "peak", "concurrency", "issues", "queue", "affected_requests", "members", "models", "workflows", "insights"]}
     result = dict(range=dates, scope=scope,
                   overview=overview(facts, start, end, sealed), previous=overview(facts, previous, start, prior),
                   time={**time_stats(connection, requests, executions, (start, end), now, sealed), **activity},
                   members=members, models=models, workflows=workflow_stats(connection, attempts),
+                  issues=attention_issues(connection, attempts, earlier_attempts, revived, (previous, start, end)),
                   insights=insights(connection, members, start, end))
     result["overview"]["daily"] = daily_overview(dates, facts, executions, sealed_days, now)
+    result["time"]["concurrency"]["unfinished"] = unfinished_series(attempts, start, end)
+    result["previous"].update(previous_work(earlier_attempts, previous, start, now))
     if len(cache) >= CACHE_ENTRIES:
         cache.clear()
     cache[key] = (monotonic() + CACHE_SECONDS, result)

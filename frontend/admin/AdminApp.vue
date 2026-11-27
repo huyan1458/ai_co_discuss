@@ -142,7 +142,7 @@ async function sync() {
   finally { syncing = false; }
 }
 
-// Counts asks to bind the online site from elsewhere (the hosted relay card); "本机 → 线上网站" opens its dialog on each.
+// Counts asks to bind the online site from elsewhere (the hosted relay card); "本机 → 自建中转" opens its dialog on each.
 const binding = ref(0);
 provide("panel", { state, reload, notify, refreshed, updating, binding, storage_raw, storage_loading, storage_error, load_storage });
 onMounted(reload);

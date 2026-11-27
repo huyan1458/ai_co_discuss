@@ -95,20 +95,98 @@ export function send_visual_theme(frame_window, theme) {
   frame_window?.postMessage({ codiscuss_visual_theme: theme }, "*");
 }
 
+// The room's base look plus a small opt-in kit (`cd-*` classes, documented in the participant skill), so every visual
+// shares the site's restrained controls in both themes instead of each one drawing its own. Selectors sit in :where()
+// so a page's own rules still win.
 const VISUAL_DEFAULTS = `<style>
   html, body { background: transparent !important; margin: 0 !important; }
-  :where(body) { display: flow-root; }
+  :where(body) { display: flow-root; line-height: 1.6; }
   :root, body { color-scheme: var(--codiscuss-color-scheme, normal) !important; }
-  body { color: var(--codiscuss-text, CanvasText) !important; font-family: var(--codiscuss-font-family, system-ui) !important; font-size: var(--codiscuss-font-size, 14px) !important; }
-  :where(button, select, input) { font: inherit; color: inherit; box-sizing: border-box; }
-  :where(button, select, input:not([type="range"], [type="checkbox"], [type="radio"], [type="color"])) {
-    border: 1px solid var(--codiscuss-border, GrayText); border-radius: var(--codiscuss-radius, 6px);
-    background: var(--codiscuss-card, Canvas); padding: .3em .6em;
+  body { color: var(--codiscuss-text, CanvasText) !important; font-family: var(--codiscuss-font-family, system-ui) !important; font-size: var(--codiscuss-font-size, 14px) !important; -webkit-font-smoothing: antialiased; }
+  :root { --cd-tint: color-mix(in srgb, var(--codiscuss-text, CanvasText) 6%, transparent); --cd-tint-strong: color-mix(in srgb, var(--codiscuss-text, CanvasText) 11%, transparent);
+    --cd-rule: color-mix(in srgb, var(--codiscuss-border, GrayText) 70%, transparent); }
+  :where(*, *::before, *::after) { box-sizing: border-box; }
+  :where(button, select, input, textarea) { font: inherit; color: inherit; }
+  /* Controls sit one step below the text size, as the room's own buttons do, and never under a 32px touch height. */
+  :where(button, select, textarea, input:not([type="range"], [type="checkbox"], [type="radio"], [type="color"])) {
+    min-height: 32px; border: 1px solid var(--codiscuss-border, GrayText); border-radius: var(--codiscuss-radius, 6px);
+    background-color: transparent; padding: .3em .8em; font-size: .875em; line-height: 1.4; transition: border-color .12s, background-color .12s;
   }
-  :where(input[type="range"], input[type="checkbox"], input[type="radio"]) { accent-color: var(--codiscuss-accent, Highlight); }
-  :where(button, select, input):focus-visible { outline: 2px solid var(--codiscuss-accent, Highlight); outline-offset: 2px; }
-  :where(button, select, input[type="range"]) { cursor: pointer; }
-  :where(button, select, input):disabled { cursor: not-allowed; opacity: .6; }
+  :where(button) { display: inline-flex; align-items: center; justify-content: center; gap: .4em; background-color: var(--cd-tint); font-weight: 500; white-space: nowrap; }
+  :where(button:hover:not(:disabled)) { background-color: var(--cd-tint-strong); }
+  :where(button:active:not(:disabled)) { background-color: var(--cd-tint); }
+  :where(select, textarea, input):hover:not(:disabled) { border-color: var(--codiscuss-text-hint, GrayText); }
+  :where(textarea, input)::placeholder { color: var(--codiscuss-text-hint, GrayText); opacity: 1; }
+  :where(textarea) { display: block; padding: .5em .8em; line-height: 1.5; resize: vertical; }
+  :where(select) { -webkit-appearance: none; appearance: none; padding-right: 2.1em; background-repeat: no-repeat; background-size: 5px 5px;
+    background-position: right calc(.8em + 5px) top 54%, right .8em top 54%;
+    background-image: linear-gradient(45deg, transparent 50%, var(--codiscuss-text-muted, GrayText) 50%), linear-gradient(135deg, var(--codiscuss-text-muted, GrayText) 50%, transparent 50%); }
+  :where(input[type="checkbox"], input[type="radio"]) { width: .9em; height: .9em; margin: 0; vertical-align: -.08em; accent-color: var(--codiscuss-accent, Highlight); }
+  :where(button, select, input, textarea):focus-visible { outline: 2px solid color-mix(in srgb, var(--codiscuss-accent, Highlight) 70%, transparent); outline-offset: 1px; }
+  :where(button, select, input[type="range"], input[type="checkbox"], input[type="radio"]) { cursor: pointer; }
+  :where(button, select, input, textarea):disabled { cursor: not-allowed; opacity: .5; }
+  /* --cd-fill is the slider's value as a percentage, kept current by the frame's startup script. */
+  :where(input[type="range"]) { -webkit-appearance: none; appearance: none; width: 100%; height: 24px; margin: 0; background: transparent; }
+  :where(input[type="range"])::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
+    background: linear-gradient(to right, var(--codiscuss-accent, Highlight) var(--cd-fill, 0%), var(--cd-tint-strong) var(--cd-fill, 0%)); }
+  :where(input[type="range"])::-moz-range-track { height: 4px; border-radius: 2px; background: var(--cd-tint-strong); }
+  :where(input[type="range"])::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--codiscuss-accent, Highlight); }
+  :where(input[type="range"])::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border: 0; border-radius: 50%;
+    background: var(--codiscuss-accent, Highlight); box-shadow: 0 0 0 0 color-mix(in srgb, var(--codiscuss-accent, Highlight) 24%, transparent); transition: box-shadow .12s; }
+  :where(input[type="range"])::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: var(--codiscuss-accent, Highlight); }
+  :where(input[type="range"]):focus-visible { outline: none; }
+  :where(input[type="range"]):is(:hover, :active, :focus-visible)::-webkit-slider-thumb { box-shadow: 0 0 0 5px color-mix(in srgb, var(--codiscuss-accent, Highlight) 24%, transparent); }
+  :where(input[type="range"]):is(:hover, :active, :focus-visible)::-moz-range-thumb { box-shadow: 0 0 0 5px color-mix(in srgb, var(--codiscuss-accent, Highlight) 24%, transparent); }
+  :where(table) { width: 100%; border-collapse: collapse; font-size: .9em; font-variant-numeric: tabular-nums; }
+  :where(th, td) { padding: .45em .6em; text-align: left; border-bottom: 1px solid var(--cd-rule); }
+  :where(th) { font-size: .9em; font-weight: 500; color: var(--codiscuss-text-hint, GrayText); }
+  :where(tr:last-child > td) { border-bottom: 0; }
+  :where(svg) { max-width: 100%; }
+  :where(.cd-wrap) { max-width: 640px; margin: 0 auto; }
+  :where(.cd-muted) { color: var(--codiscuss-text-muted, GrayText); }
+  :where(.cd-hint) { color: var(--codiscuss-text-hint, GrayText); font-size: .8em; }
+  :where(.cd-accent) { color: var(--codiscuss-accent, Highlight); }
+  :where(.cd-card) { padding: .8em 1em; border-radius: calc(var(--codiscuss-radius, 6px) + 2px); background: var(--cd-tint); }
+  :where(.cd-stack) { display: grid; gap: .8em; }
+  :where(.cd-row) { display: flex; flex-wrap: wrap; align-items: center; gap: .5em 1em; }
+  :where(.cd-between) { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5em 1em; }
+  :where(.cd-grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: .8em 1.4em; }
+  :where(.cd-stats) { display: flex; flex-wrap: wrap; gap: .7em 2em; }
+  :where(.cd-stat) { display: grid; gap: .15em; }
+  :where(.cd-stat) > :where(b, strong) { font-size: 1.5em; font-weight: 600; line-height: 1.15; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+  :where(.cd-stat) > :where(span, small) { font-size: .78em; color: var(--codiscuss-text-hint, GrayText); }
+  :where(.cd-field) { display: grid; grid-template-columns: minmax(3em, auto) minmax(0, 1fr) minmax(3.5em, auto); align-items: center; gap: .9em; font-size: .9em; }
+  :where(.cd-field) > :where(span) { color: var(--codiscuss-text-muted, GrayText); }
+  :where(.cd-field) > :where(output) { text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
+  :where(.cd-primary) { border-color: color-mix(in srgb, var(--codiscuss-accent, Highlight) 40%, transparent) !important;
+    background-color: color-mix(in srgb, var(--codiscuss-accent, Highlight) 14%, transparent) !important; color: var(--codiscuss-accent, Highlight); }
+  :where(.cd-primary:hover:not(:disabled)) { background-color: color-mix(in srgb, var(--codiscuss-accent, Highlight) 24%, transparent) !important; }
+  :where(.cd-tabs) { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: calc(var(--codiscuss-radius, 6px) + 2px); background: var(--cd-tint); }
+  :where(.cd-tabs) > :where(button) { min-height: 28px; border-color: transparent; background-color: transparent; color: var(--codiscuss-text-muted, GrayText); font-weight: 400; }
+  :where(.cd-tabs) > :where(button:hover:not(:disabled)) { color: var(--codiscuss-text, CanvasText); }
+  :where(.cd-tabs) > :where(button[aria-pressed="true"], button[aria-selected="true"]) { background-color: var(--cd-tint-strong); color: var(--codiscuss-text, CanvasText); font-weight: 500; }
+  /* --cd-unit is viewBox units per CSS pixel (within limits), kept current by the startup script: text and strokes hold
+     their size on screen while the drawing scales with the column, so a chart stays readable on a phone. */
+  :where(.cd-chart) { display: block; width: 100%; height: auto; overflow: visible; }
+  :where(.cd-chart text) { fill: var(--codiscuss-text, CanvasText); font-size: calc(12px * var(--cd-unit, 1)); }
+  :where(.cd-axis, .cd-gridline, .cd-line, .cd-line-muted, .cd-box, .cd-box-accent) { vector-effect: non-scaling-stroke; }
+  :where(.cd-axis) { stroke: var(--codiscuss-border, GrayText); stroke-width: 1; fill: none; }
+  :where(.cd-gridline) { stroke: var(--cd-rule); stroke-width: 1; stroke-dasharray: 2 4; fill: none; }
+  :where(.cd-tick) { fill: var(--codiscuss-text-hint, GrayText); font-size: calc(11px * var(--cd-unit, 1)); font-variant-numeric: tabular-nums; }
+  :where(.cd-line) { stroke: var(--codiscuss-accent, Highlight); stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  :where(.cd-line-muted) { stroke: var(--codiscuss-text-hint, GrayText); stroke-width: 1.25; fill: none; stroke-dasharray: 4 4; }
+  :where(.cd-fill) { fill: var(--codiscuss-accent, Highlight); }
+  :where(.cd-fill-soft) { fill: color-mix(in srgb, var(--codiscuss-accent, Highlight) 14%, transparent); }
+  :where(.cd-fill-muted) { fill: color-mix(in srgb, var(--codiscuss-text-hint, GrayText) 45%, transparent); }
+  :where(.cd-box) { fill: var(--cd-tint); stroke: var(--codiscuss-border, GrayText); stroke-width: 1; }
+  :where(.cd-box-accent) { fill: color-mix(in srgb, var(--codiscuss-accent, Highlight) 14%, transparent); stroke: color-mix(in srgb, var(--codiscuss-accent, Highlight) 70%, transparent); stroke-width: 1; }
+  :where(.cd-label) { fill: var(--codiscuss-text, CanvasText); font-size: calc(13px * var(--cd-unit, 1)); }
+  @media (max-width: 480px) {
+    :where(.cd-field) { grid-template-columns: minmax(0, 1fr) auto; gap: .1em .8em; }
+    :where(.cd-field) > :where(input, select) { grid-column: 1 / -1; grid-row: 2; }
+    :where(.cd-stats) { gap: .6em 1.4em; }
+    :where(.cd-stat) > :where(b, strong) { font-size: 1.3em; }
+  }
 </style>`;
 const VISUAL_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob: data:; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; media-src data: blob:; base-uri 'none'; form-action 'none'">`;
 
@@ -143,6 +221,32 @@ function start_visual_frame(measure, submit) {
     }
     request_height();
   });
+  // The unified kit's two values CSS cannot compute: a slider's filled share, and a chart's viewBox units per pixel.
+  let kit_scheduled = false;
+  function refresh_kit() {
+    if (kit_scheduled) return;
+    kit_scheduled = true;
+    requestAnimationFrame(() => {
+      kit_scheduled = false;
+      for (const input of document.querySelectorAll('input[type="range"]')) {
+        const min = Number(input.min || 0), max = Number(input.max || 100);
+        const share = max > min ? (Number(input.value) - min) / (max - min) : 0;
+        input.style.setProperty("--cd-fill", (Math.min(1, Math.max(0, share)) * 100).toFixed(2) + "%");
+      }
+      for (const chart of document.querySelectorAll("svg.cd-chart")) {
+        const shown = chart.getBoundingClientRect().width, drawn = chart.viewBox.baseVal?.width;
+        if (shown && drawn) chart.style.setProperty("--cd-unit", Math.min(1.25, Math.max(.7, drawn / shown)).toFixed(3));
+      }
+    });
+  }
+  // A page sets a slider's value from its own handlers, which run on these events.
+  for (const type of ["input", "change", "click", "keyup"]) addEventListener(type, refresh_kit, true);
+  addEventListener("resize", refresh_kit);
+  addEventListener("DOMContentLoaded", () => {
+    new MutationObserver(refresh_kit).observe(document.body, { childList: true, subtree: true });
+    new ResizeObserver(refresh_kit).observe(document.body);
+    refresh_kit();
+  }, { once: true });
   if (measure) {
     // Shown in a message the frame takes the content's full height, so the page never scrolls inside it.
     root.style.overflow = "hidden";

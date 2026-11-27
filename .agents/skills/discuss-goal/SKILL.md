@@ -27,7 +27,7 @@ description: "AI CoDiscuss 的 Goal 模式主持技能，仅主持人调用，�
 |---|---|---|
 | 推进中 | `goal state ROOM --state doing --revision REV` | 默认：房间空闲满用户设定的时长（默认 2 分钟）就唤醒你 |
 | 等待后台 | `goal state ROOM --state waiting --revision REV --note-file 草稿 [--minutes N]` | 空闲时不唤醒；到时限（默认 30 分钟）兜底唤醒一次 |
-| 待用户确认 | `goal state ROOM --state pending --revision REV --note-file 草稿 [--minutes N]` | 空闲时不唤醒；5 分钟后用户仍未回复且绑定了微信时发微信通知；到时限（默认 60 分钟）兜底唤醒一次 |
+| 待用户确认 | `goal state ROOM --state pending --revision REV --note-file 草稿 [--minutes N]` | 空闲时不唤醒；3 分钟后用户仍未回复且绑定了微信时发微信通知；到时限（默认 60 分钟）兜底唤醒一次 |
 
 - 待确认的 note 写清要用户做什么，它会原样出现在微信通知里。要用户在几个选项里拍板时改用阻塞提问，不必声明待确认，见参与技能 [回答房间请求](../discuss-participant/references/room.md)“需要用户决定时”。
 - 后台工作回来、接着推进前改回 `doing`；忘了改到时限也会兜底唤醒。用户发言后、每次被续跑唤醒时状态都自动回到推进中，需要时重新声明。

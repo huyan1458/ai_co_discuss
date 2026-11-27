@@ -98,7 +98,7 @@ export function participant_tools(context) {
 
 function role_tools(context) {
   const tools = [tool('read_room', '读取本房间最新目标、安排、限制和状态'),
-    tool('read_messages', '读取原文；服务端按本次请求限制讨论中的可见范围。after（只读该编号之后的）与 page（按页）二选一，给了 after 则忽略 page。每次输出有上限，remaining 大于 0 时还有没读到的，放不下的长正文只给预览（text_complete: false），用 read_message 按 next_offset 续读', { page: NUMBER, after: { type: 'integer', minimum: 0 } }),
+    tool('read_messages', '读取原文；服务端按本次请求限制讨论中的可见范围。after（只读该编号之后的）与 page（按页）二选一，给了 after 则忽略 page。每次输出有上限，remaining 大于 0 时还有没读到的，放不下的长正文只给预览（text_complete: false），用 read_message 按 next_offset 续读；值为空的字段不输出，read_message 给完整字段', { page: NUMBER, after: { type: 'integer', minimum: 0 } }),
     tool('read_message', '读取指定原文；服务端按本次请求限制讨论中的可见范围。长正文用 offset（从第几个字符起）与 limit 续读，带上前一段返回的 text_sha256 作 version：正文已变化时报错，须从头重读、不与旧片段拼接',
       { id: NUMBER, offset: { type: 'integer', minimum: 0 }, limit: NUMBER, version: VERSION }, ['id']),
     tool('read_execution', '读取一次执行的状态、结果与交付状态（delivery.last_submission 的 outcome：accepted 已接受 / rejected 被拒 / unknown 不明）；不填 id 读本次执行，主持人可读任意成员的执行', { id: NUMBER }),

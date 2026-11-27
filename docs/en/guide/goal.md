@@ -37,7 +37,7 @@ When you start or edit Goal, enter an objective. Limits are unlimited by default
 
 ### 5. Set up WeChat notifications
 
-If you do not want to watch the computer, open “Settings → WeChat notifications” on the local site and click “Scan to link.” Scan the code with your personal WeChat account. When Goal is “Awaiting your confirmation” and you have not replied in the room for five minutes, the local service sends a WeChat reminder. If the computer is bound to an online site, the message includes a room link. For setup, testing, and reply behavior, see [Voice and notifications](voice.md#wechat-notifications).
+If you do not want to watch the computer, open “Settings → Notifications” on the local site and click “Scan to link” under “WeChat.” Scan the code with your personal WeChat account. When Goal is “Awaiting your confirmation” and you have not replied in the room for three minutes, the local service sends a WeChat reminder. If the computer is bound to an online site, the message includes a room link. For setup, testing, and reply behavior, see [Voice and notifications](voice.md#wechat-notifications).
 
 ## Things to know
 

@@ -154,7 +154,7 @@ async function copy(text) {
           <div class="panel-main">
             <div class="panel-title">{{ t('登录信息') }}</div>
             <span class="panel-sub detail-login"><b class="detail-name">{{ account.name }}</b><template v-if="address"> · <a class="panel-link" :href="address" target="_blank" rel="noopener">{{ address }}</a></template></span>
-            <span v-if="!state.entry?.address" class="panel-sub detail-warn">{{ t('登录入口没有开启线上网站或自有域名，其他设备打不开') }}</span>
+            <span v-if="!state.entry?.address" class="panel-sub detail-warn">{{ t('登录入口没有开启自建中转或 Cloudflare 隧道，其他设备打不开') }}</span>
             <span v-else-if="!state.entry?.running" class="panel-sub detail-warn">{{ t('登录入口未运行，使用者暂时无法登录，请到“概览”启动') }}</span>
           </div>
           <div class="panel-side">

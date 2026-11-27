@@ -49,20 +49,20 @@ export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面
   autostart on|off                         登录 Windows 时自动启动
 
 管理员入口
-  site status                              本地网页与线上网站的地址
-  site connect <接入码|站点> [绑定令牌]     绑定线上网站（管理员外出、邀请外部专家用）；在部署该网站的电脑上只填站点即可
-  site disconnect                          解绑线上网站，已配对的设备不能再连到这台电脑
+  site status                              本地网页地址与线上网站地址
+  site connect <接入码|线上网站地址> [绑定令牌]     绑定自建中转（管理员外出、邀请外部专家用）；在部署该网站的电脑上只填线上网站地址即可
+  site disconnect                          解绑自建中转，已配对的设备不能再连到这台电脑
   site region [地区]                       查看或设置中转地区（auto、apac、apac-ne、apac-se、wnam、enam、weur、eeur、oc、sam、afr、me）
-  site reconnect                           立即重连已绑定网站的中转
+  site reconnect                           立即重连已绑定的自建中转
 
 登录入口与访问方式（需打开托管管理）
   entry start|stop                         启动或停止登录入口
-  entry open|close relay|tunnel            开启或关闭访问方式：线上网站 | 自有域名，两种可同时开启
-  entry join <接入码>                       用接入码接入线上站点并开启线上网站
+  entry open|close relay|tunnel            开启或关闭访问方式：自建中转 | Cloudflare 隧道，两种可同时开启
+  entry join <接入码>                       用接入码绑定自建中转并开启托管账号入口
   entry code [--config <wrangler.jsonc>] [--site <地址>]   在部署线上站点的电脑上生成接入码（不填用上次的）
-  entry tunnel <域名> [隧道名]              设置自有域名（Cloudflare 隧道），输出授权链接；域名须已托管在 Cloudflare
+  entry tunnel <域名> [隧道名]              设置 Cloudflare 隧道，输出授权链接；域名须已托管在 Cloudflare
   entry tunnel reconnect                   重新连接隧道，保留登录会话
-  entry tunnel status                      查看自有域名设置的进度
+  entry tunnel status                      查看 Cloudflare 隧道设置的进度
   runtime sync                             同步隔离账号的程序副本
   drives restrict                          只允许隔离账号用系统盘：其他固定磁盘对它们的 Windows 用户拒绝访问（需管理员权限，之后重启它们的实例）
 

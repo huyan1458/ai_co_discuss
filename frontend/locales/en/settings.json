@@ -760,7 +760,7 @@
   "自行决定": "Its own choice",
   "第 {value1} 行": "Line {value1}",
   "第 {value1}–{value2} 行": "Lines {value1}–{value2}",
-  "主持人声明 Goal 待你确认后，5 分钟内你没在房间回复，就发到微信；直接回复微信消息即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间。成员向你提的问题等你 5 分钟未答也会发来，回复选项编号即直接作答，其他文字交给主持人代为选择。只转发文字，登录凭据只存这台电脑。": "If you do not reply in the room within 5 minutes after the host marks a Goal as awaiting your confirmation, a notification is sent to Weixin. Reply in Weixin to post your message in that room; quoting a notification sends it to that notification's room. A question a member asks you is also sent once it has waited 5 minutes: reply with an option number to answer it directly, or anything else for the host to choose for you. Only text is forwarded. Login credentials stay on this computer.",
+  "主持人声明 Goal 待你确认后，3 分钟内你没在房间回复，就发到微信；直接回复微信消息即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间。成员向你提的问题等你 3 分钟未答也会发来，回复选项编号即直接作答，其他文字交给主持人代为选择。只转发文字，登录凭据只存这台电脑。": "If you do not reply in the room within 3 minutes after the host marks a Goal as awaiting your confirmation, a notification is sent to Weixin. Reply in Weixin to post your message in that room; quoting a notification sends it to that notification's room. A question a member asks you is also sent once it has waited 3 minutes: reply with an option number to answer it directly, or anything else for the host to choose for you. Only text is forwarded. Login credentials stay on this computer.",
   "配置 {value1}": "Configure {value1}",
   "配置：软件、模型、描述与专属提示词（也可双击卡片）": "Configure: software, model, description and expert prompt (or double-click the card)",
   "从工作流移除这张卡片": "Remove this card from the workflow",
@@ -901,5 +901,18 @@
   "提醒它不要用命令行看目录、读文件，否则这一轮会被中断": "Reminds it not to list folders or read files through the command line; otherwise the turn is cut short",
   "每次任务": "every task",
   "仅只读权限时": "only when read-only",
-  "{software}：{note}（{when}）": "{software}: {note} ({when})"
+  "{software}：{note}（{when}）": "{software}: {note} ({when})",
+  "（微信返回：{value1}）": " (WeChat said: {value1})",
+  "微信拒绝了这条通知{value1}。常见原因是太久没在微信里给机器人发消息、发送凭据已失效：在微信里给机器人发一句任意消息即可恢复。": "WeChat refused this notification{value1}. This usually means you have not messaged the bot for a long time, so its sending credential has expired. Send the bot any message in WeChat to restore it.",
+  "微信拒绝了这条通知（错误码 {value1}）{value2}。": "WeChat refused this notification (error code {value1}){value2}.",
+  "这台电脑连不上微信服务器，通知没有发出：{value1}": "This computer could not reach the WeChat server, so the notification was not sent: {value1}",
+  "微信通知没有发出：{value1}": "WeChat notification not sent: {value1}",
+  "{value1} 发送失败：{value2}": "Failed to send at {value1}: {value2}",
+  "微信登录已过期，请在“设置 → 通知”的微信一栏解除绑定后重新扫码。": "The WeChat login has expired. Unbind it under WeChat in “Settings → Notifications” and scan again.",
+  "通知": "Notifications",
+  "有事等你处理时提醒你": "Reminds you when something needs you",
+  "微信 · {value1}": "WeChat · {value1}",
+  "Goal 待你确认、或成员向你提的问题等你 3 分钟未答时，经下面的渠道提醒你。": "When a Goal awaits your confirmation, or a member’s question has waited 3 minutes for your answer, you are reminded through the channels below.",
+  "微信": "WeChat",
+  "用个人微信扫码绑定。直接回复通知即作为你的发言发回该房间，引用某条通知回复则发回那条通知的房间；回复问题通知的选项编号即直接作答，其他文字交给主持人代为选择。只转发文字，登录凭据只存这台电脑。": "Link your personal WeChat by scanning a QR code. Reply to a notification to post your message in that room; quoting a notification sends it to that notification’s room. Reply to a question notification with an option number to answer it directly, or with anything else for the host to choose for you. Only text is forwarded. Login credentials stay on this computer."
 }

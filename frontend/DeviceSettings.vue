@@ -20,10 +20,6 @@ const local = computed(() => view.value.admin.local);
 const remote = computed(() => !local.value && view.value.launch.available && view.value.launch.remote);
 const device = computed(() => view.value.device);
 const devices = cached_devices;
-const timings = ref(bridge.device.recent_timings?.() || []);
-function update_timings() { timings.value = bridge.device.recent_timings(); }
-onMounted(() => window.addEventListener("relay-timing", update_timings));
-onUnmounted(() => window.removeEventListener("relay-timing", update_timings));
 const audit = cached_audit;
 const audit_open = ref("");
 const busy = ref("");
@@ -162,10 +158,6 @@ const date = (time) => new Date(time).toLocaleString(locale, { month: "numeric",
   <section v-if="local || remote || needs_pairing || device.needs" class="device-settings" aria-labelledby="device-heading">
     <h4 id="device-heading">{{ t('已配对的设备') }}</h4>
 
-    <details v-if="remote && timings.length && !needs_pairing">
-      <summary>{{ t('最近中转耗时（毫秒）') }}</summary>
-      <p v-for="row in timings" :key="row.id" class="fine-print">{{ row.category }} · {{ row.bytes ?? '—' }} B · {{ t('手机线路 {mobile} · 站点 {site} · 电脑线路 {link} · 本机 {local}', { mobile: row.mobile ?? '—', site: row.site ?? '—', link: row.link ?? '—', local: row.local }) }} · {{ row.dc || '—' }} / {{ row.mc || '—' }}</p>
-    </details>
     <form v-if="needs_pairing" class="dialog-form device-pair" :aria-label="t('配对这台设备')" @submit.prevent="pair">
       <p class="fine-print">{{ t('扫描电脑本机网页 设置 → 添加设备 的二维码，或输入配对码。') }}</p>
       <div class="device-pair-row">

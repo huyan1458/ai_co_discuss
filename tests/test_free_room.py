@@ -2504,6 +2504,11 @@ class HostTests(HostRoomTests):
         self.assertNotIn(("Claude", "handoff", "pending"), self.requests())
         self.work("Antigravity")
         self.assertEqual(self.requests().count(("Claude", "handoff", "pending")), 1)
+        # The hand-back names each answer, so the host reads them by number instead of paging the room.
+        answers = {item["author_label"]: item["id"] for item in self.request(f"{self.path}/messages")[1]["messages"]
+                   if item["author"] in ("Codex", "Antigravity")}
+        handoff = next(item for item in self.reserve_for("Claude")[1]["requests"] if item["purpose"] == "handoff")
+        self.assertEqual({item["member"]: item["message_id"] for item in handoff["outcome"]}, answers)
 
     def test_sequential_mention_asks_the_host_first_and_each_next_member_after_the_previous_ends(self):
         """@全体依次 asks one member at a time: the host, then by joining order; a failed or departed member is passed over."""
@@ -2962,6 +2967,11 @@ class HostTests(HostRoomTests):
         self.assertEqual(self.request(f"{self.path}/messages/{saved['message']['id']}?execution_id={first}", token=self.member)[0], 200)
         self.work("Codex")
         self.assertEqual(self.requests()[-1], ("Claude", "notice", "pending"), "the hand-back waits for the host's work as a notice")
+        # The notice names the answer by number: a host still working has no `outcome` to read it from.
+        messages = self.request(f"{self.path}/messages")[1]["messages"]
+        answer = next(item for item in reversed(messages) if item["author"] == "Codex")
+        notice = next(item for item in reversed(messages) if item["kind"] == "notice")
+        self.assertIn(f"{answer['author_label']} #{answer['id']}", notice["text"])
         executions = {item["id"]: item for item in self.request(self.path)[1]["free"]["executions"]}
         codex = next(item for item in executions.values() if item["member"] == "Codex")
         self.assertEqual((codex["background"], executions[carried["id"]]["background"]), (True, False))
@@ -3610,6 +3620,23 @@ class HostTests(HostRoomTests):
         self.reserve_for("Claude")
         self.assertEqual(self.request(f"{self.path}/recommendations/{started}", {"action": "all"}, self.owner)[0], 409)
 
+    def test_the_summary_notice_names_answers_apart_from_who_did_not_finish(self):
+        """With one member failed, the summary lists the others' answers by number and names the failed one as unfinished."""
+        everyone = ["Claude", "Codex", "Antigravity"]
+        first = FreeRoomTests.say(self, "大家说说看法", to=everyone, order="auto")[1]["message"]["id"]
+        revision = self.request(f"{self.path}/recommendations/{first}", token=self.owner)[1]["revision"]
+        self.assertEqual(self.request(f"{self.path}/recommendations/{first}", {"action": "all", "revision": revision}, self.owner)[0], 200)
+        self.work("Claude")
+        self.work("Codex")
+        failing = self.reserve_for("Antigravity")[1]
+        self.request(f"{self.path}/executions/{failing['id']}", {"action": "fail", "reason": "CLI 退出"}, self.owner)
+        messages = self.request(f"{self.path}/messages?after={first}")[1]["messages"]
+        notice = next(item for item in reversed(messages) if "全体成员已回答完毕" in item["text"])
+        answered, unfinished = notice["text"].split("其中未完成：")
+        for answer in (item for item in messages if item["author"] in ("Claude", "Codex")):
+            self.assertIn(f"{answer['author_label']} #{answer['id']}", answered)
+        self.assertTrue(unfinished.startswith(next(item["label"] for item in self.request(self.path)[1]["members"] if item["name"] == "Antigravity")))
+
     def test_naming_everyone_waits_for_the_runner_to_choose_at_once_or_in_turn(self):
         """@全体成员 leaves the host an undeliverable group request; all asks everyone at once, sequential queues them."""
         everyone = ["Claude", "Codex", "Antigravity"]
@@ -3627,8 +3654,14 @@ class HostTests(HostRoomTests):
         self.work("Antigravity")
         # The host answered its own share, then sums everyone up once, on a notice.
         self.assertEqual(self.requests()[3:], [("Claude", "notice", "pending")])
-        notice = self.request(f"{self.path}/messages?after={first}")[1]["messages"][-1]
+        messages = self.request(f"{self.path}/messages?after={first}")[1]["messages"]
+        notice = messages[-1]
         self.assertIn(f"#{first} 全体成员已回答完毕", notice["text"])
+        # Each answer is named by number, so the host reads them directly instead of paging the room to find them.
+        answers = [item for item in messages if item["author"] in everyone]
+        self.assertEqual(len(answers), 3)
+        for answer in answers:
+            self.assertIn(f"{answer['author_label']} #{answer['id']}", notice["text"])
         self.work("Claude")
         second = FreeRoomTests.say(self, "接龙，每人接上一句", to=everyone, order="auto")[1]["message"]["id"]
         revision = self.request(f"{self.path}/recommendations/{second}", token=self.owner)[1]["revision"]

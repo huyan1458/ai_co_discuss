@@ -153,7 +153,10 @@ function row_drag(event, name) {
   emit("leave");
   event.dataTransfer.effectAllowed = "copy";
   event.dataTransfer.setData("text/plain", t("[成员 {name}]", { name: reference_name(bridge.display_name(name)) }));
+  // The messages take the drop anywhere, as for a dragged room (user 2026-11-26, #13990); they need the name to say so.
+  window.dispatchEvent(new CustomEvent("codiscuss:member-drag", { detail: { name: bridge.display_name(name) } }));
 }
+function row_drag_end() { window.dispatchEvent(new CustomEvent("codiscuss:member-drag", { detail: null })); }
 function row_press(event) {
   drag_blocked = Boolean(event.target.closest?.("button, input, textarea, select, a, [contenteditable='true']"));
   emit("press");
@@ -176,7 +179,7 @@ function select_row(name, event) {
       <template v-for="(item, index) in rows" :key="item.key">
         <li v-if="item.outside" class="speaking-order-divider" aria-hidden="true"><span>{{ OUTSIDE_LABELS[order.kind] }}</span></li>
         <li class="pb-member speaking-order-row" :class="[`is-${item.state}`, drop_class(index), { 'is-movable': item.state === movable_state && can_reorder }]"
-          :data-key="item.key" :data-movable="item.state === movable_state ? '' : undefined" draggable="true" @dragstart="row_drag($event, item.name)"
+          :data-key="item.key" :data-movable="item.state === movable_state ? '' : undefined" draggable="true" @dragstart="row_drag($event, item.name)" @dragend="row_drag_end"
           @mouseenter="emit('enter', item.name, $event)" @mouseleave="emit('leave')" @pointerdown="row_press" @click="select_row(item.name, $event)">
           <button v-if="item.state === movable_state && can_reorder" type="button" class="speaking-order-grip" :aria-disabled="saving"
             :aria-label="t('{value1}，第 {value2} 位；拖动或用上下方向键调整发言顺序', { value1: item.name, value2: item.place })" :title="grip_title"
@@ -206,7 +209,7 @@ function select_row(name, event) {
           <UIcon :name="away_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t('已离开 {value1}', { value1: props.away.length }) }}
         </button>
       </li>
-      <li v-for="name in away_open ? props.away : []" :key="`away-${name}`" class="pb-member speaking-order-row is-away" draggable="true" @dragstart="row_drag($event, name)"
+      <li v-for="name in away_open ? props.away : []" :key="`away-${name}`" class="pb-member speaking-order-row is-away" draggable="true" @dragstart="row_drag($event, name)" @dragend="row_drag_end"
         @mouseenter="emit('enter', name, $event)" @mouseleave="emit('leave')" @pointerdown="row_press" @click="select_row(name, $event)">
         <span class="speaking-order-place"></span>
         <slot :item="{ name, state: 'away' }" :place="0" />

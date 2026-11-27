@@ -3265,6 +3265,9 @@ def query_messages(connection, room_id, params, token=""):
         # The spec keeps `max_chars` for an optional text-only sub-budget, which is not offered yet.
         raise ValueError(Text('max_chars（正文子预算）暂不支持；整体输出预算请用 max_output_chars'))
     if params.get("max_output_chars") not in (None, ""):
+        # Agent reads drop empty fields first: most of a message's metadata is unused relay and link fields, which would
+        # otherwise take about half the budget and end a page after a few answers.
+        messages = [without_empty_fields(message) for message in messages]
         fitted = fit_messages(messages, output_budget(params["max_output_chars"]))
         budget_stopped, has_more = len(fitted) < len(messages) or fitted[-1:] != messages[-1:], has_more or len(fitted) < len(messages)
         messages = fitted
@@ -3306,6 +3309,11 @@ def output_budget(value):
 def compact_chars(value):
     """Size of a value as the budget counts it: code points of its compact JSON."""
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+
+
+def without_empty_fields(message):
+    """A message without its null, empty-string and empty-collection fields; the text stays even when empty, and 0 stays."""
+    return {key: value for key, value in message.items() if key == "text" or value not in (None, "", [], {})}
 
 
 def fit_messages(messages, budget):
@@ -3528,18 +3536,18 @@ def state_reading_text(room, language="zh"):
 
 def message_text(message, language="zh"):
     """Render an original message with its provenance and reply reference."""
-    reply = read_text(Text(" · 回复 #{reply_to}", reply_to=message["reply_to"]), language) if message["reply_to"] else ""
+    reply = read_text(Text(" · 回复 #{reply_to}", reply_to=message.get("reply_to")), language) if message.get("reply_to") else ""
     role = read_text({"moderation": Text("主持发言"), "receipt": Text("运行回执"), "chat": Text("协作消息")}.get(
         message.get("kind"), Text("专家观点")), language)
     summary = (read_text(Text("\n回答摘要（{summary_by}）：\n{summary}\n\n完整正文：\n",
-                              summary_by=reading_identity(message["summary_by"], language),
+                              summary_by=reading_identity(message.get("summary_by", ""), language),
                               summary=reading_field(message, "summary", language)), language)
                if message.get("summary") else "\n")
     attachments = "".join(read_text(Text("\n附件：{file_name}（{size} 字节；ID: {id}）\n{download_url}", **item), language)
                           for item in message.get("attachments", []))
     return read_text(Text("#{id} · {author} · {created_at}{reply}\n职责：{role}；来源：{source}；提交者：{submitted_by}{summary}{text}{attachments}",
                           id=message["id"], author=reading_identity(message["author"], language), created_at=message["created_at"], reply=reply,
-                          role=role, source=message["source"], submitted_by=reading_identity(message.get("submitted_by", "用户"), language),
+                          role=role, source=message.get("source", ""), submitted_by=reading_identity(message.get("submitted_by", "用户"), language),
                           summary=summary, text=reading_field(message, "text", language), attachments=attachments), language)
 
 

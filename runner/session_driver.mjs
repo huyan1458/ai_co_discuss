@@ -137,7 +137,9 @@ export class SessionDriver {
   /** Choose an eligible next task; manual and web members remain valid candidates from the roster. */
   async plan(session, roster, turns, request, room) {
     const latest_id = room.latest_id || 0;
-    const page = await api(this.config, `/messages?after=${Math.max(0, latest_id - ROUTE_CONTEXT_MESSAGES)}`);
+    const target = request.cause_kind === 'user_message' && request.source_message_id;
+    const end = target || latest_id;
+    const page = await api(this.config, `/messages?before=${end ? end + 1 : 0}&limit=${ROUTE_CONTEXT_MESSAGES + (target ? 1 : 0)}`);
     const base = { title: room.title, goal: session.goal || room.goal, user_request: room.user_request,
       context: page.messages, host: room.host, brief: room.host_brief?.text, focus: room.focus, profiles: room.descriptions,
       arrangement: arrangement_of(turns) };

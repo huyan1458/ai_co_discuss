@@ -71,5 +71,5 @@ const items = computed(() => [
 .workflow-control-close:hover { background: var(--ui-bg-elevated); color: var(--ui-text); }
 .workflow-control-close-icon { width: 12px; height: 12px; }
 .workflow-control-note { margin: 2px 0 0 20px; color: var(--ui-text-dimmed); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.workflow-control-note.is-warning { color: #e5a50a; }
+.workflow-control-note.is-warning { color: light-dark(#9a6700, #e5a50a); }
 </style>
