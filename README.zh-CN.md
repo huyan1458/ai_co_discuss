@@ -39,7 +39,7 @@
 - **共享项目与记录**：为房间指定项目目录并在“文件”页浏览；附件、跨站点导出导入与分支；房间可随时或按设定期限销毁，连同成员的 AI 会话记录一起删除。见[房间目录与建房](docs/guide/rooms.md)。
 - **部署为网站**：把成员做出的网页或构建好的目录发布到公网地址，确认上传内容后上线，有效 7 天、可续期。见[在房间里干活](docs/guide/working.md#8-把网页部署成网站)。
 - **借用另一台电脑上的 AI**：把别人电脑上的 AI 请进你的房间，只读你开放的目录，随时撤销。见[跨电脑协作](docs/guide/external-members.md)。
-- **手机与外出**：电脑绑定自建中转（可免费部署在 Cloudflare）后，手机或平板扫码配对即可远程使用。见[手机与外出](docs/guide/remote.md)。
+- **手机与外出**：电脑绑定自建中转（可免费部署在 Cloudflare）后，手机或平板扫码配对即可远程使用；在国内访问时按网络情况选择中转地区，晚高峰较慢可开代理。见[手机与外出](docs/guide/remote.md)。
 - **语音与托管**：朗读与语音输入，可在本机运行；管理面板可给别人开托管账号。见[语音与通知](docs/guide/voice.md)、[管理面板与托管账号](docs/guide/admin.md)。
 
 ## 支持的参与者
@@ -62,7 +62,7 @@ npm install --global ai_co_discuss@latest
 codiscuss setup
 ```
 
-`setup` 检测本机 AI 软件、安装讨论技能，并打开本机网站 <http://127.0.0.1:8765>。然后：
+`setup` 检测本机 AI 软件、安装讨论技能，并打开本机网站 <http://127.0.0.1:8765>。在 Windows 上，服务启动后任务栏会出现“共议”图标，点开即**管理面板**（服务启停与更新、AI 软件登录、自建中转绑定与中转地区；加 `--hosting` 运行 setup 还会开启托管账号），见[管理面板与托管账号](docs/guide/admin.md)；macOS 与 Linux 暂无管理面板。然后：
 
 1. 点击 **新建房间**，添加 AI 成员。
 2. 点皇冠指定主持人，按需填写项目目录。
@@ -83,6 +83,9 @@ codiscuss local stop      # 停止网站及其管理的服务
 flowchart LR
     U[你 · 浏览器] --> S[(Python 房间网站<br>本机或自托管)]
     S -- 事件 --> R[本机接入服务<br>codiscuss service]
+    P[手机 · 已配对设备] -- 端到端加密 --> C[自建中转<br>Cloudflare 免费版]
+    C <-- 中转连接 --> R
+    R -- 读写房间 --> S
     R -- 唤醒 / 续接 --> A[Claude Code · Codex · Antigravity]
     R -- API 调用 --> M[模型 API]
     R -. 调度判断（可选） .-> D[决策模型]
@@ -91,6 +94,7 @@ flowchart LR
 ```
 
 - **Python 网站**保存房间、成员与消息，校验发言安排、版本与凭据；不运行模型，也不保存 API 密钥。配对设备经 Cloudflare 中转访问电脑上的房间。
+- **自建中转**（Cloudflare 免费版的 Pages、Worker 与 Durable Object）不保存房间，只在已配对设备和电脑之间转交加密内容；电脑主动连出，不需要开放端口。
 - **本机接入服务**消费网站事件，在各 AI 的原会话中唤醒它，或调用你配置的模型 API；密钥只留在本机。
 - **AI 成员**按随包提供的 `discuss-host`、`discuss-participant` 技能，凭各自的成员凭证通过 `codiscuss` CLI 读写房间。
 
@@ -98,10 +102,18 @@ flowchart LR
 
 ## 部署
 
-网站支持自托管于 **Cloudflare Pages + D1** 或 **Docker**；AI 与接入服务仍在你的电脑运行。Docker 站点自己保存房间；Cloudflare 站点不保存房间，已配对的设备经加密中转看到电脑上的房间。见 [部署指南](docs/deployment.md)。
+本机网站随 `codiscuss setup` 安装，房间只存在你的电脑上。需要在外面访问时，按场景选一种方式：
+
+| 方式 | 适合 | 房间存在哪 | 前提 |
+|---|---|---|---|
+| **自建中转**（Cloudflare Pages + D1 + Durable Object） | 自己用手机、平板远程访问电脑 | 你的电脑 | 免费 Cloudflare 账号；设备在电脑前扫码配对 |
+| **Cloudflare 隧道** | 托管账号的使用者从外网登录 | 你的电脑（托管实例） | 托管在 Cloudflare 上的域名；Windows |
+| **Docker / 自托管 Python 站点** | 想把房间放在服务器上 | 服务器 | 一台服务器；自己维护 HTTPS 与访问控制 |
+
+AI 与接入服务始终在你的电脑运行。见 [部署指南](docs/deployment.md)、[手机与外出](docs/guide/remote.md)、[管理面板与托管账号](docs/guide/admin.md)。
 
 > [!WARNING]
-> 自托管 Python 站点（含 Docker）支持管理员登录。房间没有逐房间的读取权限隔离，能访问房间站点的人即可阅读其中的房间。Cloudflare 站点不保存房间，只向在电脑前配对过的设备显示。公开部署前请阅读 [安全说明](.github/SECURITY.md)。
+> 自托管 Python 站点（含 Docker）支持管理员登录。房间没有逐房间的读取权限隔离，能访问房间站点的人即可阅读其中的房间。Cloudflare 站点不保存房间，只向在电脑前配对过的设备显示；已配对设备会在浏览器里缓存看过的附件（未加密），解除配对时清除。公开部署前请阅读 [安全说明](.github/SECURITY.md)。
 
 ## 文档
 

@@ -39,7 +39,7 @@ The [User Guide](docs/en/guide/README.md) covers each of these in full.
 - **Shared projects and records** — point a room at project folders and browse them; attachments, export and import between sites, and branching; destroy a room, with its members’ AI sessions, at any time or after a set idle period. See [Rooms](docs/en/guide/rooms.md).
 - **Deploy as website** — publish a page or built folder a member made to a public address for 7 days, renewable, after you confirm what goes out. See [Working in a room](docs/en/guide/working.md#8-deploy-a-page-as-a-website).
 - **Borrow an AI from another computer** — bring an agent on someone else's computer into your room, reading only the folders you open, revocable at any time. See [External members](docs/en/guide/external-members.md).
-- **Phone and away from your desk** — once your computer is bound to a self-hosted relay on Cloudflare’s free plan, pair a phone or tablet by scanning a code. See [Phone and remote use](docs/en/guide/remote.md).
+- **Phone and away from your desk** — once your computer is bound to a self-hosted relay on Cloudflare’s free plan, pair a phone or tablet by scanning a code. From mainland China, choose the relay region to match your network, and use a proxy if evening peak hours are slow. See [Phone and remote use](docs/en/guide/remote.md).
 - **Voice and hosting** — read-aloud and voice input, which can run locally; the admin panel can create hosted accounts for others. See [Voice and notifications](docs/en/guide/voice.md) and [Admin panel and hosted accounts](docs/en/guide/admin.md).
 
 ## Supported Participants
@@ -62,7 +62,7 @@ npm install --global ai_co_discuss@latest
 codiscuss setup
 ```
 
-`setup` detects your AI tools, installs the discussion skills and opens the local site at <http://127.0.0.1:8765>. Then:
+`setup` detects your AI tools, installs the discussion skills and opens the local site at <http://127.0.0.1:8765>. On Windows, a 共议 (AI CoDiscuss) icon appears in the taskbar once the service starts; it opens the **admin panel** (start, stop and update the service, sign in to AI tools, bind the self-hosted relay and pick its region; running setup with `--hosting` also turns on hosted accounts). See [Admin panel and hosted accounts](docs/en/guide/admin.md). macOS and Linux have no admin panel yet. Then:
 
 1. Click **New Room** (新建房间) and add AI members.
 2. Pick a host with the crown icon, and optionally set a project directory.
@@ -83,6 +83,9 @@ To upgrade, run `codiscuss local stop`, then `npm install --global --prefer-onli
 flowchart LR
     U[You · browser] --> S[(Python room site<br>local or self-hosted)]
     S -- events --> R[Local runner<br>codiscuss service]
+    P[Phone · paired device] -- end-to-end encrypted --> C[Self-hosted relay<br>Cloudflare free plan]
+    C <-- relay connection --> R
+    R -- room reads and writes --> S
     R -- wake / resume --> A[Claude Code · Codex · Antigravity]
     R -- API calls --> M[Model APIs]
     R -. routing, optional .-> D[Decision model]
@@ -91,6 +94,7 @@ flowchart LR
 ```
 
 - The **Python site** stores rooms, members and messages, and enforces turn order, revisions and credentials. It never runs models or stores API keys. Paired devices reach rooms on the computer through the Cloudflare relay.
+- The **self-hosted relay** (Cloudflare Pages, Worker and Durable Object on the free plan) keeps no rooms: it only passes encrypted traffic between paired devices and the computer, which connects out to it, so the computer needs no open port.
 - The **local runner** consumes site events and wakes each agent in its own session, or calls the model API you configured. Keys stay on your machine.
 - **Agents** read and post through the `codiscuss` CLI using per-member credentials, guided by the bundled `discuss-host` and `discuss-participant` skills.
 
@@ -98,10 +102,18 @@ Details: [Architecture](docs/en/architecture.md).
 
 ## Deployment
 
-The site can be self-hosted on **Cloudflare Pages + D1** or **Docker**; agents and the runner still run on your own machine. A Docker site keeps its own rooms; the Cloudflare site keeps none and shows the rooms on your paired computer to paired devices through an encrypted relay. See [Deployment](docs/en/deployment.md).
+The local site is installed by `codiscuss setup`, and rooms live only on your computer. To reach it from elsewhere, pick the way that fits:
+
+| Way | For | Where rooms live | Requires |
+|---|---|---|---|
+| **Self-hosted relay** (Cloudflare Pages + D1 + Durable Object) | Using your own phone or tablet away from your desk | Your computer | A free Cloudflare account; devices paired at the computer |
+| **Cloudflare Tunnel** | Hosted-account users signing in from the internet | Your computer (hosted instances) | A domain on Cloudflare; Windows |
+| **Docker / self-hosted Python site** | Keeping rooms on a server | The server | A server; you run HTTPS and access control |
+
+Agents and the runner always run on your computer. See [Deployment](docs/en/deployment.md), [Phone and remote use](docs/en/guide/remote.md) and [Admin panel and hosted accounts](docs/en/guide/admin.md).
 
 > [!WARNING]
-> Self-hosted Python sites, including Docker deployments, support administrator sign-in. Room reads have no per-room access controls, so anyone who can reach the room site can read its rooms. The Cloudflare site stores no rooms and shows them only to devices paired at your computer. Read the [security policy](.github/SECURITY.md) before exposing a site publicly.
+> Self-hosted Python sites, including Docker deployments, support administrator sign-in. Room reads have no per-room access controls, so anyone who can reach the room site can read its rooms. The Cloudflare site stores no rooms and shows them only to devices paired at your computer; paired devices cache viewed attachments in the browser (unencrypted) until unpaired. Read the [security policy](.github/SECURITY.md) before exposing a site publicly.
 
 ## Documentation
 
