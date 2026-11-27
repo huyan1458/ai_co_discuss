@@ -49,7 +49,7 @@ async function run(site, action, payload = {}) {
 }
 
 const menu = (site) => [[
-  { label: t("续期"), icon: "i-lucide-timer-reset", disabled: site.status !== "active", children: [renew_items((days) => run(site, "renew", { days }))] },
+  { label: t("续期"), icon: "i-lucide-timer-reset", disabled: site.status !== "active" && !site.renewable, children: [renew_items((days) => run(site, "renew", { days }))] },
   ...(site.previous_version ? [{ label: t("回滚到上一版"), icon: "i-lucide-undo-2", disabled: site.status !== "active", onSelect: () => run(site, "rollback", { version: site.previous_version }) }] : []),
 ], [{ label: t("撤销网站"), icon: "i-lucide-link-2-off", color: "error", disabled: site.status !== "active", onSelect: () => run(site, "revoke") }]];
 

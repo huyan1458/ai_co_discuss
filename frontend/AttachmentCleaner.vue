@@ -4,16 +4,24 @@
  * sorted by size, picked and cleared at once. A cleared file keeps its message card, number and thumbnail; only the
  * original bytes go. Shared by the room page and the management panel, each passing its own way to reach the site.
  *
+ * With `cloud`, it manages the account's cloud space instead: every large file of the account across its rooms, each with
+ * its room, and the space used against the account's quota; deleting removes the file from the cloud space.
+ *
  * Props:
- *   load: async () => { attachments: [...], bytes } — the room's sent files (owner view).
- *   clear: async (ids) => { cleared: [...], freed_bytes } — clears the chosen files.
+ *   load: async () => { attachments: [...], bytes } — the room's sent files (owner view); in cloud mode
+ *     { attachments: [... with room_id, room_title], used_bytes, quota_mib }.
+ *   clear: async (ids) => { cleared: [...], freed_bytes } — clears (deletes) the chosen files.
+ *   cloud: whether this manages the account's cloud space rather than one room.
  * Emits `cleared(result)` after a successful clear, `failed(message)` when loading or clearing fails.
  */
 import { computed, onMounted, ref } from "vue";
 import { t } from "./i18n.js";
 import { format_storage_bytes } from "./storage-format.js";
 
-const props = defineProps({ load: { type: Function, required: true }, clear: { type: Function, required: true } });
+const props = defineProps({ load: { type: Function, required: true }, clear: { type: Function, required: true }, cloud: Boolean });
+const MIB = 1024 * 1024;
+// The cloud space's use and quota, from the last read and lowered at once by a delete.
+const usage = ref({ used_bytes: 0, quota_mib: 0 });
 const emit = defineEmits(["cleared", "failed"]);
 const DAY_MS = 86400000;
 const KINDS = [["all", t("全部")], ["image", t("图片")], ["video", t("音视频")], ["archive", t("压缩包")], ["document", t("文档")], ["other", t("其他")]];
@@ -66,7 +74,11 @@ function toggle_shown() {
 
 async function reload() {
   loading.value = true;
-  try { files.value = (await props.load()).attachments || []; }
+  try {
+    const result = await props.load();
+    files.value = result.attachments || [];
+    usage.value = { used_bytes: Number(result.used_bytes) || 0, quota_mib: Number(result.quota_mib) || 0 };
+  }
   catch (failure) { emit("failed", failure.message); }
   finally { loading.value = false; }
 }
@@ -81,6 +93,7 @@ async function clear_chosen() {
     const now = new Date().toISOString();
     // Show the outcome at once; the next room read brings the same state from the site.
     files.value = files.value.map(file => done.has(file.id) ? { ...file, cleared_at: file.cleared_at || now } : file);
+    usage.value = { ...usage.value, used_bytes: Math.max(0, usage.value.used_bytes - (Number(result.freed_bytes) || 0)) };
     chosen.value = new Set();
     emit("cleared", result);
   } catch (failure) { emit("failed", failure.message); }
@@ -97,7 +110,11 @@ defineExpose({ reload });
 
 <template>
   <div class="attachment-cleaner">
-    <p class="cleaner-note">{{ t("清理后消息仍在，附件卡片保留文件名、大小和图片缩略图并标“已清理”，原文件无法再打开或下载，成员也读不到；此操作无法撤销。") }}</p>
+    <template v-if="cloud">
+      <p v-if="usage.quota_mib" class="cleaner-usage">{{ t("云空间已用 {used} / 上限 {quota}", { used: format_storage_bytes(usage.used_bytes), quota: format_storage_bytes(usage.quota_mib * MIB) }) }}</p>
+      <p class="cleaner-note">{{ t("云空间存放本账号各房间里的大文件。删除后消息仍在，附件卡片标“已从云空间删除”，文件无法再下载，成员也读不到；此操作无法撤销。") }}</p>
+    </template>
+    <p v-else class="cleaner-note">{{ t("清理后消息仍在，附件卡片保留文件名、大小和图片缩略图并标“已清理”，原文件无法再打开或下载，成员也读不到；此操作无法撤销。") }}</p>
     <div class="cleaner-filters" role="group" :aria-label="t('按类型筛选')">
       <button v-for="[key, label] in KINDS" :key="key" type="button" class="cleaner-chip" :aria-pressed="kind === key" @click="kind = key">
         {{ label }}<small>{{ format_storage_bytes(kind_bytes[key]) }}</small>
@@ -107,7 +124,7 @@ defineExpose({ reload });
       <button v-for="[days, label] in AGES" :key="days" type="button" class="cleaner-chip" :aria-pressed="age === days" @click="age = days">{{ label }}</button>
     </div>
     <p v-if="loading" class="cleaner-empty">{{ t("正在读取附件…") }}</p>
-    <p v-else-if="!shown.length" class="cleaner-empty">{{ kept.length ? t("没有符合条件的附件") : t("本房间没有可清理的附件") }}</p>
+    <p v-else-if="!shown.length" class="cleaner-empty">{{ kept.length ? t("没有符合条件的附件") : cloud ? t("云空间里没有文件") : t("本房间没有可清理的附件") }}</p>
     <template v-else>
       <label class="cleaner-row cleaner-all">
         <input type="checkbox" :checked="all_shown_chosen" @change="toggle_shown">
@@ -118,16 +135,20 @@ defineExpose({ reload });
           <label class="cleaner-row">
             <input type="checkbox" :checked="chosen.has(file.id)" @change="toggle(file.id)">
             <span class="cleaner-name" :title="file.file_name">{{ file.file_name }}</span>
-            <small class="cleaner-meta">#{{ file.number }} · {{ date_label(file.created_at) }}</small>
+            <small v-if="cloud" class="cleaner-meta cleaner-room" :title="file.room_title || file.room_id">{{ file.room_title || file.room_id }} · {{ date_label(file.created_at) }}</small>
+            <small v-else class="cleaner-meta">#{{ file.number }} · {{ date_label(file.created_at) }}</small>
             <span class="cleaner-size">{{ format_storage_bytes(file.size) }}</span>
           </label>
         </li>
       </ul>
     </template>
-    <p v-if="cleared_count" class="cleaner-empty">{{ t("已清理 {count} 项", { count: cleared_count }) }}</p>
+    <p v-if="cleared_count" class="cleaner-empty">{{ cloud ? t("已删除 {count} 项", { count: cleared_count }) : t("已清理 {count} 项", { count: cleared_count }) }}</p>
     <footer class="cleaner-footer">
       <span>{{ t("已选 {count} 项，将释放 {size}", { count: chosen.size, size: format_storage_bytes(chosen_bytes) }) }}</span>
-      <button type="button" class="cleaner-clear" :class="{ 'is-confirming': confirming }" :disabled="!chosen.size || clearing" @click="clear_chosen">
+      <button v-if="cloud" type="button" class="cleaner-clear" :class="{ 'is-confirming': confirming }" :disabled="!chosen.size || clearing" @click="clear_chosen">
+        {{ clearing ? t("删除中…") : confirming ? t("确认删除（无法撤销）") : t("删除所选") }}
+      </button>
+      <button v-else type="button" class="cleaner-clear" :class="{ 'is-confirming': confirming }" :disabled="!chosen.size || clearing" @click="clear_chosen">
         {{ clearing ? t("清理中…") : confirming ? t("确认清理（无法撤销）") : t("清理所选") }}
       </button>
     </footer>
@@ -137,6 +158,8 @@ defineExpose({ reload });
 <style scoped>
 .attachment-cleaner { display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
 .cleaner-note, .cleaner-empty { margin: 0; opacity: .7; font-size: 12px; line-height: 1.5; }
+.cleaner-usage { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cleaner-room { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cleaner-filters { display: flex; flex-wrap: wrap; gap: 6px; }
 .cleaner-chip { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 10px; color: inherit; font: inherit; font-size: 12px; background: transparent; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 999px; cursor: pointer; }
 .cleaner-chip small { opacity: .6; font-variant-numeric: tabular-nums; }

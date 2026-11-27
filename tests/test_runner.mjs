@@ -17,7 +17,7 @@ import { EventEmitter, once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { createServer } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
+import { createServer as createNetServer, Socket } from 'node:net';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -26,6 +26,7 @@ import { listen_local } from './local_port.mjs';
 import { DiscussionStore, load_config, service_drafts, validate_config } from '../runner/discussion_runner.mjs';
 import { slash_insertion } from '../runner/slash_names.mjs';
 import { cwd_key, edited_changes, expert_prompt_delivery, free_task_files, FreeRoomRunner, process_started, named_workflows, request_attachments, member_drafts, member_extra_directories, member_folders, review_capability_version, room_goal, workspace_snapshot } from '../runner/free_runner.mjs';
+import { host_skill_digest } from '../runner/discussion_skills.mjs';
 import { SessionDriver } from '../runner/session_driver.mjs';
 import { capture_base } from '../runner/file_diff.mjs';
 
@@ -34,7 +35,7 @@ import { participant_tools, system_prompt } from '../runner/adapters/api.mjs';
 import { pi_provider } from '../runner/adapters/api_pi.mjs';
 import { glob_regex, open_project, run_file_tool } from '../runner/adapters/api_files.mjs';
 import { DiscussionService, migrate_platform_ids, migrate_service_home, persisted_env, read_registry, register_room, remove_room_files, service_pid, service_ready, start_service, sweep_service_home, unregister_room } from '../runner/discussion_service.mjs';
-import { restore_room, room_profiles, save_launch_settings } from '../runner/discussion_launch.mjs';
+import { host_control, restore_room, room_profiles, save_launch_settings } from '../runner/discussion_launch.mjs';
 import { adapter_of, capabilities_of, deliver_task, execution_details } from '../runner/adapters/index.mjs';
 import { inherited_access, NO_DESKTOP_VARIABLE } from '../runner/adapters/profiles.mjs';
 
@@ -53,14 +54,84 @@ test('a new host takes over the previous host access only as far as its own soft
   assert.equal(take('claude', 'read', 'claude', 'own'), 'read');
 });
 import { read_only_enforced } from '../runner/project_files.mjs';
-import { adopted_fork, claude_api_error, claude_input, claude_permissions, claude_exit_error, claude_inbox_ready, claude_rule_path, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
+import { adopted_fork, claude_api_error, claude_input, claude_permissions, claude_exit_error, claude_inbox_ready, claude_rule_path, post_inbox, standalone_claude_env, watch_window_turn } from '../runner/adapters/claude.mjs';
 import { codex_developer_instructions, codex_permissions, codex_sandbox_missing, codex_sandbox_refusal } from '../runner/adapters/codex_cli.mjs';
 import { agy_rule, prepare_agy_project, remove_agy_projects, sweep_legacy_agy_projects } from '../runner/adapters/antigravity_cli.mjs';
 import { kill_process_tree, run_program, shell_written_paths, TASK_SUBCOMMANDS, watch_events } from '../runner/adapters/common.mjs';
+import { cli_delivery } from '../runner/adapters/cli.mjs';
 
 // The service and setup install Pi from npm unless one is given; tests never download it.
 process.env.CODISCUSS_PI_CLI ??= 'pi-not-needed-in-this-test';
 // Codex's permission tests must not depend on whether this computer's own Codex has a Windows sandbox set up.
+test('Claude, Codex and Pi report the latest input context and observed limits', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'member-usage-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const { session_usage, account_quota } = await import('../runner/adapters/index.mjs');
+  const id = 'usage-fixture';
+  const log = join(home, 'claude.log');
+  const assistant = (id, input_tokens, output_tokens) => ({ type: 'assistant', message: { id, model: 'opus[1m]',
+    usage: { input_tokens, cache_read_input_tokens: 20, cache_creation_input_tokens: 3, output_tokens } } });
+  // A sub-agent's last call holds its own small context; it counts in the turn but not as the member's context.
+  const sub_agent = { ...assistant('c', 5, 1), parent_tool_use_id: 'toolu_1' };
+  writeFileSync(log, [assistant('a', 777, 12), assistant('b', 100, 2), assistant('b', 100, 4), sub_agent, { type: 'rate_limit_event', rate_limit_info: { unifiedWindows: {
+    seven_day: { utilization: 0.99, resetsAt: 1234 }, seven_day_overage_included: { utilization: 1 } } } }].map(x => JSON.stringify(x)).join('\n'));
+  const claude = session_usage('claude', id, { home, log_path: log });
+  assert.deepEqual(claude.context, { used: 123, window: 1000000 });
+  assert.deepEqual(claude.turn, { input: 882, cache_read: 60, cache_write: 9, output: 17 });
+  assert.deepEqual(claude.account.windows, [{ kind: 'seven_day', minutes: 10080, used: 0.99, resets_at: 1234, group: '', models: [] }]);
+  const sessions = join(home, 'sessions');
+  mkdirSync(sessions);
+  const payload = { type: 'token_count', info: { last_token_usage: { input_tokens: 540 }, model_context_window: 16000 },
+    rate_limits: { primary: { used_percent: 42, window_minutes: 300, resets_at: 1234 } } };
+  const counted = (input_tokens, cached_input_tokens, output_tokens) => ({ ...payload,
+    info: { ...payload.info, total_token_usage: { input_tokens, cached_input_tokens, output_tokens } } });
+  const rollout = [counted(110, 60, 24), { type: 'task_started', turn_id: 'mine' }, counted(410, 160, 30),
+    counted(410, 160, 30), counted(910, 200, 54), { type: 'task_complete', turn_id: 'mine' },
+    { type: 'task_started', turn_id: 'another' }, counted(980, 230, 80)];
+  writeFileSync(join(sessions, 'rollout-' + id + '.jsonl'), rollout.map(payload => JSON.stringify({ type: 'event_msg', payload })).join('\n'));
+  writeFileSync(log, JSON.stringify({ type: 'codiscuss.turn', thread_id: id, turn_id: 'mine' }));
+  for (const adapter of ['codex', 'codex_cli']) {
+    const usage = session_usage(adapter, id, { env: { CODEX_HOME: home }, log_path: log });
+    assert.deepEqual(usage.turn, { input: 660, cache_read: 140, cache_write: 0, output: 30 });
+    assert.deepEqual(usage.context, { used: 540, window: 16000 });
+    assert.equal(usage.account.windows[0].used, 0.42);
+  }
+  const pi_dir = join(home, '.codiscuss', 'pi', 'sessions');
+  mkdirSync(pi_dir, { recursive: true });
+  writeFileSync(join(pi_dir, 'time_' + id + '.jsonl'), JSON.stringify({ type: 'message', message: {
+    role: 'assistant', usage: { input: 7, cacheRead: 10, cacheWrite: 3, output: 500 } } }));
+  assert.deepEqual(session_usage('api', id, { home }), { context: { used: 20, window: 0 } });
+  writeFileSync(log, [3, 5].map(input => JSON.stringify({ type: 'message_end', message: { role: 'assistant',
+    usage: { input, cacheRead: 10, cacheWrite: 1, output: 12 } } })).join('\n'));
+  assert.deepEqual(session_usage('api', id, { home, log_path: log }).turn, { input: 8, cache_read: 20, cache_write: 2, output: 24 });
+  const base_url = 'https://api.deepseek.com/v1';
+  const profile = { adapter: 'api', model: 'fixture', api_protocol: 'chat', base_url,
+    ...save_api_key(home, { base_url, api_key: 'fixture' }) };
+  const fetch_impl = async (url, options) => {
+    assert.equal(url, 'https://api.deepseek.com/user/balance');
+    assert.equal(options.headers.Authorization, 'Bearer fixture');
+    return Response.json({ balance_infos: [{ total_balance: '23.50', currency: 'CNY' }] });
+  };
+  assert.deepEqual(await account_quota(profile, { home, fetch_impl }), { windows: [], balance: { amount: '23.50', currency: 'CNY' } });
+});
+
+test('Codex reads account limits over stdio without opening a conversation', async () => {
+  const { PassThrough } = await import('node:stream');
+  const calls = [];
+  const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(),
+    stderr: new PassThrough(), kill() {} });
+  child.stdin.on('data', chunk => {
+    const request = JSON.parse(chunk);
+    calls.push(request.method);
+    if (request.id === undefined) return;
+    const result = request.id === 0 ? {} : { rateLimits: { secondary: { windowDurationMins: 10080, usedPercent: 82, resetsAt: 5000 } } };
+    queueMicrotask(() => child.stdout.write(JSON.stringify({ id: request.id, result }) + '\n'));
+  });
+  const quota = await adapter_of('codex_cli').quota({}, { spawn_process: () => child });
+  assert.deepEqual(calls, ['initialize', 'initialized', 'account/rateLimits/read']);
+  assert.deepEqual(quota.windows, [{ kind: 'seven_day', minutes: 10080, used: 0.82, resets_at: 5000 }]);
+});
+
 const codex_test_home = mkdtempSync(join(tmpdir(), 'codex-home-'));
 writeFileSync(join(codex_test_home, 'config.toml'), '[windows]\nsandbox = "elevated"\n');
 process.env.CODEX_HOME = codex_test_home;
@@ -295,7 +366,13 @@ test('a workflow or sub-workflow the "/" menu inserts reaches the host task as n
 test("the host's occasional pages are listed only when the task carries what they cover", () => {
   const config = { site: 'http://127.0.0.1:1', room: 'r', directory: mkdtempSync(join(tmpdir(), 'host-pages-')), project: resolve('.'),
     members: { Host: { token: 'h'.repeat(32) } }, participants: { Host: { adapter: 'codex' } } };
-  const read = task => JSON.parse(readFileSync(task.task_path, 'utf8')).skills.map(path => path.split(sep).join('/'));
+  const read = task => {
+    const files = JSON.parse(readFileSync(task.task_path, 'utf8')).skills;
+    const root = join(config.project, '.agents', 'skills');
+    assert.match(task.skill_hash, /^[a-f0-9]{16}$/);
+    assert.equal(task.skill_hash, host_skill_digest(root));
+    return files.map(path => path.split(sep).join('/'));
+  };
   const pages = ['relay.md', 'control.md', 'workflow.md', 'dev-flow.md'];
   const host = (id, request, options = {}) => read(free_task_files(config, { name: 'Host', role: 'host' },
     { id, read_until: 0, requests: [{ id, message_id: id, ...request }] }, {}, options)).filter(path => path.includes('discuss-host/references/'));
@@ -316,6 +393,24 @@ test("the host's occasional pages are listed only when the task carries what the
   assert.ok(listed(host(8, { purpose: 'handoff', outcome: [{ member: 'A', status: 'completed' }, { member: 'B', status: 'failed', reason: 'timeout' }] }), 'control.md'));
   assert.ok(listed(host(9, { purpose: 'handoff', outcome: [{ member: 'B', status: 'cancelled' }] }), 'control.md'));
   assert.ok(!listed(host(10, { purpose: 'handoff', outcome: [{ member: 'A', status: 'completed' }] }), 'control.md'));
+});
+
+test('host skill digest includes files outside the task-specific skill list', () => {
+  const root = mkdtempSync(join(tmpdir(), 'host-skill-digest-'));
+  try {
+    for (const name of ['discuss-goal', 'discuss-host', 'discuss-participant', 'discuss-session']) {
+      mkdirSync(join(root, name));
+      writeFileSync(join(root, name, 'SKILL.md'), name);
+    }
+    const before = host_skill_digest(root);
+    writeFileSync(join(root, 'discuss-goal', 'reference.md'), 'goal reference');
+    const with_reference = host_skill_digest(root);
+    assert.notEqual(before, with_reference);
+    writeFileSync(join(root, 'discuss-goal', 'reference.md'), 'changed reference');
+    assert.notEqual(with_reference, host_skill_digest(root));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('a discussion host and a goal host get their occasional pages by what woke them', () => {
@@ -344,10 +439,13 @@ test('a discussion host and a goal host get their occasional pages by what woke 
 test('woken messages bring their attachments: local copies by placeholder, images only to software that takes them', async t => {
   const image = Buffer.from('89504e470d0a1a0a', 'hex'), sha = data => createHash('sha256').update(data).digest('hex');
   const files = [{ id: 'a'.repeat(32), file_name: 'shot.png', content_type: 'image/png', size: image.length, sha256: sha(image) },
-    { id: 'b'.repeat(32), file_name: 'notes.pdf', content_type: 'application/pdf', size: 3, sha256: sha('bad') }];
+    { id: 'b'.repeat(32), file_name: 'notes.pdf', content_type: 'application/pdf', size: 3, sha256: sha('bad') },
+    { id: 'c'.repeat(32), file_name: 'large.png', content_type: 'image/png', size: 104857600, storage: 'object', stored: true }];
+  const requested = [];
   const server = createServer((request, response) => {
     const url = new URL(request.url, 'http://local');
     if (url.pathname.endsWith('/attachments')) return response.end(JSON.stringify({ attachments: url.searchParams.get('message_id') === '9' ? files : [] }));
+    requested.push(url.pathname);
     response.end(url.pathname.includes('a'.repeat(32)) ? image : Buffer.from('pdf'));
   });
   await listen_local(server);
@@ -360,12 +458,16 @@ test('woken messages bring their attachments: local copies by placeholder, image
   config.members = Object.fromEntries(Object.keys(config.participants).map(name => [name, { token: name[0].repeat(32) }]));
   const execution = { id: 4, read_until: 0, requests: [{ id: 1, message_id: 9, purpose: 'ask' }] };
   const attachments = await request_attachments(config, execution);
-  assert.deepEqual(attachments.map(item => [item.placeholder, Boolean(item.path), Boolean(item.error)]), [['[图片 #1]', true, false], ['[文件 #2]', false, true]]);
+  assert.deepEqual(attachments.map(item => [item.placeholder, Boolean(item.path), Boolean(item.error)]),
+    [['[图片 #1]', true, false], ['[文件 #2]', false, true], ['[图片 #3]', false, false]]);
+  assert.equal(requested.length, 2, 'object storage bytes do not pass through the runner');
   assert.deepEqual(readFileSync(attachments[0].path), image);
   const task = name => free_task_files(config, { name }, execution, {}, { attachments });
   const claude = task('Claude'), agy = task('Agy');
   assert.match(claude.prompt, /#9 \[图片 #1\] shot\.png：本机副本 .+shot\.png/);
   assert.match(claude.prompt, /#9 \[文件 #2\] notes\.pdf：未能取到本机副本.+attachment download/);
+  assert.match(claude.prompt, /large\.png（104857600 字节.+attachment download room c{32} --dest/);
+  assert.match(JSON.parse(readFileSync(claude.task_path, 'utf8')).attachments[2].download_command, /attachment download room c{32} --dest/);
   assert.doesNotMatch(claude.prompt, /简单消息可跳过技能/);
   assert.deepEqual(claude.images.map(item => item.path), [attachments[0].path]);
   assert.deepEqual(agy.images, []);
@@ -377,6 +479,138 @@ test('woken messages bring their attachments: local copies by placeholder, image
   assert.deepEqual(content.map(block => block.type), ['text', 'image']);
   assert.equal(content[1].source.data, image.toString('base64'));
   assert.equal(JSON.parse(claude_input('看图', [{ ...claude.images[0], size: 4_000_000 }])).message.content.length, 1);
+});
+
+test('object storage admin CLI uses panel routes and never returns the key', async t => {
+  const { admin_cli } = await import('../runner/admin_cli.mjs');
+  const { create_panel } = await import('../runner/admin_panel.mjs');
+  const { account_home, add_account, instance_home } = await import('../gateway/gateway.mjs');
+  const { account_object_storage, attachment_limit, object_quota_path, policy, save_attachment_limit } = await import('../runner/attachment_policy.mjs');
+  const data = mkdtempSync(join(tmpdir(), 'object-store-panel-'));
+  t.after(() => rmSync(data, { recursive: true, force: true }));
+  mkdirSync(join(data, 'local'));
+  writeFileSync(join(data, 'local', 'attachment-limit.json'), '"not an integer"');
+  assert.equal(attachment_limit(data), policy.default_mib);
+  save_attachment_limit(data, policy.min_mib);
+  assert.equal(attachment_limit(data), policy.min_mib);
+  writeFileSync(join(data, 'local-settings.json'), JSON.stringify({ hosting: true }));
+  add_account(data, 'demo');
+  t.after(() => rmSync(account_home(data, 'demo'), { recursive: true, force: true }));
+  const hosted_home = instance_home(data, 'demo');
+  const key = 'stub-key-not-for-output', key_file = join(data, 'key');
+  writeFileSync(key_file, key);
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push({ url: request.url, key: request.headers['x-api-key'] });
+    response.end(JSON.stringify({ succeed: true, data: [] }));
+  });
+  await listen_local(server);
+  t.after(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const { api } = create_panel({ data, port: 0, key: '' });
+  const admin = (...args) => admin_cli(['storage', 'object', '--data', data, ...args], {
+    client: async () => (route, body) => api(body === undefined ? 'GET' : 'POST', '/api/' + route, body),
+    print: output => assert.ok(!output.includes(key)),
+  });
+  const empty = { configured: false, base_url: '', api_key_ref: '', managed: false, retention_days: 0, quota_mib: 10240, object_threshold_mib: 20 };
+  assert.deepEqual(await admin(), { ...empty, object_threshold_mib: policy.min_mib });
+  assert.deepEqual(await admin('--account', 'demo'), { ...empty, object_threshold_mib: policy.min_mib });
+  save_attachment_limit(data, 35);
+  assert.deepEqual(await admin(), empty);
+  assert.deepEqual(await admin('--retention-days', '1'), { ...empty, retention_days: 1 });
+  await assert.rejects(admin('--retention-days', '1.5'));
+  const owner = await admin('--url', url, '--key-file', key_file);
+  assert.deepEqual(owner, { ...empty, configured: true, base_url: url, api_key_ref: owner.api_key_ref, retention_days: 1 });
+  assert.deepEqual(await admin('--account', 'demo'), empty);
+  await assert.rejects(api('POST', '/api/accounts/demo/object-storage', { base_url: url, api_key_ref: owner.api_key_ref }));
+  await assert.rejects(api('POST', '/api/storage/object', { base_url: url }));
+  const hosted_key = 'hosted-stub-key-not-for-output';
+  writeFileSync(key_file, hosted_key);
+  const hosted = await admin('--account', 'demo', '--url', url, '--key-file', key_file, '--retention-days', '30', '--quota-mib', '128', '--threshold-mib', '29');
+  assert.match(hosted.api_key_ref, /^[a-f0-9-]{36}$/i);
+  assert.notEqual(hosted.api_key_ref, owner.api_key_ref);
+  assert.deepEqual(hosted, { ...empty, configured: true, base_url: url, api_key_ref: hosted.api_key_ref, managed: true, retention_days: 30, quota_mib: 128, object_threshold_mib: 29 });
+  assert.deepEqual(JSON.parse(readFileSync(join(hosted_home, 'object-storage-settings.json'), 'utf8')),
+    { base_url: url, api_key_ref: hosted.api_key_ref, retention_days: 30, object_threshold_mib: 29 });
+  assert.equal(JSON.parse(readFileSync(object_quota_path(data, 'demo'), 'utf8')), 128);
+  await assert.rejects(account_object_storage(hosted_home, { quota_mib: 99999 }));
+  const hosted_path = '/api/accounts/demo/object-storage';
+  for (const retention_days of [-1, 31, 2.5, '7', null]) await assert.rejects(api('POST', hosted_path, { retention_days }));
+  for (const quota_mib of [0, 1048577, 2.5, '128', null]) await assert.rejects(api('POST', hosted_path, { quota_mib }));
+  for (const object_threshold_mib of [0, 36, 2.5, '29', null]) await assert.rejects(api('POST', hosted_path, { object_threshold_mib }));
+  assert.deepEqual(await api('GET', hosted_path), hosted);
+  assert.deepEqual(await admin('--account', 'demo', '--retention-days', '0'), { ...hosted, retention_days: 0 });
+  const [listed] = await api('GET', '/api/accounts/demo/keys');
+  assert.equal(listed.object_storage, true);
+  assert.deepEqual(await admin('--test'), { ok: true });
+  assert.deepEqual(await admin('--account', 'demo', '--test'), { ok: true });
+  assert.deepEqual(requests, [{ url: '/files?maxKeys=1', key }, { url: '/files?maxKeys=1', key: hosted_key }]);
+  assert.deepEqual(await admin('--account', 'demo', '--clear'), { ...empty, quota_mib: 128 });
+  assert.equal(existsSync(join(hosted_home, 'api-keys', hosted.api_key_ref + '.json')), true);
+  assert.deepEqual(await admin(), owner);
+  assert.deepEqual(await admin('--clear'), empty);
+  await assert.rejects(admin('--test'));
+  writeFileSync(join(data, 'object-storage-settings.json'), JSON.stringify({ retention_days: 31 }));
+  assert.deepEqual(await admin(), empty);
+});
+
+test('cloud file admin CLI lists and deletes only in the selected instance', async t => {
+  const { admin_cli } = await import('../runner/admin_cli.mjs');
+  const { create_panel } = await import('../runner/admin_panel.mjs');
+  const { account_home, add_account } = await import('../gateway/gateway.mjs');
+  const data = mkdtempSync(join(tmpdir(), 'cloud-files-panel-'));
+  t.after(() => rmSync(data, { recursive: true, force: true }));
+  const calls = [], id = 'a'.repeat(32);
+  const site = async account => {
+    const server = createServer(async (request, response) => {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      calls.push([account, request.method, request.url, Buffer.concat(chunks).toString()]);
+      response.end(JSON.stringify(request.method === 'POST' ? { cleared: [id] } : { attachments: [], used_bytes: 0, quota_mib: 10240 }));
+    });
+    await listen_local(server);
+    t.after(() => server.close());
+    return server.address().port;
+  };
+  const [owner_port, hosted_port] = await Promise.all([site('owner'), site('demo')]);
+  writeFileSync(join(data, 'local-settings.json'), JSON.stringify({ hosting: true, port: owner_port }));
+  add_account(data, 'demo', hosted_port);
+  t.after(() => rmSync(account_home(data, 'demo'), { recursive: true, force: true }));
+  const { api } = create_panel({ data, port: 0, key: '' });
+  const admin = (...args) => admin_cli(['storage', 'object', '--data', data, ...args], {
+    client: async () => (route, body) => api(body === undefined ? 'GET' : 'POST', '/api/' + route, body), print: () => {},
+  });
+  assert.deepEqual(await admin('list'), { attachments: [], used_bytes: 0, quota_mib: 10240 });
+  assert.deepEqual(await admin('delete', id, '--account', 'demo'), { cleared: [id] });
+  assert.deepEqual(calls, [
+    ['owner', 'GET', '/api/rooms/cloud-attachments', ''],
+    ['demo', 'POST', '/api/rooms/cloud-attachments/delete', JSON.stringify({ id })],
+  ]);
+});
+
+test('object credentials pass through the paired relay, while external members cannot transfer attachments', async t => {
+  const { room_api } = await import('../runner/relay_channel.mjs');
+  const { external_route } = await import('../runner/external_client.mjs');
+  const { config: { directory } } = task_fixture(t);
+  const room = 'abcdef123456', id = 'e'.repeat(32), base = `/api/rooms/${room}/attachments`;
+  const requests = [
+    { method: 'POST', path: base + '/object', body: { file_name: 'large.zip' } },
+    { method: 'POST', path: `${base}/${id}/complete`, body: {} },
+    { method: 'GET', path: `${base}/${id}/content?link=1` },
+  ];
+  const response = { url: 'https://cos.invalid/object?signature=stub', size: 90 * 1024 ** 2 };
+  for (const request of requests) {
+    const fetcher = async (url, options) => {
+      assert.equal(new URL(url).pathname + new URL(url).search, request.path);
+      assert.equal(options.redirect, 'error');
+      assert.equal(options.headers.Range, undefined);
+      return Response.json(response);
+    };
+    assert.deepEqual(await room_api(directory, 'https://paired.invalid', request, { fetcher }), { status: 200, body: response });
+  }
+  assert.equal(external_route(room, 'POST', requests[0].path, requests[0].body), null);
+  assert.equal(external_route(room, 'GET', requests[2].path.replace('?link=1', '')), null);
+  assert.equal(external_route(room, 'GET', requests[2].path), null);
 });
 
 test('API profiles need a bound key and no software, and take only the access their file tools enforce', t => {
@@ -832,6 +1066,41 @@ test('a backup carries local member sessions, and restoring it resumes them whil
   assert.match(missing.members[0].error, /找不到 Codex CLI 会话 missing-session/);
   assert.equal(missing.members[0].status, 'failed');
   assert.deepEqual(missing.members[2], { name: 'DeepSeek', status: 'resumed', session_id: '' });
+});
+
+test('host withdrawal sends the integer execution ID from its task credential', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'host-withdraw-'));
+  const host = { name: 'Claude', role: 'host', status: 'active' };
+  const execution = { id: 72, read_until: 0, requests: [{ id: 4, message_id: 20, purpose: 'route' }] };
+  let withdrawal;
+  const server = createServer(async (request, response) => {
+    let result = {};
+    if (request.method === 'GET' && request.url === '/api/rooms/withdrawal') {
+      result = { free: { members: [host] } };
+    } else if (request.method === 'POST' && request.url === '/api/rooms/withdrawal/dispatches/10/withdraw') {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      withdrawal = JSON.parse(Buffer.concat(chunks));
+    }
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify(result));
+  });
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    rmSync(home, { recursive: true, force: true });
+  });
+  await listen_local(server);
+  const directory = join(home, 'runtime');
+  const config = with_members({ site: `http://127.0.0.1:${server.address().port}`, room: 'withdrawal',
+    token: 'x'.repeat(32), mode: 'free', directory, data_directory: directory, project: resolve('.'),
+    host_permissions: { items: ['execution'] }, participants: { Claude: { adapter: 'claude', executable: process.execPath } } });
+  const path = join(home, 'withdrawal.json');
+  writeFileSync(path, JSON.stringify(config));
+  register_room(home, path);
+  const task = free_task_files(config, host, execution, {});
+  await host_control(home, 'withdraw', { access_file: task.access_path, message: '10' });
+  assert.ok(Number.isInteger(withdrawal?.execution_id));
+  assert.equal(withdrawal.execution_id, execution.id);
 });
 
 test('a restarted free-room runner does not redeliver an active member request', async t => {
@@ -1340,6 +1609,107 @@ test('agy lists the background work its tool steps show and ends it as the steps
   assert.ok(f.background_lists.some(list => list.some(item => item.id === 'task-4' && item.state === 'running')), 'the schedule shows while its step runs');
 });
 
+test('Antigravity CLI and App read session context usage from gen_metadata or stream-json log, and agy quota from /usage (1.5.18)', async t => {
+  const { account_quota, reads_quota, session_usage } = await import('../runner/adapters/index.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'discussion-agy-usage-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const encode_varint = value => {
+    const out = [];
+    let rest = value;
+    while (rest >= 128) { out.push((rest & 127) | 128); rest = Math.floor(rest / 128); }
+    out.push(rest);
+    return Buffer.from(out);
+  };
+  const proto_msg = (field, body) => Buffer.concat([encode_varint((field << 3) | 2), encode_varint(body.length), body]);
+  const proto_int = (field, value) => Buffer.concat([encode_varint((field << 3) | 0), encode_varint(value)]);
+  const gen_blob = (used, window) => proto_msg(1, proto_msg(9, proto_msg(10, Buffer.concat([proto_int(1, used), proto_int(4, window)]))));
+
+  for (const [adapter, folder] of [['antigravity_cli', 'antigravity-cli'], ['antigravity', 'antigravity']]) {
+    const dir = join(root, '.gemini', folder, 'conversations');
+    mkdirSync(dir, { recursive: true });
+    const db = new DatabaseSync(join(dir, 'conv-db-1.db'));
+    db.exec('CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB)');
+    db.prepare('INSERT INTO gen_metadata (idx, data) VALUES (?, ?)').run(0, gen_blob(24000, 512000));
+    db.prepare('INSERT INTO gen_metadata (idx, data) VALUES (?, ?)').run(1, gen_blob(147544, 512000));
+    db.close();
+    assert.deepEqual(session_usage(adapter, 'conv-db-1', { home: root }), { context: { used: 147544, window: 512000 } });
+  }
+
+  // Fallback to stream-json log when conversation DB is absent: uses the last DONE agent_response step for context, and result.usage for turn totals.
+  const log_path = join(root, 'antigravity_cli-free-1.log');
+  writeFileSync(log_path, [
+    JSON.stringify({ event: 'init', conversation_id: 'conv-log-only' }),
+    JSON.stringify({ event: 'step_update', step_update: { step_index: 1, step_type: 'agent_response', state: 'DONE',
+      usage: { input_tokens: 23039, output_tokens: 118, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 23157 } } }),
+    JSON.stringify({ event: 'step_update', step_update: { step_index: 3, step_type: 'agent_response', state: 'DONE',
+      usage: { input_tokens: 8716, output_tokens: 158, thinking_tokens: 0, cache_read_tokens: 232794, total_tokens: 8874 } } }),
+    JSON.stringify({ event: 'result', result: { conversation_id: 'conv-log-only', status: 'SUCCESS',
+      usage: { input_tokens: 245611, output_tokens: 10627, thinking_tokens: 0, cache_read_tokens: 1157998, total_tokens: 256238 } } }),
+  ].join('\n'));
+  assert.deepEqual(session_usage('antigravity_cli', 'conv-log-only', { home: root, log_path }), {
+    context: { used: 241510, window: 0 },
+    turn: { input: 245611, cache_read: 1157998, cache_write: 0, output: 10627 },
+  });
+  // When both DB and log are present, context comes from DB (with window) and turn comes from log.
+  assert.deepEqual(session_usage('antigravity_cli', 'conv-db-1', { home: root, log_path }), {
+    context: { used: 147544, window: 512000 },
+    turn: { input: 245611, cache_read: 1157998, cache_write: 0, output: 10627 },
+  });
+  // When the log has no result event, turn sums the DONE agent_response steps.
+  const partial_log = join(root, 'antigravity_cli-free-2.log');
+  writeFileSync(partial_log, [
+    JSON.stringify({ event: 'step_update', step_update: { step_index: 1, step_type: 'agent_response', state: 'DONE',
+      usage: { input_tokens: 23039, output_tokens: 118, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 23157 } } }),
+    JSON.stringify({ event: 'step_update', step_update: { step_index: 3, step_type: 'agent_response', state: 'DONE',
+      usage: { input_tokens: 8716, output_tokens: 158, thinking_tokens: 0, cache_read_tokens: 232794, total_tokens: 8874 } } }),
+  ].join('\n'));
+  assert.deepEqual(session_usage('antigravity_cli', 'conv-log-only', { home: root, log_path: partial_log }), {
+    context: { used: 241510, window: 0 },
+    turn: { input: 31755, cache_read: 232794, cache_write: 0, output: 276 },
+  });
+
+  // Account quota from `agy -p /usage --output-format json`.
+  assert.equal(reads_quota({ adapter: 'antigravity_cli' }), true);
+  assert.equal(reads_quota({ adapter: 'antigravity' }), false);
+  const { PassThrough } = await import('node:stream');
+  const spawn_usage = (_cmd, args) => {
+    assert.deepEqual(args, ['-p', '/usage', '--output-format', 'json']);
+    const child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => {};
+    setImmediate(() => {
+      child.stdout.end(`${JSON.stringify({
+        conversation_id: '', status: 'SUCCESS',
+        command: { name: 'usage', data: { groups: [
+          { name: 'Gemini Models', description: 'Models within this group: Gemini 4 Neon, Gemini 3.8 Flash', buckets: [
+            { id: 'gemini-weekly', window: 'weekly', remaining_fraction: 0.5, reset_time: '2026-12-03T07:11:39Z' },
+            { id: 'gemini-5h', window: '5h', remaining_fraction: 0.6, reset_time: '2026-11-27T11:21:33Z' },
+          ] },
+          { name: 'Claude and GPT models', buckets: [
+            { id: '3p-weekly', window: 'weekly', remaining_fraction: 1, reset_time: '1970-01-01T00:00:00Z' },
+            { id: '3p-5h', window: '5h', remaining_fraction: 1, reset_time: '1970-01-01T00:00:00Z' },
+          ] },
+        ] } },
+      })}\n`);
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  const quota = await account_quota({ adapter: 'antigravity_cli', executable: process.execPath }, { spawn_process: spawn_usage });
+  assert.deepEqual(quota, {
+    windows: [
+      { kind: 'five_hour', minutes: 300, used: 0.4, resets_at: Math.floor(Date.parse('2026-11-27T11:21:33Z') / 1000), group: 'Gemini Models', models: ['gemini-4-neon', 'gemini-3-8-flash'] },
+      { kind: 'five_hour', minutes: 300, used: 0, resets_at: 0, group: 'Claude and GPT models', models: [] },
+      { kind: 'seven_day', minutes: 10080, used: 0.5, resets_at: Math.floor(Date.parse('2026-12-03T07:11:39Z') / 1000), group: 'Gemini Models', models: ['gemini-4-neon', 'gemini-3-8-flash'] },
+      { kind: 'seven_day', minutes: 10080, used: 0, resets_at: 0, group: 'Claude and GPT models', models: [] },
+    ],
+  });
+  // Asked again within the wait, agy is not run and the old reading is not passed on as new.
+  assert.equal(await account_quota({ adapter: 'antigravity_cli', executable: process.execPath }, { spawn_process: spawn_usage }), null);
+});
+
 test('Codex classifies software error codes without interpreting prose or retrying the delivery', async t => {
   for (const [info, expected] of [
     [{ codex_error_info: 'usage_limit_exceeded' }, 'quota'],
@@ -1634,6 +2004,13 @@ test('extra project directories follow the member access, and stay read-only for
   assert.ok(denied.includes(`Edit(${claude_rule_path(main)}/**)`), 'the read-only one is never edited');
   assert.ok(claude.includes(`Edit(${claude_rule_path(docs)}/**)`) && !denied.includes(`Edit(${claude_rule_path(docs)}/**)`));
   assert.ok(claude_permissions({ cwd: elsewhere, project_access: 'auto' }, task).slice(-2).includes(`Edit(${claude_rule_path(main)}/**)`));
+  assert.ok(!claude.includes('--mcp-config'), 'no extra MCP servers without a .mcp.json');
+  for (const path of [docs, main]) writeFileSync(join(path, '.mcp.json'), '{"mcpServers":{}}');
+  for (const access of ['write', 'auto']) {
+    const args = claude_permissions({ cwd: elsewhere, project_access: access }, task);
+    assert.equal(args[args.indexOf('--mcp-config') + 1], join(docs, '.mcp.json'), "a writable directory's MCP servers start");
+    assert.ok(!args.includes(join(main, '.mcp.json')), 'a read-only directory starts none of its MCP servers');
+  }
 
   const codex = codex_permissions({ cwd: elsewhere, project_access: 'write' }, task, 'linux').args.find(arg => arg.startsWith('permissions.'));
   const entry = (path, access) => `${JSON.stringify(resolve(path).replaceAll('\\', '/'))}=${JSON.stringify(access)}`;
@@ -3027,6 +3404,7 @@ async function free_fixture(t) {
       // Like the website: the host's fired schedule opens one with a request on a notice of its own.
       if (!execution && body.scheduled) {
         execution = { id: state.executions.length + 1, client_id: body.client_id, status: 'dispatched', member: 'Claude', scheduled: body.scheduled,
+          ...(state.schedule_host_version ? { host_version: state.schedule_host_version } : {}),
           requests: [{ id: 60, message_id: 98, purpose: 'scheduled', status: 'delivering' }] };
         state.executions.push(execution);
       }
@@ -3142,15 +3520,14 @@ async function free_fixture(t) {
 
 test('installed cleanup skill can recover dispatch from legacy drafts without deleting unique work', async t => {
   const { state, store, config } = await free_fixture(t);
-  const { install_skills } = await import('../runner/discussion_skills.mjs');
   const { measure, block_reason } = await import('../runner/storage_guard.mjs');
-  const home = join(config.directory, 'custom-home'), skills = join(config.directory, 'skills');
+  const home = join(config.directory, 'custom-home');
+  const skill = fileURLToPath(new URL('../.agents/steward-skills/codiscuss-draft-cleanup/', import.meta.url));
   config.draft_directory = join(home, 'drafts', 'room');
   const member = join(config.draft_directory, 'member');
   mkdirSync(member, { recursive: true });
-  install_skills(skills, join(home, 'manifest.json'));
   const script = (file, ...args) => spawnSync(process.platform === 'win32' ? 'python' : 'python3',
-    [join(skills, 'codiscuss-draft-cleanup', file), '--home', home, ...args], { encoding: 'utf8' });
+    [join(skill, file), '--home', home, ...args], { encoding: 'utf8' });
   const archived = Buffer.alloc(4096, 65);
   for (const name of ['keep.zip', 'drop.zip']) writeFileSync(join(member, name), archived);
   writeFileSync(join(member, 'only.md'), 'unique');
@@ -3170,6 +3547,56 @@ test('installed cleanup skill can recover dispatch from legacy drafts without de
   state.pending = [{ id: 3, message_id: 11 }];
   await runner.tick();
   assert.equal(sent, 1);
+});
+
+test('steward storage inventory and cleanup stay within the selected CoDiscuss roots', async t => {
+  const { config } = await free_fixture(t);
+  const home = join(config.directory, 'steward-storage');
+  const skill = fileURLToPath(new URL('../.agents/steward-skills/codiscuss-draft-cleanup/', import.meta.url));
+  const fixture_file = (relative, text) => {
+    const parts = relative.split('/');
+    mkdirSync(join(home, ...parts.slice(0, -1)), { recursive: true });
+    const path = join(home, ...parts);
+    writeFileSync(path, text);
+    return path;
+  };
+  const log = fixture_file('launches/launch/runtime/codex-free-1.log', '12345');
+  const lock = fixture_file('launches/launch/runtime/runner.lock', String(process.pid));
+  fixture_file('launches/launch/runtime/only.task.json', 'not a log');
+  const backup = fixture_file('backups/workflow-my-flow-workflow-date-abcd/SKILL.md', '123456');
+  fixture_file('backups/skills/keep', 'not a workflow backup');
+  fixture_file('drafts/room/member/item.txt', 'draft');
+  fixture_file('local/discuss.sqlite3.attachments/id', 'attached');
+  fixture_file('yovoice-root.txt', join(home, 'models'));
+  fixture_file('models/yovoice/data/model', 'local speech');
+  fixture_file('crispasr/data/model', 'legacy speech');
+  const outside = fixture_file('outside.log', 'keep');
+  const script = (name, ...args) => spawnSync(process.platform === 'win32' ? 'python' : 'python3',
+    ['-B', '-X', 'utf8', join(skill, name), '--home', home, ...args], { encoding: 'utf8' });
+  const inventory = script('scan.py');
+  assert.equal(inventory.status, 0, inventory.stderr);
+  assert.match(inventory.stdout, /logs\s+[^\r\n]+\r?\ntotal_bytes=5/);
+  assert.match(inventory.stdout, /workflow-backups\s+[^\r\n]+\r?\ntotal_bytes=6/);
+  assert.match(inventory.stdout, /attachments\s+[^\r\n]+\r?\ntotal_bytes=8/);
+  assert.match(inventory.stdout, /speech\s+[^\r\n]+yovoice\r?\ntotal_bytes=12/);
+  assert.match(inventory.stdout, /speech\s+[^\r\n]+crispasr\r?\ntotal_bytes=13/);
+  const log_args = ['--log', 'launch/runtime/codex-free-1.log'];
+  assert.notEqual(script('cleanup.py', '--log', '../outside.log', '--apply').status, 0);
+  assert.equal(readFileSync(outside, 'utf8'), 'keep');
+  assert.notEqual(script('cleanup.py', ...log_args, '--apply').status, 0);
+  assert.ok(existsSync(log));
+  assert.ok(existsSync(lock));
+  rmSync(lock);
+  assert.equal(script('cleanup.py', ...log_args).status, 0);
+  assert.ok(existsSync(log));
+  assert.equal(script('cleanup.py', ...log_args, '--apply').status, 0);
+  assert.ok(!existsSync(log));
+  assert.ok(!existsSync(lock));
+  const backup_args = ['--workflow-backup', 'workflow-my-flow-workflow-date-abcd/SKILL.md'];
+  assert.equal(script('cleanup.py', ...backup_args).status, 0);
+  assert.ok(existsSync(backup));
+  assert.equal(script('cleanup.py', ...backup_args, '--apply').status, 0);
+  assert.ok(!existsSync(backup));
 });
 
 test('idle storage stays cached and concurrent retries verify the whole blocked home immediately', async t => {
@@ -3406,15 +3833,18 @@ test('only the host\'s schedule fire opens a scheduled execution, and a busy hos
   assert.equal(await delivered.on_schedule(schedule, handle()), 'drop');
   assert.equal(state.executions.length, 1);
   schedule.set_at = Date.now();
+  state.schedule_host_version = { package_version: '1.2.3', prompt_hash: '', skill_hash: '0123456789abcdef' };
   const fired = handle();
   assert.equal(await delivered.on_schedule(schedule, fired), true);
   const run = state.executions.at(-1);
-  assert.deepEqual([run.scheduled, runner.row('Claude').execution_id, runner.row('Claude').status], [schedule, run.id, 'running']);
+  assert.deepEqual([run.scheduled, runner.row('Claude').execution_id, runner.row('Claude').status],
+    [{ ...schedule, source_execution_id: 1 }, run.id, 'running']);
   assert.deepEqual([runner.delivery_caps.get(run.id).steer, runner.steers.has(run.id)], [false, false]);
   // Its turn found nothing to do: it ends quietly.
   delivered.on_turn_end();
   fired.emit('close');
   await runner.tick();
+  assert.ok(state.calls.includes(`POST /executions/${run.id} model`));
   assert.ok(state.calls.includes(`POST /executions/${run.id} quiet`));
   assert.equal(run.status, 'completed');
 });
@@ -4291,6 +4721,16 @@ test("a member's own prompt goes into the system prompt of a new session where p
   assert.ok(api_fresh.system_text && api_fresh.prompt === '任务');
   assert.match(expert_prompt_delivery('任务', { adapter: 'api', system_prompt: '只改文档' }, adapter_of('api'), { session_id: 'p1' }, false,
     { session_id: 'p1', hash: api_fresh.expert_prompt_hash }).prompt, /替换此前给你的同类提示[\s\S]*只改文档/);
+  // The owner's host prompt goes only to the member hosting now, after the prompts for every member.
+  const hosting = { layers: { program: '先给结论', host: 'Codex 额度多，批量活多派 Codex' }, platform: 'Claude' };
+  assert.match(expert_prompt_delivery('任务', { adapter: 'claude' }, adapter_of('claude'), {}, false, null, { ...hosting, role: 'host' }).system_text,
+    /所有成员[\s\S]*先给结论[\s\S]*主持人[\s\S]*批量活多派 Codex/);
+  assert.doesNotMatch(expert_prompt_delivery('任务', { adapter: 'claude' }, adapter_of('claude'), {}, false, null, { ...hosting, role: 'member' }).system_text, /批量活/);
+  // A member no longer hosting is told the earlier prompts are replaced, without the host's part.
+  const was_host = expert_prompt_delivery('任务', { adapter: 'claude' }, adapter_of('claude'), {}, false, null, { ...hosting, role: 'host' });
+  const now_member = expert_prompt_delivery('任务', { adapter: 'claude' }, adapter_of('claude'), { session_id: 'h1' }, false, { session_id: 'h1', hash: was_host.expert_prompt_hash }, { ...hosting, role: 'member' });
+  assert.match(now_member.prompt, /替换此前给你的同类提示/);
+  assert.doesNotMatch(now_member.prompt, /批量活/);
   // A manually started member takes none, even one left in its settings.
   assert.equal(expert_prompt_delivery('任务', { ...profile('claude'), project_access: 'own' }, adapter_of('claude'), { session_id: 's1' }, false, null).prompt, '任务');
 });
@@ -4422,6 +4862,132 @@ for (const failure of ['before', 'after']) test(`stop reporting survives a ${fai
   assert.deepEqual(restarted.stopped_executions('Claude'), [1]);
   await restarted.tick();
   assert.deepEqual(restarted.stopped_executions('Claude'), [1]);
+});
+
+/** A real local inbox, with a controlled write-completion failure rather than timing-dependent OS buffering. */
+async function failing_inbox(t, directory, failure) {
+  const token = randomUUID();
+  const socket = process.platform === 'win32' ? String.raw`\\.\pipe\codiscuss-inbox-${token}` : join(directory, 'inbox.sock');
+  const received = [];
+  if (failure === 'before-connect') return { socket, token, received };
+  let client, completion;
+  const original_end = Socket.prototype.end;
+  t.mock.method(Socket.prototype, 'end', function (payload, callback, ...rest) {
+    if (typeof payload !== 'string' || !payload.startsWith(`{"type":"auth","token":"${token}"}`)) {
+      return original_end.call(this, payload, callback, ...rest);
+    }
+    client = this; completion = callback;
+    // Withhold completion until the receiver closes; a partial frame cannot become a user message.
+    return original_end.call(this, failure === 'mid-write' ? payload.slice(0, -10) : payload);
+  });
+  const server = createNetServer(connection => {
+    let data = '';
+    connection.on('data', chunk => { data += chunk; });
+    connection.on('end', () => {
+      for (const frame of data.split('\n').slice(0, -1)) {
+        const item = JSON.parse(frame);
+        if (item.type === 'user') received.push(item.message.content);
+      }
+      const error = new Error('inbox disconnected before write confirmation');
+      connection.destroy();
+      if (failure === 'mid-write') { completion(error); client.destroy(); }
+      else { client.emit('error', error); client.destroy(); }
+    });
+  });
+  await new Promise(resolve_listen => server.listen(socket, resolve_listen));
+  t.after(() => new Promise(resolve_close => server.close(resolve_close)));
+  return { socket, token, received };
+}
+
+test('Claude inbox retries only before writing, including hosted windows', async t => {
+  for (const access of ['write', 'own']) for (const failure of ['before-connect', 'mid-write', 'received-then-close']) {
+    await t.test(`${access}: ${failure}`, async t => {
+      const { state, store, config } = await free_fixture(t);
+      config.participants.Claude.project_access = access;
+      const inbox = await failing_inbox(t, config.directory, failure);
+      let attempts = 0;
+      const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
+        attempts++;
+        await post_inbox(inbox, task.prompt);
+        return { status: 'accepted' };
+      });
+      for (let tick = 0; tick < 5; tick++) {
+        for (const execution of state.executions) if (execution.retry) execution.retry.retry_at = 1;
+        await runner.tick();
+      }
+      assert.equal(attempts, failure === 'before-connect' ? (access === 'own' ? 4 : 3) : 1, 'uncertain delivery must never be retried');
+      assert.equal(inbox.received.length, failure === 'received-then-close' ? 1 : 0);
+      assert.equal(state.executions.at(-1).status, 'failed');
+      if (failure !== 'before-connect') {
+        assert.match(state.executions.at(-1).result, /投递结果不明/);
+        assert.equal(state.calls.filter(call => / (release|retry_wait)$/.test(call)).length, 0);
+      }
+    });
+  }
+});
+
+test('CLI setup errors after spawn stop the child and remain uncertain', { timeout: 10000 }, async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'cli-write-boundary-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const receipt = join(directory, 'received.txt');
+  const adapter = { id: 'antigravity_cli', events: {}, invocation: () => ({ args: ['user content'] }) };
+  const task = { id: 'boundary', directory, on_process() { throw new Error('tracking failed'); }, on_output() {} };
+  const config = { executable: process.execPath, cwd: directory };
+  let closed, child;
+  const spawn_process = (executable, args, settings) => {
+    child = spawn(executable, ['-e', 'require("node:fs").writeFileSync(process.argv[1], process.argv[2]); setInterval(() => {}, 1000)', receipt, ...args], settings);
+    closed = once(child, 'close');
+    return child;
+  };
+  await assert.rejects(cli_delivery(adapter, config, {}, task, spawn_process), error => {
+    assert.equal(error.message, 'tracking failed');
+    assert.equal(error.delivery_status, undefined);
+    return true;
+  });
+  await closed;
+  assert.ok(child.exitCode !== null || child.signalCode !== null, 'an unregistered process must not keep running');
+  await assert.rejects(cli_delivery(adapter, config, {}, task, () => { throw new Error('spawn failed'); }),
+    error => error.delivery_status === 'not_sent');
+});
+
+test('uncertain room interjections keep their reason and are not handed over again', async t => {
+  const { config, store } = await free_fixture(t);
+  const inbox = await failing_inbox(t, config.directory, 'received-then-close');
+  const runner = new FreeRoomRunner(config, store);
+  runner.steers.set(1, text => post_inbox(inbox, text));
+  const execution = { id: 1, interjections: [{ id: 8, text: 'one interjection' }] };
+  // A lost outcome report must not cause another socket write.
+  const reports = [];
+  runner.report_interjection = async (execution_id, id, report) => { reports.push(report); if (reports.length === 1) throw new Error('report lost'); };
+  await runner.deliver_interjections([execution]);
+  await runner.deliver_interjections([execution]);
+  assert.equal(inbox.received.length, 1);
+  assert.equal(reports[1].status, 'failed');
+  assert.match(reports[1].reason, /投递结果不明/);
+  assert.doesNotMatch(reports[1].reason, /已结束本轮/);
+});
+
+test('uncertain private interjections fail even after a lost report and runner restart', async t => {
+  const f = await fixture(t);
+  const inbox = await failing_inbox(t, f.config.directory, 'received-then-close');
+  f.member.pending = [];
+  f.member.chats = [{ id: 5, status: 'running' }, { id: 6, status: 'pending', text: 'one private interjection' }];
+  let starts = 0;
+  const deliver = async () => { starts++; return { status: 'accepted' }; };
+  const runner = new FreeRoomRunner(f.config, f.store, deliver);
+  runner.chat_turns.set('Codex', { id: 5, steered: new Set(), steer: text => post_inbox(inbox, text) });
+  runner.chat_report = async () => false;
+  await runner.run_chats([f.member]);
+  assert.equal(inbox.received.length, 1);
+  assert.equal(f.member.chats[1].status, 'pending', 'the site has not received the failure yet');
+  f.member.chats[0].status = 'answered';
+  const restarted = new FreeRoomRunner(f.config, f.store, deliver);
+  await restarted.run_chats([f.member]);
+  await restarted.run_chats([f.member]);
+  assert.equal(f.member.chats[1].status, 'failed');
+  assert.match(f.member.chats[1].reason, /投递结果不明/);
+  assert.equal(starts, 0, 'the uncertain interjection is never sent as a new turn');
+  assert.equal(inbox.received.length, 1);
 });
 
 test('proven non-delivery is released and retried, then fails after three attempts', async t => {

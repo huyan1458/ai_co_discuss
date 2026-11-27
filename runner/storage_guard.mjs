@@ -336,32 +336,32 @@ export function block_reason(snapshot, room_key = '', disk = null, options = {})
   const max_files = options.max_files ?? MAX_SCAN_FILES;
 
   if (disk && Number.isFinite(disk.available_bytes) && Number.isFinite(disk.reserve_bytes) && disk.available_bytes < disk.reserve_bytes) {
-    return t('磁盘剩余空间仅 {available}，低于安全线 {reserve}，已停止派活。请先清理磁盘空间；清理旧草稿请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup，或在管理面板“存储”页清理临时文件。',
+    return t('磁盘剩余空间仅 {available}，低于安全线 {reserve}，已停止派活。请先清理磁盘空间，也可在管理面板“存储”页清理临时文件。',
       { available: format_bytes(disk.available_bytes), reserve: format_bytes(disk.reserve_bytes) }, locale);
   }
   if (!snapshot) return '';
   if (snapshot.truncated) {
-    return t('本机数据目录文件数超过 {limit} 上限（已扫到 {total}，草稿 {draft}），按超限停止派活。房间被拦截时请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup，或在管理面板“存储”页清理临时文件。',
+    return t('本机数据目录文件数超过 {limit} 上限（已扫到 {total}，草稿 {draft}），按超限停止派活。请在管理面板“存储”页清理临时文件。',
       { limit: max_files, total: format_bytes(snapshot.total_bytes), draft: format_bytes(snapshot.draft_bytes) }, locale);
   }
   const rooms = snapshot.rooms || {};
   const normalized_room = room_key && Object.hasOwn(rooms, room_key) ? room_key : (room_key ? basename(room_key) : '');
   const room_bytes = normalized_room ? Number(rooms[normalized_room] || 0) : 0;
   if (normalized_room && room_bytes > room_limit) {
-    return t('本房间草稿占用 {used}，超过 {limit} 上限（目录 drafts/{room}），已停止派活。房间被拦截时请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 清理可重建副本，或在管理面板“存储”页清理临时文件。',
+    return t('本房间草稿占用 {used}，超过 {limit} 上限（目录 drafts/{room}），已停止派活。请在管理面板“存储”页清理临时文件。',
       { used: format_bytes(room_bytes), limit: format_bytes(room_limit), room: normalized_room }, locale);
   }
   if (Number(snapshot.draft_bytes || 0) > draft_limit) {
-    return t('全机草稿占用 {used}，超过 {limit} 上限（目录 drafts/），已停止派活。请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 清理旧草稿，或在管理面板“存储”页清理临时文件。',
+    return t('全机草稿占用 {used}，超过 {limit} 上限（目录 drafts/），已停止派活。请在管理面板“存储”页清理临时文件。',
       { used: format_bytes(snapshot.draft_bytes), limit: format_bytes(draft_limit) }, locale);
   }
   if (Number(snapshot.total_bytes || 0) > home_limit) {
     const local_bytes = Number(snapshot.local_bytes || 0);
     if (local_bytes > 0) {
-      return t('本机 .codiscuss 数据占用 {used}（草稿 {draft}，房间记录与附件 {local}），超过 {limit} 上限，已停止派活。房间记录与附件不会自动删除，请先销毁不需要的旧房间；清理旧草稿请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup。',
+      return t('本机 .codiscuss 数据占用 {used}（草稿 {draft}，房间记录与附件 {local}），超过 {limit} 上限，已停止派活。房间记录与附件不会自动删除，请先销毁不需要的旧房间，也可在管理面板“存储”页清理临时文件。',
         { used: format_bytes(snapshot.total_bytes), draft: format_bytes(snapshot.draft_bytes), local: format_bytes(local_bytes), limit: format_bytes(home_limit) }, locale);
     }
-    return t('本机 .codiscuss 数据占用 {used}（草稿 {draft}），超过 {limit} 上限，已停止派活。清理旧草稿请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup，或在管理面板“存储”页清理临时文件；若由房间记录与附件占满，请销毁旧房间。',
+    return t('本机 .codiscuss 数据占用 {used}（草稿 {draft}），超过 {limit} 上限，已停止派活。请在管理面板“存储”页清理临时文件。若由房间记录与附件占满，请销毁不需要的旧房间。',
       { used: format_bytes(snapshot.total_bytes), draft: format_bytes(snapshot.draft_bytes), limit: format_bytes(home_limit) }, locale);
   }
   if (snapshot.uncertain_growth && !options.running) {
@@ -387,10 +387,10 @@ export function warn_reason(snapshot, options = {}) {
   if (!snapshot || Number(snapshot.total_bytes || 0) < home_warn) return '';
   const unreadable = Number(snapshot.unreadable || 0);
   if (unreadable > 0) {
-    return t('本机 .codiscuss 数据已占 {used}（另有 {unreadable} 处因权限无法读取未计入），接近 {limit} 上限（预警线 {warn}）。请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或在管理面板“存储”页清理临时文件。',
+    return t('本机 .codiscuss 数据已占 {used}（另有 {unreadable} 处因权限无法读取未计入），接近 {limit} 上限（预警线 {warn}）。请在管理面板“存储”页清理临时文件。',
       { used: format_bytes(snapshot.total_bytes), unreadable, limit: format_bytes(home_limit), warn: format_bytes(home_warn) }, locale);
   }
-  return t('本机 .codiscuss 数据已占 {used}，接近 {limit} 上限（预警线 {warn}）。请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或在管理面板“存储”页清理临时文件。',
+  return t('本机 .codiscuss 数据已占 {used}，接近 {limit} 上限（预警线 {warn}）。请在管理面板“存储”页清理临时文件。',
     { used: format_bytes(snapshot.total_bytes), limit: format_bytes(home_limit), warn: format_bytes(home_warn) }, locale);
 }
 

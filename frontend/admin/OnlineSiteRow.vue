@@ -24,6 +24,31 @@ const usage = computed(() => !state.value.hosting ? t('在外面用其他设备�
     : t('你在外面使用这台电脑，以及托管账号的登录和邀请外部专家，都经过它'));
 // The dialog open: "bind", "unbind" or "make".
 const dialog = ref(""), busy = ref(""), code = ref("");
+const rules = ref([]), new_origin = ref(""), subdomains = ref(false);
+async function show_origins() {
+  try {
+    rules.value = (await call('site/origins')).rules;
+    subdomains.value = false;
+    new_origin.value = '';
+    dialog.value = 'origins';
+  } catch (error) { notify('error', error.message); }
+}
+async function change_origin(action, origin) {
+  if (action === 'remove' && !window.confirm(t('移除 {origin}？失去所有规则覆盖的设备和配对码将被撤销。', { origin }))) return;
+  if (action === 'add' && !subdomains.value && rules.value.some(rule => rule.subdomains)) {
+    let canonical;
+    try { canonical = new URL(origin).origin; } catch { /* The API reports invalid addresses. */ }
+    if (rules.value.some(rule => rule.subdomains && rule.origin === canonical)
+        && !window.confirm(t('改为精确匹配后，失去规则覆盖的设备和配对码将被撤销。继续吗？'))) return;
+  }
+  busy.value = 'origins';
+  try {
+    rules.value = (await call('site/origins', { action, origin, subdomains: action === 'add' && subdomains.value })).rules;
+    subdomains.value = false;
+    new_origin.value = '';
+  } catch (error) { notify('error', error.message); }
+  finally { busy.value = ''; }
+}
 const maker = ref({ config: "", site: "", made: "" });
 
 /** Run one change to the binding, then show where it left things. */
@@ -76,6 +101,7 @@ const close = (open) => { if (!open) dialog.value = ""; };
     <div class="panel-side">
       <template v-if="site">
         <RelayRegion />
+        <button type="button" class="panel-button is-plain is-small" @click="show_origins">{{ t('其他访问地址') }}</button>
         <RelayReconnect :disabled="Boolean(busy)" />
         <button type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" :title="t('在部署线上网站的电脑上，为其他电脑生成绑定用的接入码')" @click="start_making"><UIcon name="i-lucide-ticket" />{{ t('生成接入码') }}</button>
         <button type="button" class="panel-button is-plain is-small is-danger" :disabled="Boolean(busy)" @click="dialog = 'unbind'">{{ t('解绑') }}</button>
@@ -84,6 +110,19 @@ const close = (open) => { if (!open) dialog.value = ""; };
     </div>
   </div>
 
+  <UModal :open="dialog === 'origins'" :title="t('其他访问地址')" :description="t('这个地址的服务器负责提供网页，能使用在此配对的设备权限。只添加你信任的地址。')" @update:open="close">
+    <template #body>
+      <form class="site-form" @submit.prevent="change_origin('add', new_origin)">
+        <div v-for="rule in rules" :key="rule.origin" class="panel-row"><span class="panel-main">{{ rule.origin }} <small v-if="rule.subdomains">{{ t('包含子域名') }}</small></span>
+          <button type="button" class="panel-button is-plain is-small" :disabled="Boolean(busy)" @click="change_origin('remove', rule.origin)">{{ t('移除') }}</button>
+        </div>
+        <label class="panel-field">{{ t('配对地址') }}<input v-model="new_origin" required type="url" class="panel-input" placeholder="https://relay.example.com"></label>
+        <label><input v-model="subdomains" type="checkbox"> {{ t('包含子域名') }}</label>
+        <small v-if="subdomains">{{ t('该域名下任何子站被他人控制，都可能导致在那里配对的设备权限被使用。每个子域名仍需单独配对。') }}</small>
+        <div class="panel-form-foot"><button type="submit" class="panel-button is-primary" :disabled="!new_origin.trim() || Boolean(busy)">{{ t('添加') }}</button></div>
+      </form>
+    </template>
+  </UModal>
   <UModal :open="dialog === 'bind'" :title="t('绑定自建中转')" :description="t('填写接入码，或在部署电脑上填写线上网站地址（如 https://xxx.pages.dev）')" @update:open="close">
     <template #body>
       <form class="site-form" @submit.prevent="change('connect', { site: code.trim() }, t('已绑定自建中转'))">

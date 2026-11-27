@@ -62,7 +62,7 @@ test('only a pong on the current socket confirms the relay; HTTP successes canno
     close() { this.readyState = 3; queueMicrotask(() => this.dispatchEvent(new Event('close'))); }
   };
   context.mock.method(globalThis, 'fetch', async () => Response.json({ commands: [] }));
-  context.mock.timers.enable({ apis: ['setInterval'] });
+  context.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.now() });
   const channels = start_relay_channels(data, { signal: stop.signal, health });
   context.after(async () => { stop.abort(); await channels.done(); globalThis.WebSocket = original; });
   const status = () => { health.flush(); return read_relay_health(data, bound, process.pid); };
@@ -71,7 +71,8 @@ test('only a pong on the current socket confirms the relay; HTTP successes canno
   context.mock.timers.tick(15_000);
   sockets[0].dispatchEvent(new MessageEvent('message', { data: 'pong' }));
   assert.equal(status().state, 'connected');
-  context.mock.timers.tick(15_000);
+  for (let index = 0; index < 4; index++) context.mock.timers.tick(15_000);
+  assert.equal(sockets[0].readyState, 1, 'one missed pong is not a stalled connection');
   context.mock.timers.tick(15_000);
   assert.equal(status().last_failure.kind, 'heartbeat');
   assert.equal(status().state, 'reconnecting');
@@ -99,6 +100,68 @@ test('only a pong on the current socket confirms the relay; HTTP successes canno
   assert.equal(status().state, 'connected');
   assert.equal(status().retries, 0);
   assert.equal(status().last_failure.kind, 'heartbeat');
+});
+
+test('relay requires pong despite inbound traffic and tolerates delayed timers and draining buffers', async context => {
+  for (const scenario of ['request', 'entry', 'first-pong', 'sleep', 'draining', 'stuck-buffer']) {
+    await context.test(scenario, async context => {
+      const { data } = fixture(), site = 'https://heartbeat.example';
+      writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: { [site]: { id: 'test', private_key: {}, token: 'test' } } }));
+      const sockets = [], stop = new AbortController();
+      const original = globalThis.WebSocket;
+      globalThis.WebSocket = class extends EventTarget {
+        static OPEN = 1;
+        readyState = 1;
+        bufferedAmount = 0;
+        frames = [];
+        constructor() { super(); sockets.push(this); }
+        send(frame) { this.frames.push(frame); }
+        close() { this.readyState = 3; }
+      };
+      context.mock.method(globalThis, 'fetch', async () => Response.json({}));
+      let now = Date.now();
+      context.mock.method(Date, 'now', () => now);
+      context.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+      const channels = start_relay_channels(data, { signal: stop.signal });
+      context.after(async () => { stop.abort(); await channels.done(); globalThis.WebSocket = original; });
+      const socket = sockets[0];
+      socket.dispatchEvent(new Event('open'));
+      const tick = () => { now += 15_000; context.mock.timers.tick(15_000); };
+      if (scenario === 'sleep') {
+        now += 600_000;
+        context.mock.timers.tick(180_000);
+        assert.equal(socket.readyState, 1, 'neither overdue heartbeat nor watchdog may disconnect on wake');
+        socket.dispatchEvent(new MessageEvent('message', { data: 'pong' }));
+        tick();
+        assert.equal(socket.readyState, 1);
+      } else if (scenario === 'request' || scenario === 'entry') {
+        for (let index = 0; index < 4; index++) {
+          socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: scenario }) }));
+          tick();
+          assert.equal(socket.readyState, 1, 'short pong loss is tolerated');
+        }
+        socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: scenario }) }));
+        tick();
+        assert.equal(socket.readyState, 3, 'business frames cannot hide a stalled uplink after five unanswered probes');
+      } else {
+        if (scenario !== 'first-pong') socket.bufferedAmount = 20 * 1024 * 1024;
+        for (let index = 0; index < (scenario === 'first-pong' ? 4 : 16); index++) {
+          if (scenario === 'draining') socket.bufferedAmount -= 512 * 1024;
+          tick();
+          if (scenario !== 'stuck-buffer') assert.equal(socket.readyState, 1);
+        }
+        if (scenario === 'first-pong') tick();
+        assert.equal(socket.readyState, scenario === 'draining' ? 1 : 3);
+        if (scenario !== 'first-pong') assert.equal(socket.frames.filter(frame => frame === 'ping').length, 1, 'do not pile pings behind a blocked response');
+        if (scenario === 'first-pong') {
+          await new Promise(resolve => setImmediate(resolve));
+          now += 4000; context.mock.timers.tick(4000);
+          await new Promise(resolve => setImmediate(resolve));
+          assert.equal(sockets.length, 2, 'a connection that never answered its first ping is replaced');
+        }
+      }
+    });
+  }
 });
 
 test('relay retry caps the wait at 30 seconds and sends a heartbeat when the recovered socket opens', async context => {
@@ -797,6 +860,39 @@ test('admin storage accounts for members and separate speech models and cleans o
   assert.deepEqual(relayed_command(config.site, 'storage-clean', { room_key: room.key }).input, { room_key: room.key });
 });
 
+test('storage analyze uses the same guarded panel route and asks its own local steward for inventory only', async t => {
+  const { data, ops } = fixture();
+  const requests = [];
+  let allowed = true;
+  const website = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const fragment of req) body += fragment;
+    requests.push({ url: req.url, local: req.headers['x-codiscuss-local'], body: JSON.parse(body) });
+    res.writeHead(allowed ? 200 : 403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(allowed ? { room_id: 'steward-test', message_id: requests.length } : { error: 'skill not allowed' }));
+  });
+  await new Promise(resolve => website.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => website.close(resolve)));
+  writeFileSync(join(data, 'local-settings.json'), JSON.stringify({ port: website.address().port }));
+  const { port, request } = await serve(data, ops);
+  assert.equal((await request('/api/storage/steward', { body: {} })).status, 401);
+  assert.equal(requests.length, 0);
+  const cookie = (await request('/enter?key=owner-key')).headers.get('set-cookie').split(';')[0];
+  const browser = await request('/api/storage/steward', { cookie, body: { skill: 'ignored' } });
+  assert.deepEqual(await browser.json(), { room_id: 'steward-test', message_id: 1 });
+  writeFileSync(join(data, 'admin-panel.json'), JSON.stringify({ port, key: KEY, pid: process.pid }));
+  assert.deepEqual(await admin_cli(['storage', 'analyze', '--data', data], { print() {} }), { room_id: 'steward-test', message_id: 2 });
+  assert.deepEqual(requests[0], requests[1]);
+  assert.equal(requests[0].url, '/api/local/steward-request');
+  assert.equal(requests[0].local, '1');
+  assert.equal(requests[0].body.skill, 'codiscuss-draft-cleanup');
+  assert.match(requests[0].body.context, /不要删除任何文件|Do not delete any files/);
+  allowed = false;
+  const refused = await request('/api/storage/steward', { cookie, body: {} });
+  assert.equal(refused.status, 403);
+  assert.equal((await refused.json()).error, 'skill not allowed');
+});
+
 test('the admin command line works the panel with the owner key only, and does what the panel does', async () => {
   const { data, ops } = fixture();
   const { port } = await serve(data, ops);
@@ -810,6 +906,14 @@ test('the admin command line works the panel with the owner key only, and does w
   assert.deepEqual(await run(['account', 'migration-backups', 'demo']), []);
   await assert.rejects(run(['account', 'release-backup', 'demo', 'unknown', 'drafts']), /confirm/);
   assert.deepEqual(await run(['site', 'status']), { local: null, online: null });
+  const site = 'https://site.example', proxy = 'https://proxy.example';
+  writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: { [site]: { id: 'machine', private_key: {} } } }));
+  assert.deepEqual((await run(['site', 'origins'])).origins, [site]);
+  assert.deepEqual((await run(['site', 'origins', 'add', proxy])).origins, [site, proxy]);
+  assert.deepEqual((await run(['site', 'origins', 'list'])).origins, [site, proxy]);
+  await run(['site', 'origins', 'add', proxy, '--subdomains']);
+  assert.deepEqual((await run(['site', 'origins', 'list'])).rules, [{ origin: proxy, subdomains: true }]);
+  assert.deepEqual((await run(['site', 'origins', 'remove', proxy])).origins, [site]);
   const created = await run(['key', 'add', 'demo', '--base-url', 'https://api.deepseek.com/v1', '--key', 'sk-secret-5678']);
   assert.ok(created);
   const keys = await run(['key', 'list', 'demo']);

@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS rooms (
 CREATE TABLE IF NOT EXISTS room_directory (
     room_id TEXT PRIMARY KEY REFERENCES rooms(id),
     position INTEGER NOT NULL DEFAULT 0,
-    archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1))
+    archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
+    system_kind TEXT NOT NULL DEFAULT ''
 );
 INSERT OR IGNORE INTO room_directory (room_id,position)
     SELECT id,ROW_NUMBER() OVER (ORDER BY created_at,id) FROM rooms;
@@ -80,6 +81,7 @@ CREATE TABLE IF NOT EXISTS attachments (
     thumbnail_type TEXT,
     -- When the owner cleared the original bytes to free space (the record and thumbnail stay); NULL while kept.
     cleared_at TEXT,
+    storage TEXT, object_name TEXT, stored_at TEXT,
     UNIQUE(room_id, submission_id)
 );
 CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id, position);
@@ -358,6 +360,34 @@ CREATE TABLE IF NOT EXISTS member_executions (
     effort TEXT NOT NULL DEFAULT '',
     UNIQUE(room_id,client_id)
 );
+-- Dispatch review facts kept separately from execution and message rows.
+CREATE TABLE IF NOT EXISTS host_execution_versions (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    package_version TEXT NOT NULL,
+    prompt_hash TEXT NOT NULL,
+    skill_hash TEXT
+);
+CREATE TABLE IF NOT EXISTS dispatch_feedback (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    rating TEXT NOT NULL CHECK(rating IN ('good','bad')),
+    should_be TEXT NOT NULL,
+    note TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dispatch_feedback_cases (
+    message_id INTEGER PRIMARY KEY,
+    room_id TEXT NOT NULL,
+    snapshot TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS dispatch_feedback_cases_room ON dispatch_feedback_cases(room_id,message_id);
+CREATE TABLE IF NOT EXISTS dispatch_withdrawals (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    legacy INTEGER NOT NULL DEFAULT 0,
+    redirect_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS dispatch_withdrawn_requests (
+    request_id INTEGER PRIMARY KEY REFERENCES member_requests(id) ON DELETE CASCADE
+);
 -- What the owner wrote about each member (strengths, division of work), by name so it survives leaving and rejoining.
 CREATE TABLE IF NOT EXISTS member_descriptions (
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -466,6 +496,7 @@ CREATE INDEX IF NOT EXISTS member_requests_open ON member_requests(member_id,sta
 CREATE INDEX IF NOT EXISTS member_requests_execution ON member_requests(execution_id);
 CREATE INDEX IF NOT EXISTS member_requests_answer ON member_requests(answer_id);
 CREATE INDEX IF NOT EXISTS member_requests_room ON member_requests(room_id);
+CREATE INDEX IF NOT EXISTS member_requests_room_chain ON member_requests(room_id,chain_id);
 CREATE INDEX IF NOT EXISTS member_requests_room_status ON member_requests(room_id,status);
 CREATE INDEX IF NOT EXISTS member_requests_batch ON member_requests(batch_id,status);
 -- Where a request's cards sit on the page: the room's latest message when the request was made. The page shows every
@@ -610,6 +641,35 @@ CREATE TABLE IF NOT EXISTS member_capabilities (
     rewind TEXT NOT NULL CHECK(rewind IN ('cut','fresh','kept')),
     image_model TEXT NOT NULL DEFAULT ''
 );
+-- What a runner member's session context held after its latest reported execution (tokens, and the model's window, 0
+-- when unknown), and which account's quota it draws on (`account_quotas`). Read from the software after a turn; not backed up.
+CREATE TABLE IF NOT EXISTS member_usage (
+    member_id INTEGER PRIMARY KEY REFERENCES room_members(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL,
+    execution_id INTEGER NOT NULL DEFAULT 0,
+    account TEXT NOT NULL DEFAULT '',
+    context_used INTEGER NOT NULL DEFAULT 0,
+    context_window INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
+-- The tokens one execution's model calls took in all, as the runner's adapter read them after the turn: input not read
+-- from cache, cache reads, cache writes and output. Shown on its card with the cache hit rate; not backed up.
+CREATE TABLE IF NOT EXISTS execution_usage (
+    execution_id INTEGER PRIMARY KEY REFERENCES member_executions(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL,
+    member_id INTEGER NOT NULL,
+    input INTEGER NOT NULL DEFAULT 0,
+    cache_read INTEGER NOT NULL DEFAULT 0,
+    cache_write INTEGER NOT NULL DEFAULT 0,
+    output INTEGER NOT NULL DEFAULT 0
+);
+-- The latest usage limits (5-hour, 7-day and other windows) or prepaid balance one account showed, shared by every room on
+-- this site: a software's sign-in (`Claude`, `Codex`, ...) or a model API key reference (`api:<name>`). `quota` is JSON.
+CREATE TABLE IF NOT EXISTS account_quotas (
+    account TEXT PRIMARY KEY,
+    quota TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 -- What a member submitted for an execution the user had already voided. Refused as an answer, so it never joins the
 -- transcript or AI reads; kept so the page can show the late work folded, and so a member the runner could not stop
 -- is known to have finished that turn. One per execution; not backed up, like executions.
@@ -622,7 +682,8 @@ CREATE TABLE IF NOT EXISTS late_answers (
 -- Why a request was cancelled; a side table so older databases need no column change. Requests cancelled before it existed have no row.
 CREATE TABLE IF NOT EXISTS request_cancel_reasons (
     request_id INTEGER PRIMARY KEY REFERENCES member_requests(id) ON DELETE CASCADE,
-    reason TEXT NOT NULL CHECK(reason IN ('user_stop','member_away','member_removed','rerouted','no_reply','archived'))
+    reason TEXT NOT NULL CHECK(reason IN ('user_stop','member_away','member_removed','rerouted','no_reply','archived',
+                                         'guest_disconnected','guest_withdrawn'))
 );
 -- External members (backend/external_members.py): a room_members row with access='external' runs on another computer and
 -- reaches this room only through the runner's gateway. Its grant, expiry and quota live here; `token_hash` repeats the
@@ -2094,3 +2155,31 @@ CREATE TABLE IF NOT EXISTS room_sites (
 );
 CREATE INDEX IF NOT EXISTS room_sites_room ON room_sites(room_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS room_sites_status ON room_sites(status, expires_at);
+
+CREATE TABLE IF NOT EXISTS room_guest_visits (
+    invite_id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    guest_id TEXT UNIQUE,
+    key_id TEXT,
+    token_hash TEXT UNIQUE,
+    label TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    private_chat INTEGER NOT NULL,
+    requested_mode TEXT NOT NULL,
+    duration_seconds INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    invite_expires_at INTEGER NOT NULL,
+    joined_at INTEGER,
+    expires_at INTEGER,
+    ended_at INTEGER,
+    reason TEXT,
+    stop_for_admission INTEGER NOT NULL DEFAULT 0,
+    revision INTEGER NOT NULL DEFAULT 1
+);
+CREATE UNIQUE INDEX IF NOT EXISTS room_guest_current ON room_guest_visits(room_id) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS room_guest_history ON room_guest_visits(room_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS guest_message_sources (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    guest_id TEXT NOT NULL REFERENCES room_guest_visits(guest_id) ON DELETE CASCADE,
+    mentions TEXT NOT NULL
+);

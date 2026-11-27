@@ -1,3 +1,4 @@
+import policy from './attachment_policy.json' with { type: 'json' };
 /** The relay Durable Object bound by the Pages website; it lets devices reach the paired computer's rooms. */
 /** How long a device's request waits for the computer before it is reported as unconfirmed; local operations that run longer ask for more. */
 const RELAY_WAIT_MS = 9000;
@@ -45,7 +46,7 @@ export class MachineRelay {
     }
     if (request.method === "POST" && role === "request") return Response.json(await this.relay(await request.json()));
     if (request.method === "POST" && role === "entry") return this.entry(request);
-    if (request.method === "GET" && role === "entry-status") return Response.json({ online: this.machine() !== null });
+    if (request.method === "GET" && role === "entry-status") return Response.json({ online: this.machine() !== null, limit_mib: this.machine()?.deserializeAttachment()?.limit_mib ?? policy.default_mib });
     if (request.method === "POST" && role === "relocate") {
       for (const id of this.pending.keys()) this.settle(id, { id, status: "offline" });
       for (const id of this.entries.keys()) this.entry_finish(id, 503);
@@ -81,14 +82,14 @@ export class MachineRelay {
   }
 
   /** Hand one request to the computer and wait for its answer; the outcome is unconfirmed when it does not come in time. */
-  relay({ id, envelope, wait }) {
+  relay({ id, envelope, wait, guest }) {
     const machine = this.machine();
     if (!machine) return { id, status: "offline" };
     if (this.pending.has(id)) return { id, status: "duplicate" };
     return new Promise(resolve => {
       const limit = Number.isInteger(wait) ? Math.min(Math.max(wait, 1000), RELAY_MAX_WAIT_MS) : RELAY_WAIT_MS;
       const timer = setTimeout(() => this.settle(id, { id, status: "unknown" }), limit);
-      this.pending.set(id, { resolve, timer, started: performance.now() });
+      this.pending.set(id, { resolve, timer, guest, started: performance.now() });
       try { machine.send(JSON.stringify({ type: "request", id, envelope })); }
       catch { this.settle(id, { id, status: "offline" }); }
     });
@@ -107,21 +108,43 @@ export class MachineRelay {
       { status: 503, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", Vary: "Accept-Language" } });
     let meta;
     try { meta = JSON.parse(decodeURIComponent(request.headers.get("X-Entry-Request") || "")); } catch { return new Response(null, { status: 400 }); }
-    const body = request.body ? new Uint8Array(await request.arrayBuffer()) : new Uint8Array(0);
+    const limit = machine.deserializeAttachment()?.limit_mib ?? policy.default_mib;
+    const maximum = (limit + policy.entry_overhead_mib) * 1024 * 1024;
     const id = crypto.randomUUID();
     const { readable, writable } = new TransformStream();
     return new Promise(resolve => {
-      const timer = setTimeout(() => this.entry_finish(id, 504), ENTRY_HEAD_WAIT_MS);
-      this.entries.set(id, { resolve, readable, writer: writable.getWriter(), timer, started: false });
-      try {
-        const parts = Math.max(1, Math.ceil(body.length / ENTRY_PART_BYTES));
-        for (let index = 0; index < parts; index += 1) {
-          const part = to_base64(body.subarray(index * ENTRY_PART_BYTES, (index + 1) * ENTRY_PART_BYTES));
-          machine.send(JSON.stringify(index === 0 ? { type: "entry", id, method: meta.method, path: meta.path, headers: meta.headers, body: part, more: parts > 1 }
-            : { type: "entry-body", id, body: part, more: index < parts - 1 }));
-        }
-      } catch { this.entry_finish(id, 503); }
+      const timeout = () => this.entry_cancel(id, 504);
+      const timer = setTimeout(timeout, ENTRY_HEAD_WAIT_MS);
+      this.entries.set(id, { resolve, readable, writer: writable.getWriter(), timer, timeout, started: false });
+      this.send_entry_body(machine, id, meta, request.body, maximum).catch(() => this.entry_cancel(id, 503));
     });
+  }
+
+  /** Forward bounded frames without buffering the whole upload in the Durable Object. */
+  async send_entry_body(machine, id, meta, stream, maximum) {
+    let first = true, size = 0;
+    const send = (bytes, more) => {
+      const frame = first ? { type: "entry", id, ...meta } : { type: "entry-body", id };
+      machine.send(JSON.stringify({ ...frame, body: to_base64(bytes), more }));
+      first = false;
+    };
+    if (stream) {
+      for await (const chunk of stream) {
+        const pending = this.entries.get(id);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        pending.timer = setTimeout(pending.timeout, ENTRY_HEAD_WAIT_MS);
+        size += chunk.length;
+        if (size > maximum) {
+          this.entry_finish(id, 413);
+          machine.send(JSON.stringify({ type: "entry-cancel", id }));
+          return;
+        }
+        for (let offset = 0; offset < chunk.length; offset += ENTRY_PART_BYTES)
+          send(chunk.subarray(offset, offset + ENTRY_PART_BYTES), true);
+      }
+    }
+    if (this.entries.has(id)) send(new Uint8Array(), false);
   }
 
   /** The computer's answer to an entry request: its status and headers, parts of its body, its end. */
@@ -153,9 +176,9 @@ export class MachineRelay {
     else entry.resolve(new Response(null, { status: status ?? 502 }));
   }
 
-  entry_cancel(id) {
+  entry_cancel(id, status) {
     if (!this.entries.has(id)) return;
-    this.entry_finish(id);
+    this.entry_finish(id, status);
     try { this.machine()?.send(JSON.stringify({ type: "entry-cancel", id })); } catch { /* The computer went away too. */ }
   }
 
@@ -165,7 +188,7 @@ export class MachineRelay {
     if (!waiting) return;
     clearTimeout(waiting.timer);
     this.pending.delete(id);
-    waiting.resolve(result);
+    waiting.resolve(waiting.guest && waiting.guest.expires_at <= Date.now() ? { id, status: "revoked", reason: "expired" } : result);
   }
 
   /** Computers send answers and change notices; devices only keep their socket open. */
@@ -173,6 +196,11 @@ export class MachineRelay {
     if (socket.deserializeAttachment()?.role !== "machine" || typeof message !== "string") return;
     let frame;
     try { frame = JSON.parse(message); } catch { return; }
+    if (frame.type === "attachment-policy" && Number.isInteger(frame.limit_mib)
+        && frame.limit_mib >= policy.min_mib && frame.limit_mib <= policy.max_mib) {
+      socket.serializeAttachment({ ...socket.deserializeAttachment(), limit_mib: frame.limit_mib });
+      return;
+    }
     if (typeof frame.type === "string" && frame.type.startsWith("entry-") && typeof frame.id === "string") this.entry_frame(frame);
     else if (frame.type === "response" && typeof frame.id === "string") {
       const waiting = this.pending.get(frame.id);
@@ -200,6 +228,14 @@ export class MachineRelay {
    */
   devices(list) {
     const kept = new Map((Array.isArray(list) ? list : []).map(item => [item?.id, Number(item?.expires_at) || 0]));
+    const guests = new Map((list || []).filter(item => item.kind === "guest").map(item => [item.id, item.expires_at]));
+    for (const [id, pending] of this.pending) {
+      if (!pending.guest) continue;
+      const expiry = guests.get(pending.guest.id);
+      if (!(expiry > Date.now())) this.settle(id, { id, status: "revoked", reason: "disconnected" });
+      else pending.guest.expires_at = expiry;
+    }
+    for (const id of guests.keys()) kept.delete(id);
     let closed = 0;
     for (const socket of this.ctx.getWebSockets("device")) {
       const attachment = socket.deserializeAttachment() || {};

@@ -156,12 +156,18 @@ function admin_avatar(value) {
  * (`kind: 'external'`, AIs on other computers invited into one room): they count only where `external` is set, which
  * is the relayed POST alone, so everywhere else such a signer is treated as unpaired.
  */
-async function device_identity(database, credential, method, path, { renewing = false, external = false } = {}) {
+async function device_identity(database, credential, method, path, { renewing = false, external = false, guest_point } = {}) {
   const [machine_id, device_id, time, signature] = String(credential || "").split(".");
   if (!/^[0-9a-f]{32}$/.test(machine_id || "") || !/^[0-9a-f]{32}$/.test(device_id || "") || !/^\d{10}$/.test(time || "") || !signature) return null;
   if (Math.abs(now_seconds() - Number(time)) > DEVICE_CLOCK_SECONDS) return null;
-  const row = await database.prepare("SELECT d.body, d.signature, s.sign_key FROM machine_devices d JOIN machine_sign_keys s ON s.machine_id=d.machine_id WHERE d.machine_id=?")
-    .bind(machine_id).first();
+  const query_started = performance.now();
+  const lookup = await database.prepare(`SELECT d.body, d.signature, s.sign_key,
+    EXISTS(SELECT 1 FROM local_machines WHERE id=d.machine_id) AS connected,
+    EXISTS(SELECT 1 FROM machine_keys WHERE machine_id=d.machine_id) AS keyed
+    FROM machine_devices d JOIN machine_sign_keys s ON s.machine_id=d.machine_id WHERE d.machine_id=?`)
+    .bind(machine_id).all();
+  const d1_ms = Math.round(performance.now() - query_started);
+  const row = lookup.results[0];
   if (!row) return null;
   const algorithm = { name: "ECDSA", namedCurve: "P-256" }, hash = { name: "ECDSA", hash: "SHA-256" };
   let expires_at, kind, region;
@@ -171,14 +177,28 @@ async function device_identity(database, credential, method, path, { renewing = 
     const manifest = JSON.parse(row.body);
     region = valid_region(manifest.relay_region);
     const device = manifest.devices.find(item => item.id === device_id);
-    if (!device || (device.kind === "external" && !external)) return null;
-    if (device.expires_at <= Date.now() && !(renewing && device.kind !== "external" && device.renew_until > Date.now())) return null;
+    // Only the holder of a previously used guest key may distinguish a removed key from an invalid signature.
+    if (!device && guest_point && external) {
+      const [x, y] = guest_point.split(".");
+      if (!/^[A-Za-z0-9_-]{43}$/.test(x) || !/^[A-Za-z0-9_-]{43}$/.test(y)) return null;
+      const point = Uint8Array.from([4, ...b64url_bytes(x), ...b64url_bytes(y)]);
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", point));
+      if (Array.from(digest.slice(0, 16), byte => byte.toString(16).padStart(2, "0")).join("") !== device_id) return null;
+      const key = await crypto.subtle.importKey("jwk", { kty: "EC", crv: "P-256", x, y }, algorithm, false, ["verify"]);
+      if (await crypto.subtle.verify(hash, key, b64url_bytes(signature), new TextEncoder().encode(`${method}\n${path}\n${time}`))) return { machine_id, kind: "revoked" };
+      return null;
+    }
+    if (!device || !Number.isFinite(device.expires_at)) return null;
+    const restricted = ["guest", "external"].includes(device.kind);
+    if (restricted && !external) return null;
+    if (device.expires_at <= Date.now() && !(renewing && !restricted && device.renew_until > Date.now())) return null;
     const key = await crypto.subtle.importKey("jwk", { kty: "EC", crv: "P-256", x: device.x, y: device.y }, algorithm, false, ["verify"]);
     if (!await crypto.subtle.verify(hash, key, b64url_bytes(signature), new TextEncoder().encode(`${method}\n${path}\n${time}`))) return null;
     expires_at = device.expires_at;
-    kind = device.kind === "external" ? "external" : "device";
+    kind = restricted ? device.kind : "device";
   } catch { return null; }
-  return { machine_id, device_id, expires_at, kind, region };
+  return { machine_id, device_id, expires_at, kind, region, connected: row.connected, keyed: row.keyed, d1_ms,
+    primary_colo: lookup.meta?.served_by_primary === true ? lookup.meta.served_by_colo : undefined };
 }
 
 /** Require a paired device's signed request (`X-CoDiscuss-Device`). */
@@ -424,7 +444,7 @@ async function machine_sync(database, machine_id, token, payload, now, relay = n
         } catch { /* The computer also reconnects when its local setting changes. */ }
       }
       await relay_in_region(relay, machine_id, region).fetch("https://relay.internal/", { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Role": "devices" },
-        body: JSON.stringify({ devices: list.devices.filter(item => item.kind !== "external").map(item => ({ id: item.id, expires_at: item.expires_at })) }) }).catch(() => {});
+        body: JSON.stringify({ devices: list.devices.filter(item => item.kind !== "external").map(item => ({ id: item.id, kind: item.kind, expires_at: item.expires_at })) }) }).catch(() => {});
     }
   }
   // Unchanged heartbeats write nothing until seen_at is due for a refresh.
@@ -525,7 +545,7 @@ async function handle_relay(env, request, machine_id) {
       // A device signs the socket with its own key, as it signs requests; subprotocols carry it, never the URL.
       identity = await device_identity(database, device?.slice(2), "GET", new URL(request.url).pathname);
       if (!identity || identity.machine_id !== machine_id) throw new HttpError(401, "这台设备没有与电脑配对，或配对已失效：请在电脑前扫码配对");
-      await require_paired_machine(database, machine_id);
+      check_machine_binding(identity);
       role = "device";
     }
     const forwarded = new Request(request);
@@ -539,22 +559,36 @@ async function handle_relay(env, request, machine_id) {
   if (request.method !== "POST") throw new HttpError(404, "地址不存在");
   // An expired device that may still renew reaches the computer one request at a time; the computer lets only renewal through.
   // An external member listed by the computer reaches it this way only; the computer answers it with the external actions alone.
-  const identity = await require_device(database, request, { renewing: true, external: true });
+  const identity = await require_device(database, request, { renewing: true, external: true, guest_point: request.headers.get("X-CoDiscuss-Guest-Key") });
+  if (identity.kind === "revoked" && identity.machine_id === machine_id) return Response.json({ status: "revoked" }, { headers: { "Cache-Control": "no-store" } });
   if (identity.machine_id !== machine_id) throw new HttpError(403, "这台设备配对的是另一台电脑");
-  await require_paired_machine(database, machine_id);
-  return forward_relay(relay_in_region(env.RELAY, machine_id, identity.region), await read_payload(request), started, identity.kind === "device" ? request.cf?.colo || null : undefined);
+  check_machine_binding(identity);
+  const guest = identity.kind === "guest" ? { id: identity.device_id, expires_at: identity.expires_at } : undefined;
+  const answer = await forward_relay(relay_in_region(env.RELAY, machine_id, identity.region), await read_payload(request), started, identity.kind === "device" ? request.cf?.colo || null : undefined, guest, identity);
+  if (guest) {
+    const current = await device_identity(database, request.headers.get("X-CoDiscuss-Device"), "POST", new URL(request.url).pathname, { external: true });
+    if (current?.kind !== "guest") return Response.json({ status: "revoked", reason: guest.expires_at <= Date.now() ? "expired" : "disconnected" }, { headers: { "Cache-Control": "no-store" } });
+    answer.headers.set("Cache-Control", "no-store");
+  }
+  return answer;
 }
 
 /** Hand one sealed request to the computer's relay object and return its answer. */
-async function forward_relay(relay, { id, envelope, wait }, started, colo) {
+async function forward_relay(relay, { id, envelope, wait }, started, colo, guest, identity) {
   if (typeof id !== "string" || !/^[A-Za-z0-9_-]{16,80}$/.test(id)) throw new HttpError(400, "命令编号无效");
+  const rpc_started = performance.now();
   const answer = await relay.fetch("https://relay.internal/", { method: "POST", headers: { "Content-Type": "application/json", "X-Relay-Role": "request" },
-    body: JSON.stringify({ id, envelope: valid_envelope(envelope, true), ...(Number.isInteger(wait) ? { wait } : {}) }) });
+    body: JSON.stringify({ id, guest, envelope: valid_envelope(envelope, true), ...(Number.isInteger(wait) ? { wait } : {}) }) });
   const result = await answer.json();
   // Unsigned site observations are diagnostic only. Never use them for authorization or routing.
   if (started !== undefined) {
     result.worker_ms = Math.round(performance.now() - started);
-    if (colo !== undefined) result.device_colo = colo;
+    if (colo !== undefined) {
+      result.device_colo = colo;
+      result.d1_ms = identity.d1_ms;
+      result.primary_colo = identity.primary_colo;
+      result.rpc_ms = Math.round(performance.now() - rpc_started);
+    }
   }
   if (colo === undefined) {
     delete result.device_colo;
@@ -578,6 +612,11 @@ async function handle_pairing(env, request, machine_id) {
 }
 
 /** A paired computer that can already decrypt relayed commands. */
+function check_machine_binding(identity) {
+  if (!identity.connected) throw new HttpError(404, "这台电脑尚未连接网站");
+  if (!identity.keyed) throw new HttpError(409, "这台电脑的 codiscuss 版本过旧，请更新后重试");
+}
+
 async function require_paired_machine(database, machine_id) {
   if (!await database.prepare("SELECT 1 AS found FROM local_machines WHERE id=?").bind(machine_id).first()) throw new HttpError(404, "这台电脑尚未连接网站");
   if (!await database.prepare("SELECT 1 AS found FROM machine_keys WHERE machine_id=?").bind(machine_id).first()) throw new HttpError(409, "这台电脑的 codiscuss 版本过旧，请更新后重试");
@@ -603,10 +642,11 @@ async function handle_remote_launch_api(database, request, parts, setup_key, rel
   // A queued command's answer is sealed for the device that sent it, and its id is unguessable, so reading it needs no sign-in.
   if (parts.length === 5 && parts[3] === "commands" && method === "GET") return respond(await machine_command_status(database, parts[2], parts[4]));
   if (parts.length === 2 && method === "GET") {
-    const signed = request.headers.get("X-CoDiscuss-Device") ? await device_identity(database, request.headers.get("X-CoDiscuss-Device"), "GET", "/api/machines") : null;
-    // Hosted accounts' computers come after the owners' own, so a page that picks the first never lands on one.
-    const { results } = await database.prepare(`${MACHINE_SELECT} ORDER BY (p.parent_id IS NOT NULL), m.seen_at DESC, m.created_at DESC`).all();
-    return respond({ machines: results.map(row => machine_view(row, now, signed?.machine_id === row.id)) });
+    const signed = request.headers.get("X-CoDiscuss-Device") ? await device_identity(database, request.headers.get("X-CoDiscuss-Device"), "GET", "/api/machines", { renewing: true }) : null;
+    if (!signed && request.headers.has("X-CoDiscuss-Device")) throw new HttpError(401, "这台设备没有与电脑配对，或配对已失效：请在电脑前扫码配对");
+    if (!signed) return respond({ code: "client_update_required", error: "请更新 AI CoDiscuss 后使用完整邀请链接。 Please update AI CoDiscuss and use the full invitation link." }, 426);
+    const row = await database.prepare(`${MACHINE_SELECT} WHERE m.id=?`).bind(signed.machine_id).first();
+    return respond({ machines: row ? [machine_view(row, now, signed.expires_at > Date.now())] : [] });
   }
   if (parts.length === 2 && method === "POST") return respond(await pair_machine(database, await read_payload(request), now, setup_key));
   const identity = await require_device(database, request);
@@ -619,6 +659,11 @@ async function handle_remote_launch_api(database, request, parts, setup_key, rel
 
 async function handle_api(database, request, parts, setup_key = "", relay = null) {
   const route = parts.join("/");
+  if (request.method === "GET" && parts.length === 4 && parts[1] === "guest" && parts[3] === "key" && /^[0-9a-f]{32}$/.test(parts[2])) {
+    const row = await database.prepare("SELECT k.public_key,s.sign_key FROM machine_keys k JOIN machine_sign_keys s ON k.machine_id=s.machine_id WHERE k.machine_id=?").bind(parts[2]).first();
+    if (!row) throw new HttpError(404, "地址不存在");
+    return respond({ id: parts[2], public_key: JSON.parse(row.public_key), sign_key: JSON.parse(row.sign_key) });
+  }
   if (route === "api/health" && request.method === "GET") return respond({ ok: true });
   if (parts[1] === "admin") return handle_admin_api(database, request, parts, setup_key);
   if (parts[1] === "machines") return handle_remote_launch_api(database, request, parts, setup_key, relay);

@@ -18,6 +18,7 @@ export const HOST_ACTION_ITEMS = {
   order: 'pacing', discussion: 'pacing', goal: 'pacing', checkin: 'pacing',
   // `room-post` needs no item: messages reach the other room’s host within its existing permissions.
   'create-room': 'create_rooms',
+  // `guest-disconnect` needs no item: the host may always end an external user's visit (README §3.5).
 };
 
 const ITEM_LABELS = { execution: '处理执行问题', member_config: '调整成员配置', project_access: '改项目权限', roster: '管理成员名单',
@@ -51,6 +52,45 @@ export const without_host_item = (permissions, item) => ({ ...permissions, items
 export function host_permission_fields(permissions) {
   const next = normalize_host_permissions(permissions);
   return { host_permissions: next.items.length ? next : undefined, host_workflows: next.items.length ? true : undefined };
+}
+
+/**
+ * The room's protection while an external user (a browser guest) is in it, from the site's guest state
+ * (`GET /api/rooms/{room}/guest`, .dev/plans/临时外部用户/API.md §2): 'conservative' (every run of the room goes into the
+ * protected level, members that cannot are paused), 'trust' (members keep the owner's settings) or '' when no external
+ * user is in the room. Only an active visit counts; the site is the only source.
+ * @param {object} [state] The guest `State`.
+ * @returns {'' | 'conservative' | 'trust'}
+ */
+export function guest_protection(state) {
+  if (state?.phase !== 'active') return '';
+  return state.mode === 'conservative' || state.mode === 'trust' ? state.mode : '';
+}
+
+/**
+ * The guest `State` inside a site answer: API.md wraps answers as `{ok, data}` and writes answer `{state, ...}`, so a
+ * wrapped or bare State, or one under `state`, all give the State; anything else gives null. Read this way, a wrapped
+ * answer can never pass for "no external user".
+ */
+export function guest_state_of(result) {
+  const value = result?.ok === true && result.data !== undefined ? result.data : result;
+  const state = value?.phase === undefined && value?.state ? value.state : value;
+  return state && typeof state === 'object' && typeof state.phase === 'string' ? state : null;
+}
+
+/**
+ * Whether a host control is withheld while an external user is in the room, in either level and whatever the owner
+ * ticked; the ticks stay as stored and apply again once the external user leaves (.dev/plans/临时外部用户/PLAN.md §二).
+ * Kept: dispatching, stop, steer, retry, withdraw, speaking order, away, remove, and `guest-disconnect`.
+ * @param {string} action A `host-control` action.
+ * @param {object} [options] Its options: reads (`model --list`, `discussion` / `goal` without a start) stay allowed.
+ */
+export function guest_withheld(action, options = {}) {
+  if (['access', 'adapter', 'invite', 'back', 'room-post', 'create-room', 'workflow-adopt', 'workflow-promote'].includes(action)) return true;
+  if (action === 'model') return !options.list;
+  if (action === 'checkin') return !options.off;
+  if (action === 'discussion' || action === 'goal') return ['start', 'resume'].includes(options.do);
+  return false;
 }
 
 /** What the host is told when the owner has not granted the item an action needs. */

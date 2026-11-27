@@ -62,7 +62,7 @@ In `room trace`, `history` records come from the event log. `current` records sh
 
 ### Share-card cover tools
 
-In a room, ask `$share-card Make a share card for <room link> highlighting the finished product`. Omit the link for the current room. The agent collects the materials, makes the cover and attaches the PNG to its reply.
+Run `codiscuss steward ask share-card --room ROOM --note "Highlight the finished product"` and collect the cover and copy in the steward conversation.
 
 Used by room AI members or locally from the terminal to build custom share-card covers. The share panel accepts rendered images (PNG / JPG / WebP) and appends a unified QR code, domain, and expiry footer automatically. When invoked with a room task credential, `materials` is restricted to the credential's bound site and `render` enforces the member's directory permissions; manual terminal runs without a task credential use the local OS user's own file permissions.
 
@@ -70,6 +70,16 @@ Used by room AI members or locally from the terminal to build custom share-card 
 | --- | --- |
 | Read shareable-scope room collaboration metrics, concurrency curve, and material index (with truncation flags) | `codiscuss share-card materials [room-ID]` |
 | Render a local static HTML cover to high-DPI PNG (default 750 CSS px @2× via a sandboxed browser from trusted system install locations over a private process pipe) | `codiscuss share-card render cover.html --out cover.png` |
+
+### Platform steward
+
+- `codiscuss steward status` shows the [platform steward](steward.md) conversation, settings, and skill availability.
+- `codiscuss steward settings --help` lists options for software, model, effort, project access, working directory, and allowed skills.
+- `codiscuss steward ask share-card --room ROOM` requests a share card for a room. View the result in the steward conversation.
+- `codiscuss steward ask discuss-report --room ROOM --note "Include the specified messages and save to the specified local folder"` requests a report on an existing discussion.
+- `codiscuss steward ask codiscuss-draft-cleanup --note "Inspect drafts only; do not delete"` requests a local draft inventory. The service must still be able to dispatch steward tasks.
+- `codiscuss steward ask cloudflare-deploy --confirm` asks the platform steward to deploy or update your own Cloudflare online site. It still asks for approval before each write to Cloudflare.
+- `codiscuss steward history` lists old steward conversations archived after switching software; `codiscuss steward delete ROOM --confirm` deletes one of them.
 
 ### Backups, export, and import
 

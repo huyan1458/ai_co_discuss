@@ -585,15 +585,85 @@ function recover_turn(record) {
   return { status: 'completed', exact: true, text: ends[0].last_agent_message || '' };
 }
 
+function codex_limits(limits) {
+  const windows = [];
+  for (const item of [limits?.primary, limits?.secondary]) {
+    const percent = item?.used_percent ?? item?.usedPercent;
+    if (!Number.isFinite(percent)) continue;
+    const minutes = item.window_minutes ?? item.windowDurationMins;
+    const kind = minutes === 300 ? 'five_hour' : minutes === 10080 ? 'seven_day' : 'other';
+    windows.push({ kind, minutes, used: percent / 100, resets_at: item.resets_at ?? item.resetsAt });
+  }
+  return windows.length ? { windows } : null;
+}
+
+/** Difference between the cumulative counters immediately before and at the end of the identified turn. */
+function codex_turn(file, id, log_path) {
+  if (!log_path || !existsSync(log_path)) return null;
+  const marker = log_entries(log_path).find(entry => ['codiscuss.turn', 'codiscuss.entry'].includes(entry.type)
+    && entry.thread_id === id && entry.turn_id);
+  if (!marker?.turn_id) return null;
+  let latest = null, before = null, end = null, first = null, first_call = null, active = false;
+  for (const entry of log_entries(file)) {
+    if (entry.type !== 'event_msg') continue;
+    const event = entry.payload;
+    if (event?.type === 'task_started') {
+      if (active) break;
+      active = event.turn_id === marker.turn_id;
+      if (active) before = latest;
+    } else if (event?.type === 'token_count' && event.info?.total_token_usage) {
+      latest = event.info.total_token_usage;
+      if (active) {
+        if (!first) { first = latest; first_call = event.info.last_token_usage; }
+        end = latest;
+      }
+    } else if (active && ['task_complete', 'turn_aborted'].includes(event?.type)) break;
+  }
+  if (!end || (!before && !first_call)) return null;
+  // A fork can inherit counters without retaining the preceding token_count.
+  const delta = key => before ? (end[key] || 0) - (before[key] || 0)
+    : (end[key] || 0) - (first[key] || 0) + (first_call[key] || 0);
+  const cache_read = delta('cached_input_tokens');
+  const input = delta('input_tokens') - cache_read;
+  const output = delta('output_tokens');
+  return Math.min(input, cache_read, output) >= 0 ? { input, cache_read, cache_write: 0, output } : null;
+}
+
+/** Read the last model call from a rollout shared by the CLI and desktop app. */
+export function codex_usage(id, { env, home, log_path } = {}) {
+  const file = session_path(id, env, home);
+  const event = file && newest_record(file, 'token_count', entry =>
+    entry.type === 'event_msg' && entry.payload?.type === 'token_count' && entry.payload);
+  if (!event) return null;
+  return { context: { used: event.info?.last_token_usage?.input_tokens, window: event.info?.model_context_window },
+    account: codex_limits(event.rate_limits), turn: codex_turn(file, id, log_path) };
+}
+
+/** Ask the app-server for this account's current rate limits without starting a thread. */
+export function codex_quota(profile, { env = process.env, spawn_process = spawn } = {}) {
+  return query_catalog(profile, ['app-server', '--listen', 'stdio://'], (send, finish) => ({
+    start: () => send({ id: 0, method: 'initialize', params: { clientInfo: { name: 'codiscuss', version: '0.1.0' } } }),
+    line: line => {
+      const reply = json_line(line);
+      if (!reply || ![0, 1].includes(reply.id)) return;
+      if (reply.error) return finish(null, null);
+      if (reply.id === 1) return finish(null, codex_limits(reply.result?.rateLimits));
+      send({ method: 'initialized', params: {} });
+      send({ id: 1, method: 'account/rateLimits/read', params: {} });
+    },
+  }), { spawn: (exe, args, options) => spawn_process(exe || 'codex', args, { ...options, env }) }).catch(() => null);
+}
+
 /** Codex CLI's behaviour; its static facts are in profiles.mjs. */
 export const codex_cli = {
+  quota: codex_quota,
   recover_turn, failure_class,
   id: 'codex_cli', catalog_source: 'codex-app-server',
   deliver: (config, binding, task, spawn_process, user_home) => cli_delivery(codex_cli, config, binding, task, spawn_process, user_home),
   chat,
   invocation, lifecycle, exit_error, events,
   on_stderr: remember_writer_conflict,
-  session: { path: session_path, exists: session_exists, owns: (id, options) => session_exists(id, options) && !desktop_thread(id, options),
+  session: { usage: codex_usage, path: session_path, exists: session_exists, owns: (id, options) => session_exists(id, options) && !desktop_thread(id, options),
     branch, settings: session_settings, list: list_sessions, preview: preview_session, remove: remove_session, history: codex_history },
   models: { list: models, defaults },
   skills: codex_skills,

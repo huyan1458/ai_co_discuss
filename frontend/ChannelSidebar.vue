@@ -149,6 +149,9 @@ function row_icon(item) {
         <button type="button" class="channel-section-toggle" :aria-current="analytics_open ? 'page' : undefined" @click="emit('analytics')"><UIcon name="i-lucide-bar-chart-3" />{{ t("统计") }}</button>
       </div>
     </div>
+    <div v-if="can_view_analytics" class="channel-directory-heading channel-tools-heading" :class="{ 'is-current': !analytics_open && view.room?.system_kind === 'steward' }">
+      <button type="button" class="channel-section-toggle" :aria-current="!analytics_open && view.room?.system_kind === 'steward' ? 'page' : undefined" @click="bridge.open_steward()"><UIcon name="i-lucide-sparkles" />{{ t("平台主理人") }}</button>
+    </div>
   <footer class="channel-sidebar-footer">
     <button type="button" class="channel-self-button" :aria-label="t('账号与设置：{name}', { name: bridge.display_name(author) }) + (account_status ? t('，') + account_status : '')" @click="emit('settings')">
       <UAvatar :src="bridge.identities[author]?.icon" :text="bridge.identities[author]?.initials" :alt="bridge.display_name(author)" size="sm" class="channel-avatar" :class="bridge.identities[author]?.style" />

@@ -1081,7 +1081,10 @@ test('project and global workflow IDs are independent and project approvals expi
   assert.equal(listed.workflows[0].label, NOVEL.label);
   assert.deepEqual(readdirSync(join(cwd, '.codiscuss')), ['workflows']);
   const card = join(cwd, '.codiscuss', 'workflows', id, 'experts', 'writer.md');
+  // Editing a prompt keeps the approval; raising a card's access asks again.
   writeFileSync(card, readFileSync(card, 'utf8') + 'edited');
+  assert.equal(workflows_command(home, { ...local, action: 'get', id }).needs_trust, false);
+  writeFileSync(card, readFileSync(card, 'utf8').replace('project_access: write', 'project_access: full'));
   assert.equal(workflows_command(home, { ...local, action: 'get', id }).needs_trust, true);
   assert.throws(() => workflows_command(home, { ...local, action: 'move', id, target_scope: 'global' }), { code: 'workflow_untrusted' });
   workflows_command(home, { ...local, action: 'trust', id });

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { device_command, open_signed_request, pairing_passkey_challenge, pairing_proof, signed_device_list, start_pairing } from '../runner/device_auth.mjs';
+import { update_pairing_origins, device_command, open_signed_request, pairing_passkey_challenge, pairing_proof, signed_device_list, start_pairing } from '../runner/device_auth.mjs';
 import { guard_remote_request } from '../runner/remote_policy.mjs';
 import { verify_assertion, verify_registration } from '../runner/webauthn.mjs';
 import { software_device, software_passkey } from './passkey_authenticator.mjs';
@@ -31,6 +31,80 @@ async function paired_device(home) {
   assert.equal(answer.status, 200, answer.body.error);
   return Object.assign(device, { passkey });
 }
+
+test('an alternate HTTPS origin scopes registration, assertions and revocation', async t => {
+  const home = home_dir(t), origin = 'https://proxy.example:8443';
+  const device = await software_device(MACHINE), key = software_passkey('proxy.example');
+  const command = (action, payload) => device_command(home, { site: SITE, machine_id: MACHINE, device_id: device.id }, action, payload);
+  for (const invalid of ['http://proxy.example', origin + '/path', origin + '?x', origin + '#x', 'https://u@proxy.example']) {
+    assert.throws(() => update_pairing_origins(home, SITE, 'add', invalid));
+  }
+  assert.throws(() => start_pairing(home, { site: SITE, origin }));
+  const register = async (chosen, claimed) => {
+    const { code, url } = start_pairing(home, { site: SITE, origin: chosen });
+    assert.ok(url.startsWith(chosen + '/#pair='));
+    return command('device-pair', { ...pairing_request(code, device, key),
+      passkey: key.create(pairing_passkey_challenge(code, device.public_key), claimed) });
+  };
+  assert.equal((await register(SITE, origin)).status, 400);
+  assert.deepEqual(update_pairing_origins(home, SITE, 'add', 'https://PROXY.example:8443/').origins, [SITE, origin]);
+  const pair = await register(origin, origin);
+  assert.equal(pair.status, 200, pair.body.error);
+  const challenge = async () => (await command('passkey-challenge', { purpose: 'unlock' })).body;
+  const answer = (item, claimed) => command('device-unlock', { challenge_id: item.challenge_id, assertion: key.get(item.challenge, claimed) });
+  assert.equal((await answer(await challenge(), 'https://proxy.example')).status, 400);
+  const item = await challenge();
+  assert.equal(item.rp_id, 'proxy.example');
+  assert.equal((await answer(item, origin)).status, 200);
+  const pending = await challenge();
+  update_pairing_origins(home, SITE, 'remove', origin);
+  assert.equal((await answer(pending, origin)).status, 400);
+  assert.equal((await command('passkey-challenge', { purpose: 'unlock' })).status, 400);
+});
+
+test('suffix pairing uses the actual RP, respects ports and revokes only uncovered origins', async t => {
+  const home = home_dir(t), base = 'https://example.com', child = 'https://a.example.com', other = 'https://b.a.example.com:9443';
+  const rule = (action, origin, suffix = false) => update_pairing_origins(home, SITE, action, origin, suffix);
+  const invite = origin => start_pairing(home, { site: SITE, origin });
+  async function register(origin, existing = invite(origin)) {
+    const device = await software_device(MACHINE), key = software_passkey(new URL(origin).hostname);
+    const cmd = (action, payload) => device_command(home, { site: SITE, machine_id: MACHINE, device_id: device.id }, action, payload);
+    const pair = await cmd('device-pair', { ...pairing_request(existing.code, device, key),
+      passkey: key.create(pairing_passkey_challenge(existing.code, device.public_key), origin) });
+    return { pair, unlock: async () => {
+      const opts = await cmd('passkey-challenge', { purpose: 'unlock' });
+      if (opts.status !== 200) return opts.status;
+      assert.equal(opts.body.rp_id, new URL(origin).hostname);
+      return (await cmd('device-unlock', { challenge_id: opts.body.challenge_id, assertion: key.get(opts.body.challenge, origin) })).status;
+    } };
+  }
+  rule('add', base);
+  assert.throws(() => invite(child));
+  rule('add', base, true);
+  for (const denied of ['https://badexample.com', 'http://a.example.com']) assert.throws(() => invite(denied));
+  const root = await register(base), retained = await register(child), nested = await register(other);
+  for (const phone of [root, retained, nested]) {
+    assert.equal(phone.pair.status, 200);
+    assert.equal(await phone.unlock(), 200);
+  }
+  rule('add', child);
+  rule('remove', child);
+  assert.equal(await retained.unlock(), 200);
+  rule('add', child);
+  const retained_code = invite(child), revoked_code = invite(other);
+  rule('remove', base);
+  assert.equal(await root.unlock(), 400);
+  assert.equal(await nested.unlock(), 400);
+  assert.equal(await retained.unlock(), 200);
+  assert.equal((await register(child, retained_code)).pair.status, 200);
+  rule('add', base + ':443', true);
+  invite(child);
+  assert.throws(() => invite(other));
+  rule('add', base + ':9443', true);
+  assert.equal((await register(other, revoked_code)).pair.status, 400);
+  invite(other);
+  assert.throws(() => invite('https://b.example.com:9444'));
+});
 
 test('passkey checks accept a verified user and refuse wrong sites, challenges, missing verification and copied counters', async () => {
   const rp = { origin: SITE, rp_id: 'codiscuss.pages.dev' };

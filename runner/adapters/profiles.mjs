@@ -46,7 +46,9 @@
  *   software can be followed when it fires, so the host's comes into the room (`'window'`: only a delivery into its open
  *   window; absent: none). `tool_lockdown`: a task with `tool_lockdown: true` can be confined
  *   to the codiscuss subcommands, with no other local file access, no web and no MCP (see `lockdown_support`; not yet
- *   measured on real software, 2026-11-15).
+ *   measured on real software, 2026-11-15). The protected level used while an external user is in the room is the same
+ *   confinement plus reading the room's project directories (`task.lockdown_read_directories`); software without
+ *   `tool_lockdown` is paused there instead.
  * - `capabilities.system_prompt`: where the member's own prompt can go into the software's system prompt: `session`
  *   (set when the runner starts a new session and kept by it after: Claude Code's snapshot, a Codex thread's developer
  *   instructions, the first system message of a Pi session, which a changed prompt only follows as an addendum the model
@@ -139,7 +141,8 @@ export const ADAPTER_PROFILES = {
     resume_command: session_id => `claude --resume ${session_id}`,
     // Claude Code runs commands through bash on Windows too, where the npm shim works without .cmd.
     windows_command: 'codiscuss',
-    // Confined by --restricted --safe-mode --tools and dontAsk (claude_lockdown); a taken-over manual member keeps its own window.
+    // Confined by --restricted --tools, dontAsk and our PreToolUse hook, which alone stops its own read-only commands
+    // (claude_lockdown, 2.1.332 measured 2026-11-27); a taken-over manual member keeps its own window.
     capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, resume: true, images: true, capture: FINAL_REMARK, tool_lockdown: true, system_prompt: 'session',
       // Only the window's session log marks a fire; a `-p` process loses its schedules when it exits (2.1.326).
       schedule_reports: 'window' },
@@ -226,6 +229,18 @@ export function inherited_access(member, source) {
   if (!offered || rank(member.project_access) < 0 || limit < 0) return member.project_access;
   const reachable = offered.filter(level => rank(level) <= limit && rank(level) > rank(member.project_access));
   return reachable.sort((left, right) => rank(right) - rank(left))[0] || member.project_access;
+}
+
+/**
+ * Which account's usage limits a member draws on, so members and software options on one account show one reading:
+ * its platform's sign-in (the CLI and App of one platform share it), or for a model API the key reference it uses
+ * (`api:<api_key_ref>`, a name, never the key). '' when unknown.
+ */
+export function quota_account(profile) {
+  const facts = ADAPTER_PROFILES[profile?.adapter];
+  if (!facts) return '';
+  if (facts.kind === 'api') return profile.api_key_ref ? `api:${profile.api_key_ref}` : '';
+  return facts.platform;
 }
 
 /** The adapters serving one platform, in table order; a model API serves every platform. */

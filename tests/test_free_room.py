@@ -148,6 +148,37 @@ class SingleMemberTests(FreeRoomTests):
         shown = self.request(self.path)[1]["free"]["executions"][0]
         self.assertEqual((shown["model"], shown["effort"]), ("claude-sonnet-5-5", "high"))
 
+    def test_usage_reports_show_member_context_and_shared_account_quota(self):
+        """Only the owner reports; a member's context follows its execution, the account quota is shared by every room."""
+        self.say("写一段", to=["Claude"])
+        execution = self.reserve()[1]
+        url = f"{self.path}/executions/{execution['id']}"
+        quota = {"windows": [{"kind": "five_hour", "minutes": 300, "used": 0.3, "resets_at": 1795776600, "group": ""}]}
+        report = {"action": "usage", "account": "Claude", "context": {"used": 120000, "window": 200000}, "quota": quota}
+        self.assertEqual(self.request(url, report, self.member)[0], 403)
+        self.assertEqual(self.request(url, {**report, "quota": {"windows": [{"kind": "five_hour", "used": 2}]}}, self.owner)[0], 400)
+        self.assertEqual(self.request(url, report, self.owner)[0], 200)
+        free = self.request(self.path)[1]["free"]
+        member = next(item for item in free["members"] if item["name"] == "Claude")
+        self.assertEqual((member["usage"]["context_used"], member["usage"]["context_window"], member["usage"]["account"]),
+                         (120000, 200000, "Claude"))
+        self.assertEqual(free["quotas"]["Claude"]["windows"][0]["used"], 0.3)
+        turn = {"input": 100, "cache_read": 900, "cache_write": 0, "output": 50}
+        self.assertEqual(self.request(url, {"action": "usage", "account": "Claude", "turn": {**turn, "output": -1}}, self.owner)[0], 400)
+        self.assertEqual(self.request(url, {"action": "usage", "account": "Claude", "turn": turn}, self.owner)[0], 200)
+        free = self.request(self.path)[1]["free"]
+        self.assertEqual(next(item for item in free["executions"] if item["id"] == execution["id"])["usage"], turn)
+        self.assertEqual(next(item for item in free["members"] if item["name"] == "Claude")["usage"]["totals"], turn)
+        balance = {"windows": [], "balance": {"amount": "23.50", "currency": "CNY"}}
+        self.assertEqual(self.request(f"{self.path}/quotas", {"account": "api:deepseek", "quota": balance}, self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/quotas", {"account": "api:deepseek", "quota": balance})[0], 403)
+        # Balances are the owner's: a page that is not the manager's gets no list.
+        self.assertEqual(self.request("/api/rooms")[1]["quotas"], {})
+        member_id = next(item["id"] for item in free["members"] if item["name"] == "Claude")
+        self.assertEqual(self.request(f"{self.path}/members/{member_id}/capabilities", {"rewind": "cut", "account": "api:deepseek"}, self.owner)[0], 200)
+        free = self.request(self.path)[1]["free"]
+        self.assertEqual(free["quotas"]["api:deepseek"]["balance"]["amount"], "23.50")
+
     def test_message_reads_name_members_as_shown_and_count_what_remains(self):
         """`author` takes the display name as well as the ID; pages say how many matches still follow."""
         self.say("帮我看看")
@@ -2109,6 +2140,274 @@ class HostTests(HostRoomTests):
         self.assertEqual(status, 201, saved)
         return saved["message"]["id"]
 
+    def test_dispatch_records_keep_host_version_retry_history_and_withdrawal(self):
+        """Review the same dispatch before and after the member is retried and stopped."""
+        first = self.say("安排工作")[1]["message"]["id"]
+        host = self.reserve_for("Claude")[1]["id"]
+        version = {"package_version": "1.2.3", "prompt_hash": "aabbccddeeff", "skill_hash": "0123456789abcdef"}
+        self.assertEqual(self.request(f"{self.path}/executions/{host}",
+                                      {"action": "model", "host_version": version}, self.owner)[0], 200)
+        message_id = self.answer(host, "做任务\n分工理由：熟悉项目", to=["Codex"])[1]["message"]["id"]
+        failed = self.reserve_for("Codex")[1]["id"]
+        execution = f"{self.path}/executions/{failed}"
+        self.assertEqual(self.request(execution, {"action": "model", "model": "sol", "effort": "medium"}, self.owner)[0], 200)
+        self.assertEqual(self.request(execution, {"action": "usage", "account": "Codex", "turn": {"input": 42}}, self.owner)[0], 200)
+        self.assertEqual(self.request(execution, {"action": "fail", "reason": "断开"}, self.owner)[0], 200)
+        self.assertEqual(self.request(execution, {"action": "retry"}, self.owner)[0], 200)
+        retried = self.reserve_for("Codex")[1]["id"]
+        self.assertEqual(self.request(f"{self.path}/dispatches/{message_id}/withdraw", {}, self.owner)[0], 200)
+        self.assertEqual(self.request("/api/dispatches", token=self.member)[0], 403)
+        self.server.local_site = True
+        status, page = self.request(f"/api/dispatches?room={self.room['id']}&after={first}")
+        self.assertEqual(status, 200, page)
+        record, = page["records"]
+        self.assertEqual((record["message_id"], record["chain_id"], record["reason"]), (message_id, first, "分工理由：熟悉项目"))
+        self.assertEqual(record["host_version"], version)
+        self.assertTrue(record["withdrawn"])
+        self.assertEqual(record["invalidation_reasons"], ["host_withdraw", "failed"])
+        member, = record["members"]
+        self.assertEqual((member["member"], member["execution_id"], member["request_status"], member["cancel_reason"]),
+                         ("Codex", retried, "cancelled", "user_stop"))
+        old, new = member["attempts"]
+        self.assertEqual((old["status"], old["model"], old["effort"], old["usage"]["input"]), ("failed", "sol", "medium", 42))
+        self.assertTrue(old["retried"])
+        self.assertEqual(new["status"], "cancelled")
+        self.assertEqual(new["invalidation_reason"], "host_withdraw")
+        self.assertEqual(self.request(f"/api/dispatches?after={message_id}")[1]["records"], [])
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("DELETE FROM dispatch_withdrawals")
+            connection.execute("DELETE FROM dispatch_withdrawn_requests")
+            connection.execute("DELETE FROM site_preferences WHERE key='dispatch_withdrawals_v2'")
+            connection.execute("INSERT INTO dispatch_withdrawals(message_id,legacy) VALUES (?,1)", (first,))
+            connection.execute("""INSERT INTO room_events(room_id,at,kind,data) VALUES (?,?,'api.write',?)""",
+                               (self.room["id"], int(time.time() * 1000),
+                                json.dumps({"path": f"/dispatches/{first}/withdraw", "status": 403})))
+        init_database(self.database, seed=False)
+        migrated, = self.request(f"/api/dispatches?after={first}")[1]["records"]
+        self.assertEqual(migrated["invalidation_reasons"], ["host_withdraw", "failed"])
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            self.assertIsNone(connection.execute("SELECT 1 FROM dispatch_withdrawals WHERE message_id=?", (first,)).fetchone())
+            connection.execute("DELETE FROM dispatch_withdrawals")
+        init_database(self.database, seed=False)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM dispatch_withdrawals").fetchone()[0], 0)
+
+    def test_dispatch_chain_distinguishes_host_withdrawal_from_owner_interrupt(self):
+        """A chain totals both dispatches and counts only the owner's member interrupt as intervention."""
+        source = self.say("安排两项工作")[1]["message"]["id"]
+        host = self.reserve_for("Claude")[1]["id"]
+        version = {"package_version": "1.2.3", "prompt_hash": "", "skill_hash": "0123456789abcdef"}
+        self.request(f"{self.path}/executions/{host}",
+                     {"action": "model", "model": "opus", "effort": "high", "host_version": version}, self.owner)
+        first = self.answer(host, "请 Codex 处理", to=["Codex"], keep_working=True)[1]["message"]["id"]
+        active = self.request(f"{self.path}/inbox", token=self.owner)[1]["executions"]
+        carry = next(item["id"] for item in active if item["member"] == "Claude")
+        second = self.answer(carry, "请 Antigravity 处理", to=["Antigravity"])[1]["message"]["id"]
+        codex = self.reserve_for("Codex")[1]["id"]
+        gemini = self.reserve_for("Antigravity")[1]["id"]
+        self.request(f"{self.path}/executions/{codex}", {"action": "usage", "account": "Codex", "turn": {"input": 40}}, self.owner)
+        self.request(f"{self.path}/executions/{gemini}", {"action": "usage", "account": "Antigravity", "turn": {"input": 2}}, self.owner)
+        self.assertEqual(self.request(f"{self.path}/dispatches/{first}/withdraw", {}, self.owner)[0], 200)
+        self.assertEqual(self.request(f"{self.path}/members/{self.member_id('Antigravity')}/interrupt", {}, self.owner)[0], 200)
+        self.server.local_site = True
+        status, page = self.request(f"/api/dispatches?view=chains&room={self.room['id']}")
+        self.assertEqual(status, 200, page)
+        chain, = page["records"]
+        self.assertEqual((chain["chain_id"], chain["source_message_id"], chain["ended"]), (source, source, True))
+        self.assertEqual((chain["dispatch_messages"], chain["dispatch_requests"]), (2, 2))
+        self.assertEqual(chain["invalidated_dispatches"]["host_withdraw"], {"count": 1, "message_ids": [first]})
+        self.assertEqual(chain["invalidated_dispatches"]["user_stop_or_retract"], {"count": 1, "message_ids": [second]})
+        self.assertEqual(chain["user_interventions"], {"stop": 1, "retract": 0, "rewind": 0, "redirect": 0, "targeted_dispatch": True})
+        self.assertEqual(chain["tokens"]["voided_dispatch"]["input"], 42)
+        self.assertEqual((chain["tokens"]["with_usage"], chain["tokens"]["executions"]), (2, 4))
+        self.assertEqual(chain["host_versions"]["values"], [version])
+        self.assertFalse(chain["host_versions"]["mixed"])
+        self.assertEqual([run["execution_id"] for run in chain["host_versions"]["runs"]], [host, carry])
+        self.assertFalse(chain["unhandled_failure"])
+        rewind = self.request(f"{self.path}/rewind?message_id={source}", token=self.owner)[1]
+        self.assertEqual(self.request(f"{self.path}/rewind", {"message_id": source, "revision": rewind["revision"]}, self.owner)[0], 200)
+        rewound, = self.request("/api/analytics/dispatches")[1]["records"]
+        self.assertEqual(rewound["user_interventions"], {"stop": 1, "retract": 0, "rewind": 1, "redirect": 0, "targeted_dispatch": True})
+        self.assertEqual(rewound["invalidated_dispatches"]["user_rewind"], {"count": 2, "message_ids": [first, second]})
+
+    def test_only_owner_rates_dispatch_and_message_shows_rating(self):
+        """Readers see the room rating and only the owner can write or clear it."""
+        user = self.say("安排工作")[1]["message"]["id"]
+        message_id = self.host_dispatch(to=["Codex"])
+        url = f"{self.path}/dispatch-feedback/{message_id}"
+        payload = {"rating": "bad", "should_be": "Gemini", "note": "熟悉项目"}
+        self.assertEqual(self.request(url, payload, self.member)[0], 403)
+        self.assertEqual(self.request(url, payload, self.codex)[0], 403)
+        self.assertEqual(self.request(f"{self.path}/dispatch-feedback/{user}", payload, self.owner)[0], 404)
+        self.assertEqual(self.request(url, {}, self.owner)[0], 400)
+        status, result = self.request(url, payload, self.owner)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["dispatch_feedback"]["should_be"], "Antigravity")
+        shown = self.request(f"{self.path}/messages/{message_id}", token=self.owner)[1]
+        self.assertTrue(shown["host_dispatch"])
+        self.assertEqual(shown["dispatch_feedback"], result["dispatch_feedback"])
+        for token in (None, self.member, self.codex):
+            msg = self.request(f"{self.path}/messages/{message_id}", token=token)[1]
+            self.assertTrue(msg["host_dispatch"])
+            self.assertEqual(msg["dispatch_feedback"], result["dispatch_feedback"])
+            page = self.request(f"{self.path}/messages?before=0&limit=10", token=token)[1]
+            self.assertEqual(next(row["dispatch_feedback"] for row in page["messages"] if row["id"] == message_id),
+                             result["dispatch_feedback"])
+        self.assertEqual(self.request(url, {**payload, "should_be": "Unknown"}, self.owner)[0], 400)
+        host_events = self.request(f"{self.path}/events", token=self.member)[1]
+        self.assertIn(payload["note"], json.dumps(host_events, ensure_ascii=False))
+        backup = self.request(f"{self.path}/backup", token=self.owner)[1]
+        self.assertEqual(self.request(f"{self.path}/backup")[1]["tables"]["dispatch_feedback"],
+                         backup["tables"]["dispatch_feedback"])
+        backup["tables"]["rooms"][0]["id"] = "dispatchcopy"
+        backup["tables"]["dispatch_feedback"].append({**backup["tables"]["dispatch_feedback"][0], "message_id": message_id + 100})
+        importer = uuid.uuid4().hex
+        self.assertEqual(self.request("/api/rooms/import", backup, importer)[0], 201)
+        imported = self.request("/api/rooms/dispatchcopy/messages?after=0", token=importer)[1]["messages"]
+        self.assertEqual(next(row["dispatch_feedback"] for row in imported if row.get("host_dispatch")), result["dispatch_feedback"])
+        self.assertEqual(self.request(url, {"rating": None}, self.owner)[1]["dispatch_feedback"], None)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertIsNone(connection.execute("SELECT 1 FROM dispatch_feedback_cases WHERE message_id=?", (message_id,)).fetchone())
+
+    def test_dispatch_feedback_snapshot_captures_context_at_each_vote(self):
+        """Save at each vote and retain only bounded room context."""
+        before = [self.say(f"派活前 {index}")[1]["message"]["id"] for index in range(4)]
+        message_id = self.host_dispatch(to=["Codex"])
+        url = f"{self.path}/dispatch-feedback/{message_id}"
+        self.request(f"{self.path}/members/{self.member_id('Codex')}/chat",
+                     {"text": "私下内容", "submission_id": "private"}, self.owner)
+        after = [self.say("长" * 1600)[1]["message"]["id"]]
+        self.assertEqual(self.request(url, {"rating": "good"}, self.owner)[0], 200)
+        after.extend(self.say(f"派活后 {index}")[1]["message"]["id"] for index in range(5))
+        with closing(sqlite3.connect(self.database)) as connection:
+            snapshot = json.loads(connection.execute("SELECT snapshot FROM dispatch_feedback_cases WHERE message_id=?",
+                                                     (message_id,)).fetchone()[0])
+        self.assertEqual([row["id"] for row in snapshot["context"]["after"]], after[:1])
+        self.assertEqual(self.request(url, {"rating": "bad"}, self.owner)[0], 200)
+        self.say("改分后发出的消息")
+        self.say("另一条改分后发出的消息")
+        self.server.local_site = True
+        live, = self.request("/api/dispatches")[1]["records"]
+        self.assertFalse(live["archived"])
+        self.assertEqual(self.request(f"{self.path}/delete", {"actor": "用户"}, self.owner)[0], 200)
+        saved, = self.request("/api/dispatches")[1]["records"]
+        self.assertEqual(saved["rating"], "bad")
+        self.assertTrue(saved["archived"])
+        self.assertEqual([row["id"] for row in saved["context"]["before"]], before[-3:])
+        self.assertEqual([row["id"] for row in saved["context"]["after"]], after[:5])
+        self.assertEqual(saved["context"]["after"][0], {"id": after[0], "author": "用户", "text": "长" * 1500})
+        self.assertNotIn("私下内容", json.dumps(saved, ensure_ascii=False))
+
+    def test_destroy_refreshes_existing_dispatch_snapshot_with_later_outcome(self):
+        """An early rating retains the final context and execution, with the rating itself unchanged."""
+        self.say("安排工作")
+        message_id = self.host_dispatch(to=["Codex"])
+        status, rated = self.request(f"{self.path}/dispatch-feedback/{message_id}",
+                                     {"rating": "bad", "should_be": "Gemini", "note": "应该改派"}, self.owner)
+        self.assertEqual(status, 200, rated)
+        later = self.say("派活后的补充")[1]["message"]["id"]
+        execution_id = self.reserve_for("Codex")[1]["id"]
+        execution = f"{self.path}/executions/{execution_id}"
+        self.assertEqual(self.request(execution, {"action": "usage", "account": "Codex", "turn": {"input": 42}}, self.owner)[0], 200)
+        self.assertEqual(self.request(execution, {"action": "fail", "reason": "连接失败"}, self.owner)[0], 200)
+        self.server.local_site = True
+        self.assertEqual(self.request(f"{self.path}/delete", {"actor": "用户"}, self.owner)[0], 200)
+        saved, = self.request("/api/dispatches")[1]["records"]
+        self.assertTrue(saved["archived"])
+        self.assertEqual(saved["feedback"], rated["dispatch_feedback"])
+        self.assertIn(later, [row["id"] for row in saved["context"]["after"]])
+        self.assertIn("failed", saved["invalidation_reasons"])
+        member, = saved["members"]
+        attempt, = member["attempts"]
+        self.assertEqual((member["request_status"], attempt["execution_id"], attempt["status"]), ("failed", execution_id, "failed"))
+        self.assertEqual(attempt["usage"]["input"], 42)
+        self.assertIsNotNone(attempt["elapsed_seconds"])
+
+    def test_dispatch_redirect_is_counted_on_original_chain_and_completed_work_is_kept(self):
+        """A newer owner request attributes withdrawal to its old chain, but only for unfinished work."""
+        source = self.say("请 Codex 看")[1]["message"]["id"]
+        first = self.host_dispatch(to=["Codex"], no_handoff=True)
+        self.reserve_for("Codex")
+        redirect = self.say("改派 Antigravity")[1]["message"]["id"]
+        host = self.reserve_for("Claude")[1]["id"]
+        self.assertEqual(self.request(f"{self.path}/dispatches/{first}/withdraw", {"execution_id": host}, self.owner)[0], 200)
+        second = self.answer(host, "改派", to=["Antigravity"], no_handoff=True)[1]["message"]["id"]
+        self.work("Antigravity")
+        self.assertEqual(self.request(f"{self.path}/dispatches/{second}/withdraw", {}, self.owner)[0], 200)
+        self.server.local_site = True
+        old, new = self.request("/api/dispatches")[1]["records"]
+        self.assertEqual(old["redirect_message_id"], redirect)
+        self.assertEqual(old["invalidation_reasons"], ["host_withdraw"])
+        self.assertFalse(new["withdrawn"])
+        original_chain, redirect_chain = self.request("/api/dispatches?view=chains")[1]["records"]
+        self.assertEqual((original_chain["chain_id"], original_chain["user_interventions"]["redirect"]), (source, 1))
+        self.assertTrue(original_chain["user_interventions"]["targeted_dispatch"])
+        self.assertEqual((redirect_chain["chain_id"], redirect_chain["user_interventions"]["redirect"]), (redirect, 0))
+
+    def test_relay_is_not_a_dispatch_redirect_or_archived_owner_text(self):
+        """Treat a linked host's relayed message separately from the owner's words."""
+        other = self.request("/api/rooms", {"title": "父房间", "members": [{"name": "Codex", "token": uuid.uuid4().hex}],
+                                            "host": "Codex"}, self.owner)[1]["id"]
+        self.request(f"{self.path}/room-link", {"relation": "parent", "room_id": other, "host": "Codex"}, self.owner)
+        source = self.say("请 Codex 看")[1]["message"]["id"]
+        first = self.host_dispatch(to=["Codex"], no_handoff=True)
+        self.reserve_for("Codex")
+        status, relay = FreeRoomTests.say(self, "父房间转达", relay={"room_id": other, "host": "Codex"}, queue=True)
+        self.assertEqual(status, 201, relay)
+        host = self.reserve_for("Claude")[1]
+        self.assertEqual(host["requests"][0]["message_id"], relay["message"]["id"])
+        status, result = self.request(f"{self.path}/dispatches/{first}/withdraw", {"execution_id": host["id"]}, self.owner)
+        self.assertEqual(status, 200, result)
+        second = self.answer(host["id"], "按父房间请求派活", to=["Antigravity"])[1]["message"]["id"]
+        self.assertEqual(self.request(f"{self.path}/dispatch-feedback/{second}", {"rating": "good"}, self.owner)[0], 200)
+        self.server.local_site = True
+        old, _ = self.request("/api/dispatches")[1]["records"]
+        self.assertIsNone(old["redirect_message_id"])
+        original = next(chain for chain in self.request("/api/dispatches?view=chains")[1]["records"] if chain["chain_id"] == source)
+        self.assertEqual(original["user_interventions"]["redirect"], 0)
+        self.assertEqual(self.request(f"{self.path}/delete", {"actor": "用户"}, self.owner)[0], 200)
+        case, = self.request("/api/dispatches")[1]["records"]
+        self.assertEqual(case["chain_id"], relay["message"]["id"])
+        self.assertIsNone(case["source_user_text"])
+
+    def test_destroy_dispatch_feedback_follows_site_retention(self):
+        """Personal sites preserve both ratings with context, while hosting accounts delete them."""
+        for hosted in (False, True):
+            with self.subTest(hosted=hosted):
+                if hosted:
+                    self.set_up_second_dispatch_room()
+                self.say("安排工作")
+                message_id = self.host_dispatch(to=["Codex"], no_handoff=True)
+                self.assertEqual(self.request(f"{self.path}/dispatch-feedback/{message_id}", {"rating": "bad"}, self.owner)[0], 200)
+                self.work("Codex")
+                self.say("另一条安排")
+                good_id = self.host_dispatch(to=["Antigravity"])
+                self.assertEqual(self.request(f"{self.path}/dispatch-feedback/{good_id}", {"rating": "good"}, self.owner)[0], 200)
+                with mock.patch("backend.server.hosted_instance", return_value=hosted):
+                    status, result = self.request(f"{self.path}/delete", {"actor": "用户"}, self.owner)
+                self.assertEqual(status, 200, result)
+                with closing(sqlite3.connect(self.database)) as connection:
+                    self.assertIsNone(connection.execute("SELECT 1 FROM dispatch_feedback WHERE message_id=?", (message_id,)).fetchone())
+                    cases = [json.loads(row[0]) for row in connection.execute(
+                        "SELECT snapshot FROM dispatch_feedback_cases WHERE message_id IN (?,?) ORDER BY message_id", (message_id, good_id))]
+                if hosted:
+                    self.assertEqual(cases, [])
+                else:
+                    self.assertEqual([row["rating"] for row in cases], ["bad", "good"])
+                    self.assertEqual(cases[0]["dispatch_text"], "派活")
+                    self.assertEqual(cases[0]["source_user_text"], "安排工作")
+
+    def set_up_second_dispatch_room(self):
+        """Reuse the test server and credentials for the second retention policy."""
+        members = [{"name": name, "adapter": "claude", "token": token} for name, token in self.tokens.items()]
+        status, room = self.request("/api/rooms", {"title": "托管房间", "mode": "free", "members": members,
+                                                   "submission_id": "hosted-dispatch-room"}, self.owner)
+        self.assertEqual(status, 201, room)
+        self.room = room
+        self.path = f"/api/rooms/{room['id']}"
+        self.assertEqual(self.request(f"{self.path}/members/{self.member_id('Claude')}",
+                                      {"action": "role", "role": "host"}, self.owner)[0], 200)
+
     def test_a_linked_rooms_message_goes_to_the_idle_host_while_members_work(self):
         """2026-11-25 #10958: a linked room's message names this room's host; an idle host takes it though Codex works."""
         other = self.request("/api/rooms", {"title": "父房间", "members": [{"name": "Codex", "token": uuid.uuid4().hex}],
@@ -3076,9 +3375,14 @@ class HostTests(HostRoomTests):
         try:
             FreeRoomTests.say(self, "盯一下线上版本")
             last = self.work("Claude")["id"]
+            version = {"package_version": "1.2.3", "prompt_hash": "", "skill_hash": "0123456789abcdef"}
+            self.assertEqual(self.request(f"{self.path}/executions/{last}",
+                                          {"action": "model", "host_version": version}, self.owner)[0], 200)
             post = lambda execution, to: self.request(f"{self.path}/messages", {"author": "Claude", "text": "版本还没生效，派人看看", "source": "cli",
                 "submission_id": uuid.uuid4().hex, "execution_id": execution, "to": [to]}, self.member)
-            self.assertEqual(self.scheduled("Claude")[0], 200)
+            status, scheduled = self.scheduled("Claude")
+            self.assertEqual(status, 200, scheduled)
+            self.assertEqual(scheduled["host_version"], version)
             self.assertEqual(post(last, "Codex")[0], 201)
             self.assertEqual(self.request(self.path)[1]["free"]["halted_chains"], [], "the first fire's dispatch is within the limit")
             self.work("Codex")
@@ -3150,8 +3454,12 @@ class HostTests(HostRoomTests):
             self.work("Claude", to=["Antigravity"])
             self.work("Antigravity")
             first = self.work("Claude")["id"]
+            version = {"package_version": "1.2.3", "prompt_hash": "", "skill_hash": "0123456789abcdef"}
+            self.assertEqual(self.request(f"{self.path}/executions/{first}",
+                                          {"action": "model", "host_version": version}, self.owner)[0], 200)
             status, followup = self.followup("Claude", first)
             self.assertEqual(status, 200, followup)
+            self.assertEqual(followup["host_version"], version)
             status, saved = self.request(f"{self.path}/messages", {"author": "Claude", "text": "后台结果出来了，再派 Codex", "source": "cli",
                 "submission_id": uuid.uuid4().hex, "execution_id": first, "to": ["Codex"]}, self.member)
             self.assertEqual(status, 201, saved)

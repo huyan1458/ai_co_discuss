@@ -8,15 +8,30 @@ import { call } from "./api.js";
 import { t } from "../i18n.js";
 import { format_storage_bytes, normalize_storage_snapshot, storage_ratio, storage_tone } from "../storage-format.js";
 import AttachmentCleaner from "../AttachmentCleaner.vue";
+import SecretKeyInput from "../SecretKeyInput.vue";
+import { delete_cloud_files, object_storage_fields, object_storage_values } from "../object-storage-fields.js";
 
-const { notify, refreshed, reload, storage_raw: raw, storage_loading: loading, storage_error: error, load_storage } = inject("panel");
+const { state, notify, refreshed, reload, storage_raw: raw, storage_loading: loading, storage_error: error, load_storage } = inject("panel");
 const preview = ref(null);
 const selected = ref(false);
 const repairing = ref(false);
+const analyzing = ref(false);
 const groups = computed(() => ({
   local: t("房间记录与附件"), drafts: t("成员草稿"), launches: t("运行日志与任务文件"),
   "panel-window": t("管理面板窗口缓存"), pi: t("模型 API 运行环境"), other: t("其他"),
 }));
+
+/** Send an inventory request to the platform steward for this panel's account. */
+async function analyze_storage() {
+  if (analyzing.value) return;
+  analyzing.value = true;
+  try {
+    await call("storage/steward", {});
+    notify("info", t("已发送占用分析请求，请到平台主理人对话查看。"));
+  } catch (failure) { notify("error", failure.message); }
+  finally { analyzing.value = false; }
+}
+
 async function repair(apply = false) {
   if (repairing.value || (apply && (!selected.value || !window.confirm(t("确认删除所选日志？此操作无法撤销。"))))) return;
   repairing.value = true;
@@ -98,6 +113,91 @@ function tag_class(tone) {
   return tone === "error" ? "is-red" : tone === "warning" ? "is-amber" : "is-green";
 }
 
+const attachment_mib = ref(null);
+async function save_limit() {
+  try {
+    await call("storage/attachment-limit", { limit_mib: attachment_mib.value });
+    notify("info", t("已保存"));
+  } catch (failure) { notify("error", failure.message); }
+}
+onMounted(async () => {
+  try { attachment_mib.value = (await call("storage/attachment-limit")).limit_mib; }
+  catch (failure) { notify("error", failure.message); }
+});
+
+// Object storage for files over the limit, per account like API keys: the key goes into the account's key store (for a
+// hosted account marked as provided by the owner) and the configuration keeps only its reference.
+const object_account = ref("");
+const object_storage = ref(null);
+const object_url = ref("");
+const object_busy = ref("");
+const object_paths = computed(() => object_account.value
+  ? { config: `accounts/${encodeURIComponent(object_account.value)}/object-storage`, keys: `accounts/${encodeURIComponent(object_account.value)}/keys` }
+  : { config: "storage/object", keys: "owner/keys" });
+// A stored key belongs to the address it was saved for; another address needs its own.
+const object_key_saved = computed(() => Boolean(object_storage.value?.api_key_ref) && object_url.value.trim() === object_storage.value.base_url);
+function show_object_storage(result) {
+  object_storage.value = result;
+  object_url.value = result.base_url || "";
+}
+async function load_object_storage() {
+  const account = object_account.value;
+  object_storage.value = null;
+  try {
+    const result = await call(object_paths.value.config);
+    if (account === object_account.value) show_object_storage(result);
+  } catch (failure) { notify("error", failure.message); }
+}
+/** Save a newly entered key for the address shown, then bind the configuration to it; SecretKeyInput reports failures. */
+async function save_object_key(api_key) {
+  const { config, keys } = object_paths.value;
+  const base_url = object_url.value.trim();
+  if (!base_url) throw new Error(t("请先填写资源中心地址"));
+  const { api_key_ref } = await call(keys, { base_url, api_key });
+  show_object_storage(await call(config, { base_url, api_key_ref }));
+  notify("info", t("已保存"));
+}
+// The cloud space's number settings (retention days, quota, threshold), each saved on its own when its field is left.
+const object_fields = computed(() => object_storage_fields(attachment_mib.value || 50));
+const object_values = ref({});
+watch(object_storage, (result) => { if (result) object_values.value = object_storage_values(object_fields.value, result); });
+async function save_object_field(field) {
+  const value = object_values.value[field.key];
+  if (!Number.isInteger(value) || value < field.min || value > field.max) { notify("error", field.invalid); return; }
+  if (value === object_storage.value?.[field.key]) return;
+  const result = await object_action(field.key, () => call(object_paths.value.config, { [field.key]: value }));
+  if (result) { object_storage.value = result; notify("info", t("已保存")); }
+}
+// The account's cloud space files, opened from the section; reread whenever it opens or the account changes.
+const cloud_open = ref(false);
+const cloud_paths = computed(() => ({ list: `${object_paths.value.config}/files`, remove: `${object_paths.value.config}/files/delete` }));
+const delete_cloud = (ids) => delete_cloud_files(ids, (id) => call(cloud_paths.value.remove, { id }));
+function cloud_deleted(result) {
+  notify("info", t("已释放 {size}", { size: format_storage_bytes(result.freed_bytes) }));
+  if (result.error) notify("error", result.error);
+}
+watch(object_account, () => { cloud_open.value = false; });
+async function object_action(action, request) {
+  if (object_busy.value) return;
+  object_busy.value = action;
+  try { return await request(); }
+  catch (failure) { notify("error", failure.message); }
+  finally { object_busy.value = ""; }
+}
+async function test_object_storage() {
+  if (await object_action("test", () => call(`${object_paths.value.config}/test`, {}))) notify("info", t("连接成功"));
+}
+async function clear_object_storage() {
+  if (!window.confirm(t("清除后超过上限的文件将无法上传，已存于对象存储的附件也无法下载。确认清除？"))) return;
+  const result = await object_action("clear", () => call(`${object_paths.value.config}/clear`, {}));
+  if (result) { show_object_storage(result); notify("info", t("已清除")); }
+}
+onMounted(load_object_storage);
+watch(object_account, load_object_storage);
+// A removed hosted account falls back to the owner.
+watch(() => state.value.accounts, (accounts) => {
+  if (object_account.value && !accounts.some(item => item.name === object_account.value)) object_account.value = "";
+});
 onMounted(() => { if (!raw.value && !loading.value) load_storage(); });
 watch(refreshed, () => load_storage());
 </script>
@@ -107,12 +207,48 @@ watch(refreshed, () => load_storage());
     <h3 class="panel-section-title">
       <UIcon name="i-lucide-hard-drive" />{{ t("共议数据") }}
       <span class="panel-section-action storage-head-actions">
+        <button type="button" class="panel-button is-outline is-small" :disabled="analyzing" @click="analyze_storage">
+          <UIcon name="i-lucide-sparkles" />{{ t("让平台主理人分析占用") }}
+        </button>
         <button type="button" class="panel-button is-plain is-small" :disabled="loading" @click="load_storage">
           <UIcon name="i-lucide-refresh-cw" :class="{ 'animate-spin': loading }" />{{ t("刷新") }}
         </button>
       </span>
     </h3>
 
+    <form v-if="attachment_mib !== null" class="panel-row" @submit.prevent="save_limit">
+      <label>{{ t("单个附件上限（MiB）") }} <input v-model.number="attachment_mib" type="number" required min="1" max="90" step="1"></label>
+      <button class="panel-button" type="submit">{{ t("保存") }}</button>
+    </form>
+    <h3 class="panel-section-title">
+      <UIcon name="i-lucide-cloud-upload" />{{ t("云空间（对象存储）") }}
+      <span v-if="object_storage" class="panel-tag" :class="object_storage.configured ? 'is-green' : 'is-gray'">{{ object_storage.configured ? t("已配置") : t("未配置") }}</span>
+      <span v-if="object_account && object_storage?.configured" class="panel-tag" :class="object_storage.managed ? 'is-blue' : 'is-gray'">{{ object_storage.managed ? t("管理员提供") : t("账号自行填写") }}</span>
+    </h3>
+    <p class="panel-guide">{{ t("每个账号一份云空间，建在资源中心的对象存储上：大于门槛的附件（最大 2 GiB）存到这里，房间里发的大文件和成员交付的大文件都能从这里取走。只经房间附件进出，可设自动删除，也可在“管理云空间”里手动删除。未配置时只能发送上限以内的附件。存储桶须允许网页所在地址跨域上传。每个账号各用自己的 Key，与 API 密钥一起保存。") }}</p>
+    <div v-if="state.hosting && state.accounts.length" class="panel-chips storage-object-accounts" role="group" :aria-label="t('配置哪个账号的对象存储')">
+      <button type="button" class="panel-chip" :class="{ 'is-active': !object_account }" @click="object_account = ''">{{ t("管理员") }}</button>
+      <button v-for="account in state.accounts" :key="account.name" type="button" class="panel-chip" :class="{ 'is-active': object_account === account.name }" @click="object_account = account.name">{{ account.name }}</button>
+    </div>
+    <div v-if="object_storage" class="panel-row storage-object-form">
+      <label class="panel-field">{{ t("资源中心地址") }}<input v-model.trim="object_url" class="panel-input" type="url" placeholder="https://…" spellcheck="false"></label>
+      <div class="panel-field">{{ t("Key") }}
+        <SecretKeyInput :key="`${object_account}\u0000${object_storage.api_key_ref || ''}\u0000${object_key_saved}`" :save="save_object_key" :saved="object_key_saved" :disabled="!object_url.trim()" :label="t('对象存储 Key')" :placeholder="t('填写 Key，失焦或回车保存')" size="sm" @error="(failure) => notify('error', failure.message)" />
+        <small v-if="object_account">{{ t("对方界面不显示 Key，但对方账号里的 AI 成员能读到本账号的密钥文件；请给每个账号单独的 Key。") }}</small>
+      </div>
+      <label v-for="field in object_fields" :key="field.key" class="panel-field">{{ field.label }}
+        <input v-model.number="object_values[field.key]" class="panel-input storage-object-number" type="number" :min="field.min" :max="field.max" step="1" :disabled="Boolean(object_busy)" @change="save_object_field(field)">
+        <small>{{ field.help }}</small></label>
+      <div class="storage-object-actions">
+        <button class="panel-button is-outline" type="button" :disabled="!object_storage.configured || Boolean(object_busy)" @click="test_object_storage">
+          <UIcon v-if="object_busy === 'test'" name="i-lucide-loader" class="animate-spin" />{{ t("测试连接") }}
+        </button>
+        <button class="panel-button is-outline" type="button" :disabled="!object_storage.configured" @click="cloud_open = !cloud_open">{{ cloud_open ? t("收起云空间") : t("管理云空间") }}</button>
+        <button class="panel-button is-outline storage-danger" type="button" :disabled="!object_storage.configured || Boolean(object_busy)" @click="clear_object_storage">{{ t("清除") }}</button>
+      </div>
+      <AttachmentCleaner v-if="cloud_open && object_storage.configured" :key="object_account" cloud :load="() => call(cloud_paths.list)" :clear="delete_cloud"
+        @cleared="cloud_deleted" @failed="(message) => notify('error', message)" />
+    </div>
     <div v-if="!snapshot && loading" class="panel-rows" role="status" :aria-label="t('正在统计存储占用…')">
       <div class="panel-row">
         <USkeleton class="panel-tile" />
@@ -130,11 +266,11 @@ watch(refreshed, () => load_storage());
       <p class="panel-guide">{{ t("存储上限通过定期采样检查（有执行时每 2 秒查磁盘余量、每 30 秒扫描占用），并非文件系统写入层硬拦截，无法保证磁盘绝不写满。") }}</p>
       <p v-if="snapshot.truncated || snapshot.total_bytes > snapshot.limits.home_limit_bytes || disk_low" class="panel-note is-red storage-banner" role="alert">
         <UIcon name="i-lucide-octagon-alert" />
-        <span>{{ snapshot.block_reason || t("存储占用已超过上限或磁盘剩余空间低于安全线，新的派活已暂停。房间被拦截时请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 清理旧草稿，或清理下方临时文件；房间记录与附件需手动销毁旧房间。") }}</span>
+        <span>{{ snapshot.block_reason || t("存储占用已超过上限或磁盘剩余空间低于安全线，新的派活已暂停。请先清理下方临时文件或释放磁盘空间；房间记录与附件需手动销毁旧房间。") }}</span>
       </p>
       <p v-else-if="snapshot.warning" class="panel-note is-amber storage-banner" role="status">
         <UIcon name="i-lucide-triangle-alert" />
-        <span>{{ snapshot.warning_reason || t("本机 .codiscuss 数据已占 {used}，接近 {limit} 上限（预警线 {warn}）。请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或清理临时文件。", { used: format_storage_bytes(snapshot.total_bytes), limit: format_storage_bytes(snapshot.limits.home_limit_bytes), warn: format_storage_bytes(snapshot.limits.home_warn_bytes) }) }}</span>
+        <span>{{ snapshot.warning_reason || t("本机 .codiscuss 数据已占 {used}，接近 {limit} 上限（预警线 {warn}）。建议清理临时文件。", { used: format_storage_bytes(snapshot.total_bytes), limit: format_storage_bytes(snapshot.limits.home_limit_bytes), warn: format_storage_bytes(snapshot.limits.home_warn_bytes) }) }}</span>
       </p>
       <p v-if="snapshot.unreadable > 0" class="panel-note is-amber storage-banner" role="status">
         <UIcon name="i-lucide-shield-alert" />
@@ -198,8 +334,8 @@ watch(refreshed, () => load_storage());
             </div>
             <span class="panel-sub">
               {{ snapshot.scratch_bytes > 0
-                ? t("其中可回收执行临时文件 {size}；单房间上限 {room_limit}。清理历史草稿请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup。", { size: format_storage_bytes(snapshot.scratch_bytes), room_limit: format_storage_bytes(snapshot.limits.room_draft_bytes) })
-                : t("单房间草稿上限 {room_limit}；历史草稿和成品不会自动删除，需要清理时请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup。", { room_limit: format_storage_bytes(snapshot.limits.room_draft_bytes) }) }}
+                ? t("其中可回收执行临时文件 {size}；单房间上限 {room_limit}。历史草稿和成品不会自动删除。", { size: format_storage_bytes(snapshot.scratch_bytes), room_limit: format_storage_bytes(snapshot.limits.room_draft_bytes) })
+                : t("单房间草稿上限 {room_limit}；历史草稿和成品不会自动删除。", { room_limit: format_storage_bytes(snapshot.limits.room_draft_bytes) }) }}
             </span>
           </div>
         </div>
@@ -323,6 +459,10 @@ watch(refreshed, () => load_storage());
 .storage-danger { color: var(--panel-red); }
 .storage-head-actions { display: flex; align-items: center; gap: 6px; }
 .storage-banner { margin-bottom: 12px; }
+.storage-object-form { flex-direction: column; align-items: stretch; gap: 12px; max-width: 520px; }
+.storage-object-accounts { margin-bottom: 8px; }
+.storage-object-actions { display: flex; gap: 8px; }
+.storage-object-number { max-width: 140px; }
 .storage-bar { height: 5px; width: 100%; max-width: 360px; margin: 2px 0; overflow: hidden; border-radius: 999px; background: var(--panel-tint); }
 .storage-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--panel-blue); transition: width .2s ease; }
 .storage-bar.is-warning > i { background: var(--panel-amber); }

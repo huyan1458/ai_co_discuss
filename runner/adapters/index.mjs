@@ -32,6 +32,18 @@
  *   - `session`: `{path, exists, branch, settings}` for the software's own session store, or null; with `list(options)`
  *     and `preview(session_id, options)` when its stored conversations can be browsed (see `software_sessions`);
  *   - `models`: `{list, effort?, defaults}` read from the installed software, or null when it is chosen inside the App;
+ *   - optional `session.usage(session_id, {log_path, profile, home, env})` → `{context?, account?}` read after a turn from the
+ *     software's session store or the turn's process log (`log_path`, may be ''): `context` `{used, window}` (tokens the
+ *     session's context holds after its last model call, and the model's window; window 0 when unknown), `account` an
+ *     account quota (below) when the turn's output carried one, `turn` `{input, cache_read, cache_write, output}` the
+ *     tokens this turn's model calls took in all (input not read from cache, cache reads, cache writes, output with
+ *     reasoning), summed over the calls of this execution only; null or a missing field when it cannot tell;
+ *   - optional `quota(profile, {home, env, spawn_process})` → account quota read without an agent turn, or null;
+ *     an account quota is `{windows: [{kind, minutes, used, resets_at, group}], balance?}`: `kind` `five_hour`,
+ *     `seven_day` or `other`, `minutes` the window length (0 unknown), `used` the fraction used (0..1), `resets_at` Unix
+ *     seconds (0 unknown), `group` the software's own name for the models sharing it ('' when one group), `models` the
+ *     model ID prefixes in that group (empty when it applies to every model);
+ *     `balance` `{amount, currency}` (strings) for a prepaid model API;
  *   - optional `skills(profile, options)` lists installed skills `{id, label, description, prompt}` without a model turn;
  *   - optional `chat(config, binding, task, spawn_process, user_home)` for a private chat turn whose software a usual
  *     delivery cannot follow (an App, an open window, the model API): same result as `deliver`, and it reports through
@@ -289,6 +301,58 @@ export function session_preview(adapter_id, session_id, options = {}) {
   if (!adapter?.session?.preview) throw new Error(`${adapter?.label || adapter_id} 的历史会话不能在这里浏览`);
   if (typeof session_id !== 'string' || !SESSION_PATTERN.test(session_id)) throw new Error('会话 ID 格式不正确');
   return adapter.session.preview(session_id, options);
+}
+
+/**
+ * What a session's context holds after a turn and any account quota that turn's output carried (see `session.usage`),
+ * normalized; null when the adapter cannot tell. Internal formats: anything unreadable yields null, never an error.
+ */
+export function session_usage(adapter_id, session_id, options = {}) {
+  const read = adapter_of(adapter_id)?.session?.usage;
+  if (!read || typeof session_id !== 'string' || !SESSION_PATTERN.test(session_id)) return null;
+  try { return checked_usage(read(session_id, options)); }
+  catch { return null; }
+}
+
+/** The account quota a configured profile draws on, read without an agent turn (see `quota`); null when unsupported or unreadable. */
+export async function account_quota(profile, options = {}) {
+  const read = adapter_of(profile?.adapter)?.quota;
+  if (!read) return null;
+  try { return checked_quota(await read(profile, options)); }
+  catch { return null; }
+}
+
+/** Whether a profile's account quota can be read without an agent turn, so the runner refreshes it on its own. */
+export function reads_quota(profile) { return Boolean(adapter_of(profile?.adapter)?.quota); }
+
+const QUOTA_KINDS = ['five_hour', 'seven_day', 'other'];
+const whole = value => Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
+
+function checked_usage(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  const used = whole(usage.context?.used);
+  const context = used ? { used, window: whole(usage.context.window) } : null;
+  const account = checked_quota(usage.account);
+  const turn = checked_turn(usage.turn);
+  return context || account || turn ? { ...(context && { context }), ...(account && { account }), ...(turn && { turn }) } : null;
+}
+
+function checked_turn(turn) {
+  if (!turn || typeof turn !== 'object') return null;
+  const counts = Object.fromEntries(['input', 'cache_read', 'cache_write', 'output'].map(key => [key, whole(turn[key])]));
+  return Object.values(counts).some(Boolean) ? counts : null;
+}
+
+function checked_quota(quota) {
+  if (!quota || typeof quota !== 'object') return null;
+  const windows = (Array.isArray(quota.windows) ? quota.windows : []).filter(item => Number.isFinite(item?.used)).map(item => ({
+    kind: QUOTA_KINDS.includes(item.kind) ? item.kind : 'other', minutes: whole(item.minutes),
+    used: Math.min(Math.max(item.used, 0), 1), resets_at: whole(item.resets_at), group: String(item.group || '').slice(0, 80),
+    models: (Array.isArray(item.models) ? item.models : []).filter(model => typeof model === 'string').map(model => model.slice(0, 60)).slice(0, 20),
+  })).sort((left, right) => (left.minutes || Infinity) - (right.minutes || Infinity)).slice(0, 8);
+  const balance = quota.balance && typeof quota.balance.amount === 'string'
+    ? { amount: quota.balance.amount.slice(0, 32), currency: String(quota.balance.currency || '').slice(0, 8) } : null;
+  return windows.length || balance ? { windows, ...(balance && { balance }) } : null;
 }
 
 /** Public model metadata only; failures leave the original-software default available to the UI. */

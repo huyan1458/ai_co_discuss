@@ -17,7 +17,7 @@ import { t } from "./i18n.js";
 const library = use_workflow_library();
 const {
   available, workflows, writable_roots, draft, saved_id, saved_key,
-  active_scope, active_project_id, active_project_name, draft_readonly,
+  active_scope, active_project_id, scope_label, draft_readonly,
   canvas_key, commands_allowed, busy, loading, failure, dirty, add_items, skill_request,
   skill_open, set_skill_open, stacked, scope, current, reserved, subs, conflict,
 } = library;
@@ -62,9 +62,6 @@ const part_files = computed(() => {
     .filter(([path, text]) => typeof text === "string" && (prefix ? path.startsWith(prefix) : !path.startsWith("workflows/")))
     .map(([path, text]) => [path.slice(prefix.length), text]));
 });
-const scope_badge_label = computed(() => active_scope.value === "project"
-  ? (active_project_name.value ? t("项目 · {name}", { name: active_project_name.value }) : t("项目"))
-  : t("全局"));
 
 // The canvas was laid out hidden; place its view once it shows.
 watch(pane, (value) => { if (value === "canvas") nextTick(() => requestAnimationFrame(() => canvas.value?.fit())); });
@@ -145,19 +142,13 @@ function start_resize(event) {
         :shared="scope ? draft.agents : null" :subs="scope ? null : subs" :readonly="draft_readonly"
         @update:shared="(value) => { draft.agents = value; }" @open-sub="library.enter_sub" @open-skill="show_skill_text" @configure="(card) => { experts_focus = card; experts_open = true; }">
         <template #actions="{ iconsOnly, arrange }">
-          <!-- Unsaved drafts in a project room can switch target scope; saved workflows display their scope badge. -->
+          <!-- Unsaved drafts in a project room can switch target scope; otherwise the scope shows in the header bar. -->
           <UDropdownMenu v-if="!saved_id && writable_roots.length" :items="target_scope_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
-            <UButton :icon="active_scope === 'project' ? 'i-lucide-folder' : 'i-lucide-globe'" trailing-icon="i-lucide-chevron-down" :label="iconsOnly ? undefined : scope_badge_label" :aria-label="t('保存归属：{scope}', { scope: scope_badge_label })" :title="t('选择保存位置：当前项目或全局')" :size="stacked ? 'xs' : 'sm'" color="neutral" variant="soft" class="workflow-scope-picker" />
+            <UButton :icon="active_scope === 'project' ? 'i-lucide-folder' : 'i-lucide-globe'" trailing-icon="i-lucide-chevron-down" :label="iconsOnly ? undefined : scope_label" :aria-label="t('保存归属：{scope}', { scope: scope_label })" :title="t('选择保存位置：当前项目或全局')" :size="stacked ? 'xs' : 'sm'" color="neutral" variant="soft" class="workflow-scope-picker" />
           </UDropdownMenu>
-          <span v-else-if="!stacked || draft_readonly" class="workflow-scope-badges">
-            <span v-if="!stacked" class="workflow-scope-badge" :class="active_scope === 'project' ? 'is-project' : 'is-global'" :title="active_scope === 'project' ? t('项目工作流：{name}', { name: active_project_name || t('当前项目') }) : t('全局工作流：所有房间可用')">
-              <UIcon :name="active_scope === 'project' ? 'i-lucide-folder' : 'i-lucide-globe'" />
-              <span>{{ scope_badge_label }}</span>
-            </span>
-            <span v-if="draft_readonly" class="workflow-scope-badge is-readonly" :title="t('只读项目目录，不可修改')">
-              <UIcon name="i-lucide-lock" />
-              <span>{{ t('只读') }}</span>
-            </span>
+          <span v-else-if="draft_readonly" class="workflow-scope-badge is-readonly" :title="t('只读项目目录，不可修改')">
+            <UIcon name="i-lucide-lock" />
+            <span>{{ t('只读') }}</span>
           </span>
           <UTooltip v-if="!draft_readonly" :text="experts_missing ? t('专家配置：有卡片的软件本机未配置') : t('专家配置：每张卡片的软件、模型、强度与项目权限')"><span class="workflow-library-save">
             <UButton :icon="experts_missing ? 'i-lucide-triangle-alert' : 'i-lucide-sliders-horizontal'" :label="iconsOnly ? undefined : t('专家配置')" :aria-label="t('专家配置')" :size="stacked ? 'xs' : 'sm'" :color="experts_missing ? 'warning' : 'neutral'" variant="ghost" @click="experts_focus = ''; experts_open = true" /></span></UTooltip>
@@ -234,11 +225,8 @@ function start_resize(event) {
 .workflow-library-loading > span:last-child { width: auto; height: auto; }
 .workflow-skill-loading { display: flex; flex-direction: column; gap: 18px; padding: 24px; border-left: 1px solid var(--ui-border-muted); }
 /* Scope badges in the toolbar. */
-.workflow-scope-badges { display: inline-flex; align-items: center; gap: 4px; max-width: 200px; }
 .workflow-scope-badge { display: inline-flex; align-items: center; gap: 4px; max-width: 150px; height: 24px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap; }
 .workflow-scope-badge > span { overflow: hidden; text-overflow: ellipsis; }
-.workflow-scope-badge.is-global { background: var(--ui-bg-accented); color: var(--ui-text-muted); }
-.workflow-scope-badge.is-project { background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 14%, transparent); color: var(--channel-accent, var(--ui-primary)); }
 .workflow-scope-badge.is-readonly { background: color-mix(in srgb, var(--ui-warning, #e0a33a) 16%, transparent); color: var(--ui-warning, #e0a33a); }
 .workflow-scope-picker { max-width: 170px; }
 /* Unsaved changes: a dot on the save button's corner. */

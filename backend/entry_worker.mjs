@@ -35,8 +35,8 @@ async function entry_relay(env, machine) {
 const MACHINE_PATTERN = /^[0-9a-f]{32}$/;
 const MACHINE_COOKIE = "codiscuss_machine";
 const MACHINE_COOKIE_SECONDS = 365 * 24 * 3600;
-// The largest request passed on: attachments are uploaded in one request of up to 40 MB, plus the form around them.
-const BODY_MAX_BYTES = 45 * 1024 * 1024;
+// The computer advertises its current limit via its authenticated relay connection.
+import policy from './attachment_policy.json' with { type: 'json' };
 // Headers the relay sets itself or that describe only this hop.
 const DROPPED_HEADERS = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade", "proxy-connection", "te", "trailer", "content-length",
   "x-forwarded-proto", "x-forwarded-for", "x-forwarded-host", "x-real-ip"]);
@@ -45,7 +45,7 @@ const PAGE_ENGLISH = {
   "链接不完整": "Incomplete link",
   "请使用为你开通服务的人发给你的完整链接。": "Use the complete link sent by the person who set up your access.",
   "文件太大": "File too large",
-  "单次上传不能超过 40 MB。": "Each upload must be no larger than 40 MB.",
+  "请求超过当前附件上限。": "The request exceeds the current attachment limit.",
 };
 /** Standalone pages have no UI runtime; select their language from the browser request. */
 function page(request, status, title, text) {
@@ -73,7 +73,7 @@ export default {
       const machine = url.searchParams.get("machine") || "";
       if (!MACHINE_PATTERN.test(machine)) return Response.json(entry_error("电脑编号无效"), { status: 400 });
       const answer = await (await entry_relay(env, machine)).fetch("https://relay.internal/", { headers: { "X-Relay-Role": "entry-status" } });
-      return Response.json({ service: "codiscuss-entry", ...(await answer.json()) }, { headers: { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" } });
+      return Response.json({ service: "codiscuss-entry", online: (await answer.json()).online }, { headers: { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" } });
     }
     // The link handed out: keep its computer and continue without it in the address.
     const asked = url.searchParams.get("m");
@@ -85,12 +85,19 @@ export default {
     }
     const machine = machine_cookie(request);
     if (!machine) return page(request, 404, "链接不完整", "请使用为你开通服务的人发给你的完整链接。");
-    if (Number(request.headers.get("Content-Length") || 0) > BODY_MAX_BYTES) return page(request, 413, "文件太大", "单次上传不能超过 40 MB。");
+    const relay = await entry_relay(env, machine);
+    const length = Number(request.headers.get("Content-Length") || 0);
+    if (length > policy.entry_overhead_mib * 1024 * 1024) {
+      const status = await relay.fetch("https://relay.internal/", { headers: { "X-Relay-Role": "entry-status" } });
+      const limit = (await status.json()).limit_mib ?? policy.default_mib;
+      if (length > (limit + policy.entry_overhead_mib) * 1024 * 1024)
+        return page(request, 413, "文件太大", "请求超过当前附件上限。");
+    }
     // The browser's own host, which the entry compares a page's Origin with, from the address itself.
     const headers = [...request.headers].filter(([name]) => !DROPPED_HEADERS.has(name) && name !== "host" && !name.startsWith("cf-")).concat([["host", url.host]]);
     const meta = encodeURIComponent(JSON.stringify({ method: request.method, path: `${url.pathname}${url.search}`, headers }));
     const streamed = !["GET", "HEAD"].includes(request.method);
-    return (await entry_relay(env, machine)).fetch("https://relay.internal/", { method: "POST", headers: { "X-Relay-Role": "entry", "X-Entry-Request": meta, "Accept-Language": request.headers.get("Accept-Language") || "zh" },
+    return relay.fetch("https://relay.internal/", { method: "POST", headers: { "X-Relay-Role": "entry", "X-Entry-Request": meta, "Accept-Language": request.headers.get("Accept-Language") || "zh" },
       ...(streamed ? { body: request.body, duplex: "half" } : {}) });
   },
 };

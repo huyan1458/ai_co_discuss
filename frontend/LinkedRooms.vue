@@ -1,3 +1,15 @@
+<script>
+import { ref } from "vue";
+// Folding the section is one choice for every room, kept in this browser so switching rooms or reloading keeps it;
+// the rail and the drawer share it, and refreshing the list never changes it.
+const FOLDED_KEY = "ai-codiscuss-family-rooms-folded";
+const folded = ref((() => { try { return localStorage.getItem(FOLDED_KEY) === "1"; } catch { return false; } })());
+function toggle_folded() {
+  folded.value = !folded.value;
+  try { localStorage.setItem(FOLDED_KEY, folded.value ? "1" : "0"); } catch { /* Kept for this visit only. */ }
+}
+</script>
+
 <script setup>
 /**
  * The right rail's 父子房间 section: this room's parent and child rooms, each opening on click, with the other room's
@@ -5,7 +17,7 @@
  * ("设为独立房间") still shows where it came from. Any room of the site may message another; this only shows the family.
  * Input: the room in view. Output: none, it only reads the room's room-links endpoint.
  */
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, watch } from "vue";
 import { t } from "./i18n.js";
 
 const { view, bridge, act } = inject("discussion");
@@ -41,8 +53,9 @@ function link_status(link) {
 
 <template>
   <section v-if="shown.length" class="pb-section linked-rooms" :aria-label="t('父子房间')">
-    <h4>{{ t("父子房间") }}</h4>
-    <ul class="linked-rooms-list">
+    <h4><button type="button" class="linked-rooms-toggle" :aria-expanded="!folded" @click="toggle_folded">
+      <UIcon :name="folded ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" />{{ t("父子房间 {count}", { count: shown.length }) }}</button></h4>
+    <ul v-show="!folded" class="linked-rooms-list">
       <li v-for="link in shown" :key="link.room_id" class="pb-member linked-room">
         <UIcon name="i-lucide-git-branch" class="linked-room-icon" />
         <div class="pb-member-body">
@@ -56,6 +69,10 @@ function link_status(link) {
 
 <style scoped>
 /* Rows bleed 8px past the section like the speaking order above, so icons and names line up with its avatars. */
+/* The heading folds the list, laid out like the speaking order's "已离开" toggle. */
+.linked-rooms-toggle { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; }
+.linked-rooms-toggle:hover { color: var(--ui-text-highlighted); }
+.linked-rooms-toggle > [class*="icon"] { width: 12px; height: 12px; }
 .linked-rooms-list { display: flex; flex-direction: column; gap: 2px; margin: 0 -8px; padding: 0; list-style: none; }
 .linked-room { min-height: 0; padding: 4px 8px; }
 .linked-room .pb-member-body { line-height: 1.35; }

@@ -20,15 +20,16 @@ import { read_store } from './external_client.mjs';
 import { bundle_project_markdown, bundle_project_page, inside_room, outside_directory, project_media, project_root, project_zip, read_only_enforced, read_project_files, read_project_folders, room_directories, room_directory_entries, search_project_roots } from './project_files.mjs';
 import { delete_entry, make_folder, paste_entry, read_text, RecycleArea, rename_entry, save_text, upload_part } from './project_manage.mjs';
 import { guard_remote_request, list_remote_directories, remote_allows, remote_roots } from './remote_policy.mjs';
-import { list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
+import { pairing_origins, list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
 import { setup_sidecar } from './adapters/antigravity_app.mjs';
 import { adapter_of, adoption_adapter, BRANCHABLE_ADAPTERS, branch_session, execution_details, session_preview, session_settings, software_defaults, software_defaults_stamp, software_effort, software_models, software_sessions, software_skills, wipe_software_histories } from './adapters/index.mjs';
 import { ADAPTER_IDS, ADAPTER_PROFILES, adapter_capabilities, adapter_profile, DEFAULT_API_MAX_REQUESTS, inherited_access, MAX_API_MAX_REQUESTS, platform_adapters, same_session_family } from './adapters/profiles.mjs';
 import { API_PROVIDERS, api_check, api_models, managed_api_keys, save_api_key, saved_api_keys, validate_api_profile } from './discussion_api.mjs';
+import { account_object_storage } from './attachment_policy.mjs';
 import { SCHEDULER_PROVIDERS, scheduler_check } from './scheduler.mjs';
 import { save_tts_settings, tts_release, tts_settings, tts_speak } from './tts.mjs';
 import { local_service_stop, local_services } from './tts_providers.mjs';
-import { weixin_command } from './weixin.mjs';
+import { channel_command, weixin_command } from './channels.mjs';
 import { stt_part } from './stt.mjs';
 import { image_check, image_settings, room_image, save_image_settings } from './image_service.mjs';
 import { open_project } from './adapters/api_files.mjs';
@@ -36,14 +37,16 @@ import { run_image_tool } from './adapters/api_images.mjs';
 import { access_levels, BUILTIN_EXPERT_PRESETS, MAX_EXPERT_PROMPT, PROJECT_ACCESS } from './expert_prompts.mjs';
 import { acquire_lock, api, check_extra_directories, DiscussionStore, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, free_task_files, member_drafts, member_extra_directories } from './free_runner.mjs';
+import { skill_digest } from './discussion_skills.mjs';
 import { transfer_workflow, bound_workflow, room_workflow_store, trust_workflow, assert_workflow_enabled, bind_room_workflow, delete_workflow, get_workflow, list_workflows, load_room_workflow, parse_workflow_draft, preview_workflow, rename_workflow, save_workflow, set_workflow_disabled, workflow_cards, workflow_directory, workflow_member_list, WORKFLOW_ID_PATTERN,
   card_folder, expert_disk_key, CARD_ID_PATTERN, expert_skills, experts_home, load_room_workflow as load_workflow_for_cards, parse_markdown, serialize_markdown, SKILL_FILE,
   SKILL_NAME_PATTERN, SKILLS_DIRECTORY, workflow_part_files, write_workflow_part_file, delete_workflow_part_file } from './workflows.mjs';
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 import { site_fetch } from './entry_client.mjs';
 import { t } from './i18n.mjs';
+import { post_steward_request, require_steward_skill, require_steward_software, steward_defaults, steward_profile, steward_settings_patch, steward_site, steward_software, steward_status } from './steward.mjs';
 import { host_room_limit, without_host_item } from './host_permissions.mjs';
-import { HOST_ACTION_ITEMS, HOST_ITEMS, HOST_LEGACY_ITEMS, host_allowed, host_permission_fields, host_permissions, host_refusal, normalize_host_permissions } from './host_permissions.mjs';
+import { guest_protection, guest_state_of, guest_withheld, HOST_ACTION_ITEMS, HOST_ITEMS, HOST_LEGACY_ITEMS, host_allowed, host_permission_fields, host_permissions, host_refusal, normalize_host_permissions } from './host_permissions.mjs';
 
 // A platform is a type; `Claude-review` is another Claude instance with its own session, model and effort. An ID is
 // English letters, digits and underscores only; a Chinese name is a display label.
@@ -90,6 +93,7 @@ const help_text = () => `用法：codiscuss launch settings [--file FILE]
       codiscuss launch models --file FILE
       codiscuss launch sessions --file FILE
       codiscuss launch api-key --file FILE
+      codiscuss launch object-storage-settings [--file FILE]
       codiscuss launch api-check --file FILE
       codiscuss launch scheduler-check --file FILE
       codiscuss launch image-settings [--file FILE]
@@ -100,6 +104,7 @@ const help_text = () => `用法：codiscuss launch settings [--file FILE]
       codiscuss launch tts-release
       codiscuss launch local-speech [--file FILE]
       codiscuss launch weixin [--file FILE]
+      codiscuss launch notify [--file FILE]
       codiscuss launch stt --file FILE
       codiscuss launch room-member --file FILE
       codiscuss launch room-member-access --file FILE
@@ -115,7 +120,7 @@ const help_text = () => `用法：codiscuss launch settings [--file FILE]
       codiscuss launch devices [--file FILE]
       codiscuss launch projects [--file FILE]
       codiscuss launch presets [--file FILE]
-      codiscuss launch prompts [list | get program|平台 | set program|平台 --file FILE]
+      codiscuss launch prompts [list | get program|host|平台 | set program|host|平台 --file FILE]
       codiscuss launch machine-link --file FILE
       codiscuss launch workflow-adopt (--draft FILE | --id WORKFLOW) [--scope project|global] [--project-id ID] [--access-file FILE]
       codiscuss launch workflow-promote --id ID [--project-id ID] [--access-file FILE]
@@ -133,21 +138,23 @@ start 使用启动 JSON 创建或接入房间并启动；--dry-run 只校验和�
 room-config 修正已暂停房间的软件路径或切换 Codex App / CLI，不启动讨论；须提供 site、room_id、token。
 room-models 只读指定 site、room_id 的本机登记模型与思考强度，不启动讨论；quick 为 true 时不查询 agy 的默认模型（较慢），该成员标 defaults_pending。
 room-skills 只读指定成员本机安装的技能，须提供 site、room_id、token、name；软件与项目目录只取本机已保存配置，不启动 AI。
-room-files 读取或整理房间已保存的项目目录，须提供 site、room_id、token，可选相对 path 和目录分页 offset；文件返回最多前 128 KiB 文本；给 query 时改为按名称搜索整个项目（含 / 时按路径），最多返回 50 项。root 为房间目录序号（0 为主目录），或 op roots 列出的项目、草稿 id。带 op 时改文件：roots 列出项目与草稿；mkdir（path、name）；rename（path、name）；delete（path，移进回收区）；paste（mode copy|move、source {root, path}、目标 path，可选 conflict replace|keep_both，不带时同名答 conflict）；upload（path、name、upload_id、index、total、size、base64 data，单个最多 20 MB）；read / save（path，save 带 text 与 read 返回的 version，文件已变答 conflict）；trash 列出回收区（保留 30 天）、restore（id）；new-project（name，仅托管账号）；delete-root（root，草稿或托管账号的项目，有房间在用时拒绝）。项目与草稿文件夹本身不能改名、移动，链接不能改动。
+room-files 读取或整理房间已保存的项目目录，须提供 site、room_id、token，可选相对 path 和目录分页 offset；文件返回最多前 128 KiB 文本；给 query 时改为按名称搜索整个项目（含 / 时按路径），最多返回 50 项。root 为房间目录序号（0 为主目录），或 op roots 列出的项目、草稿 id。带 op 时改文件：roots 列出项目与草稿；mkdir（path、name）；rename（path、name）；delete（path，移进回收区）；paste（mode copy|move、source {root, path}、目标 path，可选 conflict replace|keep_both，不带时同名答 conflict）；upload（path、name、upload_id、index、total、size、base64 data，单个大小遵循站点附件设置）；read / save（path，save 带 text 与 read 返回的 version，文件已变答 conflict）；trash 列出回收区（保留 30 天）、restore（id）；new-project（name，仅托管账号）；delete-root（root，草稿或托管账号的项目，有房间在用时拒绝）。项目与草稿文件夹本身不能改名、移动，链接不能改动。
 room-page 只读项目目录里的一个 HTML 文件（path，可选 root），把它按相对路径引用的样式、脚本、图片、字体与音视频内联为 data URL，以 base64 的 data 返回（最多 8 MiB）；Markdown 文件则返回它按相对路径引用的项目图片 {项目路径: data URL} 的 JSON；其他设备经中转时分段返回，按 offset 续读并核对 version；未能载入的引用列在 missing（不存在或在项目目录外）与 skipped（超出大小）。
 room-media 核对项目目录里的一个图片、视频或音频文件（path，可选 root；带 download: true 时任何普通文件都可读，本机地址以下载方式发送）可读：本机网站凭它登记一个 10 分钟有效的播放地址，按 Range 直接读盘，网页拿不到文件路径；其他设备经中转时分段返回 base64 的 data（按 offset 续读并核对 version），最多 64 MB。
 execution-details 只读房间某次执行的过程细节（中间说明、命令与输出、搜索、改动、工具调用），由本机日志还原，须提供 site、room_id、token、execution_id；细节只留在本机，不写入网站。
 models 按 adapter、executable 或 API profile 读取模型目录，不启动讨论或生成回答。
 sessions 浏览某个软件（adapter）保存在这台电脑上的历史会话，供挑选新成员要续接的会话，不启动 AI：action 为 list（默认；可选 cwd 只看该目录的会话、query 按标题 / 目录 / 会话 ID 筛选、offset 续读下一页，返回 sessions 与 next_offset）或 preview（须带 session_id，返回该会话末尾的对话）；软件不支持浏览时 available 为 false。其他设备只能看到常用项目目录内的会话。
 api-key 将 base_url、api_key 保存于本机私有目录，只返回 api_key_ref。
+${t('object-storage-settings 读取或保存本账号的云空间设置。绑定须提供 base_url 和 api_key_ref，保留天数和门槛可单独保存，空间上限只读。')}
 api-check 用 API profile 向模型发送一次极短请求，核对地址、密钥、协议与模型是否可用。
 scheduler-check 用智能调度配置（provider、model、api_key_ref）向决策模型发送一道是非题，核对供应商、模型与密钥是否可用。
 image-settings 读取这台电脑的生图服务（base_url、图片模型 model、api_key_ref，configured 表示已配置 Key）；内容非空时保存。
 image-check 检查这台电脑已保存的生图服务：用密钥读取地址的模型列表（不生成图片、不计费），核对地址、密钥与所选图片模型；无法确认账号能否实际出图（余额、组织验证）。
 image 成员按任务凭据生图（房间须添加了生图卡片）：REQUEST 为 JSON，必填 action（generate 生成 / edit 改图）与 prompt；可选 size（auto、1024x1024、1536x1024、1024x1536 或 16 倍数的 宽x高）、quality（auto/low/medium/high，2.5、2.6 系列另有 xhigh/max）、n（1–10 张）、output_format（png/jpeg/webp/gif，生成另可 svg）、background（auto/opaque/transparent）、file_name（附件名）、save_path（另存进可写项目）；edit 另需 images（1–16 个 {attachment_id} 或 {file_path}，第一张为主图），可加 mask 或 markup（同样格式，二选一）。图片存为成员的附件，返回附件 ID，再用 message post --attachment 附上。
-tts-settings 读取朗读设置；内容非空时保存（语音服务 provider：local（本机，由 local-tts-setup 技能安装）/ volcengine / aliyun / azure / openai，语速 speech_rate，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，本机、火山引擎与 OpenAI 另有语气提示 context（各自默认不同），Azure 另有 region；语音输入服务 stt_provider：local / volcengine / openai）。
+${t('tts-settings 读取或保存语音设置。本机组件可在语音设置中选择“让平台主理人安装”。')}（语音服务 provider：local / volcengine / aliyun / azure / openai，语速 speech_rate，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，本机、火山引擎与 OpenAI 另有语气提示 context（各自默认不同），Azure 另有 region；语音输入服务 stt_provider：local / volcengine / openai）。
 tts 用朗读设置把 text（不超过 300 字）合成为音频（本机服务为 m4a，其余为 MP3），返回 base64。
 weixin 微信通知：action 为 status（默认，读取绑定状态）、login（生成扫码内容）、complete（等待扫码确认，约 20 秒）、test（发一条测试通知）或 unbind（解除本机绑定）。Goal 待确认或阻塞提问 3 分钟仍未回复时通知房主，房主在微信回复即作为房主发言发回该房间；只用本机服务目录保存凭据。
+notify 通知渠道：不带 channel 时列出各渠道状态；带 channel（如 weixin）时 action 为 status（默认）、test（只往该渠道发一条测试通知）或该渠道自己的绑定操作（微信为 login、complete、unbind）。房间需要房主处理时，通知发往所有已就绪的渠道，房主在任一渠道回复都会发回对应房间。
 tts-release 用户停止朗读：所选服务释放在这台电脑上占用的资源（本机语音在 5 秒内结束、释放显存），云端服务无操作。
 local-speech 读取本机朗读（tts，yovoice）与语音识别（stt，crispasr）服务的运行状态（state：running / stopped / other（端口被其他程序占用），及 pid、进程名）；内容为 {"stop": "tts" | "stt"} 时强行结束该服务（连同子进程），只结束端口上属于该服务程序的进程。
 stt 按序接收录音片段（upload_id、index、base64 PCM 16 kHz 单声道、final）；最后一段时识别整段录音并返回 text。
@@ -158,8 +165,9 @@ devices 列出已配对设备；提供 revoke（设备 id）撤销设备。
 ${t("room-invite 创建待签到席位并签发邀请；提供 member_id 时重发该席位链接，旧链接失效。须提供 room_id、token，可选 level（discuss/read）、folders、site_url（借出时间由被邀请方加入时决定）；程序先读名单 revision 再建席位。链接有效 10 分钟，未签到席位 7 天结束；未绑定线上站点时只建立席位。")}
 room-invites 列出房间未兑换的邀请（不含配对码）；须提供 room_id、token。
 room-invite-revoke 撤销一条未兑换的邀请；须提供 room_id、token、invite_id。
+${t("guest-invite 邀请一位外部用户用浏览器限时进入房间，返回链接（15 分钟内未打开即作废）；须提供 room_id、token、revision（先读 /api/rooms/房间/guest 的 revision），可选 label、scope（chat/project）、private_chat、mode（conservative/trust）、duration_seconds（默认 900，最长 86400）、site_url。")}
 projects 读取本机已配置的项目（名称与绝对路径）；提供 JSON（projects 列表）时整体替换保存。
-prompts 查看或修改本机为所有成员（program）与各平台（Claude、Codex、Antigravity、DeepSeek、Qwen、Grok、OpenAI、Custom）设置的系统提示词；set 读 UTF-8 文件，空文件即清除；下次投递起生效，手动启动与外部成员不带。
+prompts 查看或修改本机为所有成员（program）、房间主持人（host，谁当主持人谁收到）与各平台（Claude、Codex、Antigravity、DeepSeek、Qwen、Grok、OpenAI、Custom）设置的系统提示词；set 读 UTF-8 文件，空文件即清除；下次投递起生效，手动启动与外部成员不带。
 presets 读取本机的专家预设（含未删除的内置预设）与各平台默认描述；提供 JSON（presets 列表、description_templates 和/或 hidden_builtins 已删除的内置预设名）时替换对应部分。
 machine-link 返回本机连接指定 site 的电脑编号、名称与凭据，供已登录管理员的网页完成配对；不存在时创建。
 room-member 为房间邀请、请回一位成员；须提供 site、room_id、token、action（add/rejoin）、name。
@@ -191,6 +199,7 @@ ${t("host-control 主持人代房主控制房间，须房主已为本房间勾�
         ${t("新房间复制本房间的智能调度、生图、API 上限、连续派活上限与主持人权限（不含新建房间），本房间可新建的数量有上限；两边各留一张链接卡片；重试沿用同一 --submission-id；")}
         ${t("rooms 查看父子房间；room list --query 标题片段 查找站点中的其他房间。")}
         ${t("room-post --room 房间编号 (--text 正文 | --body-file FILE) [--expect reply|none] [--reply-to 消息编号] [--interrupt] [--submission-id ID] 向同站点房间的主持人发言。回复本次执行的跨房请求即完成该请求；只有父房间可打断子房间。")}
+  ${t("外部用户：guest-disconnect [--guest ID] 立即断开在场或等待入场的外部用户（无需勾选权限，不填 --guest 即当前那位）；外部用户在场期间暂不能改项目权限、模型与接入方式，邀请或请回成员，开启讨论与 Goal，设定时检查，启用或移动工作流，新建房间，向其他房间发言。")}
   ${t("不开放：批准超出上限的轮数、放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己的其他操作。")}
 workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库，卡片按声明的项目权限保存；库里已有同 ID 的工作流时须表明来意：--revision 写读取时的修订号（库在那之后被改过就拒绝，什么都不写），或 --overwrite 明确整份覆盖，两样都没有就拒绝。写法见 workflow-creator 技能。
 JSON 指定 site、entry（conversation/web）、room（建房内容，含 submission_id）
@@ -1009,7 +1018,7 @@ function merge_participant_choices(participants, choices) {
 }
 
 /** Update software defaults or form preferences independently, preserving the other section. */
-export function save_launch_settings(home, input) {
+export function save_launch_settings(home, input, steward_patch = null) {
   const patch = {};
   if (Object.hasOwn(input, 'participants')) {
     const participants = {};
@@ -1032,6 +1041,7 @@ export function save_launch_settings(home, input) {
     lock.exec(`PRAGMA busy_timeout=${SETTINGS_LOCK_WAIT_MS}; BEGIN IMMEDIATE`);
     const previous = launch_settings(home);
     const settings = { ...previous, ...patch };
+    if (steward_patch) settings.steward = { ...previous.steward, ...steward_patch };
     if (patch.create_preferences) settings.create_preferences = { ...previous.create_preferences, ...patch.create_preferences };
     if (choices) settings.participants = merge_participant_choices(settings.participants, choices);
     if (prompts) settings.system_prompts = merge_system_prompts(previous.system_prompts, prompts);
@@ -1054,6 +1064,7 @@ function validate_system_prompts(value) {
   };
   const patch = {};
   if (Object.hasOwn(value, 'program')) patch.program = text('所有成员', value.program);
+  if (Object.hasOwn(value, 'host')) patch.host = text('主持人', value.host);
   if (Object.hasOwn(value, 'platforms')) {
     if (!value.platforms || typeof value.platforms !== 'object' || Array.isArray(value.platforms)) throw new Error('platforms 须为对象');
     patch.platforms = {};
@@ -1068,8 +1079,9 @@ function validate_system_prompts(value) {
 function merge_system_prompts(previous = {}, patch) {
   // The hosted-account administrator's layer (`managed`) is written only by save_managed_prompt, never by this patch.
   const merged = { ...(Object.hasOwn(previous, 'managed') ? { managed: previous.managed } : {}),
-    ...(previous.program ? { program: previous.program } : {}), platforms: { ...(previous.platforms || {}) } };
+    ...(previous.program ? { program: previous.program } : {}), ...(previous.host ? { host: previous.host } : {}), platforms: { ...(previous.platforms || {}) } };
   if (Object.hasOwn(patch, 'program')) { if (patch.program) merged.program = patch.program; else delete merged.program; }
+  if (Object.hasOwn(patch, 'host')) { if (patch.host) merged.host = patch.host; else delete merged.host; }
   for (const [platform, item] of Object.entries(patch.platforms || {})) { if (item) merged.platforms[platform] = item; else delete merged.platforms[platform]; }
   if (!Object.keys(merged.platforms).length) delete merged.platforms;
   return merged;
@@ -1224,10 +1236,11 @@ function validate_profile(name, profile, binding = false) {
 /** Send one request without following redirects that could disclose the room credential. */
 async function site_request(site, path, token, body, headers = {}) {
   const response = await site_fetch(`${site}${path}`, { method: body === undefined ? 'GET' : 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Discussion-Token': token, ...headers },
+    headers: { 'Content-Type': 'application/json', ...(token === undefined ? {} : { 'X-Discussion-Token': token }), ...headers },
     body: body === undefined ? undefined : JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(10000) });
   const result = await response.json();
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${result.error || '请求失败'}`);
+  if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}: ${result.error || '请求失败'}`),
+    { status: response.status, ...(result.room_id ? { room_id: result.room_id } : {}) });
   return result;
 }
 
@@ -1297,7 +1310,7 @@ function woken_member(member) { return typeof member === 'string' || !member.acc
 
 /** Free rooms add one private credential per woken member, kept with the room configuration for retries. */
 function free_launch_config(home, input, room, directory, options) {
-  const defaults = options.defaults || launch_settings(home).participants;
+  const defaults = room.system_kind === 'steward' ? {} : options.defaults || launch_settings(home).participants;
   const names = room.members.filter(woken_member).map(member => typeof member === 'string' ? member : member.name);
   const participants = Object.fromEntries(names.map(name => [name, participant_profile(name, defaults, input, false)]));
   for (const [name, profile] of Object.entries(participants)) assert_model_available(home, name, profile);
@@ -1308,6 +1321,7 @@ function free_launch_config(home, input, room, directory, options) {
   if (workflow && Object.values(workflow.members).some(name => !names.includes(name))) throw new Error('工作流成员须在本次邀请的成员中');
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
     scheduler: input.scheduler || undefined, cwd: input.cwd, extra_directories: input.extra_directories, project_access: input.project_access || undefined, workflow,
+    ...(room.system_kind === 'steward' ? { steward: true, steward_skills: input.steward_skills || [] } : {}),
     ...host_permission_fields(normalize_host_permissions(input.host_permissions, input.host_workflows === true)), api_max_requests: input.api_max_requests,
     image_generation: input.image_generation === true || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
@@ -2546,11 +2560,6 @@ export function expert_export_files(home, { preset: preset_name, workflow: workf
 // panel preset's in the service home. Never through the workflow's save, whose revision leaves skills out. The expert
 // may be writing them at the same time, so each file read carries a digest of its bytes, and a write or deletion names
 // the digest it read ('' for a file it creates): one that changed since is refused, never overwritten unseen.
-const SKILL_DIGEST_LENGTH = 16;
-
-/** A short hash of a skill file's bytes. */
-function skill_digest(bytes) { return createHash('sha256').update(bytes).digest('hex').slice(0, SKILL_DIGEST_LENGTH); }
-
 /** The skills folder a request names: `workflow` and `card` (a saved folder card) or `preset` (its name). */
 function skills_folder(home, { workflow, card, preset } = {}, writing = false) {
   if (preset) {
@@ -2892,8 +2901,28 @@ async function host_room(home, access_file) {
   if (!host || !roster.some(member => member.name === host && member.role === 'host' && member.status === 'active')) throw new Error('只有本房间的主持人能运行此命令');
   // How the room shows each member (the owner's label, else its platform nickname), so the host names them as it sees them.
   const labels = { ...Object.fromEntries((room.members || []).map(member => [member.name, member.label])), ...room.labels };
-  return { path, config, roster, labels, host, execution_id: access.execution_id, folder_id: room.folder_id, max_rounds: room.free?.max_rounds };
+  const guest = await guest_state(config);
+  return { path, config, roster, labels, host, execution_id: access.execution_id, folder_id: room.folder_id, max_rounds: room.free?.max_rounds,
+    guest, protection: guest_protection(guest) };
 }
+
+/**
+ * The room's external-user state (API.md §2 `State`), or null on a site without it (404). Any other failure is thrown,
+ * so a withheld control is not run on a state that could not be read.
+ */
+async function guest_state(config) {
+  let result;
+  try { result = await api(config, '/guest'); }
+  catch (error) {
+    if ((error.status || Number(/^HTTP (\d{3})\b/.exec(error.message)?.[1])) === 404) return null;
+    throw error;
+  }
+  // A site from before external users answers this route with something that is no State (as a 404 would say).
+  return guest_state_of(result);
+}
+
+/** What the host is told for a control withheld while an external user is in the room. */
+const guest_refusal = action => t('外部用户在场期间，主持人暂不能执行 {action}（房主的勾选保持不变，外部用户离开后恢复）；确有需要请让用户在电脑上操作', { action });
 
 const IMAGE_ACTIONS = { generate: 'generate_image', edit: 'edit_image' };
 
@@ -3438,7 +3467,14 @@ const HOST_CONTROLS = {
   withdraw: (ctx, o) => {
     const id = Number(o.message);
     if (!Number.isSafeInteger(id) || id <= 0) throw new Error('须用 --message 指定要撤回的派活消息编号');
-    return ctx.call(`/dispatches/${id}/withdraw`, {});
+    return ctx.call(`/dispatches/${id}/withdraw`, { execution_id: ctx.execution_id });
+  },
+  // Ends the external user's visit (or a redeemed one still waiting) at once, granted or not (README §3.5); the site
+  // revokes it and stops the room's runs (API.md §2). Without --guest it ends the one the room has now.
+  'guest-disconnect': (ctx, o) => {
+    const guest_id = o.guest || ctx.guest?.guest?.id;
+    if (!guest_id) throw new Error(t('本房间现在没有外部用户'));
+    return ctx.call('/guest/disconnect', { guest_id });
   },
   checkin: (ctx, o) => {
     if (o.off) return ctx.call('/host-checkin', { off: true });
@@ -3459,7 +3495,8 @@ const HOST_CONTROLS = {
  */
 export async function host_control(home, action, options, launch_options = {}) {
   if (!Object.hasOwn(HOST_CONTROLS, action || '')) throw new Error(`操作须为 ${Object.keys(HOST_CONTROLS).join('、')} 之一`);
-  const { config, roster, labels, host, execution_id, folder_id, max_rounds } = await host_room(home, options.access_file);
+  const { config, roster, labels, host, execution_id, folder_id, max_rounds, protection, guest } = await host_room(home, options.access_file);
+  if (protection && guest_withheld(action, options)) throw new Error(guest_refusal(action));
   const needed = HOST_ACTION_ITEMS[action];
   if (needed && !host_allowed(config, needed)) throw new Error(host_refusal(needed));
   if (options.body_file && ['create-room', 'room-post'].includes(action)) {
@@ -3477,7 +3514,7 @@ export async function host_control(home, action, options, launch_options = {}) {
   const headers = { 'User-Agent': `AI-CoDiscuss-host:${host}`, 'X-Acting-Member-Token': config.members[host].token };
   const owner = { site: config.site, room_id: config.room, token: config.token };
   const call = (path, body) => site_request(config.site, `/api/rooms/${config.room}${path}`, config.token, body, headers);
-  const ctx = { home, config, roster, labels, host, execution_id, headers, owner, call, launch_options, folder_id, max_rounds };
+  const ctx = { home, config, roster, labels, host, execution_id, headers, owner, call, launch_options, folder_id, max_rounds, guest };
   const result = await HOST_CONTROLS[action](ctx, options);
   await record_host_action(ctx, action, options, result);
   return result;
@@ -3491,6 +3528,7 @@ function host_action_record(ctx, action, o, result) {
   };
   if (['stop', 'away', 'remove', 'back'].includes(action)) return { action, member: label(o.member) };
   if (action === 'stop-all') return { action };
+  // `guest-disconnect` leaves its line from the site, which writes it with the disconnect (#14924 item 5).
   if (action === 'steer') return { action, member: label(o.member), detail: o.text };
   if (action === 'retry') return { action, detail: execution_number(o.execution) };
   if (action === 'withdraw') return { action, detail: Number(o.message) };
@@ -3532,7 +3570,8 @@ async function record_host_action(ctx, action, options, result) {
  */
 export async function adopt_workflow(home, { access_file, draft_file, workflow_id, scope, project_id }) {
   if (!draft_file === !workflow_id) throw new Error('须提供 --draft 草稿文件或 --id 工作流库中的工作流 ID 之一；凭据用 --access-file 或 DISCUSS_ACCESS_FILE');
-  const { config, roster } = await host_room(home, access_file);
+  const { config, roster, protection } = await host_room(home, access_file);
+  if (protection) throw new Error(guest_refusal('workflow-adopt'));
   if (!host_allowed(config, 'workflows')) throw new Error(host_refusal('workflows'));
   if (scope && !['global', 'project'].includes(scope)) throw new Error('工作流作用域无效');
   const roots = library_projects(home, { room_id: config.room });
@@ -3590,6 +3629,153 @@ function room_config_by_id(home, room_id) {
   return paths.length === 1 ? configuration_snapshot(paths[0]).config : null;
 }
 
+/** Use only a privately registered steward on this account's loopback origin. */
+async function registered_steward(home, room_id) {
+  if (!room_id) return null;
+  const site = steward_site(home);
+  const path = read_registry(home).find(path => {
+    const identity = registered_identity(path);
+    return identity?.site === site && identity.room === room_id;
+  });
+  if (!path) return null;
+  const { config } = configuration_snapshot(path);
+  if (!config.steward) return null;
+  const room = await api(config, '').catch(error => { if (error.status !== 404) throw error; return null; });
+  return room?.system_kind === 'steward' && !room.archived ? { path, config, room } : null;
+}
+
+/** Preserve a room opened before steward software had to be selected explicitly. */
+function record_steward_software(home, settings, current) {
+  if (!current || settings.steward?.adapter) return settings;
+  const [name, profile] = Object.entries(current.config.participants)[0] || [];
+  const adapter = current.room.members?.find(member => member.name === name)?.adapter || profile?.adapter;
+  return adapter_profile(adapter) ? save_launch_settings(home, {}, { adapter }) : settings;
+}
+
+/** Create through the standard launch journal, keeping the original creation ID across uncertain outcomes. */
+async function create_steward(home, view, prepared, options) {
+  const { platform, profile } = prepared;
+  const pending = join(home, 'steward-launch.json');
+  const saved = existsSync(pending) ? JSON.parse(readFileSync(pending, 'utf8')) : null;
+  const raw = saved?.room?.host === platform && saved.site === steward_site(home) ? saved : {
+    entry: 'web', site: steward_site(home), cwd: view.cwd, project_access: profile.project_access,
+    without_saved_tools: true, participants: { [platform]: profile }, steward_skills: view.skills,
+    room: { title: t('平台主理人', {}, options.lang || 'zh-CN'), mode: 'free', host: platform,
+      system_kind: 'steward', members: [platform], submission_id: randomUUID() },
+  };
+  if (raw !== saved) atomic_json(pending, raw);
+  const result = await launch_steward_with_recovery(home, raw, options);
+  save_launch_settings(home, {}, { room_id: result.room.id });
+  rmSync(pending, { force: true });
+  return { path: result.config_path, config: configuration_snapshot(result.config_path).config };
+}
+
+/** A loopback administrator can archive an orphan, but only after checking the conflicting room is a steward. */
+async function launch_steward_with_recovery(home, raw, options) {
+  try { return await launch_discussion(home, raw, options); }
+  catch (error) {
+    const room_id = error.room_id;
+    if (error.status !== 409 || typeof room_id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(room_id)) throw error;
+    try {
+      const path = `/api/rooms/${room_id}`;
+      const room = await site_request(raw.site, path);
+      if (room.system_kind !== 'steward') throw error;
+      if (!room.archived) await site_request(raw.site, `${path}/archive`, undefined, { actor: '用户' });
+      return await launch_discussion(home, raw, options);
+    } catch (cause) {
+      throw new Error(t('无法恢复平台主理人房间 {room_id}：{reason}', { room_id, reason: cause.message }), { cause });
+    }
+  }
+}
+
+/** Archive the old software's room before persisting a platform change. The next open creates its successor. */
+async function save_steward_settings(home, input) {
+  const patch = steward_settings_patch(input);
+  let settings = launch_settings(home);
+  const current = await registered_steward(home, settings.steward?.room_id);
+  settings = record_steward_software(home, settings, current);
+  if (current && Object.hasOwn(patch, 'adapter')) {
+    const view = steward_defaults(home, { ...settings, steward: { ...settings.steward, ...patch } });
+    const [platform] = steward_software(settings, view.adapter);
+    if (platform && !Object.hasOwn(current.config.participants, platform)) {
+      await api(current.config, '/archive', { actor: '用户' });
+      patch.room_id = null;
+    }
+  }
+  const result = save_launch_settings(home, {}, patch);
+  return steward_status(home, result, patch.room_id === null ? null : current?.config.room);
+}
+
+/** Apply the platform settings for the next execution without replacing the room or its history. */
+function configure_steward(current, view, profile) {
+  const { path, config } = current;
+  const name = Object.keys(config.participants)[0];
+  const next = { ...config, cwd: view.cwd, project_access: profile.project_access, steward_skills: view.skills,
+    participants: { [name]: profile } };
+  const normalized = validate_config(next, dirname(path));
+  if (JSON.stringify(config) !== JSON.stringify(normalized)) atomic_json(path, normalized);
+  return normalized;
+}
+
+/** List only archived steward rooms and read their single member's software from the website. */
+async function steward_history(home) {
+  const site = steward_site(home);
+  const { rooms } = await site_request(site, '/api/rooms');
+  const history = await Promise.all(rooms.filter(room => room.system_kind === 'steward' && room.archived).map(async summary => {
+    const room = await site_request(site, `/api/rooms/${summary.id}`).catch(error => { if (error.status !== 404) throw error; return null; });
+    if (!room?.archived || room.system_kind !== 'steward') return null;
+    const member = room.free?.members?.[0] || room.members?.[0];
+    return { room_id: room.id, archived_at: room.archived_at ?? summary.archived_at ?? null, adapter: member?.adapter ?? '' };
+  }));
+  return { rooms: history.filter(Boolean).sort((left, right) => String(right.archived_at ?? '').localeCompare(String(left.archived_at ?? ''))) };
+}
+
+/** Verify the target and request a guarded single-room destruction on this account's own site. */
+async function delete_steward_history(home, room_id) {
+  if (typeof room_id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(room_id)) throw new Error(t('房间编号无效'));
+  const site = steward_site(home), path = `/api/rooms/${room_id}`;
+  const room = await site_request(site, path);
+  if (room.system_kind !== 'steward' || !room.archived) throw new Error(t('只能删除已存档的平台主理人房间'));
+  await site_request(site, `${path}/delete`, undefined, { actor: '用户', archived_steward_only: true });
+  return { room_id, deleted: true };
+}
+
+/** Serve the privileged local actions, sharing the same implementation with the CLI. */
+export async function steward_command(home, action, input = {}, options = {}) {
+  if (process.env.DISCUSS_ACCESS_FILE || process.env.CODISCUSS_TOOL_LOCKDOWN === '1') {
+    throw new Error(t('平台主理人设置和请求只能由用户发起'));
+  }
+  if (action === 'steward-history') return steward_history(home);
+  if (action === 'steward-delete') return delete_steward_history(home, input.room_id);
+  const writing = action === 'steward-settings' || action === 'steward-request' || input.open === true;
+  const initial = launch_settings(home).steward;
+  const release = writing || (initial?.room_id && !initial.adapter) ? acquire_lock(join(home, 'steward-command')) : null;
+  try {
+    if (action === 'steward-settings') return await save_steward_settings(home, input);
+    let settings = launch_settings(home);
+    let current = await registered_steward(home, settings.steward?.room_id);
+    if (release) settings = record_steward_software(home, settings, current);
+    const view = steward_defaults(home, settings);
+    const [platform] = steward_software(settings, view.adapter);
+    const switched = current && platform && !Object.hasOwn(current.config.participants, platform);
+    if (!writing) return steward_status(home, settings, switched ? null : current?.config.room);
+    require_steward_software(view);
+    if (action === 'steward-request') require_steward_skill(settings, input.skill);
+    if (current) rmSync(join(home, 'steward-launch.json'), { force: true });
+    if (current && !switched && action === 'steward') return steward_status(home, settings, current.config.room);
+    const prepared = steward_profile(home, settings, view, participant_profile);
+    assert_model_available(home, prepared.platform, prepared.profile);
+    if (switched) {
+      await api(current.config, '/archive', { actor: '用户' });
+      current = null;
+    }
+    current ||= await create_steward(home, view, prepared, { ...options, lang: input.lang });
+    if (action === 'steward') return steward_status(home, settings, current.config.room);
+    const config = configure_steward(current, view, prepared.profile);
+    return await post_steward_request(config, input);
+  } finally { release?.(); }
+}
+
 /**
  * The folders a request without this computer owner's standing may use: for an ordinary account, its own projects and
  * draft space; for another device of the owner, the saved projects.
@@ -3641,11 +3827,13 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     goal: { type: 'string' }, label: { type: 'string' }, description: { type: 'string' }, adapter: { type: 'string' }, 'submission-id': { type: 'string' },
     message: { type: 'string' }, minutes: { type: 'string' }, off: { type: 'boolean' }, list: { type: 'boolean' },
     title: { type: 'string' }, members: { type: 'string' }, host: { type: 'string' }, cwd: { type: 'string' }, room: { type: 'string' },
+    guest: { type: 'string' },
   } });
   if (values.help || !positionals.length) return process.stdout.write(command_help(positionals[0]));
   if (positionals[0] === 'workflow-promote') {
     const home = service_home();
-    const { config } = await host_room(home, values['access-file'] || process.env.DISCUSS_ACCESS_FILE);
+    const { config, protection } = await host_room(home, values['access-file'] || process.env.DISCUSS_ACCESS_FILE);
+    if (protection) throw new Error(guest_refusal('workflow-promote'));
     if (!host_allowed(config, 'workflows')) throw new Error(host_refusal('workflows'));
     const result = workflows_command(home, { action: 'move', room_id: config.room, scope: 'project', project_id: values['project-id'], target_scope: 'global', id: values.id });
     return process.stdout.write(JSON.stringify(result) + '\n');
@@ -3659,7 +3847,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     const { member, order, revision, name, access, model, effort, execution, text, goal, label, description, adapter } = values;
     const result = await host_control(service_home(), positionals[1], { member, order, revision, name, access, model, effort, execution, text, goal,
       label, description, adapter, message: values.message, minutes: values.minutes, off: values.off, list: values.list, do: values.do, submission_id: values['submission-id'],
-      title: values.title, members: values.members, host: values.host, cwd: values.cwd, room: values.room, expect: values.expect, reply_to: values['reply-to'], interrupt: values.interrupt, body_file: values['body-file'], host_model: values['host-model'], host_effort: values['host-effort'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+      title: values.title, members: values.members, host: values.host, cwd: values.cwd, room: values.room, guest: values.guest, expect: values.expect, reply_to: values['reply-to'], interrupt: values.interrupt, body_file: values['body-file'], host_model: values['host-model'], host_effort: values['host-effort'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
     return process.stdout.write(`${JSON.stringify(result)}
 `);
   }
@@ -3678,14 +3866,14 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     const home = service_home();
     const [, op = 'list', key = ''] = positionals;
     const layers = launch_settings(home).system_prompts || {};
-    const read = name => name === 'program' ? layers.program || '' : layers.platforms?.[name] || '';
-    if (op === 'list') return process.stdout.write(`${JSON.stringify({ program: read('program'), platforms: layers.platforms || {} })}\n`);
-    if (!key || (key !== 'program' && !Object.hasOwn(API_PROVIDERS, key))) throw new Error(`须指定 program 或平台：${Object.keys(API_PROVIDERS).join('、')}`);
+    const read = name => ['program', 'host'].includes(name) ? layers[name] || '' : layers.platforms?.[name] || '';
+    if (op === 'list') return process.stdout.write(`${JSON.stringify({ program: read('program'), host: read('host'), platforms: layers.platforms || {} })}\n`);
+    if (!key || (!['program', 'host'].includes(key) && !Object.hasOwn(API_PROVIDERS, key))) throw new Error(`须指定 program、host 或平台：${Object.keys(API_PROVIDERS).join('、')}`);
     if (op === 'get') return process.stdout.write(`${read(key)}\n`);
     if (op !== 'set' || !values.file) throw new Error('用法：codiscuss launch prompts set program|平台 --file FILE');
     const text = readFileSync(values.file, 'utf8').replace(/^\uFEFF/, '');
-    const saved = save_launch_settings(home, { system_prompts: key === 'program' ? { program: text } : { platforms: { [key]: text } } });
-    return process.stdout.write(`${JSON.stringify({ program: saved.system_prompts?.program || '', platforms: saved.system_prompts?.platforms || {} })}\n`);
+    const saved = save_launch_settings(home, { system_prompts: ['program', 'host'].includes(key) ? { [key]: text } : { platforms: { [key]: text } } });
+    return process.stdout.write(`${JSON.stringify({ program: saved.system_prompts?.program || '', host: saved.system_prompts?.host || '', platforms: saved.system_prompts?.platforms || {} })}\n`);
   }
   if (positionals[0] === 'image') {
     if (!values.file) throw new Error('用 --file 指定请求 JSON：{"action":"generate"|"edit","prompt":"…",…}');
@@ -3728,6 +3916,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     scheduler_providers: SCHEDULER_PROVIDERS, api_keys: saved_api_keys(home), managed_api_keys: restricted ? managed_api_keys(home) : [], projects: launch_projects(home).projects, projects_restricted: restricted, full_access_only: ADAPTER_IDS.filter(id => adapter_capabilities(id).no_sandbox), workspace: space.workspace, user_home: restricted ? homedir() : '', ...expert_presets(home), ...workflow_library(home) };
   // The online site an invitation would use, so an external expert's card says before the room exists whether a link can be made.
   if (positionals[0] === 'settings') result.invite_site = await (await import('./external_gateway.mjs')).invite_site_state(home);
+  else if (['steward', 'steward-settings', 'steward-request', 'steward-history', 'steward-delete'].includes(positionals[0])) result = await steward_command(home, positionals[0], input || {});
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
   else if (positionals[0] === 'presets') result = presets_command(home, input || {}, values.remote || restricted);
   else if (['expert-export', 'expert-import'].includes(positionals[0]) && values.scope === 'project') {
@@ -3750,6 +3939,9 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-workflow' && input) result = await room_workflow(home, input);
   else if (positionals[0] === 'room-settings' && input) result = await room_settings(home, input);
   else if (positionals[0] === 'api-key' && input) result = save_api_key(home, { base_url: input.base_url, api_key: input.api_key });
+  else if (positionals[0] === 'object-storage-settings') {
+    result = await account_object_storage(home, input);
+  }
   else if (positionals[0] === 'api-check' && input) result = await api_check(home, input);
   else if (positionals[0] === 'scheduler-check' && input) result = await scheduler_check(home, input);
   else if (positionals[0] === 'image-check') result = await image_check(home);
@@ -3761,6 +3953,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'tts-release') result = tts_release(home);
   else if (positionals[0] === 'local-speech') result = input?.stop ? await local_service_stop(home, input.stop) : await local_services(home);
   else if (positionals[0] === 'weixin') result = await weixin_command(home, input || {});
+  else if (positionals[0] === 'notify') result = await channel_command(home, input || {});
   else if (positionals[0] === 'stt' && input) result = await stt_part(home, input);
   else if (positionals[0] === 'room-models' && input) result = await room_models(home, input, { restricted: values.remote || restricted });
   else if (positionals[0] === 'room-skills' && input) result = await room_skills(home, input);
@@ -3795,18 +3988,23 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'device-pairing' && !values.remote) {
     // The QR code opens the paired website and carries this computer's key fingerprint for the new device to check.
     const { keyed_links } = await import('./remote_launch.mjs');
-    const [site, link] = Object.entries(keyed_links(home).sites).find(([origin]) => !input?.site || origin === input.site) || [];
+    const [site, link] = Object.entries(keyed_links(home).sites).find(([origin, item]) => item.id && item.private_key && (!input?.site || origin === input.site)) || [];
     if (!link) throw new Error('这台电脑未绑定自建中转，请在管理面板“本机 → 自建中转”处绑定');
-    result = start_pairing(home, { site, fingerprint: machine_fingerprint(link), temporary: input?.temporary === true, without_passkey: input?.without_passkey === true });
+    result = start_pairing(home, { site, origin: input?.origin || site, machine: link.id, fingerprint: machine_fingerprint(link), temporary: input?.temporary === true, without_passkey: input?.without_passkey === true });
   }
   else if (positionals[0] === 'devices' && !values.remote) {
     result = input?.revoke ? revoke_device(home, String(input.revoke)) : list_devices(home);
+    if (!input?.revoke) {
+      const { machine_links } = await import('./remote_launch.mjs');
+      const site = Object.entries(machine_links(home).sites).find(([, link]) => link.id && link.private_key)?.[0];
+      Object.assign(result, site ? pairing_origins(home, site) : { origins: [], rules: [] });
+    }
     // The website takes devices only from the list this computer signs, so a revocation is sent at once.
     if (input?.revoke) await (await import('./remote_launch.mjs')).sync_remote_launches(home).catch(() => {});
   }
   else if (positionals[0] === 'machine-link' && input) result = (await import('./remote_launch.mjs')).machine_link(home, input.site);
   // Invites for members on other computers, from this computer or a paired device (external_gateway.mjs).
-  else if (['room-invite', 'room-invites', 'room-invite-revoke'].includes(positionals[0]) && input) {
+  else if (['room-invite', 'room-invites', 'room-invite-revoke', 'guest-invite'].includes(positionals[0]) && input) {
     result = await (await import('./external_gateway.mjs')).invite_command(home, positionals[0], input, { device: values.remote ? values.device : undefined });
   }
   else if (positionals[0] === 'start' && input) {

@@ -22,6 +22,7 @@ function finish(key, report = {}) {
   const total = millis(report.total), worker = millis(report.worker), relay = millis(report.relay);
   const diff = (a, b) => a !== null && b !== null ? millis(a - b) : null;
   Object.assign(row, { mobile_ms: diff(total, worker), site_ms: diff(worker, relay),
+    d1_ms: millis(report.d1), relay_overhead_ms: diff(millis(report.rpc), relay), primary_colo: colo(report.db),
     link_ms: diff(relay, row.local_ms), device_colo: colo(report.dc), machine_colo: colo(report.mc) });
   if (queued >= MAX_PENDING) return;
   queued++;

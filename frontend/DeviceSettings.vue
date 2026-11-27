@@ -24,13 +24,19 @@ const audit = cached_audit;
 const audit_open = ref("");
 const busy = ref("");
 const code = ref("");
+const machineId = ref("");
 const temporary = ref(false);
 // Lets the next code pair a browser that cannot create passkeys; such a device skips the daily confirmation.
 const without_passkey = ref(false);
+const origins = ref([]), origin = ref(''), custom_origin = ref(''), has_suffix = ref(false);
 const invite = ref(null);
 // The device waiting for the user to confirm unbinding it.
 const unbinding = ref(null);
 const unbinding_open = ref(false);
+const deploy_open = ref(false);
+async function ask_deploy() {
+  if (await bridge.ensure_steward_configured()) deploy_open.value = true;
+}
 const RENEW_SOON_MS = 7 * 86400000;
 const INVITE_POLL_MS = 3000;
 let invite_timer = null;
@@ -56,6 +62,9 @@ async function load() {
   try {
     const result = await bridge.device.request("device-list");
     devices.value = result.devices;
+    origins.value = result.origins || [];
+    has_suffix.value = result.rules?.some(rule => rule.subdomains) || false;
+    if (!(has_suffix.value && origin.value === 'custom') && !origins.value.includes(origin.value)) origin.value = origins.value[0] || '';
     audit.value = result.audit || [];
   } catch (error) {
     if (!error.cancelled && !error.need) bridge.notify("error", error.message);
@@ -70,7 +79,7 @@ const needs_pairing = computed(() => !local.value && view.value.admin.devices &&
 const renew_due = computed(() => current.value && !current.value.temporary && current.value.expires_at - Date.now() < RENEW_SOON_MS);
 
 async function pair() {
-  if (await run("pair", () => bridge.device.pair(code.value))) await load();
+  if (await run("pair", () => bridge.device.pair(code.value, device.value.pairing_machine || machineId.value))) await load();
 }
 
 // Scanning in the page: the camera frames are read here until a pairing link shows up, then pairing starts at once.
@@ -87,8 +96,9 @@ const { scanning, camera_ready, has_camera, video, scan, stop_scan } = use_qr_ca
 
 /** Show a two-minute code and the QR code a phone camera can open, for pairing another device. */
 function add_device() {
+  if (origin.value === 'custom' && !custom_origin.value.trim()) return;
   return run("invite", async () => {
-    const result = await bridge.device.invite(temporary.value, without_passkey.value);
+    const result = await bridge.device.invite(temporary.value, without_passkey.value, origin.value === 'custom' ? custom_origin.value.trim() : origin.value);
     invite.value = { ...result, svg: result.url ? renderSVG(result.url, { border: 1 }) : "", expired: false };
     watch_invite(devices.value?.length || 0);
   });
@@ -157,10 +167,17 @@ const date = (time) => new Date(time).toLocaleString(locale, { month: "numeric",
 <template>
   <section v-if="local || remote || needs_pairing || device.needs" class="device-settings" aria-labelledby="device-heading">
     <h4 id="device-heading">{{ t('已配对的设备') }}</h4>
+    <div v-if="local || remote" class="device-actions">
+      <UButton :label="t('让平台主理人部署')" icon="i-lucide-cloud-upload" color="neutral" variant="outline" class="pb-action" size="sm" @click="ask_deploy" />
+    </div>
+    <ConfirmDialog v-model:open="deploy_open" :title="t('部署线上站点')"
+      :description="t('平台主理人会准备部署方案。写入 Cloudflare 前会列出实际资源和操作，等你确认。')"
+      @confirm="bridge.request_steward('cloudflare-deploy', {}, { confirmed: true })" />
 
     <form v-if="needs_pairing" class="dialog-form device-pair" :aria-label="t('配对这台设备')" @submit.prevent="pair">
       <p class="fine-print">{{ t('扫描电脑本机网页 设置 → 添加设备 的二维码，或输入配对码。') }}</p>
       <div class="device-pair-row">
+        <UInput v-if="!device.pairing_machine" v-model="machineId" :placeholder="t('电脑编号')" :aria-label="t('电脑编号')" autocomplete="off" class="w-full" />
         <UInput v-model="code" placeholder="XXXX-XXXX-XXXX" autocomplete="off" :maxlength="16" class="w-full" :aria-label="t('配对码')" />
         <UButton icon="i-lucide-scan-line" color="neutral" variant="outline" class="pb-action" :aria-label="t('扫码')" :title="has_camera ? t('扫码') : t('这台设备没有相机，请输入配对码')" :disabled="Boolean(busy) || scanning || !has_camera" :loading="scanning && !camera_ready" @click="scan" />
       </div>
@@ -177,7 +194,11 @@ const date = (time) => new Date(time).toLocaleString(locale, { month: "numeric",
     <template v-else>
       <div class="device-actions">
         <UButton v-if="remote && renew_due" :label="t('续期这台设备')" color="neutral" variant="soft" size="sm" :loading="busy === 'renew'" :disabled="Boolean(busy)" @click="run('renew', async () => { await bridge.device.renew(); await load(); })" />
-        <UButton v-if="local" :label="t('添加设备')" icon="i-lucide-qr-code" color="neutral" variant="outline" class="pb-action" size="sm" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />
+        <label v-if="local && (origins.length > 1 || has_suffix)">{{ t('配对地址') }}
+          <select v-model="origin" @change="invite = null"><option v-for="url in origins" :key="url">{{ url }}</option><option v-if="has_suffix" value="custom">{{ t('填写地址') }}</option></select>
+          <input v-if="origin === 'custom'" v-model="custom_origin" type="url" placeholder="https://relay.example.com" @input="invite = null">
+        </label>
+        <UButton v-if="local" :label="t('添加设备')" icon="i-lucide-qr-code" color="neutral" variant="outline" class="pb-action" size="sm" :loading="busy === 'invite'" :disabled="Boolean(busy) || (origin === 'custom' && !custom_origin.trim())" @click="add_device" />
         <UCheckbox v-if="local" v-model="without_passkey" :label="t('允许不用通行密钥')" />
         <UCheckbox v-if="local" v-model="temporary" :label="t('临时设备（只授权 1 天）')" />
       </div>
@@ -187,6 +208,7 @@ const date = (time) => new Date(time).toLocaleString(locale, { month: "numeric",
         <div>
           <p>{{ t('用新设备的相机扫描二维码；没有摄像头就在新设备打开网站，输入配对码：') }}</p>
           <p class="device-code" :class="{ 'device-expired': invite.expired }">{{ invite.code }}</p>
+          <p v-if="invite.machine">{{ t('电脑编号') }} · {{ invite.machine }}</p>
           <p v-if="invite.expired" class="fine-print device-expired-note">{{ t('已过期，不能再用。') }}</p>
           <p v-else class="fine-print">{{ t('{value1} 前有效（2 分钟），只能用一次{value2}{value3}。', { value1: date(invite.expires_at), value2: invite.temporary ? t('；临时设备只授权 1 天') : "", value3: invite.without_passkey ? t('；允许不用通行密钥') : "" }) }}</p>
           <UButton :label="t('重新生成')" icon="i-lucide-refresh-cw" color="neutral" variant="outline" class="pb-action" size="xs" :loading="busy === 'invite'" :disabled="Boolean(busy)" @click="add_device" />

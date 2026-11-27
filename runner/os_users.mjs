@@ -11,6 +11,7 @@
  * and hosted computers are managed over SSH. Passwords saved earlier with the owner's scope still work where that scope
  * does. Everything here is Windows only.
  */
+import { object_quota_path, policy_path } from './attachment_policy.mjs';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -34,7 +35,7 @@ const COMMAND_ROOT = join(SHARED_ROOT, 'bin');
 const CODEX_PACKAGE_FILE = 'codex-package.json';
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 // What an account's instance runs from the shared copy of this program.
-const APP_PARTS = ['package.json', 'server.py', 'runner', 'gateway', 'backend', 'web', '.agents', 'workflows'];
+const APP_PARTS = ['package.json', 'server.py', 'runner', 'gateway', 'backend', 'web', 'frontend/locales/en', '.agents', 'workflows'];
 // Parts of a Python installation the website does not need; site-packages is most of its size.
 const PYTHON_SKIP = new Set(['site-packages', 'Doc', 'include', 'libs', 'tcl', 'share', 'Scripts', 'test', 'idlelib', 'tkinter', 'turtledemo', '__pycache__']);
 const JOB_ROOT = join(SHARED_ROOT, 'jobs');
@@ -673,6 +674,8 @@ export function start_instance_as_user(data, account, service_home, local_script
   place_account_file(data, account, START_SCRIPT, `﻿$flag = ${quote(join(SHARED_ROOT, 'keys', account, RUN_FLAG))}
 if (-not (Test-Path -LiteralPath $flag)) { exit 0 }
 $env:DISCUSS_SERVICE_HOME = ${quote(service_home)}
+$env:DISCUSS_ATTACHMENT_POLICY_FILE = ${quote(policy_path(data))}
+$env:DISCUSS_OBJECT_STORAGE_QUOTA_FILE = ${quote(object_quota_path(data, account))}
 $env:Path = ${quote(`${COMMAND_ROOT};`)} + $env:Path
 $env:${NO_DESKTOP_VARIABLE} = '1'
 $env:${ISOLATED_ACCOUNT_VARIABLE} = '1'

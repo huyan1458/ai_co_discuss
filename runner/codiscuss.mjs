@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Unified entrypoint for the local service and the discussion website client. */
 import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
@@ -81,7 +82,11 @@ const WEBSITE_CLIENT = fileURLToPath(new URL('./discuss.py', import.meta.url));
 function website_cli(args) {
   const executable = local_settings().python || (process.platform === 'win32' ? 'python' : 'python3');
   const result = spawnSync(executable, ['-X', 'utf8', WEBSITE_CLIENT, ...args], {
-    stdio: 'inherit', windowsHide: true, env: { ...process.env, DISCUSS_CLI_NAME: 'codiscuss', CODISCUSS_NODE: process.execPath },
+    stdio: 'inherit', windowsHide: true, env: { ...process.env, DISCUSS_CLI_NAME: 'codiscuss', CODISCUSS_NODE: process.execPath,
+      CODISCUSS_DISPATCH_HELP: JSON.stringify({
+        list: t('管理员读取主持人派活记录'),
+        rate: t('房主为一条主持人派活评分或撤回评分'),
+      }) },
   });
   if (result.error) throw new Error(t('网站操作需要 Python 3.10+，无法启动 {value1}：{value2}', { value1: executable, value2: result.error.message }));
   process.exitCode = result.status ?? (result.signal === 'SIGINT' ? 130 : 1);
@@ -131,10 +136,29 @@ Ctrl+C 停止服务
   return service_main(forwarded, values.json ? value => process.stdout.write(`${JSON.stringify(value)}\n`) : print_result);
 }
 
+/**
+ * A restricted run (`CODISCUSS_TOOL_LOCKDOWN=1`) uses only the credential file its process was started with: an
+ * `--access-file` naming another file (its own drafts are writable) or inline `DISCUSS_ACCESS` would let it act without
+ * its task credential, which the local website takes as this computer's administrator (#14924 item 1). The Python
+ * commands check the same again and also refuse an empty credential (runner/discuss.py `lockdown_access`). Throws.
+ */
+export function lockdown_access_guard(args, env = process.env) {
+  if (env.CODISCUSS_TOOL_LOCKDOWN !== '1') return;
+  const refuse = () => { throw new Error(t('本次运行已收窄，只能使用本次任务绑定的凭据（DISCUSS_ACCESS_FILE），不能改用其他凭据文件、空凭据或 DISCUSS_ACCESS')); };
+  const bound = env.DISCUSS_ACCESS_FILE || '';
+  if (env.DISCUSS_ACCESS || !bound) refuse();
+  const same = value => { try { return realpathSync(value) === realpathSync(bound); } catch { return false; } };
+  args.forEach((arg, index) => {
+    const [flag, inline] = arg.split(/=(.*)/s);
+    if (flag === '--access-file' && !same(inline ?? args[index + 1] ?? '')) refuse();
+  });
+}
+
 /** Keep startup convenient while separating local service management from website operations. */
 async function main(args = process.argv.slice(2)) {
   const [command] = args;
-  if (['--help', '-h', 'help'].includes(command)) return process.stdout.write(HELP + '\n  ' + t('analytics  查看全房间协作统计') + '\n');
+  lockdown_access_guard(args);
+  if (['--help', '-h', 'help'].includes(command)) return process.stdout.write(HELP + '\n  ' + t('analytics  查看全房间协作统计') + '\n  ' + t('steward  查看、配置或请求平台主理人') + '\n');
   if (command === 'service') return service_cli(args.slice(1));
   if (command === 'launch') {
     // A restricted run (子Task5 CONTRACT §5) may not read local files through launch commands.
@@ -144,6 +168,8 @@ async function main(args = process.argv.slice(2)) {
   if (['install', 'setup'].includes(command)) return setup_main(command, args.slice(1));
   if (command === 'local') return local_main(args.slice(1));
   if (command === 'analytics') return (await import('./analytics.mjs')).analytics_cli(args.slice(1));
+  if (command === 'steward') return (await import('./steward.mjs')).steward_cli(args.slice(1),
+    (action, input = {}) => launch_main([action], JSON.stringify(input)));
   if (command === 'token') return admin_main(args.slice(1));
   if (command === 'panel') return (await import('./admin_panel.mjs')).panel_main(args.slice(1));
   if (command === 'admin') return (await import('./admin_cli.mjs')).admin_cli(args.slice(1));

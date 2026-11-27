@@ -10,6 +10,8 @@ from math import floor
 from time import monotonic
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .analytics_dispatch import dispatch_quality
+from .analytics_live import live_snapshot
 from .analytics_issues import concurrency_series, issues as attention_issues, unfinished_series
 from .texts import Text
 
@@ -145,6 +147,7 @@ SELECT r.room_id,r.message_id,r.chain_id,r.created_at,r.status,mbr.name,mbr.adap
          WHERE stop.room_id=r.room_id AND stop.kind='api.write' AND json_extract(stop.data,'$.path')='/stop'
            AND json_extract(cancelled.data,'$.request_id')=r.id) END AS stopped_pending
 FROM member_requests r LEFT JOIN prior ON prior.request_id=r.id JOIN messages m ON m.id=r.message_id
+JOIN room_directory d ON d.room_id=r.room_id AND d.system_kind=''
 JOIN room_members mbr ON mbr.id=r.member_id LEFT JOIN member_labels l ON l.room_id=r.room_id AND l.name=mbr.name
 LEFT JOIN messages a ON a.id=r.answer_id LEFT JOIN member_executions e ON e.id=r.execution_id
 LEFT JOIN request_cancel_reasons c ON c.request_id=r.id
@@ -234,6 +237,7 @@ SELECT e.id,e.room_id,e.created_at,e.finished_at,e.status,e.result,e.model,e.eff
  (e.status='failed' AND EXISTS(SELECT 1 FROM retried_requests rr WHERE rr.execution_id=e.id)) AS retried,
  (rework.execution_id IS NOT NULL) AS rework
 FROM member_executions e LEFT JOIN rework ON rework.execution_id=e.id JOIN room_members m ON m.id=e.member_id
+JOIN room_directory d ON d.room_id=e.room_id AND d.system_kind=''
 LEFT JOIN member_labels l ON l.room_id=e.room_id AND l.name=m.name
 LEFT JOIN execution_failures f ON f.execution_id=e.id
 WHERE e.created_at<? AND (e.created_at>=? OR e.finished_at>=? OR e.finished_at=0)
@@ -337,6 +341,7 @@ def insights(connection, members, start, end):
             add(rule, item[key], item["executions"], {}, target)
     for room, bad, total in connection.execute("""SELECT d.room_id,sum(f.rating='bad'),count(*)
         FROM scheduler_feedback f JOIN scheduler_decisions d ON d.id=f.decision_id
+        JOIN room_directory rd ON rd.room_id=d.room_id AND rd.system_kind=''
         WHERE CAST(strftime('%s',f.created_at) AS INTEGER)>=? AND CAST(strftime('%s',f.created_at) AS INTEGER)<? GROUP BY d.room_id""", (start, end)):
         add("scheduler_feedback", bad, total, {}, {"room_id": room})
     return result
@@ -348,6 +353,7 @@ def time_stats(connection, requests, executions, bounds, now, sealed):
     counts, histograms = sealed
     folders, room_folder, room_rows = {}, {}, {}
     for room, title, folder, name in connection.execute("""SELECT r.id,r.title,f.id,f.name FROM rooms r
+        JOIN room_directory d ON d.room_id=r.id AND d.system_kind=''
         LEFT JOIN room_folder_assignments a ON a.room_id=r.id LEFT JOIN topic_folders f ON f.id=a.folder_id"""):
         room_folder[room] = folder
         folders.setdefault(folder, dict(folder_id=folder, name=name, initiated=0, execution_seconds=0))
@@ -374,7 +380,8 @@ def time_stats(connection, requests, executions, bounds, now, sealed):
             elapsed.append(duration)
             if r["rework"]:
                 rework.append(duration)
-    count, oldest = connection.execute("SELECT count(*),min(created_at) FROM queued_messages").fetchone()
+    count, oldest = connection.execute("""SELECT count(*),min(q.created_at) FROM queued_messages q
+        JOIN room_directory d ON d.room_id=q.room_id AND d.system_kind=''""").fetchone()
     rooms, rooms_at = peak_concurrent(spans)
     members, members_at = peak_concurrent(member_spans)
     peak = {"rooms": rooms, "at": rooms_at, "members": members, "members_at": members_at}
@@ -391,19 +398,26 @@ def actions(connection, start, end):
     """Count corrections by operation and rewound requests separately."""
     def count(sql):
         return connection.execute(sql, (start, end)).fetchone()[0]
-    rewind = count("SELECT count(*) FROM room_rewinds WHERE created_at>=? AND created_at<?")
+    rewind = count("""SELECT count(*) FROM room_rewinds r JOIN room_directory d ON d.room_id=r.room_id AND d.system_kind=''
+        WHERE r.created_at>=? AND r.created_at<?""")
     affected = count("""WITH window(lo,hi) AS (VALUES(?,?))
         SELECT count(*) FROM member_requests r CROSS JOIN window
+        JOIN room_directory d ON d.room_id=r.room_id AND d.system_kind=''
         LEFT JOIN member_executions e ON e.id=r.execution_id
         WHERE (e.result='用户回退了对话' AND e.status='cancelled' AND e.finished_at>=lo AND e.finished_at<hi)
           OR EXISTS(SELECT 1 FROM message_withdrawals w WHERE w.message_id IN (r.message_id,r.answer_id)
             AND w.kind='rewound' AND w.created_at>=lo AND w.created_at<hi)""")
-    retract = count("SELECT count(*) FROM message_withdrawals WHERE kind='retracted' AND created_at>=? AND created_at<?")
-    stops = count("""SELECT count(*) FROM room_events WHERE at>=?*1000 AND at<?*1000 AND kind='api.write'
+    retract = count("""SELECT count(*) FROM message_withdrawals w JOIN messages m ON m.id=w.message_id
+        JOIN room_directory d ON d.room_id=m.room_id AND d.system_kind=''
+        WHERE w.kind='retracted' AND w.created_at>=? AND w.created_at<?""")
+    stops = count("""SELECT count(*) FROM room_events e JOIN room_directory d ON d.room_id=e.room_id AND d.system_kind=''
+        WHERE at>=?*1000 AND at<?*1000 AND kind='api.write'
         AND json_extract(data,'$.path')='/stop'""")
-    stops += count("""SELECT count(*) FROM room_events WHERE at>=?*1000 AND at<?*1000 AND kind='execution.changed'
+    stops += count("""SELECT count(*) FROM room_events e JOIN room_directory d ON d.room_id=e.room_id AND d.system_kind=''
+        WHERE at>=?*1000 AND at<?*1000 AND kind='execution.changed'
         AND json_extract(data,'$.status')='cancelled' AND json_extract(data,'$.result')='用户打断'""")
     extra = count("""SELECT count(*) FROM execution_interjections i LEFT JOIN interjection_authors a ON a.interjection_id=i.id
+        JOIN room_directory d ON d.room_id=i.room_id AND d.system_kind=''
         WHERE a.interjection_id IS NULL AND i.created_at>=? AND i.created_at<?""")
     return {"corrections": {"stops": stops, "withdrawals": retract, "rewinds": rewind, "affected_requests": affected},
             "additions": {"interjections": extra}}
@@ -553,20 +567,27 @@ def previous_work(rows, start, end, now):
 
 def snapshot(connection, params, cache, now):
     """Build one SQLite read snapshot, caching only within the same server and room scope."""
+    if params.get("range") == "live":
+        return live_snapshot(connection, int(now))
     earliest = None
     if params.get("range") == "all" and "from" not in params and "to" not in params:
-        first = connection.execute("SELECT MIN(created_at) FROM member_requests").fetchone()[0]
+        first = connection.execute("""SELECT MIN(r.created_at) FROM member_requests r
+            JOIN room_directory d ON d.room_id=r.room_id AND d.system_kind=''""").fetchone()[0]
         sealed_first = connection.execute("SELECT MIN(day) FROM analytics_sealed_days").fetchone()[0]
         candidates = [int(first)] if first else []
         if sealed_first:
             candidates.append(int(datetime.combine(date.fromisoformat(sealed_first), time.min, timezone.utc).timestamp()))
         earliest = min(candidates) if candidates else None
     dates, (previous, start, end) = period(params, now, earliest)
+    if params.get("dispatch") == "1":
+        # The host dispatch section is computed only when the page opens it: chain records are costly.
+        connection.execute("BEGIN")
+        return {"range": dates, "dispatch_quality": dispatch_quality(connection, start, end)}
     mode = params.get("scope", "all")
     if mode not in ("all", "current"):
         raise ValueError("scope ∈ {all, current}")
     connection.execute("BEGIN")
-    rooms = tuple(r[0] for r in connection.execute("SELECT id FROM rooms ORDER BY id"))
+    rooms = tuple(r[0] for r in connection.execute("SELECT room_id FROM room_directory WHERE system_kind='' ORDER BY room_id"))
     revision = connection.execute("SELECT value FROM site_preferences WHERE key='analytics_revision'").fetchone()
     key = (tuple(dates.values()), rooms, mode, revision[0] if revision else None)
     hit = cache.get(key)

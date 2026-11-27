@@ -50,6 +50,9 @@ async function refresh(bridge, room_id) {
   await Promise.all([room_id ? load_room_sites(bridge, room_id) : null, sites_state.all ? load_all_sites(bridge) : null]);
 }
 
+/** An expired share link or site is kept until the operator purges it, and renewing brings it back. */
+export const expired_label = () => t("已过期，可续期");
+
 /** Renewal choices, the same as a share link's: the site lives this many days from now. */
 export const renew_items = (on_select) => [1, 3, 7].map((days) => ({
   label: t("从现在起 {count} 天（到 {time}）", { count: days, time: new Date(Date.now() + days * 864e5).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) }),

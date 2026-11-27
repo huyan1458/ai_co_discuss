@@ -136,7 +136,8 @@ function website_process(home, settings, url) {
   const database = join(home, 'local', 'discuss.sqlite3');
   const child = spawn(python, ['-u', SERVER, '--host', '127.0.0.1', '--port', String(settings.port || 8765),
     '--database', database, '--no-demo', '--local-launch'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', PATH: `${dirname(process.execPath)}${delimiter}${dirname(python)}${delimiter}${process.env.PATH || ''}` } });
+    env: { ...process.env, DISCUSS_SERVICE_HOME: home, PYTHONDONTWRITEBYTECODE: '1',
+      PATH: `${dirname(process.execPath)}${delimiter}${dirname(python)}${delimiter}${process.env.PATH || ''}` } });
   const progress = { ready: false, error: null };
   let recent = '';
   const log = data => {

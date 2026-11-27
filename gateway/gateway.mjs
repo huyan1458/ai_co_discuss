@@ -7,6 +7,7 @@
  * treats as its own local page. The instance therefore trusts whatever reaches it from this computer; the entry is the only
  * thing between the network and it.
  */
+import { object_quota_path, policy_path } from '../runner/attachment_policy.mjs';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
@@ -511,6 +512,9 @@ export function create_gateway({ data, now = Date.now }) {
   async function handle(request, response) {
     const path = new URL(request.url, 'http://entry').pathname;
     if (cross_origin(request)) return send_json(response, 403, { error: '不接受来自其他网站的请求' });
+    if (path === '/guest' || path.startsWith('/guest/') || path === '/api/guest' || path.startsWith('/api/guest/')) {
+      return direct(request, response, false);
+    }
     if (path === LOGIN_PATH && request.method === 'GET') return send(response, 200, { 'Content-Type': 'text/html; charset=utf-8' }, login_page({ action: LOGIN_PATH }));
     if (path === LOGIN_PATH && request.method === 'POST') return login(request, response);
     if (path === LOGOUT_PATH && request.method === 'POST') {
@@ -543,7 +547,8 @@ function run_instance(data, name, command) {
     if (command === 'stop') clear_instance_flag(name);
   } else set_instance_wanted(data, name, command === 'start');
   const child = spawn(process.execPath, [LOCAL_SCRIPT, command, '--json'], { stdio: 'inherit', windowsHide: true,
-    env: { ...process.env, DISCUSS_SERVICE_HOME: instance_home(data, name) } });
+    env: { ...process.env, DISCUSS_ATTACHMENT_POLICY_FILE: policy_path(data), DISCUSS_OBJECT_STORAGE_QUOTA_FILE: object_quota_path(data, name),
+      DISCUSS_SERVICE_HOME: instance_home(data, name) } });
   return new Promise((done, fail) => {
     child.on('error', fail);
     child.on('exit', code => code === 0 ? done() : fail(new Error(`实例${command === 'start' ? '启动' : '停止'}失败（退出码 ${code}）`)));

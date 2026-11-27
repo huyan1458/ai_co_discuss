@@ -38,7 +38,11 @@ npm link
 codiscuss setup
 ```
 
-`npm link` 将 `codiscuss` 链接到当前仓库，移动仓库后需重新链接；`setup` 与 npm 安装使用同一配置流程。也可在仓库中让本地 AI 调用 [codiscuss-setup](../.agents/skills/codiscuss-setup/SKILL.md) 完成安装、配置、诊断与可选的 Cloudflare 部署。
+`npm link` 将 `codiscuss` 链接到当前仓库，移动仓库后需重新链接并运行 `setup`。`setup` 与 npm 安装使用同一配置流程。无交互终端加 `--clients <软件>`（只配网站用 `none`）与 `--json`。运行 `codiscuss local status` 核对网站和服务状态，用 `codiscuss health --site <网站地址>` 检查接口。
+
+- **升级**：先检查并保留本地改动，运行 `codiscuss local stop`，更新仓库后重跑 `npm ci` 和 `codiscuss setup`。需要同步更新线上站点时，先备份 D1，再按[部署指南](../docs/deployment.md)更新。
+- **诊断**：从 `codiscuss local status --json` 与 `codiscuss setup` 的提示查起。命令指向不对时，用 `where.exe codiscuss`（macOS/Linux 用 `which -a codiscuss`）和 `npm prefix -g` 核对。端口冲突可用 `codiscuss setup --port N` 改端口。服务启动失败时，检查服务目录的 `local/website.log`、`local/supervisor.log` 和 `service.log`。技能副本有冲突时，先比较并备份已有内容再处理。
+- **卸载**：运行 `codiscuss local stop`；独立启动的服务用 `codiscuss service stop`，启用过登录自启的用 `codiscuss service autostart off` 关闭。运行 `npm unlink -g ai_co_discuss` 移除链接。服务数据、配置和已复制的技能不会随链接删除。
 
 只需手动接入时，可运行 `python server.py` 并访问 <http://127.0.0.1:8765>，网站命令用 `python runner/discuss.py …`；需要网页启动本机 AI 时加 `--host 127.0.0.1 --local-launch`。这种方式的数据位于 `data/discuss.sqlite3`，与 `codiscuss local` 的包外数据相互独立，两种方式不要交替操作同一讨论。
 

@@ -66,7 +66,12 @@ test('a confined task on software that cannot be confined starts nothing and say
 test('confined Claude runs only the codiscuss subcommands and reads only its skills, drafts and own folder', async t => {
   const { paths, task } = fixture(t);
   const args = claude_lockdown(task);
-  for (const flag of ['--restricted', '--safe-mode', '--strict-mcp-config', '--disable-slash-commands', '--no-chrome']) assert.ok(args.includes(flag), flag);
+  for (const flag of ['--restricted', '--strict-mcp-config', '--disable-slash-commands', '--no-chrome']) assert.ok(args.includes(flag), flag);
+  // Every Bash / PowerShell call passes our hook first; --safe-mode would turn it off (Claude Code 2.1.332, 2026-11-27).
+  assert.ok(!args.includes('--safe-mode'));
+  const hook = JSON.parse(args[args.indexOf('--settings') + 1]).hooks.PreToolUse[0];
+  assert.equal(hook.matcher, 'Bash|PowerShell');
+  assert.match(hook.hooks[0].command, /claude_lockdown_hook\.mjs"$/);
   assert.equal(args[args.indexOf('--tools') + 1], 'Bash,PowerShell,Read,Write,Edit');
   assert.equal(args[args.indexOf('--permission-mode') + 1], 'dontAsk');
   // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB turns dontAsk back into default (2.1.325), so nothing may be left to ask.
@@ -130,6 +135,8 @@ test('confined Claude keeps the user settings env, which --restricted would drop
   assert.equal(env.ANTHROPIC_BASE_URL, 'https://proxy.example');
   assert.equal(env.BAD, undefined);
   assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+  // Without --safe-mode, CLAUDE.md and memory are turned off by environment.
+  for (const name of ['CLAUDE_CODE_DISABLE_CLAUDE_MDS', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'CLAUDE_CODE_DISABLE_ORG_MEMORY']) assert.equal(env[name], '1', name);
   assert.equal(claude_lockdown_env(task, { CLAUDE_CONFIG_DIR: join(root, 'missing') }).CODISCUSS_TOOL_LOCKDOWN, '1');
 });
 

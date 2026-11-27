@@ -63,6 +63,7 @@ const created_label = computed(() => {
 const TIMELINE_VIEWS = [{ value: "waterfall", label: t("瀑布") }, { value: "events", label: t("事件") }];
 const timeline_view = ref("waterfall");
 const modal = ref("");
+const steward_settings_request = ref(0);
 const discussion_view = ref(null);
 const managed_room = ref(null);
 const target_folder = ref(null);
@@ -243,7 +244,7 @@ const creating_tabs = computed(() => tabs.value.map((item) => ({ ...item, disabl
 /** The workflow library belongs to this computer, not a room, so it is not a room tab: the sidebar
  * has its own 工作流 section, and a workflow chosen there fills the middle in place of the room (with no room selected too). */
 const workflow_library = use_workflow_library();
-const { page_open: workflow_page, draft: workflow_draft, loading: workflow_loading, saved_id: workflow_saved, deleting: workflow_deleting, leaving: workflow_leaving, skill_open: workflow_skill_open, stacked: workflow_stacked } = workflow_library;
+const { page_open: workflow_page, draft: workflow_draft, loading: workflow_loading, saved_id: workflow_saved, deleting: workflow_deleting, leaving: workflow_leaving, skill_open: workflow_skill_open, stacked: workflow_stacked, scope_label: workflow_scope_label, active_scope: workflow_scope, active_project_name: workflow_project_name, writable_roots: workflow_writable_roots } = workflow_library;
 // Opening the mobile sidebar drawer should reflect workflows saved via CLI without a full page reload.
 watch(nav_open, (open) => { if (open) workflow_library.refresh_list(); });
 // An invited room (a room on another computer this computer's AI joined) also fills the middle in place of the room.
@@ -310,6 +311,26 @@ function open_analytics() { nav_open.value = false; workflow_library.close_page(
 
 /** Select a shared room (leaving the workflow/analytics page) and close the mobile navigation. */
 function choose_room(id) { nav_open.value = false; workflow_library.close_page(() => { invited_rooms.close(); analytics.close(); act("room", id); }); }
+
+const open_steward = (event) => { modal.value = ""; choose_room(event.detail); };
+function open_settings() {
+  nav_open.value = false;
+  steward_settings_request.value = 0;
+  modal.value = "settings";
+}
+function open_steward_settings() {
+  nav_open.value = false;
+  modal.value = "settings";
+  steward_settings_request.value++;
+}
+onMounted(() => {
+  document.addEventListener("discuss:open-steward", open_steward);
+  document.addEventListener("discuss:steward-settings", open_steward_settings);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("discuss:open-steward", open_steward);
+  document.removeEventListener("discuss:steward-settings", open_steward_settings);
+});
 
 /** From the analytics page: open a room and show the message that asked for one run, once that room is on screen. */
 async function open_room_message({ room_id, message_id }) {
@@ -518,7 +539,7 @@ function resize_nav_by_key(event) {
 
 <template>
   <div class="channel-shell" :class="{ 'channel-share': share, 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': !nav_docked, 'channel-has-rail': show_rail }" :style="layout_style">
-    <ChannelSidebar v-if="nav_docked" :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @analytics="open_analytics" @settings="modal = 'settings'" />
+    <ChannelSidebar v-if="nav_docked" :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @analytics="open_analytics" @settings="open_settings" />
     <div v-if="nav_docked" class="channel-nav-resizer" role="separator" tabindex="0" :aria-label="t('调整房间栏宽度')" aria-orientation="vertical" aria-controls="channel-sidebar" :aria-valuemin="NAV_MIN" :aria-valuemax="nav_max" :aria-valuenow="effective_nav_width" :aria-valuetext="t('{count} 像素', { count: effective_nav_width })" :title="t('拖动调整房间栏宽度，也可使用方向键')" @pointerdown="start_nav_resize" @pointermove="resize_nav" @pointerup="finish_nav_resize" @pointercancel="finish_nav_resize" @lostpointercapture="finish_nav_resize" @keydown="resize_nav_by_key"></div>
 
     <main class="channel-main">
@@ -531,7 +552,7 @@ function resize_nav_by_key(event) {
             <div class="channel-title"><div class="channel-title-copy"><h1 v-if="!workflow_draft">{{ t("工作流") }}</h1><h1 v-else>
               <input v-model="workflow_draft.label" class="channel-title-input" :maxlength="32" :placeholder="t('未命名工作流')" :aria-label="t('工作流名称')" :title="t('点击改名')"
                 :style="{ width: `calc(${Math.max(5, Math.min(16, (workflow_draft.label || '').length + 1))}em + 14px)` }" @keydown.enter="$event.target.blur()" /></h1></div></div>
-            <span v-if="workflow_draft" class="channel-header-context">{{ t("工作流") }}<span>·</span>{{ workflow_saved ? t('{count} 位成员', { count: workflow_draft.agents?.length || 0 }) : t('未保存') }}</span>
+            <span v-if="workflow_draft" class="channel-header-context">{{ t("工作流") }}<span>·</span>{{ workflow_saved ? t('{count} 位成员', { count: workflow_draft.agents?.length || 0 }) : t('未保存') }}<template v-if="workflow_saved || !workflow_writable_roots.length"><span>·</span><bdi class="channel-header-scope" :title="workflow_scope === 'project' ? t('项目工作流：{name}', { name: workflow_project_name || t('当前项目') }) : t('全局工作流：所有房间可用')">{{ workflow_scope_label }}</bdi></template></span>
           </template>
           <template v-else-if="invited_page">
             <span class="channel-title-icon"><UIcon name="i-lucide-monitor-smartphone" /></span>
@@ -674,13 +695,13 @@ function resize_nav_by_key(event) {
 
     <ShareDialog />
     <USlideover v-model:open="nav_open" side="left" :title="t('房间导航')" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-navigation-drawer' }">
-      <template #content><ChannelSidebar :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @analytics="open_analytics" @settings="nav_open = false; modal = 'settings'" /></template>
+      <template #content><ChannelSidebar :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @analytics="open_analytics" @settings="open_settings" /></template>
     </USlideover>
     <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :content="{ onInteractOutside: keep_drawer_for_file_float }" :title="invited_page ? t('外部房间') : room.title" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.host ? t('{value1} 主持', { value1: bridge.display_name(room.host) }) : ''" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
       <template #body><InvitedRoomRail v-if="invited_page" drawer /><div v-else-if="share" inert class="channel-share-inert"><FreeBoard /></div><FreeBoard v-else @history="info_open = false; open_consensus()" @locate="(name) => locate_member(name, { close_drawer: true })" /></template>
     </USlideover>
     <FilePreview />
     <JoinInvitedDialog />
-    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" v-model:fold-level="fold_level" v-model:fold-keep="fold_keep" v-model:card-text="card_text" :fold-options="FOLD_OPTIONS" :fold-keep-options="FOLD_KEEP_OPTIONS" :card-text-options="CARD_TEXT_OPTIONS" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :target-room="managed_room" :target-folder="target_folder" />
+    <WorkspaceDialogs v-model="modal" v-model:reading-width="reading_width" v-model:effects="effects" v-model:fold-level="fold_level" v-model:fold-keep="fold_keep" v-model:card-text="card_text" :steward-settings-request="steward_settings_request" :fold-options="FOLD_OPTIONS" :fold-keep-options="FOLD_KEEP_OPTIONS" :card-text-options="CARD_TEXT_OPTIONS" :reading-options="width_options" :effect-options="EFFECT_OPTIONS" :target-room="managed_room" :target-folder="target_folder" />
   </div>
 </template>

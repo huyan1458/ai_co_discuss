@@ -11,7 +11,8 @@ import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve 
 
 import { project_path, project_root } from './project_files.mjs';
 
-export const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+import { attachment_limit } from './attachment_policy.mjs';
+import { t } from './i18n.mjs';
 export const EDIT_MAX_BYTES = 1024 * 1024;
 export const TRASH_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 // The smallest part a page sends (through the relay), bounding how many parts an upload of a given size may have.
@@ -273,7 +274,8 @@ export function upload_part({ root, path, name, upload_id, index, total, size, d
     || !Number.isSafeInteger(index) || index < 0 || index >= total || !Number.isSafeInteger(size) || size < 0 || typeof data !== 'string') {
     throw new Error('上传请求无效');
   }
-  if (size > UPLOAD_MAX_BYTES) throw new Error(`单个文件不能超过 ${UPLOAD_MAX_BYTES / 1024 / 1024} MB；更大的文件请给 AI 下载链接或仓库地址`);
+  const limit = attachment_limit(dirname(parts_directory));
+  if (size > limit * 1024 * 1024) throw new Error(t('单个文件不能超过 {value1} MiB', { value1: limit }));
   if (total > Math.ceil(size / UPLOAD_PART_MIN_BYTES) + 1) throw new Error('上传请求无效');
   const folder = folder_in(root, path);
   if (existsSync(parts_directory)) {

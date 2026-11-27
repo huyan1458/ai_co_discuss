@@ -14,12 +14,12 @@
  *   token is compared in constant time, a request with an Origin is refused, and a few requests at a time are served.
  */
 import http from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { atomic_json } from './files.mjs';
-import { answer_external, is_external_request, read_registry } from './external_gateway.mjs';
+import { ENDED_GUEST_MS, answer_external, guest_reply_check, is_external_request, read_registry } from './external_gateway.mjs';
 import { direct_link, relay_cipher, unseal } from './remote_launch.mjs';
 import { seal_compressed } from './relay_channel.mjs';
 
@@ -28,6 +28,7 @@ export const DIRECT_PATH = '/direct';
 export const DIRECT_TOKEN_HEADER = 'x-codiscuss-direct';
 const BODY_MAX = 600 * 1024;
 const READ_TIMEOUT_MS = 15_000;
+const READING_MAX = 64;
 const CONCURRENT_MAX = 6;
 // The same window the online site allows a member's request credential (worker.mjs DEVICE_CLOCK_SECONDS).
 const CLOCK_SECONDS = 300;
@@ -45,11 +46,28 @@ export async function direct_member(home, link, credential, path, now = Date.now
   if (Math.abs(Math.floor(now / 1000) - Number(time)) > CLOCK_SECONDS) return null;
   const entry = read_registry(home).externals[member];
   if (!entry || !(entry.key_expires_at > now) || (entry.site && entry.site !== link.site)) return null;
+  return await verifies_text(entry.public_key, `POST\n${path}\n${time}`, signature) ? member : null;
+}
+
+async function verifies_text(point, text, signature) {
   try {
-    const key = await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: entry.public_key.x, y: entry.public_key.y }, ECDSA, false, ['verify']);
-    const valid = await crypto.subtle.verify(SIGNED, key, Buffer.from(signature, 'base64url'), new TextEncoder().encode(`POST\n${path}\n${time}`));
-    return valid ? member : null;
-  } catch { return null; }
+    const key = await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: point.x, y: point.y }, ECDSA, false, ['verify']);
+    return await crypto.subtle.verify(SIGNED, key, Buffer.from(signature, 'base64url'), new TextEncoder().encode(text));
+  } catch { return false; }
+}
+
+/** A removed guest can authenticate its public key solely to receive its encrypted end reason. */
+async function ended_signer(home, link, request, now) {
+  const [machine, member, time, signature] = String(request.credential || '').split('.');
+  if (machine !== link.id || !/^[0-9a-f]{32}$/.test(member) || !/^\d{10}$/.test(time)
+      || Math.abs(Math.floor(now / 1000) - Number(time)) > CLOCK_SECONDS) return null;
+  const registry = read_registry(home);
+  const expired = registry.externals[member];
+  const record = expired?.kind === 'guest' && expired.key_expires_at <= now
+    ? { ...expired, until: expired.key_expires_at + ENDED_GUEST_MS }
+    : registry.ended_guests?.[member];
+  if (!record || record.until <= now || record.site !== link.site) return null;
+  return await verifies_text(record.public_key, `POST\n${request.path}\n${time}`, signature) ? record : null;
 }
 
 /** An envelope as the relay accepts one: an ephemeral public key and the sealed bytes. */
@@ -62,17 +80,23 @@ function valid_envelope(envelope) {
  * Answer one request the entry handed over: `{ kind, path, credential, id, envelope }`. Returns `{ status, body }`,
  * the body for 200 being the relay's answer `{ id, status: 'done', response }` with the reply sealed for the sender.
  */
-export async function answer_direct(home, request, { now = Date.now(), fetcher } = {}) {
+export async function answer_direct(home, request, { now = Date.now(), fetcher, admit } = {}) {
   const link = direct_link(home);
   if (!link) return { status: 404, body: { error: '这个账号没有开启邀请外部专家' } };
   const { kind, path, credential, id, envelope } = request || {};
   if (!KINDS.has(kind) || typeof id !== 'string' || !ID_PATTERN.test(id) || !valid_envelope(envelope)) return { status: 400, body: { error: '请求格式无效' } };
-  if (path !== `/api/machines/${link.id}/${kind}`) return { status: 404, body: { error: '地址不存在' } };
-  let member = null;
+  const guest = path === `/api/guest/${link.id}/${kind}`;
+  if (!guest && path !== `/api/machines/${link.id}/${kind}`) return { status: 404, body: { error: '地址不存在' } };
+  let member = null, ended = false;
   if (kind === 'relay') {
     member = await direct_member(home, link, credential, path, now);
+    if (!member && guest) {
+      ended = await ended_signer(home, link, request, now);
+      if (ended) member = credential.split('.')[1];
+    }
     if (!member) return { status: 401, body: { error: '外部成员未登记或凭据已失效' } };
   }
+  if (admit && !admit()) return { status: 503, body: { error: '请求过多，请稍后再试' } };
   let key, sealed;
   try {
     key = await relay_cipher(link.private_key, envelope.key);
@@ -82,8 +106,35 @@ export async function answer_direct(home, request, { now = Date.now(), fetcher }
   if (!is_external_request(sealed) || (kind === 'pair' ? sealed.external_id !== undefined : sealed.external_id !== member)) {
     return { status: 403, body: { error: '这个入口只接受外部成员的请求' } };
   }
-  const { response } = await answer_external(home, { machine_id: link.id, link, fetcher }, id, sealed);
-  return { status: 200, body: { id, status: 'done', response: await seal_compressed(key, response, `${id}:response`) } };
+  let inner;
+  try { inner = JSON.parse(sealed.body); } catch { return { status: 400, body: {} }; }
+  const guest_action = inner?.action === (kind === 'pair' ? 'guest-redeem' : 'guest-api');
+  if (guest !== guest_action || (guest && inner.machine !== link.id)) return { status: 403, body: {} };
+  if (!guest) {
+    const { response } = await answer_external(home, { machine_id: link.id, link, fetcher }, id, sealed);
+    return { status: 200, body: { id, status: 'done', response: await seal_compressed(key, response, `${id}:response`) } };
+  }
+  if (ended) {
+    if (inner.room !== ended.room_id || typeof inner.payload?.token !== 'string'
+        || createHash('sha256').update(inner.payload.token).digest('hex') !== ended.token_hash
+        || !await verifies_text(ended.public_key, id + '\n' + sealed.body, sealed.signature)) return { status: 403, body: {} };
+  }
+  const room = kind === 'pair' ? inner.payload?.room : inner.room;
+  const token = kind === 'pair' ? inner.payload?.guest_token : inner.payload?.token;
+  const denied = { status: 403, body: { ok: false, code: 'guest_forbidden' } };
+  const result = ended ? denied : (await answer_external(home, { machine_id: link.id, link, fetcher }, id, sealed)).response;
+  let response = await seal_compressed(key, result, id + ':response');
+  if (ended || result.status < 400) {
+    const refusal = await guest_reply_check(home, room, token, fetcher);
+    const id_on_list = member || result.body?.data?.key_id;
+    const entry = read_registry(home).externals[id_on_list];
+    const listed = entry?.kind === 'guest' && entry.room_id === room && entry.site === link.site && entry.key_expires_at > Date.now();
+    if (ended) {
+      const reason = refusal?.body?.code === 'guest_ended' ? refusal.body.reason : null;
+      response = await seal_compressed(key, reason ? { status: 403, body: { ok: false, code: 'guest_ended', reason } } : denied, id + ':response');
+    } else if (refusal || !listed) response = await seal_compressed(key, refusal || denied, id + ':response');
+  }
+  return { status: 200, body: { id, status: 'done', response } };
 }
 
 function reply(response, status, body) {
@@ -119,19 +170,27 @@ export function direct_receiver(home, { log = () => {}, fetcher } = {}) {
     const expected = Buffer.from(token), supplied = Buffer.from(String(given || ''));
     return expected.length === supplied.length && timingSafeEqual(expected, supplied);
   };
+  let reading = 0;
   const handle = async (request, response) => {
     if (request.method !== 'POST' || request.url !== DIRECT_PATH || request.headers.origin || !same(request.headers[DIRECT_TOKEN_HEADER])) {
       request.resume();
       return reply(response, 404, { error: '地址不存在' });
     }
-    if (active >= CONCURRENT_MAX) { request.resume(); return reply(response, 503, { error: '请求过多，请稍后再试' }); }
-    active += 1;
+    if (reading >= READING_MAX) { request.resume(); return reply(response, 503, { error: '请求过多，请稍后再试' }); }
+    let admitted = false;
     try {
-      const body = await read_body(request);
-      const answer = await answer_direct(home, body, { fetcher });
+      reading += 1;
+      let body;
+      try { body = await read_body(request); } finally { reading -= 1; }
+      const answer = await answer_direct(home, body, { fetcher, admit() {
+        if (active >= CONCURRENT_MAX) return false;
+        active += 1;
+        admitted = true;
+        return true;
+      } });
       reply(response, answer.status, answer.body);
     } catch (error) { if (!response.headersSent) reply(response, error.status || 400, { error: error.message }); }
-    finally { active -= 1; }
+    finally { if (admitted) active -= 1; }
   };
   const stop = () => {
     if (server) { server.close(); server = null; }

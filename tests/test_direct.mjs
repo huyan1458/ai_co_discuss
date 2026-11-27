@@ -1,12 +1,13 @@
 /** Hosted accounts reached on the owner's domain without the online relay (#5588): the receiver and the entry's three addresses. */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { add_account, create_gateway, instance_home } from '../gateway/gateway.mjs';
+import { add_account, create_gateway, instance_home, set_account_disabled } from '../gateway/gateway.mjs';
 import { external_signer, open_answer, seal_for_machine } from './external_harness.mjs';
 
 const SITE = 'https://codiscuss.example';
@@ -102,6 +103,7 @@ test('the entry answers the three direct addresses only on the owner\'s domain a
     request.on('end', () => {
       const body = JSON.parse(Buffer.concat(parts).toString('utf8'));
       seen.push({ url: request.url, headers: request.headers, body });
+      if (body.id === 'guest-poll-in-flight') set_account_disabled(data, 'bob', true);
       response.writeHead(200, { 'Content-Type': 'text/html', 'Set-Cookie': 'planted=1', 'X-Planted': '1' });
       response.end(JSON.stringify({ id: body.id, status: 'done', response: { iv: 'iv', data: 'data', html: '<script>' }, page: '<form>' }));
     });
@@ -117,8 +119,10 @@ test('the entry answers the three direct addresses only on the owner\'s domain a
 
   // On the owner's domain without a session: the key list and the two sealed routes.
   const listed = await ask(port, '/api/machines');
-  assert.deepEqual(listed.body.machines.map(item => [item.id, item.name]), [[machine, '托管账号']], 'a neutral name, never the account\'s');
-  assert.deepEqual(listed.body.machines[0].public_key, { kty: 'EC', crv: 'P-256', x: 'AA', y: 'BB' }, 'keys are rebuilt from their four fields');
+  assert.equal(listed.status, 426);
+  assert.equal(listed.body.machines, undefined);
+  const found = (await ask(port, '/api/guest/' + machine + '/key')).body;
+  assert.deepEqual(found.public_key, { kty: 'EC', crv: 'P-256', x: 'AA', y: 'BB' });
   const relayed = await ask(port, `/api/machines/${machine}/relay`, { method: 'POST', body: { id: 'relay-000000000000001', envelope }, headers: { 'X-CoDiscuss-Device': 'member-credential', Cookie: 'codiscuss_entry=x' } });
   assert.equal(relayed.status, 200);
   assert.deepEqual(relayed.body, { id: 'relay-000000000000001', status: 'done', response: { iv: 'iv', data: 'data' } }, 'only the sealed reply, rebuilt');
@@ -144,6 +148,38 @@ test('the entry answers the three direct addresses only on the owner\'s domain a
   });
   assert.equal((await ask(port, '/api/machines', { headers: { Cookie: login } })).body.instance, 'alice');
 
+  // Alice's signed-in browser follows Bob's invitation using only the guest routes.
+  add_account(data, 'bob');
+  const bob_id = 'b'.repeat(32);
+  const local = join(instance_home(data, 'bob'), 'local');
+  mkdirSync(local, { recursive: true });
+  writeFileSync(join(local, 'direct.json'), JSON.stringify({ port: receiver_port, token: 'd'.repeat(64), machine: bob_id,
+    public_key: found.public_key, sign_key: found.sign_key }));
+  writeFileSync(join(data, 'direct-accounts.json'), JSON.stringify({ [machine]: 'alice', [bob_id]: 'bob' }));
+  const headers = { Cookie: login };
+  for (const asset of ['/guest/', '/guest/guest.js', '/guest/guest.css', '/guest/i18n.js']) {
+    const page = await ask(port, asset, { headers });
+    assert.equal(page.status, 200, asset);
+    assert.equal(page.headers['set-cookie'], undefined);
+    if (asset === '/guest/') assert.match(page.raw, /src="\/guest\/guest.js"/);
+  }
+  const base = '/api/guest/' + bob_id;
+  assert.equal((await ask(port, base + '/key', { headers })).body.id, bob_id);
+  for (const path of ['/guest/missing', '/api/guest', base + '/login', '/api/guest/' + 'f'.repeat(32) + '/key']) {
+    assert.equal((await ask(port, path, { headers })).status, 404);
+  }
+  const poll = await ask(port, base + '/relay', { method: 'POST', headers, body: { id: 'guest-poll-000000001', envelope } });
+  assert.equal(poll.body.status, 'done');
+  assert.equal(seen.at(-1).headers['x-codiscuss-direct'], 'd'.repeat(64));
+  assert.equal(seen.at(-1).headers.cookie, undefined);
+  assert.equal(seen.at(-1).body.path, base + '/relay');
+  assert.equal(poll.headers['set-cookie'], undefined);
+  const interrupted = await ask(port, base + '/relay', { method: 'POST', headers, body: { id: 'guest-poll-in-flight', envelope } });
+  assert.equal(seen.at(-1).body.id, 'guest-poll-in-flight');
+  assert.equal(interrupted.status, 404);
+  assert.equal(interrupted.body.response, undefined);
+  assert.equal((await ask(port, base + '/key', { headers })).status, 404);
+  assert.equal((await ask(port, base + '/relay', { method: 'POST', headers, body: { id: 'guest-poll-000000002', envelope } })).status, 404);
   // Redemptions are limited per sending address.
   const pair = () => ask(port, `/api/machines/${machine}/pair`, { method: 'POST', body: { id: 'pair-0000000000000001', envelope }, headers: { 'CF-Connecting-IP': '203.0.113.7' } });
   for (let index = 0; index < 10; index++) assert.equal((await pair()).status, 200, `redemption ${index}`);
@@ -223,4 +259,60 @@ test('an invited computer running unchanged code joins, reads and leaves through
   assert.deepEqual(await member_api(invited, record.id, 'GET', MEMBER_API.view(ROOM), undefined, { fetcher }), { ok: true, path: MEMBER_API.view(ROOM) });
   await invited_command(invited, 'invited-leave', { id: record.id }, { fetcher });
   assert.equal(state.ended, true, 'leaving reached the room');
+});
+
+test('direct guest redemption, end checks and signed queries after removal', async t => {
+  const { create_direct_link, direct_link } = await import('../runner/remote_launch.mjs');
+  const { answer_direct } = await import('../runner/direct_entry.mjs');
+  const home = temp(t, 'guest-direct-');
+  create_direct_link(home, SITE);
+  const link = direct_link(home), machine = { id: link.id, public_key: link.public_key };
+  const signer = await external_signer(link.id);
+  const config = join(home, 'room.json');
+  const code = 'invitation', room = 'r', guest_token = 't'.repeat(43);
+  writeFileSync(config, JSON.stringify({ room, site: 'http://localhost:9877', token: 'owner' }));
+  writeFileSync(join(home, 'rooms.json'), JSON.stringify({ configs: [config] }));
+  writeFileSync(join(home, 'external.json'), JSON.stringify({ guest_invites: { invite: { room, site: SITE, machine: link.id,
+    code_hash: createHash('sha256').update(code).digest('hex'), expires_at: Date.now() + 60000 } } }));
+  const send = async (kind, action, payload, fetcher) => {
+    const id = crypto.randomUUID(), path = '/api/guest/' + link.id + '/' + kind;
+    const { key, envelope } = await seal_for_machine(machine, id, { action, payload, room }, signer, kind === 'pair' ? 'proof' : 'external');
+    const answer = await answer_direct(home, { kind, path, id, envelope, credential: await signer.credential('POST', path),
+      guest_point: signer.public_key.x + '.' + signer.public_key.y }, { fetcher });
+    assert.equal(answer.status, 200);
+    return open_answer(key, id, answer.body.response);
+  };
+  const active = () => Response.json({ ok: true, data: { phase: 'active', guest: { expires_at: Date.now() + 900000 } } });
+  const redeemed = await send('pair', 'guest-redeem', { code, guest_token, room, invite_id: 'invite', label: 'Visitor', public_key: signer.public_key }, active);
+  assert.equal(redeemed.body.data.key_id, signer.id);
+  let checks = 0;
+  const ended = reason => Response.json({ ok: false, code: 'guest_ended', reason }, { status: 403 });
+  const poll = { method: 'GET', path: '/api/external/rooms/r/guest/messages', token: guest_token };
+  const refused = await send('relay', 'guest-api', poll, async url => {
+    if (url.endsWith('/messages')) return Response.json({ ok: true, data: { items: ['withheld'] } });
+    return ++checks === 3 ? ended('disconnected_by_host') : active();
+  });
+  assert.equal(checks, 3);
+  assert.equal(refused.status, 403);
+  assert.equal(refused.body.reason, 'disconnected_by_host');
+  assert.equal(refused.body.data, undefined);
+  const { ENDED_GUEST_MS, read_registry, reconcile_guest_state } = await import('../runner/external_gateway.mjs');
+  const entry = read_registry(home).externals[signer.id];
+  reconcile_guest_state(home, room, { phase: 'ended', guest: { id: entry.guest_id } });
+  const stranger = await external_signer(link.id);
+  const path = '/api/guest/' + link.id + '/relay';
+  const probe = { kind: 'relay', path, id: crypto.randomUUID(), credential: await stranger.credential('POST', path),
+    guest_point: stranger.public_key.x + '.' + stranger.public_key.y, envelope: { key: {}, iv: '', data: '' } };
+  let admissions = 0;
+  const refusedUnknown = await answer_direct(home, probe, { admit() { admissions++; return true; } });
+  assert.equal(refusedUnknown.status, 401);
+  assert.equal(admissions, 0);
+  const expired = await send('relay', 'guest-api', poll, async () => ended('expired'));
+  assert.equal(expired.body.reason, 'expired');
+  const missing = await send('relay', 'guest-api', poll, active);
+  assert.equal(missing.status, 403);
+  const later = Date.now() + ENDED_GUEST_MS + 1000;
+  const stale = { ...probe, credential: await signer.credential('POST', path, Math.floor(later / 1000)) };
+  assert.equal((await answer_direct(home, stale, { now: later, admit() { admissions++; return true; } })).status, 401);
+  assert.equal(admissions, 0);
 });

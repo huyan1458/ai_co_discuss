@@ -155,6 +155,35 @@ class AnalyticsTests(HostRoomTests):
             self.assertEqual(sum(r[key] for r in rooms), sum(f[key] for f in folders))
         self.assertTrue(all(r["title"] and "folder_id" in r for r in rooms))
 
+    def test_dispatch_quality_groups_chain_records_by_host_version(self):
+        """The dispatch section reads the shared chain records: a withdrawn dispatch is voided under its host version."""
+        FreeRoomTests.say(self, "安排工作")
+        host = self.reserve_for("Claude")[1]["id"]
+        version = {"package_version": "1.2.3", "prompt_hash": "0123456789ab", "skill_hash": "0123456789abcdef"}
+        self.request(f"{self.path}/executions/{host}",
+                     {"action": "model", "model": "opus", "effort": "high", "host_version": version}, self.owner)
+        dispatch = self.answer(host, "请 Codex 处理", to=["Codex"])[1]["message"]["id"]
+        self.assertEqual(self.request(f"{self.path}/dispatches/{dispatch}/withdraw", {}, self.owner)[0], 200)
+        section = self.report("&dispatch=1")["dispatch_quality"]
+        group, = section["groups"]
+        self.assertEqual((group["kind"], group["model"], group["package_version"], group["prompt_hash"]),
+                         ("known", "opus", "1.2.3", "0123456789ab"))
+        self.assertEqual(group["skill_hash"], "0123456789abcdef")
+        self.assertEqual((section["ended"], group["chains"], group["dispatch_messages"], group["voided"]), (1, 1, 1, 1))
+        self.assertEqual(group["voided_examples"], [{"room_id": self.room["id"], "message_id": dispatch}])
+
+    def test_live_view_lists_running_and_failed_work(self):
+        """The live view shows who runs now and a failed request as waiting for the owner, minute by minute."""
+        FreeRoomTests.say(self, "一", to=["Codex"])
+        FreeRoomTests.say(self, "二", to=["Antigravity"])
+        running = self.reserve_for("Codex")[1]["id"]
+        failed = self.reserve_for("Antigravity")[1]["id"]
+        self.request(f"{self.path}/executions/{failed}", {"action": "fail", "reason": "timeout"}, self.owner)
+        live = self.report("&range=live")["live"]
+        self.assertEqual([(item["execution_id"], item["member"]) for item in live["running"]], [(running, "Codex")])
+        self.assertEqual([(item["kind"], item["member"]) for item in live["waiting"]], [("failed", "Antigravity")])
+        self.assertEqual((live["errors"], len(live["timeline"]["points"]), live["timeline"]["step"]), (1, 60, 60))
+
     def test_dst_and_concurrency(self):
         instant = datetime(2026, 3, 8, 12, tzinfo=timezone.utc).timestamp()
         _, (_, start, end) = period({"tz": "America/Los_Angeles", "range": "week"}, instant)

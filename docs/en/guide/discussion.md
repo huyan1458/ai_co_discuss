@@ -31,11 +31,9 @@ After starting, the host breaks down the topic and schedules speaking turns. Mem
 
 After a discussion ends, or when you have selected a specific message range, use the bundled `discuss-report` skill to produce a standalone Chinese report and archive the source material.
 
-1. **Give the AI a source and scope.** Open a local AI conversation with the skill installed. You can use Claude Code or Codex in another window, or mention a room member that can write to the output folder. Provide a room link or the path to a discussion record extracted from an “Export conversation” ZIP, the range to cover, and the local output folder. For example:
+1. **Give the steward a source and scope.** In “Settings → Platform steward,” allow `discuss-report` and grant write access to the local output folder. Send the request from the terminal. Include the room ID, message range, and output folder. For a local export, give a readable file path in `--note` and omit `--room`.
 
-   > Use the `discuss-report` skill to write a report on this discussion in room `http://127.0.0.1:8765/r/your-room-id` and archive the source in `D:\work\reports\`.
-
-   In Codex, you can invoke the skill with `$discuss-report`. To cover only part of a discussion, provide the starting and ending message IDs.
+   `codiscuss steward ask discuss-report --room ROOM --note "Cover messages #100 to #200 and save to D:/work/reports"`
 
 2. **Review the result.** With a room link, the AI reads messages, assignments, and state for the selected range. With local files, it organizes the available contents in those files. It reports the output path, coverage, and unresolved questions.
 

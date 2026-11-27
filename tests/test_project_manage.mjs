@@ -111,7 +111,7 @@ test('an upload is written once all its parts arrive, within the size limit', t 
   assert.deepEqual(part(0, bytes.subarray(0, half)), { path: '上传.txt', size: bytes.length });
   assert.deepEqual(readFileSync(join(f.root, '上传.txt')), bytes);
   assert.throws(() => upload_part({ root: f.root, path: '', name: '大.bin', upload_id: 'upload-0123456789abcdeg', index: 0, total: 1,
-    size: 21 * 1024 * 1024, data: '', parts_directory: f.parts, recycle: f.recycle }), /20 MB/);
+    size: 51 * 1024 * 1024, data: '', parts_directory: f.parts, recycle: f.recycle }), /50 MiB/);
 });
 
 test('saving an edit keeps encoding and line endings, and refuses when the file changed after it was read', t => {

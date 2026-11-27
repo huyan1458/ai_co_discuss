@@ -168,8 +168,12 @@ test('npm tarball installs outside the checkout and launches both entries with p
     const files = tarball.files.map(item => item.path);
     for (const required of ['server.py', 'backend/server.py', 'backend/runtime.py', 'backend/schema.sql', 'backend/migrations/drop_legacy_discussion.sql', 'web/modern.js',
       'runner/discuss.py', 'runner/discussion_setup.mjs', 'runner/i18n.mjs', 'runner/i18n_en.mjs', '.agents/skills/discuss-host/references/manual.md',
-      '.agents/skills/discuss-host/references/launch.md',
-      '.agents/skills/discuss-report/assets/Discussion_Report_Template.md']) assert(files.includes(required), required);
+      '.agents/skills/discuss-host/references/launch.md', '.agents/steward-skills/codiscuss-draft-cleanup/scan.py',
+      '.agents/steward-skills/discuss-report/assets/Discussion_Report_Template.md']) assert(files.includes(required), required);
+    for (const name of ['local-tts-setup', 'local-stt-setup', 'notify-setup', 'share-card', 'discuss-report', 'codiscuss-draft-cleanup', 'dispatch-analysis', 'cloudflare-deploy']) {
+      assert(files.includes(`.agents/steward-skills/${name}/SKILL.md`), name);
+      assert(!files.some(path => path.startsWith(`.agents/skills/${name}/`)), name);
+    }
     assert(!files.filter(path => !/^frontend\/locales\/en\/[^/]+\.json$/.test(path)).some(path => /(^|\/)(data|node_modules|__pycache__|\.wrangler|\.dev|tests|frontend)(\/|$)|\.sqlite3$|\.pyc$/.test(path)));
     const installed = execute(NPM, ['exec', '--offline', '--cache', join(temporary, 'npm-cache'), '--yes',
       '--package', join(temporary, tarball.filename), '--', 'codiscuss', 'install', '--prefix', prefix,

@@ -42,6 +42,7 @@ export const MANAGED_PROMPT_HEADING = '托管账号的管理员为本账号所�
 export const PROMPTS_REPLACED = '以下用户提示替换此前给你的同类提示（包括系统提示词里的旧版本），以此为准。';
 /** Sent once when every layer was cleared after a session had received some. */
 export const PROMPTS_REVOKED = '此前给你的用户提示（包括系统提示词里的）已全部撤销，不再适用。';
+export const HOST_PROMPT_HEADING = '用户给本机房间主持人的提示（派活与选人等偏好，优先于成员分工参考，低于用户当次的要求）：';
 export const PLATFORM_PROMPT_HEADING = '用户为 {platform} 平台的成员设置的提示（补充做法与偏好，不改变权限与技能规则）：';
 
 /**
@@ -49,12 +50,15 @@ export const PLATFORM_PROMPT_HEADING = '用户为 {platform} 平台的成员设�
  * (`platforms[platform]`, `platform` being the member's platform ID) and for this member (its card, preset or workflow
  * card), as one block with a heading each; '' when none is set. `layers` is `system_prompts` of launch-settings.json.
  */
-export function system_text(profile, layers = {}, platform = '', platform_label = platform) {
+export function system_text(profile, layers = {}, platform = '', platform_label = platform, role = '') {
   const managed = String(layers?.managed || '').trim();
   const program = String(layers?.program || '').trim();
+  // The owner's own preferences for whoever hosts a room, such as whom to give which work (user 2026-11-27, #14368).
+  const host = role === 'host' ? String(layers?.host || '').trim() : '';
   const shared = String(layers?.platforms?.[platform] || '').trim();
   const own = expert_prompt(profile);
   return [managed && `${MANAGED_PROMPT_HEADING}\n${managed}`, program && `${PROGRAM_PROMPT_HEADING}\n${program}`,
+    host && `${HOST_PROMPT_HEADING}\n${host}`,
     shared && `${PLATFORM_PROMPT_HEADING.replace('{platform}', platform_label)}\n${shared}`,
     own && `${EXPERT_PROMPT_HEADING}\n${own}`].filter(Boolean).join('\n\n');
 }
@@ -278,7 +282,11 @@ export function wake_opening(requests = [], name = '', discussion = false) {
  */
 export function attachments_text(attachments, cli) {
   if (!attachments.length) return '';
-  const lines = attachments.map(item => `#${item.message_id} ${item.placeholder} ${item.file_name}：${item.path
-    ? `本机副本 ${item.path}` : `未能取到本机副本（${item.error || '未知原因'}），用 ${cli} attachment download 下载`}`);
+  const lines = attachments.map(item => {
+    const label = `#${item.message_id} ${item.placeholder} ${item.file_name}`;
+    if (item.download_command)
+      return `${label}（${item.size} 字节，存于对象存储，未自动下载）：需要时运行 ${item.download_command}，并将 --dest 改为可写目录中不存在的文件路径`;
+    return `${label}：${item.path ? `本机副本 ${item.path}` : `未能取到本机副本（${item.error || '未知原因'}），用 ${cli} attachment download 下载`}`;
+  });
   return `\n\n消息附件（消息正文里的 [图片 #n] / [文件 #n] 指对应附件；已能直接看到的图片不必再打开，其余用你的工具读取本机副本，读不了时如实说明）：\n${lines.join('\n')}`;
 }

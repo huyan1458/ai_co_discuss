@@ -7,13 +7,14 @@ import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import AccountSettings from "./AccountSettings.vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
 import SpeechSettings from "./SpeechSettings.vue";
+import StewardSettings from "./StewardSettings.vue";
 import SystemPrompts from "./SystemPrompts.vue";
 import WeixinSettings from "./WeixinSettings.vue";
 import LanguagePicker from "./LanguagePicker.vue";
 import { t } from "./i18n.js";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 
-const props = defineProps({ targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] }, foldOptions: { type: Array, default: () => [] }, foldKeepOptions: { type: Array, default: () => [] }, cardTextOptions: { type: Array, default: () => [] } });
+const props = defineProps({ targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] }, foldOptions: { type: Array, default: () => [] }, foldKeepOptions: { type: Array, default: () => [] }, cardTextOptions: { type: Array, default: () => [] }, stewardSettingsRequest: { type: Number, default: 0 } });
 const mode = defineModel({ type: String, default: "" });
 const reading_width = defineModel("readingWidth", { type: String, default: "default" });
 const effects = defineModel("effects", { type: String, default: "full" });
@@ -32,11 +33,11 @@ titles.archives = t("已存档房间");
 titles.destructions = t("销毁记录");
 descriptions.destructions = t("查看销毁回执：删除了什么、保留了什么；未完成的可以重试。");
 descriptions.archives = t("查看记录、恢复房间或销毁。");
-const archived_rooms = computed(() => view.value.rooms.filter((room) => room.archived));
+const archived_rooms = computed(() => view.value.rooms.filter((room) => room.archived && !room.system_kind));
 const archive_query = ref("");
 const archive_content = ref("all");
 const archive_content_options = [{ label: t("全部房间"), value: "all" }, { label: t("有消息"), value: "messages" }, { label: t("无消息"), value: "empty" }];
-const archive_results = computed(() => filter_archived_channels(view.value.rooms,
+const archive_results = computed(() => filter_archived_channels(archived_rooms.value,
   { query: archive_query.value, content: archive_content.value }));
 const archive_delete_id = ref(null);
 const archive_destroy_open = ref(false);
@@ -199,10 +200,12 @@ function destruction_label(item) {
 
 const destroy_all_open = ref(false);
 const destroy_all_word = ref("");
+const project_room_count = computed(() => view.value.rooms.filter(room => !room.system_kind).length);
+const has_system_rooms = computed(() => view.value.rooms.some(room => room.system_kind));
 const DESTROY_ALL_WORD = t("销毁全部");
 watch(mode, () => { destroy_all_open.value = false; destroy_all_word.value = ""; });
 
-/** Destroy every room, archived ones too, one after another; a hosted account then clears its AI software's conversations. */
+/** Destroy project rooms, archived ones too, one after another. */
 async function destroy_all_rooms() {
   destroy_all_open.value = false;
   await act("destroy_all_rooms");
@@ -323,8 +326,8 @@ const keep_open = (event) => event.preventDefault();
           <UButton v-if="record.status !== 'done'" :label="t('重试')" color="neutral" variant="soft" size="xs" @click="act('retry_destruction', record.room_id)" />
         </article>
         <div v-if="destroy_all_open" class="channel-destroy-all" role="alert">
-          <p>{{ t("将逐个销毁全部 {count} 个房间（含已存档）：记录、附件、成员的 AI 会话与草稿都会删除，发布过的分享网页会先撤销，项目文件保留。需要留底请先在房间目录“…”里“导出全部房间”；它不含草稿，需要草稿请逐个房间导出。", { count: view.rooms.length }) }}</p>
-          <p>{{ t("以独立 Windows 用户运行的托管账号，还会删除各 AI 软件里的全部会话记录与 AI 记住的偏好（登录信息保留）。") }}</p>
+          <p>{{ t("将逐个销毁全部 {count} 个项目房间（含已存档）：记录、附件、成员的 AI 会话与草稿都会删除，发布过的分享网页会先撤销，项目文件保留。需要留底请先在房间目录“…”里“导出全部房间”；它不含草稿，需要草稿请逐个房间导出。", { count: project_room_count }) }}</p>
+          <p v-if="!has_system_rooms">{{ t("以独立 Windows 用户运行的托管账号，还会删除各 AI 软件里的全部会话记录与 AI 记住的偏好（登录信息保留）。") }}</p>
           <UInput v-model="destroy_all_word" :placeholder="t('输入“{word}”确认', { word: DESTROY_ALL_WORD })" size="sm" autocomplete="off" />
           <div class="dialog-actions"><UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="destroy_all_open = false" /><UButton :label="t('全部销毁')" color="error" size="xs" :disabled="destroy_all_word.trim() !== DESTROY_ALL_WORD" @click="destroy_all_rooms" /></div>
         </div>
@@ -419,6 +422,7 @@ const keep_open = (event) => event.preventDefault();
           </section>
         </div>
         <SystemPrompts />
+        <StewardSettings :open-request="props.stewardSettingsRequest" />
         <SpeechSettings />
         <WeixinSettings />
       </div>

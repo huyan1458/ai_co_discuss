@@ -537,6 +537,25 @@ class RouteTraversalTests(ExternalMemberTests):
         status, body = self.call(f"{self.ext_path}/view", token=self.external, external=True, headers={"X-CoDiscuss-Bridge": "a" * 64})
         self.assertEqual((status, body.get("code")), (403, "external_route_forbidden"))
 
+    def test_external_member_cannot_get_signed_object_attachment_link(self):
+        """An active external member cannot fetch a link for a published object attachment."""
+        self.create()
+        status, posted = self.request(f"{self.path}/messages", {
+            "author": "用户", "text": "附件", "submission_id": "external-attachment-message",
+        }, self.owner)
+        self.assertEqual(status, 201, posted)
+        identifier = uuid.uuid4().hex
+        with closing(self.db()) as connection, connection:
+            connection.execute("""INSERT INTO attachments
+                (id,room_id,message_id,file_name,content_type,size,sha256,actor,submission_id,created_at,storage,object_name,stored_at)
+                VALUES (?,?,?,'large.zip','application/zip',100,'','用户','test-object',CURRENT_TIMESTAMP,
+                        'object','external-test-object',CURRENT_TIMESTAMP)""", (identifier, self.room_id, posted["message"]["id"]))
+        route = f"attachments/{identifier}/content?link=1"
+        with mock.patch("backend.server.configured_storage") as settings:
+            self.assertEqual(self.ext(route)[0], 404)
+            self.assertEqual(self.call(f"{self.path}/{route}", token=self.external)[0], 403)
+        settings.assert_not_called()
+
     def test_unknown_member_route_is_not_found(self):
         self.create()
         self.assertEqual(self.ext("members")[0], 404)

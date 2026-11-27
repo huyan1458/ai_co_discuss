@@ -17,6 +17,9 @@ import { ENTER_SENDS } from "./enter-sends.js";
 import { private_chat } from "./private-chat.js";
 import { PHASE_LABELS } from "./timeline-model.js";
 import BackgroundTaskList from "./BackgroundTaskList.vue";
+import ContextMeter from "./ContextMeter.vue";
+import TokenUsage from "./TokenUsage.vue";
+import { member_quota } from "./quota.js";
 import { background_events } from "./background-tasks.js";
 
 const { view, bridge, act } = inject("discussion");
@@ -666,6 +669,11 @@ function recall(event, step) {
       <span v-if="error" class="term-warn">{{ error }}</span>
       <span v-else-if="unsupported" class="term-warn">{{ unsupported }}</span>
       <span v-else-if="ENTER_SENDS">{{ t('enter 发送 · shift+enter 换行 · ↑↓ 历史{value1}', { value1: can_interrupt ? ` · esc ${stop_label}` : "" }) }}</span>
+      <!-- This member's readings under the input, as dsh lays out its session stats: tokens of all its runs here, then its context and quota. -->
+      <span v-if="member?.usage" class="term-stats">
+        <TokenUsage :usage="member.usage.totals" :title="t('本房间累计用量')" />
+        <ContextMeter :usage="member.usage" :quota="member_quota(view, member.name)" />
+      </span>
     </div>
   </div>
 </template>
@@ -798,7 +806,8 @@ function recall(event, step) {
 .term-background-toggle { all: unset; cursor: pointer; color: var(--term-dim); }
 .term-background-toggle.is-running { color: var(--term-blue); }
 .term-background-toggle:is(:hover, :focus-visible) { text-decoration: underline; }
-.term-hint { min-height: 26px; padding: 4px calc(var(--term-gutter) + 2px) calc(10px + env(safe-area-inset-bottom)); color: var(--term-faint); font-size: 11.5px; line-height: 18px; }
+.term-stats { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; font-family: system-ui, sans-serif; }
+.term-hint { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 4px calc(var(--term-gutter) + 2px) calc(10px + env(safe-area-inset-bottom)); color: var(--term-faint); font-size: 11.5px; line-height: 18px; }
 .term-unread { position: absolute; right: max(20px, calc((100% - var(--term-width)) / 2 + 20px)); bottom: 10px; padding: 3px 12px; border: 1px solid var(--term-border); border-radius: 999px;
   background: var(--term-bg); color: var(--term-text); font: inherit; font-size: 12px; cursor: pointer; }
 .term button { touch-action: manipulation; }

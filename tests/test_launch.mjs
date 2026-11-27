@@ -2073,7 +2073,7 @@ test('the relay channel reaches only local room routes, as the bridge, and answe
   const log_file = join(home, 'relay-timing.jsonl');
   async function feedback(request_id) {
     const receipt = await device.seal(request_id, { action: 'timing-report', timing_reports: [
-      { id, total: 130, worker: 110, relay: 100, dc: 'HKG', mc: 'SJC', token: bridge, path: '/private/marker' }] });
+      { id, total: 130, worker: 110, relay: 100, d1: 3, rpc: 105, db: 'EWR', dc: 'HKG', mc: 'SJC', token: bridge, path: '/private/marker' }] });
     const cipher = await seal(key, receipt, request_id);
     return answer_request(home, 'https://site.test', link, { id: request_id, envelope: { ...cipher, key: { kty, crv, x, y } } });
   }
@@ -2081,6 +2081,9 @@ test('the relay channel reaches only local room routes, as the bridge, and answe
   for (let i = 0; i < 100 && !existsSync(log_file); i++) await new Promise(resolve => setTimeout(resolve, 5));
   const log_text = readFileSync(log_file, 'utf8');
   assert.equal(JSON.parse(log_text).mobile_ms, 20);
+  assert.equal(JSON.parse(log_text).d1_ms, 3);
+  assert.equal(JSON.parse(log_text).relay_overhead_ms, 5);
+  assert.equal(JSON.parse(log_text).primary_colo, "EWR");
   assert.equal(JSON.parse(log_text).frame_bytes, Buffer.byteLength(JSON.stringify(answer)));
   assert.equal(JSON.parse(log_text).buffered_bytes, 321);
   for (const secret of [bridge, 'abc123', '/private/marker', '外出']) assert.ok(!log_text.includes(secret));

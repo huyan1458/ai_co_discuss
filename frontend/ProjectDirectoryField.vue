@@ -137,7 +137,7 @@ async function create_project() {
 }
 
 const menu_items = computed(() => [
-  [{ type: "label", label: relay.value ? t('电脑「{value1}」上的项目', { value1: relay.value.name }) : t('常用项目') },
+  [...(relay.value ? [{ type: "label", label: t('电脑「{value1}」上的项目', { value1: relay.value.name }) }] : []),
     ...projects.value.map((project) => ({ label: project.name, description: relay.value ? undefined : bridge.display_path(project.path), icon: "i-lucide-folder",
       ...(chosen.value === project ? { trailingIcon: "i-lucide-check" } : {}), onSelect: () => choose(project) }))],
   relay.value ? (chosen.value ? [{ label: t('不指定项目'), icon: "i-lucide-circle-slash", onSelect: () => choose(null) }] : [])
@@ -316,7 +316,8 @@ async function save_projects() {
               <UButton icon="i-lucide-check" color="neutral" variant="ghost" size="xs" :aria-label="t('完成编辑')" :disabled="!complete(project)" @click="editing = -1" />
             </template>
             <template v-else>
-              <div class="project-text"><strong>{{ project.name }}</strong><small v-if="!restricted" :title="bridge.display_path(project.path)">{{ bridge.display_path(project.path) }}</small></div>
+              <!-- Clicking a project's text edits it, as the pencil does; a restricted list only removes. -->
+              <div class="project-text" :class="{ 'is-editable': !restricted }" @click="!restricted && (adding = null, editing = index)"><strong>{{ project.name }}</strong><small v-if="!restricted" :title="bridge.display_path(project.path)">{{ bridge.display_path(project.path) }}</small></div>
               <div class="project-actions">
                 <UButton v-if="!restricted" icon="i-lucide-pencil" color="neutral" variant="ghost" size="xs" :aria-label="t('编辑 {value1}', { value1: project.name })" @click="adding = null; editing = index" />
                 <UButton icon="i-lucide-trash-2" color="neutral" variant="ghost" size="xs" :aria-label="t('移除 {value1}', { value1: project.name })" @click="remove(index)" />
@@ -439,6 +440,7 @@ async function save_projects() {
 .project-tile > [class*="icon"] { width: 15px; height: 15px; }
 .project-text { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
 .project-text strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.project-text.is-editable { cursor: text; }
 .project-text small { overflow: hidden; color: var(--ui-text-muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
 .project-actions { display: flex; flex-shrink: 0; gap: 2px; opacity: 0; transition: opacity .15s; }
 .project-row:hover .project-actions, .project-row:focus-within .project-actions { opacity: 1; }

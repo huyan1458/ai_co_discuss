@@ -154,14 +154,17 @@ export function external_signer(machine_id) {
  * sends it. The stand-in never holds a key, so everything it records (`frames`) is what the real site would see.
  * `admit(route, payload, request)` may refuse a request before delivery (the Worker's own checks): return a status
  * and message to refuse. `offline: true` answers `{ status: 'offline' }` as the site does when B is not connected.
- * `GET /api/machines` lists `machines` (set it to B's public machine view, see `public_machine`), as anyone may read it.
+ * `GET /api/guest/<id>/key` looks up the invited computer in the fixture.
  */
 export async function start_fake_relay(t, { deliver = null, admit = null } = {}) {
   const state = { deliver, admit, offline: false, frames: [], refused: [], machines: [] };
   const server = http.createServer(async (request, response) => {
     const reply = (status, value) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)); };
     const pathname = new URL(request.url, 'http://relay').pathname;
-    if (request.method === 'GET' && pathname === '/api/machines') return reply(200, { machines: state.machines });
+    if (request.method === 'GET' && pathname.startsWith('/api/guest/')) {
+      const machine = state.machines.find(item => pathname === '/api/guest/' + item.id + '/key');
+      return machine ? reply(200, machine) : reply(404, {});
+    }
     const match = RELAY_ROUTE.exec(pathname);
     if (request.method !== 'POST' || !match) return reply(404, { error: '地址不存在' });
     const chunks = [];

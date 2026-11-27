@@ -40,6 +40,7 @@ Room work can run on several lines in parallel. Labels at the top of a card show
   - “Background, not handed back”: no one waits for this background work. On success, it is not returned; on failure, the host is notified.
   - “Relay, back to the host at the end”: hand work from one member to the next in order, then return the final result to the host.
   - If an assignment also includes background members, it shows “Also in the background: {value1}”.
+- **Rate the host’s assignments.** A host assignment card ends with “Rate dispatch”. Room owners can click 👍 (“Good dispatch”) or 👎 (“Poor dispatch”); clicking it again withdraws the rating. With 👎 you can add “Who should it have gone to” and a reason, or leave both blank. Hosts and members who can read the room can see ratings. Share pages omit them. When you destroy a room on a personal site, rated assignments are kept with nearby messages and final outcomes for later review. Hosted accounts delete these records with the room.
 - **Continuous assignment limit.** A message can let the host continue for up to 10 rounds by default. At the limit, it stops automatically. Select “Continue” in the sidebar to proceed. If the host requests more rounds in advance, the sidebar shows its reason. Select “Approve” to allow the requested continuation.
 
 ### 3. Manage queued messages
@@ -99,7 +100,7 @@ A page a member delivers can go to a public address, `https://<id>.bimcanvas.com
 
 1. Under the answer, select the rocket button, “Deploy as website”, on an HTML file card. A whole folder a member prepared with `codiscuss site stage` (such as a built `dist/`) shows as a “Ready to deploy” card; select “Deploy as website” on it.
 2. The confirmation lists the file count, size and any files that look like they contain keys or tokens; those are left out by default. Select “Deploy”. The new version goes live only after every file is uploaded; if the upload fails, the live version stays as it was.
-3. Once live, the card shows the address to copy or open; its “…” menu renews for 1, 3 or 7 days from now, rolls back to the previous version or revokes the site. “Published” in the sidebar lists every live website.
+3. Once live, the card shows the address to copy or open; its “…” menu renews for 1, 3 or 7 days from now, rolls back to the previous version or revokes the site. An expired website stops serving but can still be renewed to bring the same address back. “Published” in the sidebar lists live and expired websites.
 
 To have a member put its work online directly, say “deploy” or “publish as a website” in your message; otherwise members only prepare it and upload nothing.
 

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from . import free_room
 from .identity import AI_PLATFORMS, JOINED_NICKNAMES, MAX_ROOM_AGENTS, PLATFORM_NICKNAMES, is_ai
 from .runtime import begin_write, require_owner, token_hash
-from .texts import Text, text_payload
+from .texts import Text, save_text, text_payload
 
 EXTERNAL_HEADER = "X-CoDiscuss-External"
 BRIDGE_HEADER = "X-CoDiscuss-Bridge"
@@ -672,3 +672,627 @@ def owner_api(connection, room_id, route, params, method, token, read_payload):
         if route[1:] == ["reads"] and method == "POST":
             return record_read(connection, room_id, member_id, token, read_payload()), 200
     raise LookupError(Text("地址不存在"))
+
+# Browser guest visits share the external entry point, with a separate credential and route allowlist.
+GUEST_GET = frozenset((("session",), ("messages",), ("executions",), ("room",), ("private",),
+                       ("files",), ("files", "content")))
+GUEST_INVITE_MS = 15 * 60 * 1000
+GUEST_MAX_SECONDS = 24 * 60 * 60
+GUEST_DEFAULT_SECONDS = 15 * 60
+GUEST_MAX_MESSAGE = 32_000
+GUEST_MODES = ("conservative", "trust")
+GUEST_SERVICE_ACTIONS = frozenset(("redeem", "activate", "expire", "file-read"))
+GUEST_DISCONNECT_REASONS = {"owner": "disconnected", "host": "disconnected_by_host"}
+
+
+def guest_disconnected_by(reason):
+    """Recognize both current and previously stored disconnect reasons."""
+    return next((actor for actor, value in GUEST_DISCONNECT_REASONS.items() if value == reason), None)
+
+
+def guest_now():
+    """Return the server clock in the guest protocol's milliseconds."""
+    return time.time_ns() // 1_000_000
+
+
+def guest_error(kind=PermissionError, code="guest_forbidden", **details):
+    """Provide a stable error code independently of the display language."""
+    return classified(kind, Text("访客操作不可用"), code, **details)
+
+
+def guest_path(parts):
+    """Recognize only the external guest namespace."""
+    return parts[:3] == EXTERNAL_PREFIX and parts[4:5] == ["guest"]
+
+
+def guest_route_allowed(method, route):
+    """Return whether this exact verb and route are exposed to guests."""
+    if method == "GET":
+        return tuple(route) in GUEST_GET
+    return method == "POST" and (route == ["messages"] or (
+        len(route) == 3 and route[0] == "messages" and route[2] == "withdraw"
+        and re.fullmatch(r"[0-9]{1,18}", route[1]) is not None))
+
+
+def guest_guard(connection, headers, parts, method):
+    """Apply guest and in-room member boundaries before routing or implicit local ownership."""
+    hashed = token_hash(headers.get("X-Discussion-Token", ""))
+    visit = connection.execute("SELECT * FROM room_guest_visits WHERE token_hash=?", (hashed,)).fetchone() if hashed else None
+    if visit or guest_path(parts):
+        if (not visit or not guest_path(parts) or parts[3] != visit["room_id"]
+                or headers.get(BRIDGE_HEADER) is not None or not guest_route_allowed(method, parts[5:])):
+            raise guest_error()
+        return
+    if not hashed:
+        return
+    sources = connection.execute("""SELECT v.room_id FROM room_guest_visits v JOIN room_members m ON m.room_id=v.room_id
+        WHERE m.token_hash=? AND v.ended_at IS NULL AND v.expires_at>?""", (hashed, guest_now())).fetchall()
+    if not sources:
+        return
+    target = parts[2] if parts[:2] == ["api", "rooms"] and len(parts) >= 3 else None
+    if parts[:3] == EXTERNAL_PREFIX and len(parts) > 4:
+        target = parts[3]
+    if parts[:1] == ["r"] and len(parts) > 1:
+        target = parts[1]
+    if any(row["room_id"] != target for row in sources):
+        raise guest_error()
+
+
+def guest_token_hash(token):
+    """Hash a browser bearer literally, without the internal owner-proxy convention."""
+    return hashlib.sha256(token.encode()).hexdigest() if isinstance(token, str) and 32 <= len(token) <= 128 else ""
+
+
+def guest_current(connection, room_id):
+    """Return the authoritative visit, including the last ended record when idle."""
+    return connection.execute("""SELECT * FROM room_guest_visits WHERE room_id=?
+        ORDER BY ended_at IS NULL DESC, created_at DESC, rowid DESC LIMIT 1""", (room_id,)).fetchone()
+
+
+def guest_phase(row, now):
+    """Compute effective phase even if cleanup has not run yet."""
+    if row is None:
+        return "none"
+    end = row["expires_at"] if row["joined_at"] is not None else row["invite_expires_at"]
+    if row["ended_at"] is not None or end <= now:
+        return "ended"
+    if row["joined_at"] is not None:
+        return "active"
+    return "waiting" if row["guest_id"] else "invited"
+
+
+def guest_mode_active(connection, room_id):
+    """Return whether a guest currently has access to the room."""
+    return guest_phase(guest_current(connection, room_id), guest_now()) == "active"
+
+
+def guest_dispatch_held(connection, room_id):
+    """Return whether admission currently blocks local execution claims."""
+    return guest_phase(guest_current(connection, room_id), guest_now()) == "waiting"
+
+
+def guest_view(row, now):
+    """Project the room's current invitation and effective protection mode."""
+    phase = guest_phase(row, now)
+    guest = None
+    if row and row["guest_id"]:
+        guest = {key: row[key] for key in ("key_id", "label", "scope", "requested_mode", "duration_seconds",
+                                           "joined_at", "expires_at", "ended_at", "reason")}
+        guest.update(id=row["guest_id"], private_chat=bool(row["private_chat"]))
+        guest["disconnected_by"] = guest_disconnected_by(row["reason"])
+    return {"revision": f'{row["invite_id"]}:{row["revision"]}' if row else "0",
+            "server_time": now, "phase": phase, "mode": row["requested_mode"] if phase == "active" else "none",
+            "invite_id": row["invite_id"] if row else None, "invite_expires_at": row["invite_expires_at"] if row else None,
+            "hold_dispatch": phase == "waiting", "stop_for_admission": phase == "waiting" and bool(row["stop_for_admission"]),
+            "guest": guest}
+
+
+def guest_cancel_pending(connection, room_id, guest_id, reason):
+    """Cancel undelivered requests rooted in this guest's messages."""
+    where = """room_id=? AND status='pending' AND (chain_id IN (SELECT message_id FROM guest_message_sources WHERE guest_id=?)
+        OR message_id IN (SELECT message_id FROM guest_message_sources WHERE guest_id=?))"""
+    values = (room_id, guest_id, guest_id)
+    free_room.record_cancel_reasons(connection, where, values, reason)
+    connection.execute(f"UPDATE member_requests SET status='cancelled' WHERE {where}", values)
+
+
+def guest_end(connection, row, now, reason):
+    """Invalidate the visit and cancel its pending work within the same transaction."""
+    connection.execute("""UPDATE room_guest_visits SET ended_at=?,reason=?,revision=revision+1
+        WHERE invite_id=? AND ended_at IS NULL""", (now, reason, row["invite_id"]))
+    if row["guest_id"]:
+        guest_cancel_pending(connection, row["room_id"], row["guest_id"],
+                             "guest_disconnected" if guest_disconnected_by(reason) else "no_reply")
+
+
+def guest_refresh(connection, room_id, now):
+    """Persist lazy expiry and return the latest visit."""
+    row = guest_current(connection, room_id)
+    if row and row["ended_at"] is None and guest_phase(row, now) == "ended":
+        guest_end(connection, row, now, "expired" if row["joined_at"] is not None else "invite_expired")
+        return guest_current(connection, room_id)
+    return row
+
+
+def guest_revision(row, now, payload):
+    """Check that an owner mutation observed the current invitation first."""
+    if not isinstance(payload.get("revision"), str) or not payload["revision"]:
+        raise guest_error(ValueError, "invalid_input")
+    state = guest_view(row, now)
+    if payload["revision"] != state["revision"]:
+        raise guest_error(FileExistsError, "stale_revision", state=state)
+
+
+def guest_identifier(value):
+    """Validate a bounded opaque protocol identifier."""
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", value):
+        raise guest_error(ValueError, "invalid_input")
+    return value
+
+
+def guest_duration(value):
+    """Validate the total visit duration in seconds."""
+    if type(value) is not int or not 1 <= value <= GUEST_MAX_SECONDS:
+        raise guest_error(ValueError, "invalid_input")
+    return value
+
+
+def guest_invite(connection, room_id, row, now, payload):
+    """Replace only an unclaimed invite, using the revision the owner read."""
+    invite = guest_identifier(payload.get("invite_id"))
+    mode, scope = payload.get("mode", "conservative"), payload.get("scope", "chat")
+    private = payload.get("private_chat", False)
+    label = checked_text(payload.get("label", ""), 80, "label").strip()
+    duration = guest_duration(payload.get("duration_seconds", GUEST_DEFAULT_SECONDS))
+    if mode not in GUEST_MODES or scope not in ("chat", "project") or type(private) is not bool:
+        raise guest_error(ValueError, "invalid_input")
+    if row and row["invite_id"] == invite and guest_phase(row, now) == "invited":
+        if (label, scope, private, mode, duration) != tuple(row[field] for field in
+                ("label", "scope", "private_chat", "requested_mode", "duration_seconds")):
+            raise guest_error(FileExistsError, "submission_conflict")
+        return
+    guest_revision(row, now, payload)
+    if guest_phase(row, now) in ("waiting", "active"):
+        raise guest_error(FileExistsError, "guest_occupied")
+    if guest_phase(row, now) == "invited":
+        guest_end(connection, row, now, "invite_replaced")
+    if connection.execute("SELECT 1 FROM room_guest_visits WHERE invite_id=?", (invite,)).fetchone():
+        raise guest_error(FileExistsError, "submission_conflict")
+    connection.execute("""INSERT INTO room_guest_visits
+        (invite_id,room_id,label,scope,private_chat,requested_mode,duration_seconds,created_at,invite_expires_at)
+        VALUES (?,?,?,?,?,?,?,?,?)""", (invite, room_id, label, scope, private, mode, duration, now, now + GUEST_INVITE_MS))
+
+
+def guest_redeem(connection, row, now, payload):
+    """Bind the invite to one browser, allowing retries of the same claim."""
+    if not row or row["invite_id"] != payload.get("invite_id") or guest_phase(row, now) == "ended":
+        raise guest_error()
+    guest_id = guest_identifier(payload.get("guest_id"))
+    key_id = guest_identifier(payload.get("key_id"))
+    hashed = payload.get("token_hash")
+    if not isinstance(hashed, str) or not re.fullmatch(r"[a-f0-9]{64}", hashed):
+        raise guest_error(ValueError, "invalid_input")
+    if row["guest_id"]:
+        if (row["guest_id"], row["key_id"], row["token_hash"]) != (guest_id, key_id, hashed):
+            raise guest_error(FileExistsError, "guest_occupied")
+        return
+    if connection.execute("SELECT 1 FROM room_guest_visits WHERE token_hash=? OR guest_id=?", (hashed, guest_id)).fetchone():
+        raise guest_error(FileExistsError, "guest_occupied")
+    label = checked_text(payload.get("label", row["label"]), 80, "label").strip() or row["label"] or "Guest"
+    connection.execute("""UPDATE room_guest_visits SET guest_id=?,key_id=?,token_hash=?,label=?,revision=revision+1
+        WHERE invite_id=?""", (guest_id, key_id, hashed, label, row["invite_id"]))
+
+
+def guest_live_executions(connection, room_id, *, local_only=False):
+    """List in-flight room executions, including reservations before the process starts."""
+    return [row[0] for row in connection.execute("""SELECT e.id FROM member_executions e JOIN room_members m ON m.id=e.member_id
+        WHERE e.room_id=? AND e.status IN ('dispatched','started') AND (?=0 OR m.access<>'external') ORDER BY e.id""",
+        (room_id, int(local_only)))]
+
+
+def guest_stop_executions(connection, room_id, *, admission=False, keep_execution=None):
+    """Stop live execution cards without dropping independent pending work."""
+    stopped = [item for item in guest_live_executions(connection, room_id, local_only=admission)
+               if item != keep_execution]
+    for execution_id in stopped:
+        free_room.finish_execution(connection, execution_id, "cancelled", Text("用户停止全部"),
+                                   "pending" if admission else "cancelled", "user_stop" if admission else "guest_disconnected")
+    connection.execute("""UPDATE private_chats SET status='stopped',updated_at=? WHERE room_id=? AND status='running'""",
+                       (int(time.time()), room_id))
+    if not admission:
+        free_room.settle_batches(connection, room_id)
+    return stopped
+
+
+def guest_change(connection, room_id, row, now, action, payload):
+    """Apply one mutation after route-level authentication."""
+    phase = guest_phase(row, now)
+    if action == "invite":
+        return guest_invite(connection, room_id, row, now, payload)
+    if action == "redeem":
+        return guest_redeem(connection, row, now, payload)
+    if action in ("protection", "extend"):
+        guest_revision(row, now, payload)
+        if phase != "active":
+            raise guest_error()
+        return guest_change_active(connection, row, action, payload)
+    if not row or not row["guest_id"] or row["guest_id"] != payload.get("guest_id"):
+        raise guest_error()
+    if action == "expire":
+        if phase != "ended":
+            raise guest_error(FileExistsError, "guest_waiting")
+        return None
+    if phase == "active" and (action == "activate" or action == "admit" and row["stop_for_admission"]):
+        return None
+    if phase != "waiting":
+        raise guest_error()
+    if action == "admit":
+        if not row["stop_for_admission"]:
+            guest_stop_executions(connection, room_id, admission=True)
+            connection.execute("UPDATE room_guest_visits SET stop_for_admission=1,revision=revision+1 WHERE invite_id=?",
+                               (row["invite_id"],))
+    elif guest_live_executions(connection, room_id, local_only=True) or connection.execute(
+            "SELECT 1 FROM private_chats WHERE room_id=? AND status='running'", (room_id,)).fetchone():
+        raise guest_error(FileExistsError, "guest_waiting")
+    else:
+        connection.execute("""UPDATE room_guest_visits SET joined_at=?,expires_at=?,revision=revision+1 WHERE invite_id=?""",
+                           (now, now + row["duration_seconds"] * 1000, row["invite_id"]))
+    return None
+
+
+def guest_change_active(connection, row, action, payload):
+    """Write a protection change or extend the running visit from its original start."""
+    if action == "protection":
+        mode = payload.get("mode")
+        if mode not in GUEST_MODES:
+            raise guest_error(ValueError, "invalid_input")
+        if mode != row["requested_mode"]:
+            connection.execute("UPDATE room_guest_visits SET requested_mode=?,revision=revision+1 WHERE invite_id=?",
+                               (mode, row["invite_id"]))
+    else:
+        duration = guest_duration(payload.get("duration_seconds"))
+        if duration < row["duration_seconds"]:
+            raise guest_error(ValueError, "invalid_input")
+        if duration > row["duration_seconds"]:
+            connection.execute("""UPDATE room_guest_visits SET duration_seconds=?,expires_at=?,revision=revision+1
+                WHERE invite_id=?""", (duration, row["joined_at"] + duration * 1000, row["invite_id"]))
+
+
+def guest_disconnect_host(connection, room_id, token, acting_token):
+    """Identify the current host for direct and owner-proxied host controls."""
+    member = free_room.require_owner_or_host(connection, room_id, token)
+    if member is None and acting_token:
+        member = free_room.require_member(connection, room_id, acting_token)
+        if member["role"] != "host":
+            raise guest_error()
+    return member
+
+
+def guest_disconnect(connection, row, now, payload, host):
+    """Revoke the addressed visit and stop other live executions atomically."""
+    if not row or not row["guest_id"] or row["guest_id"] != payload.get("guest_id"):
+        raise guest_error()
+    room_id, guest_id = row["room_id"], row["guest_id"]
+    stopped = []
+    if guest_phase(row, now) != "ended":
+        actor = "host" if host else "owner"
+        keep_execution = None
+        if host:
+            active = connection.execute("""SELECT id FROM member_executions
+                WHERE room_id=? AND member_id=? AND status IN ('dispatched','started') ORDER BY id DESC LIMIT 1""",
+                (room_id, host["id"])).fetchone()
+            keep_execution = active[0] if active else None
+            if "execution_id" in payload and payload["execution_id"] != keep_execution:
+                raise guest_error(FileExistsError, "stale_execution")
+        guest_end(connection, row, now, GUEST_DISCONNECT_REASONS[actor])
+        stopped = guest_stop_executions(connection, room_id, keep_execution=keep_execution)
+        guest_cancel_pending(connection, room_id, guest_id, "guest_disconnected")
+        guest_event(connection, room_id, "guest.disconnected", {"guest_id": guest_id, "actor": actor})
+        guest_disconnect_notice(connection, row, host)
+    state = guest_view(guest_current(connection, room_id), now)
+    return {"state": state, "ended_guest_id": guest_id, "stopped_execution_ids": stopped,
+            "disconnected_by": state["guest"]["disconnected_by"]}
+
+
+def guest_disconnect_notice(connection, row, host):
+    """Append exactly one visible notice in the same transaction as the disconnect."""
+    room_id = row["room_id"]
+    if host:
+        label = free_room.member_display_names(connection, room_id).get(host["name"], host["name"])
+        text = Text("主持人 {host} 断开了外部用户 {guest}。", host=label, guest=row["label"])
+    else:
+        text = Text("房主断开了外部用户 {guest}。", guest=row["label"])
+    message_id = connection.execute("""INSERT INTO messages(room_id,author,text,source,submission_id,created_at)
+        VALUES (?,?,?,?,?,?)""", (room_id, free_room.NOTICE_AUTHOR, text, "host_action" if host else "system",
+        f'guest-disconnect-{row["guest_id"]}', datetime.now(timezone.utc).isoformat(timespec="seconds"))).lastrowid
+    save_text(connection, "message", message_id, "text", text)
+    connection.execute("INSERT INTO message_details(message_id,kind,submitted_by) VALUES (?,'notice',?)",
+                       (message_id, free_room.NOTICE_AUTHOR))
+
+
+def guest_revoke_invite(connection, row, now, payload):
+    """Invalidate a single unredeemed invite by ID, without touching room work."""
+    if not row or row["invite_id"] != payload.get("invite_id") or row["guest_id"]:
+        raise guest_error()
+    if guest_phase(row, now) == "invited":
+        guest_end(connection, row, now, "invite_revoked")
+        row = guest_current(connection, row["room_id"])
+    return {"state": guest_view(row, now), "invite_id": row["invite_id"]}
+
+
+def guest_owner_api(connection, room_id, route, method, token, *, payload=None, service=False, acting_token=""):
+    """Dispatch only the owner, host or local service guest operations."""
+    if not route and method == "GET":
+        free_room.require_owner_or_host(connection, room_id, token)
+        now = guest_now()
+        row = guest_current(connection, room_id)
+        if row is None or row["ended_at"] is not None or guest_phase(row, now) != "ended":
+            return guest_view(row, now)
+    elif method != "POST" or len(route) != 1:
+        raise guest_error()
+    elif route == ["disconnect"]:
+        # Recheck the role after the writer lock, before deciding whose execution to preserve.
+        begin_write(connection)
+        host = guest_disconnect_host(connection, room_id, token, acting_token)
+    elif route[0] in GUEST_SERVICE_ACTIONS:
+        if not service:
+            raise guest_error()
+        require_owner(connection, room_id, token)
+    elif route[0] in ("invite", "protection", "extend", "admit", "revoke"):
+        require_owner(connection, room_id, token)
+    else:
+        raise guest_error()
+    begin_write(connection)
+    now = guest_now()
+    row = guest_refresh(connection, room_id, now)
+    if not route:
+        return guest_view(row, now)
+    action = route[0]
+    if action == "file-read":
+        return guest_file_grant(connection, room_id, row, now, payload)
+    if action == "disconnect":
+        return guest_disconnect(connection, row, now, payload, host)
+    if action == "revoke":
+        return guest_revoke_invite(connection, row, now, payload)
+    guest_change(connection, room_id, row, now, action, payload)
+    state = guest_view(guest_current(connection, room_id), now)
+    data = {"state": state}
+    if action == "invite":
+        data.update(invite_id=state["invite_id"], invite_expires_at=state["invite_expires_at"])
+    return data
+
+
+def guest_event(connection, room_id, kind, data):
+    """Record guest operations for the room's audit log."""
+    connection.execute("INSERT INTO room_events(room_id,at,kind,data) VALUES (?,?,?,?)",
+                       (room_id, guest_now(), kind, json.dumps(data, ensure_ascii=False)))
+
+
+def guest_file_grant(connection, room_id, row, now, payload):
+    """Authorize and audit a live visit's file reads. The gateway alone resolves its own roots."""
+    if (guest_phase(row, now) != "active" or row["guest_id"] != payload.get("guest_id")
+            or row["scope"] != "project"):
+        raise guest_error()
+    action, outcome = payload.get("action"), payload.get("outcome")
+    root, path, size = payload.get("root"), payload.get("path"), payload.get("bytes", 0)
+    if (action not in ("roots", "list", "read") or outcome not in ("check", "served", "denied")
+            or not isinstance(path, str) or len(path) > 4096 or type(size) is not int or size < 0
+            or (root is not None and (type(root) is not int or root < 0))
+            or (root is None) != (action == "roots")):
+        raise guest_error(ValueError, "invalid_input")
+    if outcome == "check":
+        return {"expires_at": row["expires_at"]}
+    guest_event(connection, room_id, "guest.file", {"guest_id": row["guest_id"], "root": root, "path": path,
+                                                   "action": action, "outcome": outcome, "bytes": size})
+    return {"recorded": True}
+
+
+def guest_origin(connection, message_id, chain_id=0):
+    """Resolve inherited guest provenance by the message or its dispatch chain."""
+    row = connection.execute("""SELECT g.guest_id,g.label,s.message_id FROM guest_message_sources s
+        JOIN room_guest_visits g ON g.guest_id=s.guest_id WHERE s.message_id IN (?,?)
+        ORDER BY s.message_id=? DESC LIMIT 1""", (message_id, chain_id, message_id)).fetchone()
+    return {"kind": "guest", "guest_id": row["guest_id"], "label": row["label"],
+            "root_message_id": row["message_id"]} if row else None
+
+
+def guest_display_names(connection, room_id):
+    """Return display labels for the room's persistent historical guest authors."""
+    return {f'guest:{row["guest_id"]}': row["label"] for row in connection.execute(
+        "SELECT guest_id,label FROM room_guest_visits WHERE room_id=? AND guest_id IS NOT NULL", (room_id,))}
+
+
+def add_guest_question_origin(connection, room_id, question):
+    """Identify the guest source of a question by its persisted request bindings."""
+    row = connection.execute("""SELECT s.message_id FROM room_questions q
+        JOIN json_each(q.request_ids) wanted JOIN member_requests r ON r.id=wanted.value AND r.room_id=q.room_id
+        JOIN guest_message_sources s ON s.message_id IN (r.chain_id,r.message_id)
+        WHERE q.room_id=? AND q.id=? ORDER BY r.id,s.message_id LIMIT 1""",
+        (room_id, question.get("id", question.get("question_id")))).fetchone()
+    if row:
+        question["origin"] = guest_origin(connection, row["message_id"])
+    return question
+
+
+def guest_page(connection, sql, room_id, params, *, limit_default=50):
+    """Read a bounded ID page with stable output ordering in both directions."""
+    if "after" in params and "before" in params:
+        raise guest_error(ValueError, "invalid_input")
+    limit = int(params.get("limit", limit_default))
+    cursor = int(params.get("after", params.get("before", 0)))
+    if not 1 <= limit <= 100 or not 0 <= cursor < 2**63:
+        raise guest_error(ValueError, "invalid_input")
+    ascending = "after" in params
+    cursor_program = "AND item.id>?" if ascending else "AND item.id<?" if "before" in params else ""
+    values = (room_id, cursor, limit + 1) if cursor_program else (room_id, limit + 1)
+    rows = connection.execute(f"{sql} {cursor_program} ORDER BY item.id {'ASC' if ascending else 'DESC'} LIMIT ?", values).fetchall()
+    return (rows[:limit] if ascending else list(reversed(rows[:limit]))), len(rows) > limit
+
+
+GUEST_MESSAGE_SQL = """SELECT item.id,item.author,item.text,item.created_at,item.source,
+    (w.message_id IS NOT NULL) AS withdrawn FROM messages item LEFT JOIN message_withdrawals w ON w.message_id=item.id
+    WHERE item.room_id=? AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=item.id)"""
+
+
+def guest_withdrawable(connection, message_id):
+    """A guest cannot withdraw a message after an associated request has been handled."""
+    return not connection.execute("""SELECT 1 FROM member_requests r WHERE message_id=?
+        AND (execution_id IS NOT NULL OR status NOT IN ('pending','cancelled')
+            OR EXISTS(SELECT 1 FROM retried_requests previous WHERE previous.request_id=r.id)) LIMIT 1""",
+        (message_id,)).fetchone()
+
+
+def guest_message_view(connection, room_id, row, visit):
+    """Project one public message, including server-computed withdrawal rights."""
+    origin = guest_origin(connection, row["id"])
+    author = origin["label"] if origin else free_room.member_display_names(connection, room_id).get(row["author"], row["author"])
+    kind = "guest" if origin else "owner" if row["author"] == "用户" else "system" if row["source"] == "system" else "member"
+    withdrawn = bool(row["withdrawn"])
+    return {"id": row["id"], "author_label": author, "author_kind": kind, "text": "" if withdrawn else row["text"],
+            "created_at": int(datetime.fromisoformat(row["created_at"]).timestamp() * 1000), "withdrawn": withdrawn,
+            "can_withdraw": bool(origin and origin["guest_id"] == visit["guest_id"] and not withdrawn
+                                 and guest_withdrawable(connection, row["id"])), "origin": origin}
+
+
+def guest_message_by_id(connection, room_id, message_id, visit):
+    """Return one guest-visible message."""
+    row = connection.execute(GUEST_MESSAGE_SQL + " AND item.id=?", (room_id, message_id)).fetchone()
+    if not row:
+        raise guest_error(LookupError, "not_found")
+    return guest_message_view(connection, room_id, row, visit)
+
+
+def guest_post(connection, room_id, visit, payload):
+    """Append one guest message and its requests without granting owner authority."""
+    text, mentions = payload.get("text"), payload.get("mentions", [])
+    if (set(payload) - {"text", "mentions", "submission_id"} or not isinstance(text, str)
+            or not 0 < len(text.strip()) <= GUEST_MAX_MESSAGE or text.lstrip().startswith("/")
+            or not isinstance(mentions, list) or any(not isinstance(name, str) for name in mentions)):
+        raise guest_error(ValueError, "invalid_input")
+    text = text.strip()
+    submission = guest_identifier(payload.get("submission_id"))
+    key = "guest-" + hashlib.sha256(f'{visit["guest_id"]}:{submission}'.encode()).hexdigest()
+    targets = json.dumps(sorted(set(mentions)), ensure_ascii=False)
+    earlier = connection.execute("""SELECT m.id,m.text,s.mentions FROM messages m
+        JOIN guest_message_sources s ON s.message_id=m.id WHERE m.room_id=? AND m.submission_id=?""",
+        (room_id, key)).fetchone()
+    if earlier:
+        if earlier["text"] != text or earlier["mentions"] != targets:
+            raise guest_error(FileExistsError, "submission_conflict")
+        return earlier["id"]
+    archived = connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()
+    if archived and archived[0]:
+        raise guest_error()
+    pairs = free_room.recipients(connection, room_id, {"to": mentions} if mentions else {})
+    now = datetime.now(timezone.utc).isoformat()
+    author = f'guest:{visit["guest_id"]}'
+    message_id = connection.execute("""INSERT INTO messages(room_id,author,text,source,submission_id,created_at)
+        VALUES (?,?,?,'guest',?,?)""", (room_id, author, text, key, now)).lastrowid
+    connection.execute("INSERT INTO guest_message_sources(message_id,guest_id,mentions) VALUES (?,?,?)",
+                       (message_id, visit["guest_id"], targets))
+    connection.execute("INSERT INTO message_details(message_id,kind,submitted_by) VALUES (?,'chat',?)",
+                       (message_id, visit["label"]))
+    for member_id, purpose in pairs:
+        free_room.insert_request(connection, room_id, member_id, message_id, message_id, purpose, "guest")
+    return message_id
+
+
+def guest_withdraw(connection, room_id, visit, message_id, payload):
+    """Withdraw only the presenting visit's own untouched message, atomically."""
+    if payload:
+        raise guest_error(ValueError, "invalid_input")
+    message = guest_message_by_id(connection, room_id, message_id, visit)
+    if (message["origin"] or {}).get("guest_id") != visit["guest_id"]:
+        raise guest_error()
+    if message["withdrawn"]:
+        return
+    if not message["can_withdraw"]:
+        raise guest_error(FileExistsError, "guest_not_withdrawable")
+    connection.execute("INSERT INTO message_withdrawals(message_id,kind,created_at) VALUES (?,'retracted',?)",
+                       (message_id, int(time.time())))
+    where = "room_id=? AND message_id=? AND status='pending'"
+    free_room.record_cancel_reasons(connection, where, (room_id, message_id), "guest_withdrawn")
+    connection.execute(f"UPDATE member_requests SET status='cancelled' WHERE {where}", (room_id, message_id))
+
+
+def guest_members(connection, room_id):
+    """Expose public member handles needed for display and mentions."""
+    labels = free_room.member_display_names(connection, room_id)
+    return [{"id": row["name"], "label": labels[row["name"]], "role": row["role"], "status": row["status"]}
+            for row in connection.execute("SELECT name,role,status FROM room_members WHERE room_id=? AND status<>'removed' ORDER BY id",
+                                          (room_id,))]
+
+
+def guest_executions(connection, room_id, params):
+    """Expose execution status, excluding logs, paths and command output."""
+    rows, more = guest_page(connection, """SELECT item.id,item.status,item.created_at,item.finished_at,
+        m.name,(SELECT MIN(r.message_id) FROM member_requests r WHERE r.execution_id=item.id
+        AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=r.message_id)) AS request_message_id
+        FROM member_executions item JOIN room_members m ON m.id=item.member_id WHERE item.room_id=?""", room_id, params)
+    labels = free_room.member_display_names(connection, room_id)
+    return {"items": [{"id": row["id"], "status": row["status"], "member_id": row["name"],
+                       "member_label": labels.get(row["name"], row["name"]),
+                       "started_at": row["created_at"] * 1000,
+                       "ended_at": row["finished_at"] * 1000 if row["finished_at"] else None,
+                       "request_message_id": row["request_message_id"]} for row in rows], "has_more": more}
+
+
+def guest_private(connection, room_id, params):
+    """Expose only owner and member text for an explicitly shared private chat."""
+    rows, more = guest_page(connection, """SELECT item.id,item.text,item.reply,item.created_at,item.updated_at,m.name
+        FROM private_chats item JOIN room_members m ON m.id=item.member_id WHERE item.room_id=?""", room_id, params)
+    labels = free_room.member_display_names(connection, room_id)
+    items = []
+    for row in rows:
+        label = labels.get(row["name"], row["name"])
+        items.append({"id": row["id"], "member_label": label, "author_label": "用户",
+                      "text": row["text"], "created_at": row["created_at"] * 1000})
+        if row["reply"]:
+            items.append({"id": row["id"], "member_label": label, "author_label": label,
+                          "text": row["reply"], "created_at": row["updated_at"] * 1000})
+    return {"items": items, "has_more": more}
+
+
+def guest_projection(connection, parts, method, token, params, read_payload):
+    """Authenticate and serve the browser's narrowly projected data."""
+    room_id, route = parts[3], parts[5:]
+    payload = read_payload() if method == "POST" else None
+    begin_write(connection)
+    now = guest_now()
+    guest_refresh(connection, room_id, now)
+    visit = connection.execute("SELECT * FROM room_guest_visits WHERE room_id=? AND token_hash=?",
+                               (room_id, guest_token_hash(token))).fetchone()
+    if not visit or not guest_route_allowed(method, route):
+        raise guest_error()
+    phase = guest_phase(visit, now)
+    if phase == "ended":
+        connection.commit()
+        raise guest_error(code="guest_ended", reason=visit["reason"] or "expired",
+                          disconnected_by=guest_disconnected_by(visit["reason"]))
+    room = connection.execute("SELECT title FROM rooms WHERE id=?", (room_id,)).fetchone()
+    if route == ["session"]:
+        state = guest_view(visit, now)
+        guest = {key: state["guest"][key] for key in ("id", "label", "scope", "private_chat", "duration_seconds", "joined_at", "expires_at")}
+        return {"phase": phase, "server_time": now, "guest": {**guest, "mode": state["mode"]}, "room_title": room["title"]}
+    if phase != "active":
+        raise guest_error(FileExistsError, "guest_waiting")
+    if method == "POST":
+        message_id = guest_post(connection, room_id, visit, payload) if route == ["messages"] else int(route[1])
+        if route != ["messages"]:
+            guest_withdraw(connection, room_id, visit, message_id, payload)
+        return {"message": guest_message_by_id(connection, room_id, message_id, visit)}
+    return guest_read(connection, room_id, route, params, visit, room)
+
+
+def guest_read(connection, room_id, route, params, visit, room):
+    """Read one active guest projection; file data is served by the audited gateway."""
+    if route == ["room"]:
+        return {"id": room_id, "title": room["title"], "members": guest_members(connection, room_id)}
+    if route == ["messages"]:
+        rows, more = guest_page(connection, GUEST_MESSAGE_SQL, room_id, params)
+        return {"items": [guest_message_view(connection, room_id, row, visit) for row in rows], "has_more": more}
+    if route == ["executions"]:
+        return guest_executions(connection, room_id, params)
+    if route == ["private"] and visit["private_chat"]:
+        return guest_private(connection, room_id, params)
+    raise guest_error()

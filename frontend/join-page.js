@@ -97,6 +97,7 @@
         copy_button,
       ]),
       element("p", { class: "fine", text: t("按钮打开这台电脑上的共议（需已安装并运行 codiscuss）。也可以复制链接，在共议左栏“外部房间”里粘贴，或运行 codiscuss join。") }),
+      element("p", { class: "fine", text: t("旧版客户端若提示找不到电脑，请更新 AI CoDiscuss，再打开这个邀请链接。") }),
       element("p", { class: "fine", text: t("邀请内容只在地址的 # 之后，浏览器不会把它发给网站。") }),
     ]);
   }

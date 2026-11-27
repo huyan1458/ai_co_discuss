@@ -16,6 +16,7 @@ import MemberTextDialog from "./MemberTextDialog.vue";
 import SessionBrowser from "./SessionBrowser.vue";
 import WorkflowExperts from "./WorkflowExperts.vue";
 import { LEND_DURATIONS, SCOPES, WAKES, scope_label } from "./external-members.js";
+import { profile_quota, quota_peak, quota_text, quota_title } from "./quota.js";
 import { MAX_LABEL } from "./member-actions.js";
 import { adapter_profile, same_session_family } from "../runner/adapters/profiles.mjs";
 import { EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
@@ -172,6 +173,7 @@ const platform_missing = computed(() => {
   const ready = view.value.launch.card_platforms || [];
   return Boolean(preset.value) && ready.length > 0 && !ready.includes(bridge.platform_of(props.name));
 });
+const quota = computed(() => profile_quota(view.value, profile.value));
 // The front states only what is decided or an exception; placeholders such as "set in the original software" stay off it.
 const facts = computed(() => preset.value ? [
   ...preset.value.needs_platform || platform_missing.value ? [{ label: t('平台'), value: t('本机未配置此软件'), tone: "warn" }] : [],
@@ -184,6 +186,8 @@ const facts = computed(() => preset.value ? [
   { label: t('启动'), value: launch_fact.value },
   ...automatic.value && resuming.value ? [{ label: t('会话'), value: session_label.value }] : [],
   ...automatic.value ? [{ label: t('软件'), value: entry_label.value }] : [],
+  // The account's usage limits as last read, so the software can be chosen by what it has left.
+  ...automatic.value && quota.value ? [{ label: t('额度'), value: quota_text(quota.value), title: quota_title(quota.value), ...(quota_peak(quota.value)?.level ? { tone: quota_peak(quota.value).level } : {}) }] : [],
   ...configurable.value ? [models.value.unknown ? { label: t('模型'), value: t('本机没有 {value1}，不能调用；在背面改模型', { value1: profile.value.model }), tone: "warn" }
     : { label: t('模型'), value: profile.value.model || models.value.defaults?.model || t('软件默认模型') }] : [],
   ...configurable.value && (profile.value.adapter !== "api" || profile.value.effort) ? [{ label: t('强度'), value: effort_label.value }] : [],
@@ -591,7 +595,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
           <!-- A workflow card (preset) is read for what it does, so its description fills the middle of the front. -->
           <p v-if="preset" class="expert-card-summary" :class="{ 'is-empty': !description }" :title="description">{{ description || t('还没有描述') }}</p>
           <dl class="expert-card-facts">
-            <div v-for="fact in facts" :key="fact.label"><dt>{{ fact.label }}</dt><dd :class="fact.tone ? ['expert-card-status', `is-${fact.tone}`] : ''" :title="fact.value"><i v-if="fact.tone" aria-hidden="true" />{{ fact.value }}</dd></div>
+            <div v-for="fact in facts" :key="fact.label"><dt>{{ fact.label }}</dt><dd :class="fact.tone ? ['expert-card-status', `is-${fact.tone}`] : ''" :title="fact.title || fact.value"><i v-if="fact.tone" aria-hidden="true" />{{ fact.value }}</dd></div>
           </dl>
           <div v-if="manual" class="expert-card-manual">
             <p>{{ t('会话自行注册后才算到场。') }}</p>
@@ -760,6 +764,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-facts .expert-card-status > i { display: inline-block; margin: 0 5px 1px 0; vertical-align: middle; width: 5px; height: 5px; border-radius: 50%; background: var(--ui-text-dimmed); }
 .expert-card-facts .expert-card-status.is-ready > i { background: var(--ui-success, #3fb27f); }
 .expert-card-facts .expert-card-status.is-warn > i { background: var(--ui-warning, #e0a33a); }
+.expert-card-facts .expert-card-status.is-error > i { background: var(--ui-error, #e5484d); }
 .expert-card-facts { display: grid; gap: 4px; width: 100%; margin: 0; padding-top: 10px; border-top: 1px solid var(--ui-border-muted); font-size: 11px; }
 .expert-card-facts > div { display: grid; grid-template-columns: 3em minmax(0, 1fr); gap: 8px; }
 .expert-card-facts dt { color: var(--ui-text-dimmed); white-space: nowrap; }

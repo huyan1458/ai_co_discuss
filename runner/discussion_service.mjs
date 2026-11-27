@@ -18,7 +18,7 @@ import { relay_health_writer } from './relay_health.mjs';
 import { t } from './i18n.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, LIVE, member_drafts, write_proactive_access } from './free_runner.mjs';
-import { can_notify, notice_sent, receive_replies, send_notice } from './weixin.mjs';
+import { can_notify, notice_sent, receive_replies, send_notice } from './channels.mjs';
 import { answer_by_weixin } from './question_weixin.mjs';
 import { OPERATOR_EVENTS_FILE, account_space, drafts_root } from './account_space.mjs';
 import { install_pi, pi_outdated } from './pi_runtime.mjs';

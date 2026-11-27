@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { receive_replies, send_notice, weixin_status } from '../runner/weixin.mjs';
+import { receive_replies, send_notice } from '../runner/channels.mjs';
+import { weixin_status } from '../runner/weixin.mjs';
 
 const ACCOUNT = { account_id: 'bot@im.bot', owner_id: 'owner@im.wechat', token: 'secret-token', base_url: 'https://ilinkai.weixin.qq.com' };
 

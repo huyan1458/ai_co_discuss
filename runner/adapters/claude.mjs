@@ -10,13 +10,18 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, s
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runs_commands } from '../expert_prompts.mjs';
+import { t } from '../i18n.mjs';
 import { bind_access, carve_protected, cli_max_run_ms, cli_timeout_reason, DENIAL_FIELD, EDIT_TOOLS, edge_entries, launch_directory, log_entries, marked, MAX_DENIALS, model_entry, json_line,
   clock_reset_at, newest_record, not_sent, page_sessions, preview_messages, project_directory, prompt_text, prompt_title, query_catalog,
   remove_session_files, report_edits, same_path, TASK_SUBCOMMANDS, BackgroundTasks, background_state, track_edits, tree_killable, typed_prompt, watch_events, shell_written_paths } from './common.mjs';
 
 // A message posted to an open Claude window that has not started by then is reported, not failed.
 const INBOX_CHECK_MS = 90_000;
+// Claude Code 2.1.332 omits the context window. Only its explicit [1m] model variant tells it (one million tokens); a plain
+// ID is left unknown, as `claude-opus-5-5` was seen holding 257K tokens (2026-11-27, runner log claude-free-9343).
+const CLAUDE_EXTENDED_WINDOW = 1_000_000;
 // How often an open window's session log is read for the end of the turn that took a task.
 const WINDOW_POLL_MS = 3_000;
 // How much of a schedule's prompt marks the turn its fire starts (see `listen_schedules`).
@@ -183,6 +188,11 @@ export function claude_rule_path(directory) {
  */
 export function claude_permissions(config, task) {
   const extras = task.extra_directories || [];
+  // Claude Code starts the MCP servers of the launch directory's `.mcp.json` only; those of a writable extra directory are
+  // passed in too, so its project tools (such as SSH) work as in that project. A read-only directory's servers stay off:
+  // they run commands from it.
+  const mcp_files = extras.filter(item => item.access === 'write').map(item => join(item.path, '.mcp.json')).filter(file => existsSync(file));
+  const mcp = mcp_files.length ? ['--mcp-config', ...mcp_files] : [];
   // Only the member's own runtime folder: the runtime directory holds every member's credential (凭据文件隔离).
   // The expert's own knowledge (`task.knowledge_directory`) is edited like its drafts, whatever its project access.
   const added = [task.member_directory, task.draft_directory, task.knowledge_directory, ...task.skill_directories, ...extras.map(item => item.path)].filter(Boolean);
@@ -190,7 +200,7 @@ export function claude_permissions(config, task) {
   // does, and 全放开 skips every check; the website commands and drafts stay pre-approved either way.
   if (['own', 'auto', 'full'].includes(config.project_access)) {
     const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
-    return ['--permission-mode', config.project_access === 'full' ? 'bypassPermissions' : 'auto', '--add-dir', ...added, '--allowedTools',
+    return [...mcp, '--permission-mode', config.project_access === 'full' ? 'bypassPermissions' : 'auto', '--add-dir', ...added, '--allowedTools',
       ...commands, ...[task.draft_directory, task.knowledge_directory].filter(Boolean).map(directory => `Edit(${claude_rule_path(directory)}/**)`),
       ...(config.allowed_tools || []), ...edit_denial(task)];
   }
@@ -198,23 +208,39 @@ export function claude_permissions(config, task) {
     : TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
   const writable = [task.draft_directory, ...(task.knowledge_directory ? [task.knowledge_directory] : []), ...(runs_commands(config, extras)
     ? [project_directory(config), ...extras.filter(item => item.access === 'write').map(item => item.path)].filter(Boolean) : [])];
-  return ['--add-dir', ...added, '--allowedTools',
+  return [...mcp, '--add-dir', ...added, '--allowedTools',
     ...commands, ...writable.map(directory => `Edit(${claude_rule_path(directory)}/**)`), ...(config.allowed_tools || []), ...edit_denial(task)];
 }
 
 /**
  * A task confined to the codiscuss subcommands (`task.tool_lockdown`): only Bash / PowerShell running those commands,
  * Read on the skills, the drafts and this member's own runtime folder, and Edit on the drafts. `--restricted` drops the
- * user's settings and confines the file tools to these working directories, `--safe-mode` leaves out CLAUDE.md, memory,
- * plugins, hooks and MCP, and `dontAsk` refuses anything not listed. `--permission-prompts none` refuses whatever would
- * still ask: with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB set, Claude Code 2.1.325 turns `dontAsk` back into `default`. The
- * member's project, the room's other directories and the owner's own allowed tools are ignored. Measured on Claude
- * Code 2.1.325, 2026-11-16 (.dev/plans/远程协作与多人房间/VERIFY_浏览器验收.md, “收窄实测”).
+ * user's settings and confines the file tools to these working directories, and `dontAsk` refuses anything not listed.
+ * `--permission-prompts none` refuses whatever would still ask: with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB set, Claude Code
+ * 2.1.325 turns `dontAsk` back into `default`. The member's project, the room's other directories and the owner's own
+ * allowed tools are ignored, except the directories of `task.lockdown_read_directories` (the protected level), which are
+ * added for Read, Glob and Grep only. Measured on Claude Code 2.1.325, 2026-11-16 (.dev/plans/远程协作与多人房间/
+ * VERIFY_浏览器验收.md, “收窄实测”).
+ *
+ * Claude Code 2.1.332 still runs its own read-only commands (`echo`, `whoami`, `hostname`, `date`, `netstat`,
+ * `Write-Output`, `Get-Location`, `ls` / `cat` inside the working directories) whatever the allow list or mode says, so
+ * every Bash / PowerShell call first passes our PreToolUse hook (claude_lockdown_hook.mjs), which lets through only one
+ * plain codiscuss subcommand. `--safe-mode` would turn that hook off too, so it is left out and what it covered is turned
+ * off one by one: CLAUDE.md and memory by environment (`claude_lockdown_env`), skills and agents by `--tools`, slash
+ * commands and MCP by their own flags, the user's plugins and hooks by `--restricted` (measured 2026-11-27,
+ * Ref_外部软件通信.md §2.11).
  */
+/** Settings for a confined run: our PreToolUse hook checks every Bash and PowerShell call (claude_lockdown_hook.mjs). */
+const LOCKDOWN_HOOK_SETTINGS = JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash|PowerShell', hooks: [{ type: 'command',
+  command: `"${process.execPath.replaceAll('\\', '/')}" "${fileURLToPath(new URL('./claude_lockdown_hook.mjs', import.meta.url)).replaceAll('\\', '/')}"` }] }] } });
+
 export function claude_lockdown(task) {
-  const readable = [task.member_directory, task.draft_directory, ...(task.skill_directories || [])].filter(Boolean);
+  // The protected level (an external user in the room) also reads the room's project directories, never writes them.
+  const project = task.lockdown_read_directories || [];
+  const readable = [task.member_directory, task.draft_directory, ...(task.skill_directories || []), ...project].filter(Boolean);
   const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
-  return ['--restricted', '--safe-mode', '--tools', 'Bash,PowerShell,Read,Write,Edit', '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
+  const tools = project.length ? 'Bash,PowerShell,Read,Write,Edit,Glob,Grep' : 'Bash,PowerShell,Read,Write,Edit';
+  return ['--restricted', '--settings', LOCKDOWN_HOOK_SETTINGS, '--tools', tools, '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-chrome', '--add-dir', ...readable,
     '--allowedTools', ...commands, ...readable.map(directory => `Read(${claude_rule_path(directory)}/**)`),
     `Edit(${claude_rule_path(task.draft_directory)}/**)`, '--disallowedTools', 'WebFetch', 'WebSearch'];
@@ -230,7 +256,9 @@ export function claude_lockdown_env(task, env = process.env, home = homedir()) {
   try { settings = JSON.parse(readFileSync(join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'settings.json'), 'utf8')).env || {}; }
   catch { /* No readable user settings. */ }
   const own = Object.fromEntries(Object.entries(settings).filter(([, value]) => typeof value === 'string'));
-  return { ...own, CODISCUSS_TOOL_LOCKDOWN: '1', CODISCUSS_LOCKDOWN_DIRECTORY: task.draft_directory, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1' };
+  // Without --safe-mode (see claude_lockdown), CLAUDE.md and memory are turned off here.
+  return { ...own, CODISCUSS_TOOL_LOCKDOWN: '1', CODISCUSS_LOCKDOWN_DIRECTORY: task.draft_directory, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
+    CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_ORG_MEMORY: '1' };
 }
 
 /**
@@ -397,15 +425,19 @@ export function adopted_fork(config, binding, held, exists = id => session_exist
  * Write lines into an open window's inbox: an `auth` line with its peer token, then one `user` message. The inbox is not
  * a public interface of Claude Code, so a failure says so; the window wraps every message as one from another session.
  */
-async function post_inbox(inbox, text) {
+export async function post_inbox(inbox, text) {
   const lines = [{ type: 'auth', token: inbox.token }, { type: 'user', message: { role: 'user', content: text } }];
   await new Promise((resolve_sent, reject) => {
-    let written = false;
+    let writing = false;
+    const failed = error => reject(writing
+      ? new Error(t('Claude 原窗口投递结果不明，不自动重投：{reason}', { reason: error.message }))
+      : not_sent(new Error(t('无法投递到 Claude 原窗口：它的跨会话收件箱不是 Claude Code 的公开接口，可能已随版本变化或被关闭（{reason}）', { reason: error.message }))));
     const socket = connect(inbox.socket, () => {
-      socket.end(lines.map(line => `${JSON.stringify(line)}\n`).join(''), () => { written = true; resolve_sent(); });
+      // Once writing starts, even an error before the completion callback cannot prove non-delivery.
+      writing = true;
+      socket.end(lines.map(line => `${JSON.stringify(line)}\n`).join(''), error => error ? failed(error) : resolve_sent());
     });
-    socket.on('error', error => written ? undefined : reject(not_sent(new Error(
-      `无法投递到 Claude 原窗口：它的跨会话收件箱不是 Claude Code 的公开接口，可能已随版本变化或被关闭（${error.message}）`))));
+    socket.on('error', failed);
   });
 }
 
@@ -454,7 +486,7 @@ async function inbox_delivery(config, window, task, options = {}) {
     const tag = `[codiscuss:${task.id}+${++count}]`;
     if (!watcher.expect(tag)) return false;
     try { await post_inbox(window.inbox, `${tag} ${ROOM_STEER_LEAD}\n\n${text}`); }
-    catch { watcher.forget(tag); return false; }
+    catch (error) { watcher.forget(tag); throw error; }
     task.on_output?.(log_path, `${JSON.stringify({ type: 'codiscuss.interjection', text })}\n`);
     return true;
   };
@@ -515,7 +547,7 @@ async function chat(config, binding, task, spawn_process = spawn, user_home, opt
     const tag = `[codiscuss:${task.id}+${++count}]`;
     if (!watcher.expect(tag)) return false;
     try { await post_inbox(window.inbox, `${tag} ${CHAT_STEER_LEAD}\n\n${text}`); }
-    catch { watcher.forget(tag); return false; }
+    catch (error) { watcher.forget(tag); throw error; }
     task.on_output?.(log_path, `${JSON.stringify({ type: 'codiscuss.interjection', text })}\n`);
     return true;
   };
@@ -1306,6 +1338,51 @@ function recover_turn(record) {
     denied: claude_denials(JSON.stringify(result)).length > 0 };
 }
 
+
+function claude_turn(entries) {
+  const messages = new Map();
+  for (const entry of entries) {
+    const message = entry.message;
+    if (entry.type !== 'assistant' || !message?.usage) continue;
+    if (!message.id) return null;
+    messages.set(message.id, message.usage);
+  }
+  if (!messages.size) return null;
+  const turn = { input: 0, cache_read: 0, cache_write: 0, output: 0 };
+  for (const usage of messages.values()) {
+    turn.input += usage.input_tokens || 0;
+    turn.cache_read += usage.cache_read_input_tokens || 0;
+    turn.cache_write += usage.cache_creation_input_tokens || 0;
+    turn.output += usage.output_tokens || 0;
+  }
+  return turn;
+}
+
+/**
+ * The member's context after the turn, the plan limits and this turn's tokens, read from the turn's log in one pass (the
+ * session file when there is no log). The context is the main agent's last call: a sub-agent's calls (with
+ * `parent_tool_use_id`, or `isSidechain` in the session file) hold their own, smaller context, though they count in the turn.
+ */
+function claude_usage(id, { env, home, log_path, profile } = {}) {
+  const entries = log_path && existsSync(log_path) ? log_entries(log_path) : [];
+  const main = entry => entry.type === 'assistant' && entry.message?.usage && !entry.parent_tool_use_id && !entry.isSidechain;
+  const stored = () => { try { return newest_record(session_path(id, env, home), 'assistant', entry => main(entry) && entry.message); } catch { return null; } };
+  const message = entries.findLast(main)?.message || stored();
+  const limits = entries.findLast(entry => entry.type === 'rate_limit_event' && entry.rate_limit_info?.unifiedWindows)?.rate_limit_info.unifiedWindows;
+  const windows = [];
+  for (const [kind, minutes] of [['five_hour', 300], ['seven_day', 10080]]) {
+    const limit = limits?.[kind];
+    if (Number.isFinite(limit?.utilization)) windows.push({ kind, minutes, used: limit.utilization, resets_at: limit.resetsAt });
+  }
+  const usage = message?.usage;
+  // The API returns the plain model ID; only the member's own setting says it asked for the 1M variant.
+  const extended = [message?.model, profile?.model].some(model => String(model || '').includes('[1m]'));
+  const context = usage && { used: usage.input_tokens + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0),
+    window: extended ? CLAUDE_EXTENDED_WINDOW : 0 };
+  const turn = entries.length ? claude_turn(entries) : null;
+  return context || windows.length || turn ? { context, account: { windows }, turn } : null;
+}
+
 /** Claude Code's behaviour; its static facts are in profiles.mjs. */
 export const claude = {
   recover_turn,
@@ -1315,7 +1392,7 @@ export const claude = {
   preflight_stoppable: (profile, binding) => !(profile.project_access === 'own' && profile.session_id
     && (binding.session_id ?? profile.session_id) === profile.session_id),
   deliver, chat, events,
-  session: { path: session_path, exists: session_exists, owns: session_exists, cwd: session_cwd, branch, settings: session_settings,
+  session: { usage: claude_usage, path: session_path, exists: session_exists, owns: session_exists, cwd: session_cwd, branch, settings: session_settings,
     list: list_sessions, preview: preview_session, remove: remove_session,
     // Every conversation Claude keeps, with its prompt history; login (.credentials.json) and settings stay.
     history: ({ env = process.env, home = homedir() } = {}) => ['projects', 'file-history', 'session-env', 'todos', 'shell-snapshots', 'history.jsonl']

@@ -19,6 +19,7 @@ import { fetch_page, html_text, is_private_address, run_web_tool, web_search_key
 import { deliver_task, execution_details } from '../runner/adapters/index.mjs';
 import { draw_image, launch_discussion, room_settings, validate_preset } from '../runner/discussion_launch.mjs';
 import { save_image_settings } from '../runner/image_service.mjs';
+import { t } from '../runner/i18n.mjs';
 import { save_workflow } from '../runner/workflows.mjs';
 import { api, DiscussionStore, load_config } from '../runner/discussion_runner.mjs';
 import { FreeRoomRunner } from '../runner/free_runner.mjs';
@@ -490,7 +491,7 @@ test('read-aloud on the local service uses the token the setup skill saved and s
     rmSync(fresh, { recursive: true, force: true });
     save_tts_settings(home, { provider: 'local', providers: { local: { context: '慢一点' } } });
     assert.equal(tts_settings(home).api_key_ref, '', 'not ready before the skill saves a token');
-    await assert.rejects(tts_speak(home, { text: '你好' }), /local-tts-setup/);
+    await assert.rejects(tts_speak(home, { text: '你好' }), { message: t('本机语音尚未安装，请在语音设置中选择“让平台主理人安装”') });
     // A token saved before the service's port could change is bound to its former fixed port, and still serves.
     const token = save_api_key(home, { base_url: 'http://127.0.0.1:18765', api_key: 'local-token' }).api_key_ref;
     assert.equal(tts_settings(home).api_key_ref, token, 'the saved token is picked up without the page');
@@ -530,7 +531,8 @@ test('read-aloud on the local service uses the token the setup skill saved and s
     assert.notEqual(body.voiceDescription, '慢一点');
     assert.equal(body.speaker, undefined);
     const missing = async () => new Response(JSON.stringify({ error: { code: '@yovoice.error.modelRequired' } }), { status: 400 });
-    await assert.rejects(tts_speak(home, { text: '未安装', speaker: 'voxcpm2_soft_female' }, { request: missing, start, convert }), /local-tts-setup/);
+    await assert.rejects(tts_speak(home, { text: '未安装', speaker: 'voxcpm2_soft_female' }, { request: missing, start, convert }),
+      { message: t('这个音色的模型尚未安装，请让平台主理人安装') });
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -578,7 +580,7 @@ test('voice input on the local recognizer uses the token its skill saved and sta
     save_tts_settings(home, { speech_rate: 20 });
     assert.equal(tts_settings(home).stt_provider, 'local');
     const part = (final) => ({ upload_id: randomUUID(), index: 0, data: Buffer.from([1, 0, 2, 0]).toString('base64'), final });
-    await assert.rejects(stt_part(home, part(true)), /local-stt-setup/);
+    await assert.rejects(stt_part(home, part(true)), { message: t('本机语音识别尚未安装，请在语音设置中选择“让平台主理人安装”') });
     save_api_key(home, { base_url: 'http://127.0.0.1/crispasr', api_key: 'stt-token' });
     mkdirSync(join(home, 'crispasr'));
     // The port recorded when the service started is where requests go.

@@ -1,32 +1,18 @@
 <script setup>
 /** An entered key stays only in this component's memory; the local private store returns just an opaque reference. */
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject } from "vue";
 import { t } from "./i18n.js";
+import SecretKeyInput from "./SecretKeyInput.vue";
 
 const props = defineProps({ name: { type: String, required: true } });
 const { view, bridge } = inject("discussion");
 const profile = computed(() => view.value.launch.profiles[props.name] || {});
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch));
-const api_key = ref(""), key_visible = ref(false), saving = ref(false);
-const saved_key = ref("");
-// A key saved earlier is never sent back to the page, so only a masked mark stands in for it.
-const SAVED_MARK = "••••••••••••";
 const protocols = [{ value: "responses", label: "OpenAI Responses" }, { value: "chat", label: "OpenAI Chat Completions" },
   { value: "anthropic", label: "Anthropic Messages" }, { value: "gemini", label: "Gemini generateContent" }];
-// A key entered for one address does not belong to another.
-watch(() => profile.value.base_url, () => { api_key.value = saved_key.value = ""; });
 const write = (field, value) => bridge.write_launch(props.name, field, value);
 // A key the computer owner provided to this hosted account is used as is; the account neither sees nor replaces it here.
 const provided = computed(() => view.value.launch.projects_restricted && (view.value.launch.managed_api_keys || []).includes(profile.value.api_key_ref));
-
-/** Persist the entered key once input is committed (blur or Enter); it stays in the field so it can still be shown. */
-async function save_key() {
-  if (!api_key.value.trim() || api_key.value === saved_key.value || !view.value.launch.available || saving.value) return;
-  saving.value = true;
-  try { await bridge.save_launch_api_key(props.name, api_key.value); saved_key.value = api_key.value; }
-  catch (failure) { bridge.notify("error", failure.message); }
-  finally { saving.value = false; }
-}
 </script>
 
 <template>
@@ -36,10 +22,8 @@ async function save_key() {
     <div class="api-field" :title="t('OpenRouter 等兼容服务可选 Chat Completions，并填写该服务的完整模型 ID。')"><span>{{ t("协议") }}</span><USelect :model-value="profile.api_protocol || ''" :items="protocols" :aria-label="t('{name} API 请求协议', { name })" class="w-full" size="xs" @update:model-value="write('api_protocol', $event)" /></div>
     <div v-if="provided" class="api-field"><span>{{ t("密钥") }}</span><span class="api-provided"><UIcon name="i-lucide-shield-check" />{{ t("管理员已提供") }}</span></div>
     <div v-else class="api-field"><span>{{ t("密钥") }}</span>
-      <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
-      <UInput v-model="api_key" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="profile.api_key_ref ? SAVED_MARK : t('填写 API Key')" :title="profile.api_key_ref && !api_key ? t('已保存；本机不回传密钥，输入新 Key 可更换') : undefined" :aria-label="`${name} API Key`" size="xs" class="w-full" :loading="saving" :ui="{ base: key_visible ? '' : 'api-key-masked', trailing: 'pe-0.5' }" @change="save_key">
-        <template #trailing><UButton :icon="key_visible ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!api_key" :aria-label="key_visible ? t('隐藏密钥') : t('显示密钥')" :aria-pressed="key_visible" size="xs" color="neutral" variant="link" @click="key_visible = !key_visible" /></template>
-      </UInput>
+      <!-- A key entered for one address does not belong to another. -->
+      <SecretKeyInput :key="profile.base_url || ''" :save="(key) => bridge.save_launch_api_key(name, key)" :saved="Boolean(profile.api_key_ref)" :disabled="!view.launch.available" :label="`${name} API Key`" @error="(failure) => bridge.notify('error', failure.message)" />
     </div>
     <div class="api-field"><span>{{ t("模型") }}</span>
       <div class="api-inline"><UInputMenu mode="autocomplete" ignore-filter :model-value="profile.model || ''" :items="models.items" value-key="value" :aria-label="t('{name} API 模型 ID', { name })" :placeholder="t('推荐模型或完整 ID')" class="w-full min-w-0" size="xs" @update:model-value="write('model', $event)" />
@@ -57,7 +41,6 @@ async function save_key() {
 .api-field { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
 .api-inline { display: flex; gap: 4px; min-width: 0; }
 .api-inline > button { flex-shrink: 0; }
-.api-settings :deep(.api-key-masked) { -webkit-text-security: disc; }
 .api-hint { color: var(--ui-text-muted); font-size: 10px; align-self: center; }
 .api-provided { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; color: var(--ui-text-muted); }
 .api-provided > [class*="icon"] { width: 13px; height: 13px; color: var(--ui-success, #3ec486); }

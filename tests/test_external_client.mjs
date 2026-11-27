@@ -108,7 +108,7 @@ function fake_b() {
   };
   const handle = async (url, init = {}) => {
     const { pathname } = new URL(url);
-    if (pathname === '/api/machines') return Response.json({ machines: [{ id: MACHINE, name: 'B-PC', public_key: ecdh.public_key, sign_key: sign.public_key, online: state.online }] });
+    if (pathname === '/api/guest/' + MACHINE + '/key') return Response.json({ id: MACHINE, public_key: ecdh.public_key, sign_key: sign.public_key });
     const route = pathname.match(/^\/api\/machines\/([0-9a-f]{32})\/(relay|pair)$/);
     if (!route) return Response.json({ error: 'not found' }, { status: 404 });
     state.posts += 1;
@@ -281,13 +281,14 @@ test('a link whose fingerprint does not match is refused before anything is sent
   assert.deepEqual(read_store(home).records, {});
 });
 
-test('a bare code needs the site, takes its only computer, and is marked unchecked', async t => {
+test('a bare code needs the site and machine ID and is marked unchecked', async t => {
   assert.throws(() => parse_invite('0123-4567-89AB'), /--site|site/);
   const b = fake_b(), home = home_dir(t);
-  const { record } = await invited_command(home, 'invited-join', { invite: '0123-4567-89ab', site: SITE, adapter: 'claude' }, { fetcher: b.fetcher });
+  await assert.rejects(invited_command(home, 'invited-join', { invite: '0123-4567-89ab', site: SITE, adapter: 'claude' }, { fetcher: b.fetcher }), { code: 'machine_required' });
+  const { record } = await invited_command(home, 'invited-join', { invite: '0123-4567-89ab', site: SITE, machine: MACHINE, adapter: 'claude' }, { fetcher: b.fetcher });
   assert.equal(record.fingerprint_checked, false);
   assert.equal(record.machine, MACHINE);
-  await assert.rejects(invited_command(home, 'invited-join', { invite: 'ZZZZ-4567-89AB', site: SITE, adapter: 'claude' }, { fetcher: b.fetcher }), /邀请码不对/);
+  await assert.rejects(invited_command(home, 'invited-join', { invite: 'ZZZZ-4567-89AB', site: SITE, machine: MACHINE, adapter: 'claude' }, { fetcher: b.fetcher }), /邀请码不对/);
   await assert.rejects(invited_command(home, 'invited-join', { invite: link(b.fingerprint), adapter: 'codex' }, { fetcher: b.fetcher }), /命令行软件|command-line/);
 });
 
@@ -726,7 +727,10 @@ test('a restricted run cannot use launch image or launch files outside its draft
   assert.throws(() => lockdown_launch_guard(['host-control', '--stdin'], env), /标准输入|standard input/);
   lockdown_launch_guard(['workflow-adopt', '--draft', join(drafts, 'wf')], env);
   lockdown_launch_guard(['image', '--file', join(home, 'a.json')], {});
-  const result = await run_cli(home, ['launch', 'image', '--file', join(drafts, 'a.json')], env, [join(ROOT, 'runner', 'codiscuss.mjs')], process.execPath);
+  // A restricted run always has its task credential bound; without it the CLI refuses before this check (#14924 item 1).
+  const bound = join(drafts, 'task.access.json');
+  writeFileSync(bound, JSON.stringify({ site: 'http://127.0.0.1:9', room: 'room00000001', member: 'Claude', token: 'b'.repeat(40) }));
+  const result = await run_cli(home, ['launch', 'image', '--file', join(drafts, 'a.json')], { ...env, DISCUSS_ACCESS_FILE: bound }, [join(ROOT, 'runner', 'codiscuss.mjs')], process.execPath);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /launch image/);
 });

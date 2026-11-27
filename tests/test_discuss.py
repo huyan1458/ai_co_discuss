@@ -9,6 +9,8 @@ import tempfile
 import threading
 import unittest
 import uuid
+from contextlib import ExitStack
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
@@ -711,6 +713,137 @@ class CliContractTests(unittest.TestCase):
         """Return parsed arguments and the live command registry."""
         parser, registry = discuss.build_parser()
         return parser.parse_args(arguments), registry
+
+    def test_steward_dispatches_sends_only_its_own_sites_member_credential(self):
+        """Keep the exception narrow: the selected record filter is not the credential's room."""
+        site = "http://127.0.0.1:9876"
+        credential = {"site": site, "room": "steward", "member": "Codex", "token": "m" * 32, "steward": True}
+        args, registry = self.parse(["--site", site, "room", "dispatches", "--room", "project", "--view", "chains"])
+        with patch.dict(os.environ, {"DISCUSS_ACCESS": json.dumps(credential)}, clear=True):
+            with patch.object(discuss, "send_request", return_value={"records": [], "next_after": None}) as send:
+                self.assertTrue(discuss.run(args, registry)["ok"])
+                plan, url, _, headers = send.call_args.args
+                self.assertEqual((plan.method, plan.path), ("GET", "/api/dispatches"))
+                self.assertIn("room=project", url)
+                self.assertEqual(headers["X-Discussion-Token"], credential["token"])
+                with self.assertRaises(discuss.CliError):
+                    discuss.access_headers(args, "https://other.example", plan.path)
+                with self.assertRaises(discuss.CliError):
+                    discuss.access_headers(args, site, plan.path, "POST")
+        credential.pop("steward")
+        with patch.dict(os.environ, {"DISCUSS_ACCESS": json.dumps(credential)}, clear=True):
+            with self.assertRaises(discuss.CliError):
+                discuss.run(args, registry)
+
+    def test_external_attachment_download_is_rejected_before_relaying(self):
+        """An external member receives a localized refusal without asking the host for a link."""
+        plan = discuss.RequestPlan("/api/rooms/abcdef123456/attachments/" + "a" * 32 + "/content",
+                                   download_file="large.zip")
+        with patch.dict(os.environ, {"CODISCUSS_LANG": "en"}), patch("runner.discuss.subprocess.run") as proxy:
+            with self.assertRaisesRegex(discuss.CliError, "External members cannot upload or download attachments"):
+                discuss.external_send(plan, {}, 1)
+        proxy.assert_not_called()
+
+    def test_object_attachment_transfers_stream_to_cos_without_room_credentials(self):
+        """Reserve/complete with the room credential, but send bytes only to the supplied COS endpoint."""
+        identifier = "a" * 32
+        path = "/api/rooms/abcdef123456/attachments"
+        content = b"a" * (1024 * 1024 + 9)
+        calls = []
+
+        class StorageStub(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def reply(self, value, status=200):
+                body = json.dumps(value).encode() if isinstance(value, dict) else value
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                calls.append((self.path, self.headers.get("X-Discussion-Token"), None))
+                routes = {
+                    "/api/attachment-limit": {"limit_mib": 2, "object_storage_enabled": True, "object_storage_threshold_mib": 1},
+                    f"{path}/{identifier}": {"id": identifier, "storage": "object"},
+                    f"{path}/{identifier}/content?link=1": {"url": base + "/cos?signature=stub", "size": len(content)},
+                    "/cos?signature=stub": content,
+                    "/short": content[:1024],
+                }
+                self.reply(routes[self.path])
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                calls.append((self.path, self.headers.get("X-Discussion-Token"), body))
+                if self.path == path + "/object":
+                    self.reply({"attachment": {"id": identifier, "stored": False}, "upload": {
+                        "url": base + "/cos", "fields": {"key": "stub-key", "policy": "stub-policy", "Content-Type": "text/plain"},
+                    }})
+                else:
+                    self.reply({"attachment": {"id": identifier, "stored": True}})
+
+        with ExitStack() as cleanup:
+            server = cleanup.enter_context(ThreadingHTTPServer(("127.0.0.1", 0), StorageStub))
+            folder = cleanup.enter_context(tempfile.TemporaryDirectory())
+            base = f"http://127.0.0.1:{server.server_port}"
+            thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
+            thread.start()
+            cleanup.callback(server.shutdown)
+            source, dest = Path(folder) / "source.txt", Path(folder) / "dest.txt"
+            source.write_bytes(content)
+            headers = {"X-Discussion-Token": "fixture-token"}
+            upload = discuss.RequestPlan(path, "POST", params={"actor": "用户", "file_name": source.name,
+                "submission_id": "test-object"}, upload_file=str(source))
+            download = discuss.RequestPlan(f"{path}/{identifier}/content", download_file=str(dest))
+            self.assertTrue(discuss.send_request(upload, base + path, 3, headers)["attachment"]["stored"])
+            self.assertEqual(discuss.send_request(download, base + download.path, 3, headers)["sha256"], "")
+            self.assertEqual(dest.read_bytes(), content)
+            partial = dest.with_suffix(".partial")
+            with self.assertRaises(discuss.CliError):
+                discuss.download_object_attachment(partial, {"url": base + "/short", "size": len(content)}, 3)
+            self.assertFalse(partial.exists())
+        self.assertEqual([token for _, token, _ in calls], [
+            "fixture-token", "fixture-token", None, "fixture-token", "fixture-token", "fixture-token", None, None])
+        self.assertEqual(json.loads(calls[1][2]), {"actor": "用户", "file_name": "source.txt",
+            "submission_id": "test-object", "size": len(content), "content_type": "text/plain"})
+        self.assertRegex(calls[2][2][:400], rb'(?s)name="key".+stub-key.+name="policy".+stub-policy.+name="file"')
+        self.assertIn(content, calls[2][2])
+        self.assertEqual(calls[3][0], f"{path}/{identifier}/complete")
+
+    def test_an_ordinary_download_works_after_lowering_the_upload_limit(self):
+        """A previously accepted local file remains downloadable under a lower upload cap."""
+        identifier = "a" * 32
+        path = f"/api/rooms/abcdef123456/attachments/{identifier}"
+        content = b"x" * (1024 * 1024 + 1)
+        metadata = io.BytesIO(b'{"storage":null}')
+        original = io.BytesIO(content)
+        for response in (metadata, original):
+            response.headers = {}
+        with tempfile.TemporaryDirectory() as folder, patch.object(discuss, "build_opener") as opener:
+            opener.return_value.open.side_effect = [metadata, original]
+            dest = Path(folder) / "previously-accepted.bin"
+            plan = discuss.RequestPlan(path + "/content", params={"download": "1"}, download_file=str(dest))
+            with patch.dict(discuss.ATTACHMENT_POLICY, {"default_mib": 1}):
+                self.assertEqual(discuss.send_request(plan, "https://room.test" + plan.path, 3)["size"], len(content))
+            self.assertEqual(dest.read_bytes(), content)
+
+    def test_cleared_object_attachment_is_reported_before_requesting_a_link(self):
+        """Show the localized deletion error without contacting COS or writing a file."""
+        path = f"/api/rooms/abcdef123456/attachments/{'a' * 32}/content"
+        with tempfile.TemporaryDirectory() as folder:
+            dest = Path(folder) / "expired.bin"
+            plan = discuss.RequestPlan(path, download_file=str(dest))
+            for language, expected in (("zh-CN", "已从云空间删除"), ("en", "Deleted from cloud storage")):
+                with self.subTest(language=language), patch.dict(os.environ, {"CODISCUSS_LANG": language}), \
+                        patch.object(discuss, "attachment_request", return_value={"storage": "object", "cleared_at": "2026-11-27T00:00:00Z"}) as request:
+                    with self.assertRaises(discuss.CliError) as caught:
+                        discuss.send_request(plan, "https://room.test" + path, 3)
+                    self.assertEqual(str(caught.exception), expected)
+                    self.assertEqual(caught.exception.details["http_status"], 410)
+                    self.assertEqual(request.call_args.args[0].path, path.removesuffix("/content"))
+                    request.assert_called_once()
+            self.assertFalse(dest.exists())
 
     def test_room_and_state_reads_keep_the_reason_a_field_was_withheld(self):
         """必 4: `field_notes` from the service survives the CLI projection, so hidden is not shown as empty."""

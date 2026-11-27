@@ -103,6 +103,16 @@ class EntryGuardTest(ProtectedInstance):
         self.assertEqual(self.proven("/api/analytics")[0], 200)
         self.assertEqual(self.proven("/api/analytics", token="room-member")[0], 403)
 
+    def test_steward_dispatch_read_through_protected_entry(self):
+        owner, member = secrets.token_hex(16), secrets.token_hex(16)
+        status, room = self.proven("/api/rooms", "POST", {
+            "title": "Platform steward", "system_kind": "steward", "host": "Codex",
+            "members": [{"name": "Codex", "token": member}],
+        }, owner)
+        self.assertEqual(status, 201, room)
+        self.assertEqual(self.proven("/api/dispatches", token=member)[0], 200)
+        self.assertEqual(self.proven("/api/dispatches", token=owner)[0], 403)
+
     def test_passing_the_entry_does_not_lift_a_member_to_the_room_owner(self):
         owner, member = secrets.token_hex(16), secrets.token_hex(16)
         status, room = self.proven("/api/rooms", "POST", {"title": "托管房间", "goal": "核对角色", "mode": "free",

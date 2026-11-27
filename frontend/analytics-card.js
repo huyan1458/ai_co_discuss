@@ -92,7 +92,7 @@ function paint(ctx, report, heading, scope_text, height) {
     ctx.fill();
   });
   ctx.font = `600 23px ${FONT}`;
-  ctx.fillText(t("共议 AI CoDiscuss"), PAD + 42, y + 2);
+  ctx.fillText(t("共议 CoDiscuss"), PAD + 42, y + 2);
   ctx.textAlign = "right";
   ctx.fillStyle = COLORS.muted;
   ctx.font = `500 20px ${FONT}`;

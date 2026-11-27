@@ -813,7 +813,29 @@ function check_save_base(directory, id, { base_revision, overwrite } = {}) {
   if (exists) throw workflow_failure('workflow_exists', '工作流库里已有「{id}」；要整份覆盖它，请明确选择覆盖', { id });
 }
 
-/** Read the local approval for the exact project workflow revision. */
+/**
+ * What a project workflow approval covers: the cards above read access with their levels and, when it registers commands,
+ * every file but Markdown and canvases (`commands.json` and the scripts and data the commands may run or load). Edits to SKILL.md,
+ * card prompts, references or the canvas do not ask again (user 2026-11-27, #14429); new commands, a changed script or a
+ * raised card do. Folder cards' skills are left out: their members write them while the workflow is in use.
+ */
+function trust_digest(workflow, elevated_cards) {
+  const hash = createHash('sha256');
+  hash.update(JSON.stringify(elevated_cards.map(({ card, project_access }) => [card, project_access]))).update('\0');
+  if (workflow.commands.length) {
+    const walk = relative => {
+      for (const name of readdirSync(join(workflow.directory, relative)).sort()) {
+        const path = relative ? `${relative}/${name}` : name;
+        if (lstatSync(join(workflow.directory, path)).isDirectory()) { if (!CARD_SKILLS_PATH.test(path)) walk(path); }
+        else if (!/\.md$/i.test(name) && name !== 'flow.json') hash.update(`${path}\0`).update(readFileSync(join(workflow.directory, path))).update('\0');
+      }
+    };
+    walk('');
+  }
+  return `t1:${hash.digest('hex').slice(0, FOLDER_REVISION_LENGTH)}`;
+}
+
+/** Read the local approval for the project workflow's risky parts (`trust_digest`). */
 function project_trust(home, workflow, approve = false) {
   if (!home.project_id) return {};
   const commands = workflow.commands.map(command => command.id);
@@ -822,8 +844,9 @@ function project_trust(home, workflow, approve = false) {
   const path = join(home.service_home, 'project-trust.json');
   const records = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
   const key = `workflow:${home.project_id}:${workflow.id}`;
-  const digest = folder_revision(workflow.directory, true);
-  if (approve) {
+  const digest = trust_digest(workflow, elevated_cards);
+  // An approval recorded before the digest narrowed was for the whole folder as it is now: carry it over.
+  if (approve || (records[key] && records[key] !== digest && records[key] === folder_revision(workflow.directory, true))) {
     records[key] = digest;
     atomic_json(path, records);
   }

@@ -7,6 +7,7 @@
  * session that only the owner can start: the icon (or `codiscuss panel open`) opens the page with a key kept in the
  * owner's private service directory.
  */
+import { attachment_limit, checked_quota, clear_object_storage, object_quota_path, object_storage_status, policy_path, save_attachment_limit, save_object_quota, save_object_storage, test_object_storage } from './attachment_policy.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -20,11 +21,11 @@ import { parseArgs } from 'node:util';
 
 import { account_home, add_account, data_home, entry_settings, entry_status, instance_home as plain_instance_home, read_accounts, remove_account, reset_password, save_entry_settings,
   instance_key, set_account_disabled, set_account_protected, set_instance_wanted, start_entry, stop_entry, ENTRY_WAYS } from '../gateway/gateway.mjs';
-import { signed_site_url, site_fetch, verified_connection } from './entry_client.mjs';
+import { owner_key_file, signed_site_url, site_fetch, verified_connection } from './entry_client.mjs';
 import { API_PROVIDERS, save_api_key } from './discussion_api.mjs';
 import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
 import { ensure_tunnel, stop_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } from './hosting_tunnel.mjs';
-import { RELAY_REGIONS } from './device_auth.mjs';
+import { pairing_origins, update_pairing_origins, RELAY_REGIONS } from './device_auth.mjs';
 import { machine_links, save_machine_links } from './remote_launch.mjs';
 import { read_relay_health, request_relay_reconnect } from './relay_health.mjs';
 import { instance_recovery } from './instance_recovery.mjs';
@@ -43,8 +44,8 @@ import { local_status, save_site_connection } from './discussion_local.mjs';
 import { autostart_enabled, launcher_path, set_autostart } from './launcher.mjs';
 import { show_tray } from './tray.mjs';
 import { OPERATOR_EVENTS_FILE } from './account_space.mjs';
-import { can_notify, send_notice } from './weixin.mjs';
-import { t } from './i18n.mjs';
+import { can_notify, send_notice } from './channels.mjs';
+import { resolve_locale, t } from './i18n.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const WEB = join(ROOT, 'web');
@@ -68,6 +69,7 @@ const UPDATE_STALE_MS = 10 * 60 * 1000;
 // How often a running panel looks for an install to finish: one started during the install never gets the updater's start.
 const UPDATE_FINISH_CHECK_MS = 3000;
 const OWNER_ENV_TIMEOUT_MS = 120_000;
+const STORAGE_STEWARD_TIMEOUT_MS = 60_000;
 // How often the panel makes sure the entry's tunnel runs as set, and how long an update waits for the entry to be back.
 const TUNNEL_CONNECT_MS = 30_000;
 const TUNNEL_POLL_MS = 500;
@@ -558,6 +560,7 @@ function run_instance(data, name, command) {
     if (!existsSync(local_script)) throw panel_error('还没有安装隔离账号的程序副本，请先在“概览 → 本机 → 程序副本”中安装');
     // Whatever was set up first, the instance starts on the shared copies its Windows user can run.
     use_shared_programs(data, name);
+    if (!existsSync(policy_path(data))) save_attachment_limit(data, attachment_limit(data));
     return start_instance_as_user(data, name, service, local_script, process.execPath, { key_file });
   }
   // An isolated instance runs as a scheduled task that comes back when the computer starts unless it was stopped here.
@@ -565,7 +568,8 @@ function run_instance(data, name, command) {
   else set_instance_wanted(data, name, command === 'start');
   const { DISCUSS_ENTRY_KEY_FILE: _inherited, ...environment } = process.env;
   const child = spawn(process.execPath, [LOCAL_SCRIPT, command, '--json'], { stdio: 'ignore', windowsHide: true,
-    env: { ...environment, DISCUSS_SERVICE_HOME: service, ...(key_file ? { DISCUSS_ENTRY_KEY_FILE: key_file } : {}) } });
+    env: { ...environment, DISCUSS_ATTACHMENT_POLICY_FILE: policy_path(data), DISCUSS_OBJECT_STORAGE_QUOTA_FILE: object_quota_path(data, name),
+      DISCUSS_SERVICE_HOME: service, ...(key_file ? { DISCUSS_ENTRY_KEY_FILE: key_file } : {}) } });
   return new Promise((done, fail) => {
     child.on('error', fail);
     child.on('exit', code => code === 0 ? done() : fail(command === 'start'
@@ -677,26 +681,27 @@ const KEY_FILE = /^[a-f0-9-]{36}\.json$/i;
 
 /** The keys saved in an instance, newest first, with only the last characters of each key. */
 /**
- * What a saved key is for when it belongs to a speech service, read from its address: the speech services keep their keys
- * in the same folder as the model API keys. Returns { label, uses: ['语音朗读' | '语音识别'], local } or null.
+ * Recognize keys saved for speech and the account's configured resource center by address.
  */
-export function key_use(base_url) {
+export function key_use(base_url, storage_url = '') {
   const root = String(base_url || '').replace(/\/+$/, '');
   const match = list => list.find(item => [item.key_base_url, item.legacy_key_base_url].some(url => url && url.replace(/\/+$/, '') === root));
   const speak = match(TTS_PROVIDERS), listen = match(STT_PROVIDERS), provider = speak || listen;
-  if (!provider) return null;
-  return { label: provider.local ? t('本机语音服务') : provider.label, uses: [speak && t('语音朗读'), listen && t('语音识别')].filter(Boolean), local: Boolean(provider.local) };
+  const speech = provider ? { label: provider.local ? t('本机语音服务') : provider.label,
+    uses: [speak && t('语音朗读'), listen && t('语音识别')].filter(Boolean), local: Boolean(provider.local) } : null;
+  return { speech, object_storage: Boolean(storage_url && storage_url === root) };
 }
 
 export function list_keys(service) {
   const directory = join(service, 'api-keys');
   if (!existsSync(directory)) return [];
+  const { base_url: storage_url } = object_storage_status(service);
   return readdirSync(directory).filter(name => KEY_FILE.test(name)).map(name => {
     const path = join(directory, name);
     try {
       const saved = JSON.parse(readFileSync(path, 'utf8'));
       return { ref: name.slice(0, -5), base_url: saved.base_url, managed: saved.managed === true, tail: String(saved.api_key || '').slice(-4), time: statSync(path).mtimeMs,
-        speech: key_use(saved.base_url) };
+        ...key_use(saved.base_url, storage_url) };
     } catch { return null; }
   }).filter(Boolean).sort((left, right) => right.time - left.time);
 }
@@ -704,6 +709,32 @@ export function list_keys(service) {
 function remove_key(service, ref) {
   if (!/^[a-f0-9-]{36}$/i.test(ref)) throw panel_error('密钥编号无效');
   rmSync(join(service, 'api-keys', `${ref}.json`), { force: true });
+}
+
+function panel_object_storage(home, method, action, body, options) {
+  if (method === 'GET' && !action) return object_storage_status(home, options);
+  if (method === 'POST' && !action) {
+    const { quota_mib, ...settings } = body ?? {};
+    const set_quota = Object.hasOwn(body ?? {}, 'quota_mib');
+    if (set_quota) checked_quota(quota_mib);
+    if (!set_quota || Object.keys(settings).length) save_object_storage(home, settings, options);
+    if (set_quota) save_object_quota(options.quota_file, quota_mib);
+    return object_storage_status(home, options);
+  }
+  if (method === 'POST' && action === 'test') return test_object_storage(home);
+  if (method === 'POST' && action === 'clear') return clear_object_storage(home, options);
+  throw panel_error('接口不存在');
+}
+
+/** Forward this panel's authenticated cloud inventory request to the selected account's own site. */
+async function panel_object_files(local, key_file, deleting, body) {
+  const route = 'api/rooms/cloud-attachments' + (deleting ? '/delete' : '');
+  const init = { redirect: 'error', signal: AbortSignal.timeout(15_000) };
+  if (deleting) Object.assign(init, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: body?.id }) });
+  const response = await site_fetch(new URL(route, local).href, init, key_file ? { key_file } : undefined);
+  const result = await response.json();
+  if (!response.ok) throw Object.assign(new Error(result.error || t('接口不存在')), { status: response.status, error_text: result.error_text });
+  return result;
 }
 
 // ---- HTTP ----
@@ -788,7 +819,16 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       if (!response.ok) throw new Error(result.error);
       return result;
     }
+    if (path === '/api/storage/attachment-limit' && method === 'GET') return { limit_mib: attachment_limit(data) };
+    if (path === '/api/storage/attachment-limit' && method === 'POST') return save_attachment_limit(data, body.limit_mib);
+    if (path === '/api/storage/object/files' && method === 'GET' || path === '/api/storage/object/files/delete' && method === 'POST') {
+      const key_file = owner_key_file(data);
+      return panel_object_files(site_url(data), existsSync(key_file) ? key_file : '', method === 'POST', body);
+    }
+    if (section === 'storage' && name === 'object' && parts.length <= 3)
+      return panel_object_storage(data, method, action, body, { limit: attachment_limit(data), quota_file: object_quota_path(data) });
     if (path === '/api/storage' && method === 'GET') return panel_storage(data, site_url(data));
+    if (path === '/api/storage/steward' && method === 'POST') return panel_storage_steward(data);
     if (path === '/api/storage/clean' && method === 'POST') return panel_clean(data, site_url(data), body);
     if (path === '/api/storage/repair' && method === 'POST') return panel_repair(data, site_url(data), body);
     if (path === '/api/storage/attachments' && method === 'POST') return panel_room_attachments(site_url(data), body);
@@ -862,6 +902,12 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // The owner's own online site: bound, checked and left here whether or not this computer hosts accounts.
     if (method === 'POST' && section === 'site' && name === 'connect') { const bound = await bind_online_site(data, body, op.connect_site); after_change(); return bound; }
     if (method === 'POST' && section === 'site' && name === 'disconnect') { const left = await disconnect_site(data); after_change(); return left; }
+    if (section === 'site' && name === 'origins' && ['GET', 'POST'].includes(method)) {
+      const bound = bound_site(data);
+      if (!bound) throw panel_error('尚未绑定自建中转');
+      return method === 'GET' ? pairing_origins(data, bound.site)
+        : update_pairing_origins(data, bound.site, body.action, body.origin, body.subdomains);
+    }
     if (section === 'site' && name === 'region' && ['GET', 'POST'].includes(method)) {
       const bound = bound_site(data);
       if (!bound) throw panel_error('尚未绑定自建中转');
@@ -966,6 +1012,13 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && action === 'env' && extra === 'skills') return op.account_skills(data, name, { install: body.install || [], remove: body.remove || [] });
     if (method === 'POST' && action === 'env' && extra === 'prompt') return op.account_env(data, name, 'prompt', { home: instance_home(data, name), prompt: String(body.text ?? '') });
     const service = instance_home(data, name);
+    if (action === 'object-storage' && extra === 'files' && (parts.length === 4 && method === 'GET'
+      || parts.length === 5 && parts[4] === 'delete' && method === 'POST')) {
+      const target = read_accounts(data)[name];
+      return panel_object_files(`http://127.0.0.1:${target.port}/`, target.protected ? instance_key_file(name) : '', method === 'POST', body);
+    }
+    if (action === 'object-storage' && parts.length <= 4)
+      return panel_object_storage(service, method, extra, body, { limit: attachment_limit(data), quota_file: object_quota_path(data, name) });
     if (method === 'GET' && action === 'workflows') return op.account_workflows(service);
     // Set up again (safe to repeat): it installs the shipped workflows the account lacks and keeps the rest.
     if (method === 'POST' && action === 'workflows' && extra === 'install') { await op.prepare_account(data, name); return op.account_workflows(service); }
@@ -1592,6 +1645,21 @@ function panel_url(state) {
 function site_url(data) {
   try { return `http://127.0.0.1:${JSON.parse(readFileSync(join(data, 'local-settings.json'), 'utf8')).port || 8765}/`; }
   catch { return 'http://127.0.0.1:8765/'; }
+}
+
+/** Send a read-only storage inventory request via this panel owner's local website. */
+async function panel_storage_steward(data) {
+  const { href } = new URL('api/local/steward-request', site_url(data));
+  const key_file = owner_key_file(data);
+  const response = await site_fetch(href, {
+    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(STORAGE_STEWARD_TIMEOUT_MS),
+    headers: { 'Content-Type': 'application/json', 'X-CoDiscuss-Local': '1' },
+    body: JSON.stringify({ skill: 'codiscuss-draft-cleanup', lang: resolve_locale(),
+      context: t('请盘点共议占用并报告结果，不要删除任何文件。') }),
+  }, existsSync(key_file) ? { key_file } : undefined);
+  const result = await response.json();
+  if (!response.ok) throw Object.assign(new Error(result.error), { status: response.status, error_text: result.error_text });
+  return { room_id: result.room_id, message_id: result.message_id };
 }
 
 /** A runner script of the installed codiscuss package (npm puts its command beside node_modules), or this tree's copy. */

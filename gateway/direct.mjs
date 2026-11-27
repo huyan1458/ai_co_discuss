@@ -2,7 +2,7 @@
  * The three addresses an external member's computer uses, answered by the sign-in entry on the owner's own domain for
  * hosted accounts that invite external experts without the online relay (user 2026-11-19, #5588; security #5599):
  *
- *   GET  /api/machines                 the accounts reached directly: id and public keys under a neutral name
+ *   GET  /api/guest/<id>/key           public keys of one known account
  *   POST /api/machines/<id>/pair       a sealed invite redemption, handed to that account's receiver
  *   POST /api/machines/<id>/relay      a member's sealed request, handed to that account's receiver
  *
@@ -43,6 +43,26 @@ const ID_PATTERN = /^[A-Za-z0-9_-]{16,80}$/;
 const MACHINE_PATTERN = /^[0-9a-f]{32}$/;
 const ROUTE = /^\/api\/machines\/([0-9a-f]{32})\/(pair|relay)$/;
 const HEADERS = { 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' };
+
+const GUEST_ROUTE = /^\/api\/guest\/([0-9a-f]{32})\/(key|pair|relay)$/;
+const GUEST_FILES = new Map([
+  ['/guest/', ['guest/index.html', 'text/html']],
+  ['/guest/guest.js', ['guest.js', 'text/javascript']],
+  ['/guest/guest.css', ['guest.css', 'text/css']],
+  ['/guest/i18n.js', ['i18n.js', 'text/javascript']],
+]);
+
+function guest_asset(response, path, method) {
+  const asset = GUEST_FILES.get(path);
+  if (method !== 'GET' || !asset) { answer(response, 404, {}); return; }
+  const [file, mime] = asset;
+  let contents;
+  try { contents = readFileSync(new URL('../web/' + file, import.meta.url)); }
+  catch { answer(response, 503, {}); return; }
+  if (mime === 'text/html') contents = contents.toString('utf8').replace(/(src|href)="\/(guest\.js|guest\.css|i18n\.js)"/g, '$1="/guest/$2"');
+  response.writeHead(200, { ...HEADERS, 'Content-Type': mime + '; charset=utf-8', 'Referrer-Policy': 'no-referrer' });
+  response.end(contents);
+}
 
 function answer(response, status, value) {
   response.writeHead(status, HEADERS);
@@ -158,21 +178,29 @@ export function create_direct({ data, read_accounts, entry_settings, instance_ho
   return async function handle(request, response, signed_in) {
     if (signed_in) return false;
     const path = new URL(request.url, 'http://entry').pathname;
-    const route = ROUTE.exec(path);
-    if (!route && path !== '/api/machines') return false;
+    const guest = path === '/guest' || path.startsWith('/guest/') || path === '/api/guest' || path.startsWith('/api/guest/');
+    const route = guest ? GUEST_ROUTE.exec(path) : ROUTE.exec(path);
+    if (!guest && !route && path !== '/api/machines') return false;
     // Only these addresses read the entry's settings, so signed-in pages pay nothing for this (#5617).
     const host = direct_host(entry_settings(data));
-    if (!host || String(request.headers.host || '').toLowerCase() !== host) return false;
+    if (!host || String(request.headers.host || '').toLowerCase() !== host) {
+      if (guest) answer(response, 404, {});
+      return guest;
+    }
+    if (guest && !route) {
+      guest_asset(response, path, request.method);
+      return true;
+    }
+    if (guest && route[2] === 'key') {
+      const account = direct_accounts().find(([id]) => id === route[1])?.[1];
+      const receiver = account && read_receiver(instance_home(data, account));
+      if (request.method !== 'GET' || receiver?.machine !== route[1] || !receiver.public_key || !receiver.sign_key) answer(response, 404, {});
+      else answer(response, 200, { id: route[1], public_key: receiver.public_key, sign_key: receiver.sign_key, transport: 'direct' });
+      return true;
+    }
     if (path === '/api/machines') {
       if (request.method !== 'GET') return false;
-      const machines = [];
-      for (const [id, name] of direct_accounts()) {
-        const receiver = read_receiver(instance_home(data, name));
-        if (receiver?.machine === id && receiver.public_key && receiver.sign_key) {
-          machines.push({ id, name: '托管账号', public_key: receiver.public_key, sign_key: receiver.sign_key, online: true, projects: [], clients: {} });
-        }
-      }
-      answer(response, 200, { machines });
+      answer(response, 426, { error: '请更新 AI CoDiscuss 后使用完整邀请链接。 Please update AI CoDiscuss and use the full invitation link.', code: 'client_update_required' });
       return true;
     }
     if (request.method !== 'POST') { request.resume(); answer(response, 404, { error: '地址不存在' }); return true; }
@@ -200,6 +228,10 @@ export function create_direct({ data, read_accounts, entry_settings, instance_ho
       if (!receiver || receiver.machine !== machine) { answer(response, 200, { id, status: 'offline' }); return true; }
       const timeout = Math.min(Math.max(Number.isInteger(wait) ? wait : 8000, 1000), WAIT_MAX_MS);
       const result = await call_receiver(receiver, { kind, path, credential: String(request.headers['x-codiscuss-device'] || ''), id, envelope }, timeout);
+      if (guest && !direct_accounts().some(([id, account]) => id === machine && account === name)) {
+        answer(response, 404, { error: '这台电脑尚未连接网站' });
+        return true;
+      }
       if (!result) { answer(response, 200, { id, status: 'unknown' }); return true; }
       if (result.status === 200) {
         const reply = sealed_reply(id, result.body);

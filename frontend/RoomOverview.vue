@@ -27,9 +27,12 @@ import MemberNameEdit from "./MemberNameEdit.vue";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import MemoBlock from "./memo-block.js";
 import { member_actions, project_files } from "./member-actions.js";
+import { member_quota, member_usage } from "./quota.js";
+import ContextMeter from "./ContextMeter.vue";
 import { access_label, access_options, MAX_EXPERT_PROMPT } from "../runner/expert_prompts.mjs";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { t } from "./i18n.js";
+import { member_protection, use_guest_state } from "./external-guests.js";
 
 const { view, bridge, act } = inject("discussion");
 const ACCESS_LABELS = { manual: t("手动接入") };
@@ -40,6 +43,9 @@ const ADAPTER_LABELS = { api: "API", codex: "App", antigravity: "App" };
 const room = computed(() => view.value.room);
 const free = computed(() => !["active", "paused"].includes(room.value.session?.status));
 const saved = computed(() => view.value.launch.room_models?.room_id === room.value.id ? view.value.launch.room_models : null);
+// While an external user is in under the conservative mode, a member reads as temporarily read-only or paused, here as in the rail.
+const guest_state = use_guest_state(bridge, () => (view.value.access?.can_manage && !view.value.share ? room.value?.id : "")).state;
+const protection_of = (member) => member_protection(guest_state.value, live(member), saved.value);
 /**
  * One line, above the members, for why this computer's saved choices are not shown; cells then stay empty instead of
  * repeating it. agy's slower model read is not part of it: only that member waits, greyed out.
@@ -76,7 +82,8 @@ watch(() => saved.value?.api_max_requests, (value) => { requests_shown.value = v
 // ones, saved as a whole; blank rows are dropped when saving.
 const saving_directories = ref(false), directories_draft = ref([]), main_draft = ref("");
 const saved_extra_directories = computed(() => saved.value?.extra_directory_entries || saved.value?.extra_directories || []);
-watch(saved_extra_directories, (value) => { directories_draft.value = [...value]; }, { immediate: true });
+// Each published snapshot is a fresh clone, so only a change in the saved list itself may replace the draft being edited.
+watch(() => JSON.stringify(saved_extra_directories.value), () => { directories_draft.value = [...saved_extra_directories.value]; }, { immediate: true });
 watch(() => saved.value?.project_directory, () => { main_draft.value = ""; });
 const directories_changed = computed(() => Boolean(main_draft.value.trim())
   || JSON.stringify(directories_draft.value) !== JSON.stringify(saved_extra_directories.value));
@@ -226,7 +233,7 @@ async function switch_adapter(member, adapter) {
 
 /** Project file access, and whether it can be switched here; anything that cannot says why on hover. */
 function files(member) {
-  return project_files(member, saved.value, view.value);
+  return project_files(member, saved.value, view.value, protection_of(member));
 }
 
 /** Switch one member's project files; the change applies from its next request and keeps its session. */
@@ -362,6 +369,32 @@ function edit_prompt(member) {
   prompt_draft.value = prompt_profile(member.name)?.system_prompt || "";
   prompting.value = member.name;
 }
+/**
+ * The member's prompt and, on the host's card, the owner's prompt for every room's host (设置 → 系统提示词 → 主持人),
+ * as buttons beside 名称与描述 rather than a row of their own (user 2026-11-27, #14386).
+ */
+function prompt_tools(member) {
+  if (!prompt_editable.value) return [];
+  return [...(has_prompt(member) ? [{ label: t("专属提示词"), icon: "i-lucide-scroll-text", title: prompt_profile(member.name).system_prompt || t("未设置"), onSelect: () => edit_prompt(member) }] : []),
+    ...(member.role === "host" && (view.value.launch.available || view.value.launch.remote)
+      ? [{ label: t("主持人提示词"), icon: "i-lucide-crown", title: t("所有房间的主持人都会收到"), onSelect: edit_host_prompt }] : [])];
+}
+// The owner's prompt for whoever hosts a room, the same text as in the settings; read when its editor opens.
+const host_prompt_open = ref(false), host_prompt_draft = ref(""), host_prompt_saved = ref(""), host_prompt_saving = ref(false);
+async function edit_host_prompt() {
+  try { host_prompt_saved.value = (await bridge.read_system_prompts()).host || ""; }
+  catch (error) { bridge.notify("error", error.message); return; }
+  host_prompt_draft.value = host_prompt_saved.value;
+  host_prompt_open.value = true;
+}
+async function save_host_prompt() {
+  const host = host_prompt_draft.value.trim();
+  host_prompt_open.value = false;
+  host_prompt_saving.value = true;
+  try { host_prompt_saved.value = (await bridge.save_system_prompts({ host })).host || ""; }
+  catch (error) { bridge.notify("error", error.message); }
+  finally { host_prompt_saving.value = false; }
+}
 /** Closes at once; the bridge shows the new text until the local service confirms, and a refusal is told and undone. */
 async function save_prompt() {
   const name = prompting.value, system_prompt = prompt_draft.value.trim();
@@ -490,12 +523,12 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
               @pointercancel="finish_drag($event, true)" @lostpointercapture="finish_drag($event, true)"
               @keydown.up.prevent="commit_move(member.name, movable_names.indexOf(member.name) - 1)" @keydown.down.prevent="commit_move(member.name, movable_names.indexOf(member.name) + 1)"><UIcon name="i-lucide-grip-vertical" /></button>
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-            <div class="member-card-name"><strong><MemberNameEdit :name="member.name" :editable="Boolean(view.access?.can_manage)" /><span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
+            <div class="member-card-name"><strong><MemberNameEdit :name="member.name" :editable="Boolean(view.access?.can_manage)" /><span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><ContextMeter :usage="member_usage(view, member.name)" :quota="member_quota(view, member.name)" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
             <!-- The host's crown sits where the other cards offer 设为主持人, so every card shows it in one place. -->
             <span v-if="member.role === 'host'" class="member-card-host is-current" :title="t('主持人')"><UIcon name="i-lucide-crown" /><span data-slot="label">{{ t('主持人') }}</span></span>
             <UButton v-else-if="actions(member).host" class="member-card-host" :title="actions(member).host.label" :icon="actions(member).host.icon" :label="actions(member).host.label" size="xs" variant="ghost" color="neutral" :disabled="actions(member).host.disabled" @click="actions(member).host.onSelect()" />
             <UBadge v-if="in_workflow(member.name)" color="neutral" variant="outline" size="sm" :title="t('来自工作流「{name}」，提示词按工作流卡片发送', { name: workflow.label })">{{ t("工作流") }}</UBadge>
-            <UBadge :color="unregistered(member) ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm">{{ unregistered(member) ? (member.access === 'external' ? t('待签到') : t('待注册')) : STATUS_LABELS[member.status] || member.status }}</UBadge>
+            <UBadge :color="unregistered(member) || protection_of(member)?.paused ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm" :title="protection_of(member)?.paused ? t('外部用户在场，保守保护下暂停接单：{reason}', { reason: protection_of(member).reason }) : undefined">{{ unregistered(member) ? (member.access === 'external' ? t('待签到') : t('待注册')) : member.status === 'active' && protection_of(member)?.paused ? t('暂停接单') : STATUS_LABELS[member.status] || member.status }}</UBadge>
           </header>
           <dl class="member-card-facts">
             <template v-if="external_of(live(member))">
@@ -529,11 +562,6 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
             </dd></div>
-            <div v-if="has_prompt(member)" class="overview-span"><dt>{{ t("专属提示词") }}</dt><dd class="overview-model">
-              <span :class="{ 'overview-muted': !prompt_profile(member.name).system_prompt }" :title="prompt_profile(member.name).system_prompt || undefined">{{ prompt_profile(member.name).system_prompt?.split('\n')[0] || t("未设置") }}</span>
-              <UButton v-if="prompt_editable" :icon="in_workflow(member.name) ? 'i-lucide-eye' : 'i-lucide-pencil'" size="xs" variant="ghost" color="neutral"
-                :aria-label="t('编辑 {value1} 的专属提示词', { value1: bridge.display_name(member.name) })" @click="edit_prompt(member)" />
-            </dd></div>
             </template>
             <div v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="bridge.display_path(saved.participants[member.name].outside_directory)">
               <UIcon name="i-lucide-triangle-alert" /><span>{{ t('在 {path} 工作，房间目录{access}', { path: bridge.display_path(saved.participants[member.name].outside_directory), access: saved.participants[member.name].outside_enforced ? t('只读') : t('只读（仅任务要求，程序拦不住）') }) }}</span></div>
@@ -544,9 +572,9 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
               <UIcon name="i-lucide-triangle-alert" /><span>{{ t('主持人最近一次执行失败：{reason}', { reason: live(member).execution.result || t('原因未知') }) }}</span></div>
           </dl>
           <footer class="member-card-actions" :aria-label="t('{name} 的操作', { name: member.name })">
-            <div><UButton v-for="item in actions(member).taking_part" :key="item.label" class="member-card-tool" :icon="item.icon" :label="item.label" size="xs" variant="ghost" color="neutral" :disabled="item.disabled" @click="item.onSelect()" />
+            <div><UButton v-for="item in [...actions(member).taking_part, ...prompt_tools(member)]" :key="item.label" class="member-card-tool" :icon="item.icon" :label="item.label" size="xs" variant="ghost" color="neutral" :disabled="item.disabled" :title="item.title" @click="item.onSelect()" />
               <!-- A phone folds these into one menu, so a card's actions fit on a single line. -->
-              <UDropdownMenu v-if="actions(member).taking_part.length" :items="[actions(member).taking_part]" :content="{ align: 'start' }" :ui="{ content: 'channel-menu' }"><UButton class="member-card-more" icon="i-lucide-ellipsis" size="xs" variant="ghost" color="neutral" :aria-label="t('更多操作')" /></UDropdownMenu></div>
+              <UDropdownMenu v-if="actions(member).taking_part.length || prompt_tools(member).length" :items="[[...actions(member).taking_part, ...prompt_tools(member)]]" :content="{ align: 'start' }" :ui="{ content: 'channel-menu' }"><UButton class="member-card-more" icon="i-lucide-ellipsis" size="xs" variant="ghost" color="neutral" :aria-label="t('更多操作')" /></UDropdownMenu></div>
             <div v-if="actions(member).place.length"><UButton v-for="item in actions(member).place" :key="item.label" :icon="item.icon" :label="item.label" size="xs" variant="ghost" :color="item.color || 'neutral'" :disabled="item.disabled" @click="item.onSelect()" /></div>
           </footer>
         </li>
@@ -613,7 +641,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
         </div>
       </div>
       <p v-if="room_storage.room_tone === 'error'" class="pb-storage-note">
-        {{ t('本房间草稿已超限，派活已暂停；请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup，或点击下方清理临时文件。') }}
+        {{ t('本房间草稿已超限，派活已暂停。可先点击下方“清理临时文件”；如需盘点历史草稿，请找平台主理人。') }}
       </p>
       <p v-else-if="room_storage.room_tone === 'warning'" class="pb-storage-note">
         {{ t('本房间草稿已达 80% 以上，接近上限时将停止派活。') }}
@@ -621,7 +649,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
       <p v-else-if="room_storage.home_warning" class="pb-storage-note">
         {{ room_storage.local_bytes > 0
           ? t('本机数据已占 {used} / {limit}（含房间记录与附件 {local}），建议清理临时文件或销毁旧房间。', { used: format_storage_bytes(room_storage.total_bytes), limit: format_storage_bytes(room_storage.home_limit), local: format_storage_bytes(room_storage.local_bytes) })
-          : t('本机数据已占 {used} / {limit}，建议清理临时文件或在房间外运行 $codiscuss-draft-cleanup。', { used: format_storage_bytes(room_storage.total_bytes), limit: format_storage_bytes(room_storage.home_limit) }) }}
+          : t('本机数据已占 {used} / {limit}，建议清理临时文件。', { used: format_storage_bytes(room_storage.total_bytes), limit: format_storage_bytes(room_storage.home_limit) }) }}
       </p>
       <p v-if="room_storage.unreadable > 0" class="pb-storage-note pb-storage-unreadable">
         {{ t('另有 {count} 处因权限无法读取，未计入配额。', { count: room_storage.unreadable }) }}
@@ -655,6 +683,10 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
       </template>
     </UModal>
     <ExternalMemberDialog v-model:open="external_open" :member="external_member" :reinvite="external_reinvite" />
+    <MemberTextDialog v-model:open="host_prompt_open" v-model:draft="host_prompt_draft" :title="t('主持人提示词')"
+      :description="t('所有房间的主持人都会收到，和“设置 → 系统提示词 → 主持人”是同一份；写你派活、选人的偏好，比如哪家额度多、谁擅长什么。')"
+      :label="t('主持人提示词')" :max="MAX_EXPERT_PROMPT" :rows="8" :note="host_prompt_draft.trim() ? t('Ctrl + Enter 保存') : t('留空表示不使用')"
+      :changed="host_prompt_draft.trim() !== host_prompt_saved" :saving="host_prompt_saving" @save="save_host_prompt" />
     <MemberTextDialog :open="Boolean(prompting)" v-model:draft="prompt_draft" :title="t('{value1} 的专属提示词', { value1: bridge.display_name(prompting || ' ') })"
       :description="in_workflow(prompting) ? t('来自工作流「{value1}」，每次执行时按工作流里的这张卡片发送；请在“工作流”一行点“编辑”修改，修改会作用于所有启用它的房间。', { value1: workflow?.label || '' }) : t('只发给这位专家，补充它的做法与偏好；不改变权限和技能规则。')"
       :label="t('{value1} 的专属提示词', { value1: bridge.display_name(prompting || ' ') })" :placeholder="t('例如：回答先给结论，控制在三段以内。')" :max="MAX_EXPERT_PROMPT" :rows="8"

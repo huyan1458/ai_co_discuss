@@ -6,7 +6,9 @@ import hashlib
 import hmac
 import http.client
 import json
+import locale
 import math
+import mimetypes
 import os
 import re
 import secrets
@@ -14,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.client import HTTPException
@@ -28,7 +31,16 @@ DEFAULT_TIMEOUT = 20
 REFUSED_RETRY_SECONDS = 10
 REFUSED_RETRY_INTERVAL = 1.0
 MAX_BODY_BYTES = 512 * 1024
-MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+ATTACHMENT_POLICY = json.loads((Path(__file__).resolve().parents[1] / "backend" / "attachment_policy.json").read_text(encoding="utf-8"))
+FILE_CHUNK_BYTES = 1024 * 1024
+MAX_OBJECT_BYTES = 2 * 1024 * 1024 * 1024
+OBJECT_TRANSFER_ERRORS = {
+    "对象存储凭证响应无效": "Invalid object storage credential response",
+    "对象存储上传未完成；请沿用原提交编号重试": "Object upload did not complete. Retry with the original submission ID",
+    "对象存储下载不完整或无法写入；未保存文件": "The object download was incomplete or could not be written. No file was saved",
+    "已从云空间删除": "Deleted from cloud storage",
+    "外部成员不支持上传或下载附件": "External members cannot upload or download attachments",
+}
 MAX_MESSAGE_ATTACHMENTS = 10
 # Environment variables a hosting AI session exposes its own ID through, with the client name the room records.
 SESSION_VARIABLES = (("CLAUDE_CODE_SESSION_ID", "claude"), ("CODEX_THREAD_ID", "codex"), ("ANTIGRAVITY_CONVERSATION_ID", "antigravity"))
@@ -54,7 +66,7 @@ OVERVIEW_FIELDS = ("id", "title", "goal", "host", "phase", "focus", "message_cou
 # Agent tools cut long command output (Claude Code past 30000 characters, Codex CLI past 10000 tokens), so a page stays inside both.
 LIST_OUTPUT_CHARS = 8000
 # An attachment shown inside its message: identity, type, size, content hash and where to read it.
-ATTACHMENT_FIELDS = ("id", "file_name", "content_type", "size", "sha256", "url")
+ATTACHMENT_FIELDS = ("id", "file_name", "content_type", "size", "sha256", "url", "storage", "stored")
 # The room view keeps live work and a short recent trail; `execution view` reads any one execution in full.
 RECENT_EXECUTIONS = 10
 EXECUTION_FIELDS = ("id", "member", "status", "result", "answer_id", "request_message_id", "changes", "late_answer")
@@ -122,6 +134,7 @@ class RequestPlan:
     upload_file: str | None = None
     download_file: str | None = None
     title_query: str | None = None
+    limit_mib: int = 0
 
 
 class JoinPreviousStep(argparse.Action):
@@ -228,7 +241,14 @@ def fill_submission_id(args, plan):
     body = {key: value for key, value in (plan.body or {}).items() if key not in ("session_id", "session_client")}
     material = {"operation": args.operation, "room": getattr(args, "room", None), "body": body, "params": plan.params}
     if plan.upload_file:
-        material["file"] = hashlib.sha256(Path(plan.upload_file).read_bytes()).hexdigest()
+        digest = hashlib.sha256()
+        try:
+            with Path(plan.upload_file).open("rb") as source:
+                for chunk in iter(lambda: source.read(FILE_CHUNK_BYTES), b""):
+                    digest.update(chunk)
+        except OSError as error:
+            raise CliError(f"无法读取上传文件: {error}") from error
+        material["file"] = digest.hexdigest()
     digest = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     target["submission_id"] = "auto-" + digest[:40]
 
@@ -319,6 +339,18 @@ def add_leaf(subcommands, registry, name, description, needs_room=False):
 
 def room_commands(subcommands, registry):
     """Register room discovery, progressive reading, creation, and updates."""
+    dispatch_help = json.loads(os.getenv("CODISCUSS_DISPATCH_HELP", "{}"))
+    dispatches = add_leaf(subcommands, registry, "room dispatches",
+                          dispatch_help.get("list", "管理员读取主持人派活记录"))
+    dispatches.add_argument("--room", dest="dispatch_room", type=room_id)
+    dispatches.add_argument("--after", type=non_negative_int, default=0)
+    dispatches.add_argument("--view", choices=("messages", "chains"), default="messages")
+    rating = add_leaf(subcommands, registry, "room dispatch-rate",
+                      dispatch_help.get("rate", "房主为一条主持人派活评分或撤回评分"), True)
+    rating.add_argument("id", type=positive_int)
+    rating.add_argument("rating", choices=("good", "bad", "clear"))
+    rating.add_argument("--should-be", default="")
+    rating.add_argument("--note", default="")
     for action, description in (("list", "列出房间概要"), ("view", "只读目标、阶段、成员与分工、当前安排；执行只列进行中与最近 10 次的要点，完整内容用 execution view"),
                                 ("brief", "按需读取背景、边界和专家配置"),
                                 ("conclusion", "收束前申请最新收束状态（阻碍项与 revision）；主持人收束前必做"),
@@ -441,7 +473,7 @@ def attachment_commands(subcommands, registry):
     view = add_leaf(subcommands, registry, "attachment view", "读取文件名、类型、大小与下载地址", True)
     view.add_argument("id", type=attachment_id)
     upload = add_leaf(subcommands, registry, "attachment upload", "上传原文件；之后用 message post --attachment 关联消息", True)
-    upload.add_argument("--file", required=True, help="本地原文件路径；最多 20 MiB")
+    upload.add_argument("--file", required=True, help="本地原文件路径；大小遵循站点设置")
     upload.add_argument("--submission-id", type=submission_id, help="上传唯一编号；省略时按命令与内容自动生成，同样内容重试得到同一编号")
     download = add_leaf(subcommands, registry, "attachment download", "下载原文件到显式路径；不覆盖已有文件", True)
     download.add_argument("id", type=attachment_id)
@@ -678,8 +710,32 @@ def read_object(path):
     return value
 
 
+LOCKDOWN_ACCESS_ERROR = ("本次运行已收窄，只能使用本次任务绑定的凭据（DISCUSS_ACCESS_FILE），不能改用其他凭据文件、空凭据或 DISCUSS_ACCESS / "
+                         "This run is restricted to the credential bound to its task (DISCUSS_ACCESS_FILE); another file, an empty credential or DISCUSS_ACCESS is refused")
+
+
+def lockdown_access(args):
+    """In a restricted run, only the credential file its process was started with, holding a valid token.
+
+    A restricted member can write its draft folder, so without this it could name an empty file there with
+    ``--access-file``: the CLI would then send no credential, and the local website takes such a request from this
+    computer as its administrator (#14924 item 1). Inline ``DISCUSS_ACCESS`` is refused for the same reason.
+    """
+    bound = os.getenv("DISCUSS_ACCESS_FILE", "").strip()
+    explicit = getattr(args, "access_file", None)
+    if os.getenv("DISCUSS_ACCESS", "").strip() or not bound or (explicit and Path(explicit).resolve() != Path(bound).resolve()):
+        raise CliError(LOCKDOWN_ACCESS_ERROR, 2)
+    access = read_object(bound)
+    token = access.get("token")
+    if not isinstance(token, str) or not 32 <= len(token) <= 256:
+        raise CliError(LOCKDOWN_ACCESS_ERROR, 2)
+    return access
+
+
 def load_access(args):
-    """Read an explicit file, a process-bound file, or inline credentials, in that order."""
+    """Read an explicit file, a process-bound file, or inline credentials, in that order; a restricted run only its own."""
+    if os.getenv("CODISCUSS_TOOL_LOCKDOWN") == "1":
+        return lockdown_access(args)
     path = getattr(args, "access_file", None) or os.getenv("DISCUSS_ACCESS_FILE", "").strip()
     if path:
         return read_object(path)
@@ -805,6 +861,15 @@ def read_context_params(args):
 
 def plan_room(args):
     """Translate room operations to one existing HTTP endpoint."""
+    if args.action == "dispatches":
+        params = {"after": args.after, "view": args.view}
+        if args.dispatch_room:
+            params["room"] = args.dispatch_room
+        return RequestPlan("/api/dispatches", params=params)
+    if args.action == "dispatch-rate":
+        payload = {"rating": None if args.rating == "clear" else args.rating,
+                   "should_be": args.should_be, "note": args.note}
+        return RequestPlan(f"/api/rooms/{args.room}/dispatch-feedback/{args.id}", "POST", payload)
     if args.action == "list":
         params = {"submission_id": args.submission_id} if args.submission_id else None
         return RequestPlan("/api/rooms", view="room_list", params=params, title_query=args.query)
@@ -941,6 +1006,15 @@ def plan_message(args):
     return RequestPlan(base, "POST", payload, "message_receipt")
 
 
+def attachment_text(template, **params):
+    """Format attachment limits in the CLI language using the site's translations."""
+    language = os.environ.get("CODISCUSS_LANG") or locale.getlocale()[0] or "en"
+    if not language.lower().startswith(("zh", "chinese")):
+        dictionary = Path(__file__).resolve().parents[1] / "frontend/locales/en/backend.json"
+        template = OBJECT_TRANSFER_ERRORS.get(template) or json.loads(dictionary.read_text(encoding="utf-8")).get(template, template)
+    return template.format(**params)
+
+
 def plan_attachment(args):
     """Keep file bytes outside JSON messages and all storage targets explicit."""
     base = f"/api/rooms/{args.room}/attachments"
@@ -950,8 +1024,8 @@ def plan_attachment(args):
     if args.action == "upload":
         path = Path(args.file)
         try:
-            if not path.is_file() or path.stat().st_size > MAX_ATTACHMENT_BYTES:
-                raise CliError("上传路径须为文件，大小最多 20 MiB")
+            if not path.is_file():
+                raise CliError("上传路径须为文件")
         except OSError as error:
             raise CliError(f"无法读取上传文件: {error}") from error
         metadata = {"actor": require_actor(args), "file_name": path.name, "submission_id": args.submission_id}
@@ -1241,7 +1315,7 @@ def resolve_site(args):
 def decode_response(response, plan):
     """Decode the expected payload while identifying uncertain write responses."""
     if plan.download_file is not None:
-        return save_attachment_response(response, plan.download_file)
+        return save_attachment_response(response, plan.download_file, plan.limit_mib)
     try:
         text = response.read().decode("utf-8-sig")
         if plan.path.startswith("/r/") and plan.method == "GET":
@@ -1257,12 +1331,13 @@ def decode_response(response, plan):
                        outcome="unknown" if plan.method == "POST" else "unavailable") from error
 
 
-def save_attachment_response(response, destination):
+def save_attachment_response(response, destination, limit_mib):
     """Validate a complete bounded response before creating an exclusive local file."""
-    data = response.read(MAX_ATTACHMENT_BYTES + 1)
+    maximum = limit_mib * 1024 * 1024
+    data = response.read(maximum + 1)
     size_header = response.headers.get("Content-Length")
-    if len(data) > MAX_ATTACHMENT_BYTES or (size_header and len(data) != int(size_header)):
-        raise CliError("附件下载不完整或超过 20 MiB；未保存文件", 3, outcome="unavailable")
+    if len(data) > maximum or (size_header and len(data) != int(size_header)):
+        raise CliError(attachment_text("附件下载不完整或超过 {limit} MiB；未保存文件", limit=limit_mib), 3, outcome="unavailable")
     digest = hashlib.sha256(data).hexdigest()
     if response.headers.get("X-Content-SHA256", digest) != digest:
         raise CliError("附件校验失败；未保存文件", 3, outcome="unavailable")
@@ -1284,13 +1359,131 @@ def request_data(plan):
     if plan.upload_file is not None:
         try:
             with Path(plan.upload_file).open("rb") as source:
-                data = source.read(MAX_ATTACHMENT_BYTES + 1)
+                data = source.read(plan.limit_mib * 1024 * 1024 + 1)
         except OSError as error:
             raise CliError(f"无法读取上传文件: {error}") from error
-        if len(data) > MAX_ATTACHMENT_BYTES:
-            raise CliError("单个附件最多 20 MiB")
+        if len(data) > plan.limit_mib * 1024 * 1024:
+            raise CliError(attachment_text("单个附件最多 {limit} MiB", limit=plan.limit_mib))
         return data
     return json.dumps(plan.body, ensure_ascii=False).encode("utf-8") if plan.body is not None else None
+
+
+def attachment_request(plan, url, timeout, headers):
+    """Send a JSON control request to the same room site, never to the object host."""
+    target = urlsplit(url)._replace(path=plan.path, query=urlencode(plan.params or {}), fragment="").geturl()
+    return send_request(plan, target, timeout, headers)
+
+
+def object_transfer_url(url):
+    """Accept only an explicit HTTP(S) transfer URL without embedded credentials."""
+    try:
+        parts = urlsplit(url)
+        if (parts.scheme in ("http", "https") and parts.hostname
+                and parts.username is None and parts.password is None and not parts.fragment):
+            return url
+    except (AttributeError, TypeError, ValueError):
+        pass
+    raise CliError(attachment_text("对象存储凭证响应无效"), 3, outcome="unavailable")
+
+
+def object_form(fields, boundary):
+    """Preserve all signed form fields and place the file part after them."""
+    prefix = bytearray()
+    for name, value in fields.items():
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or not isinstance(value, str):
+            raise CliError(attachment_text("对象存储凭证响应无效"), 3, outcome="unknown")
+        prefix.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode("utf-8"))
+    mime = fields.get("Content-Type", "application/octet-stream")
+    if not re.fullmatch(r"[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+", mime):
+        raise CliError(attachment_text("对象存储凭证响应无效"), 3, outcome="unknown")
+    prefix.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="file"\r\n'
+                  f'Content-Type: {mime}\r\n\r\n'.encode("ascii"))
+    return bytes(prefix), f"\r\n--{boundary}--\r\n".encode("ascii")
+
+
+def upload_object_bytes(path, size, upload, timeout):
+    """Stream the multipart file directly to COS with an explicit request length."""
+    url = object_transfer_url(upload["url"])
+    boundary = uuid.uuid4().hex
+    fields = upload["fields"]
+    prefix, suffix = object_form(fields, boundary)
+
+    def parts():
+        yield prefix
+        with path.open("rb") as source:
+            remaining = size
+            while remaining:
+                chunk = source.read(min(FILE_CHUNK_BYTES, remaining))
+                if not chunk:
+                    raise OSError("Attachment changed while uploading")
+                remaining -= len(chunk)
+                yield chunk
+        yield suffix
+
+    request = Request(url, data=parts(), method="POST", headers={
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Content-Length": str(len(prefix) + size + len(suffix)),
+    })
+    try:
+        with build_opener(NoRedirect()).open(request, timeout=timeout):
+            pass
+    except (URLError, OSError, HTTPException, ValueError) as error:
+        if isinstance(error, HTTPError):
+            error.close()
+        raise CliError(attachment_text("对象存储上传未完成；请沿用原提交编号重试"), 3, outcome="unknown") from error
+
+
+def upload_object_attachment(plan, url, timeout, headers, size):
+    """Reserve a room attachment, send its bytes to COS, then verify completion at the room."""
+    path = Path(plan.upload_file)
+    if size > MAX_OBJECT_BYTES:
+        raise CliError(attachment_text("单个附件最多 {limit} MiB", limit=MAX_OBJECT_BYTES // FILE_CHUNK_BYTES))
+    fields = {**plan.params, "size": size, "content_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream"}
+    try:
+        reserved = attachment_request(RequestPlan(f"{plan.path}/object", "POST", fields), url, timeout, headers)
+    except CliError as error:
+        if error.details.get("http_status") == 409 and str(error) in ("对象存储未配置", "Object storage is not configured"):
+            raise CliError(attachment_text("单个附件最多 {limit} MiB", limit=plan.limit_mib)) from error
+        raise
+    attachment = reserved["attachment"]
+    if attachment.get("stored"):
+        return {"attachment": attachment, "duplicate": True}
+    if not re.fullmatch(r"[a-f0-9]{32}", attachment["id"]):
+        raise CliError(attachment_text("对象存储凭证响应无效"), 3, outcome="unknown")
+    identifier = attachment["id"]
+    upload_object_bytes(path, size, reserved["upload"], timeout)
+    return attachment_request(RequestPlan(f"{plan.path}/{identifier}/complete", "POST", {}),
+                              url, timeout, headers)
+
+
+def download_object_attachment(destination, link, timeout):
+    """Stream an explicitly authorized object into a new file, removing partial downloads."""
+    url = object_transfer_url(link["url"])
+    size = link["size"]
+    if type(size) is not int or not 0 <= size <= MAX_OBJECT_BYTES:
+        raise CliError(attachment_text("对象存储凭证响应无效"), 3, outcome="unavailable")
+    path = Path(destination)
+    created, complete = False, False
+    try:
+        with build_opener(NoRedirect()).open(Request(url), timeout=timeout) as response, path.open("xb") as target:
+            created = True
+            remaining = size
+            for chunk in iter(lambda: response.read(FILE_CHUNK_BYTES), b""):
+                remaining -= len(chunk)
+                if remaining < 0:
+                    raise OSError("Object is larger than declared")
+                target.write(chunk)
+            if remaining:
+                raise OSError("Incomplete object")
+        complete = True
+    except (URLError, OSError, HTTPException, ValueError) as error:
+        if isinstance(error, HTTPError):
+            error.close()
+        raise CliError(attachment_text("对象存储下载不完整或无法写入；未保存文件"), 3, outcome="unavailable") from error
+    finally:
+        if created and not complete:
+            path.unlink(missing_ok=True)
+    return {"path": str(path.resolve()), "size": size, "sha256": ""}
 
 
 def http_error(error, plan):
@@ -1418,8 +1611,46 @@ def open_protected(url, method, data, headers, timeout, key):
     return response
 
 
+def prepare_attachment_upload(plan, url, timeout, headers):
+    """Select COS for eligible oversize uploads, otherwise set the binary upload cap."""
+    try:
+        policy = attachment_request(RequestPlan("/api/attachment-limit"), url, timeout, headers)
+    except CliError as error:
+        if error.details.get("http_status") != 404:
+            raise
+        policy = {"limit_mib": 20}  # Sites predating configurable attachment limits.
+    limit = policy.get("limit_mib")
+    if type(limit) is not int or not ATTACHMENT_POLICY["min_mib"] <= limit <= ATTACHMENT_POLICY["max_mib"]:
+        raise CliError(attachment_text("站点附件上限无效"))
+    plan.limit_mib = limit
+    try:
+        size = Path(plan.upload_file).stat().st_size
+    except OSError as error:
+        raise CliError(f"无法读取上传文件: {error}") from error
+    threshold = policy.get("object_storage_threshold_mib")
+    if type(threshold) is not int or not ATTACHMENT_POLICY["min_mib"] <= threshold <= limit:
+        threshold = limit  # Older sites only accept an object above the ordinary attachment cap.
+    if policy.get("object_storage_enabled") is True and size > threshold * FILE_CHUNK_BYTES:
+        return upload_object_attachment(plan, url, timeout, headers, size)
+    if size > limit * FILE_CHUNK_BYTES:
+        raise CliError(attachment_text("单个附件最多 {limit} MiB", limit=limit))
+    return None
+
+
 def send_request(plan, url, timeout, headers=None):
     """Send once it is accepted, retrying only a refused connection, with TLS verification and bounded waiting."""
+    if plan.download_file:
+        attachment = attachment_request(RequestPlan(plan.path.removesuffix("/content")), url, timeout, headers)
+        if attachment.get("storage") == "object":
+            if attachment.get("cleared_at"):
+                raise CliError(attachment_text("已从云空间删除"), 1, http_status=410, outcome="unavailable")
+            link = attachment_request(RequestPlan(plan.path, params={"link": "1"}), url, timeout, headers)
+            return download_object_attachment(plan.download_file, link, timeout)
+        plan.limit_mib = ATTACHMENT_POLICY["max_mib"]
+    if plan.upload_file:
+        object_result = prepare_attachment_upload(plan, url, timeout, headers)
+        if object_result is not None:
+            return object_result
     data = request_data(plan)
     content_type = "application/octet-stream" if plan.upload_file is not None else "application/json"
     fields = {"Content-Type": content_type, "Accept": "*/*" if plan.download_file else "application/json, text/plain",
@@ -1699,7 +1930,7 @@ def cross_room_read(access, site, method, target):
 
 
 def access_headers(args, site, path, method="GET"):
-    """Load a room-scoped secret only for its exact site and room; another room is read without it, declared read-only."""
+    """Keep secrets on their bound site and room, except the steward's authorized site-wide dispatch read."""
     access = load_access(args)
     if not access:
         return {}
@@ -1707,7 +1938,10 @@ def access_headers(args, site, path, method="GET"):
     target = urlsplit(path).path
     creation = target == "/api/rooms" and bool(access.get("submission_id"))
     reading = f"/r/{access.get('room', '')}"
-    if access.get("site", "").rstrip("/") != site or not (creation or target == expected or target.startswith(expected + "/") or target == reading or target.startswith(reading + "/")):
+    steward_dispatches = (access.get("steward") is True and method == "GET" and target == "/api/dispatches"
+                          and getattr(args, "operation", "") == "room dispatches")
+    room_path = target == expected or target.startswith(expected + "/") or target == reading or target.startswith(reading + "/")
+    if access.get("site", "").rstrip("/") != site or not (creation or room_path or steward_dispatches):
         if cross_room_read(access, site, method, target):
             return {READ_ONLY_HEADER: "1"}
         raise CliError("凭据文件不属于本次站点和房间")
@@ -1800,8 +2034,8 @@ def external_send(plan, access, timeout):
     The task's access file names only the invitation record; the member credential and the signing key stay with the
     local service, which signs, encrypts and relays the request to the inviting computer.
     """
-    if plan.upload_file is not None or plan.download_file:
-        raise CliError("外部成员暂不支持附件上传与下载", 2)
+    if plan.upload_file is not None or plan.download_file is not None:
+        raise CliError(attachment_text("外部成员不支持上传或下载附件"), 2)
     path = plan.path + ("?" + urlencode(plan.params) if plan.params else "")
     request = {"access": {"transport": "external", "record": access.get("record"), "room": access.get("room")},
                "method": plan.method, "path": path, "body": plan.body}

@@ -22,9 +22,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
+from unittest.mock import patch
 
-from backend.server import DiscussionServer, attachment_path, page_host, connect_db, create_room, expired_rooms, image_size, init_database, require_room, sweep_attachments
+from backend.object_storage import DEFAULT_RETENTION_DAYS, QUOTA_NAME, SETTINGS_NAME, configured_storage
+from backend.server import ATTACHMENT_POLICY, DiscussionServer, attachment_path, page_host, connect_db, create_room, expired_rooms, image_size, init_database, require_room, sweep_attachments
 from backend.texts import Text, incoming_text, load_texts, save_text
 
 
@@ -713,6 +715,463 @@ class DiscussionTests(unittest.TestCase):
             with patch("backend.server.ZIP_ENTRY_LIMIT", 4):
                 self.assertEqual(self.attachment_request(route + "?" + urlencode({"entry": "目录/说明.txt"}))[0], 400)
 
+    def mock_resource_center(self, callback):
+        """Use a private test configuration and a fake Resource Center HTTP transport."""
+        if self.external:
+            self.skipTest("Requires isolated SQLite and a fake Resource Center")
+        home, ref = self.database.parent, str(uuid.uuid4())
+        keys = home / "api-keys"
+        keys.mkdir()
+        base_url = "https://center.example/api/cos"
+        (keys / f"{ref}.json").write_text(json.dumps({"base_url": base_url, "api_key": "dummy-secret"}), encoding="utf-8")
+        (home / SETTINGS_NAME).write_text(json.dumps({"base_url": base_url, "api_key_ref": ref}), encoding="utf-8")
+
+        def open_request(request, timeout):
+            self.assertEqual((request.get_header("X-api-key"), timeout), ("dummy-secret", 6))
+            path = urlsplit(request.full_url).path.removeprefix("/api/cos")
+            params = parse_qs(urlsplit(request.full_url).query)
+            result = callback(request.get_method(), path, params, request.data)
+            response = io.BytesIO(json.dumps(result).encode())
+            response.status = 200
+            return response
+
+        opener_patcher = patch("backend.object_storage.build_opener")
+        opener = opener_patcher.start()
+        self.addCleanup(opener_patcher.stop)
+        opener.return_value.open.side_effect = open_request
+
+    def test_object_storage_reference_is_bound_to_account_and_address(self):
+        """A hosted instance may inherit the attachment cap but not the owner's key."""
+        if self.external:
+            self.skipTest("Requires private account directories")
+        owner, hosted = self.database.parent / "owner-service", self.database.parent / "hosted-service"
+        for home in (owner, hosted):
+            (home / "api-keys").mkdir(parents=True)
+        ref = str(uuid.uuid4())
+        saved_key = {"base_url": "https://center.example/api/cos", "api_key": "dummy-owner"}
+        config = {"base_url": saved_key["base_url"], "api_key_ref": ref}
+        (owner / "api-keys" / f"{ref}.json").write_text(json.dumps(saved_key), encoding="utf-8")
+        for home in (owner, hosted):
+            (home / SETTINGS_NAME).write_text(json.dumps(config), encoding="utf-8")
+        with patch.dict(os.environ, {"DISCUSS_SERVICE_HOME": str(owner)}):
+            self.assertEqual(configured_storage(self.database).api_key, saved_key["api_key"])
+        shared_limit = str(owner / "local" / "attachment-limit.json")
+        with patch.dict(os.environ, {"DISCUSS_SERVICE_HOME": str(hosted), "DISCUSS_ATTACHMENT_POLICY_FILE": shared_limit}):
+            self.assertIsNone(configured_storage(self.database))
+            (hosted / "api-keys" / f"{ref}.json").write_text(
+                json.dumps({**saved_key, "base_url": "https://wrong.example"}), encoding="utf-8")
+            self.assertIsNone(configured_storage(self.database))
+
+    def test_object_storage_local_api_binds_a_key_without_echoing_it(self):
+        """The local web settings use the same authenticated key save step and this instance's service home."""
+        if self.external:
+            self.skipTest("Requires a local launch endpoint")
+        self.server.local_launch = True
+        home = self.database.parent / "local-api"
+        quota_file = self.database.parent / "object-storage-quota-demo.json"
+        quota_file.write_text("128", encoding="utf-8")
+        base_url, key = "https://center.example/api/cos", "local-api-fixture-secret"
+        headers = {"Content-Type": "application/json", "X-CoDiscuss-Local": "1"}
+
+        def local(path, payload=None):
+            data = json.dumps(payload).encode() if payload is not None else None
+            status, _, body = self.attachment_request("/api/local/" + path, data, headers)
+            self.assertEqual(status, 200, body)
+            self.assertNotIn(key.encode(), body)
+            return json.loads(body)
+
+        with patch.dict(os.environ, {"DISCUSS_SERVICE_HOME": str(home), "DISCUSS_OBJECT_STORAGE_QUOTA_FILE": str(quota_file)}):
+            self.assertFalse(local("object-storage-settings")["configured"])
+            ref = local("api-key", {"base_url": base_url, "api_key": key})["api_key_ref"]
+            config = {"base_url": base_url, "api_key_ref": ref}
+            bound = {**config, "configured": True, "managed": False, "retention_days": 0, "quota_mib": 128, "object_threshold_mib": 20}
+            self.assertEqual(local("object-storage-settings", config), bound)
+            bound.update(retention_days=12, object_threshold_mib=19)
+            self.assertEqual(local("object-storage-settings", {"retention_days": 12, "object_threshold_mib": 19}), bound)
+            for payload in ({"quota_mib": 129}, {"action": "clear", "quota_mib": 129}):
+                status, _, _ = self.attachment_request("/api/local/object-storage-settings", json.dumps(payload).encode(), headers)
+                self.assertEqual(status, 400)
+            self.assertEqual(local("object-storage-settings"), bound)
+            self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_retention_days"], 12)
+            self.assertTrue(self.request("/api/attachment-limit")[1]["object_storage_enabled"])
+            cleared = local("object-storage-settings", {"action": "clear"})
+            self.assertFalse(cleared["configured"])
+            self.assertEqual(cleared["quota_mib"], 128)
+            self.assertEqual(quota_file.read_text(encoding="utf-8"), "128")
+            self.assertFalse(self.request("/api/attachment-limit")[1]["object_storage_enabled"])
+            self.assertTrue((home / "api-keys" / (ref + ".json")).exists())
+
+    def test_object_attachment_verifies_before_publish_and_signs_download(self):
+        """Room authorization, idempotence, MIME and size are enforced before a public record is written."""
+        size = 91 * 1024 * 1024
+        name, link = "报告.pdf", "https://cos.example/item?sign=dummy"
+        objects, issued, calls = {}, [], []
+        def resource(method, path, params, data):
+            calls.append(path)
+            if method == "POST" and path == "/upload-credential":
+                requested = json.loads(data)
+                self.assertEqual((requested["contentType"], requested["maxSizeBytes"]), ("application/pdf", size))
+                issued.append(requested["fileName"])
+                return {"succeed": True, "data": {"url": "https://cos.example", "key": "prefix/" + issued[-1],
+                        "policy": "dummy", "qAk": "dummy-id", "qKeyTime": "1;2", "qSignature": "dummy", "qSignAlgorithm": "sha1"}}
+            if method == "GET" and path == "/file-info":
+                object_name = params["fileName"][0]
+                return {"succeed": True, "data": {"size": objects[object_name]}} if object_name in objects else {"succeed": False, "code": 404}
+            self.assertEqual((method, path, params["expiresIn"]), ("GET", "/presigned-download-url", ["600"]))
+            if params["fileName"][0] not in objects:
+                return {"succeed": False, "code": 404}
+            return {"succeed": True, "data": {"url": link, "expiresAt": "2030-01-01T00:00:00Z"}}
+
+        self.mock_resource_center(resource)
+        base = f"/api/rooms/{self.room['id']}/attachments"
+        payload = {"file_name": name, "size": size, "content_type": "application/pdf", "submission_id": "object-upload"}
+        self.assertEqual(self.request(base + "/object", payload, token="")[0], 403)
+        self.assertEqual(self.request(base + "/object", {**payload, "size": 1})[0], 400)
+        self.assertEqual(self.request(base + "/object", {**payload, "size": 2 * 1024**3 + 1})[0], 400)
+        status, draft = self.request(base + "/object", payload)
+        self.assertEqual(status, 200, draft)
+        file = draft["attachment"]
+        self.assertEqual((file["storage"], file["stored"], file["sha256"]), ("object", False, ""))
+        self.assertNotIn("object_name", file)
+        self.assertEqual(draft["upload"]["fields"]["Content-Type"], "application/pdf")
+        self.assertTrue(issued[-1].startswith(f"codiscuss/{self.room['id']}/{file['id']}/"))
+        self.assertEqual(self.request(base + "/object", payload)[1]["attachment"]["id"], file["id"])
+        self.assertEqual(self.request(base + "/object", {**payload, "size": size + 1})[0], 409)
+        complete = f"{base}/{file['id']}/complete"
+        self.assertEqual(self.request(complete, {}, token=self.member_tokens["Claude"])[0], 403)
+        message = {"author": "用户", "text": "", "attachment_ids": [file["id"]], "submission_id": "object-publish"}
+        self.assertEqual(self.request(base.removesuffix("/attachments") + "/messages", message)[0], 400)
+        self.assertEqual(self.request(complete, {})[0], 409)
+        objects[issued[-1]] = size - 1
+        self.assertEqual(self.request(complete, {})[0], 409)
+        objects[issued[-1]] = size
+        self.assertTrue(self.request(complete, {})[1]["attachment"]["stored"])
+        self.assertTrue(self.request(complete, {})[1]["attachment"]["stored"])
+        self.assertIsNone(self.request(base + "/object", payload)[1]["upload"])
+        self.assertEqual(self.request(base.removesuffix("/attachments") + "/messages", message)[0], 201)
+
+        class NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        calls.clear()
+        with self.assertRaises(HTTPError) as redirected:
+            build_opener(NoRedirect()).open(self.base + file["url"], timeout=5)
+        with redirected.exception as response:
+            self.assertEqual((response.code, response.headers["Location"]), (302, link))
+        status, result = self.request(file["url"] + "?link=1")
+        self.assertEqual((status, result), (200, {"url": link, "expires_at": "2030-01-01T00:00:00Z", "size": size, "file_name": name}))
+        self.assertEqual(calls, ["/presigned-download-url", "/presigned-download-url"])
+        objects.clear()
+        self.assertEqual(self.request(file["url"] + "?link=1")[0], 410)
+        self.database.with_name(SETTINGS_NAME).unlink()
+        self.assertEqual(self.request(file["url"] + "?link=1")[0], 503)
+        self.assertEqual(self.request(base + "/object", payload)[0], 409)
+
+    def test_object_attachment_retention_settings_are_exposed_by_both_routes(self):
+        """The room directory and attachment policy use the same account settings and fallback."""
+        if self.external:
+            self.skipTest("Requires a private object-storage settings file")
+        settings_path = self.database.with_name(SETTINGS_NAME)
+        field = "object_storage_retention_days"
+        self.assertEqual(self.request("/api/attachment-limit")[1][field], DEFAULT_RETENTION_DAYS)
+        for contents in ("{", "{}", *[json.dumps({"retention_days": invalid}) for invalid in (True, -1, 31, "2")]):
+            with self.subTest(contents=contents):
+                settings_path.write_text(contents, encoding="utf-8")
+                self.assertEqual(self.request("/api/rooms")[1][field], DEFAULT_RETENTION_DAYS)
+        settings_path.write_text('{"retention_days": 2}', encoding="utf-8")
+        for route in ("/api/rooms", "/api/attachment-limit"):
+            self.assertEqual(self.request(route)[1][field], 2)
+
+    def test_object_attachment_retention_retries_only_unconfirmed_deletions(self):
+        """Expire stored files on the account's schedule while preserving message attachment records."""
+        attempts = []
+
+        def resource(method, path, params, data):
+            self.assertEqual((method, path), ("DELETE", "/file"))
+            name = params["fileName"][0]
+            attempts.append(name)
+            if name == "missing":
+                return {"succeed": False, "code": 404}
+            if name == "retry" and attempts.count(name) == 1:
+                return {"succeed": False, "code": 503}
+            return {"succeed": True}
+
+        self.mock_resource_center(resource)
+        settings_path = self.database.with_name(SETTINGS_NAME)
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        settings_path.write_text(json.dumps({**settings, "retention_days": 2}), encoding="utf-8")
+
+        room_id = self.room["id"]
+        base = f"/api/rooms/{room_id}"
+        message_id = self.post("中转附件", "object-retention-message")[1]["message"]["id"]
+        fresh = datetime.now(timezone.utc).replace(microsecond=0)
+        recent = fresh - timedelta(hours=36)
+        old = fresh - timedelta(days=3)
+        files = {"stored": old, "missing": old, "retry": old, "recent": recent, "pending": None}
+        with closing(connect_db(self.database)) as connection, connection:
+            for name, stored_at in files.items():
+                published = message_id if stored_at else None
+                created_at = (stored_at or fresh).isoformat()
+                connection.execute("""INSERT INTO attachments
+                    (id, room_id, message_id, file_name, content_type, size, sha256, actor, submission_id, created_at,
+                     storage, object_name, stored_at)
+                    VALUES (?,?,?,?,'application/zip',100,'','用户',?,?,'object',?,?)""",
+                    (name, room_id, published, name + ".zip", name, created_at, name, stored_at and stored_at.isoformat()))
+
+        def attachment(name):
+            return self.request(f"{base}/attachments/{name}")[1]
+
+        expires_at = (old + timedelta(days=2)).isoformat()
+        self.assertEqual(attachment("stored")["expires_at"], expires_at)
+        listed = self.request(f"{base}/messages/{message_id}")[1]["attachments"]
+        self.assertEqual({file["expires_at"] for file in listed}, {expires_at, (recent + timedelta(days=2)).isoformat()})
+        self.assertIsNone(attachment("pending")["expires_at"])
+        settings_path.write_text(json.dumps({**settings, "retention_days": 0}), encoding="utf-8")
+        self.assertIsNone(attachment("stored")["expires_at"])
+        self.assertEqual(sweep_attachments(self.database), set())
+        self.assertEqual(attempts, [])
+        settings_path.write_text(json.dumps({**settings, "retention_days": 2}), encoding="utf-8")
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(sweep_attachments(self.database), {room_id})
+        self.assertCountEqual(attempts, ["stored", "missing", "retry"])
+        self.assertTrue(attachment("stored")["cleared_at"])
+        self.assertTrue(attachment("missing")["cleared_at"])
+        self.assertEqual(attachment("stored")["expires_at"], expires_at)
+        self.assertIsNone(attachment("retry")["cleared_at"])
+        self.assertIsNone(attachment("recent")["cleared_at"])
+        self.assertFalse(attachment("pending")["stored"])
+        self.assertEqual(self.request(f"{base}/attachments/stored/content?link=1")[0], 410)
+
+        self.assertEqual(sweep_attachments(self.database), {room_id})
+        self.assertEqual(attempts[3:], ["retry"])
+        self.assertTrue(attachment("retry")["cleared_at"])
+        self.assertEqual(sweep_attachments(self.database), set())
+        self.assertEqual(attempts[3:], ["retry"])
+
+    def test_object_attachment_sweep_retries_stale_uploads_and_releases_confirmed_space(self):
+        """Published and queued objects stay, and only confirmed deletions free space."""
+        attempts = []
+
+        def resource(method, path, params, data):
+            self.assertEqual((method, path), ("DELETE", "/file"))
+            name = params["fileName"][0]
+            attempts.append(name)
+            if name == "pending":
+                return {"succeed": False, "code": 404}
+            if name == "retry" and attempts.count(name) == 1:
+                return {"succeed": False, "code": 503}
+            return {"succeed": True}
+
+        self.mock_resource_center(resource)
+        room_id = self.room["id"]
+        message_id = self.post("已发送", "object-sweep-message")[1]["message"]["id"]
+        now = datetime.now(timezone.utc)
+        old = (now - timedelta(hours=25)).isoformat()
+        ids = ("completed", "pending", "retry", "queued", "sent", "fresh")
+        with closing(connect_db(self.database)) as connection, connection:
+            for identifier in ids:
+                created_at = now.isoformat() if identifier == "fresh" else old
+                stored_at = None if identifier == "pending" else created_at
+                connection.execute("""INSERT INTO attachments
+                    (id,room_id,message_id,file_name,content_type,size,sha256,actor,submission_id,created_at,
+                     storage,object_name,stored_at)
+                    VALUES (?,?,?,?,'application/zip',100,'','用户',?,?,'object',?,?)""",
+                    (identifier, room_id, message_id if identifier == "sent" else None,
+                     identifier + ".zip", identifier, created_at, identifier, stored_at))
+            connection.execute("""INSERT INTO queued_messages(room_id,position,submission_id,payload,created_at)
+                VALUES (?,1,'object-sweep-queued',?,1)""", (room_id, json.dumps({"attachment_ids": ["queued"]})))
+
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(sweep_attachments(self.database), set())
+        self.assertCountEqual(attempts, ["completed", "pending", "retry"])
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 400)
+        base = f"/api/rooms/{room_id}/attachments"
+        for identifier in ("completed", "pending"):
+            self.assertEqual(self.request(f"{base}/{identifier}")[0], 404)
+        for identifier in ("retry", "sent", "queued", "fresh"):
+            self.assertEqual(self.request(f"{base}/{identifier}")[0], 200)
+
+        sweep_attachments(self.database)
+        self.assertEqual(attempts[3:], ["retry"])
+        self.assertEqual(self.request(f"{base}/retry")[0], 404)
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 300)
+
+    def test_cloud_attachment_reserves_account_quota_and_uses_cloud_threshold(self):
+        """Concurrent reservations from different rooms share one cap, and an idempotent retry does not add usage."""
+        def resource(method, path, params, data):
+            self.assertEqual((method, path), ("POST", "/upload-credential"))
+            return {"succeed": True, "data": {"url": "https://cos.example", "key": json.loads(data)["fileName"],
+                    "policy": "dummy", "qAk": "dummy-id", "qKeyTime": "1;2", "qSignature": "dummy", "qSignAlgorithm": "sha1"}}
+        self.mock_resource_center(resource)
+        settings_path = self.database.with_name(SETTINGS_NAME)
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        settings_path.write_text(json.dumps({**settings, "quota_mib": 999, "object_threshold_mib": 8}), encoding="utf-8")
+        admin_dir = self.database.parent / "admin"
+        admin_dir.mkdir()
+        quota_file = admin_dir / "object-storage-quota-test-account.json"
+        quota_file.write_text("30", encoding="utf-8")
+        inherited = patch.dict(os.environ, {"DISCUSS_OBJECT_STORAGE_QUOTA_FILE": str(quota_file)})
+        inherited.start()
+        self.addCleanup(inherited.stop)
+        other = self.request("/api/rooms", {"title": "另一个房间", "goal": "共用账号空间"})[1]["id"]
+        paths = [f"/api/rooms/{room_id}/attachments/object" for room_id in (self.room["id"], other)]
+        size = 20 * 1024 * 1024
+        metadata = {"file_name": "large.zip", "size": size, "content_type": "application/zip", "submission_id": "quota-test"}
+        self.assertEqual(self.request(paths[0], {**metadata, "size": 8 * 1024 * 1024})[0], 400)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda path: self.request(path, metadata), paths))
+        self.assertCountEqual([status for status, _ in results], [200, 409])
+        rejected = next(body for status, body in results if status == 409)
+        self.assertEqual(rejected["error_text"]["params"], {"used": "20.00", "quota": 30})
+        accepted_index = next(index for index, (status, _) in enumerate(results) if status == 200)
+        original = results[accepted_index][1]["attachment"]
+        self.assertFalse(original["stored"])
+        self.assertEqual(self.request(paths[accepted_index], metadata)[1]["attachment"]["id"], original["id"])
+        for path in ("/api/rooms", "/api/attachment-limit"):
+            view = self.request(path)[1]
+            self.assertEqual((view["object_storage_threshold_mib"], view["object_storage_used_bytes"],
+                              view["object_storage_quota_mib"]), (8, size, 30))
+
+    def test_cloud_attachment_quota_defaults_when_admin_policy_cannot_be_read(self):
+        """An inherited policy never falls through to files controlled by the hosted account."""
+        if self.external:
+            self.skipTest("quota policy is held on the room server")
+        route = "/api/attachment-limit"
+        account_quota = self.database.with_name(QUOTA_NAME)
+        account_quota.write_text("45", encoding="utf-8")
+        with patch.dict(os.environ, {"DISCUSS_OBJECT_STORAGE_QUOTA_FILE": ""}):
+            self.assertEqual(self.request(route)[1]["object_storage_quota_mib"], 45)
+            account_quota.unlink()
+            self.assertEqual(self.request(route)[1]["object_storage_quota_mib"], 10240)
+
+        account_quota.write_text("45", encoding="utf-8")
+        inherited = self.database.with_name("admin-quota-missing.json")
+        with patch.dict(os.environ, {"DISCUSS_OBJECT_STORAGE_QUOTA_FILE": str(inherited)}):
+            self.assertEqual(self.request(route)[1]["object_storage_quota_mib"], 10240)
+            for value in ("not json", "true", "0", "1048577"):
+                with self.subTest(value=value):
+                    inherited.write_text(value, encoding="utf-8")
+                    self.assertEqual(self.request(route)[1]["object_storage_quota_mib"], 10240)
+
+    def test_cloud_attachment_management_requires_account_authority_and_confirms_remote_delete(self):
+        """Site management may delete across rooms, while failure preserves the record and quota."""
+        attempts = []
+        def resource(method, path, params, data):
+            self.assertEqual((method, path), ("DELETE", "/file"))
+            attempts.append(params["fileName"][0])
+            return {"succeed": len(attempts) > 1, "code": 503}
+        self.mock_resource_center(resource)
+        room_id = self.request("/api/rooms", {"title": "云空间另一房间", "goal": "保留文件"})[1]["id"]
+        identifier = uuid.uuid4().hex
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.execute("""INSERT INTO attachments
+                (id,room_id,file_name,content_type,size,sha256,actor,submission_id,created_at,storage,object_name)
+                VALUES (?,?,'large.zip','application/zip',100,'','用户','manage-cloud',CURRENT_TIMESTAMP,'object','managed-object')""",
+                (identifier, room_id))
+        route = "/api/rooms/cloud-attachments"
+        for token in (self.owner, self.member_tokens["Claude"]):
+            self.assertEqual(self.request(route, token=token)[0], 403)
+            self.assertEqual(self.request(route + "/delete", {"id": identifier}, token=token)[0], 403)
+        def manage(path="", data=None, headers=None):
+            headers = {"Content-Type": "application/json", **(headers or {})}
+            request = Request(self.base + route + path, json.dumps(data).encode() if data is not None else None, headers)
+            try:
+                response = urlopen(request, timeout=5)
+            except HTTPError as error:
+                response = error
+            with response:
+                return response.status, json.load(response)
+
+        self.assertEqual(manage()[0], 403)
+        self.assertEqual(manage("/delete", {"id": identifier})[0], 403)
+        registration = Request(self.base + "/api/admin/register", json.dumps({
+            "username": "TestAdmin", "password": "test-admin-password", "setup_key": self.server.admin_setup_key,
+        }).encode(), {"Content-Type": "application/json"})
+        with urlopen(registration, timeout=5) as response:
+            admin = {"Cookie": response.headers["Set-Cookie"].split(";", 1)[0]}
+        self.assertEqual(manage(headers={**admin, "X-Discussion-Token": self.owner})[0], 403)
+
+        status, listing = manage(headers=admin)
+        self.assertEqual(status, 200, listing)
+        self.assertEqual((listing["attachments"][0]["id"], listing["attachments"][0]["room_title"],
+                          listing["used_bytes"], listing["quota_mib"]), (identifier, "云空间另一房间", 100, 10240))
+        self.assertNotIn("object_name", listing["attachments"][0])
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(manage("/delete", {"id": identifier}, admin)[0], 503)
+        self.assertEqual(manage(headers=admin)[1]["used_bytes"], 100)
+        self.assertEqual(manage("/delete", {"id": identifier}, admin), (200, {
+            "cleared": [identifier], "freed_bytes": 100, "used_bytes": 0, "quota_mib": 10240,
+        }))
+        self.assertEqual(manage("/delete", {"id": identifier}, admin)[1]["cleared"], [])
+        self.assertEqual(attempts, ["managed-object", "managed-object"])
+        self.assertEqual(manage(headers=admin)[1]["attachments"], [])
+        self.server.local_site = True
+        self.assertEqual(manage()[0], 200)
+        self.assertEqual(manage(headers={"Origin": "https://untrusted.example"})[0], 403)
+
+    def test_object_attachment_cleanup_and_backup_do_not_reuse_remote_paths(self):
+        """Only live local records can delete their objects; imported paths cannot sign or delete them."""
+        deleted = []
+        size = 91 * 1024 * 1024
+        def resource(method, path, params, data):
+            if path == "/upload-credential":
+                return {"succeed": True, "data": {"url": "https://cos.example", "key": json.loads(data)["fileName"],
+                        "policy": "dummy", "qAk": "dummy-id", "qKeyTime": "1;2", "qSignature": "dummy", "qSignAlgorithm": "sha1"}}
+            if path == "/file-info":
+                return {"succeed": True, "data": {"size": size}}
+            self.assertEqual((method, path), ("DELETE", "/file"))
+            remote = params["fileName"][0]
+            deleted.append(remote)
+            return {"succeed": not remote.endswith("/clear.pdf") or deleted.count(remote) > 1, "code": 503}
+
+        self.mock_resource_center(resource)
+        base = f"/api/rooms/{self.room['id']}"
+        attachments = base + "/attachments"
+
+        def reserve(label):
+            status, draft = self.request(attachments + "/object", {"file_name": label + ".pdf", "size": size,
+                "content_type": "application/pdf", "submission_id": "object-" + label})
+            self.assertEqual(status, 200, draft)
+            return draft["attachment"], draft["upload"]["fields"]["key"]
+
+        stale, swept_object = reserve("stale")
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.execute("UPDATE attachments SET created_at='2000-01-01T00:00:00+00:00' WHERE id=?", (stale["id"],))
+        sweep_attachments(self.database)
+        self.assertEqual(deleted, [swept_object])
+        file, original_object = reserve("clear")
+        pending, pending_object = reserve("pending")
+        self.assertEqual(self.request(attachments + f"/{file['id']}/complete", {})[0], 200)
+        self.assertEqual(self.request(base + "/messages", {"author": "用户", "text": "报告", "attachment_ids": [file["id"]],
+                                                           "submission_id": "object-backup"})[0], 201)
+        backup = self.request(base + "/backup")[1]
+        row = backup["tables"]["attachments"][0]
+        self.assertEqual(row["storage"], "object")
+        self.assertNotIn("object_name", row)
+        row["object_name"] = original_object  # A supplied backup is untrusted.
+        backup["tables"]["rooms"][0]["id"] = "imported-object-room"
+        status, imported = self.request("/api/rooms/import", backup)
+        self.assertEqual(status, 201, imported)
+        imported_base = "/api/rooms/imported-object-room"
+        imported_id = imported["attachments"][file["id"]]
+        imported_file = self.request(imported_base + f"/attachments/{imported_id}")[1]
+        self.assertEqual((imported_file["storage"], imported_file["stored"]), ("object", False))
+        self.assertEqual(self.request(imported_file["url"] + "?link=1")[0], 410)
+        self.assertEqual(self.request(imported_base + "/delete", {"actor": "用户"})[0], 200)
+        self.assertEqual(deleted, [swept_object])
+
+        with self.assertLogs(level="WARNING") as logged:
+            self.assertEqual(self.request(attachments + "/clear", {"ids": [file["id"]]})[0], 200)
+        self.assertIn("Object attachment cleanup failed", "\n".join(logged.output))
+        with closing(connect_db(self.database)) as connection:
+            self.assertIsNotNone(connection.execute("SELECT 1 FROM room_events WHERE room_id=? AND kind='attachment.object_delete_failed'",
+                                                    (self.room["id"],)).fetchone())
+        self.assertEqual(self.request(file["url"] + "?link=1")[0], 410)
+        self.assertEqual(self.request(base + "/delete", {"actor": "用户"})[0], 200)
+        self.assertCountEqual(deleted, [swept_object, original_object, original_object, pending_object])
+
     def test_attachments_round_trip_link_replay_and_room_delete(self):
         """Published files retain exact bytes, provenance, readable links, and backup metadata."""
         base = f"/api/rooms/{self.room['id']}"
@@ -750,6 +1209,8 @@ class DiscussionTests(unittest.TestCase):
             # Upgrade a database with already-published files and no room/message index.
             with closing(connect_db(self.database)) as connection, connection:
                 connection.execute("DROP INDEX attachments_room_message")
+                for column in ("storage", "object_name", "stored_at"):
+                    connection.execute(f"ALTER TABLE attachments DROP COLUMN {column}")
             init_database(self.database, seed=False)
             with closing(connect_db(self.database)) as connection:
                 columns = connection.execute("PRAGMA index_info(attachments_room_message)").fetchall()
@@ -1044,6 +1505,37 @@ class DiscussionTests(unittest.TestCase):
         with closing(connect_db(self.database)) as connection:
             self.assertEqual({row[0] for row in connection.execute("SELECT id FROM attachments")}, {queued, sent, fresh})
 
+    def test_attachment_limit_keeps_room_directory_available_on_bad_settings(self):
+        """A broken or unreadable policy falls back to the default without breaking room discovery."""
+        if self.external:
+            self.skipTest("Requires a private attachment policy")
+        policy_path = self.database.with_name("attachment-limit.json")
+        default = ATTACHMENT_POLICY["default_mib"]
+
+        def assert_default():
+            with self.assertLogs(level="WARNING"):
+                status, directory = self.request("/api/rooms")
+            self.assertEqual(status, 200, directory)
+            self.assertEqual(directory["attachment_limit_mib"], default)
+
+        for contents in ("{", json.dumps(str(default)), str(ATTACHMENT_POLICY["max_mib"] + 1)):
+            with self.subTest(contents=contents):
+                policy_path.write_text(contents, encoding="utf-8")
+                assert_default()
+
+        minimum = ATTACHMENT_POLICY["min_mib"]
+        policy_path.write_text(str(minimum), encoding="utf-8")
+        read_text = Path.read_text
+
+        def deny_policy(path, *args, **kwargs):
+            if path == policy_path:
+                raise PermissionError("attachment policy access denied")
+            return read_text(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", deny_policy):
+            assert_default()
+        self.assertEqual(self.request("/api/rooms")[1]["attachment_limit_mib"], minimum)
+
     def test_attachments_reject_cross_room_owner_path_and_size(self):
         """Untrusted MIME and filenames cannot create executable or cross-room file access."""
         base = f"/api/rooms/{self.room['id']}"
@@ -1080,7 +1572,12 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(base + "/messages", {"author": "用户", "text": "", "attachment_ids": [foreign["id"]], "submission_id": "wrong-owner"})[0], 409)
         for name in ("../escape", "folder\\file", "bad\nname", "x" * 256):
             self.assertEqual(self.attachment_request(base + "/attachments?" + urlencode({**params, "file_name": name}), b"x")[0], 400)
-        self.assertEqual(self.attachment_request(base + "/attachments?" + urlencode(params), b"x", {"Content-Length": str(20 * 1024 * 1024 + 1)})[0], 413)
+        if not self.external:
+            self.database.with_name("attachment-limit.json").write_text("3", encoding="utf-8")
+        limit = self.request("/api/attachment-limit")[1]["limit_mib"]
+        if not self.external:
+            self.assertEqual(limit, 3)
+        self.assertEqual(self.attachment_request(base + "/attachments?" + urlencode(params), b"x", {"Content-Length": str(limit * 1024 * 1024 + 1)})[0], 413)
         invalid = {"author": "用户", "text": "资料", "submission_id": "invalid-files"}
         for identifiers in ([file["id"]] * 2, ["invalid"], [f"{index:032x}" for index in range(11)], "not-an-array"):
             self.assertEqual(self.request(base + "/messages", {**invalid, "attachment_ids": identifiers})[0], 400)
@@ -1149,7 +1646,9 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(card_path, change)[0], 409)
         self.assertEqual(self.request(card_path)[1]["card"], {})
         self.request(base + "/share-link", {"link": {**link, "expires_at": "2000-01-01T00:00:00.000Z"}})
-        self.assertIsNone(self.request(base + "/share-link")[1]["link"], "an expired link is not offered")
+        # The share site keeps an expired link renewable until the operator purges it, so the owner still gets it.
+        self.assertEqual(self.request(base + "/share-link")[1]["link"]["share_id"], "A" * 22)
+        self.assertEqual(self.request(card_path)[0], 404, "but its share card is not offered")
         self.assertEqual(self.request(base + "/share-link", {"link": None})[1], {"link": None})
 
     def test_share_card_upload_counts_belong_to_the_current_revision(self):

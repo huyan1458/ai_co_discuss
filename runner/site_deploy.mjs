@@ -12,6 +12,7 @@ import { configuration_snapshot, read_registry, service_home } from './discussio
 import { site_fetch } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
 import { t } from './i18n.mjs';
+import { guest_state_of } from './host_permissions.mjs';
 
 export const SITES_DOMAIN = 'bimcanvas.com';
 
@@ -638,6 +639,29 @@ async function diagnose_site(home, conn, site_id, { origin, token, fetcher }) {
     last_confirmed_stage: confirmed_stage(remote, registration_matches_active, probes) };
 }
 
+/**
+ * A member may not put a site online while an external user is in, or waiting to enter, its room (#14633 item 6,
+ * PLAN.md §二): an external user's words could ask for it, and nobody may count them as the requester. Staging stays
+ * open, so the owner decides on the card. The owner's own publish (its room token, no member) is not affected. A state
+ * that cannot be read refuses too; a site without guest support (404) has no external users.
+ */
+async function refuse_publish_with_guest(conn, input, fetcher) {
+  const by_member = Boolean(input.member) || Boolean(input.token && input.token !== conn.config?.token);
+  if (!by_member || !conn.room_id || !conn.site) return;
+  let state;
+  try {
+    const parsed = await room_api_request(conn.site, `/api/rooms/${encodeURIComponent(conn.room_id)}/guest`, { token: conn.write_token, fetcher });
+    state = guest_state_of(parsed);
+  } catch (error) {
+    if (error.http_status === 404) return;
+    throw new SiteCommandError(t('读取不到本房间的外部用户状态，暂不能发布网站；可先用 site stage 登记为待部署'), { code: 'guest_present', http_status: 403 });
+  }
+  // An answer that is no State comes from a site without external users, as a 404 would.
+  if (['waiting', 'active'].includes(state?.phase)) {
+    throw new SiteCommandError(t('外部用户在场期间成员不能发布网站；请用 site stage 登记为待部署，由用户决定是否上线'), { code: 'guest_present', http_status: 403 });
+  }
+}
+
 /** Execute a local site command. */
 export async function site_command(home, command, input = {}, { fetcher = fetch, sites_origin: origin_override = '' } = {}) {
   const origin = sites_origin(origin_override || input.sites_origin || '');
@@ -650,6 +674,7 @@ export async function site_command(home, command, input = {}, { fetcher = fetch,
   }
 
   if (command === 'site-publish') {
+    await refuse_publish_with_guest(conn, input, fetcher);
     let target;
     let effective_exclude = Array.isArray(input.exclude) ? input.exclude : [];
     let effective_title = input.title || '';

@@ -170,13 +170,13 @@ def series_step(start, end):
     return 3600 if length <= 8 * 86400 else 6 * 3600 if length <= 32 * 86400 else 86400
 
 
-def concurrency_series(spans, start, end):
+def concurrency_series(spans, start, end, step=None):
     """Most experts running at once in each time step of [start, end), for the page's and share card's timeline.
 
     Each expert's overlapping runs are merged first, exactly like the peak figure, so the series' maximum equals
-    `peak.members`.
+    `peak.members`. `step` overrides the period's bucket length (the live view counts per minute).
     """
-    step = series_step(start, end)
+    step = step or series_step(start, end)
     buckets = [0] * -(-max(1, end - start) // step)
     events = defaultdict(int)
     for intervals in spans.values():
@@ -200,9 +200,9 @@ def concurrency_series(spans, start, end):
     return {"step": step, "points": buckets}
 
 
-def unfinished_series(rows, start, end):
+def unfinished_series(rows, start, end, step=None):
     """Runs that did not finish, per time step of [start, end) by when they started: the red marks on the timeline."""
-    step = series_step(start, end)
+    step = step or series_step(start, end)
     buckets = [0] * -(-max(1, end - start) // step)
     for row in rows:
         if not_finished(row) and start <= row["created_at"] < end:

@@ -20,9 +20,13 @@ const ACCESS_CLIENTS = ["codex_cli", "claude", "antigravity_cli", "api"];
  * @param {object} member A room member.
  * @param {object|null} saved This computer's saved choices for the room (`view.launch.room_models`), or null.
  * @param {object} view The current snapshot.
+ * @param {object|null} [held] The conservative protection on this member while an external user is in
+ *   (external-guests.js member_protection): it overrides the saved choice, so no switch is offered.
  * @returns {{ value?: string, text?: string, hint?: string, editable?: boolean }}
  */
-export function project_files(member, saved, view) {
+export function project_files(member, saved, view, held = null) {
+  if (held?.paused) return { text: t("暂停接单"), hint: t("外部用户在场，保守保护下暂停接单：{reason}", { reason: held.reason }) };
+  if (held) return { text: t("临时只读"), hint: t("外部用户在场，保守保护下临时只读；对方离开后恢复原设置") };
   if (member.access === "manual") return { text: t("自行决定"), hint: t("手动成员的权限由它自己的会话决定") };
   const profile = saved?.participants?.[member.name];
   if (!profile) return { text: "—" };

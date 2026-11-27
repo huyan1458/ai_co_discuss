@@ -20,7 +20,7 @@ import { local_settings } from './discussion_setup.mjs';
 import { machine_links, relay_cipher, save_machine_links, relayed_command, ROOM_ACTIONS, run_launch_command, synced_relay_region, sync_remote_launches, unseal } from './remote_launch.mjs';
 import { claim_relayed_command, guard_remote_directories } from './remote_policy.mjs';
 import { audit, DEVICE_ACTIONS, device_command, open_signed_request } from './device_auth.mjs';
-import { answer_external, INVITE_COMMANDS, is_external_request } from './external_gateway.mjs';
+import { answer_external, INVITE_COMMANDS, is_external_request, refresh_guest_entries } from './external_gateway.mjs';
 import { site_fetch } from './entry_client.mjs';
 import { entry_settings } from '../gateway/gateway.mjs';
 
@@ -30,8 +30,12 @@ const RETRY_MIN_MS = 2000;
 const RETRY_MAX_MS = 30_000;
 const CONNECT_TIMEOUT_MS = 10_000;
 const WATCHDOG_MS = 180_000;
-// A ping still unanswered at the next one means the connection is stalled, so it is replaced within two of these.
+// Five unanswered probes over 75 seconds tolerate transient latency without leaving a half-open uplink forever.
+// Business frames prove only the downlink; only pong proves a round trip.
 const PING_MS = 15000;
+const SILENCE_MS = 75000;
+const MISSED_PINGS = 5;
+const TIMER_DELAY_MS = PING_MS * 2;
 // The site gives up on a request after 9 seconds, so the local website must answer before then.
 const LOCAL_TIMEOUT_MS = 8000;
 const EVENT_RETRY_MS = 3000;
@@ -52,7 +56,7 @@ const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions|sites|analytics)(\/[A-Za
 const RELAY_READ_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Attachment uploads arrive in parts and are sent to the local website whole, as one browser upload would be.
 const UPLOAD_PATH = /^\/api\/rooms\/[A-Za-z0-9_-]+\/attachments(\/[A-Za-z0-9_-]+\/(import|thumbnail))?(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
-const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+import { attachment_limit, policy } from './attachment_policy.mjs';
 const UPLOAD_TTL_MS = 10 * 60 * 1000;
 const uploads = new Map();
 // Answers of uploads already handed to the local website, by upload id, kept as long as unfinished uploads are.
@@ -60,7 +64,7 @@ const finished_uploads = new Map();
 // The hosted accounts' entry over the relay (backend/entry_worker.mjs): answer parts per frame (sent as base64 within the
 // 1 MiB frame), the largest request taken, and when to pause reading an answer the connection has not sent on yet.
 const ENTRY_PART_BYTES = 512 * 1024;
-const ENTRY_BODY_MAX_BYTES = 45 * 1024 * 1024;
+
 const ENTRY_BUFFER_HIGH = 4 * 1024 * 1024;
 const ENTRY_BUFFER_CHECK_MS = 50;
 const ENTRY_HOP_HEADERS = new Set(['connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'proxy-connection', 'te', 'trailer', 'content-length',
@@ -149,7 +153,12 @@ export async function room_api(home, site, payload, { fetcher = site_fetch, devi
   const tag = response.headers.get('ETag');
   if (response.status === 304) return { status: 304, etag: tag || etag };
   const type = response.headers.get('Content-Type') || '';
-  if (type.startsWith('application/json')) return { status: response.status, body: await response.json(), ...(tag ? { etag: tag } : {}) };
+  if (type.startsWith('application/json')) {
+    const result = await response.json();
+    const mutation = method === 'POST' && /^\/api\/rooms\/([\w-]+)\/guest\/(?:extend|disconnect|admit)$/.exec(path);
+    if (mutation && response.ok && result?.ok && await refresh_guest_entries(home, { rooms: [mutation[1]], fetcher })) await sync_remote_launches(home);
+    return { status: response.status, body: result, ...(tag ? { etag: tag } : {}) };
+  }
   // A file larger than one frame comes back in parts; the device asks again from where the previous part ended.
   const bytes = Buffer.from(await response.arrayBuffer());
   // Asked from past the end (an empty file): no bytes, and the size the website gives.
@@ -202,7 +211,7 @@ export async function room_upload(home, site, payload, { fetcher = site_fetch, n
   const { id, path, index, total, size, content_type = 'application/octet-stream', data } = payload || {};
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{16,80}$/.test(id) || typeof path !== 'string' || !UPLOAD_PATH.test(path)
       || !Number.isSafeInteger(total) || total < 1 || !Number.isSafeInteger(index) || index < 0 || index >= total
-      || !Number.isSafeInteger(size) || size < 0 || size > UPLOAD_MAX_BYTES || typeof data !== 'string' || typeof content_type !== 'string') {
+      || !Number.isSafeInteger(size) || size < 0 || size > attachment_limit(home) * 1024 * 1024 || typeof data !== 'string' || typeof content_type !== 'string') {
     return { status: 400, body: { error: '附件上传请求无效' } };
   }
   for (const store of [uploads, finished_uploads]) for (const [key, item] of store) if (now - item.at > UPLOAD_TTL_MS) store.delete(key);
@@ -210,7 +219,11 @@ export async function room_upload(home, site, payload, { fetcher = site_fetch, n
   if (finished) return finished.path === path ? finished.answer : { status: 400, body: { error: '附件上传请求无效' } };
   const upload = uploads.get(id) ?? { path, total, size, parts: [], at: now };
   if (upload.path !== path || upload.total !== total || upload.size !== size) return { status: 400, body: { error: '附件上传请求无效' } };
-  upload.parts[index] = Buffer.from(data, 'base64');
+  const part = Buffer.from(data, 'base64');
+  const received = (upload.received || 0) - (upload.parts[index]?.length || 0) + part.length;
+  if (received > size || total > Math.ceil(size / (64 * 1024)) + 1) return { status: 400, body: { error: '附件上传请求无效' } };
+  upload.received = received;
+  upload.parts[index] = part;
   upload.at = now;
   uploads.set(id, upload);
   const missing = [];
@@ -371,6 +384,7 @@ async function forward_changes(home, socket, signal) {
           let rooms = null;
           try { rooms = JSON.parse(frame.match(/^data: (.*)$/m)?.[1] ?? '{}').rooms ?? null; } catch { /* Every room may have changed. */ }
           socket.send(JSON.stringify({ type: 'event', rooms }));
+          if (await refresh_guest_entries(home, { rooms: Array.isArray(rooms) ? rooms : null })) await sync_remote_launches(home);
         }
       }
     } catch { /* Reconnect below; devices fall back to their own polling meanwhile. */ }
@@ -438,14 +452,14 @@ export function entry_proxy(home, { send, buffered = () => 0, signal }) {
     else if (frame.type === 'entry-body' && open.has(id)) { const entry = open.get(id); entry.parts.push(part); entry.size += part.length; }
     else return;
     const entry = open.get(id);
-    if (entry.size > ENTRY_BODY_MAX_BYTES) { open.delete(id); return refuse(id, 413, '请求太大'); }
+    if (entry.size > (attachment_limit(home) + policy.entry_overhead_mib) * 1024 * 1024) { open.delete(id); return refuse(id, 413, '请求太大'); }
     if (!frame.more) forward(id);
   };
 }
 
 /** Hold one website's relay connection, reconnecting with backoff; `connected` tracks which websites are live. */
 async function hold_channel(home, site, { connected, log, signal, health, watch }) {
-  let delay = RETRY_MIN_MS, answers_pings = false;
+  let delay = RETRY_MIN_MS;
   while (!signal.aborted) {
     // Read the pairing each time: reconnecting the website replaces the token, and disconnecting removes it.
     const link = machine_links(home).sites[site];
@@ -484,25 +498,44 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
         }
         resolve(pong_seen);
       };
-      // Only a pong proves both directions work: requests can keep arriving while this computer's answers are stuck.
-      // A website that never answers pings is not judged by them.
       let opened = false, awaiting_pong = false, pong_seen = false, backlog_logged = 0;
+      let last_pong = 0, probe_started = 0, last_ping = null, missed_pings = 0, previous_buffer = 0, buffer_progress = 0;
       socket.addEventListener('open', () => {
         if (finished || signal.aborted) return;
         clearTimeout(handshake);
         opened = true;
+        last_pong = probe_started = buffer_progress = Date.now();
         health?.channel(site, link.id, 'confirming');
         connected.add(site);
         log(`${site}: ${t('连接已打开，正在等待网站回应心跳。')}`);
+        let advertised_limit = policy.default_mib;
         const heartbeat = () => {
           if (socket.readyState !== WebSocket.OPEN) return finish(opened, { kind: 'closed' });
-          // A website that answered pings on an earlier connection is judged from the first ping: a connection that
-          // stalls before its first pong (seen 2026-11-21) would otherwise stay "connected" while no request reaches it.
-          if (awaiting_pong && answers_pings) {
-            log(`${site}: 中转心跳 ${PING_MS / 1000} 秒未回应，重新连接`);
-            try { socket.close(4000, 'stalled'); } catch { /* Already closing. */ }
-            return finish(opened, { kind: 'heartbeat', seconds: PING_MS / 1000 });
+          const limit = attachment_limit(home);
+          if (limit !== advertised_limit) {
+            socket.send(JSON.stringify({ type: 'attachment-policy', limit_mib: limit }));
+            advertised_limit = limit;
           }
+          const now = Date.now(), buffered = socket.bufferedAmount || 0;
+          // A delayed timer after sleep is not a missed network response. Resume probing before judging the link.
+          const delayed = last_ping !== null && (now - last_ping > TIMER_DELAY_MS || now < last_ping);
+          if (delayed) { missed_pings = 0; probe_started = buffer_progress = now; }
+          else if (last_ping !== null) missed_pings++;
+          if (buffered < previous_buffer || previous_buffer <= ENTRY_BUFFER_HIGH) buffer_progress = now;
+          if (buffered < previous_buffer) watch(pong_seen, true);
+          previous_buffer = buffered;
+          // A queued ping cannot be answered yet. Allow draining traffic, but never exempt a stuck queue forever.
+          const draining = buffered > ENTRY_BUFFER_HIGH && now - buffer_progress < SILENCE_MS;
+          if (draining) missed_pings = 0;
+          // Applies before the first pong too (the 2026-11-21 stall); no prior successful connection is required.
+          if (!delayed && !draining && missed_pings >= MISSED_PINGS && now - Math.max(last_pong, probe_started) >= SILENCE_MS) {
+            log(`${site}: ${t('中转连续 {seconds} 秒未收到心跳回应，重新连接', { seconds: SILENCE_MS / 1000 })}`);
+            try { socket.close(4000, 'stalled'); } catch { /* Already closing. */ }
+            return finish(opened, { kind: 'heartbeat', seconds: SILENCE_MS / 1000 });
+          }
+          last_ping = now;
+          // Do not add more pings behind the same large response; waking from sleep gets one fresh probe.
+          if (buffered > ENTRY_BUFFER_HIGH && awaiting_pong && !delayed) return;
           awaiting_pong = true;
           try { socket.send('ping'); }
           catch (error) {
@@ -520,9 +553,11 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
         const received_at = performance.now();
         if (event.data === 'pong') {
           if (!awaiting_pong) return;
-          if (!pong_seen) log(`${site}: ${t('中转已连接')}`);
-          awaiting_pong = false; pong_seen = true; answers_pings = true;
+          last_pong = Date.now();
+          missed_pings = 0;
           watch(true);
+          if (!pong_seen) log(`${site}: ${t('中转已连接')}`);
+          awaiting_pong = false; pong_seen = true;
           health?.channel(site, link.id, 'connected');
           return;
         }
@@ -603,10 +638,13 @@ export function start_relay_channels(home, { log = () => {}, signal, health }) {
     const controller = new AbortController(), channel_signal = AbortSignal.any([signal, controller.signal]);
     const record = { controller, machine: link.id, token: link.token, timer: null, confirmed: false };
     held.set(site, record);
-    const watch = confirmed => {
-      if (confirmed || record.confirmed || !record.timer) {
+    const watch = (confirmed, progress = false) => {
+      if (progress || confirmed || record.confirmed || !record.timer) {
         clearTimeout(record.timer);
+        const due = Date.now() + WATCHDOG_MS;
         record.timer = setTimeout(() => {
+          // The watchdog must not bypass the heartbeat's sleep grace when both timers resume late.
+          if (Date.now() - due > TIMER_DELAY_MS) return watch(record.confirmed, true);
           if (held.get(site) === record && !channel_signal.aborted) rebuild(site, 'watchdog');
         }, WATCHDOG_MS);
       }
@@ -627,8 +665,11 @@ export function start_relay_channels(home, { log = () => {}, signal, health }) {
     health?.rebuild(site, link.id, reason);
     start(site, link);
   }
+  let checking_guests;
   const refresh = () => {
     if (signal.aborted) return;
+    checking_guests ??= refresh_guest_entries(home).then(changed => changed && sync_remote_launches(home))
+      .catch(error => log(error.message)).finally(() => { checking_guests = null; });
     const sites = machine_links(home).sites;
     const requested = requested_site(sites);
     if (requested) rebuild(requested, 'manual');

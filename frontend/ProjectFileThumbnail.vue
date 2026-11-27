@@ -60,5 +60,6 @@ function run_thumbnails() {
 <style scoped>
 .project-thumbnail { display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 6px; }
 .project-thumbnail img { width: 100%; height: 100%; object-fit: contain; }
-.project-file-icon.project-thumbnail-icon { width: 44%; height: 44%; }
+/* An icon fills most of its box, so a folder's name is not left far below it. */
+.project-file-icon.project-thumbnail-icon { width: 62%; height: 62%; }
 </style>

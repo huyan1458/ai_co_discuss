@@ -2,6 +2,14 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.43 (2026-11-27 08:14)
+
+- New: "Platform steward": a dedicated chat where a local AI handles platform chores such as installing local voice, setting up notifications, making share cards and analyzing dispatch.
+- New: "Invite an external user" lets someone join the room's chat from a link, with no install or sign-in, and you can disconnect them anytime.
+- New: Member cards show context usage, tokens used per turn and account quota (5-hour / 7-day windows or balance).
+- New: Besides WeChat, notifications can go through Telegram, Discord, QQ and Feishu bots.
+- New: The "Analytics" page adds a "Live" view and "How well the host dispatches" to compare how the host assigns work.
+
 ## 0.5.42 (2026-11-26 22:30)
 
 - New: On phones, swipe right on a file preview and let go in the corner circle at the bottom right to fold the window into a floating button, keeping the file open.

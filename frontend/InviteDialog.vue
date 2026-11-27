@@ -3,6 +3,7 @@
 import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import ExpertCard from "./ExpertCard.vue";
 import ExternalExpertCard from "./ExternalExpertCard.vue";
+import ExternalGuestCard from "./ExternalGuestCard.vue";
 import PlatformConfigDialog from "./PlatformConfigDialog.vue";
 import RosterAdd from "./RosterAdd.vue";
 import { copy_seat_link, external_of, room_operations, runner_text, seat_options } from "./external-members.js";
@@ -44,6 +45,11 @@ const room_directories = computed(() => {
   return models?.room_id === room.value?.id ? [models.project_directory, ...(models.extra_directories || [])].filter(Boolean) : [];
 });
 const EXTERNAL_CHIP = "external:computer";
+// An external user is one person in a browser, one per room: the chip shows a single card that makes its own link.
+const GUEST_CHIP = "external:guest";
+const guest_card = ref(false);
+// Once the card made its link the dialog's work is done: its dismiss button reads "完成" instead of "取消".
+const guest_generated = ref(false);
 // Instance names of just-invited manual members; the dialog then shows their start step.
 const invited_manual = ref([]);
 // Member ids of just-added external seats, listed beside the manual members in that step.
@@ -109,6 +115,8 @@ watch(inviting, async (open) => {
   invite_workflow.value = null;
   invite_picks.value = [];
   external_drafts.value = [];
+  guest_card.value = false;
+  guest_generated.value = false;
   invite_tried.value = false;
   invited_manual.value = [];
   invited_external.value = [];
@@ -158,10 +166,13 @@ const library_items = computed(() => [...invite_choices.value.map((name) => ({ v
   // Its own row: it opens the invitation panel instead of adding a card.
   { value: EXTERNAL_CHIP, name: t("外部专家"), icon: "/icons/external-expert.svg", style: "external", row: t("外部"),
     title: t("对方电脑上的 AI，只读本房间开放的内容"), aria_label: t("邀请外部专家") },
+  { value: GUEST_CHIP, name: t("外部用户"), icon: "/icons/external-user.svg", style: "external", row: t("外部"),
+    title: t("对方用浏览器打开链接，限时进入本房间直接和 AI 对话"), aria_label: t("邀请外部用户") },
 ]);
 
 /** Add the platform or preset a chip names. */
 function add_library_item(value) {
+  if (value === GUEST_CHIP) { guest_card.value = true; return; }
   if (value === EXTERNAL_CHIP) { external_drafts.value = [...external_drafts.value, { id: ++external_seq, draft: {} }]; return; }
   if (value.startsWith(PROJECT_PRESET_PREFIX)) {
     const preset = project_preset(value);
@@ -335,14 +346,16 @@ async function refresh_after(invited_any) {
           </div>
           <template v-if="!invite_workflow"><ExternalExpertCard v-for="item in external_drafts" :key="`external-${item.id}`" v-model:draft="item.draft" :paths="room_directories" @remove="external_drafts = external_drafts.filter((entry) => entry !== item)" /></template>
         </div>
+        <ExternalGuestCard v-if="guest_card && !invite_workflow" @remove="guest_card = false; guest_generated = false" @generated="guest_generated = true" />
         <!-- Always rendered once cards exist, so switching a card's mode never changes the dialog height. -->
         <p v-if="invite_picks.length" class="fine-print" :class="{ 'pb-invite-reserved': !(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')) }" :aria-hidden="!(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual'))">{{ t("手动启动的成员排在程序启动的成员之后加入队列。") }}</p>
         <p v-else-if="submitting" class="pb-invite-empty">{{ t("正在加入成员…") }}</p>
-        <p v-else-if="!invite_workflow && !external_drafts.length" class="pb-invite-empty">{{ t("选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。") }}</p>
+        <p v-else-if="!invite_workflow && !external_drafts.length && !guest_card" class="pb-invite-empty">{{ t("选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。") }}</p>
         <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available" role="alert" class="fine-print">{{ t("邀请需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
         <div class="pb-invite-footer">
-          <UButton :label="t('取消')" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />
-          <UButton type="submit" icon="i-lucide-user-plus" :label="invite_workflow ? t('确认成员并启用工作流') : invite_picks.length > 1 ? t('邀请 {count} 位', { count: invite_picks.length }) : t('邀请')" class="channel-primary-button" :disabled="invite_blocked" :loading="submitting" />
+          <UButton :label="guest_generated && !invite_picks.length && !external_drafts.length ? t('完成') : t('取消')" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />
+          <!-- The external user card makes its own link; with nothing else picked there is nothing to invite here. -->
+          <UButton v-if="!(guest_card && !invite_picks.length && !external_drafts.length && !invite_workflow)" type="submit" icon="i-lucide-user-plus" :label="invite_workflow ? t('确认成员并启用工作流') : invite_picks.length > 1 ? t('邀请 {count} 位', { count: invite_picks.length }) : t('邀请')" class="channel-primary-button" :disabled="invite_blocked" :loading="submitting" />
         </div>
       </form>
     </template>

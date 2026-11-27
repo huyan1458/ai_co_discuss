@@ -62,7 +62,7 @@
 
 ### 分享卡封面工具
 
-在房间里可以直接说 `$share-card 为 <房间链接> 做分享卡，重点展示最终产品`。在目标房间内可省略链接。AI 会取材、制图，并把 PNG 附在回答中。
+让平台主理人制作时，运行 `codiscuss steward ask share-card --room ROOM --note "重点展示最终产品"`，在主理人对话取用封面和文案。
 
 供房间 AI 或本机用户在命令行定制分享卡封面；分享面板只接收成图（PNG / JPG / WebP），并自动在底部拼接二维码、链接与有效期。带房间任务凭据运行时，`materials` 只访问凭据绑定站点、`render` 受该成员的目录读写权限约束；房主在终端不带任务凭据手动运行时，沿用当前系统账号的文件权限。
 
@@ -70,6 +70,16 @@
 | --- | --- |
 | 按可分享范围读取房间协作指标、并发曲线与素材索引（含截断标记） | `codiscuss share-card materials [房间ID]` |
 | 将本地静态 HTML 封面导出为高清 PNG（默认 750 CSS px @2×，经进程私有管道调用系统可信安装位置的沙箱浏览器） | `codiscuss share-card render cover.html --out cover.png` |
+
+### 平台主理人
+
+- `codiscuss steward status` 查看[平台主理人](steward.md)的房间、设置与技能是否可用。
+- `codiscuss steward settings --help` 查看软件、模型、强度、项目权限、工作目录与允许技能的设置选项。
+- `codiscuss steward ask share-card --room ROOM` 为指定房间发起分享卡请求，结果在主理人对话中查看。
+- `codiscuss steward ask discuss-report --room ROOM --note "整理指定消息范围，保存到所指定的本机目录"` 为已有讨论生成报告。
+- `codiscuss steward ask codiscuss-draft-cleanup --note "盘点草稿，不删除"` 盘点本机草稿。服务必须仍能派发主理人任务。
+- `codiscuss steward ask cloudflare-deploy --confirm` 请平台主理人部署或更新自己的 Cloudflare 线上站点；写入 Cloudflare 前它仍会逐步征求同意。
+- `codiscuss steward history` 列出换软件后存档的旧主理人对话；`codiscuss steward delete ROOM --confirm` 删除其中一个。
 
 ### 备份、导出与导入
 

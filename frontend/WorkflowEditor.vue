@@ -121,7 +121,10 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
         <span>{{ t('一句话描述') }} <small>{{ t('主持人凭它判断何时使用') }}</small></span>
         <textarea v-model="workflow.description" :readonly="readonly" class="workflow-description-text" rows="1" :maxlength="500" :placeholder="sub ? t('做什么、什么时候用（必填）') : t('做什么、什么时候用')" />
       </label>
-      <div v-if="!sub" class="workflow-skill-meta">
+      <!-- Author and source: display only, never sent to the host; folded into one quiet line under the description. -->
+      <details v-if="!sub" class="workflow-skill-meta">
+        <summary :title="t('仅用于展示，不发给主持人')">{{ workflow.author || workflow.source
+          ? [workflow.author, workflow.source].filter(Boolean).join(' · ') : t('作者与出处（可选）') }}</summary>
         <div class="workflow-skill-meta-row">
           <label class="workflow-skill-description">
             <span>{{ t('作者') }}</span>
@@ -132,8 +135,7 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
             <input v-model="workflow.source" :readonly="readonly" :maxlength="200" :placeholder="t('来源文章、链接或实践（可选）')" />
           </label>
         </div>
-        <small class="workflow-skill-meta-hint">{{ t('作者与出处仅用于展示，不发给主持人') }}</small>
-      </div>
+      </details>
       <textarea v-if="editing" ref="source" v-model="workflow.skill" :maxlength="MAX_SKILL" class="workflow-skill-source" spellcheck="false" :aria-label="t('SKILL.md 正文')" />
       <div v-else-if="workflow.skill?.trim()" class="workflow-skill-preview markdown-body" v-html="rendered" @dblclick="edit"></div>
       <button v-else-if="!readonly" type="button" class="workflow-skill-empty" @click="edit"><UIcon name="i-lucide-pencil" class="workflow-skill-icon" />{{ t('写下主持人怎么组织这个{value1}', { value1: sub ? t('子工作流') : t('工作流') }) }}</button>
@@ -167,9 +169,10 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
 .workflow-skill-description input { height: 30px; padding: 0 8px; border: 1px solid var(--ui-border-muted); border-radius: 7px; background: var(--ui-bg-elevated); color: var(--ui-text);
   font-size: 13px; outline: none; }
 .workflow-skill-description input:focus { border-color: var(--channel-accent, var(--ui-primary)); }
-.workflow-skill-meta { display: grid; gap: 4px; }
+.workflow-skill-meta { display: grid; gap: 6px; }
+.workflow-skill-meta > summary { overflow: hidden; color: var(--ui-text-dimmed); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+.workflow-skill-meta > summary:hover { color: var(--ui-text-muted); }
 .workflow-skill-meta-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.workflow-skill-meta-hint { color: var(--ui-text-dimmed); font-size: 11px; }
 /* One scrolling column: the description, then the text (the source box grows to its text and fills at least the rest). */
 .workflow-skill-body { display: flex; flex: 1; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
 .workflow-skill-source { flex: 1 0 auto; min-height: 240px; padding: 10px 12px; overflow: hidden; border: 1px solid var(--channel-accent, var(--ui-primary)); border-radius: 8px; background: var(--ui-bg-elevated);
@@ -192,6 +195,6 @@ watch([source, () => workflow.value.skill], () => nextTick(fit_source));
 .workflow-skill-files { flex: 1; }
 /* Stacked page: tighter, the subtitle gives way to the text. */
 .workflow-skill.is-compact { gap: 8px; padding: 8px 12px; }
-.workflow-skill.is-compact .workflow-skill-head small, .workflow-skill.is-compact .workflow-skill-description small, .workflow-skill.is-compact .workflow-skill-meta-hint { display: none; }
+.workflow-skill.is-compact .workflow-skill-head small, .workflow-skill.is-compact .workflow-skill-description small { display: none; }
 .workflow-skill.is-compact .workflow-skill-meta-row { grid-template-columns: minmax(0, 1fr); }
 </style>

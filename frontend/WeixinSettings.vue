@@ -1,7 +1,7 @@
 <script setup>
 /**
- * The settings' "Notifications" section, whose only channel for now is Weixin, kept by the local service: bind the
- * owner's Weixin by QR code; a goal waiting for the owner's
+ * The settings' "Notifications" section, kept by the local service: Weixin (bound by QR code) and the bot channels
+ * listed by `launch notify` (`BotChannelSettings`). A goal or question waiting for the owner's
  * input reaches it after three minutes, and a reply there is posted back to that room as the owner. The login token stays
  * on this computer; the page only sees the binding state and the QR content to draw.
  */
@@ -9,15 +9,31 @@ import { computed, inject, onBeforeUnmount, onMounted, ref } from "vue";
 import { renderSVG } from "uqr";
 import { t } from './i18n.js';
 import { weixin_failure_text } from './weixin-failure.js';
+import BotChannelSettings from './BotChannelSettings.vue';
+
+import ConfirmDialog from "./ConfirmDialog.vue";
 
 const { bridge } = inject("discussion");
+const confirm_setup = ref(false);
+async function ask_setup() {
+  if (await bridge.ensure_steward_configured()) confirm_setup.value = true;
+}
 const status = ref(null), unavailable = ref(""), busy = ref(""), open = ref(false);
 // The QR code being scanned, drawn here from the content the service returned.
 const qr = ref("");
 let polling = false;
 
-const summary = computed(() => unavailable.value ? t('需连接本机服务') : !status.value ? t('读取中…')
-  : !status.value.bound ? t('未绑定') : status.value.context_ready ? t('已绑定') : t('已绑定 · 待你发一条消息'));
+// Every channel in the owner's order, as `launch notify` lists them; an older local service lists none.
+const channels = ref([]);
+const bots = computed(() => channels.value.filter(item => item.id !== "weixin"));
+const summary = computed(() => {
+  if (unavailable.value) return t('需连接本机服务');
+  if (!status.value) return t('读取中…');
+  const primary = channels.value.find(item => item.primary);
+  const ready = channels.value.filter(item => item.enabled && item.ready).length;
+  if (!primary) return status.value.context_ready ? t('微信 · 已绑定') : t('未连接渠道');
+  return ready ? t('主要：{value1} · {value2} 个可用', { value1: primary.label, value2: ready }) : t('未连接渠道');
+});
 
 async function run(action) {
   return bridge.local_request("weixin", { action });
@@ -25,8 +41,38 @@ async function run(action) {
 
 onMounted(async () => {
   try { status.value = await run("status"); }
-  catch (error) { unavailable.value = error.message; }
+  catch (error) { unavailable.value = error.message; return; }
+  try { channels.value = (await bridge.local_request("notify", {})).channels; }
+  catch { channels.value = []; }
 });
+
+function update_bot(next) {
+  channels.value = channels.value.map(item => item.id === next.id ? next : item);
+}
+
+/** Show the new order and choice at once, save it, and put the previous one back if saving fails. */
+async function arrange(next) {
+  const previous = channels.value;
+  const enabled = next.filter(item => item.enabled);
+  channels.value = next.map(item => ({ ...item, primary: item === enabled[0] }));
+  try {
+    const result = await bridge.local_request("notify", { action: "arrange", order: next.map(item => item.id), enabled: enabled.map(item => item.id) });
+    channels.value = result.channels;
+  } catch (error) {
+    channels.value = previous;
+    bridge.notify("error", error.message);
+  }
+}
+
+function move(index, step) {
+  const next = [...channels.value];
+  [next[index], next[index + step]] = [next[index + step], next[index]];
+  arrange(next);
+}
+
+function toggle(index, enabled) {
+  arrange(channels.value.map((item, position) => position === index ? { ...item, enabled } : item));
+}
 onBeforeUnmount(() => { polling = false; });
 
 /** Show a QR code and wait for the scan, a bounded poll at a time, until it is confirmed, expires or the panel closes. */
@@ -57,11 +103,22 @@ async function act(action, message) {
   <section class="channel-reading-setting">
     <UCollapsible v-model:open="open">
       <button type="button" class="weixin-header" :aria-expanded="open">
-        <h3>{{ t('通知') }}</h3><small>{{ t('有事等你处理时提醒你') }}</small><span :class="{ 'is-ready': status?.context_ready }">{{ t('微信 · {value1}', { value1: summary }) }}</span><UIcon :name="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
+        <h3>{{ t('通知') }}</h3><small>{{ t('有事等你处理时提醒你') }}</small><span :class="{ 'is-ready': channels.some(item => item.enabled && item.ready) || (!channels.length && status?.context_ready) }">{{ summary }}</span><UIcon :name="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
       </button>
       <template #content>
         <div class="weixin-settings">
-          <p class="fine-print">{{ t('Goal 待你确认、或成员向你提的问题等你 3 分钟未答时，经下面的渠道提醒你。') }}</p>
+          <UButton class="justify-self-start" size="xs" color="neutral" variant="soft" :label="t('让平台主理人配置')" @click="ask_setup" />
+          <p class="fine-print">{{ t('Goal 待你确认、或成员向你提的问题等你 3 分钟未答时提醒你：先用主要渠道发送，发不出去再按顺序换下一个已启用的渠道。你在任一已绑定的渠道回复都能发回房间。') }}</p>
+          <ol v-if="channels.length" class="notify-order" :aria-label="t('通知渠道顺序')">
+            <li v-for="(item, index) in channels" :key="item.id">
+              <UCheckbox :model-value="item.enabled" :aria-label="t('启用 {value1}', { value1: item.label })" @update:model-value="toggle(index, $event)" />
+              <span class="notify-order-name">{{ item.label }}</span>
+              <UBadge v-if="item.primary" :label="t('主要')" size="sm" variant="subtle" />
+              <small :class="{ 'is-ready': item.ready }">{{ item.ready ? t('可发送') : item.bound ? t('未就绪') : t('未配置') }}</small>
+              <UButton icon="i-lucide-arrow-up" size="xs" color="neutral" variant="ghost" :disabled="index === 0" :aria-label="t('上移')" @click="move(index, -1)" />
+              <UButton icon="i-lucide-arrow-down" size="xs" color="neutral" variant="ghost" :disabled="index === channels.length - 1" :aria-label="t('下移')" @click="move(index, 1)" />
+            </li>
+          </ol>
           <h4 class="weixin-channel">{{ t('微信') }}</h4>
           <p v-if="unavailable" class="fine-print">{{ t('微信通知由这台电脑的本机服务收发，需要连接本机服务或已配对电脑：{value1}', { value1: unavailable }) }}</p>
           <template v-else-if="status">
@@ -82,9 +139,12 @@ async function act(action, message) {
               </template>
             </div>
           </template>
+          <BotChannelSettings v-for="bot in bots" :key="bot.id" :channel="bot" :bridge="bridge" @update="update_bot" />
         </div>
       </template>
     </UCollapsible>
+    <ConfirmDialog v-model:open="confirm_setup" :title="t('配置通知渠道')" :description="t('平台主理人将引导你配置通知，并可能更改本机的通知设置。')"
+      @confirm="bridge.request_steward('notify-setup', {}, { confirmed: true })" />
   </section>
 </template>
 
@@ -103,4 +163,9 @@ async function act(action, message) {
 .weixin-qr { width: 180px; padding: 8px; border-radius: 8px; background: #fff; }
 .weixin-qr :deep(svg) { display: block; width: 100%; height: auto; }
 .weixin-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.notify-order { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.notify-order li { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.notify-order-name { font-size: 13px; }
+.notify-order small { margin-left: auto; color: var(--ui-text-dimmed); font-size: 12px; }
+.notify-order small.is-ready { color: var(--ui-success); }
 </style>

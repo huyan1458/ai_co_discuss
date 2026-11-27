@@ -95,7 +95,12 @@ export function recent_audit(home, limit = AUDIT_SHOWN) {
 function read_registry(home) {
   const file = join(home, DEVICES_FILE);
   const registry = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
-  return { devices: registry.devices || {} };
+  return { devices: registry.devices || {}, origins: registry.origins || {} };
+}
+
+/** A guest key must be independent of every key registered as a paired device. */
+export function registered_device_key(home, id) {
+  return Object.hasOwn(read_registry(home).devices, id);
 }
 
 /** The uncompressed P-256 point of a JWK, which names the device. */
@@ -141,15 +146,17 @@ export function machine_fingerprint(link) {
  * `without_passkey` lets this one pairing go without a passkey (a browser that cannot create one); only the person at
  * this computer can allow it, never the new device's page.
  */
-export function start_pairing(home, { site, fingerprint = '', temporary = false, without_passkey = false, by = 'computer' }) {
+export function start_pairing(home, { site, origin = site, machine = '', fingerprint = '', temporary = false, without_passkey = false, by = 'computer' }) {
   const bytes = randomBytes(CODE_LENGTH);
   const code = Array.from(bytes, byte => CODE_ALPHABET[byte & 31]).join('');
   audit(home, { event: 'pairing.started', by, temporary: Boolean(temporary), without_passkey: Boolean(without_passkey) });
   return with_lock(home, (registry, now) => {
     const id = randomBytes(8).toString('hex');
-    registry.pairings[id] = { code, temporary: Boolean(temporary), without_passkey: Boolean(without_passkey), by, expires_at: now + PAIRING_MS, failures: 0 };
+    if (origin !== site) origin = rule_address(origin, false);
+    require_origin(registry, site, origin);
+    registry.pairings[id] = { site, origin, code, temporary: Boolean(temporary), without_passkey: Boolean(without_passkey), by, expires_at: now + PAIRING_MS, failures: 0 };
     return { code: `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8)}`, expires_at: now + PAIRING_MS, temporary: Boolean(temporary),
-      without_passkey: Boolean(without_passkey), ...(site ? { url: `${site}/#pair=${code}${fingerprint ? `&fp=${fingerprint}` : ''}` } : {}) };
+      without_passkey: Boolean(without_passkey), machine, ...(site ? { url: `${origin}/#pair=${code}${machine ? `&machine=${machine}` : ''}${fingerprint ? `&fp=${fingerprint}` : ''}` } : {}) };
   });
 }
 
@@ -160,9 +167,9 @@ const renewable = device => device.passkeys.length > 0 && !device.temporary;
  * Record a paired device with its passkey, if it has one: thirty days, or one day for a temporary one. A device paired
  * without a passkey (allowed at this computer for that pairing) is trusted by its device key alone and never locks.
  */
-function add_device(registry, now, { public_key, label, temporary, by, passkey }) {
+function add_device(registry, now, { public_key, label, temporary, by, passkey, site, origin }) {
   const id = device_id_of(public_key);
-  registry.devices[id] = { public_key: { kty: 'EC', crv: 'P-256', x: public_key.x, y: public_key.y }, label: clean_label(label), by,
+  registry.devices[id] = { site, origin, public_key: { kty: 'EC', crv: 'P-256', x: public_key.x, y: public_key.y }, label: clean_label(label), by,
     temporary: Boolean(temporary), created_at: now, expires_at: now + (temporary ? TEMPORARY_DAYS : DEVICE_DAYS) * DAY_MS, passkeys: passkey ? [passkey] : [],
     // Pairing itself was confirmed at this computer, so the device starts unlocked.
     unlocked_until: Math.min(now + UNLOCK_MS, now + (temporary ? TEMPORARY_DAYS : DEVICE_DAYS) * DAY_MS) };
@@ -173,10 +180,9 @@ function add_device(registry, now, { public_key, label, temporary, by, passkey }
  * A new browser proves it holds a live code shown at this computer and brings the passkey it just created for it; a
  * wrong proof counts against every waiting code.
  */
-export function pair_device(home, machine_id, site, { public_key, label, proof, passkey: credential }) {
+export function pair_device(home, machine_id, site, { public_key, label, proof, passkey: credential, origin: browser_origin }) {
   if (typeof proof !== 'string' || !proof) throw new Error('缺少配对证明');
   device_id_of(public_key);
-  const { origin, rp_id } = relying_party(site);
   const paired = with_lock(home, (registry, now) => {
     const supplied = Buffer.from(proof);
     for (const [id, pairing] of Object.entries(registry.pairings)) {
@@ -186,9 +192,13 @@ export function pair_device(home, machine_id, site, { public_key, label, proof, 
         if (!credential && !pairing.without_passkey) {
           throw Object.assign(new Error('这台设备没有创建通行密钥。如果它的浏览器确实不支持，请在电脑上添加设备时勾选“允许不用通行密钥”，再重新扫码'), { need: 'passkey' });
         }
+        const chosen = pairing.origin || site;
+        const { origin, rp_id } = require_origin(registry, site, credential ? credential_origin(credential) : (browser_origin || site));
+        if ((pairing.site && pairing.site !== site) || origin !== chosen) throw new Error('通行密钥来自其他网站');
         delete registry.pairings[id];
         const passkey = credential && verify_registration(credential, { challenge: pairing_passkey_challenge(pairing.code, public_key), origin, rp_id });
-        const added = add_device(registry, now, { public_key, label, temporary: pairing.temporary, by: pairing.by, passkey });
+        if (passkey) passkey.origin = origin;
+        const added = add_device(registry, now, { public_key, label, temporary: pairing.temporary, by: pairing.by, passkey, site, origin });
         audit(home, { event: 'device.paired', device: added.device_id, label: clean_label(label), by: pairing.by, temporary: pairing.temporary, passkey: Boolean(passkey) });
         return added;
       }
@@ -246,7 +256,7 @@ export async function signed_device_list(home, link, now = Date.now(), externals
   const listed = [...Object.entries(devices)
     .map(([id, device]) => ({ id, x: device.public_key.x, y: device.public_key.y, expires_at: device.expires_at,
       ...(renewable(device) ? { renew_until: device.expires_at + RENEW_GRACE_DAYS * DAY_MS } : {}) })),
-    ...externals.map(({ id, x, y, room, expires_at }) => ({ id, x, y, kind: 'external', room, expires_at }))];
+    ...externals.map(({ id, x, y, kind, room, expires_at }) => ({ id, x, y, kind: kind === 'guest' ? 'guest' : 'external', room, expires_at }))];
   // An unchanged list keeps its signature and issued_at, so the heartbeat that carries it is the same each time and
   // the website neither rewrites it nor wakes the relay (2026-11-19, #5500); issued_at is when the content last changed.
   const region = RELAY_REGIONS.includes(link.relay_region) ? link.relay_region : 'apac';
@@ -268,7 +278,7 @@ const signed_lists = new Map();
 export function list_devices(home, current = null) {
   const { devices } = read_registry(home);
   return { audit: recent_audit(home), devices: Object.entries(devices).map(([id, device]) => ({ id, label: device.label, temporary: device.temporary, created_at: device.created_at,
-    expires_at: device.expires_at, passkeys: device.passkeys.length, current: id === current,
+    expires_at: device.expires_at, origin: device.origin, passkeys: device.passkeys.length, current: id === current,
     unlocked_until: device.unlocked_until || 0 }))
     .sort((left, right) => right.created_at - left.created_at) };
 }
@@ -286,6 +296,75 @@ export function revoke_device(home, device_id) {
   });
 }
 
+/** Read legacy strings as exact rules, keeping the bound site as the default pairing address. */
+function origin_rules(registry, site) {
+  return (registry.origins?.[site] || []).map(rule => typeof rule === 'string' ? { origin: rule, subdomains: false } : rule);
+}
+
+function pairing_addresses(site, rules) {
+  return { origins: [site, ...rules.filter(rule => !rule.subdomains).map(rule => rule.origin)], rules };
+}
+
+export function pairing_origins(home, site) {
+  return pairing_addresses(site, origin_rules(read_registry(home), site));
+}
+
+/** Keep an explicitly requested default port distinguishable from a suffix rule covering every port. */
+function rule_address(value, keep_default_port) {
+  const raw = String(value || '').trim();
+  if (!/^https:\/\/[^\s/?#@\\]+\/?$/i.test(raw)) throw new Error('请输入 HTTPS 网站地址，不含路径、账号、查询或片段');
+  let url;
+  try { url = new URL(raw); } catch { throw new Error('请输入 HTTPS 网站地址，不含路径、账号、查询或片段'); }
+  return keep_default_port && !url.port && /:0*443\/?$/.test(raw) ? url.origin + ':443' : url.origin;
+}
+
+function origin_allowed(site, rules, origin) {
+  if (origin === site) return true;
+  let actual;
+  try { actual = new URL(origin); } catch { return false; }
+  if (actual.protocol !== 'https:' || actual.origin !== origin) return false;
+  return rules.some(rule => {
+    if (!rule.subdomains) return rule.origin === origin;
+    const base = new URL(rule.origin);
+    if ((base.port || rule.origin.endsWith(':443')) && actual.port !== base.port) return false;
+    return actual.hostname === base.hostname || actual.hostname.endsWith('.' + base.hostname);
+  });
+}
+
+/** Apply the rule change and revoke any devices and pending pairings it no longer covers. */
+export function update_pairing_origins(home, site, action, value, subdomains = false) {
+  if (!['add', 'remove'].includes(action) || typeof subdomains !== 'boolean') throw new Error('其他访问地址无效');
+  const origin = rule_address(value, subdomains || action === 'remove');
+  if (action === 'add' && !subdomains && origin === site) throw new Error('其他访问地址无效');
+  return with_lock(home, registry => {
+    registry.origins ||= {};
+    let rules = origin_rules(registry, site);
+    // Older exact entries normalize :443 away. Prefer an explicitly stored suffix address when present.
+    const canonical = new URL(origin).origin;
+    const exact_alias = rules.some(rule => !rule.subdomains && rule.origin === canonical);
+    const target = action === 'remove' && exact_alias && !rules.some(rule => rule.origin === origin) ? canonical : origin;
+    rules = rules.filter(rule => rule.origin !== target);
+    if (action === 'add') rules.push({ origin, subdomains });
+    registry.origins[site] = rules;
+    for (const records of [registry.devices, registry.pairings]) {
+      for (const [id, record] of Object.entries(records)) {
+        if (record.site === site && !origin_allowed(site, rules, record.origin || site)) delete records[id];
+      }
+    }
+    return pairing_addresses(site, rules);
+  });
+}
+
+function require_origin(registry, site, origin) {
+  if (!origin_allowed(site, origin_rules(registry, site), origin)) throw new Error('通行密钥来自其他网站');
+  return relying_party(origin);
+}
+
+function credential_origin(credential) {
+  try { return JSON.parse(Buffer.from(credential.client_data_json, 'base64url').toString()).origin; }
+  catch { throw new Error('通行密钥来自其他网站'); }
+}
+
 /** The relying party of a site: its exact origin and host name. */
 function relying_party(site) {
   const url = new URL(site);
@@ -298,10 +377,10 @@ function relying_party(site) {
  */
 export function passkey_options(home, device_id, site, { purpose, room_id }) {
   if (!['unlock', 'renew'].includes(purpose)) throw new Error('通行密钥用途无效');
-  const { rp_id } = relying_party(site);
   return with_lock(home, (registry, now) => {
     const device = registry.devices[device_id];
     if (!device) throw new Error('这台设备未配对');
+    const { rp_id } = require_origin(registry, site, device.origin || site);
     if (!device.passkeys.length) throw new Error('这台设备没有通行密钥，请撤销后在电脑前重新配对');
     if (purpose === 'renew' && device.temporary) throw new Error('临时设备不能续期，请重新配对');
     const id = randomBytes(8).toString('hex'), challenge = b64url(randomBytes(32));
@@ -325,10 +404,11 @@ function take_challenge(registry, { challenge_id, device_id, purpose, room_id = 
  * device and passkey are still there, move the counter only forward, and apply `commit`.
  */
 async function check_assertion(home, device_id, site, { challenge_id, assertion }, purpose, room_id, commit) {
-  const { origin, rp_id } = relying_party(site);
+  const registry = read_registry(home);
+  const { origin, rp_id } = require_origin(registry, site, credential_origin(assertion));
   const item = with_lock(home, registry => take_challenge(registry, { challenge_id, device_id, purpose, room_id, site }));
-  const passkey = read_registry(home).devices[device_id]?.passkeys.find(kept => kept.id === assertion?.id);
-  if (!passkey) throw new Error('这个通行密钥不属于这台设备');
+  const passkey = registry.devices[device_id]?.passkeys.find(kept => kept.id === assertion?.id);
+  if (!passkey || (passkey.origin || site) !== origin) throw new Error('这个通行密钥不属于这台设备');
   const count = await verify_assertion(assertion, passkey, { challenge: item.challenge, origin, rp_id });
   return with_lock(home, (registry, now) => {
     const device = registry.devices[device_id];
@@ -336,6 +416,10 @@ async function check_assertion(home, device_id, site, { challenge_id, assertion 
     if (!kept) throw new Error('这台设备或通行密钥已被撤销');
     // Assertions finishing out of order never move the counter back; a counter that did not grow is refused.
     if ((count || kept.sign_count) && count <= kept.sign_count) throw new Error('通行密钥计数异常，可能被复制，请撤销后重新配对');
+    require_origin(registry, site, origin);
+    device.site ??= site;
+    device.origin ??= origin;
+    kept.origin ??= origin;
     kept.sign_count = count;
     return commit(device, registry, now);
   });

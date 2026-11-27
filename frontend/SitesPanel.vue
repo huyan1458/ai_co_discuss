@@ -5,7 +5,7 @@
  */
 import { computed, inject, ref, watch } from "vue";
 import { locale, t } from "./i18n.js";
-import { close_deploy, confirm_deploy, load_all_sites, renew_items, site_command, sites_state } from "./sites.js";
+import { close_deploy, confirm_deploy, expired_label, load_all_sites, renew_items, site_command, sites_state } from "./sites.js";
 import ConfirmDialog from "./ConfirmDialog.vue";
 
 defineProps({ visible: { type: Boolean, default: true } });
@@ -18,7 +18,7 @@ const SOON_MS = 24 * 3600 * 1000;
 const open = ref(false);
 const revoking = ref(null);
 const busy = ref("");
-const live = computed(() => (sites_state.all || []).filter((site) => site.status === "active").sort((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at)));
+const live = computed(() => (sites_state.all || []).filter((site) => site.status === "active" || site.renewable).sort((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at)));
 watch(() => live.value.length, (count) => { if (!count) open.value = false; });
 watch(open, (shown) => { if (shown) load_all_sites(bridge); });
 
@@ -27,6 +27,7 @@ const time_text = (value) => new Date(value).toLocaleString(locale, { month: "nu
 const soon = (site) => Date.parse(site.expires_at) - Date.now() < SOON_MS;
 const life_left = (site) => Math.max(2, Math.min(100, (Date.parse(site.expires_at) - Date.now()) / LIFETIME_MS * 100));
 function expiry_label(site) {
+  if (site.status !== "active") return expired_label();
   const hours = Math.max(0, Math.round((Date.parse(site.expires_at) - Date.now()) / 3600000));
   return hours >= 24 ? t("{days} 天 {hours} 小时后过期", { days: Math.floor(hours / 24), hours: hours % 24 }) : t("{hours} 小时后过期", { hours });
 }
@@ -64,7 +65,7 @@ watch(sites_ready, (ready) => { if (ready) load_all_sites(bridge); }, { immediat
 
 <template>
   <UButton v-show="visible && live.length" icon="i-lucide-globe" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="open = true"><span class="channel-archive-label">{{ t("已发布") }}</span><small class="channel-archive-count">{{ live.length }}</small></UButton>
-  <UModal v-model:open="open" :title="t('已发布的网站')" :description="t('每个网站从最近一次部署或续期起有效 7 天，到期自动下线并删除文件。')"
+  <UModal v-model:open="open" :title="t('已发布的网站')" :description="t('每个网站从最近一次部署或续期起有效 7 天；过期后停止访问，续期即可恢复原地址。')"
     :ui="{ content: 'glass-panel studio-modal channel-folder-modal channel-manage-modal share-dialog', body: 'dialog-body' }">
     <template #body>
       <ul class="shared-rooms">
@@ -77,8 +78,8 @@ watch(sites_ready, (ready) => { if (ready) load_all_sites(bridge); }, { immediat
           <div class="shared-room-side">
             <span class="shared-room-expiry"><UIcon name="i-lucide-clock" />{{ expiry_label(site) }}</span>
             <div class="shared-room-actions">
-              <UTooltip :text="t('复制链接')"><UButton icon="i-lucide-copy" size="xs" color="neutral" variant="ghost" :aria-label="t('复制网站地址')" @click="copy(site)" /></UTooltip>
-              <UTooltip :text="t('在新窗口打开')"><UButton icon="i-lucide-external-link" size="xs" color="neutral" variant="ghost" :aria-label="t('打开网站')" :to="site.url" target="_blank" rel="noopener noreferrer" /></UTooltip>
+              <template v-if="site.status === 'active'"><UTooltip :text="t('复制链接')"><UButton icon="i-lucide-copy" size="xs" color="neutral" variant="ghost" :aria-label="t('复制网站地址')" @click="copy(site)" /></UTooltip>
+              <UTooltip :text="t('在新窗口打开')"><UButton icon="i-lucide-external-link" size="xs" color="neutral" variant="ghost" :aria-label="t('打开网站')" :to="site.url" target="_blank" rel="noopener noreferrer" /></UTooltip></template>
               <UDropdownMenu :items="[renew_items((days) => run(site, 'renew', { days }))]" :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
                 <UButton icon="i-lucide-timer-reset" :label="t('续期')" size="xs" color="neutral" variant="soft" :loading="busy === site.site_id" :aria-label="t('续期网站 {value1}', { value1: host(site) })" /></UDropdownMenu>
               <UTooltip :text="t('撤销网站')"><UButton icon="i-lucide-link-2-off" size="xs" color="neutral" variant="ghost" class="shared-room-revoke" :aria-label="t('撤销网站')" @click="revoking = site" /></UTooltip>

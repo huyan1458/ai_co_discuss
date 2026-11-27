@@ -44,6 +44,8 @@ def backup_tables(backup):
     room = tables["rooms"][0]
     if not isinstance(room.get("id"), str) or not ROOM_ID_PATTERN.match(room["id"]):
         raise ValueError(Text('备份中的房间编号无效'))
+    if any(row.get("system_kind") for row in tables.get("room_directory", [])):
+        raise ValueError(Text('不能导入系统房间的备份'))
     return tables, room
 
 
@@ -132,6 +134,11 @@ def settings_statements(tables, room, maps):
         if row.get("context"):
             statements.append(("INSERT INTO scheduler_decision_context (decision_id,context) VALUES (?,?)",
                                (maps["scheduler_decisions"][row["id"]], row["context"])))
+    for row in tables.get("dispatch_feedback", []):
+        if row["message_id"] not in messages:
+            continue  # A branch can omit the rated message from the source backup.
+        statements.append(("INSERT INTO dispatch_feedback (message_id,rating,should_be,note,created_at) VALUES (?,?,?,?,?)",
+                           (messages[row["message_id"]], row["rating"], row["should_be"], row["note"], row["created_at"])))
     return statements
 
 
@@ -142,10 +149,12 @@ def record_statements(tables, room_id, maps):
                    (messages[row["message_id"]], remap_text(row["text"], messages), row["author"])) for row in tables.get("message_summaries", [])]
     statements += [("INSERT INTO message_timings (message_id,elapsed_seconds) VALUES (?,?)", (messages[row["message_id"]], row["elapsed_seconds"]))
                    for row in tables.get("message_timings", [])]
-    statements += [("""INSERT INTO attachments (id,room_id,message_id,position,file_name,content_type,size,sha256,actor,submission_id,created_at,cleared_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (maps["attachments"][row["id"]], room_id, messages[row["message_id"]], row["position"], row["file_name"],
+    statements += [("""INSERT INTO attachments (id,room_id,message_id,position,file_name,content_type,size,sha256,actor,submission_id,created_at,cleared_at,storage)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (maps["attachments"][row["id"]], room_id, messages[row["message_id"]], row["position"], row["file_name"],
                                                            row["content_type"], row["size"], row["sha256"], row["actor"], row["submission_id"],
-                                                           row["created_at"], row.get("cleared_at"))) for row in tables.get("attachments", [])]
+                                                           row["created_at"], row.get("cleared_at"),
+                                                           "object" if row.get("storage") == "object" else None))
+                   for row in tables.get("attachments", [])]
     statements += [("""INSERT INTO member_requests (id,room_id,member_id,message_id,status,answer_id,created_at,chain_id,batch_id,purpose,created_by)
                        VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (requests[row["id"]], room_id, members[row["member_id"]], messages[row["message_id"]],
                                                            "cancelled" if row["status"] in OPEN_REQUESTS else row["status"],
@@ -306,6 +315,6 @@ def imported_attachment(connection, room_id, attachment_id, token, data):
     row = connection.execute("SELECT * FROM attachments WHERE room_id=? AND id=?", (room_id, attachment_id)).fetchone()
     if row is None:
         raise LookupError(Text('附件不存在'))
-    if len(data) != row["size"] or hashlib.sha256(data).hexdigest() != row["sha256"]:
+    if row["storage"] == "object" or len(data) != row["size"] or hashlib.sha256(data).hexdigest() != row["sha256"]:
         raise ValueError(Text('附件内容与备份记录不一致'))
     return dict(row)

@@ -389,6 +389,12 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
   .channel-visual-collapsed > .channel-visual-name { flex: 1; margin-inline-start: 4px; }
 }
 .channel-visual-slot:not(:has(.channel-message-visual)) { color: var(--ui-text-muted); }
+/* A folded answer keeps a visual or table the fold cuts through whole and shows its top, fading out (user 2026-11-27,
+   #14282/#14284/#14894). A cut visual is only a preview: no tools, no input. A cut table still scrolls sideways. */
+.channel-answer .is-preview-clipped { max-height: var(--preview-clip-height, 160px); overflow-y: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 48px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 48px), transparent); }
+.channel-visual-slot.is-preview-clipped { overflow: hidden; pointer-events: none; }
+.channel-visual-slot.is-preview-clipped .channel-visual-tools { display: none; }
 .channel-visual-slot:has(.channel-message-visual) > .channel-visual-caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .channel-answer .markdown-body pre { border: 0; border-radius: 6px; padding: 12px 14px; background: #27292e; }
 .channel-answer .markdown-body .markdown-copy { background: #27292e; }
@@ -408,6 +414,7 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-title { flex-shrink: 1; min-width: min(6em, 30%); }
 @container (max-width: 760px) { .channel-header-context { display: none; } }
 .channel-header-context > span { color: #656d7b; }
+.channel-header-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .channel-header-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .channel-search { display: flex; align-items: center; flex-shrink: 0; }
 .channel-search-input { width: 190px; }
@@ -1068,6 +1075,10 @@ html[data-theme^="channel"] .channel-menu.project-menu.project-menu-field { widt
 html[data-theme^="channel"] .project-menu :is([data-slot="itemWrapper"], [data-slot="itemLabel"], [data-slot="itemDescription"]) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 html[data-theme^="channel"] .project-menu [data-slot="itemDescription"] { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10.5px; }
 html[data-theme^="channel"] .project-menu [data-slot="itemTrailingIcon"] { color: var(--channel-accent); }
+/* Project rows read like the 常用项目 manager's: name in bold over its path, a little room between rows, the chosen one tinted. */
+html[data-theme^="channel"] .project-menu [data-slot="item"]:has([data-slot="itemDescription"]) { min-height: 44px; padding-block: 6px; }
+html[data-theme^="channel"] .project-menu [data-slot="item"]:has([data-slot="itemDescription"]) [data-slot="itemLabel"] { color: var(--ui-text-highlighted); font-weight: 600; }
+html[data-theme^="channel"] .project-menu [data-slot="item"]:has([data-slot="itemTrailingIcon"]):has([data-slot="itemDescription"]) { background: color-mix(in srgb, var(--channel-accent) 10%, transparent); }
 html[data-theme^="channel"] .channel-topic-menu { width: 224px; max-width: calc(100vw - 24px); padding: 6px; border-radius: 12px; background: #292b30; backdrop-filter: none; border-color: #ffffff14; box-shadow: 0 12px 32px #0005, 0 2px 6px #0003; }
 html[data-theme^="channel"] .channel-topic-menu [data-slot="item"] { min-height: 35px; padding: 8px 10px; gap: 12px; font-size: 13px; color: #d8dbe2; }
 html[data-theme^="channel"] .channel-topic-menu [data-slot="itemLeadingIcon"] { width: 15px; height: 15px; color: #b1b7c2; }
@@ -1772,9 +1783,10 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-edit-note.is-error { color: var(--ui-error); }
 .channel-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .channel-relay-sent .channel-schedule-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; cursor: pointer; }
-/* Keep the delivery reference or queue status visible at the end of narrow rows. */
+/* Narrow rows wrap to two lines instead of cutting from the left (which dropped "主持人 X 向" and mangled the ellipsis,
+   #14942), so both who sent it and the delivery status stay readable. */
 @media (max-width: 600px) {
-  .channel-relay-sent .channel-schedule-text { direction: rtl; text-align: left; }
+  .channel-relay-sent .channel-schedule-text { display: -webkit-box; white-space: normal; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 }
 .channel-relay-sent .channel-schedule-detail { min-width: 0; overflow-wrap: anywhere; }
 .channel-relay-sent .channel-schedule-detail .markdown-body { color: var(--ui-text); }
@@ -1787,6 +1799,11 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 .channel-schedule-rate [class*="icon"] { width: 13px; height: 13px; }
 .channel-schedule-rate:hover { color: var(--ui-text-toned); background: var(--channel-ghost-hover); }
 .channel-schedule-rate.is-on { color: var(--channel-accent); }
+/* The same rating on a host dispatch card, at the end of the card; its correction form sits inside the card. */
+.channel-dispatch-feedback { margin-top: 6px; }
+.channel-dispatch-feedback-row { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--ui-text-dimmed); }
+.channel-dispatch-feedback-row > span { margin-right: 4px; }
+.channel-dispatch-feedback .channel-schedule-correction { margin: 4px 0 0; }
 .channel-schedule-toggle:hover { color: var(--ui-text-toned); background: var(--channel-ghost-hover); }
 .channel-schedule-toggle [class*="icon"] { width: 14px; height: 14px; transition: transform .12s; }
 .channel-schedule-card.is-open .channel-schedule-toggle [class*="icon"] { transform: rotate(180deg); }

@@ -6,9 +6,9 @@
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 
-import { audit, device_id_of, machine_fingerprint, raw_point } from './device_auth.mjs';
+import { audit, device_id_of, machine_fingerprint, raw_point, registered_device_key } from './device_auth.mjs';
 import { site_fetch } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
 import { t } from './i18n.mjs';
@@ -20,6 +20,7 @@ const REGISTRY_FILE = 'external.json';
 const LOCK_FILE = 'external.lock';
 const LOCK_WAIT_MS = 3000;
 const LOCK_STALE_MS = 10000;
+export const ENDED_GUEST_MS = 5 * 60_000;
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
 export const INVITE_MS = 10 * 60000;
@@ -39,7 +40,7 @@ const LEVELS = new Set(['discuss', 'read']);
 // The only actions an external signer has; redeeming an invite is the one that goes without a registered key.
 export const EXTERNAL_SIGNED_ACTIONS = new Set(['external-api', 'external-repo', 'external-leave']);
 export const EXTERNAL_ACTIONS = new Set(['external-redeem', ...EXTERNAL_SIGNED_ACTIONS]);
-export const INVITE_COMMANDS = new Set(['room-invite', 'room-invites', 'room-invite-revoke']);
+export const INVITE_COMMANDS = new Set(['guest-invite', 'room-invite', 'room-invites', 'room-invite-revoke']);
 const QUERY = /^(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
 const SUB_PATH = /^[A-Za-z0-9_.~-]+(\/[A-Za-z0-9_.~-]+)*$/;
 const MODEL_LIMIT = 120;
@@ -71,8 +72,9 @@ function with_registry(home, task) {
     const file = join(home, REGISTRY_FILE);
     const registry = read_registry(home);
     const now = Date.now();
+    for (const [id, guest] of Object.entries(registry.ended_guests || {})) if (guest.until <= now) delete registry.ended_guests[id];
     for (const [key, invite] of Object.entries(registry.invites)) if (invite.expires_at <= now) delete registry.invites[key];
-    for (const [key, entry] of Object.entries(registry.externals)) if (entry.key_expires_at <= now) delete registry.externals[key];
+    for (const [key, entry] of Object.entries(registry.externals)) if (entry.kind !== 'guest' && entry.key_expires_at <= now) delete registry.externals[key];
     for (const [key, entry] of Object.entries(registry.redemptions || {})) if (entry.member_expires_at * 1000 <= now) delete registry.redemptions[key];
     // Saved even when the task refuses: a used invite or a counted failure must not come back.
     try { return task(registry, now); } finally { atomic_json(file, registry); }
@@ -128,8 +130,11 @@ export function local_room(home, room_id) {
       const config = JSON.parse(readFileSync(config_path, 'utf8'));
       const url = new URL(config.site);
       if (config.room !== room_id || !['127.0.0.1', 'localhost'].includes(url.hostname) || typeof config.token !== 'string') continue;
+      const configured = [config.cwd, ...(Array.isArray(config.extra_directories) ? config.extra_directories : [])];
       return { id: room_id, site: url.origin, token: config.token,
-        directories: [config.cwd, ...(Array.isArray(config.extra_directories) ? config.extra_directories : [])].filter(item => typeof item === 'string' && item) };
+        directories: configured.filter(item => typeof item === 'string' && item),
+        guest_directories: configured.map(item => typeof item === 'string' ? item : item?.path)
+          .filter(directory => typeof directory === 'string' && isAbsolute(directory)) };
     } catch { /* A broken configuration grants nothing. */ }
   }
   return null;
@@ -187,12 +192,13 @@ function membership_end(chosen, duration, now) {
  * Pick the site an invite names: the one asked for, else this account's own domain when it is reached directly (#5588),
  * else the only online site this computer is bound to.
  */
-async function invite_site(home, site_url) {
+async function invite_site(home, site_url, guest = false) {
   const { direct_link, keyed_links } = await import('./remote_launch.mjs');
   const direct = direct_link(home);
   if (direct && (!site_url || site_url === direct.site)) return { site: direct.site, link: direct };
   const sites = Object.entries(keyed_links(home).sites);
   const found = site_url ? sites.find(([origin]) => origin === site_url) : sites.length === 1 ? sites[0] : null;
+  if (guest && !found && !sites.length && !direct) throw new GatewayError(400, '访客邀请需要已绑定的线上站点。托管账号也可由管理员开启自有域名隧道，并为该账号开通直连。', {}, 'site_missing');
   if (!found) throw sites.length ? new GatewayError(400, '这台电脑绑定了多个自建中转，请指定邀请使用的网站', {}, 'site_required')
     : new GatewayError(400, '这台电脑未绑定自建中转，请在管理面板“本机 → 自建中转”处绑定', {}, 'site_missing');
   return { site: found[0], link: found[1] };
@@ -292,6 +298,7 @@ export async function revoke_invite(home, { room_id, token, invite_id }, { fetch
 
 /** `room-invite`, `room-invites` and `room-invite-revoke`, from this computer or relayed from a paired device. */
 export async function invite_command(home, command, input, { device } = {}) {
+  if (command === 'guest-invite') return create_guest_invite(home, input);
   if (command === 'room-invite') return create_invite(home, { ...input, by: device || 'computer' });
   if (command === 'room-invites') return list_invites(home, input);
   if (command === 'room-invite-revoke') return revoke_invite(home, input);
@@ -301,7 +308,7 @@ export async function invite_command(home, command, input, { device } = {}) {
 /** External members' keys for the signed list of one website (the one their invite named), or of every website. */
 export function external_entries(home, site) {
   return Object.entries(read_registry(home).externals).filter(([, entry]) => entry.key_expires_at > Date.now() && (!site || !entry.site || entry.site === site))
-    .map(([id, entry]) => ({ id, x: entry.public_key.x, y: entry.public_key.y, kind: 'external', room: entry.room_id, expires_at: entry.key_expires_at }));
+    .map(([id, entry]) => ({ id, x: entry.public_key.x, y: entry.public_key.y, kind: entry.kind === 'guest' ? 'guest' : 'external', room: entry.room_id, expires_at: entry.key_expires_at }));
 }
 
 /**
@@ -380,6 +387,7 @@ async function redeem(home, ctx, id, sealed, request) {
   claim_relayed_command(home, id, request.sent_at);
   if (typeof platform !== 'string' || !/^[A-Za-z]{2,20}$/.test(platform)) throw new GatewayError(400, '请说明派来的是哪个 AI');
   const previous = read_registry(home).externals[external_id];
+  if (previous?.kind === 'guest') throw guest_error();
   if (previous) {
     const previous_room = local_room(home, previous.room_id);
     const status = await local_call(previous_room, 'GET', `/api/rooms/${encodeURIComponent(previous.room_id)}/external-members/${previous.member_id}`, { token: previous_room.token, fetcher: ctx.fetcher });
@@ -415,10 +423,11 @@ async function redeem(home, ctx, id, sealed, request) {
     level: invite.level, directories: directories.map((directory, root) => ({ root, name: basename(directory) })), expires_at: member.expires_at } };
 }
 
-/**
- * Open one request from a registered external member: its key signs `id + "\n" + body`, the body names this computer and
- * the member's own room, and only the external actions pass.
- */
+/** Signed relay actions available to each kind of external identity. */
+export function allows_external_action(kind, action) {
+  return kind === 'guest' ? action === 'guest-api' : (kind === undefined || kind === 'external') && EXTERNAL_SIGNED_ACTIONS.has(action);
+}
+
 async function open_external(home, id, sealed, machine_id) {
   const request = JSON.parse(sealed.body);
   const entry = read_registry(home).externals[sealed.external_id];
@@ -426,7 +435,7 @@ async function open_external(home, id, sealed, machine_id) {
   if (!await verify_signature(entry.public_key, sealed.signature, `${id}\n${sealed.body}`)) throw new GatewayError(403, '外部成员签名无效', {}, 'bad_signature');
   if (request.machine !== machine_id) throw new GatewayError(403, '这条请求是发给另一台电脑的', {}, 'wrong_machine');
   if (request.room !== entry.room_id) throw new GatewayError(403, '外部成员只能访问自己加入的房间', {}, 'wrong_room');
-  if (!EXTERNAL_SIGNED_ACTIONS.has(request.action)) throw new GatewayError(403, '该操作不对外部成员开放', {}, 'action_forbidden');
+  if (!allows_external_action(entry.kind, request.action)) throw new GatewayError(403, '该操作不对外部成员开放', {}, 'action_forbidden');
   return { request, entry };
 }
 
@@ -529,7 +538,7 @@ export function is_external_request(sealed) {
   if (typeof sealed?.body !== 'string') return false;
   if (sealed.external_id !== undefined) return true;
   if (sealed.device_id) return false;
-  try { return JSON.parse(sealed.body).action === 'external-redeem'; } catch { return false; }
+  try { return ['external-redeem', 'guest-redeem'].includes(JSON.parse(sealed.body).action); } catch { return false; }
 }
 
 /**
@@ -543,24 +552,196 @@ export async function answer_external(home, ctx, id, sealed) {
     if (sealed.device_id) throw new GatewayError(400, '请求同时带有设备与外部成员签名');
     if (sealed.external_id === undefined) {
       request = JSON.parse(sealed.body);
-      if (request.action !== 'external-redeem') throw new GatewayError(403, '该操作不对外部成员开放', {}, 'action_forbidden');
+      if (!['guest-redeem', 'external-redeem'].includes(request.action)) throw new GatewayError(403, '该操作不对外部成员开放', {}, 'action_forbidden');
       if (request.machine !== ctx.machine_id) throw new GatewayError(403, '这条请求是发给另一台电脑的', {}, 'wrong_machine');
-      response = await redeem(home, ctx, id, sealed, request);
+      response = request.action === 'guest-redeem' ? await guest_redeem(home, ctx, id, sealed, request) : await redeem(home, ctx, id, sealed, request);
     } else {
       const opened = await open_external(home, id, sealed, ctx.machine_id);
       request = opened.request;
       claim_relayed_command(home, id, request.sent_at);
       const room = local_room(home, opened.entry.room_id);
       if (!room) throw new GatewayError(404, '房间已不在这台电脑上');
-      const handler = { 'external-api': external_api, 'external-repo': external_repo, 'external-leave': external_leave }[request.action];
+      const handler = { 'guest-api': guest_api, 'external-api': external_api, 'external-repo': external_repo, 'external-leave': external_leave }[request.action];
       response = await handler(home, ctx, sealed.external_id, opened.entry, room, request.payload);
     }
   } catch (error) {
-    response = { status: error instanceof GatewayError ? error.status : 400,
+    response = { status: error instanceof GatewayError || error.code === 'guest_forbidden' ? error.status : 400,
       body: { error: error.message, ...(error.error_text ? { error_text: error.error_text } : {}), ...(error.code ? { code: error.code } : {}) } };
   }
   audit(home, { event: 'external', action: typeof request.action === 'string' ? request.action.slice(0, 40) : '',
     route: typeof request.payload?.path === 'string' ? request.payload.path.split('?')[0].slice(0, 200) : '',
     external: typeof sealed.external_id === 'string' ? sealed.external_id.slice(0, 32) : null, status: response.status });
+  if (request.action?.startsWith('guest-') && response.status >= 400) {
+    const code = response.body?.code || 'guest_forbidden';
+    response.body = { ...response.body, ok: false, code, error: { message: code } };
+  }
   return { request, response };
+}
+
+const guest_error = () => Object.assign(new Error('guest_forbidden'), { code: 'guest_forbidden', status: 403 });
+const guest_base = room => '/api/rooms/' + encodeURIComponent(room.id) + '/guest';
+const guest_projection = room => '/api/external/rooms/' + encodeURIComponent(room.id) + '/guest';
+
+async function create_guest_invite(home, input) {
+  const room = await owned_room(home, input.room_id, input.token);
+  const { site, link } = await invite_site(home, input.site_url, true);
+  const { revision, scope = 'chat', private_chat = false, label = '', mode = 'conservative', duration_seconds = 900 } = input;
+  const invite_id = randomBytes(16).toString('hex'), code = randomBytes(32).toString('base64url');
+  const body = { revision, invite_id, scope, private_chat, label, mode, duration_seconds };
+  const answer = await local_call(room, 'POST', guest_base(room) + '/invite', { token: input.token, body });
+  if (!answer.body?.ok) throw Object.assign(new Error(answer.body?.code || 'invite_failed'), { code: answer.body?.code });
+  const data = answer.body.data;
+  with_registry(home, registry => {
+    registry.guest_invites ||= {};
+    for (const [id, old] of Object.entries(registry.guest_invites)) if (old.expires_at <= Date.now()) delete registry.guest_invites[id];
+    registry.guest_invites[invite_id] = { site, machine: link.id, room: room.id, code_hash: sha256(code), expires_at: data.invite_expires_at };
+  });
+  const view = await local_call(room, 'GET', '/api/rooms/' + encodeURIComponent(room.id), { token: input.token });
+  const payload = { v: 1, site, machine: link.id, fp: machine_fingerprint(link), room: room.id, room_title: view.body?.title || '', invite_id, code, label, scope, private_chat, mode, duration_seconds, invite_expires_at: data.invite_expires_at };
+  return { ...data, url: site + '/guest/#' + b64url(Buffer.from(JSON.stringify(payload))) };
+}
+
+async function guest_redeem(home, ctx, id, sealed, request) {
+  const { invite_id, room: room_id, code, guest_token, label, public_key } = request.payload || {};
+  const invite = read_registry(home).guest_invites?.[invite_id];
+  if (!invite || invite.room !== room_id || invite.machine !== ctx.machine_id || invite.expires_at <= Date.now()
+      || typeof code !== 'string' || !same(invite.code_hash, sha256(code)) || typeof guest_token !== 'string' || !/^[A-Za-z0-9_-]{43,128}$/.test(guest_token)) throw guest_error();
+  const key_id = device_id_of(public_key);
+  if (!await verify_signature(public_key, sealed.signature, id + '\n' + sealed.body)) throw guest_error();
+  claim_relayed_command(home, id, request.sent_at);
+  const room = local_room(home, room_id);
+  if (!room) throw guest_error();
+  const guest_id = sha256(invite_id + ':' + key_id).slice(0, 32);
+  const token_hash = sha256(guest_token);
+  with_registry(home, (registry, now) => {
+    const previous = registry.externals[key_id];
+    if (registered_device_key(home, key_id) || (previous && (previous.kind !== 'guest' || previous.guest_id !== guest_id || !same(previous.token_hash, token_hash)))) throw guest_error();
+    const reserved = Object.values(registry.guest_invites).some(item => item.key_id === key_id && item.expires_at > now && item !== registry.guest_invites[invite_id]);
+    const claim = registry.guest_invites[invite_id];
+    if (reserved || !claim || (claim.key_id && (claim.key_id !== key_id || !same(claim.token_hash, token_hash)))) throw guest_error();
+    claim.key_id = key_id;
+    claim.token_hash = token_hash;
+  });
+  const result = await local_call(room, 'POST', guest_base(room) + '/redeem', { fetcher: ctx.fetcher, token: room.token, body: { invite_id, guest_id, key_id, token_hash, label } });
+  if (!result.body?.ok) return result;
+  const session = await local_call(room, 'GET', guest_projection(room) + '/session', { fetcher: ctx.fetcher, token: guest_token, external: true });
+  if (!session.body?.ok) return session;
+  with_registry(home, registry => {
+    const previous = registry.externals[key_id];
+    if (previous && (previous.kind !== 'guest' || previous.guest_id !== guest_id)) throw guest_error();
+    if (registry.ended_guests) delete registry.ended_guests[key_id];
+    registry.externals[key_id] = { kind: 'guest', room_id, guest_id, site: invite.site, public_key: { x: public_key.x, y: public_key.y }, token_hash, key_expires_at: session.body.data.guest.expires_at || invite.expires_at };
+  });
+  await ctx.on_change?.();
+  return { status: 200, body: { ok: true, data: { guest_id, key_id, session: session.body.data } } };
+}
+
+/** Apply authoritative admission, extension or revocation before publishing the next device list. */
+export function reconcile_guest_state(home, room_id, state, expected_expiry) {
+  return with_registry(home, registry => {
+    let changed = false;
+    for (const [id, entry] of Object.entries(registry.externals)) {
+      if (entry.kind !== 'guest' || entry.room_id !== room_id || entry.guest_id !== state.guest?.id) continue;
+      if (expected_expiry !== undefined && entry.key_expires_at !== expected_expiry) continue;
+      const expiry = state.phase === 'active' ? state.guest.expires_at : state.phase === 'waiting' ? state.invite_expires_at : 0;
+      if (expiry === entry.key_expires_at) continue;
+      if (expiry > Date.now()) entry.key_expires_at = expiry;
+      else {
+        registry.ended_guests ||= {};
+        const { public_key, room_id, site, token_hash } = entry;
+        const until = Math.min(Date.now(), entry.key_expires_at) + ENDED_GUEST_MS;
+        if (until > Date.now()) registry.ended_guests[id] = { public_key, room_id, site, token_hash, until };
+        delete registry.externals[id];
+      }
+      changed = true;
+    }
+    return changed;
+  });
+}
+
+/** Reconcile each locally registered guest against its current room, including ends while the browser is offline. */
+export async function refresh_guest_entries(home, { fetcher, rooms } = {}) {
+  const registry = read_registry(home);
+  if (Object.values(registry.ended_guests || {}).some(record => record.until <= Date.now())) {
+    with_registry(home, () => {}); // Prune expired records under the same lock as redemption.
+  }
+  const entries = Object.values(registry.externals).filter(entry => entry.kind === 'guest' && (!rooms || rooms.includes(entry.room_id)));
+  let changed = false;
+  await Promise.all(entries.map(async entry => {
+    const room = local_room(home, entry.room_id);
+    if (!room) return;
+    const answer = await local_call(room, 'GET', guest_base(room), { token: room.token, fetcher }).catch(() => null);
+    const state = answer?.body?.data;
+    if (!state || !['waiting', 'active', 'ended', 'none', 'invited'].includes(state.phase)) return;
+    const matching = state.guest?.id === entry.guest_id;
+    const next = matching ? state : { phase: 'ended', guest: { id: entry.guest_id } };
+    if (matching && (state.phase === 'active' ? state.guest.expires_at : state.phase === 'waiting' ? state.invite_expires_at : 0) === entry.key_expires_at) return;
+    if (reconcile_guest_state(home, entry.room_id, next, entry.key_expires_at)) changed = true;
+  }));
+  return changed;
+}
+
+/** Confirm a sealed guest reply may leave the direct receiver. Keep only the refusal if the visit ended. */
+export async function guest_reply_check(home, room_id, token, fetcher) {
+  const room = local_room(home, room_id);
+  if (!room || typeof token !== 'string' || !token) return { status: 403, body: { ok: false, code: 'guest_forbidden' } };
+  const result = await local_call(room, 'GET', guest_projection(room) + '/session', { token, external: true, fetcher });
+  if (result.status === 200 && result.body?.ok && ['active', 'waiting'].includes(result.body.data?.phase)) return null;
+  return result.body?.ok === false ? result : { status: 503, body: { ok: false, code: 'offline' } };
+}
+
+async function guest_api(home, ctx, key_id, entry, room, payload) {
+  check_token(entry, payload?.token);
+  const { method, path, query, body, token } = payload;
+  const prefix = guest_projection(room) + '/';
+  if (typeof path !== 'string' || !path.startsWith(prefix)) throw guest_error();
+  const suffix = path.slice(prefix.length);
+  const allowed = method === 'GET' && ['session', 'messages', 'executions', 'room', 'private', 'files', 'files/content'].includes(suffix)
+    || method === 'POST' && (suffix === 'messages' || /^messages\/[0-9]+\/withdraw$/.test(suffix));
+  if (!allowed) throw guest_error();
+  const options = { token, external: true, fetcher: ctx.fetcher };
+  const session = () => local_call(room, 'GET', prefix + 'session', options);
+  const before = await session();
+  if (!before.body?.ok) {
+    if (before.body?.code === 'guest_ended' && reconcile_guest_state(home, room.id, { phase: 'ended', guest: { id: entry.guest_id } })) await ctx.on_change?.();
+    return before;
+  }
+  const current = before.body.data;
+  if (current.phase === 'active' && current.guest?.id === entry.guest_id && current.guest.expires_at > entry.key_expires_at) {
+    if (reconcile_guest_state(home, room.id, current)) await ctx.on_change?.();
+  }
+  if (suffix === 'session') return before;
+  if (before.body.data.phase !== 'active') throw guest_error();
+  const answer = suffix.startsWith('files') ? await guest_file(ctx, entry, room, suffix, query)
+    : await local_call(room, method, path + (query ? '?' + new URLSearchParams(query) : ''), { ...options, body });
+  const after = await session();
+  if (!after.body?.ok || after.body.data.phase !== 'active') return after.body?.ok ? { status: 403, body: { ok: false, code: 'guest_ended' } } : after;
+  return answer;
+}
+
+async function guest_file(ctx, entry, room, suffix, query = {}) {
+  const value = query.root;
+  const root = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
+  const path = query.path ?? '';
+  if (typeof path !== 'string' || (root !== undefined && (!Number.isSafeInteger(root) || root < 0))) throw guest_error();
+  const action = suffix === 'files/content' ? 'read' : root === undefined ? 'roots' : 'list';
+  const call = (outcome, bytes = 0) => local_call(room, 'POST', guest_base(room) + '/file-read', { token: room.token, fetcher: ctx.fetcher,
+    body: { guest_id: entry.guest_id, root: root ?? null, path, action, outcome, bytes } });
+  const grant = await call('check');
+  if (!grant.body?.ok) throw guest_error();
+  const directories = room.guest_directories;
+  let data, count = 0;
+  if (action === 'roots') data = { roots: directories.map((directory, id) => ({ id, name: basename(directory) || String(id) })) };
+  else {
+    const directory = directories[root];
+    if (!directory) { await call('denied'); throw guest_error(); }
+    const result = await engine_call(directory, { op: action === 'read' ? 'read' : 'ls', path });
+    if (!result.ok || result.truncated || result.next_offset != null) { await call('denied'); throw guest_error(); }
+    count = result.bytes;
+    data = action === 'list' ? { root, path, items: result.entries.map(({ name, path, kind, size }) => ({ name, path, kind, size_bytes: size })) }
+      : { root, path, content: result.text, encoding: 'utf-8', size_bytes: result.size };
+  }
+  const audit = await call('served', count);
+  if (!audit.body?.data?.recorded) throw guest_error();
+  return { status: 200, body: { ok: true, data } };
 }

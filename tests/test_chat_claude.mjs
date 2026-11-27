@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { createServer, Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -13,6 +13,8 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { claude, watch_window_turn } from '../runner/adapters/claude.mjs';
 import { deliver_task, execution_details } from '../runner/adapters/index.mjs';
+// Failure assertions must not depend on the machine's interface language.
+process.env.CODISCUSS_LANG = 'zh-CN';
 
 const line = entry => `${JSON.stringify(entry)}\n`;
 const turn_end = line({ type: 'system', subtype: 'turn_duration', durationMs: 2000 });
@@ -119,6 +121,33 @@ test('a chat line to an open Claude window without an inbox fails with the reaso
   claude_home(t, session_id);
   const { task } = chat_task(mkdtempSync(join(tmpdir(), 'chat-run-')));
   await assert.rejects(deliver_task(own(session_id), { session_id }, task, () => { throw new Error('no process'); }), /窗口开着.*收件箱/);
+});
+
+test('window room and private interjections propagate uncertain writes instead of reporting an ended turn', async t => {
+  for (const room of [false, true]) await t.test(room ? 'room' : 'private', async t => {
+    const session_id = randomUUID(), inbox = await inbox_server(t);
+    const { log } = claude_home(t, session_id, { socket: inbox.socket });
+    const { task, seen } = chat_task(mkdtempSync(join(tmpdir(), 'uncertain-steer-')));
+    if (room) Object.assign(task, { id: 'free-21', chat: false, inbox: true, prompt: '读取 free-21.task.json' });
+    const result = await (room ? claude.deliver : claude.chat)(own(session_id), { session_id }, task,
+      () => { throw new Error('no model process'); }, undefined, { console: () => ({ ok: false }) });
+    const original_end = Socket.prototype.end;
+    t.mock.method(Socket.prototype, 'end', function (payload, callback, ...rest) {
+      if (typeof payload !== 'string' || !payload.includes(`[codiscuss:${task.id}+1]`)) return original_end.call(this, payload, callback, ...rest);
+      return original_end.call(this, payload, () => callback(new Error('write confirmation lost')));
+    });
+    await assert.rejects(result.steer('补充要求'), error => {
+      assert.match(error.message, /投递结果不明/);
+      assert.equal(error.delivery_status, undefined);
+      return true;
+    });
+    for (let waited = 0; inbox.received.length < 2 && waited < 2000; waited += 20) await delay(20);
+    assert.equal(inbox.received.length, 2, 'the receiver got the task and exactly one interjection');
+    // Finish the simulated window turn, so its watcher is not left running.
+    appendFileSync(log, line({ type: 'user', message: { content: inbox.received[0][1].message.content } }) + text('完成') + turn_end);
+    await settled(seen);
+    assert.equal(seen.exits, 1);
+  });
 });
 
 test('a chat line whose inbox cannot be reached says the inbox is not a public interface', async t => {

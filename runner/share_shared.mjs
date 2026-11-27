@@ -43,7 +43,8 @@ export const SHARE_SITE_AS_TEXT = /\.(?:js|mjs|cjs|ps1|bat|cmd|vbs)$/i;
 // Fields a share page never carries: where things ran on this computer, sessions, credentials, the owner's own notes
 // on the room and its members, the decision model's choices, messages still queued, attachments and refused commands.
 export const SHARE_DROPPED_FIELDS = new Set(["cwd", "session_id", "reported_session", "reported_client", "client_id", "submission_id",
-  "lease_until", "adopt_error", "token", "access_token", "descriptions", "extra_directories", "project_directory", "resets"]);
+  "lease_until", "adopt_error", "token", "access_token", "descriptions", "extra_directories", "project_directory", "resets",
+  "dispatch_feedback"]);
 export const SHARE_ZEROED_FIELDS = ["quota_until", "held_until"];
 export const SHARE_EMPTIED_FIELDS = new Set(["scheduler_decisions", "scheduler_routing", "recommendations", "denials", "queued_messages",
   "ended_externals", "attachments"]);

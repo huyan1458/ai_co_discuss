@@ -13,6 +13,7 @@
  * and nothing ends when the SSH connection closes; `stop` ends the panel with its icon, the entry, the tunnel and the
  * owner's service, keeping every setting, so the next `start` brings back what was running.
  */
+import { checked_limit, checked_quota, checked_retention, checked_threshold } from './attachment_policy.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
@@ -52,6 +53,7 @@ export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面
   site status                              本地网页地址与线上网站地址
   site connect <接入码|线上网站地址> [绑定令牌]     绑定自建中转（管理员外出、邀请外部专家用）；在部署该网站的电脑上只填线上网站地址即可
   site disconnect                          解绑自建中转，已配对的设备不能再连到这台电脑
+  site origins [list|add <url> [--subdomains]|remove <url>] 管理其他访问地址；仅撤销失去覆盖的设备
   site region [地区]                       查看或设置中转地区（auto、apac、apac-ne、apac-se、wnam、enam、weur、eeur、oc、sam、afr、me）
   site reconnect                           立即重连已绑定的自建中转
 
@@ -90,6 +92,11 @@ API 密钥、技能、工作流、系统提示词（目标同上）
 
 结果以 JSON 输出。--data 指定管理员服务目录（默认 ~/.codiscuss）。
 `) + t('  room-links A    查看父子房间') + '\n' + t('  storage [clean | repair [logs --confirm]]  查看用量、安全清理或深度修理日志') + '\n'
+  + t('  storage attachment-limit [MiB]  查看或调整单个附件上限') + '\n'
+  + t('  storage analyze  让平台主理人盘点共议占用') + '\n'
+  + t('  storage object [--account NAME] [[--url URL --key-file FILE|-] [--retention-days N] [--quota-mib N] [--threshold-mib N] | --test | --clear]  管理云空间') + '\n'
+  + t('  storage object [list | delete ID] [--account NAME]  查看云空间文件或删除指定原件') + '\n'
+  + t('    保留天数 0–30（默认 0，不自动删除），空间上限默认 10240 MiB，走云空间门槛默认 20 MiB 且不超过附件上限') + '\n'
   + t('  storage attachments [ROOM [clear ID... --confirm]]  按房间查看附件占用、列出某房间附件或清理所选附件原件') + '\n'
   + t('  account add <名> --project-data-root <目录>   将新账号的项目、工作区和成员草稿放在指定目录') + '\n'
   + t('  account migrate-data <名> --project-data-root <目录>   停止实例并迁移项目数据') + '\n'
@@ -113,7 +120,7 @@ export async function panel_client(data) {
       headers: { cookie, origin, 'x-codiscuss-panel': '1', 'content-type': 'application/json' } });
     const response = await fetch(`${origin}/api/${path}`, init);
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || t('管理面板返回 {value1}', { value1: response.status }));
+    if (!response.ok) throw new Error((result.error_text ? t(result.error_text.template, result.error_text.params) : result.error) || t('管理面板返回 {value1}', { value1: response.status }));
     return result;
   };
 }
@@ -353,13 +360,18 @@ async function entry_command(call, [action, first, second], values) {
 }
 
 /** The owner's own ways in: the local page and the online site this computer is bound to. */
-async function site_command(call, [action, first, second]) {
+async function site_command(call, [action, first, second], subdomains) {
   if (!action || action === 'status') {
     const state = await call('state');
     return { local: state.service.url || null, online: state.online_site || null };
   }
   if (action === 'connect') return call('site/connect', { site: need(first, t('站点')), setup_key: second || '' });
   if (action === 'disconnect') return call('site/disconnect', {});
+  if (action === 'origins') {
+    if ((!first || first === 'list') && !second) return call('site/origins');
+    if (['add', 'remove'].includes(first) && second) return call('site/origins', { action: first, origin: second, subdomains });
+    throw new Error(HELP);
+  }
   if (action === 'region') return call('site/region', first === undefined ? undefined : { region: first });
   if (action === 'reconnect') return call('site/reconnect', {});
   throw new Error(HELP);
@@ -402,12 +414,43 @@ async function with_elevation(call, data) {
   return (path, body) => (body !== undefined && ELEVATED_PATHS.test(path) ? api('POST', `/api/${path}`, body) : call(path, body));
 }
 
+function cloud_settings_flags(values) {
+  const fields = [['retention-days', 'retention_days', checked_retention], ['quota-mib', 'quota_mib', checked_quota],
+    ['threshold-mib', 'object_threshold_mib', checked_threshold]];
+  return Object.fromEntries(fields.filter(([flag]) => values[flag] !== undefined).map(([flag, field, validate]) =>
+    [field, validate(/^\d+$/.test(values[flag]) ? Number(values[flag]) : NaN)]));
+}
+
+/** Run the object storage command through the same authenticated routes as the panel. */
+async function object_storage_command(call, values, action) {
+  const { url, 'key-file': key_file, test, clear, account } = values;
+  const target = account && !is_owner(account) ? `accounts/${encodeURIComponent(account)}` : 'owner';
+  const path = is_owner(target) ? 'storage/object' : `${target}/object-storage`;
+  const settings = cloud_settings_flags(values), has_settings = Object.keys(settings).length > 0;
+  const setting = Boolean(url || key_file) || has_settings;
+  if (action.length) {
+    if (!setting && !test && !clear && action.join(' ') === 'list') return call(`${path}/files`);
+    if (!setting && !test && !clear && action.length === 2 && action[0] === 'delete' && /^[a-f0-9]{32}$/.test(action[1]))
+      return call(`${path}/files/delete`, { id: action[1] });
+    throw new Error(HELP);
+  }
+  if (Number(setting) + Number(Boolean(test)) + Number(Boolean(clear)) > 1 || Boolean(url) !== Boolean(key_file))
+    throw new Error(t('绑定云空间密钥须同时提供 --url 和 --key-file，设置参数不能与 --test 或 --clear 合用'));
+  if (test || clear) return call(`${path}/${test ? 'test' : 'clear'}`, {});
+  if (!url) return call(path, has_settings ? settings : undefined);
+  const api_key = readFileSync(key_file === '-' ? 0 : key_file, 'utf8').trim();
+  const { api_key_ref } = await call(`${target}/keys`, { base_url: url, api_key });
+  return call(path, { ...settings, base_url: url, api_key_ref });
+}
+
 /** Run one `codiscuss admin` command and print its result as JSON. */
 export async function admin_cli(args, { client = panel_client, print = text => process.stdout.write(text) } = {}) {
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: {
-    data: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'no-isolate': { type: 'boolean' }, 'no-start': { type: 'boolean' },
+    subdomains: { type: 'boolean' }, data: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'no-isolate': { type: 'boolean' }, 'no-start': { type: 'boolean' },
     'project-data-root': { type: 'string' },
     confirm: { type: 'boolean' },
+    url: { type: 'string' }, 'key-file': { type: 'string' }, 'retention-days': { type: 'string' }, test: { type: 'boolean' }, clear: { type: 'boolean' }, account: { type: 'string' },
+    'quota-mib': { type: 'string' }, 'threshold-mib': { type: 'string' },
     set: { type: 'string', multiple: true }, 'base-url': { type: 'string' }, key: { type: 'string' }, file: { type: 'string' }, group: { type: 'string' },
     full: { type: 'boolean' }, config: { type: 'string' }, site: { type: 'string' },
   } });
@@ -436,6 +479,10 @@ export async function admin_cli(args, { client = panel_client, print = text => p
   const commands = {
     storage: () => {
       if (!rest.length) return call('storage');
+      if (rest.length === 1 && rest[0] === 'analyze') return call('storage/steward', {});
+      if (rest[0] === 'object') return object_storage_command(call, values, rest.slice(1));
+      if (rest[0] === 'attachment-limit' && rest.length <= 2)
+        return call('storage/attachment-limit', rest.length === 2 ? { limit_mib: checked_limit(Number(rest[1])) } : undefined);
       if (rest.join(' ') === 'repair') return call('storage/repair', {});
       if (rest.join(' ') === 'repair logs' && values.confirm) return call('storage/repair', { logs: true, confirm: true });
       if (rest.length === 1 && rest[0] === 'clean') return call('storage/clean', {});
@@ -468,7 +515,7 @@ export async function admin_cli(args, { client = panel_client, print = text => p
     service: () => call(`service/${need(rest[0], 'start|stop|restart')}`, {}),
     autostart: () => call('autostart', { on: need(rest[0], 'on|off') === 'on' }),
     update: () => (rest[0] === 'check' ? call('update/check') : update(call, data)),
-    site: () => site_command(call, rest),
+    site: () => site_command(call, rest, values.subdomains),
     entry: () => entry_command(call, rest, values),
     runtime: () => (rest[0] === 'sync' ? call('clis/install', {}) : Promise.reject(new Error(HELP))),
     drives: () => (rest[0] === 'restrict' ? call('drives/restrict', {}) : Promise.reject(new Error(HELP))),

@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { CodexAppClient } from './codex_app_client.mjs';
-import { branch, codex_skills, desktop_thread, list_sessions, preview_session, remove_session, session_exists, session_path, session_settings } from './codex_cli.mjs';
+import { branch, codex_skills, codex_usage, desktop_thread, list_sessions, preview_session, remove_session, session_exists, session_path, session_settings } from './codex_cli.mjs';
 import { BackgroundTasks, bind_access, CALL_TIMEOUT_MS, not_sent, read_json, run_program, same_path, shell_written_paths } from './common.mjs';
 
 // The desktop has no stop or interrupt tool (its tool list, checked 2026-10-30).
@@ -127,11 +127,17 @@ function app_item_activity(item) {
 function entry_logger(task) {
   const log_path = task?.directory && task?.id ? resolve(task.directory, `codex-${task.id}.log`) : '';
   const logged = new Map();
-  return entry => {
+  return (entry, marker) => {
     if (!log_path || !entry) return;
-    const line = JSON.stringify({ type: 'codiscuss.entry', entry });
+    const line = JSON.stringify({ type: 'codiscuss.entry', entry, ...marker });
     if (logged.get(entry.id) !== line) { logged.set(entry.id, line); task.on_output?.(log_path, `${line}\n`); }
   };
+}
+
+function log_turn(task, thread_id, turn_id) {
+  if (!task.directory || !task.id || !turn_id) return;
+  const marker = { type: 'codiscuss.turn', thread_id, turn_id };
+  task.on_output?.(resolve(task.directory, `codex-${task.id}.log`), JSON.stringify(marker) + '\n');
 }
 
 /** Find or follow the one turn matching this room task; ignores unrelated or private turns in the same chat. */
@@ -258,6 +264,7 @@ export async function watch_room_turn(config, thread_id, before, task, options =
       catch { app?.close(); app = null; if (++failures >= CHAT_READ_FAILURES) return; continue; }
       const found = resolve_room_turn(snapshot, task.prompt, seen, matched);
       if (!found) continue;
+      if (!matched && !seen.turns.has(found.matched.turn_id)) log_turn(task, thread_id, found.matched.turn_id);
       matched = found.matched;
       if (found.turn) report_room_items(found.turn, found.items, state, task, log);
       if (found.ended) {
@@ -410,7 +417,11 @@ function read_progress(snapshot, context, log) {
   const found = find_turn(snapshot, context.task.prompt, context.seen);
   if (!found) return null;
   const items = found.turn.items.slice(found.index + 1);
-  for (const [index, item] of items.entries()) { const entry = chat_entry(item, `${found.turn.id}:${index}`); if (entry) log(entry); }
+  const marker = context.previous_turns.has(found.turn.id) ? null : { thread_id: context.thread_id, turn_id: found.turn.id };
+  for (const [index, item] of items.entries()) {
+    const entry = chat_entry(item, `${found.turn.id}:${index}`);
+    if (entry) { log(entry, marker); context.logged_turn = found.turn.id; }
+  }
   const newest = snapshot.turns[0] === found.turn;
   if (found.turn.status === 'inProgress' || (newest && snapshot.thread.status.type === 'active')) return null;
   return { turn: found.turn, items };
@@ -434,7 +445,10 @@ async function follow_chat(context) {
         if (++failures >= CHAT_READ_FAILURES) return task.on_failure?.(`读取 Codex App 会话失败：${error.message}`);
       }
       const ended = snapshot && read_progress(snapshot, context, log);
-      if (ended) return state.stop ? task.on_failure?.(await state.stop) : finish_turn(ended.turn, ended.items, task, log);
+      if (ended) {
+        if (context.logged_turn !== ended.turn.id && !context.previous_turns.has(ended.turn.id)) log_turn(task, thread_id, ended.turn.id);
+        return state.stop ? task.on_failure?.(await state.stop) : finish_turn(ended.turn, ended.items, task, log);
+      }
       await sleep(context.poll_ms);
     }
   } finally { app?.close(); }
@@ -492,10 +506,11 @@ export async function codex_chat(config, binding, task, options = {}) {
   if (!thread_id) throw not_sent(new Error('这位成员还没有 Codex App 会话，先在房间里给它派一次任务'));
   const connect = options.connect || (() => open_app(config));
   let app;
-  let seen;
+  let seen, previous_turns;
   try {
     app = await connect();
     const before = await app.read_thread(thread_id, CHAT_READ);
+    previous_turns = new Set(before.turns.map(turn => turn.id));
     seen = new Set(before.turns.flatMap(turn => (turn.items || []).map(item => item.id)));
   } catch (error) { app?.close(); throw not_sent(error); }
   try { await app.send_message(thread_id, task.prompt); }
@@ -506,7 +521,7 @@ export async function codex_chat(config, binding, task, options = {}) {
   // The force stop archives the user's chat for a moment; the runner's own shutdown must not leave it archived.
   handle.stop_on_shutdown = false;
   task.on_process?.(handle);
-  follow_chat({ app, connect, task, state, thread_id, seen, poll_ms: options.poll_ms ?? CHAT_POLL_MS, timeout_ms: options.timeout_ms ?? CHAT_TIMEOUT_MS })
+  follow_chat({ app, connect, task, state, thread_id, seen, previous_turns, poll_ms: options.poll_ms ?? CHAT_POLL_MS, timeout_ms: options.timeout_ms ?? CHAT_TIMEOUT_MS })
     .catch(error => task.on_failure?.(error.message))
     .finally(() => { state.running = false; handle.emit('close', 0); });
   return { session_id: thread_id, status: 'accepted', capabilities: CHAT_CAPABILITIES, steer: chat_steer(connect, thread_id, state) };
@@ -521,7 +536,7 @@ export const codex = {
   },
   deliver,
   chat: (config, binding, task) => codex_chat(config, binding, task),
-  session: { path: session_path, exists: session_exists, owns: desktop_thread, branch, settings: session_settings,
+  session: { usage: codex_usage, path: session_path, exists: session_exists, owns: desktop_thread, branch, settings: session_settings,
     list: list_sessions, preview: preview_session, remove: remove_session },
   models: null,
   skills: codex_skills,

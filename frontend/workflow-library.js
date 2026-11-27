@@ -118,6 +118,10 @@ function create_library({ view, bridge }) {
     return draft.value?.project_name || active_item.value?.project_name
       || project_roots.value.find((root) => root.id === active_project_id.value)?.name || "";
   });
+  // Where the open workflow is saved, shown after its member count in the header bar.
+  const scope_label = computed(() => active_scope.value === "project"
+    ? (active_project_name.value ? t("项目 · {name}", { name: active_project_name.value }) : t("项目"))
+    : t("全局"));
 
   // Which canvas of the workflow is shown: "" for its main flow, else a sub-workflow's ID; all of them save together.
   const scope = ref("");
@@ -699,7 +703,7 @@ function create_library({ view, bridge }) {
     conflict, reload, refresh_list, available,
     workflows, global_workflows, project_workflows, project_roots, writable_roots,
     page_open, draft, saved_id, saved_scope, saved_project_id, saved_key,
-    active_scope, active_project_id, active_project_name, draft_readonly, set_draft_target,
+    active_scope, active_project_id, active_project_name, scope_label, draft_readonly, set_draft_target,
     canvas_key, scope, subs, current, reserved, open_scope, enter_sub, add_sub, remove_sub,
     commands_allowed, busy, loading, failure, pending_items, retry: () => retry_read?.(),
     deleting, deleting_label, leaving, renaming, rename_text, inputs,

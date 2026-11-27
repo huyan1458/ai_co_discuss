@@ -10,7 +10,7 @@ import { Worker } from 'node:worker_threads';
 import { atomic_json } from './files.mjs';
 import { launch_settings, save_launch_settings } from './discussion_launch.mjs';
 import { assert_shared_home, service_home } from './discussion_service.mjs';
-import { SKILLS, install_skills, install_workflows, remove_legacy_skills, shipped_workflows } from './discussion_skills.mjs';
+import { SKILLS, install_skills, install_workflows, remove_legacy_skills, retire_steward_skills, shipped_workflows } from './discussion_skills.mjs';
 import { ask, checkbox_prompt, intro, outro, pad, short_path, spinner, step, styled, text_width, tone, tree_prompt } from './discussion_tui.mjs';
 import { launcher_installed } from './launcher.mjs';
 import { ask_hosting, configure_hosting, finish_hosting, hosting_requested } from './hosting_setup.mjs';
@@ -349,10 +349,14 @@ async function configure_clients(home, selected, options, existing) {
     const profile = await choose_profile(client, participants[client.name], options);
     profiles.push(profile);
     if (profile.status === 'configured') participants[client.name] = { ...participants[client.name], ...profile.effective };
-    if (!installed.has(directory)) installed.set(directory, install_skills(directory, record));
+    if (!installed.has(directory)) installed.set(directory, {
+      retired: retire_steward_skills(directory, record), results: install_skills(directory, record),
+    });
     const retired = [client.legacy_skills && real_directory(join(user_home, ...client.legacy_skills)), own]
       .filter(path => path && path !== directory);
-    skills.push({ client: client.name, results: installed.get(directory), legacy: retired.flatMap(path => remove_legacy_skills(path, record)) });
+    const current = installed.get(directory);
+    skills.push({ client: client.name, results: current.results,
+      legacy: [...current.retired, ...retired.flatMap(path => [...retire_steward_skills(path, record), ...remove_legacy_skills(path, record)])] });
   }
   save_launch_settings(home, { participants });
   const legacy = remove_legacy_agy_rules(home, user_home);

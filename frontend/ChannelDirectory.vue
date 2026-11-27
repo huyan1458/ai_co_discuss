@@ -26,6 +26,7 @@ import { use_workflow_library } from "./workflow-library.js";
 import { use_invited_rooms } from "./external-members.js";
 import { use_analytics_page } from "./analytics-state.js";
 import { locale, t } from "./i18n.js";
+import { expired_label } from "./sites.js";
 
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions"]);
 const { view, bridge, act, is_running } = inject("discussion");
@@ -34,8 +35,9 @@ const { page_open: workflow_library_open } = use_workflow_library();
 const { page_open: invited_open } = use_invited_rooms();
 const { page_open: analytics_open } = use_analytics_page();
 const middle_page = computed(() => workflow_library_open.value || invited_open.value || analytics_open.value);
-const rooms = computed(() => view.value.rooms.filter((room) => !room.archived));
-const archived_count = computed(() => view.value.rooms.filter((room) => room.archived).length);
+const project_rooms = computed(() => view.value.rooms.filter((room) => !room.system_kind));
+const rooms = computed(() => project_rooms.value.filter((room) => !room.archived));
+const archived_count = computed(() => project_rooms.value.filter((room) => room.archived).length);
 const children = computed(() => {
   const by_id = new Map(rooms.value.map(room => [room.id, room]));
   const groups = new Map();
@@ -96,8 +98,8 @@ const directory_actions = computed(() => [
   })),
   { type: "separator" },
   { label: t("导入房间"), icon: "i-lucide-download", disabled: view.value.backup_pending, onSelect: () => choose_import_target(null) },
-  { label: t("导出全部房间"), icon: "i-lucide-upload", disabled: view.value.backup_pending || !view.value.rooms.length,
-    onSelect: () => act("backup_rooms", { ids: view.value.rooms.map((room) => room.id), name: t("全部房间") }) },
+  { label: t("导出全部房间"), icon: "i-lucide-upload", disabled: view.value.backup_pending || !project_rooms.value.length,
+    onSelect: () => act("backup_rooms", { ids: project_rooms.value.map((room) => room.id), name: t("全部房间") }) },
   { label: t("销毁记录"), icon: "i-lucide-flame", onSelect: () => emit("destructions") },
 ]);
 const import_input = ref(null);
@@ -269,7 +271,7 @@ function folder_actions(folder, index) {
 
 /** Export every channel filed in a folder, archived ones included. */
 function folder_export(folder) {
-  const ids = view.value.rooms.filter((room) => (room.folder_id || "") === folder.id).map((room) => room.id);
+  const ids = project_rooms.value.filter((room) => (room.folder_id || "") === folder.id).map((room) => room.id);
   return { label: t("导出文件夹"), icon: "i-lucide-upload", disabled: view.value.backup_pending || !ids.length,
     onSelect: () => act("backup_rooms", { ids, name: folder.name || t("未分组") }) };
 }
@@ -288,7 +290,7 @@ function toggle_folder(id) {
 
 // Every room with a live share link, for the "shared" list: newest expiry last.
 const shares_open = ref(false);
-const shared_rooms = computed(() => view.value.rooms.filter((room) => view.value.share_links?.[room.id])
+const shared_rooms = computed(() => project_rooms.value.filter((room) => view.value.share_links?.[room.id])
   .map((room) => ({ ...room, share_link: view.value.share_links[room.id] }))
   .sort((a, b) => Date.parse(a.share_link.expires_at) - Date.parse(b.share_link.expires_at)));
 const jobs = computed(() => (view.value.managed_share_jobs || []).filter(job => job.phase !== "published"));
@@ -320,6 +322,7 @@ const SOON_MS = 24 * 3600 * 1000;
 const expires_soon = (link) => Date.parse(link.expires_at) - Date.now() < SOON_MS;
 /** "Expires in 2 days 3 hours", or "in 5 hours" under a day. */
 function expiry_label(link) {
+  if (link.expired) return expired_label();
   const hours = Math.max(0, Math.round((Date.parse(link.expires_at) - Date.now()) / 3600000));
   return hours >= 24 ? t("{days} 天 {hours} 小时后过期", { days: Math.floor(hours / 24), hours: hours % 24 }) : t("{hours} 小时后过期", { hours });
 }
@@ -387,7 +390,8 @@ function actions(room) {
     { label: t("重命名"), icon: "i-lucide-pencil", disabled: !can_rename(room), onSelect: () => start_rename(room) },
     { label: t("分享"), icon: "i-lucide-share-2", children: [
       { label: t("分享房间"), icon: "i-lucide-share-2", onSelect: () => emit("manage", { room, action: "share_prepare" }) },
-      ...(share_link(room) ? [{ label: t("复制分享链接"), icon: "i-lucide-link-2", onSelect: () => act("share_copy", room.id) },
+      { label: t("AI 制作分享卡"), icon: "i-lucide-sparkles", onSelect: () => bridge.request_steward("share-card", { room_id: room.id }) },
+      ...(share_link(room) ? [...(share_link(room).expired ? [] : [{ label: t("复制分享链接"), icon: "i-lucide-link-2", onSelect: () => act("share_copy", room.id) }]),
         { label: t("撤销分享链接"), icon: "i-lucide-link-2-off", onSelect: () => { revoking.value = room; } }] : []),
       { label: t("导出对话"), icon: "i-lucide-upload", disabled: view.value.backup_pending, onSelect: () => act("backup", room.id) },
     ] },
@@ -470,7 +474,7 @@ function actions(room) {
     <UButton v-show="rooms_open" icon="i-lucide-archive" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="emit('archives')"><span class="channel-archive-label">{{ t("已存档") }}</span><small v-if="archived_count" class="channel-archive-count">{{ archived_count }}</small></UButton>
     <UButton v-show="rooms_open && (shared_rooms.length || jobs.length)" :icon="active_job ? 'i-lucide-loader-circle' : 'i-lucide-share-2'" :ui="{ leadingIcon: active_job ? 'animate-spin' : '' }" color="neutral" variant="ghost" class="channel-archive-toggle" aria-haspopup="dialog" @click="shares_open = true"><span class="channel-archive-label">{{ t("已分享") }}</span><small class="channel-archive-count">{{ share_badge }}</small></UButton>
     <SitesPanel :visible="rooms_open" />
-    <UModal v-model:open="shares_open" :title="t('已分享的房间')" :description="t('到期自动删除。续期只延长时间，内容不变；要换成最新内容，在房间菜单里重新分享。')"
+    <UModal v-model:open="shares_open" :title="t('已分享的房间')" :description="t('过期后仍可续期恢复原链接。续期只延长时间，内容不变；要换成最新内容，在房间菜单里重新分享。')"
       :ui="{ content: 'glass-panel studio-modal channel-folder-modal channel-manage-modal share-dialog', body: 'dialog-body' }">
       <template #body>
         <section v-if="jobs.length" class="share-jobs">
@@ -500,12 +504,12 @@ function actions(room) {
             <div class="shared-room-side">
               <span class="shared-room-expiry"><UIcon name="i-lucide-clock" />{{ expiry_label(room.share_link) }}</span>
               <div class="shared-room-actions">
-                <UButton size="xs" color="neutral" variant="soft" :label="t('查看分享卡')" @click="shares_open = false; act('open_share_card', room.id)" />
+                <UButton v-if="!room.share_link.expired" size="xs" color="neutral" variant="soft" :label="t('查看分享卡')" @click="shares_open = false; act('open_share_card', room.id)" />
                 <UButton v-if="!jobs.some(job => job.room_id === room.id) && view.share_tasks?.[room.id]?.phase === 'publishing'" color="primary" size="xs" variant="soft"
                   :label="view.share_tasks[room.id].upload ? t('正在上传附件 {done}/{total}', view.share_tasks[room.id].upload) : t('正在上传…')"
                   @click="shares_open = false; emit('manage', { room, action: 'share_open' })" />
-                <UTooltip :text="t('复制链接')"><UButton icon="i-lucide-copy" size="xs" color="neutral" variant="ghost" :aria-label="t('复制「{name}」的分享链接', { name: room.title })" @click="act('share_copy', room.id)" /></UTooltip>
-                <UTooltip :text="t('打开分享页')"><UButton icon="i-lucide-external-link" size="xs" color="neutral" variant="ghost" :aria-label="t('打开「{name}」的分享页', { name: room.title })" :to="room.share_link.url" target="_blank" rel="noopener noreferrer" /></UTooltip>
+                <template v-if="!room.share_link.expired"><UTooltip :text="t('复制链接')"><UButton icon="i-lucide-copy" size="xs" color="neutral" variant="ghost" :aria-label="t('复制「{name}」的分享链接', { name: room.title })" @click="act('share_copy', room.id)" /></UTooltip>
+                <UTooltip :text="t('打开分享页')"><UButton icon="i-lucide-external-link" size="xs" color="neutral" variant="ghost" :aria-label="t('打开「{name}」的分享页', { name: room.title })" :to="room.share_link.url" target="_blank" rel="noopener noreferrer" /></UTooltip></template>
                 <UDropdownMenu :items="renew_items(room)" :content="{ align: 'start', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
                   <UButton icon="i-lucide-timer-reset" :label="t('续期')" size="xs" color="neutral" variant="soft" :aria-label="t('续期「{name}」的分享链接', { name: room.title })" /></UDropdownMenu>
                 <UTooltip :text="t('撤销链接')"><UButton icon="i-lucide-link-2-off" size="xs" color="neutral" variant="ghost" class="shared-room-revoke" :aria-label="t('撤销「{name}」的分享链接', { name: room.title })" @click="revoking = room" /></UTooltip>

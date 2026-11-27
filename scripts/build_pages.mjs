@@ -51,7 +51,7 @@ export async function build_pages(source_root = PROJECT_ROOT, output_root = PROJ
 }
 
 /** Assets referenced by fixed URLs; scoped Vue styles in modern.css only match the modern.js built with them. */
-const VERSIONED_ASSETS = ["modern.css", "modern.js", "markdown.css", "markdown.js", "backup.js", "i18n.js", "video-compress.js", "app.js"];
+const VERSIONED_ASSETS = ["modern.css", "modern.js", "markdown.css", "markdown.js", "backup.js", "i18n.js", "video-compress.js", "guest.css", "guest.js", "app.js"];
 
 /**
  * Append a content hash to each fixed asset URL so a browser never pairs a cached stylesheet or script
@@ -65,8 +65,9 @@ async function stamp_asset_versions(output) {
   }
   if (!versions.size) return;
   const pattern = new RegExp(`(["'])/(${[...versions.keys()].map((name) => name.replace(".", "\\.")).join("|")})\\1`, "g");
-  // app.js is stamped first so index.html points at its final content; app.js itself loads modern.js.
-  for (const name of ["app.js", "index.html"]) {
+  // app.js is stamped first so index.html points at its final content; app.js itself loads modern.js. The external
+  // user's page loads i18n.js and its own bundle, which the rules below cache for good, so it is stamped too.
+  for (const name of ["app.js", "index.html", "guest/index.html"]) {
     const path = join(output, name);
     const text = await readFile(path, "utf8").catch(() => null);
     if (text === null) continue;

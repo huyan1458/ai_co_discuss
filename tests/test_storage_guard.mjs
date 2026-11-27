@@ -222,7 +222,7 @@ test('disk_free computes min(max(10 GiB, 5%), 30 GiB) and walks up missing paths
   assert.ok(real.reserve_bytes >= DISK_RESERVE_MIN && real.reserve_bytes <= DISK_RESERVE_MAX);
 });
 
-test('block_reason, warn_reason and storage_error_reason cover B1 out-of-room guidance and N1/N3/N4 details', () => {
+test('block_reason, warn_reason and storage_error_reason guide users to cleanup and explain the limit', () => {
   const safe_disk = { available_bytes: 50 * GIB, reserve_bytes: 20 * GIB };
   const low_disk = { available_bytes: 8.5 * GIB, reserve_bytes: 10 * GIB };
   const ok_snap = { total_bytes: 5 * GIB, draft_bytes: 512 * MIB, local_bytes: 2.5 * GIB, rooms: { r1: 512 * MIB }, unreadable: 0, truncated: false };
@@ -234,14 +234,12 @@ test('block_reason, warn_reason and storage_error_reason cover B1 out-of-room gu
   const disk_msg = block_reason(ok_snap, 'r1', low_disk, { locale: 'zh-CN' });
   assert.match(disk_msg, /8\.5 GiB/);
   assert.match(disk_msg, /10 GiB/);
-  assert.match(disk_msg, /房间外/);
-  assert.match(disk_msg, /\$codiscuss-draft-cleanup/);
+  assert.match(disk_msg, /管理面板“存储”/);
 
   // 2. Truncated scan (> 200k files).
   const trunc_msg = block_reason({ ...ok_snap, truncated: true }, 'r1', safe_disk, { locale: 'zh-CN' });
   assert.match(trunc_msg, /200000/);
-  assert.match(trunc_msg, /房间外/);
-  assert.match(trunc_msg, /\$codiscuss-draft-cleanup/);
+  assert.match(trunc_msg, /管理面板“存储”/);
 
   // 3. Room draft limit (> 1 GiB) blocks only that room when total drafts stay under 3 GiB.
   const room_snap = { ...ok_snap, rooms: { r1: 1.25 * GIB, r2: 200 * MIB }, draft_bytes: 1.45 * GIB };
@@ -249,14 +247,14 @@ test('block_reason, warn_reason and storage_error_reason cover B1 out-of-room gu
   assert.match(room_msg, /1\.25 GiB/);
   assert.match(room_msg, /1 GiB/);
   assert.match(room_msg, /drafts\/r1/);
-  assert.match(room_msg, /房间外/);
+  assert.match(room_msg, /管理面板“存储”/);
   assert.equal(block_reason(room_snap, 'r2', safe_disk, { locale: 'zh-CN' }), '');
 
   // 4. Total draft limit (> 3 GiB).
   const draft_msg = block_reason({ ...ok_snap, rooms: { r1: 200 * MIB, r2: 3.1 * GIB }, draft_bytes: 3.3 * GIB }, 'r1', safe_disk, { locale: 'zh-CN' });
   assert.match(draft_msg, /3\.3 GiB/);
   assert.match(draft_msg, /3 GiB/);
-  assert.match(draft_msg, /房间外/);
+  assert.match(draft_msg, /管理面板“存储”/);
 
   // 5. Total home limit (> 10 GiB) calls out room records/attachments (N3) and never auto-deletes them.
   const home_msg = block_reason({ ...ok_snap, total_bytes: 10.5 * GIB, local_bytes: 9.2 * GIB }, 'r1', safe_disk, { locale: 'zh-CN' });
@@ -272,7 +270,7 @@ test('block_reason, warn_reason and storage_error_reason cover B1 out-of-room gu
   const warn_msg = warn_reason(warn_snap, { locale: 'zh-CN' });
   assert.match(warn_msg, /8\.5 GiB/);
   assert.match(warn_msg, /12 处/);
-  assert.match(warn_msg, /房间外/);
+  assert.match(warn_msg, /管理面板“存储”/);
 
   // 7. Measurement error wrapper (N4) in both Chinese and English.
   const err_zh = storage_error_reason(new Error('EPERM'), { locale: 'zh-CN' });
@@ -285,7 +283,7 @@ test('block_reason, warn_reason and storage_error_reason cover B1 out-of-room gu
   // English translations work cleanly.
   const en_msg = block_reason(ok_snap, 'r1', low_disk, { locale: 'en' });
   assert.match(en_msg, /Only 8\.5 GiB/);
-  assert.match(en_msg, /outside the room/);
+  assert.match(en_msg, /Storage tab/);
   assert.equal(format_bytes(0), '0 B');
 });
 

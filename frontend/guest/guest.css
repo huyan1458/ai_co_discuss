@@ -1,0 +1,24 @@
+@import "tailwindcss" source(none);
+@import "@nuxt/ui";
+@import "../markdown.css";
+@source "./";
+
+/* The site's channel colors (frontend/channel.css), so the guest page looks like the room it comes from; main.js sets
+   data-theme to "channel" (dark) or "channel-light", which markdown.css also keys on. */
+:root[data-theme="channel"] {
+  color-scheme: dark;
+  --ui-primary: #8c96ff; --ui-text-inverted: #202125; --ui-text-dimmed: #949ba4; --ui-text-muted: #a6adb7; --ui-text-toned: #b9c0c9;
+  --ui-text: #d8dce3; --ui-text-highlighted: #f2f3f5; --ui-bg: #2b2d31; --ui-bg-muted: #232428; --ui-bg-elevated: #313338;
+  --ui-bg-accented: #3f4249; --ui-bg-inverted: #f2f3f5; --ui-border: #42454d; --ui-border-muted: #ffffff0b; --ui-border-accented: #666d7b;
+  --ui-radius: .375rem;
+}
+:root[data-theme="channel-light"] {
+  color-scheme: light;
+  --ui-primary: #0969da; --ui-text-inverted: #fff; --ui-text-dimmed: #767676; --ui-text-muted: #666666; --ui-text-toned: #555555;
+  --ui-text: #242424; --ui-text-highlighted: #171717; --ui-bg: #ffffff; --ui-bg-muted: #f6f6f6; --ui-bg-elevated: #fff;
+  --ui-bg-accented: #ededed; --ui-bg-inverted: #242424; --ui-border: #dedede; --ui-border-muted: #ebebeb; --ui-border-accented: #b7b7b7;
+  --ui-warning: #9a6700; --ui-success: #1a7f37; --ui-radius: .375rem;
+}
+body { margin: 0; background: var(--ui-bg); font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
+/* Touch screens: 16px fields keep iOS Safari from zooming in when one gets focus. */
+@media (pointer: coarse) { textarea, input { font-size: 16px !important; } }

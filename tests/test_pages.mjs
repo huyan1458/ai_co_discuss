@@ -154,8 +154,9 @@ test('the website accepts only devices the computer signed into its list', async
   const { device_command } = await import('../runner/device_auth.mjs');
   const { software_device } = await import('./passkey_authenticator.mjs');
   const f = await bound_fixture(t);
-  const [machine] = (await call(f, '/api/machines')).body.machines;
+  const machine = (await call(f, '/api/guest/' + f.machine_id + '/key')).body;
   assert.ok(machine.public_key && machine.sign_key, 'anyone sees the keys an unpaired device needs to pair');
+  assert.deepEqual((await f.signed('/api/machines')).body.machines.map(item => item.id), [f.machine_id]);
   const commands = `/api/machines/${f.machine_id}/commands`;
   const key = { kty: 'EC', crv: 'P-256', x: 'A'.repeat(43), y: 'B'.repeat(43) };
   const command = { id: 'command-0000000001', envelope: { key, iv: 'C'.repeat(16), data: 'ZGF0YQ==' } };
@@ -199,7 +200,7 @@ test('a page pairs at the computer with a passkey, then runs operations on it en
   const { start_pairing } = await import('../runner/device_auth.mjs');
   const { software_passkey } = await import('./passkey_authenticator.mjs');
   const f = await bound_fixture(t, { pair: false });
-  const [machine] = (await call(f, '/api/machines')).body.machines;
+  const machine = (await call(f, '/api/guest/' + f.machine_id + '/key')).body;
 
   // The page's own relay and pairing code, with its requests going to the Worker as the page sends them.
   const source = await readFile(join(PROJECT_ROOT, 'web', 'app.js'), 'utf8');
@@ -233,7 +234,7 @@ test('a page pairs at the computer with a passkey, then runs operations on it en
 
   // Before pairing, the website refuses the page; pairing runs on the user's tap and creates the passkey in the same step.
   await assert.rejects(relay_command('settings'), /配对/);
-  const pairing = page_code.pair_this_device(start_pairing(f.home, { site: 'https://discussion.test' }).code);
+  const pairing = page_code.pair_this_device(start_pairing(f.home, { site: 'https://discussion.test' }).code, f.machine_id);
   for (let tries = 0; !state.device.prompt && tries < 50; tries++) await new Promise(resolve => setTimeout(resolve, 10));
   const confirmed = state.device.prompt.run();
   for (let tries = 0; !storage.has('codiscuss-paired') && tries < 100; tries++) {
@@ -384,7 +385,16 @@ test('Worker hands relay sockets and requests to the computer relay only after c
   assert.equal((await upgrade(`m.${machine_token}`)).status, 204);
   assert.equal((await upgrade(`d.${await f.device.credential('GET', path)}`)).status, 204);
   assert.equal((await f.signed(path, { ...request, envelope: { ...request.envelope, data: 'not base64!' } })).status, 400);
+  const prepare = f.env.DB.prepare.bind(f.env.DB);
+  let queries = 0;
+  f.env.DB.prepare = sql => { queries++; return prepare(sql); };
   const timed = (await f.signed(path, request)).body;
+  assert.equal(queries, 1, 'one fresh database read per authenticated relay request');
+  f.env.DB.prepare = prepare;
+  f.sql.exec('SAVEPOINT missing_relay_key');
+  f.sql.prepare('DELETE FROM machine_keys WHERE machine_id=?').run(f.machine_id);
+  assert.equal((await f.signed(path, request)).status, 409);
+  f.sql.exec('ROLLBACK TO missing_relay_key; RELEASE missing_relay_key');
   assert.ok(timed.worker_ms >= 0);
   assert.equal(timed.status, 'unknown');
   assert.deepEqual(seen.map(item => [item.id, item.role]), [[`${f.machine_id}:apac`, 'machine'], [`${f.machine_id}:apac`, 'device'], [`${f.machine_id}:apac`, 'request']]);
@@ -467,11 +477,15 @@ test('hosted accounts reach the computer\'s sign-in entry over the relay only wh
     assert.equal(seen.length, 0, 'nothing reached the entry');
 
     await settings('relay');
-    const answer = await visit('/_entry/login?x=1', { method: 'POST', headers: { 'content-type': 'text/plain', 'x-forwarded-for': '1.2.3.4' }, body: large });
+    const maximum = 90 * 1024 * 1024;
+    await mkdir(join(home, 'local'), { recursive: true });
+    await writeFile(join(home, 'local', 'attachment-limit.json'), '90');
+    relay.webSocketMessage(machine, JSON.stringify({ type: 'attachment-policy', limit_mib: 90 }));
+    const answer = await visit('/_entry/login?x=1', { method: 'POST', headers: { 'content-type': 'text/plain', 'x-forwarded-for': '1.2.3.4', 'content-length': String(maximum) }, body: Buffer.alloc(maximum) });
     assert.equal(answer.status, 200);
     assert.equal(await answer.text(), 'POST /_entry/login?x=1');
     assert.deepEqual(answer.headers.getSetCookie(), ['a=1; Path=/', 'b=2; Path=/'], 'every cookie the entry sets comes through');
-    assert.deepEqual(seen.at(-1), { host: 'codiscuss-entry.example.workers.dev', proto: 'https', cookie: `codiscuss_machine=${id}`, body: large.length },
+    assert.deepEqual(seen.at(-1), { host: 'codiscuss-entry.example.workers.dev', proto: 'https', cookie: `codiscuss_machine=${id}`, body: maximum },
       'the entry sees the browser\'s own host over HTTPS and the whole body, sent in parts');
     const downloaded = Buffer.from(await (await visit('/large')).arrayBuffer());
     assert.ok(downloaded.equals(large), 'a large answer comes back whole, in parts');
@@ -486,7 +500,7 @@ test('Worker errors retain Chinese text and translation metadata without leaking
   const missing = await worker.fetch(new Request('https://site.example/api/missing'), {});
   assert.equal(missing.status, 404);
   assert.deepEqual(await missing.json(), { error: '地址不存在', error_text: { template: '地址不存在', params: {} } });
-  const broken = await worker.fetch(new Request('https://site.example/api/machines'), { DB: { prepare() { throw new Error('private database details'); } } });
+  const broken = await worker.fetch(new Request('https://site.example/api/guest/' + 'a'.repeat(32) + '/key'), { DB: { prepare() { throw new Error('private database details'); } } });
   assert.equal(broken.status, 500);
   assert.deepEqual(await broken.json(), { error: '服务器内部错误', error_text: { template: '服务器内部错误', params: {} } });
   const { default: entry_worker } = await import('../backend/entry_worker.mjs');
@@ -591,9 +605,9 @@ test('a bound computer binds its hosted accounts with one-time child tokens, and
     'a child token cannot rebind the computer that issued it');
   f.sql.prepare('UPDATE machine_setup SET created_at=created_at-601').run();
   assert.equal((await call(f, '/api/machines', { ...account, id: 'e'.repeat(32), setup_key: another.body.setup_key })).status, 403, 'an expired child token');
-  const machines = (await call(f, '/api/machines')).body.machines;
-  assert.deepEqual(machines.map(machine => [machine.id, machine.parent]), [[f.machine_id, undefined], [account.id, f.machine_id]],
-    'hosted accounts are marked and listed after their computer');
+  const anonymous = await call(f, '/api/machines');
+  assert.equal(anonymous.status, 426);
+  assert.equal(anonymous.body.machines, undefined);
   // Turning the switch off releases the account's slot; only the computer that bound it can.
   const release = (id, token) => call(f, `/api/machines/${id}/release`, { machine: account.id }, { 'X-Machine-Token': token });
   assert.equal((await release(account.id, account.token)).status, 404, 'a hosted account releases nobody');
@@ -601,7 +615,7 @@ test('a bound computer binds its hosted accounts with one-time child tokens, and
   assert.equal((await call(f, '/api/machines', { ...other, setup_key: deployer })).status, 200);
   assert.equal((await release(other.id, other.token)).status, 404, 'another computer cannot release it');
   assert.equal((await release(f.machine_id, parent.token)).status, 200);
-  assert.ok(!(await call(f, '/api/machines')).body.machines.some(machine => machine.id === account.id), 'gone from the list');
+  assert.equal((await call(f, '/api/guest/' + account.id + '/key')).status, 404);
   assert.equal((await issue(account.id, account.token)).status, 401, 'its credential no longer works');
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS count FROM machine_parents WHERE parent_id=?').get(f.machine_id).count, 0, 'the slot is back');
 });

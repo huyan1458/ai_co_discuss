@@ -1,6 +1,10 @@
 <script setup>
 import { computed, inject, reactive, ref, watch } from "vue";
 import DeviceSettings from "./DeviceSettings.vue";
+import SecretKeyInput from "./SecretKeyInput.vue";
+import AttachmentCleaner from "./AttachmentCleaner.vue";
+import { delete_cloud_files, object_storage_fields, object_storage_values } from "./object-storage-fields.js";
+import { format_storage_bytes } from "./storage-format.js";
 import { locale, t } from './i18n.js';
 
 const { view, bridge } = inject("discussion");
@@ -18,6 +22,70 @@ const register_blocked = computed(() => state_key.value === "register" && !accou
 // A hosted account's page opened through the account entry signs out there; opened at the instance itself (the computer
 // owner's direct link) there is no entry sign-in to end, so the section is not shown.
 const via_entry = computed(() => Boolean(view.value.entry_account));
+const can_set_storage = computed(() => Boolean((via_entry.value || view.value.launch.projects_restricted) && view.value.launch.available));
+const storage = ref(null), storage_url = ref(""), storage_busy = ref("");
+const saved_storage_key = computed(() => storage.value?.configured && normalized_storage_url() === storage.value.base_url);
+const storage_request = (payload = {}) => bridge.local_request("object-storage-settings", payload);
+function normalized_storage_url() { return storage_url.value.trim().replace(/\/+$/, ""); }
+watch(can_set_storage, async (available) => {
+  if (!available) { storage.value = null; return; }
+  try {
+    const settings = await storage_request();
+    if (!can_set_storage.value) return;
+    storage.value = settings;
+    storage_url.value = settings.base_url;
+  } catch (error) { bridge.notify("error", error.message); }
+}, { immediate: true });
+
+async function save_storage_key(api_key) {
+  const base_url = normalized_storage_url();
+  storage_busy.value = "save";
+  try {
+    const { api_key_ref } = await bridge.local_request("api-key", { base_url, api_key });
+    storage.value = await storage_request({ base_url, api_key_ref });
+    storage_url.value = storage.value.base_url;
+    bridge.notify("info", t("已保存"));
+    void bridge.execute("refresh", { room: false });
+  } finally { storage_busy.value = ""; }
+}
+// The cloud space's number settings (retention days, quota, threshold), each saved on its own when its field is left.
+const storage_fields = computed(() => object_storage_fields(view.value.attachment_limit_mib));
+const storage_values = ref({});
+watch(storage, (settings) => { if (settings) storage_values.value = object_storage_values(storage_fields.value, settings); });
+async function save_storage_field(field) {
+  const value = storage_values.value[field.key];
+  if (!Number.isInteger(value) || value < field.min || value > field.max) { bridge.notify("error", field.invalid); return; }
+  if (value === storage.value?.[field.key] || storage_busy.value) return;
+  storage_busy.value = field.key;
+  try {
+    storage.value = await storage_request({ [field.key]: value });
+    bridge.notify("info", t("已保存"));
+    void bridge.execute("refresh", { room: false });
+  } catch (error) { bridge.notify("error", error.message); }
+  finally { storage_busy.value = ""; }
+}
+// The account's cloud space files, listed and deleted by the room site with the owner's sign-in.
+const cloud_open = ref(false);
+const read_cloud = () => bridge.request("/api/rooms/cloud-attachments");
+const delete_cloud = (ids) => delete_cloud_files(ids, (id) => bridge.request("/api/rooms/cloud-attachments/delete", { id }));
+function cloud_deleted(result) {
+  bridge.notify("info", t("已释放 {size}", { size: format_storage_bytes(result.freed_bytes) }));
+  if (result.error) bridge.notify("error", result.error);
+}
+async function manage_storage(action) {
+  if (action === "clear" && !window.confirm(t("清除后超过上限的文件将无法上传，已存于对象存储的附件也无法下载。确认清除？"))) return;
+  storage_busy.value = action;
+  try {
+    const result = await storage_request({ action });
+    if (action === "clear") {
+      storage.value = result;
+      storage_url.value = result.base_url;
+      void bridge.execute("refresh", { room: false });
+    }
+    bridge.notify("info", action === "test" ? t("连接成功") : t("已清除"));
+  } catch (error) { bridge.notify("error", error.message); }
+  finally { storage_busy.value = ""; }
+}
 
 watch(() => profile.value?.username, (value) => { display_name.value = value || ""; }, { immediate: true });
 watch(state_key, () => { Object.assign(auth_form, { password: "", confirm: "", setup_key: "" }); });
@@ -178,6 +246,26 @@ async function save_password() {
         <div class="account-signout account-actions"><UButton :label="t('退出登录')" icon="i-lucide-log-out" color="neutral" variant="outline" class="pb-action" size="sm" :loading="busy === 'logout'" :disabled="Boolean(busy)" @click="sign_out" /></div>
       </template>
     </div>
+    <section v-if="can_set_storage && storage" class="account-devices" aria-labelledby="account-object-storage">
+      <h4 id="account-object-storage">{{ t("云空间（对象存储）") }} <small v-if="saved_storage_key && storage.managed">· {{ t("管理员提供") }}</small></h4>
+      <UFormField :label="t('资源中心地址')" class="w-full">
+        <UInput v-model="storage_url" type="url" :disabled="Boolean(storage_busy)" :aria-label="t('资源中心地址')" class="w-full" />
+      </UFormField>
+      <UFormField :label="t('对象存储 Key')" class="w-full">
+        <SecretKeyInput :key="`${normalized_storage_url()} ${storage.api_key_ref}`" :save="save_storage_key" :saved="Boolean(saved_storage_key)" :disabled="Boolean(storage_busy) || !normalized_storage_url()" :label="t('对象存储 Key')" :placeholder="t('填写 Key，失焦或回车保存')" @error="(error) => bridge.notify('error', error.message)" />
+      </UFormField>
+      <!-- The quota is the computer owner's to set (management panel), so a hosted account only sees it here. -->
+      <UFormField v-for="field in storage_fields" :key="field.key" :label="field.label" :help="field.key === 'quota_mib' ? t('由管理员在管理面板设置。') : field.help" class="w-full">
+        <UInput v-model.number="storage_values[field.key]" type="number" :min="field.min" :max="field.max" step="1" :disabled="Boolean(storage_busy) || field.key === 'quota_mib'" :aria-label="field.label" class="w-32" @change="save_storage_field(field)" />
+      </UFormField>
+      <div class="account-actions">
+        <UButton :label="t('测试连接')" :loading="storage_busy === 'test'" :disabled="Boolean(storage_busy) || !saved_storage_key" color="neutral" variant="soft" size="sm" @click="manage_storage('test')" />
+        <UButton :label="cloud_open ? t('收起云空间') : t('管理云空间')" :disabled="!storage.configured" color="neutral" variant="soft" size="sm" @click="cloud_open = !cloud_open" />
+        <UButton :label="t('清除')" :loading="storage_busy === 'clear'" :disabled="Boolean(storage_busy) || !storage.configured" color="neutral" variant="ghost" size="sm" @click="manage_storage('clear')" />
+      </div>
+      <AttachmentCleaner v-if="cloud_open && storage.configured" cloud class="w-full" :load="read_cloud" :clear="delete_cloud"
+        @cleared="cloud_deleted" @failed="(message) => bridge.notify('error', message)" />
+    </section>
   </section>
 </template>
 

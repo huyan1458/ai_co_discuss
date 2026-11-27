@@ -274,9 +274,11 @@ function agy_project_grants(config, task, folders, user_home) {
  */
 function agy_lockdown_grants(task, user_home) {
   const write_rule = directory => `write_file(${resolve(directory).replaceAll('\\', '/')})`;
-  const protected_paths = [task.member_directory, ...task.skill_directories, ...agy_skill_directories(user_home), join(user_home, '.gemini')];
+  // The protected level's project directories (`lockdown_read_directories`) are added to the workspace and never written.
+  const protected_paths = [task.member_directory, ...task.skill_directories, ...agy_skill_directories(user_home), join(user_home, '.gemini'),
+    ...(task.lockdown_read_directories || [])];
   if (protected_paths.some(directory => within_directory(directory, task.draft_directory))) {
-    throw new Error('agy 草稿目录不能位于运行目录、技能或 .gemini 配置目录中，未交付任务');
+    throw new Error('agy 草稿目录不能位于运行目录、项目、技能或 .gemini 配置目录中，未交付任务');
   }
   return { allow: [agy_rule(), write_rule(task.draft_directory)],
     deny: [...new Set([...protected_paths.map(write_rule), 'mcp(*)', 'read_url(*)', ...agy_saved_grants(user_home)])] };
@@ -353,7 +355,7 @@ function invocation(config, binding, task, user_home) {
     .filter(directory => !same_path(directory, cwd));
   // Only the member's own runtime folder: the runtime directory holds every member's credential (凭据文件隔离).
   const added = unique_paths([task.member_directory, task.draft_directory, task.tool_lockdown ? '' : task.knowledge_directory, ...task.skill_directories,
-    ...agy_skill_directories(user_home), ...extra]);
+    ...agy_skill_directories(user_home), ...extra, ...(task.tool_lockdown ? task.lockdown_read_directories || [] : [])]);
   const args = ['--output-format', 'stream-json', '--print-timeout', '0',
     ...added.flatMap(directory => ['--add-dir', directory])];
   // Headless agy refuses `--mode auto` ("not available for this account", 1.4.10–1.4.11) though its interactive window
@@ -726,14 +728,135 @@ export function database_settings(file) {
   return null;
 }
 
-/** agy's native slash command /model names the current model without an agent turn. */
-function slash_command(profile, command, options) {
+/**
+ * The context tokens a conversation database recorded on its latest model call, from `gen_metadata`
+ * (`ChatModelMetadata.chat_start_metadata.context_window_metadata`: field 1.9.10.1 `estimated_tokens_used`,
+ * 1.9.10.4 `max_context_tokens`; agy 1.5.18, shared with the Antigravity App).
+ */
+export function database_usage(file) {
+  if (!file) return null;
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    const row = db.prepare('SELECT data FROM gen_metadata ORDER BY idx DESC LIMIT 1').get();
+    if (!row?.data) return null;
+    const payload = Buffer.from(row.data);
+    const used = proto_value(payload, 1, 9, 10, 1);
+    const window = proto_value(payload, 1, 9, 10, 4);
+    if (typeof used === 'number' && used > 0) {
+      return { context: { used, window: typeof window === 'number' && window > 0 ? window : 0 } };
+    }
+  } finally { db.close(); }
+  return null;
+}
+
+/**
+ * Context and turn token usage from an agy stream-json process log:
+ * - `context.used`: `input_tokens + cache_read_tokens` of the last finished `agent_response` step (`window: 0`).
+ * - `turn`: `result.usage` when present (agy sums all model calls of the turn there), else the sum of every finished
+ *   `agent_response` step's `usage` (`input_tokens`, `cache_read_tokens`, `output_tokens`; agy reports no `cache_write`).
+ */
+function log_usage(log_path) {
+  if (!log_path || !existsSync(log_path)) return null;
+  let used = 0, result_turn = null;
+  const step_sum = { input: 0, cache_read: 0, cache_write: 0, output: 0 };
+  let has_steps = false;
+  for (const line of readFileSync(log_path, 'utf8').split(/\r?\n/)) {
+    const entry = json_line(line);
+    if (!entry) continue;
+    const step = entry.step_update;
+    if (step?.step_type === 'agent_response' && step.state === 'DONE' && step.usage) {
+      const input = Number(step.usage.input_tokens) || 0;
+      const cache_read = Number(step.usage.cache_read_tokens) || 0;
+      const output = Number(step.usage.output_tokens) || 0;
+      if (input + cache_read > 0) used = input + cache_read;
+      if (input + cache_read + output > 0) {
+        step_sum.input += input;
+        step_sum.cache_read += cache_read;
+        step_sum.output += output;
+        has_steps = true;
+      }
+    }
+    if (entry.event === 'result' && entry.result?.usage) {
+      const u = entry.result.usage;
+      const input = Number(u.input_tokens) || 0;
+      const cache_read = Number(u.cache_read_tokens) || 0;
+      const output = Number(u.output_tokens) || 0;
+      if (input + cache_read + output > 0) {
+        result_turn = { input, cache_read, cache_write: 0, output };
+      }
+    }
+  }
+  const context = used > 0 ? { used, window: 0 } : null;
+  const turn = result_turn || (has_steps ? step_sum : null);
+  return context || turn ? { ...(context && { context }), ...(turn && { turn }) } : null;
+}
+
+/** Context usage of one agy session after a turn: its database first for context, plus its stream-json log for turn totals. */
+export function session_usage(session_id, { log_path = '', env = process.env, home = homedir() } = {}) {
+  let from_db = null, from_log = null;
+  try { from_db = database_usage(session_path(session_id, env, home)); } catch { /* Fall back to the turn's stream-json log. */ }
+  try { from_log = log_usage(log_path); } catch { /* Ignore unreadable log. */ }
+  const context = from_db?.context || from_log?.context;
+  const turn = from_log?.turn;
+  return context || turn ? { ...(context && { context }), ...(turn && { turn }) } : null;
+}
+
+/** Normalize agy's `/usage` command data (`groups[].buckets[]`) into adapter quota windows (agy 1.5.18). */
+function parse_agy_quota(data) {
+  const windows = [];
+  for (const group of Array.isArray(data?.groups) ? data.groups : []) {
+    const group_name = typeof group?.name === 'string' ? group.name : '';
+    // agy names the group's models by display name ("Gemini 4 Neon, Claude Opus 5.5"); as ID prefixes they let the page
+    // show the group of the model a member uses (`gemini-4-neon-high`, `claude-opus-5-5`).
+    const listed = /:\s*(.+)$/.exec(typeof group?.description === 'string' ? group.description : '')?.[1] || '';
+    const models = listed.split(',').map(name => name.trim().toLowerCase().replace(/[\s.]+/g, '-')).filter(Boolean);
+    for (const bucket of Array.isArray(group?.buckets) ? group.buckets : []) {
+      const remaining = Number(bucket?.remaining_fraction);
+      if (!Number.isFinite(remaining)) continue;
+      const kind = bucket.window === '5h' ? 'five_hour' : bucket.window === 'weekly' ? 'seven_day' : 'other';
+      const minutes = bucket.window === '5h' ? 300 : bucket.window === 'weekly' ? 10080 : 0;
+      const parsed = Date.parse(String(bucket.reset_time || ''));
+      const resets_at = Number.isFinite(parsed) && parsed > 0 && !/^1970-/.test(String(bucket.reset_time || ''))
+        ? Math.floor(parsed / 1000) : 0;
+      windows.push({ kind, minutes, used: 1 - remaining, resets_at, group: group_name, models });
+    }
+  }
+  return windows.length ? { windows } : null;
+}
+
+/** agy's native slash commands (`/model`, `/usage`) return structured JSON in print mode without an agent turn. */
+function slash_command(profile, command, options = {}) {
   const args = ['-p', `/${command}`, '--output-format', 'json'];
+  const catalog_options = options.spawn_process && !options.spawn ? { ...options, spawn: options.spawn_process } : options;
   return query_catalog(profile, args, (send, finish) => ({ start: () => {}, line: line => {
     const reply = json_line(line), data = reply?.command?.data;
     if (reply?.status !== 'SUCCESS' || reply.command?.name !== command || !data) return;
     if (command === 'model') finish(null, { model: MODEL_PATTERN.test(data.id || '') ? data.id : '', effort: typeof data.effort === 'string' ? data.effort : '' });
-  } }), options);
+    if (command === 'usage') finish(null, parse_agy_quota(data));
+  } }), catalog_options);
+}
+
+// Every agy run may refresh its sign-in, and a refresh meeting a network drop opens the Google sign-in page in a browser
+// (2026-11-05, see default-model caching), so `/usage` is asked at most this often, and after a failure much less often.
+const QUOTA_READ_MS = 30 * 60_000;
+const QUOTA_FAILED_MS = 6 * 3600_000;
+// Kept per process launcher, so a test's fake agy and the real one never share a reading.
+const quota_reads = new WeakMap();
+const real_launcher = {};
+
+/** Read agy's account quota windows (`5h` and `weekly` per model group) via `agy -p /usage --output-format json`. */
+async function quota(profile, options = {}) {
+  if (!isAbsolute(profile?.executable || '')) return null;
+  const launcher = options.spawn_process || options.spawn || real_launcher;
+  if (!quota_reads.has(launcher)) quota_reads.set(launcher, new Map());
+  const reads = quota_reads.get(launcher), last = reads.get(profile.executable);
+  // Within the wait nothing new is known; returning the old reading again would let it be stored as read now.
+  if (last && Date.now() - last.at < (last.ok ? QUOTA_READ_MS : QUOTA_FAILED_MS)) return null;
+  let value = null;
+  try { value = await slash_command(profile, 'usage', options); }
+  catch { value = null; }
+  reads.set(profile.executable, { at: Date.now(), ok: Boolean(value) });
+  return value;
 }
 
 /** `agy models` prints tab-separated ids and labels. */
@@ -877,9 +1000,10 @@ export const antigravity_cli = {
     return agy_failure_class(reason);
   },
   session: { path: session_path, exists: session_exists, owns: session_exists, branch, settings: session_settings,
-    list: list_sessions, preview: preview_session,
+    usage: session_usage, list: list_sessions, preview: preview_session,
     remove: (id, { home = homedir() } = {}) => remove_conversation(join(home, '.gemini', 'antigravity-cli'), id),
     history: ({ home = homedir() } = {}) => conversation_history(join(home, '.gemini', 'antigravity-cli')) },
   models: { list: models, defaults, defaults_stamp },
+  quota,
   skills: agy_skills,
 };

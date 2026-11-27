@@ -13,13 +13,14 @@ import { MAX_EXPERT_PROMPT } from "../runner/expert_prompts.mjs";
 import { t } from "./i18n.js";
 
 const { bridge } = inject("discussion");
-const PROGRAM = "program";
+const PROGRAM = "program", HOST = "host";
 const prompts = ref({});
 const loaded = ref(false), unavailable = ref(""), saving = ref(false);
 const open = ref(false), editing = ref(""), draft = ref("");
 
 const platform_label = (name) => name === "Custom" ? t("自定义 API") : bridge.platform_identity(name)?.label || name;
 const rows = computed(() => [{ key: PROGRAM, label: t("所有成员"), text: prompts.value.program || "" },
+  { key: HOST, label: t("主持人"), text: prompts.value.host || "" },
   ...Object.keys(API_PROVIDERS).map((name) => ({ key: name, label: platform_label(name), text: prompts.value.platforms?.[name] || "" }))]);
 const current = computed(() => rows.value.find((row) => row.key === editing.value) || { label: "", text: "" });
 const set_count = computed(() => rows.value.filter((row) => row.text).length);
@@ -53,8 +54,9 @@ function edit(key) {
 async function save() {
   const key = editing.value, text = draft.value.trim(), before = prompts.value;
   editing.value = "";
-  const patch = key === PROGRAM ? { program: text } : { platforms: { [key]: text } };
-  prompts.value = key === PROGRAM ? { ...before, program: text } : { ...before, platforms: { ...before.platforms, [key]: text } };
+  const layer = [PROGRAM, HOST].includes(key);
+  const patch = layer ? { [key]: text } : { platforms: { [key]: text } };
+  prompts.value = layer ? { ...before, [key]: text } : { ...before, platforms: { ...before.platforms, [key]: text } };
   saving.value = true;
   try { prompts.value = await bridge.save_system_prompts(patch); }
   catch (error) { prompts.value = before; bridge.notify("error", error.message); }
@@ -85,8 +87,8 @@ async function save() {
       </template>
     </UCollapsible>
     <MemberTextDialog :open="Boolean(editing)" v-model:draft="draft" :title="t('{value1} 的系统提示词', { value1: current.label })"
-      :description="editing === PROGRAM ? t('发给本机唤醒的所有成员，补充做法与偏好；不改变权限和技能规则。') : t('发给 {value1} 平台的所有成员，含本地软件、模型 API、预设与工作流里的专家。', { value1: current.label })"
-      :label="t('{value1} 的系统提示词', { value1: current.label })" :max="MAX_EXPERT_PROMPT" :rows="8" :fixed="editing === PROGRAM ? null : fixed"
+      :description="editing === PROGRAM ? t('发给本机唤醒的所有成员，补充做法与偏好；不改变权限和技能规则。') : editing === HOST ? t('只发给当下的房间主持人，换了主持人跟着换；写你派活、选人的偏好，比如哪家额度多、谁擅长什么。主持人照你的明确要求也会更新这里。') : t('发给 {value1} 平台的所有成员，含本地软件、模型 API、预设与工作流里的专家。', { value1: current.label })"
+      :label="t('{value1} 的系统提示词', { value1: current.label })" :max="MAX_EXPERT_PROMPT" :rows="8" :fixed="[PROGRAM, HOST].includes(editing) ? null : fixed"
       :note="draft.trim() ? t('Ctrl + Enter 保存') : t('留空表示不使用')" :changed="draft.trim() !== current.text" :saving="saving"
       @update:open="(value) => { if (!value) editing = ''; }" @save="save" />
   </section>

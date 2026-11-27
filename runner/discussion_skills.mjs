@@ -3,7 +3,7 @@
  * when asked, the workflows this package ships.
  */
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -11,8 +11,36 @@ import { atomic_json } from './files.mjs';
 import { WORKFLOW_ID_PATTERN, install_workflow_folder, parse_markdown, workflow_directory } from './workflows.mjs';
 
 const SOURCE = fileURLToPath(new URL('../.agents/skills/', import.meta.url));
-export const SKILLS = ['discuss-host', 'discuss-participant', 'discuss-goal', 'discuss-session', 'discuss-report', 'share-card', 'workflow-creator', 'local-tts-setup', 'local-stt-setup', 'codiscuss-draft-cleanup'];
+export const SKILLS = ['discuss-host', 'discuss-participant', 'discuss-goal', 'discuss-session', 'workflow-creator'];
+const FORMER_STEWARD_SKILLS = ['discuss-report', 'share-card', 'local-tts-setup', 'local-stt-setup', 'notify-setup', 'codiscuss-draft-cleanup'];
 const LEGACY_MANIFEST = '.codiscuss-skills.json';
+const SKILL_DIGEST_LENGTH = 16;
+
+/** A short hash of a skill file's bytes, shared by the editor and delivery records. */
+export function skill_digest(bytes) {
+  return createHash('sha256').update(bytes).digest('hex').slice(0, SKILL_DIGEST_LENGTH);
+}
+
+/** Fingerprint the complete fixed set of room skills that can steer the host. */
+export function host_skill_digest(root) {
+  try {
+    const directories = ['discuss-goal', 'discuss-host', 'discuss-participant', 'discuss-session'];
+    const paths = directories.flatMap(name => skill_file_paths(root, name)).sort();
+    const files = paths.map(path => [path, skill_digest(readFileSync(join(root, path)))]);
+    return skill_digest(JSON.stringify(files));
+  } catch {
+    return null;
+  }
+}
+
+/** Enumerate files with portable relative paths and without following symlinks. */
+function skill_file_paths(root, path) {
+  const target = join(root, path);
+  const status = lstatSync(target);
+  if (status.isDirectory()) return readdirSync(target).flatMap(name => skill_file_paths(root, `${path}/${name}`));
+  if (status.isFile()) return [path];
+  throw new Error('技能目录包含无法读取的条目');
+}
 
 /** Hash names and contents, rejecting links instead of following them outside a skill. */
 function tree_hash(directory) {
@@ -69,6 +97,40 @@ export function install_skills(directory, record) {
   for (const result of results) if (result.hash) managed[result.name] = result.hash;
   save_record(record, root, { ...data, [root]: managed });
   return results.map(({ hash, ...result }) => result);
+}
+
+/** Remove only the retired steward copies the installer recorded, preserving edited copies in service backups. */
+export function retire_steward_skills(directory, record) {
+  const root = resolve(directory);
+  if (!existsSync(root)) return [];
+  const { data, previous } = recorded_hashes(record, root);
+  const retired = FORMER_STEWARD_SKILLS.filter(name => Object.hasOwn(previous, name) && /^[a-f0-9]{64}$/.test(previous[name]));
+  if (!retired.length) return [];
+  const results = [];
+  for (const name of retired) {
+    const path = join(root, name);
+    let present;
+    try { present = lstatSync(path); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (present) {
+      let current;
+      try { current = tree_hash(path); } catch { /* An unreadable or linked tree still needs a backup before removal. */ }
+      const backup = current === previous[name] ? undefined : backup_retired_skill(record, name, path);
+      rmSync(path, { recursive: true });
+      results.push({ name, path, status: backup ? 'backed_up' : 'removed', ...(backup ? { backup } : {}) });
+    }
+    delete previous[name];
+  }
+  save_record(record, root, { ...data, [root]: previous });
+  return results;
+}
+
+/** Copy without following links, and only return a backup once the entire copy succeeds. */
+function backup_retired_skill(record, name, path) {
+  const directory = join(dirname(record), 'backups', 'skills');
+  mkdirSync(directory, { recursive: true });
+  const backup = join(mkdtempSync(join(directory, `${name}-`)), name);
+  cpSync(path, backup, { recursive: true, dereference: false, verbatimSymlinks: true });
+  return backup;
 }
 
 /** Remove unmodified copies a previous install left in a retired directory; edited copies stay. */

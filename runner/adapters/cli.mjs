@@ -144,22 +144,31 @@ export async function cli_delivery(adapter, config, binding, task, spawn_process
     task.on_diagnostic?.({ retry: { layer: 'adapter', state: 'started', attempt: restarts } });
     let launched;
     try { launched = launch(); }
-    catch (error) { task.on_failure(error.message, { not_started: true }); return true; }
+    catch (error) { task.on_failure(error.message, { not_started: error.delivery_status === 'not_sent', retryable: error.delivery_status === 'not_sent' }); return true; }
     current = launched;
     launched.child.once('spawn', () => { launched.state.spawned = true; launched.send(); });
     launched.child.once('error', error => task.on_failure(error.message, { not_started: !launched.state.spawned }));
     return true;
   };
   const launch = () => {
-    const child = spawn_process(invocation.executable || config.executable, invocation.args, {
+    let child;
+    try { child = spawn_process(invocation.executable || config.executable, invocation.args, {
       cwd: launch_directory(config, task), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, ...(invocation.env || {}), DISCUSS_ACCESS_FILE: task.access_path },
-    });
+    }); } catch (error) { throw not_sent(error); }
     tree_killable(child);
-    const state = monitor_cli(adapter, child, binding, task, restart);
-    const kill = child.kill;
-    child.kill = (...args) => { state.stopped = true; return kill(...args); };
-    task.on_process(child);
+    let state;
+    try {
+      state = monitor_cli(adapter, child, binding, task, restart);
+      const kill = child.kill;
+      child.kill = (...args) => { state.stopped = true; return kill(...args); };
+      task.on_process(child);
+    } catch (error) {
+      // The child may already have read argv; stop its tree even if it never reached the runner's registry.
+      child.once('error', () => {});
+      try { child.kill(); } catch { /* Preserve the setup failure. */ }
+      throw error;
+    }
     const send = () => {
       child.stdin.on('error', error => { if (error.code !== 'EPIPE') task.on_failure(error.message); });
       if (invocation.steer) child.stdin.write(invocation.input);
@@ -168,9 +177,7 @@ export async function cli_delivery(adapter, config, binding, task, spawn_process
     };
     return { child, state, send };
   };
-  let first;
-  try { first = launch(); }
-  catch (error) { throw not_sent(error); }
+  const first = launch();
   current = first;
   const { child, state } = first;
   await new Promise((resolve_spawn, reject) => {

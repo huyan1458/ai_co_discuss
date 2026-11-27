@@ -21,10 +21,14 @@ import SpeakingOrder from "./SpeakingOrder.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberNameEdit from "./MemberNameEdit.vue";
 import { busy, member_actions, project_files } from "./member-actions.js";
+import { member_quota, member_usage } from "./quota.js";
+import ContextMeter from "./ContextMeter.vue";
 import { access_label, access_options } from "../runner/expert_prompts.mjs";
 import MemoBlock from "./memo-block.js";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import { copy_seat_link, declined, external_of, external_tag, revoke_member } from "./external-members.js";
+import GuestPresence from "./GuestPresence.vue";
+import { member_protection, use_guest_state } from "./external-guests.js";
 
 
 const { view, bridge, act, is_running } = inject("discussion");
@@ -33,6 +37,10 @@ const ACCESS_LABELS = { runner: t('本机唤醒'), manual: t('手动接入') };
 const TASK_PREVIEW_LENGTH = 90;
 const room = computed(() => view.value.room);
 const free = computed(() => room.value.free || {});
+// While an external user is in, the conservative mode reads every woken member as temporarily read-only, or paused
+// when its software cannot be confined (external-guests.js member_protection).
+const guest_state = use_guest_state(bridge, () => (view.value.access?.can_manage && !view.value.share ? room.value?.id : "")).state;
+const protection_of = (member) => member_protection(guest_state.value, member, view.value.launch.room_models?.room_id === room.value.id ? view.value.launch.room_models : null);
 const discussion = computed(() => ["active", "paused"].includes(room.value.session?.status));
 // The open goal, if any; an ended one only leaves its end notice in the transcript.
 const goal = computed(() => ["active", "paused"].includes(room.value.goal_state?.goal?.status) ? room.value.goal_state.goal : null);
@@ -128,7 +136,7 @@ function member_tone(member) {
   const external = external_of(member);
   if (external && (external.ended || (external.expires_at && external.expires_at <= clock.value))) return "neutral";
   if (external_declined.value.has(member.id) && !busy(member)) return "warning";
-  if (unregistered(member)) return "warning";
+  if (unregistered(member) || protection_of(member)?.paused) return "warning";
   if (member.execution?.stale || (member.pending && member.adopt_error)) return "error";
   if (member.held_until) return "warning";
   if (busy(member)) return member.pending && !LIVE.includes(member.execution?.status) ? "warning" : "primary";
@@ -140,6 +148,8 @@ function member_status(member, state) {
   if (external_of(member)?.ended) return t('已结束：不能再领取请求或读取文件');
   if (external_of(member) && external_of(member).expires_at && external_of(member).expires_at <= clock.value) return t('已到期：不能再领取请求或读取文件');
   if (member.status === "away") return t('已离开：不会被唤醒，可请回');
+  const held = protection_of(member);
+  if (held?.paused) return t('暂停接单：外部用户在场，{reason}', { reason: held.reason });
   if (unregistered(member)) return member.access === 'external' ? t('待签到') : t('待注册');
   const execution = member.execution;
   if (execution && LIVE.includes(execution.status)) return execution.stale ? t('执行失联，停止未确认') : t('正在处理');
@@ -177,7 +187,9 @@ function member_setup(member) {
   if (external_of(member)?.pending) return "";
   if (external_of(member)) return external_tag(member, clock.value);
   const session = member.access === "runner" ? (member.session_mode === "borrowed" ? t('借用会话') : t('独立会话')) : "";
-  return [session, bridge.participant_files(member.name, room.value, view.value.launch.room_models)].filter(Boolean).join(" · ");
+  const held = protection_of(member);
+  const files = held && !held.paused ? t('临时只读') : bridge.participant_files(member.name, room.value, view.value.launch.room_models);
+  return [session, files].filter(Boolean).join(" · ");
 }
 
 /** Ways to let a stopped chain run on: what the host asked for, else one more round or as many as the room's limit. */
@@ -250,10 +262,10 @@ watch(() => room.value.id, () => { task_expanded.value = false; });
  */
 function member_row_key(member, state) {
   const identity = bridge.identities[member.name];
-  return JSON.stringify([member, state, discussion.value, member_tag(member), member_setup(member), member_model(member),
+  return JSON.stringify([member, state, discussion.value, member_tag(member), member_quota(view.value, member.name), member_setup(member), member_model(member),
     bridge.participant_session_hint(member.name, room.value, view.value.launch.room_models), bridge.display_name(member.name),
     room.value.descriptions?.[member.name], can_describe.value, external_declined.value.has(member.id), external_of(member) && Math.floor(clock.value / CLOCK_TICK_MS), in_workflow(member.name) && workflow.value.label, identity?.icon, identity?.initials, identity?.style,
-    view.value.access, room.value.session?.status, view.value.launch.available]);
+    view.value.access, room.value.session?.status, view.value.launch.available, protection_of(member)]);
 }
 
 /**
@@ -262,7 +274,10 @@ function member_row_key(member, state) {
  */
 function access_menu(member) {
   const saved = view.value.launch.room_models?.room_id === room.value.id ? view.value.launch.room_models : null;
-  const files = project_files(member, saved, view.value);
+  const held = protection_of(member);
+  const files = project_files(member, saved, view.value, held);
+  // Overridden by the conservative mode: the entry stays, greyed, saying why, so nothing here seems to change it.
+  if (held) return [{ label: t("项目文件：{state}", { state: files.text }), icon: "i-lucide-folder-lock", disabled: true }];
   if (!files.value) return [];
   const adapter = saved.participants[member.name].adapter;
   return [{ label: t("项目文件"), icon: "i-lucide-folder-lock", disabled: !files.editable,
@@ -436,6 +451,7 @@ watch(() => room.value.id, () => { starting.value = false; });
 <template>
   <div ref="board" class="progress-board is-docked">
     <header class="pb-header"><strong>{{ discussion ? t('讨论进度') : t('房间') }}</strong><span class="pb-mode">{{ host ? t('{value1} 主持', { value1: bridge.display_name(host.name) }) : t('无主持人') }}</span></header>
+    <GuestPresence variant="rail" />
     <ProgressBoard v-if="discussion" />
     <section v-else class="pb-status" :class="`is-${status.tone}`" :aria-label="t('房间状态')">
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong>
@@ -492,9 +508,9 @@ watch(() => room.value.id, () => { starting.value = false; });
             <UContextMenu :items="member_menu(member)" :ui="{ content: 'channel-menu' }"><div class="pb-member-context">
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
             <div class="pb-member-body" :data-member="member.name">
-              <div class="pb-member-name"><MemberNameEdit :name="member.name" :editable="can_describe" /><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small translate="no" class="notranslate" :title="member_tag(member, false) || undefined">{{ member_tag(member) }}</small></div>
+              <div class="pb-member-name"><MemberNameEdit :name="member.name" :editable="can_describe" /><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small translate="no" class="notranslate" :title="member_tag(member, false) || undefined">{{ member_tag(member) }}</small><ContextMeter :usage="member_usage(view, member.name)" :quota="member_quota(view, member.name)" /></div>
               <div v-if="member_setup(member) || in_workflow(member.name)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)"><small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>{{ member_setup(member) }}</div>
-              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
+              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until || protection_of(member)?.paused ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span></div>
             </div>
             <UDropdownMenu :open="menu_open === member.name" @update:open="(open) => menu_open = open ? member.name : ''" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="t('{value1} 的更多操作', { value1: member.name })" /></UDropdownMenu>
             </div></UContextMenu>

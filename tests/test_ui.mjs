@@ -349,7 +349,7 @@ function attachment_fixture() {
   let identifier = 0, fail = true;
   const context = vm.createContext({ state, element, room_timing_mark() {}, SEND_RETRY_MS: [2000, 5000, 10000], setTimeout: (callback) => callback(), MAX_MESSAGE_LENGTH: 30000, MAX_SUMMARY_LENGTH: 1000,
     CustomEvent, document: { getElementById: () => null, dispatchEvent: event => diagnostics.push(event.detail) },
-    MAX_MESSAGE_ATTACHMENTS: 10, MAX_ATTACHMENT_BYTES: 20 * 1024 * 1024, URLSearchParams,
+    MAX_MESSAGE_ATTACHMENTS: 10, URLSearchParams,
     new_submission_id: () => String(++identifier), escape_html: text => text, relay_files: new Map(), prefetched: new Map(),
     URL: { createObjectURL: () => "blob:test", revokeObjectURL: url => revoked.push(url) },
     localStorage: { getItem: () => null }, admin_headers: () => ({}), publish_view() {}, show_toast() {}, cancel_reply() {},
@@ -744,9 +744,14 @@ test("retracting the latest message members started on stops that work and rewin
 
 test("attachment selection enforces count and size without consuming ordinary clipboard text", () => {
   const { context, state, notified } = attachment_fixture();
+  state.attachment_limit_mib = 20;
   context.add_attachments([{ name: "大文件", size: 20 * 1024 * 1024 + 1 }]);
   assert.equal(state.attachment_drafts.length, 0);
-  assert.deepEqual(notified.at(-1), ["warning", "单个附件最多 20 MiB"]);
+  assert.deepEqual(notified.at(-1), ["warning", "单个附件最多 20 MiB；管理员可配置对象存储以发送更大的文件"]);
+  state.attachment_limit_mib = 50;
+  context.add_attachments([{ name: "大文件", size: 21 * 1024 * 1024 }]);
+  assert.equal(state.attachment_drafts.length, 1);
+  state.attachment_drafts.length = 0;
   context.add_attachments(Array.from({ length: 11 }, () => ({ name: "文件", size: 1 })));
   assert.equal(state.attachment_drafts.length, 0);
   let prevented = 0;
@@ -755,6 +760,49 @@ test("attachment selection enforces count and size without consuming ordinary cl
   context.paste_attachments({ clipboardData: { files: [{ name: "截图", size: 1, type: "image/png" }] }, preventDefault() { prevented++; } });
   assert.equal(prevented, 1);
   assert.equal(state.attachment_drafts.length, 1);
+});
+
+test("a file over the limit goes to object storage: reserve, post the form as given with the file last, then confirm", async () => {
+  const { context, state, posts } = attachment_fixture();
+  const sent = [];
+  Object.assign(context, { UPLOAD_PERCENT_BEFORE_SAVED: 99,
+    FormData: class { constructor() { this.parts = []; } append(key, value) { this.parts.push([key, value]); } },
+    XMLHttpRequest: class {
+      upload = {};
+      open(method, url) { this.target = [method, url]; }
+      send(form) { sent.push([...this.target, form.parts]); this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 2 }); this.status = 204; this.onload(); this.onloadend(); }
+    },
+    request_json: async (url, payload) => {
+      posts.push([url, payload]);
+      return url.endsWith("/object") ? { attachment: { id: "b".repeat(32), stored: false }, upload: { url: "https://cos.test/", fields: { key: "k", policy: "p" } } }
+        : { attachment: { id: "b".repeat(32), stored: true } };
+    } });
+  Object.assign(state, { attachment_limit_mib: 20, object_storage: true });
+  const file = { name: "录像.mkv", size: 30 * 1024 * 1024, type: "" };
+  context.add_attachments([file]);
+  assert.equal(state.attachment_drafts.length, 1, "configured object storage takes a file over the limit");
+  assert.deepEqual([...await context.upload_message_attachments("one", "用户", state.attachment_drafts)], ["b".repeat(32)]);
+  assert.deepEqual(JSON.parse(JSON.stringify(posts)), [
+    ["/api/rooms/one/attachments/object", { file_name: "录像.mkv", size: file.size, content_type: "application/octet-stream", submission_id: state.attachment_drafts[0].upload_submission, actor: "用户" }],
+    [`/api/rooms/one/attachments/${"b".repeat(32)}/complete`, {}]]);
+  assert.deepEqual(sent.map(([method, url, parts]) => [method, url, parts.map(([key, value]) => [key, value])]), [["POST", "https://cos.test/", [["key", "k"], ["policy", "p"], ["file", file]]]], "the storage's fields go as given, the file last");
+  context.add_attachments([{ name: "太大", size: 3 * 1024 ** 3 }]);
+  assert.equal(state.attachment_drafts.length, 1, "object storage still has its 2 GiB cap");
+  state.object_threshold_mib = 10;
+  assert.equal(context.goes_to_object_storage({ size: 15 * 1024 * 1024 }), true, "a file over the threshold goes to the cloud space though within the limit");
+  assert.equal(context.goes_to_object_storage({ size: 5 * 1024 * 1024 }), false, "a file under the threshold stays an ordinary attachment");
+});
+
+test("bringing a message back into the composer leaves object storage files out and says so", async () => {
+  const read = [], notified = [];
+  const context = vm.createContext({ state: { messages: [] }, File, URL, notify: (level, message) => notified.push([level, message]),
+    read_room_file: async path => { read.push(path); return new Uint8Array([1]); }, measure_draft_image: draft => draft, new_submission_id: () => "draft" });
+  vm.runInContext(source.slice(source.indexOf("function local_attachments("), source.indexOf("/** Fill the composer with drafts")), context);
+  const message = { attachments: [{ id: "big", number: 1, file_name: "录像.mkv", storage: "object", stored: true }, { id: "small", number: 2, file_name: "图.txt", content_type: "text/plain" }] };
+  const { drafts } = await context.message_draft_parts("one", message, "[文件 #1] [文件 #2]");
+  assert.deepEqual([...read], ["/api/rooms/one/attachments/small/content"], "the object storage file is not read back");
+  assert.deepEqual(JSON.parse(JSON.stringify(drafts.map(draft => [draft.file.name, draft.placeholder]))), [["图.txt", "[文件 #2]"]]);
+  assert.deepEqual([...notified], [["warning", "大附件未带回，需要重新添加"]]);
 });
 
 test("changing the uploader never reuses an earlier actor's receipt after upload failure", async () => {

@@ -13,7 +13,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { atomic_json } from '../files.mjs';
-import { agy_skills, antigravity_project, conversation_history, database_settings, remove_conversation } from './antigravity_cli.mjs';
+import { agy_skills, antigravity_project, conversation_history, database_settings, database_usage, remove_conversation } from './antigravity_cli.mjs';
 import { BackgroundTasks, bind_access, EDIT_TOOLS, not_sent, shell_written_paths } from './common.mjs';
 
 const IN_APP = { stoppable: false, progress: false };
@@ -540,6 +540,7 @@ export const antigravity = {
   // The App's conversations are read like agy's for the model they ran with; they cannot be branched from here.
   session: { path: session_path, exists: session_exists, owns: session_exists, branch: null,
     settings: (id, { env = process.env, home = homedir() } = {}) => database_settings(session_path(id, env, home)),
+    usage: (id, { env = process.env, home = homedir() } = {}) => database_usage(session_path(id, env, home)),
     remove: (id, { home = homedir() } = {}) => remove_conversation(join(home, '.gemini', 'antigravity'), id),
     history: ({ home = homedir() } = {}) => conversation_history(join(home, '.gemini', 'antigravity')) },
   models: null,

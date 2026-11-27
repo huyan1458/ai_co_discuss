@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { install_skills, install_workflows } from '../runner/discussion_skills.mjs';
+import { install_skills, install_workflows, retire_steward_skills, SKILLS } from '../runner/discussion_skills.mjs';
 import { validate_preset } from '../runner/discussion_launch.mjs';
 import { get_workflow, preview_workflow } from '../runner/workflows.mjs';
 import { agy_rule } from '../runner/adapters/antigravity_cli.mjs';
@@ -122,9 +123,8 @@ test('complete skills install idempotently, preserve user edits and keep hashes 
     const skills = join(directory, 'skills'), record = join(directory, 'service', 'skills-manifest.json');
     assert(install_skills(skills, record).every(item => item.status === 'installed'));
     assert(existsSync(join(skills, 'discuss-host/references/manual.md')));
-    assert(existsSync(join(skills, 'share-card/SKILL.md')));
-    assert(existsSync(join(skills, 'share-card/references/share-card.md')));
-    assert(existsSync(join(skills, 'discuss-report/assets/Discussion_Report_Template.md')));
+    assert.deepEqual(SKILLS, ['discuss-host', 'discuss-participant', 'discuss-goal', 'discuss-session', 'workflow-creator']);
+    assert.deepEqual(readdirSync(skills).sort(), [...SKILLS].sort());
     assert.equal(existsSync(join(skills, '.codiscuss-skills.json')), false);
     assert(install_skills(skills, record).every(item => item.status === 'unchanged'));
     const manifest = JSON.parse(readFileSync(record, 'utf8'));
@@ -143,6 +143,24 @@ test('complete skills install idempotently, preserve user edits and keep hashes 
     assert.equal(install_skills(skills, record)[0].status, 'conflict');
     assert.equal(readFileSync(path, 'utf8'), 'custom skill');
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('retiring steward skills removes only recorded copies and backs up edited files', t => {
+  const home = mkdtempSync(join(tmpdir(), 'retire-steward-skills-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const skills = join(home, 'skills'), record = join(home, 'service', 'skills-manifest.json');
+  const original = 'initial skill';
+  const hash = createHash('sha256').update('SKILL.md\0file\0').update(original).digest('hex');
+  for (const [name, body] of [['share-card', original], ['notify-setup', 'updated by owner'], ['discuss-report', original]]) {
+    mkdirSync(join(skills, name), { recursive: true });
+    writeFileSync(join(skills, name, 'SKILL.md'), body);
+  }
+  writeFileSync(join(skills, '.codiscuss-skills.json'), JSON.stringify({ 'share-card': hash, 'notify-setup': hash }));
+  const retired = retire_steward_skills(skills, record);
+  assert.deepEqual(retired.map(item => [item.name, item.status]), [['share-card', 'removed'], ['notify-setup', 'backed_up']]);
+  assert.equal(readFileSync(join(retired[1].backup, 'SKILL.md'), 'utf8'), 'updated by owner');
+  assert.deepEqual(readdirSync(skills), ['discuss-report']);
+  assert.deepEqual(retire_steward_skills(skills, record), []);
 });
 
 test('shipped workflows install only when asked, replacing a different copy after backing it up', () => {
@@ -201,7 +219,7 @@ test('setup configures native CLI, preserves existing profile and uses configure
     assert.equal(effective.executable, process.execPath);
     assert.equal(effective.cwd, directory);
     assert(!existsSync(join(env.DISCUSS_SERVICE_HOME, 'runner.lock')));
-    assert(existsSync(join(directory, '.agents/skills/discuss-report/assets/Discussion_Report_Template.md')));
+    assert(!existsSync(join(directory, '.agents/skills/discuss-report')));
     // Shipped workflows go in only on a run that asks for them.
     assert(!existsSync(join(env.DISCUSS_SERVICE_HOME, 'workflows', 'story-serial')));
     const asked = execute(['setup', ...options, '--workflows']);
@@ -350,7 +368,7 @@ test('Cursor setup installs complete skills without writing an unsupported launc
       '--skills-home', directory, '--python', detect_python(), '--no-start'], { env, encoding: 'utf8' });
     assert([0, 2].includes(setup.status), setup.stderr);
     assert.match(setup.stderr, /尚不支持全自动接入/);
-    assert(existsSync(join(directory, '.cursor/skills/discuss-report/assets/Discussion_Report_Template.md')));
+    assert(!existsSync(join(directory, '.cursor/skills/discuss-report')));
     assert.deepEqual(JSON.parse(readFileSync(join(home, 'launch-settings.json'), 'utf8')).participants, {});
     assert(!existsSync(join(home, 'runner.lock')));
   } finally { rmSync(directory, { recursive: true, force: true }); }

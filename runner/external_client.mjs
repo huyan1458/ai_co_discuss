@@ -289,17 +289,13 @@ async function retry_unreachable(send, { repeatable = false, delays = RETRY_DELA
  * exactly one computer.
  */
 export async function machine_keys(site, machine, { fetcher = fetch, retry_delays } = {}) {
+  if (!machine) throw failure('machine_required', '请使用完整邀请链接，或用 --machine 指定对方电脑编号');
   const response = await retry_unreachable(async () => {
-    try { return await fetcher(`${site}/api/machines`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }); }
+    try { return await fetcher(`${site}/api/guest/${encodeURIComponent(machine)}/key`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }); }
     catch (error) { throw site_unreachable(site, error); }
   }, { repeatable: true, delays: retry_delays });
-  const body = await response.json().catch(() => ({}));
-  const list = (Array.isArray(body) ? body : body.machines || []).filter(item => item?.public_key && item?.sign_key);
-  // Hosted accounts' computers (`parent`) are reached by id only; without one the site's own computers are meant (#5494).
-  const owners = list.filter(item => !item.parent);
-  if (!machine && owners.length > 1) throw failure('machine_required', '对方站点连着多台电脑，请用 --machine 指定电脑编号：{ids}', { ids: owners.map(item => `${item.id}（${item.name || ''}）`).join('、') });
-  const found = machine ? list.find(item => item.id === machine) : owners[0];
-  if (!found) throw failure('machine_not_found', '对方站点上找不到这台电脑，或它还没有连接中转');
+  const found = await response.json().catch(() => ({}));
+  if (!response.ok || found?.id !== machine || !found.public_key || !found.sign_key) throw failure('machine_not_found', '对方站点上找不到这台电脑，或它还没有连接中转');
   return { id: found.id, public_key: found.public_key, sign_key: found.sign_key, name: String(found.name || ''), fingerprint: fingerprint_of(found.public_key, found.sign_key) };
 }
 

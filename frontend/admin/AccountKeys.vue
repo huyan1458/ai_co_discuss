@@ -87,6 +87,7 @@ async function remove() {
         <UIcon v-else :name="key.speech ? 'i-lucide-audio-lines' : 'i-lucide-key-round'" class="keys-icon" />
         <div class="keys-text">
           <strong>{{ name(key) }}
+            <span v-if="key.object_storage" class="panel-tag is-gray">{{ t('对象存储') }}</span>
             <span v-for="use in key.speech?.uses || []" :key="use" class="panel-tag is-gray">{{ use }}</span>
             <span v-if="key.speech?.local" class="panel-tag is-gray">{{ t('访问令牌') }}</span>
             <span v-if="account" class="panel-tag" :class="key.managed ? 'is-blue' : 'is-gray'">{{ key.managed ? t('管理员提供') : t('账号自行填写') }}</span></strong>

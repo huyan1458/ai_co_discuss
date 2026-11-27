@@ -7,7 +7,7 @@
  */
 import { spawnSync } from 'node:child_process';
 
-const INHERITED = ['DISCUSS_ENTRY_KEY_FILE', 'DISCUSS_SERVICE_HOME', 'DISCUSS_ACCESS_FILE', 'CODISCUSS_GATEWAY_HOME'];
+const INHERITED = ['DISCUSS_ATTACHMENT_POLICY_FILE', 'DISCUSS_ENTRY_KEY_FILE', 'DISCUSS_SERVICE_HOME', 'DISCUSS_ACCESS_FILE', 'CODISCUSS_GATEWAY_HOME'];
 
 const [command, ...args] = process.argv.slice(2);
 if (!command) {

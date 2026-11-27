@@ -175,6 +175,17 @@ export default defineConfig(({ mode }) => mode === "markdown" ? {
     lib: { entry: "frontend/admin/main.js", formats: ["es"], fileName: () => "admin.js", cssFileName: "admin" },
     rolldownOptions: { output: { codeSplitting: false, minify: true, comments: false } },
   },
+} : mode === "guest" ? {
+  // The external user's page on the owner's online site (/guest/, web/guest/index.html): its own small bundle, so a
+  // visitor never loads the owner's full page.
+  define: { "process.env.NODE_ENV": JSON.stringify("production") },
+  plugins: [vue(), ui({ colorMode: false, router: false, dts: false, autoImport: false,
+    ui: { colors: { primary: "emerald", neutral: "zinc" }, ...FIELD_UI }, icon: { clientBundle: { scan: true } } })],
+  build: {
+    outDir: "web", emptyOutDir: false,
+    lib: { entry: "frontend/guest/main.js", formats: ["es"], fileName: () => "guest.js", cssFileName: "guest" },
+    rolldownOptions: { output: { codeSplitting: false, minify: true, comments: false } },
+  },
 } : mode === "backup" ? {
   build: {
     outDir: "web", emptyOutDir: false,

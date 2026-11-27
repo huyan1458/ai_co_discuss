@@ -71,12 +71,17 @@ export function read_api_key(home, profile) {
 
 /** Read one saved key by reference, refusing a key saved for a different root. */
 export function read_saved_api_key(home, base_url, api_key_ref) {
+  return read_saved_api_key_record(home, base_url, api_key_ref).api_key;
+}
+
+/** Read a key record and its managed marker with the same address binding as ordinary API keys. */
+export function read_saved_api_key_record(home, base_url, api_key_ref) {
   if (!/^[a-f0-9-]{36}$/i.test(api_key_ref || '')) throw new Error('请保存此 Base URL 对应的 API Key');
   let saved;
   try { saved = JSON.parse(readFileSync(join(home, 'api-keys', `${api_key_ref}.json`), 'utf8')); }
   catch { throw new Error('本机 API Key 不存在，请重新保存'); }
   if (saved.base_url !== api_base_url(base_url)) throw new Error('Base URL 已变化，请为新地址重新填写 API Key');
-  return saved.api_key;
+  return saved;
 }
 
 /** Convert neutral tool definitions to one provider's request body. */

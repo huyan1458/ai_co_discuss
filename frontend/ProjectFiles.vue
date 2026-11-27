@@ -45,7 +45,7 @@ let listing_request = 0;
 // changed, so an unchanged project costs a few small requests. Generated folders are read when they are opened.
 const SWEEP_BATCH = 100, SWEEP_FOLDER_LIMIT = 10000, SWEEP_SETTLE_MS = 3000;
 const SWEEP_SKIPPED = new Set(["node_modules", ".git", "__pycache__", ".venv", "venv"]);
-const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+
 let sweep_run = 0, sweep_timer = 0, left_page = false;
 // "list" (name, size, time) or "icons" (tiles with image thumbnails), kept for this browser.
 const LAYOUT_KEY = "codiscuss-project-files-layout";
@@ -306,7 +306,7 @@ async function upload_files(files) {
   ask_all.value = false;
   const plans = [];
   for (const file of list) {
-    if (file.size > UPLOAD_MAX_BYTES) { bridge.notify("warning", t('{value1} 超过 20 MB，未上传；更大的文件请给 AI 下载链接或仓库地址', { value1: file.name })); continue; }
+    if (file.size > view.value.attachment_limit_mib * 1024 * 1024) { bridge.notify("warning", t('{value1} 超过 {limit} MiB，未上传；更大的文件请给 AI 下载链接或仓库地址', { limit: view.value.attachment_limit_mib, value1: file.name })); continue; }
     let conflict = null;
     if (taken.has(file.name)) {
       conflict = for_all || await ask_conflict(file.name, list.length > 1);
@@ -567,7 +567,7 @@ function open_entry(entry) {
              area, used rarely, sit under "更多操作" (user 2026-11-27, #13813). -->
         <template v-if="mode === 'folder'">
           <UButton v-if="clipboard" icon="i-lucide-clipboard-paste" color="neutral" variant="soft" size="sm" :label="t('粘贴')" :title="t('粘贴 {value1}', { value1: clipboard.name })" :disabled="busy" @click="paste" />
-          <UButton icon="i-lucide-upload" color="neutral" variant="ghost" size="sm" :aria-label="t('上传文件')" :title="t('上传文件（单个不超过 20 MB）')" :disabled="busy" @click="file_input?.click()" />
+          <UButton icon="i-lucide-upload" color="neutral" variant="ghost" size="sm" :aria-label="t('上传文件')" :title="t('上传文件（单个不超过 {limit} MiB）', { limit: view.attachment_limit_mib })" :disabled="busy" @click="file_input?.click()" />
           <UButton icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="sm" :aria-label="t('新建文件夹')" :title="t('新建文件夹')" :disabled="busy" @click="start_naming('mkdir')" />
           <input ref="file_input" type="file" multiple hidden @change="upload_files($event.target.files)" />
           <UButton :icon="layout === 'icons' ? 'i-lucide-list' : 'i-lucide-layout-grid'" color="neutral" variant="ghost" size="sm"
@@ -814,7 +814,9 @@ function open_entry(entry) {
   .project-explorer-path button { padding: 3px 4px; }
   .project-files-columns, .project-file-row { grid-template-columns: minmax(0, 1fr) 64px auto; gap: 8px; }
   .project-files-columns > :last-child, .project-file-row time, .project-file-date { display: none; }
-  .project-files-tiles { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 4px; padding: 6px; }
-  .project-file-tile > button { padding: 6px; }
+  /* Four to a row on a phone, the name right under its picture (user 2026-11-27, #15002: three loose tiles a screen). */
+  .project-files-tiles { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 2px; padding: 4px; }
+  .project-file-tile > button { gap: 3px; padding: 4px 2px 6px; }
+  .project-file-tile-name { font-size: 11px; line-height: 14px; }
 }
 </style>

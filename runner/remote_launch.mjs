@@ -30,15 +30,17 @@ const RELAY_CIPHER_INFO = 'codiscuss-relay-v1';
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./discussion_launch.mjs', import.meta.url));
 // What a connected browser may ask the local bridge for, minus the folder dialog nobody would see and pairing itself.
 export const RELAYED_ACTIONS = new Set(['settings', 'launch', 'wipe-histories', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
-  'room-member-model', 'room-profiles', 'room-skills', 'room-files', 'share-job', 'room-page', 'room-media', 'execution-details', 'room-restore', 'room-fork', 'models', 'sessions', 'api-key', 'api-check', 'scheduler-check', 'image-check', 'image-settings', 'tts-settings', 'tts', 'tts-release', 'local-speech', 'stt', 'weixin', 'projects', 'presets', 'workflows', 'room-workflow', 'room-settings', 'browse-directory', 'room-invite', 'room-invites', 'room-invite-revoke',
-  'storage', 'storage-clean', 'site-stage', 'site-publish', 'site-list', 'site-diagnose', 'site-renew', 'site-rollback', 'site-revoke',
+  'room-member-model', 'room-profiles', 'room-skills', 'room-files', 'share-job', 'room-page', 'room-media', 'execution-details', 'room-restore', 'room-fork', 'models', 'sessions', 'api-key', 'api-check', 'object-storage-settings', 'scheduler-check', 'image-check', 'image-settings', 'tts-settings', 'tts', 'tts-release', 'local-speech', 'stt', 'weixin', 'notify', 'projects', 'presets', 'workflows', 'room-workflow', 'room-settings', 'browse-directory', 'room-invite', 'room-invites', 'room-invite-revoke', 'guest-invite',
+  'storage', 'storage-clean', 'steward', 'steward-settings', 'steward-request', 'steward-history', 'steward-delete', 'site-stage', 'site-publish', 'site-list', 'site-diagnose', 'site-renew', 'site-rollback', 'site-revoke',
   // Rooms on other computers this one was invited to (runner/external_client.mjs): its paired devices manage them as here.
   'invited-list', 'invited-join', 'invited-trust', 'invited-ai', 'invited-pause', 'invited-approve', 'invited-refuse', 'invited-lend', 'invited-leave', 'invited-remove', 'invited-room']);
 export const ROOM_ACTIONS = new Set(['launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
   'room-member-model', 'room-profiles', 'room-skills', 'room-files', 'share-job', 'room-page', 'room-media', 'execution-details', 'room-restore', 'room-fork', 'room-workflow', 'room-settings', 'workflows',
   'site-stage', 'site-publish', 'site-list', 'site-diagnose', 'site-renew', 'site-rollback', 'site-revoke',
   // Invites to members on other computers: paired devices issue them as this computer does (PLAN §4.2 item 1).
-  'room-invite', 'room-invites', 'room-invite-revoke']);
+  'room-invite', 'room-invites', 'room-invite-revoke',
+  // An external user's link (.dev/plans/临时外部用户/API.md §2): a paired device invites as this computer does.
+  'guest-invite']);
 
 // On Windows the file holding this computer's private keys and tokens is sealed with DPAPI for the signed-in user, so a
 // copy of the file alone is useless elsewhere; other systems rely on the file's 0600 mode.
@@ -255,7 +257,7 @@ export async function unseal(key, envelope, label) {
 /** Turn a relayed action into the local entrypoint call the local website makes, pinned to the relaying site. */
 export function relayed_command(site, action, payload) {
   if (!RELAYED_ACTIONS.has(action)) throw new Error('该操作不能经其他设备执行');
-  if (payload === undefined ? !['settings', 'storage'].includes(action) : !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('命令内容无效');
+  if (payload === undefined ? !['settings', 'storage', 'steward', 'steward-history'].includes(action) : !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('命令内容无效');
   let input = payload;
   if (['presets', 'workflows'].includes(action) && (payload?.cwd || payload?.extra_directories?.length)) throw new Error('其他设备须使用项目编号或房间编号');
   if (ROOM_ACTIONS.has(action) || (action === 'presets' && payload.room_id)) {

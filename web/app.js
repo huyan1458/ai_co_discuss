@@ -51,7 +51,8 @@ const SHARE_SITE_AS_TEXT = /\.(?:js|mjs|cjs|ps1|bat|cmd|vbs)$/i;
 // Fields a share page never carries: where things ran on this computer, sessions, credentials, the owner's own notes
 // on the room and its members, the decision model's choices, messages still queued, attachments and refused commands.
 const SHARE_DROPPED_FIELDS = new Set(["cwd", "session_id", "reported_session", "reported_client", "client_id", "submission_id",
-  "lease_until", "adopt_error", "token", "access_token", "descriptions", "extra_directories", "project_directory", "resets"]);
+  "lease_until", "adopt_error", "token", "access_token", "descriptions", "extra_directories", "project_directory", "resets",
+  "dispatch_feedback"]);
 const SHARE_ZEROED_FIELDS = ["quota_until", "held_until"];
 const SHARE_EMPTIED_FIELDS = new Set(["scheduler_decisions", "scheduler_routing", "recommendations", "denials", "queued_messages",
   "ended_externals", "attachments"]);
@@ -596,10 +597,10 @@ const ROOM_GOAL_MAX_LENGTH = 1000;
 const SUBMISSION_ID_BYTES = 16;
 const MAX_MESSAGE_LENGTH = 32000;
 const MAX_SUMMARY_LENGTH = 1000;
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
 // Videos sent through the relay are shrunk from this size up; smaller ones cost little to carry as they are.
 const VIDEO_COMPRESS_MIN_BYTES = 3 * 1024 * 1024;
-// The largest video the page tries to shrink below MAX_ATTACHMENT_BYTES.
+// The largest video the page tries to compress for upload.
 const VIDEO_COMPRESS_MAX_BYTES = 1024 * 1024 * 1024;
 const MAX_MESSAGE_ATTACHMENTS = 10;
 const PDF_CANVAS_LIMIT = 4096;
@@ -733,9 +734,19 @@ const PLATFORM_IDENTITIES = {
 };
 // An instance shows its platform's nickname with its own suffix: Antigravity-2 → Gemini-2.
 const EXTERNAL_ICON = "/icons/external-expert.svg";
-const IDENTITIES = by_platform(PLATFORM_IDENTITIES, (identity, name) => external_identity(name)
+const IDENTITIES = guest_identities(by_platform(PLATFORM_IDENTITIES, (identity, name) => external_identity(name)
   ? external_member_identity(name)
-  : ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: t('AI 实例') }));
+  : ({ ...identity, label: identity.label ? identity.label + name.slice(platform_of(name).length) : name, description: t('AI 实例') })));
+
+/**
+ * An external user writes as "guest:<id>", a name no platform owns: it shows the name the owner or the guest chose (the
+ * room view's `labels`) and the external user mark, never the id.
+ */
+function guest_identities(table) {
+  return new Proxy(table, { get: (target, name) => typeof name === "string" && name.startsWith("guest:")
+    ? { label: state.room?.labels?.[name] || t('外部用户'), icon: "/icons/external-user.svg", style: "external", description: t('外部用户') }
+    : target[name] });
+}
 
 /** An external member shows the vendor its computer reports; a custom endpoint, or none reported yet, shows the external mark. */
 function external_member_identity(name) {
@@ -751,7 +762,7 @@ function external_member_identity(name) {
 function external_identity(name) {
   return /^Custom-ext[0-9]*$/.test(name) || state.room?.members?.some(member => member.name === name && member.access === 'external');
 }
-const state = { rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, host_only: false, authors: [], card_kinds: [],
+const state = { attachment_limit_mib: 20, object_storage: false, rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, host_only: false, authors: [], card_kinds: [],
   named_followup: false, create_discussion: false, create_goal: null,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
@@ -871,7 +882,7 @@ state.directory_version = 0;
 state.navigation_version = 0;
 state.admin = { loaded: false, local: false, registered: false, setup_available: false, logged_in: false, profile: null, identity_version: 0 };
 // needs: "" | "pairing" | "renew"; pairing_code arrives from a scanned link (#pair=CODE); prompt waits for the user's tap.
-state.device = { id: "", needs: "", pairing_code: "", pairing_fp: "", prompt: null };
+state.device = { id: "", needs: "", pairing_code: "", pairing_fp: "", pairing_machine: "", prompt: null };
 state.launch = { available: false, remote: false, relay: null, connect_command: "", profiles: {}, projects: [], presets: [], project_presets: [], create_project_roots: [], builtin_presets: [], hidden_builtins: [], skilled_presets: [], skilled_project_presets: [], workflows: [], project_workflows: [], project_roots: [], workflow_trust_prompt: null, description_templates: {}, workspace: {}, scheduler: {}, create_preferences: {}, storage: null, storage_loading: false, storage_error: "", storage_read_at: 0, storage_cleaning: [], error: "", recoveries: [] };
 state.create_host_workflows = false;
 state.create_host_permissions = null;
@@ -1289,7 +1300,7 @@ function render_participants() {
 function render_rooms() {
   const rooms = visible_rooms();
   element("room-count").textContent = rooms.length;
-  element("archive-toggle").textContent = state.archive_view ? t('返回讨论频道') : t('已存档 ({value1})', { value1: state.rooms.filter((room) => room.archived).length });
+  element("archive-toggle").textContent = state.archive_view ? t('返回讨论频道') : t('已存档 ({value1})', { value1: state.rooms.filter((room) => room.archived && !room.system_kind).length });
   element("archive-toggle").setAttribute("aria-pressed", String(state.archive_view));
   element("room-list").innerHTML = rooms.map((room, index) =>
     `<div class="directory-row" data-drag-room="${room.id}"><button type="button" class="directory-grip" data-drag-handle aria-label="${escape_html(t("拖动 {name}", { name: room.title }))}" title="${escape_html(t("拖动排序；上下方向键移动"))}">⠿</button><button class="room-item ${room.id === state.room?.id ? "active" : ""}" data-room="${room.id}" title="${escape_html(room.title)}"><span class="room-item-name">${escape_html(room.title)}</span><span class="room-item-number">${room.message_count}</span></button><details class="room-actions"><summary aria-label="${escape_html(t("管理 {name}", { name: room.title }))}">⋯</summary><div>${room_menu_html(room, index, rooms.length)}</div></details></div>`).join("") || `<p class="local-note">${escape_html(t("这里还没有频道。"))}</p>`;
@@ -1304,7 +1315,7 @@ function render_rooms() {
 
 /** Return the active directory without hiding archived rooms from deep links. */
 function visible_rooms() {
-  return ordered_rooms().filter((room) => !room.archived);
+  return ordered_rooms().filter((room) => !room.archived && !room.system_kind);
 }
 
 /** Sort the displayed conversations without overwriting their saved manual order. */
@@ -1535,11 +1546,10 @@ async function set_auto_destroy(id, days) {
 }
 
 /**
- * Destroy every room, archived ones too, one after another, each as its own destroy would. Once none is left, a hosted
- * account clears every conversation its AI software keeps, which a single room's destruction leaves in shared stores.
+ * Destroy project rooms, including archives. A hosted account clears shared software histories only if no system room remains.
  */
 async function destroy_all_rooms() {
-  const ids = state.rooms.map(room => room.id);
+  const ids = state.rooms.filter(room => !room.system_kind).map(room => room.id);
   for (const id of ids) {
     try { await delete_channel(id); } catch { return; }
   }
@@ -1549,6 +1559,9 @@ async function destroy_all_rooms() {
   if (state.destroying.size) {
     const titles = [...state.destroying.values()].map(({ room }) => room.title);
     return notify("warning", t('还有 {count} 个房间没有清理完：{names}。可在“销毁记录”里重试；完成后再点一次“销毁全部房间”（没有房间时只清空各 AI 软件的会话记录）。', { count: titles.length, names: titles.join("、") }));
+  }
+  if (state.rooms.some(room => room.system_kind)) {
+    return notify("info", t("全部项目房间已销毁，平台主理人对话已保留。"));
   }
   if (!state.launch.available) return;
   try {
@@ -2085,6 +2098,8 @@ function render_host_brief() {
 /** Describe roles separately from authors and the actual submitter. */
 function message_provenance(message) {
   if (message.relay_room) return t('来自房间「{room}」的主持人 {host}', { room: message.relay_title ?? t('已删除的房间'), host: message.relay_host });
+  // An external user's message is written by that person in the browser, never on someone's behalf.
+  if (message.author?.startsWith("guest:")) return t('外部用户发言');
   const role = message.kind === "receipt" ? t('运行回执') : message.kind === "moderation" ? t('主持发言') : (message.author === "用户" ? t('用户发言') : t('专家观点'));
   const forwarding = message.submitted_by && message.submitted_by !== message.author ? t(' · {value1} 代发', { value1: display_name(message.submitted_by) }) : "";
   return `${role}${forwarding}`;
@@ -2470,6 +2485,11 @@ async function refresh_room({ room: read_room = true } = {}) {
   if (reading) live_updates.refreshed_at = Date.now();
   const directory = await directory_read;
   if (version !== state.refresh_version) return;
+  state.attachment_limit_mib = directory.attachment_limit_mib || 20; // Older sites enforce 20 MiB.
+  state.object_storage = directory.object_storage_enabled === true;
+  // 0 keeps files until someone deletes them; an older site without the field set no threshold below the limit.
+  state.object_retention_days = Number.isInteger(directory.object_storage_retention_days) ? directory.object_storage_retention_days : 0;
+  state.object_threshold_mib = Number(directory.object_storage_threshold_mib) || state.attachment_limit_mib;
   sync_background_rooms(directory.rooms);
   announce_idle_rooms(directory.rooms);
   if (!state.directory_pending.size && directory_version === state.directory_version) {
@@ -2480,6 +2500,8 @@ async function refresh_room({ room: read_room = true } = {}) {
     set_folder_directory(directory);
   }
   if (directory.destructions) state.destructions = directory.destructions;
+  // Account quotas this site keeps, shared by every room: the new-room cards show them for each software.
+  if (directory.quotas) state.quotas = directory.quotas;
   settle_destructions();
   warn_expiring_rooms();
   render_rooms();
@@ -2510,12 +2532,14 @@ const LAST_ROOM_KEY = "ai-codiscuss-last-room";
 function opening_room() {
   let last = null;
   try { last = localStorage.getItem(LAST_ROOM_KEY); } catch { /* Storage may be unavailable. */ }
-  const wanted = [new URLSearchParams(location.search).get("room"), state.last_room, last].find((id) => id && state.rooms.some((room) => room.id === id));
+  const wanted = [new URLSearchParams(location.search).get("room"), state.last_room, last]
+    .find((id) => id && state.rooms.some((room) => room.id === id && !room.system_kind));
   return wanted || visible_rooms()[0]?.id;
 }
 
 /** Tell the computer's website which room was opened, so another device opens it next; failures change nothing. */
 function remember_room(room_id) {
+  if (state.room?.system_kind) return;
   try { localStorage.setItem(LAST_ROOM_KEY, room_id); } catch { /* Keep working without remembering. */ }
   if (state.last_room === room_id || (computer_rooms_only() && !state.remote_rooms)) return;
   state.last_room = room_id;
@@ -3683,9 +3707,10 @@ async function read_queued_files(item, room_id) {
   state.queue_reading = item.id;
   publish_view();
   try {
-    return await Promise.all(item.attachments.map(async (file) => {
+    return await Promise.all(local_attachments(item.attachments).map(async (file) => {
       const bytes = await read_room_file(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(file.id)}/content`);
-      return { id: file.id, file: new File([bytes], file.file_name, { type: file.content_type || "" }) };
+      // Its place among all the message's files, so its placeholder keeps its number when a large file is left out.
+      return { id: file.id, position: item.attachments.indexOf(file) + 1, file: new File([bytes], file.file_name, { type: file.content_type || "" }) };
     }));
   } finally { state.queue_reading = 0; }
 }
@@ -3700,9 +3725,9 @@ function take_into_composer(item, files) {
     state.stashed_drafts.push(stash);
     notify("info", t('输入框原有草稿已暂存，这条发出后恢复'));
   }
-  const drafts = files.map(({ id, file }, index) => {
+  const drafts = files.map(({ id, file, position }, index) => {
     const draft = measure_draft_image({ id: new_submission_id(), file, preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: id, actor: "用户" });
-    const placeholder = draft_placeholder(draft, index + 1);
+    const placeholder = draft_placeholder(draft, position ?? index + 1);
     if (item.text.includes(placeholder)) draft.placeholder = placeholder;
     return draft;
   });
@@ -4038,8 +4063,10 @@ function add_attachments(files, target = null) {
   if (state.room?.archived) return;
   const selected = Array.from(files);
   if (state.attachment_drafts.length + selected.length > MAX_MESSAGE_ATTACHMENTS) notify("warning", t('每条消息最多 10 个附件'));
-  else if (selected.some(file => file.size > MAX_ATTACHMENT_BYTES && !can_compress_video(file))) notify("warning", t('单个附件最多 20 MiB'));
-  else {
+  else if (selected.some(file => file.size > OBJECT_MAX_BYTES && state.object_storage)) notify("warning", t('单个附件最多 2 GiB'));
+  else if (selected.some(file => file.size > (state.attachment_limit_mib * 1024 * 1024) && !can_compress_video(file) && !goes_to_object_storage(file))) {
+    notify("warning", t('单个附件最多 {limit} MiB；管理员可配置对象存储以发送更大的文件', { limit: state.attachment_limit_mib }));
+  } else {
     const added = selected.map(file => measure_draft_image({ id: new_submission_id(), file,
       preview_url: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "", uploaded: null, actor: null }));
     state.attachment_drafts.push(...added);
@@ -4047,6 +4074,10 @@ function add_attachments(files, target = null) {
     renumber_placeholders(null);
     added.forEach(item => { item.placeholder = draft_placeholder(item, state.attachment_drafts.indexOf(item) + 1); });
     insert_placeholders(added.map(item => item.placeholder).join(" "), target);
+    // Kept until deleted, a file in the cloud space needs no warning; one the account set to expire does.
+    if (state.object_retention_days > 0 && added.some(item => goes_to_object_storage(item.file))) {
+      notify("info", t('大文件存入云空间，{days} 天后自动删除；需要长期保留请在期限内下载', { days: state.object_retention_days }));
+    }
     preupload_drafts(added);
   }
   render_attachment_drafts();
@@ -4168,7 +4199,9 @@ function can_compress_video(file) {
 
 /** A video is shrunk when the relay has to carry it, or when the site would not take it as it is. */
 function wants_compression(file) {
-  return can_compress_video(file) && (file.size > MAX_ATTACHMENT_BYTES || (state.remote_rooms && file.size >= VIDEO_COMPRESS_MIN_BYTES));
+  // A video for the cloud space goes up as it is, keeping its quality: it neither passes the relay nor meets the limit.
+  if (goes_to_object_storage(file)) return false;
+  return can_compress_video(file) && (file.size > (state.attachment_limit_mib * 1024 * 1024) || (state.remote_rooms && file.size >= VIDEO_COMPRESS_MIN_BYTES));
 }
 
 /** The compression module, loaded only when a video needs it. */
@@ -4187,7 +4220,7 @@ async function compress_draft(item) {
   let compressed = null;
   try {
     const { compress_video } = await load_video_compressor();
-    compressed = await compress_video(original, { max_bytes: MAX_ATTACHMENT_BYTES, signal: item.compression.signal,
+    compressed = await compress_video(original, { max_bytes: (state.attachment_limit_mib * 1024 * 1024), signal: item.compression.signal,
       on_progress: (share) => report_upload_percent(item, Math.min(UPLOAD_PERCENT_BEFORE_SAVED, Math.floor(share * 100)), "compress") });
   } catch (error) { console.warn("video compression failed", error); }
   report_upload_percent(item, state.remote_rooms ? 0 : null);
@@ -4195,8 +4228,8 @@ async function compress_draft(item) {
     item.file = compressed;
     render_attachment_drafts();
     publish_view();
-  } else if (original.size > MAX_ATTACHMENT_BYTES && !item.removed) {
-    throw Object.assign(new Error(t('这段视频无法压缩到 20 MiB 以内，请剪短后再发')), { video_too_large: true });
+  } else if (original.size > (state.attachment_limit_mib * 1024 * 1024) && !item.removed && !goes_to_object_storage(original)) {
+    throw Object.assign(new Error(t('这段视频无法压缩到 {limit} MiB 以内，请剪短后再发', { limit: state.attachment_limit_mib })), { video_too_large: true });
   }
 }
 
@@ -4226,6 +4259,7 @@ async function upload_draft(room_id, actor, item) {
   if (item.actor && item.actor !== actor) { item.upload_submission = new_submission_id(); item.uploaded = null; }
   item.actor = actor;
   item.room_id = room_id;
+  if (goes_to_object_storage(item.file)) return upload_object_draft(room_id, actor, item);
   const params = new URLSearchParams({ file_name: item.file.name, actor, submission_id: item.upload_submission });
   // 100% is kept for the site having the file: every part can be in while the computer is still handing it over.
   const result = await post_room_file(`/api/rooms/${room_id}/attachments?${params}`, item.file, localStorage.getItem(`discuss-access:${room_id}`),
@@ -4234,6 +4268,71 @@ async function upload_draft(room_id, actor, item) {
   item.uploaded = result.attachment.id;
   if (item.upload_percent != null) report_upload_percent(item, 100);
   if (/^image\/(png|jpeg|webp)$/.test(result.attachment.content_type)) createImageBitmap(item.file).then(bitmap => store_attachment_thumbnail(result.attachment, bitmap)).catch(() => {});
+}
+
+// The largest file the site sends to object storage (OBJECT_MAX_BYTES in backend/server.py).
+const OBJECT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+/**
+ * Days until a file in the account's cloud space is deleted automatically, or 0 when it is kept until someone deletes
+ * it: from its `expires_at`, else (a file still uploading) the account's retention days, 0 meaning none.
+ */
+function object_days_left(file) {
+  const expires = Date.parse(file?.expires_at || "");
+  if (!Number.isFinite(expires)) return state.object_retention_days || 0;
+  return Math.max(1, Math.ceil((expires - Date.now()) / DAY_MS));
+}
+
+/** Whether a file goes to the account's cloud space: larger than its threshold, within 2 GiB, with the space set up. */
+function goes_to_object_storage(file) {
+  return state.object_storage && file.size > (state.object_threshold_mib || state.attachment_limit_mib) * 1024 * 1024 && file.size <= OBJECT_MAX_BYTES;
+}
+
+/**
+ * Upload one file over the limit to object storage: the site makes the attachment and an upload form, the file goes
+ * straight to the storage from this page (never through the relay), then the site checks it is there. Removing the draft
+ * cancels the transfer; the site drops the unfinished attachment with the draft's other files.
+ */
+async function upload_object_draft(room_id, actor, item) {
+  const base = `/api/rooms/${encodeURIComponent(room_id)}/attachments`;
+  const token = localStorage.getItem(`discuss-access:${room_id}`);
+  report_upload_percent(item, 0);
+  try {
+    const { attachment, upload } = await request_json(`${base}/object`, { file_name: item.file.name, size: item.file.size,
+      content_type: item.file.type || "application/octet-stream", submission_id: item.upload_submission, actor }, token);
+    item.pending_object = attachment.id;
+    // A repeated submission whose file already went up has nothing left to send.
+    if (!attachment.stored) await send_to_object_storage(upload, item);
+    if (item.removed) return;
+    await request_json(`${base}/${encodeURIComponent(attachment.id)}/complete`, {}, token);
+    item.pending_object = null;
+    item.uploaded = attachment.id;
+    report_upload_percent(item, 100);
+  } catch (error) {
+    report_upload_percent(item, null);
+    throw error;
+  }
+}
+
+/** Post the file with the storage's form fields as given, the file last, reporting progress; removal aborts it. */
+function send_to_object_storage(upload, item) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    for (const [key, value] of Object.entries(upload.fields || {})) form.append(key, value);
+    form.append("file", item.file);
+    const request = new XMLHttpRequest();
+    item.object_request = request;
+    request.open("POST", upload.url);
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) report_upload_percent(item, Math.min(UPLOAD_PERCENT_BEFORE_SAVED, Math.floor(event.loaded / event.total * 100)));
+    };
+    request.onload = () => request.status >= 200 && request.status < 300 ? resolve()
+      : reject(new Error(t('上传到对象存储失败（{status}）', { status: request.status })));
+    // A browser blocked by the bucket's CORS rules reports only a network error.
+    request.onerror = () => reject(new Error(t('无法连接对象存储，请让管理员检查存储桶的跨域设置')));
+    request.onabort = () => resolve();
+    request.onloadend = () => { item.object_request = null; };
+    request.send(form);
+  });
 }
 
 /**
@@ -4276,9 +4375,13 @@ function preupload_drafts(items) {
 function discard_draft_upload(item) {
   item.removed = true;
   item.compression?.abort();
-  if (item.uploading || !item.uploaded || !item.room_id) return;
-  const path = `/api/rooms/${encodeURIComponent(item.room_id)}/attachments/${encodeURIComponent(item.uploaded)}/discard`;
+  item.object_request?.abort();
+  // An object storage file stopped part way has its attachment on the site, though not yet `uploaded`.
+  const uploaded = item.uploaded || item.pending_object;
+  if (item.uploading || !uploaded || !item.room_id) return;
+  const path = `/api/rooms/${encodeURIComponent(item.room_id)}/attachments/${encodeURIComponent(uploaded)}/discard`;
   item.uploaded = null;
+  item.pending_object = null;
   const scope = state.remote_rooms && attachment_cache_scope();
   request_json(path, {}).then(() => { if (scope && scope === attachment_cache_scope()) remove_room_cache(path.slice(0, -7)); }).catch(() => null);
 }
@@ -4380,14 +4483,17 @@ function link_attachment_placeholders(html, files = [], inlined = null) {
     const file = by_id ? files.find(item => item.id === reference) : by_number ? files.find(item => item.number === Number(reference)) : files[Number(reference) - 1];
     const number = by_id ? file?.number ?? (files.indexOf(file) + 1) : reference;
     if (!file) return SHARE && !by_id ? omitted(kind, number) : match;
-    if (pending && kind === "图片" && file.content_type.startsWith("image/") && !file.cleared_at && !inlined.has(file.id)) {
+    if (pending && kind === "图片" && file.content_type.startsWith("image/") && !file.cleared_at && file.storage !== "object" && !inlined.has(file.id)) {
       inlined.add(file.id);
       pending.push({ file, number });
     }
     const previewable = file.content_type.startsWith("image/") || file.content_type === "application/pdf" || is_text_attachment(file);
     // The stored `[图片 #n]` / `[文件 #n]` is protocol text; only the shown label follows the page language.
     const label = escape_html(kind === "图片" ? t("[图片 #{number}]", { number }) : t("[文件 #{number}]", { number }));
-    if (file.cleared_at) return `<span class="attachment-placeholder is-cleared" title="${escape_html(t("原文件已由房主清理以释放空间"))}">${label}</span>`;
+    if (file.cleared_at) return `<span class="attachment-placeholder is-cleared" title="${escape_html(file.storage === "object" ? t("这个大文件已从云空间删除") : t("原文件已由房主清理以释放空间"))}">${label}</span>`;
+    if (file.storage === "object") return file.stored && !SHARE
+      ? `<a class="attachment-placeholder" href="#" data-object-href="${escape_html(`/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`)}" data-file-name="${escape_html(file.file_name)}" title="${escape_html(t("下载 {name}", { name: file.file_name }))}">${label}</a>`
+      : `<span class="attachment-placeholder is-cleared" title="${escape_html(file.file_name)}">${label}</span>`;
     return previewable ? `<button type="button" class="attachment-placeholder" ${attachment_preview_attributes(file)} title="${escape_html(file.file_name)}">${label}</button>`
       : `<a class="attachment-placeholder" ${attachment_download_attributes(file)} download title="${escape_html(t("下载 {name}", { name: file.file_name }))}">${label}</a>`;
   };
@@ -4478,12 +4584,66 @@ function cleared_attachment_markup(file) {
   const local = thumb && relay_files.get(thumb);
   const source = !thumb ? "" : typeof local === "string" ? `src="${escape_html(local)}"` : files_by_blob() ? `data-relay-src="${thumb}"` : `src="${thumb}"`;
   const icon = source ? `<img ${source} alt="${name}" loading="lazy" class="attachment-cleared-thumb">` : attachment_file_icon(file.file_name);
-  return `<div class="attachment-file is-cleared" title="${escape_html(t("原文件已由房主清理以释放空间"))}"><span class="attachment-file-main">${icon}<span class="attachment-name"><span>${name}</span><small>${escape_html(t("已清理 · {size}", { size: attachment_size(file.size) }))}</small></span></span></div>`;
+  // A cloud space file goes when its retention days are over or someone deletes it from the cloud space.
+  const object = file.storage === "object";
+  const title = object ? t("这个大文件已从云空间删除") : t("原文件已由房主清理以释放空间");
+  const note = object ? t("已从云空间删除 · {size}", { size: attachment_size(file.size) }) : t("已清理 · {size}", { size: attachment_size(file.size) });
+  return `<div class="attachment-file is-cleared" title="${escape_html(title)}"><span class="attachment-file-main">${icon}<span class="attachment-name"><span>${name}</span><small>${escape_html(note)}</small></span></span></div>`;
+}
+
+/**
+ * A file kept in object storage: no preview or player, as its bytes are not on the site; a download asks the site for a
+ * short-lived link first (download_object_file).
+ */
+function object_attachment_markup(file) {
+  const name = escape_html(file.file_name);
+  const kind = attachment_kind(file.file_name)[0];
+  // A message cannot take a file whose upload was never confirmed, so one shown unconfirmed (an imported room's) has no
+  // file to give. A share page carries no object storage files.
+  const note = !file.stored ? t("{kind} · {size} · 文件已不在对象存储中", { kind, size: attachment_size(file.size) }) : SHARE ? t("云空间 · {size} · 未包含在分享中", { size: attachment_size(file.size) }) : "";
+  if (note) return `<div class="attachment-file is-cleared" data-object-state="${file.stored ? "shared" : "unavailable"}"><span class="attachment-file-main">${attachment_file_icon(file.file_name)}<span class="attachment-name"><span title="${name}">${name}</span><small>${escape_html(note)}</small></span></span></div>`;
+  const path = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
+  const label = escape_html(t("下载 {name}", { name: file.file_name }));
+  const link = `href="#" data-object-href="${escape_html(path)}" data-file-name="${name}"`;
+  return `<div class="attachment-file" data-object-state="stored"><a class="attachment-file-main" ${link} aria-label="${label}">${attachment_file_icon(file.file_name)}<span class="attachment-name"><span title="${name}">${name}</span><small>${escape_html(object_days_left(file) ? t("云空间 · {size} · {days} 天后自动删除", { size: attachment_size(file.size), days: object_days_left(file) }) : t("云空间 · {size}", { size: attachment_size(file.size) }))}</small></span></a>
+    <a class="attachment-download" ${link} aria-label="${label}" title="${label}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
+    </a></div>`;
+}
+
+/**
+ * Download an object storage file: the site (on the paired computer too) answers a link straight to the storage, so the
+ * bytes go neither through the site nor the relay. A file the storage cannot give (503) or no longer has (410) turns its
+ * card unavailable instead of leaving a link that fails again.
+ */
+function download_object_file(event) {
+  const link = event.target.closest?.("a[data-object-href]");
+  if (!link) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const card = link.closest(".attachment-file");
+  request_json(`${link.dataset.objectHref}?link=1`).then((result) => {
+    const anchor = document.createElement("a");
+    anchor.href = result.url;
+    anchor.download = link.dataset.fileName || "";
+    anchor.rel = "noopener";
+    anchor.click();
+  }).catch((error) => {
+    if (card && [410, 503].includes(error.status)) {
+      card.dataset.objectState = "unavailable";
+      card.classList.add("is-cleared");
+      card.querySelectorAll("a[data-object-href]").forEach(item => item.removeAttribute("href"));
+      const note = card.querySelector(".attachment-name small");
+      if (note) note.textContent = error.status === 410 ? t("文件已不在对象存储中") : t("对象存储暂不可用");
+    }
+    notify("error", error.message);
+  });
 }
 
 /** A message image as its preview button, shown in the list or where the answer refers to it. */
 function attachment_image_markup(file, { inline = false, badge = "" } = {}) {
   if (file.cleared_at) return cleared_attachment_markup(file);
+  if (file.storage === "object") return object_attachment_markup(file);
   const original = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
   // The smaller copy, where the image has one, unless the original is already here (a share page carries originals only).
   const url = file.thumbnail_url && !SHARE && !relay_files.own?.has(original) ? attachment_thumbnail_route(file) : original;
@@ -4500,6 +4660,7 @@ function attachment_markup(files = []) {
   if (!files.length) return "";
   return `<div class="message-attachments">${files.map(file => {
     if (file.cleared_at) return cleared_attachment_markup(file);
+    if (file.storage === "object") return object_attachment_markup(file);
     const url = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
     const name = escape_html(file.file_name);
     const preview_attributes = attachment_preview_attributes(file);
@@ -4633,7 +4794,7 @@ function room_images(file) {
   for (const message of state.messages) {
     if (message.withdrawn) continue;
     for (const item of message.attachments || []) {
-      if (item.cleared_at || item.room_id !== file.room_id || !String(item.content_type || "").startsWith("image/") || images.some(image => image.id === item.id)) continue;
+      if (item.cleared_at || item.storage === "object" || item.room_id !== file.room_id || !String(item.content_type || "").startsWith("image/") || images.some(image => image.id === item.id)) continue;
       images.push({ room_id: item.room_id, id: item.id, file_name: item.file_name, content_type: item.content_type, size: Number(item.size) || 0,
         created_at: message.created_at || "", message_id: message.id, ...(item.thumbnail_url && !SHARE ? { thumbnail_url: item.thumbnail_url } : {}) });
     }
@@ -5062,6 +5223,7 @@ function take_pairing_code() {
   const match = (location.hash || "").match(/(?:^#|&)pair=([0-9A-Za-z-]{12,16})/);
   if (!match) return;
   state.device.pairing_code = match[1].toUpperCase();
+  state.device.pairing_machine = new URLSearchParams(location.hash.slice(1)).get("machine") || "";
   state.device.pairing_fp = (location.hash.match(/(?:^#|&)fp=([0-9a-f]{32})/) || [])[1] || "";
   history.replaceState(null, "", `${location.pathname}${location.search}`);
   notify("info", t('已读取配对码：打开 设置 → 账号，点“配对”'));
@@ -5073,6 +5235,7 @@ function take_scanned_pairing(text) {
   const code = (hash.match(/(?:^|&)pair=([0-9A-Za-z-]{12,16})/) || [])[1];
   if (!code) return "";
   state.device.pairing_code = code.toUpperCase();
+  state.device.pairing_machine = new URLSearchParams(hash).get("machine") || "";
   state.device.pairing_fp = (hash.match(/(?:^|&)fp=([0-9a-f]{32})/) || [])[1] || "";
   return state.device.pairing_code;
 }
@@ -5130,6 +5293,63 @@ async function local_launch_request(action, payload) {
   // `files` and `spots` list what a website deploy refused (runner/site_deploy.mjs).
   if (!response.ok) throw Object.assign(new Error(server_text(result.error_text, result.error) || t('本机启动请求失败')), { status: response.status, launch: result.launch, code: result.code, files: result.files, spots: result.spots, untrusted_reasons: result.untrusted_reasons });
   return result;
+}
+
+/** Load a newly created system room into the directory cache before handing it to room navigation. */
+async function show_steward_room(room_id, navigation = ++state.navigation_version) {
+  if (!state.rooms.some((room) => room.id === room_id)) {
+    const room = await request_json(`/api/rooms/${room_id}`);
+    if (navigation !== state.navigation_version) return;
+    if (!state.rooms.some((item) => item.id === room_id)) state.rooms = [...state.rooms, room];
+  }
+  document.dispatchEvent(new CustomEvent("discuss:open-steward", { detail: room_id }));
+}
+
+/** Open the current computer's steward, creating its room without posting a task if needed. */
+async function open_steward() {
+  const navigation = ++state.navigation_version;
+  try {
+    const status = await local_launch_request("steward", {});
+    if (navigation !== state.navigation_version) return;
+    if (!check_steward_configuration(status)) return;
+    const { room_id } = status.room_id ? status : await local_launch_request("steward", { open: true, lang: window.codiscuss_i18n?.locale });
+    if (navigation === state.navigation_version) await show_steward_room(room_id, navigation);
+  } catch (error) {
+    if (error.code === "steward_not_configured") {
+      if (navigation === state.navigation_version) check_steward_configuration({ configured: false });
+    } else notify("error", error.message);
+  }
+}
+
+/** Explain the prerequisite and open the exact setting instead of submitting a platform task. */
+function check_steward_configuration(status) {
+  if (status.configured !== false) return true;
+  document.dispatchEvent(new Event("discuss:steward-settings"));
+  notify("warning", t("请先在“设置 → 平台主理人”选择软件"));
+  return false;
+}
+
+async function ensure_steward_configured() {
+  try { return check_steward_configuration(await local_launch_request("steward", {})); }
+  catch (error) { notify("error", error.message); return false; }
+}
+
+/** Send one platform task and offer to open its result without leaving the current page. */
+async function request_steward(skill, context = {}, { confirmed = false } = {}) {
+  if (!await ensure_steward_configured()) return;
+  try {
+    const { room_id } = await local_launch_request("steward-request", {
+      skill, context, lang: window.codiscuss_i18n?.locale, submission_id: new_submission_id(),
+      ...(confirmed ? { confirmed: true } : {}),
+    });
+    notify("info", t("已发送给平台主理人"), {
+      duration: 20000,
+      actions: [{ label: t("打开平台主理人"), onClick: () => show_steward_room(room_id).catch(error => notify("error", error.message)) }],
+    });
+  } catch (error) {
+    if (error.code === "steward_not_configured") check_steward_configuration({ configured: false });
+    else notify("error", error.message);
+  }
 }
 
 // Relayed answers and files are converted in plain loops: a per-character callback takes tens of milliseconds a megabyte.
@@ -5266,8 +5486,11 @@ async function device_request(action, payload = {}) {
  * passkey is created in the same step (its challenge is bound to the code and the key). A scanned QR code also carries
  * the computer's key fingerprint, so a website handing over other keys is caught here.
  */
-async function pair_this_device(code) {
-  const machine = relay_machine || await load_relay_machine();
+async function pair_this_device(code, machine_id) {
+  const id = String(state.device.pairing_machine || machine_id || "").trim();
+  if (!/^[0-9a-f]{32}$/.test(id)) throw new Error(t('电脑编号无效'));
+  const machine = await request_json("/api/guest/" + id + "/key");
+  if (machine?.id !== id) throw new Error(t('电脑编号无效'));
   if (!machine?.sign_key) throw new Error(t('网站上还没有绑定电脑，或电脑的 codiscuss 版本过旧'));
   const normal = String(code || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
   if (normal.length !== 12) throw new Error(t('配对码是 12 位字母和数字'));
@@ -5297,7 +5520,7 @@ async function pair_this_device(code) {
         });
       const passkey = created && { id: bytes_to_b64url(created.rawId), client_data_json: bytes_to_b64url(created.response.clientDataJSON),
         attestation_object: bytes_to_b64url(created.response.attestationObject) };
-      const answer = await pair_exchange(machine, { public_key: device.public_jwk, label: device_label(), proof, passkey });
+      const answer = await pair_exchange(machine, { public_key: device.public_jwk, label: device_label(), proof, passkey, origin: location.origin });
       if (answer.status >= 400 && refused && answer.body?.need === "passkey") throw passkey_error(refused);
       if (answer.status >= 400) throw new Error(server_text(answer.body?.error_text, answer.body?.error) || t('配对失败'));
       const old_scope = pairing_scope();
@@ -5306,7 +5529,7 @@ async function pair_this_device(code) {
         purge_cached_attachments(old_scope);
       }
       localStorage.setItem(PAIRED_KEY, JSON.stringify({ machine_id: machine.id, fingerprint }));
-      Object.assign(state.device, { needs: "", pairing_code: "", pairing_fp: "" });
+      Object.assign(state.device, { needs: "", pairing_code: "", pairing_fp: "", pairing_machine: "" });
       state.admin.logged_in = true;
       publish_view();
       notify(passkey ? "info" : "warning", passkey ? t('这台设备已与电脑配对') : t('这台设备已与电脑配对（经电脑允许不用通行密钥）：不需要每天确认，也不能续期，到期须回电脑前重新配对'));
@@ -5369,9 +5592,9 @@ async function passkey_assertion(options) {
 }
 
 /** Show a pairing code for a new device; only this computer's own page can, so new devices are added in front of it. */
-async function invite_device(temporary, without_passkey = false) {
+async function invite_device(temporary, without_passkey = false, origin) {
   if (!state.admin.local) throw new Error(t('新设备只能在电脑前添加：请在电脑本机网页打开 设置 → 账号 → 添加设备'));
-  return local_launch_request("device-pairing", { temporary, without_passkey });
+  return local_launch_request("device-pairing", { temporary, without_passkey, origin });
 }
 
 // Requests made together while the device is locked share one confirmation.
@@ -5444,6 +5667,7 @@ function record_relay_time(machine, id, category, total, result, local) {
   const delta = (a, b) => Number.isFinite(a) && Number.isFinite(b) && a >= b ? Math.round(a - b) : null;
   const milliseconds = n => Number.isFinite(n) && n >= 0 && n <= 600000 ? Math.round(n) : null;
   const report = { id, total, worker: milliseconds(result.worker_ms), relay: milliseconds(result.roundtrip_ms),
+    d1: milliseconds(result.d1_ms), rpc: milliseconds(result.rpc_ms), db: /^[A-Z]{3}$/.test(result.primary_colo) ? result.primary_colo : null,
     dc: /^[A-Z]{3}$/.test(result.device_colo) ? result.device_colo : null, mc: /^[A-Z]{3}$/.test(result.machine_colo) ? result.machine_colo : null };
   if (["thumbnail", "attachment", "room-files", "room-media", "room-upload"].includes(category)) {
     const bytes = Number.isSafeInteger(result.frame_bytes) && result.frame_bytes >= 0 ? result.frame_bytes : null;
@@ -6519,8 +6743,9 @@ async function load_relay_machine() {
   if (state.admin.local) return null;
   if (!state.admin.devices && !state.admin.logged_in) return null;
   try {
-    const machines = (await request_json("/api/machines")).machines;
     const record = paired_record();
+    if (!record?.machine_id) return null;
+    const machines = (await request_json("/api/machines")).machines;
     // A paired browser talks only to the computer it paired with: a website that no longer lists it must not swap in another.
     if (record?.machine_id && !machines.some(item => item.id === record.machine_id)) {
       clear_relay_memory();
@@ -6528,8 +6753,7 @@ async function load_relay_machine() {
       notify("error", t('网站上找不到与这台设备配对的电脑，已停止连接；如果电脑确实换过绑定，请在电脑前重新扫码配对'));
       return null;
     }
-    // Without a pairing a page defaults to an owner's computer, never a hosted account's (`parent`, #5494).
-    const machine = machines.find(item => item.id === record?.machine_id) || machines.find(item => !item.parent) || null;
+    const machine = machines.find(item => item.id === record.machine_id);
     if (machine && record?.machine_id === machine.id && record.fingerprint && record.fingerprint !== await machine_fingerprint(machine)) {
       clear_relay_memory();
       purge_cached_attachments(pairing_scope(record));
@@ -6679,7 +6903,7 @@ function apply_storage_snapshot(result) {
   if (!warning) { storage_warn_announced = false; return; }
   if (storage_warn_announced) return;
   storage_warn_announced = true;
-  notify("warning", result?.warning_reason || t("本机 .codiscuss 数据已占 {used}，接近 {limit} 上限，请在房间外的 AI 对话中运行 $codiscuss-draft-cleanup 或清理临时文件。",
+  notify("warning", result?.warning_reason || t("本机 .codiscuss 数据已占 {used}，接近 {limit} 上限。请在管理面板的“存储”页清理临时文件。",
     { used: format_storage_size(total_bytes), limit: format_storage_size(limit_bytes) }));
 }
 
@@ -6781,7 +7005,7 @@ function manage_room_files(room_id, payload) {
 // Upload parts: small enough for the relay's frame when the computer is reached through it, larger on the computer itself.
 const PROJECT_UPLOAD_RELAY_PART_BYTES = 128 * 1024;
 const PROJECT_UPLOAD_LOCAL_PART_BYTES = 3 * 1024 * 1024;
-const PROJECT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+
 const PROJECT_UPLOAD_RETRY_MS = [1000, 3000];
 
 /**
@@ -6789,7 +7013,7 @@ const PROJECT_UPLOAD_RETRY_MS = [1000, 3000];
  * says what happens to a file of the same name. `on_progress(share)` follows the parts the computer took.
  */
 async function upload_project_file(room_id, { root, path, file, conflict, on_progress = () => {} }) {
-  if (file.size > PROJECT_UPLOAD_MAX_BYTES) throw new Error(t('单个文件不能超过 {value1} MB', { value1: PROJECT_UPLOAD_MAX_BYTES / 1024 / 1024 }));
+  if (file.size > state.attachment_limit_mib * 1024 * 1024) throw new Error(t('单个文件不能超过 {value1} MiB', { value1: state.attachment_limit_mib }));
   const relayed = Boolean(relay_machine && (!local_connection || computer_rooms_only()));
   const part_bytes = relayed ? PROJECT_UPLOAD_RELAY_PART_BYTES : PROJECT_UPLOAD_LOCAL_PART_BYTES;
   const total = Math.max(1, Math.ceil(file.size / part_bytes)), upload_id = crypto.randomUUID().replaceAll("-", "");
@@ -8166,11 +8390,21 @@ async function retract_message(message_id) {
 }
 
 /**
+ * The files of a message that can come back into the composer: an object storage file is not read back whole (it may
+ * be gigabytes, and its bytes are not on the site), so it is left out and the sender is told to add it again.
+ */
+function local_attachments(files) {
+  const kept = files.filter(file => file.storage !== "object");
+  if (kept.length < files.length) notify("warning", t('大附件未带回，需要重新添加'));
+  return kept;
+}
+
+/**
  * A sent message's files and reply as composer drafts, for sending it again. The site keeps the files with the old
  * message, so they are read from it and become new drafts that upload again; each keeps the placeholder `text` has for it.
  */
 async function message_draft_parts(room_id, message, text) {
-  const files = await Promise.all((message?.attachments || []).map(async (file) => {
+  const files = await Promise.all(local_attachments(message?.attachments || []).map(async (file) => {
     const bytes = await read_room_file(`/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(file.id)}/content`);
     return { number: file.number, file: new File([bytes], file.file_name, { type: file.content_type || "" }) };
   }));
@@ -8437,6 +8671,14 @@ async function rate_decision({ decision_id, rating, should_be = "", note = "" })
   const room_id = state.room.id;
   await request_json(`/api/rooms/${room_id}/scheduler-decisions/${decision_id}`, { rating, should_be, note });
   if (state.room?.id === room_id) await refresh_room();
+}
+
+/**
+ * The owner rates one host dispatch; rating null withdraws it. Returns `{message_id, dispatch_feedback}` as saved,
+ * which the card keeps itself (the transcript keeps each message as first read).
+ */
+function rate_dispatch(message_id, { rating, should_be = "", note = "" }) {
+  return request_json(`/api/rooms/${state.room.id}/dispatch-feedback/${message_id}`, { rating, should_be, note });
 }
 
 /** Read what the decision model was given for one decision (state and questions), for the card's input view. */
@@ -9114,8 +9356,9 @@ function view_snapshot() {
     recipient_previews: [...recipient_previews.values()].filter(item => item.room_id === state.room?.id),
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
-    destroying: [...state.destroying.keys()], dissolving: [...state.dissolving], destructions: state.destructions,
+    destroying: [...state.destroying.keys()], dissolving: [...state.dissolving], destructions: state.destructions, quotas: state.quotas || {},
     connected: state.connected, reconnecting: state.reconnecting, rooms_loading: state.rooms_loading, observed_until: state.observed_until, resuming: state.resuming, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
+    attachment_limit_mib: state.attachment_limit_mib,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url, placeholder: item.placeholder || "" })),
     upload_status: state.upload_status, sending_message: send_queue.some(job => job.room_id === state.room?.id), sending_previews, sending_preview: sending_previews[0] || null, queueing_previews: room_queueing_previews(), queue_reading: state.queue_reading, queue_taking: [...state.queue_taking],
     failed_sends: state.failed_sends.filter(job => job.room_id === state.room?.id).map((failed) => ({ id: failed.id, ...failed.preview })),
@@ -9123,7 +9366,7 @@ function view_snapshot() {
     source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, queued_taken: state.queued_taken, composer_restored: state.composer_restored,
     has_earlier: Boolean(transcript?.has_earlier), loading_earlier: Boolean(transcript && earlier_read?.key === transcript.key),
     access: access_snapshot(), admin: admin_snapshot(), entry_account: state.entry_account || "",
-    device: { id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
+    device: { pairing_machine: state.device.pairing_machine, id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
       prompt: state.device.prompt ? { title: state.device.prompt.title, description: state.device.prompt.description, confirm_label: state.device.prompt.confirm_label } : null },
     share: SHARE ? { exported_at: SHARE.exported_at, home: SHARE_HOME } : null,
     managed_share_jobs: shown_share_jobs().sort((a,b) => b.created_at.localeCompare(a.created_at)),
@@ -9251,6 +9494,7 @@ function preview_clicked_attachment(event) {
 /** Show and download room files read as bytes (the computer's rooms, a share page), and mark media the browser cannot play. */
 function watch_room_files() {
   document.addEventListener("click", download_relay_file, true);
+  document.addEventListener("click", download_object_file, true);
   document.addEventListener("error", mark_failed_media, true);
   document.addEventListener("loadeddata", event => {
     const video = event.target;
@@ -9831,15 +10075,17 @@ const share_changes = new Map();
 const saved_share_links = new Map();
 
 /** Project the latest intent, then the saved result, onto the public directory link. */
-function share_link(room_id) {
+function share_link(room_id, { renewable = false } = {}) {
   const entry = share_changes.get(room_id) || saved_share_links.get(room_id);
   const link = entry ? entry.link : state.rooms.find(room => room.id === room_id)?.share_link;
-  return link && Date.parse(link.expires_at) > Date.now() ? link : null;
+  // The share site keeps an expired link until the operator purges it, and only renewing it still works then.
+  return link && (renewable || Date.parse(link.expires_at) > Date.now()) ? link : null;
 }
 
-/** The live share links of the rooms in the directory, by room. */
+/** The share links of the rooms in the directory, by room, including expired ones still renewable (marked `expired`). */
 function share_links() {
-  return Object.fromEntries(state.rooms.map(room => [room.id, share_link(room.id)]).filter(([, link]) => link));
+  return Object.fromEntries(state.rooms.map(room => [room.id, share_link(room.id, { renewable: true })]).filter(([, link]) => link)
+    .map(([id, link]) => [id, Date.parse(link.expires_at) > Date.now() ? link : { ...link, expired: true }]));
 }
 
 /** Show a room's link as changed at once, before the next directory read carries it. */
@@ -10027,7 +10273,7 @@ async function queue_share_change(room_id, link, write) {
 
 async function share_renew({ room_id, days = SHARE_DEFAULT_DAYS }) {
   const ttl_days = SHARE_DAYS.includes(Number(days)) ? Number(days) : SHARE_DEFAULT_DAYS;
-  const current = share_link(room_id);
+  const current = share_link(room_id, { renewable: true });
   const preview = current && { ...current, expires_at: new Date(Date.now() + ttl_days * DAY_MS).toISOString() };
   const write = async () => {
     const link = await share_link_record(room_id);
@@ -10240,10 +10486,10 @@ function change_view_theme(theme) {
   try { localStorage.setItem(THEME_STORAGE_KEY, document.documentElement.dataset.theme); } catch { /* Keep the session preference. */ }
 }
 
-window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input, upload_progress,
+window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input, rate_dispatch, upload_progress,
   write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, clear_card_drafts, preset_origin, preset_origin_info, preset_skilled, describe_member, set_chain_rounds, continue_chain, expert_presets, project_presets, load_project_presets, clear_project_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, trust_expert_preset, workflow_key, preset_key, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, remove_launch_projects, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, write_create_relay_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
-  start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request,
+  start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request, open_steward, show_steward_room, request_steward, ensure_steward_configured,
   attachment_markup, link_attachment_placeholders, attachment_download_link, attachment_size, attachment_file_icon, add_attachments, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url, attachment_thumbnail_url, attachment_range_reader, read_zip_directory,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   reload_workflows, trust_project_workflow, confirm_workflow_trust, dismiss_workflow_trust, save_card_preset, import_expert, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_auto_destroy, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,

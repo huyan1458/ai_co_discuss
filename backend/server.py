@@ -42,9 +42,14 @@ from .free_room import (add_member, after_free_message, after_proactive, authori
                         inbox, interrupt_for_message, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
                         room_failure_wakes, room_quiet_checkins, save_room_access, view_execution, recent_executions, MAX_MESSAGE_ID)
 from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
+from .free_room import account_quotas, report_quota
+from .free_room import HOST_WITHDRAW_RESULT, OWNER_INTERRUPT_RESULT, OWNER_REWIND_RESULT, OWNER_STOP_RESULT, observed_host_versions
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
 from .private_chat import chat_action, member_chat
-from .external_members import external_api, guard_route as guard_external_route, is_external_path, owner_api as external_owner_api
+from .external_members import external_api, guard_route as guard_external_route, is_external_path, owner_api as external_owner_api, require_external
+from .external_members import (GUEST_SERVICE_ACTIONS, add_guest_question_origin, guest_dispatch_held,
+                               guest_display_names, guest_error, guest_guard,
+                               guest_mode_active, guest_origin, guest_owner_api, guest_path, guest_projection)
 from .free_room import describe_members, execution_notes, label_members, check_relay, record_host_action, record_relay_send, record_room_link, save_message_relay, set_host_checkin, withdraw_dispatch, member_descriptions, member_display_names, member_handles, member_labels, reorder_speakers, resolve_member_fields, set_chain_rounds, speaking_order, stop_room, stop_room_work
 from .free_room import (ADAPTER_VALUE, LAYOUT_AFTER_SQL, LAYOUT_AT_SQL, continue_chain, execution_segments, execution_timeline, group_route_plan, retract_message, rewind_plan, rewind_room,
                         host_event, host_hidden_event, room_event_log, withdrawals)
@@ -55,9 +60,11 @@ from .free_room import checked_sequence, continue_sequence, sequence_view
 from .windows_thumbnail import encode_preview
 from . import questions
 from .visual_fences import fold_message_visuals
-from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label_text, is_ai, is_participant
+from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label, default_label_text, is_ai, is_participant
 from .message_queue import drain as drain_queue, enqueue, enqueue_share, queue_action, queue_split, queue_view
 from .room_import import import_room, imported_attachment
+from .object_storage import (OBJECT_MAX_BYTES, ObjectMissing, StorageUnavailable, configured_storage,
+                             object_storage_quota_mib, object_storage_retention_days, object_storage_threshold_mib)
 from .free_room import save_relay_receipt
 from .room_links import list_links
 from .free_room import require_owner_or_host
@@ -80,7 +87,24 @@ MAX_BODY_BYTES = 512 * 1024
 # The file page uploads to a project in parts of up to 3 MiB on the computer itself (base64 in JSON).
 MAX_FILE_PART_BODY_BYTES = 5 * 1024 * 1024
 MAX_IMPORT_BYTES = 32 * 1024 * 1024
-MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+ATTACHMENT_POLICY = json.loads(Path(__file__).with_name("attachment_policy.json").read_text(encoding="utf-8"))
+
+
+def attachment_limit_mib(database):
+    """Read the administrator's current upload policy for this instance."""
+    path = Path(os.environ.get("DISCUSS_ATTACHMENT_POLICY_FILE") or Path(database).with_name("attachment-limit.json"))
+    minimum, maximum = ATTACHMENT_POLICY["min_mib"], ATTACHMENT_POLICY["max_mib"]
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError
+        return value
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        logging.warning("Invalid or unreadable attachment limit; expected an integer from %d to %d MiB", minimum, maximum)
+    return ATTACHMENT_POLICY["default_mib"]
+
 # A smaller copy of an image a page made (WebP or JPEG), shown in messages in place of the original: at most this many
 # bytes and this many pixels on its longer side, and its shape within THUMBNAIL_RATIO_TOLERANCE of the original's.
 MAX_THUMBNAIL_BYTES = 512 * 1024
@@ -91,6 +115,7 @@ THUMBNAIL_SUFFIX = ".thumbnail"
 # Files uploaded while the message is still being written are dropped if never sent within this time.
 UNSENT_ATTACHMENT_TTL = timedelta(hours=24)
 ATTACHMENT_SWEEP_SECONDS = 6 * 60 * 60
+BYTES_PER_MIB = 1024 * 1024
 ORPHAN_ATTACHMENT_GRACE_SECONDS = 60 * 60
 MAX_MESSAGE_ATTACHMENTS = 10
 MAX_FILENAME_LENGTH = 255
@@ -102,7 +127,9 @@ MACHINE_COMMAND_POLL_SECONDS = 0.5
 # Ordering and filing a channel only rearrange the shared directory, like folder edits, so they need no room credential.
 DIRECTORY_OPERATIONS = ("move", "folder", "detach")
 # Local entry commands for external members: the owner's invites (room credential) and this computer's invited records.
-INVITE_COMMANDS = ("room-invite", "room-invites", "room-invite-revoke")
+INVITE_COMMANDS = ("guest-invite", "room-invite", "room-invites", "room-invite-revoke")
+STEWARD_COMMANDS = ("steward", "steward-settings", "steward-request", "steward-history", "steward-delete")
+STEWARD_MEMBER_LIMIT = Text("平台主理人房间只能有一名成员，不能新增或邀请成员")
 INVITED_COMMANDS = ("invited-list", "invited-join", "invited-trust", "invited-ai", "invited-pause", "invited-approve", "invited-refuse",
                     "invited-lend", "invited-leave", "invited-remove", "invited-room")
 SITE_COMMANDS = ("site-stage", "site-publish", "site-list", "site-diagnose", "site-renew", "site-rollback", "site-revoke")
@@ -192,6 +219,10 @@ MAX_QUESTION_LENGTH = 1000
 RECENT_DECISIONS = 100
 MAX_DECISION_NOTE = 200
 MAX_DECISION_MEMBER = 60
+DISPATCH_CASE_TEXT_LIMIT = 4000
+DISPATCH_CONTEXT_LIMIT = 1500
+DISPATCH_CONTEXT_BEFORE = 3
+DISPATCH_CONTEXT_AFTER = 5
 MAX_DECISION_CONTEXT = 500
 DECISION_SELECT = """SELECT d.*,f.rating AS feedback,COALESCE(f.should_be,'') AS should_be,COALESCE(f.note,'') AS note,c.context
 FROM scheduler_decisions d LEFT JOIN scheduler_feedback f ON f.decision_id=d.id LEFT JOIN scheduler_decision_context c ON c.decision_id=d.id"""
@@ -216,6 +247,8 @@ ROOM_BACKUP_QUERIES = {
         "room_directory", "room_folder_assignments", "room_creations", "room_briefs", "room_user_requests",
         "topic_settings", "discussion_limits", "member_labels", "member_descriptions")},
     "scheduler_decisions": f"{DECISION_SELECT} WHERE d.room_id=? ORDER BY d.id",
+    "dispatch_feedback": """SELECT f.* FROM dispatch_feedback f JOIN messages m ON m.id=f.message_id
+        WHERE m.room_id=? ORDER BY f.message_id""",
     "topic_folders": "SELECT * FROM topic_folders WHERE id IN (SELECT folder_id FROM room_folder_assignments WHERE room_id=?)",
     "messages": "SELECT * FROM messages WHERE room_id=? ORDER BY id",
     "message_withdrawals": "SELECT w.* FROM message_withdrawals w JOIN messages m ON m.id=w.message_id WHERE m.room_id=? ORDER BY w.message_id",
@@ -318,6 +351,8 @@ def room_backup(connection, room_id):
            (st.owner='session_request' AND st.owner_id IN (SELECT id FROM session_requests WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?))) OR
            (st.owner='room' AND st.owner_id=?)""",
         (room_id, room_id, room_id, room_id, room_id, room_id, room_id))]
+    for attachment in tables["attachments"]:
+        attachment.pop("object_name", None)
     if not tables["rooms"]:
         raise LookupError(Text('房间不存在'))
     return {"format": "ai-codiscuss-room-backup", "version": 2,
@@ -538,6 +573,45 @@ def migrate_legacy_discussion(connection, tables):
         raise
 
 
+def migrate_dispatch_withdrawals(connection):
+    """One-time repair of legacy withdrawal records, using successful writes with cancellation evidence."""
+    if not connection.execute("""INSERT OR IGNORE INTO site_preferences(key,value)
+        VALUES('dispatch_withdrawals_v2','1')""").rowcount:
+        return
+    connection.execute("""DELETE FROM dispatch_withdrawals WHERE legacy=1 OR NOT EXISTS(
+        SELECT 1 FROM dispatch_withdrawn_requests w JOIN member_requests r ON r.id=w.request_id
+        WHERE r.message_id=dispatch_withdrawals.message_id OR r.batch_id IN (
+            SELECT json_extract(step.value,'$[2]') FROM free_sequences s,json_each(s.steps) step
+            WHERE s.message_id=dispatch_withdrawals.message_id))""")
+    connection.execute("""INSERT OR IGNORE INTO dispatch_withdrawals(message_id,legacy)
+        SELECT m.id,1 FROM room_events e JOIN messages m
+          ON m.id=CAST(substr(json_extract(e.data,'$.path'),13) AS INTEGER) AND m.room_id=e.room_id
+        WHERE e.kind='api.write' AND json_extract(e.data,'$.status')=200
+          AND json_extract(e.data,'$.path')=('/dispatches/' || m.id || '/withdraw')
+          AND EXISTS(SELECT 1 FROM room_events c JOIN member_requests r
+              ON r.id=json_extract(c.data,'$.request_id') AND r.room_id=c.room_id
+              WHERE c.room_id=e.room_id AND c.id<e.id AND c.kind='request.changed'
+                AND c.at BETWEEN e.at-1 AND e.at+COALESCE(json_extract(e.data,'$.elapsed_ms'),0)+1
+                AND json_extract(c.data,'$.status')='cancelled'
+                AND (r.message_id=m.id OR r.batch_id IN (
+                    SELECT json_extract(step.value,'$[2]') FROM free_sequences s,json_each(s.steps) step
+                    WHERE s.message_id=m.id)))""")
+
+
+def migrate_guest_cancel_reasons(connection):
+    """Extend the cancellation constraint without discarding existing reasons or replaying their events."""
+    definition = connection.execute("SELECT sql FROM sqlite_master WHERE name='request_cancel_reasons'").fetchone()[0]
+    if "'guest_disconnected'" in definition:
+        return
+    trigger = connection.execute("SELECT sql FROM sqlite_master WHERE name='event_request_cancel_reason'").fetchone()[0]
+    begin_write(connection)
+    connection.execute("ALTER TABLE request_cancel_reasons RENAME TO previous_request_cancel_reasons")
+    connection.execute(definition.replace("CHECK(reason IN (", "CHECK(reason IN ('guest_disconnected','guest_withdrawn',"))
+    connection.execute("INSERT INTO request_cancel_reasons SELECT * FROM previous_request_cancel_reasons")
+    connection.execute("DROP TABLE previous_request_cancel_reasons")
+    connection.execute(trigger)
+
+
 def init_database(database, seed=True):
     """Create durable storage; seed only a brand-new database when requested."""
     database = Path(database)
@@ -567,7 +641,16 @@ def init_database(database, seed=True):
                 for name, kind in GOAL_PHASE_COLUMNS:
                     if name not in columns:
                         connection.execute(f"ALTER TABLE room_goals ADD COLUMN {name} {kind}")
+            if "attachments" in tables:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(attachments)")}
+                for column in ("storage", "object_name", "stored_at"):
+                    if column not in columns:
+                        connection.execute(f"ALTER TABLE attachments ADD COLUMN {column} TEXT")
             connection.executescript(SCHEMA)
+            migrate_guest_cancel_reasons(connection)
+            if "redirect_message_id" not in {row[1] for row in connection.execute("PRAGMA table_info(dispatch_withdrawals)")}:
+                connection.execute("ALTER TABLE dispatch_withdrawals ADD COLUMN redirect_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL")
+            migrate_dispatch_withdrawals(connection)
             if 'member' not in {row[1] for row in connection.execute('PRAGMA table_info(message_relays)')}:
                 connection.execute("ALTER TABLE message_relays ADD COLUMN member TEXT NOT NULL DEFAULT ''")
             connection.execute("DELETE FROM room_links WHERE relation='peer'")
@@ -594,6 +677,8 @@ def init_database(database, seed=True):
             # A pinned room keeps its place but can be neither archived nor destroyed, by hand or automatically.
             if "pinned" not in directory_columns:
                 connection.execute("ALTER TABLE room_directory ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+            if "system_kind" not in directory_columns:
+                connection.execute("ALTER TABLE room_directory ADD COLUMN system_kind TEXT NOT NULL DEFAULT ''")
             if "directories" not in {row[1] for row in connection.execute("PRAGMA table_info(topic_folders)")}:
                 connection.execute("ALTER TABLE topic_folders ADD COLUMN directories TEXT NOT NULL DEFAULT '[]'")
             # Images stored before sizes were recorded keep NULL here and are measured when first read (with_image_sizes).
@@ -631,6 +716,16 @@ PARENT_ROOM = """SELECT p.id FROM room_links l JOIN rooms p ON p.id=l.other_room
     WHERE l.relation='parent' AND l.room_id=rooms.id ORDER BY l.message_id LIMIT 1"""
 
 
+def steward_archived_at(connection, room_id):
+    """Read when the current archive period began, or null if no archive event was recorded."""
+    row = connection.execute("""SELECT strftime('%Y-%m-%dT%H:%M:%fZ',at/1000.0,'unixepoch') FROM room_events
+        WHERE room_id=:room_id AND kind='api.write' AND json_extract(data,'$.path')='/archive'
+          AND id>COALESCE((SELECT MAX(id) FROM room_events WHERE room_id=:room_id
+              AND kind='api.write' AND json_extract(data,'$.path')='/restore'),0)
+        ORDER BY id LIMIT 1""", {"room_id": room_id}).fetchone()
+    return row[0] if row else None
+
+
 def require_room(connection, room_id):
     """Return a room and its current message count, or raise a lookup error."""
     row = connection.execute(f"""SELECT rooms.*, ({PARENT_ROOM}) AS parent_room_id,
@@ -645,8 +740,11 @@ def require_room(connection, room_id):
             FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id WHERE rooms.id=? GROUP BY rooms.id""", (room_id,)).fetchone()
     room = dict(row)
     room["texts"] = room_display_texts(connection, room)
-    directory = connection.execute("SELECT archived,detached,pinned FROM room_directory WHERE room_id=?", (room_id,)).fetchone()
+    directory = connection.execute("SELECT archived,detached,pinned,system_kind FROM room_directory WHERE room_id=?", (room_id,)).fetchone()
     room["archived"], room["detached"], room["pinned"] = bool(directory[0]), bool(directory[1]), bool(directory[2])
+    room["system_kind"] = directory["system_kind"]
+    if room["system_kind"] == "steward" and room["archived"]:
+        room["archived_at"] = steward_archived_at(connection, room_id)
     room["folder_id"] = connection.execute("SELECT folder_id FROM room_folder_assignments WHERE room_id=?", (room_id,)).fetchone()[0]
     # The number the next sent file takes, so the composer shows `[图片 #n]` as it will be saved. Queued messages post
     # first and take the numbers before it, so a new draft does not repeat a queued message's `[图片 #n]`.
@@ -699,7 +797,7 @@ def require_room(connection, room_id):
     first = connection.execute("SELECT MIN(id) FROM messages WHERE room_id=? AND author='用户'", (room_id,)).fetchone()[0]
     room["first_user_message_id"] = first
     room["descriptions"] = member_descriptions(connection, room_id)
-    room["labels"] = member_labels(connection, room_id)
+    room["labels"] = {**member_labels(connection, room_id), **guest_display_names(connection, room_id)}
     for member in room["members"]:
         label_text = default_label_text(member["name"], member["label"])
         if label_text:
@@ -1047,11 +1145,13 @@ def list_rooms(connection, params=None):
         GROUP BY rooms.id ORDER BY rooms.created_at, rooms.id""", (int(time.time()), *((identifier,) if identifier else ())))
     directory = {row["room_id"]: dict(row) for row in connection.execute("SELECT * FROM room_directory")}
     assignments = {row["room_id"]: row["folder_id"] for row in connection.execute("SELECT room_id,folder_id FROM room_folder_assignments")}
-    # Only the public part of a live share link; the manage token stays behind the owner-only share-link read.
+    # Only the public part of a share link, expired ones too (the share site keeps them renewable until the operator
+    # purges them); the manage token stays behind the owner-only share-link read.
     links = {row["room_id"]: {"url": row["url"], "expires_at": row["expires_at"]} for row in connection.execute(
-        "SELECT room_id,url,expires_at FROM room_share_links WHERE expires_at>?", (utc_iso_now(),))}
+        "SELECT room_id,url,expires_at FROM room_share_links")}
     rooms = [{**dict(row), "archived": bool(directory[row["id"]]["archived"]), "detached": bool(directory[row["id"]]["detached"]),
               "pinned": bool(directory[row["id"]]["pinned"]), "running": bool(row["running"]),
+              "system_kind": directory[row["id"]]["system_kind"],
               "destroy_after_days": directory[row["id"]]["destroy_after_days"], "destroy_from": destroy_from(connection, dict(row), directory[row["id"]]) if directory[row["id"]]["destroy_after_days"] else None,
               "destroy_blocked": destroy_blocked(connection, row["id"]) if directory[row["id"]]["destroy_after_days"] else False,
               "folder_id": assignments[row["id"]], "texts": room_display_texts(connection, dict(row)),
@@ -1073,10 +1173,10 @@ def utc_iso_now():
 
 
 def share_link_record(connection, room_id):
-    """The room's live share link with its manage token, or None when it has none or it expired."""
+    """The room's share link with its manage token, expired ones too (renewable until purged), or None."""
     require_room(connection, room_id)
     row = connection.execute("SELECT share_id,url,manage_token,expires_at,updated_at FROM room_share_links "
-                             "WHERE room_id=? AND expires_at>?", (room_id, utc_iso_now())).fetchone()
+                             "WHERE room_id=?", (room_id,)).fetchone()
     return {"link": dict(row) if row else None}
 
 
@@ -1328,6 +1428,9 @@ def _site_public_row(row, now_iso):
         "versions": _json_list(row["versions_json"]), "files": _json_list(row["files_json"]),
         "expires_at": row["expires_at"], "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
+    # Expired by time only: website hosting keeps its files until the operator purges them, so it can still be renewed.
+    if status == "expired" and row["status"] == "active":
+        result["renewable"] = True
     if "room_title" in row.keys():
         result["room_title"] = row["room_title"]
     return result
@@ -1456,16 +1559,19 @@ def save_room_site(connection, room_id, payload):
 
 def last_room(connection):
     """The room last opened by the site's manager on any device, or '' when none or it no longer exists."""
-    row = connection.execute("""SELECT p.value FROM site_preferences p JOIN rooms r ON r.id=p.value
-        WHERE p.key='last_room'""").fetchone()
+    row = connection.execute("""SELECT p.value FROM site_preferences p JOIN room_directory d ON d.room_id=p.value
+        WHERE p.key='last_room' AND d.system_kind=''""").fetchone()
     return row[0] if row else ""
 
 
 def remember_last_room(connection, payload):
     """Remember the room the manager opened, so the next visit from any device reopens it."""
     room_id = payload.get("room_id")
-    if not isinstance(room_id, str) or not connection.execute("SELECT 1 FROM rooms WHERE id=?", (room_id,)).fetchone():
+    directory = connection.execute("SELECT system_kind FROM room_directory WHERE room_id=?", (room_id,)).fetchone() if isinstance(room_id, str) else None
+    if directory is None:
         raise LookupError(Text('房间不存在'))
+    if directory["system_kind"]:
+        return {"last_room": last_room(connection)}
     connection.execute("INSERT INTO site_preferences (key,value) VALUES ('last_room',?) "
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (room_id,))
     return {"last_room": room_id}
@@ -1591,10 +1697,12 @@ def manage_room(connection, room_id, action, payload):
     begin_write(connection)
     room = require_room(connection, room_id)
     require_host(room, payload)
+    if room["system_kind"] and action in ("move", "folder", "detach", "auto-destroy"):
+        raise ValueError(Text('系统房间不参与目录管理或自动销毁'))
     if action in ("archive", "delete") and room["pinned"]:
         raise FileExistsError(Text('已固定的房间不能存档或销毁，请先取消固定'))
     if action == "move":
-        rooms = [item["id"] for item in list_rooms(connection)["rooms"] if item["id"] != room_id]
+        rooms = [item["id"] for item in list_rooms(connection)["rooms"] if item["id"] != room_id and not item["system_kind"]]
         before = payload.get("before_id")
         if before is not None and before not in rooms:
             raise ValueError(Text('目标房间不存在或与当前房间相同'))
@@ -1617,8 +1725,9 @@ def manage_room(connection, room_id, action, payload):
         connection.execute("UPDATE room_directory SET detached=? WHERE room_id=?", (int(detached), room_id))
         if detached:
             # A lifted room lands right after its parent rather than at the end of the folder.
-            rooms = [item["id"] for item in list_rooms(connection)["rooms"] if item["id"] != room_id]
-            rooms.insert(rooms.index(room["parent_room_id"]) + 1, room_id)
+            rooms = [item["id"] for item in list_rooms(connection)["rooms"] if item["id"] != room_id and not item["system_kind"]]
+            parent = room["parent_room_id"]
+            rooms.insert(rooms.index(parent) + 1 if parent in rooms else len(rooms), room_id)
             connection.executemany("UPDATE room_directory SET position=? WHERE room_id=?", enumerate(rooms, 1))
     elif action == "pin":
         pinned = payload.get("pinned")
@@ -1632,6 +1741,8 @@ def manage_room(connection, room_id, action, payload):
             raise ValueError(Text('title 内容为空或超过 80 字'))
         connection.execute("UPDATE rooms SET title=? WHERE id=?", (title, room_id))
     elif action in ("archive", "restore"):
+        if action == "restore" and room["archived"] and room["system_kind"] == "steward":
+            require_no_active_steward(connection)
         if action == "archive":
             session = current_session(connection, room_id, active_only=True)
             if session and session["status"] == "active":
@@ -1650,6 +1761,8 @@ def manage_room(connection, room_id, action, payload):
         # Counted from the later of the last activity and this change, so choosing a limit never destroys a room at once.
         connection.execute("UPDATE room_directory SET destroy_after_days=?,destroy_set_at=? WHERE room_id=?", (days, utc_now(), room_id))
     elif action == "delete":
+        if payload.get("archived_steward_only") is True and (room["system_kind"] != "steward" or not room["archived"]):
+            raise FileExistsError(Text('只能删除已存档的平台主理人房间'))
         # The page confirms in its own dialog; a caller that names the title must name it right.
         if "confirm_title" in payload and payload.get("confirm_title") != room["title"]:
             raise ValueError(Text('请输入完整房间名称确认删除'))
@@ -1668,11 +1781,15 @@ def manage_room(connection, room_id, action, payload):
             entry["ids"].append(row["session_id"])
         sessions = list(members.values())
         # (a) Kept scheduling feedback serves tuning on the maintainer's own site; a hosted account's has no reader and goes.
-        feedback = connection.execute("SELECT COUNT(*) FROM scheduler_feedback_cases WHERE room_id=?", (room_id,)).fetchone()[0]
-        if feedback and not hosted_instance():
+        feedback = connection.execute("""SELECT
+            (SELECT COUNT(*) FROM scheduler_feedback_cases WHERE room_id=?) +
+            (SELECT COUNT(*) FROM dispatch_feedback_cases WHERE room_id=?)""", (room_id, room_id)).fetchone()[0]
+        keep_feedback = not room["system_kind"] and not hosted_instance()
+        if feedback and keep_feedback:
             counts.append({"kind": "feedback_cases", "state": "kept", "count": feedback})
-        seal_room(connection, room_id, int(time.time()))
-        delete_room_records(connection, room_id, keep_feedback=not hosted_instance())
+        if not room["system_kind"]:
+            seal_room(connection, room_id, int(time.time()))
+        delete_room_records(connection, room_id, keep_feedback=keep_feedback)
         connection.execute("""INSERT OR REPLACE INTO room_destructions (room_id,title,control_hash,status,expect_runner,automatic,items,sessions,created_at)
             VALUES (?,?,?,'cleaning',?,?,?,?,?)""", (room_id, room["title"], control[0] if control else "", int(expect_runner),
                                                       int(payload.get("automatic") is True), json.dumps(counts), json.dumps(sessions), utc_now()))
@@ -1690,6 +1807,8 @@ def hosted_instance():
 
 def delete_room_records(connection, room_id, keep_feedback=False):
     """Remove a room's dependent records in the caller's transaction; `keep_feedback` leaves its rated scheduling cases."""
+    if keep_feedback:
+        refresh_dispatch_cases(connection, room_id)
     # Stored texts and kept feedback cases name their owner without a foreign key, so they go first, while the
     # rows that identify them still exist.
     for owner, query in ROOM_TEXT_OWNERS:
@@ -1697,13 +1816,14 @@ def delete_room_records(connection, room_id, keep_feedback=False):
     connection.execute("DELETE FROM stored_texts WHERE owner='room' AND owner_id=?", (room_id,))
     if not keep_feedback:
         connection.execute("DELETE FROM scheduler_feedback_cases WHERE room_id=?", (room_id,))
+        connection.execute("DELETE FROM dispatch_feedback_cases WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM task_message_sources WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM goal_continuations WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM question_events WHERE question_id IN (SELECT id FROM room_questions WHERE room_id=?)", (room_id,))
     connection.execute("DELETE FROM room_questions WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM room_goals WHERE room_id=?", (room_id,))
     connection.execute("DELETE FROM discussion_sessions WHERE room_id=?", (room_id,))
-    for table in ("member_recommendations", "free_queue", "queued_messages", "queued_message_pauses", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "execution_capabilities", "late_answers", "member_executions", "member_capabilities", "member_sessions", "member_adopt_failures", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_round_limits", "free_chain_holds", "free_relay_steps",
+    for table in ("member_recommendations", "free_queue", "queued_messages", "queued_message_pauses", "speaking_orders", "member_requests", "member_descriptions", "member_labels", "execution_notes", "execution_segments", "execution_capabilities", "late_answers", "member_executions", "member_capabilities", "member_usage", "execution_usage", "member_sessions", "member_adopt_failures", "member_registrations", "room_members", "room_modes", "free_batches", "free_chains", "free_handoffs", "free_round_limits", "free_chain_holds", "free_relay_steps",
                   "scheduler_decisions", "scheduler_routing", "discussion_conclusions", "discussion_sessions"):
         if table == "scheduler_decisions":
             for child in ("scheduler_feedback", "scheduler_decision_context", "scheduler_decision_inputs"):
@@ -1748,12 +1868,14 @@ DESTRUCTION_LIST_LIMIT = 20
 def destruction_counts(connection, room_id):
     """The receipt items the website itself removes and checks: records and attachment files, plus what it keeps."""
     count = lambda query: connection.execute(query, (room_id,)).fetchone()[0]
-    files = connection.execute("SELECT id,size FROM attachments WHERE room_id=?", (room_id,)).fetchall()
+    files = connection.execute("SELECT id,size,storage,object_name FROM attachments WHERE room_id=?", (room_id,)).fetchall()
     # The file IDs stay with the item until each file is checked gone, so a held file can be retried later.
     return [{"kind": "messages", "state": "pending", "count": count("SELECT COUNT(*) FROM messages WHERE room_id=?")},
             {"kind": "private_chats", "state": "pending", "count": count("SELECT COUNT(*) FROM private_chats WHERE room_id=?")},
             {"kind": "attachments", "state": "pending", "count": len(files), "bytes": sum(row["size"] for row in files),
-             "ids": [row["id"] for row in files]},
+             "ids": [row["id"] for row in files if row["storage"] != "object"],
+             "objects": [{"id": row["id"], "room_id": room_id, "object_name": row["object_name"]}
+                         for row in files if row["storage"] == "object" and row["object_name"]]},
             {"kind": "database", "state": "pending"},
             {"kind": "project_files", "state": "kept"},
             {"kind": "providers", "state": "elsewhere"}]
@@ -1764,7 +1886,7 @@ def destruction_view(connection, room_id):
     row = connection.execute("SELECT * FROM room_destructions WHERE room_id=?", (room_id,)).fetchone()
     if not row:
         return None
-    items = [{key: value for key, value in item.items() if key != "ids"} for item in json.loads(row["items"])]
+    items = [{key: value for key, value in item.items() if key not in ("ids", "objects")} for item in json.loads(row["items"])]
     return {"room_id": row["room_id"], "title": row["title"], "status": row["status"], "automatic": bool(row["automatic"]),
             "items": items, "created_at": row["created_at"], "finished_at": row["finished_at"]}
 
@@ -1870,6 +1992,7 @@ def finish_destruction_files(database, room_id):
             return
         items = {item["kind"]: item for item in json.loads(row["items"])}
         files = items["attachments"]
+        failures = files.get("object_delete_failures", 0) + delete_remote_attachments(database, files.get("objects", []))
         left = []
         for file_id in files.get("ids", []):
             path = attachment_path(database, {"id": file_id})
@@ -1889,10 +2012,10 @@ def finish_destruction_files(database, room_id):
         with connection:
             begin_write(connection)
             updates = [{**items["messages"], "state": "deleted"}, {**items["private_chats"], "state": "deleted"},
-                       {**files, "ids": left, "state": "failed" if left else "deleted"},
+                       {**files, "ids": left, "objects": [], "object_delete_failures": failures, "state": "failed" if left else "deleted"},
                        {"kind": "database", "state": "failed" if busy else "deleted"}]
             update_destruction(connection, room_id, updates)
-    sweep_attachments(database)
+    sweep_attachments(database, expire_objects=False)
 
 
 def destroy_from(connection, room, directory):
@@ -1927,7 +2050,7 @@ def expired_rooms(connection, now=None):
     question, no published share page (only the owner's page can take that down)."""
     now = now or datetime.now(timezone.utc)
     rows = connection.execute("""SELECT r.id,r.created_at,d.* FROM rooms r JOIN room_directory d ON d.room_id=r.id
-        WHERE d.destroy_after_days>0 AND d.archived=0 AND d.pinned=0""").fetchall()
+        WHERE d.destroy_after_days>0 AND d.archived=0 AND d.pinned=0 AND d.system_kind=''""").fetchall()
     return [row["room_id"] for row in rows if not destroy_blocked(connection, row["room_id"], now)
             if now - datetime.fromisoformat(destroy_from(connection, {"id": row["room_id"], "created_at": row["created_at"]}, row))
             >= timedelta(days=row["destroy_after_days"])]
@@ -1953,7 +2076,8 @@ def watch_expired_rooms(server):
     next_sweep = 0
     while True:
         if time.monotonic() >= next_sweep:
-            sweep_attachments(server.database)
+            for room_id in sweep_attachments(server.database):
+                server.hub.notify_update(room_id)
             next_sweep = time.monotonic() + ATTACHMENT_SWEEP_SECONDS
         try:
             destroy_expired_rooms(server)
@@ -2013,8 +2137,10 @@ def record_api_event(database, record):
     try:
         with closing(connect_db(database)) as connection, connection:
             data = {key: record[key] for key in ("method", "path", "status", "client", "bridged")}
+            if re.fullmatch(r"/(?:stop|rewind|messages/[0-9]+/retract|members/[0-9]+/interrupt)", record["path"]):
+                data["dispatch_interventions_recorded"] = True
             data["elapsed_ms"] = max(0, int(time.time() * 1000) - record["at"])
-            data["actor"] = api_actor(connection, record["room_id"], record["token"])
+            data["actor"] = record.get("actor") or api_actor(connection, record["room_id"], record["token"])
             if record.get("error"):
                 data["error"] = record["error"]
             if record.get("error_text"):
@@ -2055,11 +2181,33 @@ def creation_request(settings, limits):
                       if settings.get("user_request") else "")
 
 
+def require_no_active_steward(connection):
+    """Reject a second active steward and identify the existing room inside the write transaction."""
+    row = connection.execute("SELECT room_id FROM room_directory WHERE system_kind='steward' AND archived=0").fetchone()
+    if row:
+        error = FileExistsError(Text('平台主理人房间已存在'))
+        error.details = {"room_id": row["room_id"]}
+        raise error
+
+
+def is_active_steward_member(connection, token):
+    """Recognize the current steward's member credential without granting it owner rights."""
+    hashed = token_hash(token)
+    return bool(hashed and connection.execute("""SELECT 1 FROM room_members m
+        JOIN room_directory d ON d.room_id=m.room_id
+        WHERE d.system_kind='steward' AND d.archived=0 AND m.status='active' AND m.token_hash=?""", (hashed,)).fetchone())
+
+
 def create_room(connection, payload, control_token=""):
     """Create a credential-protected collaboration room, binding retries to the original credentials."""
     if payload.get("mode", "free") != "free":
         raise ValueError(Text('房间模式只能为 free'))
+    system_kind = payload.get("system_kind", "")
+    if system_kind not in ("", "steward"):
+        raise ValueError(Text("system_kind 只能为空字符串或 steward"))
     members = member_values(payload.get("members"))
+    if system_kind == "steward" and len(members) != 1:
+        raise ValueError(STEWARD_MEMBER_LIMIT)
     payload = {**payload, "experts": {member["name"]: "cli" for member in members}}
     settings = topic_values(payload)
     limits = limit_values(payload["limits"]) if "limits" in payload else None
@@ -2069,12 +2217,16 @@ def create_room(connection, payload, control_token=""):
     folder_id = payload.get("folder_id")
     if folder_id is not None and not isinstance(folder_id, str):
         raise ValueError(Text('文件夹编号必须是文本或 null'))
+    if system_kind and folder_id is not None:
+        raise ValueError(Text('系统房间不参与目录管理或自动销毁'))
     request_text = creation_request(settings, limits)
     request_text += ":access:" + token_hash(control_token) + ":" + json.dumps(
         [[member["name"], member["adapter"], member["access"], "",
           member["session_mode"], token_hash(member["token"])] for member in members], ensure_ascii=False)
     if folder_id is not None:
         request_text += ":folder:" + json.dumps(folder_id, ensure_ascii=False)
+    if system_kind:
+        request_text += ":system_kind:" + system_kind
     begin_write(connection)
     if identifier:
         previous = connection.execute("SELECT * FROM room_creations WHERE submission_id=?", (identifier,)).fetchone()
@@ -2082,10 +2234,14 @@ def create_room(connection, payload, control_token=""):
             if previous["request_text"] != request_text:
                 raise FileExistsError(Text('该建房提交编号已被其他内容使用'))
             return {**require_room(connection, previous["room_id"]), "duplicate": True, "submission_id": identifier}
+    if system_kind == "steward":
+        require_no_active_steward(connection)
     if folder_id is not None and connection.execute("SELECT 1 FROM topic_folders WHERE id=?", (folder_id,)).fetchone() is None:
         raise ValueError(Text('文件夹不存在'))
     room_id = uuid.uuid4().hex[:12]
     connection.execute("INSERT INTO rooms (id,title,goal,created_at) VALUES (?,?,?,?)", (room_id, settings["title"], settings["goal"], utc_now()))
+    if system_kind:
+        connection.execute("UPDATE room_directory SET system_kind=?,position=0 WHERE room_id=?", (system_kind, room_id))
     connection.execute("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?", (folder_id, room_id))
     if identifier:
         connection.execute("INSERT INTO room_creations (submission_id,room_id,request_text) VALUES (?,?,?)", (identifier, room_id, request_text))
@@ -2335,7 +2491,7 @@ def with_image_sizes(connection, rows):
     An imported image whose bytes have not arrived yet stays unmeasured until they do.
     """
     files = [dict(row) for row in rows]
-    missing = [item for item in files if item.get("width") is None and item["content_type"] in SIZED_IMAGE_TYPES]
+    missing = [item for item in files if item.get("width") is None and item["content_type"] in SIZED_IMAGE_TYPES and item.get("storage") != "object"]
     if not missing:
         return files
     began = connection.in_transaction
@@ -2352,9 +2508,20 @@ def with_image_sizes(connection, rows):
     return files
 
 
-def attachment_view(row):
+def attachment_view(connection, row):
     """Return attachment metadata and room-scoped content URLs."""
     result = dict(row)
+    result.pop("object_name", None)
+    stored_at = result.pop("stored_at", None)
+    is_object = result.get("storage") == "object"
+    result["stored"] = not is_object or stored_at is not None
+    if is_object:
+        result["expires_at"] = None
+        if stored_at:
+            database = connection.execute("PRAGMA database_list").fetchone()["file"]
+            retention = object_storage_retention_days(database)
+            if retention:
+                result["expires_at"] = (datetime.fromisoformat(stored_at) + timedelta(days=retention)).isoformat()
     base = f"/api/rooms/{result['room_id']}/attachments/{result['id']}/content"
     result.update(url=base, download_url=base + "?download=1")
     if result.get("thumbnail_type"):
@@ -2410,6 +2577,13 @@ def renumbered_expected(expected, payload, previous):
 def message_with_attachments(connection, row):
     """Attach the published file list to an original message."""
     message = dict(row)
+    if message["source"] == "guest":
+        origin = guest_origin(connection, message["id"])
+        if origin:
+            message.update(origin=origin, author_label=origin["label"])
+    if is_host_dispatch(connection, message["id"]):
+        message["host_dispatch"] = True
+        message["dispatch_feedback"] = dispatch_feedback(connection, message["id"])
     if message["withdrawn"] == "retracted":
         # The owner retracted it before anyone handled it: only the page that retracted it keeps the text.
         return {**message, "text": "", "summary": "", "suggestions": [], "attachments": []}
@@ -2418,7 +2592,7 @@ def message_with_attachments(connection, row):
     files = with_image_sizes(connection, connection.execute("SELECT * FROM attachments WHERE message_id=? ORDER BY position,id",
                                                             (message["id"],)))
     first =attachment_number_before(connection, message["room_id"], message["id"]) if files else 0
-    message["attachments"] = [{**attachment_view(item), "number": first + index} for index, item in enumerate(files)]
+    message["attachments"] = [{**attachment_view(connection, item), "number": first + index} for index, item in enumerate(files)]
     return message
 
 
@@ -2455,7 +2629,7 @@ def query_attachments(connection, room_id, params, token=""):
     total = connection.execute(f"SELECT COUNT(*) FROM attachments WHERE {where}", values).fetchone()[0]
     rows = with_image_sizes(connection, connection.execute(f"SELECT * FROM attachments WHERE {where} ORDER BY created_at,id LIMIT ? OFFSET ?",
                                                            [*values, PAGE_SIZE, (page - 1) * PAGE_SIZE]))
-    return {"attachments": [{**attachment_view(row), **({"number": attachment_number_before(connection, room_id, row["message_id"]) + row["position"]}
+    return {"attachments": [{**attachment_view(connection, row), **({"number": attachment_number_before(connection, room_id, row["message_id"]) + row["position"]}
                                                          if row["message_id"] is not None else {})} for row in rows], "page": page, "total": total,
             "pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)}
 
@@ -2469,7 +2643,7 @@ def get_attachment(connection, room_id, identifier, params=None, token="", conte
     if cutoff is not None and row["message_id"] is not None and row["message_id"] > cutoff:
         raise BoundaryError(Text('该附件所在的消息超出本请求读取上界 #{until}', until=cutoff),
                             code="reading_boundary", read_scope={"request_read_until": cutoff, "boundary_applied": True})
-    return attachment_view(with_image_sizes(connection, [row])[0])
+    return attachment_view(connection, with_image_sizes(connection, [row])[0])
 
 
 def attachment_path(database, attachment):
@@ -2570,7 +2744,7 @@ def store_attachment(connection, database, room_id, metadata, data):
     if previous:
         if any(previous[key] != value for key, value in expected.items()):
             raise FileExistsError(Text('这个附件提交编号已被其他文件使用'))
-        return {"attachment": attachment_view(previous), "duplicate": True}
+        return {"attachment": attachment_view(connection, previous), "duplicate": True}
     prune_unsent_attachments(connection, database, room_id)
     # Kept out of `expected`: a retry of a file stored before sizes were recorded still matches it.
     width, height = image_size(io.BytesIO(data)) if expected["content_type"] in SIZED_IMAGE_TYPES else (None, None)
@@ -2591,12 +2765,140 @@ def store_attachment(connection, database, room_id, metadata, data):
     return {"attachment": get_attachment(connection, room_id, record["id"]), "duplicate": False}
 
 
+def object_upload_metadata(payload, actor):
+    """Validate the metadata an uploader supplies before issuing a COS form."""
+    metadata = attachment_metadata({**payload, "actor": actor})
+    size, content_type = payload.get("size"), payload.get("content_type")
+    if type(size) is not int or not 0 < size <= OBJECT_MAX_BYTES:
+        raise ValueError(Text("对象存储附件大小须在 1 字节至 2 GiB 之间"))
+    if (not isinstance(content_type, str) or len(content_type) > 127
+            or not re.fullmatch(r"[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+", content_type)):
+        raise ValueError(Text("附件的 Content-Type 无效"))
+    return {**metadata, "size": size, "content_type": content_type}
+
+
+# Imported records have no object in this account. Pending uploads already reserve their full declared size.
+LIVE_CLOUD_ATTACHMENTS = "storage='object' AND object_name IS NOT NULL AND cleared_at IS NULL"
+
+
+def object_storage_used_bytes(connection):
+    """Count all live objects and upload reservations in this account's database."""
+    return connection.execute(f"SELECT COALESCE(SUM(size),0) FROM attachments WHERE {LIVE_CLOUD_ATTACHMENTS}").fetchone()[0]
+
+
+def object_storage_limits(connection, database, attachment_limit):
+    """Publish cloud-storage policy and usage without exposing the account's credential."""
+    return {
+        "object_storage_enabled": configured_storage(database) is not None,
+        "object_storage_retention_days": object_storage_retention_days(database),
+        "object_storage_threshold_mib": object_storage_threshold_mib(database, attachment_limit),
+        "object_storage_quota_mib": object_storage_quota_mib(database),
+        "object_storage_used_bytes": object_storage_used_bytes(connection),
+    }
+
+
+def reserve_object_attachment(connection, database, room_id, metadata):
+    """Reserve a room-owned path; only the same submission can recover the reservation."""
+    begin_write(connection)
+    previous = connection.execute("SELECT * FROM attachments WHERE room_id=? AND submission_id=?",
+                                  (room_id, metadata["submission_id"])).fetchone()
+    if previous:
+        if (previous["storage"] != "object" or not previous["object_name"] or previous["cleared_at"]
+                or any(previous[key] != value for key, value in metadata.items())):
+            raise FileExistsError(Text("这个附件提交编号已被其他文件使用"))
+        return dict(previous)
+    threshold = object_storage_threshold_mib(database, attachment_limit_mib(database))
+    if metadata["size"] <= threshold * BYTES_PER_MIB:
+        raise ValueError(Text("仅超过 {limit} MiB 的附件使用对象存储", limit=threshold))
+    used, quota = object_storage_used_bytes(connection), object_storage_quota_mib(database)
+    if used + metadata["size"] > quota * BYTES_PER_MIB:
+        raise FileExistsError(Text("云空间已用 {used} MiB，上限 {quota} MiB。请清理云空间后重试。",
+                                   used=f"{used / BYTES_PER_MIB:.2f}", quota=quota))
+    identifier = uuid.uuid4().hex
+    safe_name = re.sub(r"[^\w.\-]", "_", metadata["file_name"], flags=re.ASCII)
+    record = {**metadata, "id": identifier, "room_id": room_id, "storage": "object",
+              "object_name": f"codiscuss/{room_id}/{identifier}/{safe_name}", "stored_at": None, "created_at": utc_now()}
+    connection.execute("""INSERT INTO attachments
+        (id,room_id,file_name,actor,submission_id,size,sha256,content_type,created_at,storage,object_name)
+        VALUES (:id,:room_id,:file_name,:actor,:submission_id,:size,'',:content_type,:created_at,:storage,:object_name)""", record)
+    return dict(connection.execute("SELECT * FROM attachments WHERE id=?", (identifier,)).fetchone())
+
+
+def get_object_attachment(connection, room_id, identifier):
+    """Find an object-storage record in its original room."""
+    row = connection.execute("SELECT * FROM attachments WHERE room_id=? AND id=? AND storage='object'",
+                             (room_id, identifier)).fetchone()
+    if row is None:
+        raise LookupError(Text("附件不存在"))
+    return row
+
+
+def object_download_result(connection, database, attachment):
+    """Sign a stored object only after its attachment has passed room read permissions."""
+    row = get_object_attachment(connection, attachment["room_id"], attachment["id"])
+    if not row["object_name"] or row["cleared_at"]:
+        raise AdminError(Text("文件已不在对象存储中"), 410)
+    if row["stored_at"] is None:
+        raise FileExistsError(Text("附件尚未完成上传"))
+    client = configured_storage(database)
+    if not client:
+        raise AdminError(Text("对象存储暂不可用"), 503)
+    try:
+        link = client.download(row["object_name"])
+    except ObjectMissing:
+        raise AdminError(Text("文件已不在对象存储中"), 410) from None
+    except StorageUnavailable:
+        raise AdminError(Text("对象存储暂不可用"), 503) from None
+    return {**link, "size": row["size"], "file_name": row["file_name"]}
+
+
+def queued_attachment_ids(connection, room_id):
+    """Return the attachments that queued messages in this room will send."""
+    return {identifier for row in connection.execute("SELECT payload FROM queued_messages WHERE room_id=?", (room_id,))
+            for identifier in json.loads(row[0]).get("attachment_ids") or []}
+
+
 def unsent_attachment_rows(connection, room_id):
     """Files uploaded in this room that no message took and no queued message is waiting to send."""
-    queued = {identifier for row in connection.execute("SELECT payload FROM queued_messages WHERE room_id=?", (room_id,))
-              for identifier in json.loads(row[0]).get("attachment_ids") or []}
+    queued = queued_attachment_ids(connection, room_id)
     return [row for row in connection.execute("SELECT * FROM attachments WHERE room_id=? AND message_id IS NULL", (room_id,))
             if row["id"] not in queued]
+
+
+def record_object_attachment_delete_failure(connection, row):
+    """Record a failed deletion if the room still exists."""
+    connection.execute("""INSERT INTO room_events (room_id,at,kind,data)
+        SELECT ?,?,'attachment.object_delete_failed',? WHERE EXISTS (SELECT 1 FROM rooms WHERE id=?)""",
+        (row["room_id"], int(time.time() * 1000), json.dumps({"attachment_id": row["id"]}), row["room_id"]))
+
+
+def delete_remote_attachment(database, row, client, *, connection=None):
+    """Delete one COS file and log failure without recording credential details."""
+    try:
+        if not client:
+            raise StorageUnavailable()
+        client.delete(row["object_name"])
+    except StorageUnavailable:
+        logging.warning("Object attachment cleanup failed: room=%s attachment=%s", row["room_id"], row["id"])
+        try:
+            if connection is not None:
+                record_object_attachment_delete_failure(connection, row)
+            else:
+                with closing(connect_db(database)) as events, events:
+                    record_object_attachment_delete_failure(events, row)
+        except sqlite3.Error:
+            logging.warning("Could not record object attachment cleanup failure")
+        return False
+    return True
+
+
+def delete_remote_attachments(database, rows):
+    """Try to delete room-owned COS files and return the number of failures."""
+    rows = list(rows)
+    if not rows:
+        return 0
+    client = configured_storage(database)
+    return sum(not delete_remote_attachment(database, row, client) for row in rows)
 
 
 def remove_attachment_files(connection, database, rows):
@@ -2609,29 +2911,90 @@ def remove_attachment_files(connection, database, rows):
 
 def prune_unsent_attachments(connection, database, room_id):
     """Drop files uploaded ahead of sending but never sent, once they are older than a draft could still be waiting."""
-    remove_attachment_files(connection, database, expired_unsent_attachments(connection, room_id))
+    remove_attachment_files(connection, database, [row for row in expired_unsent_attachments(connection, room_id)
+                                                  if row["storage"] != "object"])
 
 
 def expired_unsent_attachments(connection, room_id):
     """Select expired uploads with no sent or queued message in the room."""
     cutoff = datetime.now(timezone.utc) - UNSENT_ATTACHMENT_TTL
-    return [row for row in unsent_attachment_rows(connection, room_id) if datetime.fromisoformat(row["created_at"]) < cutoff]
+    return [row for row in unsent_attachment_rows(connection, room_id)
+            if datetime.fromisoformat(row["created_at"]) < cutoff]
 
 
-def sweep_attachments(database):
-    """Expire unsent records, then remove their files and aged unregistered files in this database's attachment directory."""
-    expired = set()
+def sweep_unsent_object_attachments(connection, database, identifiers):
+    """Delete stale upload drafts only after confirming that each remote object is gone."""
+    if not identifiers:
+        return
+    client = configured_storage(database)
+    for identifier in identifiers:
+        # Keep the draft from being attached to a message while its object is being deleted.
+        with connection:
+            begin_write(connection)
+            row = connection.execute(f"""SELECT id,room_id,object_name FROM attachments
+                WHERE id=? AND message_id IS NULL AND {LIVE_CLOUD_ATTACHMENTS}""", (identifier,)).fetchone()
+            if not row or identifier in queued_attachment_ids(connection, row["room_id"]):
+                continue
+            if delete_remote_attachment(database, row, client, connection=connection):
+                connection.execute("DELETE FROM attachments WHERE id=?", (identifier,))
+
+
+def sweep_object_attachments(connection, database, expired_drafts):
+    """Delete expired objects first, then mark only confirmed deletions as cleared."""
+    retention = object_storage_retention_days(database)
+    if not retention:
+        return set()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention)
+    rows = connection.execute(f"""SELECT id,room_id,object_name FROM attachments
+        WHERE {LIVE_CLOUD_ATTACHMENTS} AND julianday(stored_at) <= julianday(?)""", (cutoff.isoformat(),)).fetchall()
+    if not rows:
+        return set()
+    client = configured_storage(database)
+    # The draft sweep already tried these objects. Retry failures on the next sweep.
+    removed = [row for row in rows if row["id"] not in expired_drafts and delete_remote_attachment(database, row, client)]
+    return {row["room_id"] for row in mark_cleared_object_attachments(connection, removed)}
+
+
+def mark_cleared_object_attachments(connection, rows):
+    """Record verified remote deletions and update the affected room revisions."""
+    if not rows:
+        return []
+    cleared = []
+    with connection:
+        begin_write(connection)
+        now = utc_iso_now()
+        for row in rows:
+            changed = connection.execute("UPDATE attachments SET cleared_at=? WHERE id=? AND cleared_at IS NULL",
+                                         (now, row["id"]))
+            if changed.rowcount:
+                cleared.append(row)
+        for room_id in {row["room_id"] for row in cleared}:
+            connection.execute("UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=?",
+                               (room_id,))
+    return cleared
+
+
+def sweep_attachments(database, *, expire_objects=True):
+    """Clean local and remote attachment bytes; return rooms whose objects expired."""
+    expired, cloud_drafts, rooms_changed = set(), set(), set()
     try:
         with closing(connect_db(database)) as connection:
             with connection:
                 begin_write(connection)
                 rooms = connection.execute("SELECT DISTINCT room_id FROM attachments WHERE message_id IS NULL").fetchall()
                 for room in rooms:
-                    expired.update(row["id"] for row in expired_unsent_attachments(connection, room[0]))
+                    for row in expired_unsent_attachments(connection, room[0]):
+                        if row["storage"] == "object" and row["object_name"] and not row["cleared_at"]:
+                            cloud_drafts.add(row["id"])
+                        else:
+                            expired.add(row["id"])
                 connection.executemany("DELETE FROM attachments WHERE id=? AND message_id IS NULL", ((key,) for key in expired))
+            sweep_unsent_object_attachments(connection, database, cloud_drafts)
+            if expire_objects:
+                rooms_changed = sweep_object_attachments(connection, database, cloud_drafts)
             root = attachment_path(database, {"id": ""})
             if not root.exists() or root.resolve() != root:
-                return
+                return rooms_changed
             # Uploads acquire this same write lock before creating their file. Hold it from the ID snapshot through unlink.
             with connection:
                 begin_write(connection)
@@ -2652,6 +3015,7 @@ def sweep_attachments(database):
                         logging.warning("Could not remove attachment %s", path.name, exc_info=True)
     except (OSError, sqlite3.Error, ValueError):
         logging.exception("Attachment sweep failed for %s", database)
+    return rooms_changed
 
 
 def discard_attachment(connection, database, room_id, identifier, token):
@@ -2665,6 +3029,8 @@ def discard_attachment(connection, database, room_id, identifier, token):
         raise FileExistsError(Text('附件已随消息发出或正在排队，不能撤下'))
     remove_attachment_files(connection, database, [row])
     connection.commit()
+    if row["storage"] == "object" and row["object_name"]:
+        delete_remote_attachments(database, [row])
     return {"discarded": identifier}
 
 
@@ -2674,7 +3040,7 @@ def attachment_usage(connection, room_id, token):
     require_owner(connection, room_id, token)
     rows = connection.execute("""SELECT * FROM attachments WHERE room_id=? AND message_id IS NOT NULL
         ORDER BY message_id,position,id""", (room_id,)).fetchall()
-    files = [{**attachment_view(row), "number": index + 1} for index, row in enumerate(rows)]
+    files = [{**attachment_view(connection, row), "number": index + 1} for index, row in enumerate(rows)]
     return {"attachments": files, "bytes": sum(item["size"] for item in files if not item["cleared_at"])}
 
 
@@ -2713,6 +3079,7 @@ def clear_attachments(connection, database, room_id, payload, token):
             attachment_path(database, row).unlink(missing_ok=True)
         except OSError:
             logging.warning("Could not remove cleared attachment %s", row["id"], exc_info=True)
+    delete_remote_attachments(database, [row for row in rows if row["storage"] == "object" and row["object_name"]])
     return {"cleared": [row["id"] for row in rows], "freed_bytes": sum(row["size"] for row in rows)}
 
 
@@ -2722,6 +3089,8 @@ def check_message_attachments(connection, room_id, actor, identifiers):
         attachment = get_attachment(connection, room_id, identifier)
         if attachment["actor"] != actor or attachment["message_id"] is not None:
             raise FileExistsError(Text('附件已用于其他消息，或不属于本次实际提交者'))
+        if attachment.get("storage") == "object" and not attachment["stored"]:
+            raise ValueError(Text("附件尚未完成上传"))
 
 
 def message_summary(payload, message):
@@ -3085,6 +3454,382 @@ def list_feedback_cases(connection, after):
     return {"cases": cases, "next_after": cases[-1]["decision_id"] if len(cases) == FEEDBACK_CASES_PAGE else None}
 
 
+HOST_DISPATCH_SQL = """EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=m.id
+        AND r.created_by='host' AND r.purpose='ask')
+    AND NOT EXISTS(SELECT 1 FROM free_sequences s, json_each(s.steps) step
+        WHERE s.room_id=m.room_id AND s.message_id<>m.id AND json_extract(step.value,'$[2]')=m.id)"""
+DISPATCH_INVALIDATIONS = ("host_withdraw", "user_stop_or_retract", "user_rewind", "failed")
+USER_STOP_RESULTS = (OWNER_INTERRUPT_RESULT, OWNER_STOP_RESULT)
+
+
+def is_host_dispatch(connection, message_id):
+    """Whether a message created a request as host, even if the request was later stopped."""
+    return connection.execute(f"SELECT 1 FROM messages m WHERE m.id=? AND {HOST_DISPATCH_SQL}",
+                              (message_id,)).fetchone() is not None
+
+
+def dispatch_feedback(connection, message_id):
+    """Return the current owner's rating, or None."""
+    row = connection.execute("SELECT rating,should_be,note,created_at FROM dispatch_feedback WHERE message_id=?",
+                             (message_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def rate_dispatch(connection, room_id, message_id, token, payload):
+    """Set or clear the rating for one explicitly identified dispatch."""
+    begin_write(connection)
+    require_owner(connection, room_id, token)
+    rating, should_be, note = payload.get("rating"), payload.get("should_be", ""), payload.get("note", "")
+    if "rating" not in payload or rating not in ("good", "bad", None):
+        raise ValueError(Text('rating 须为 good、bad 或 null'))
+    if not isinstance(should_be, str) or not isinstance(note, str) or len(should_be) > MAX_DECISION_MEMBER or len(note.strip()) > MAX_DECISION_NOTE:
+        raise ValueError(Text('should_be 须为成员名，note 不超过 {value1} 字', value1=MAX_DECISION_NOTE))
+    message = connection.execute("SELECT * FROM messages WHERE id=? AND room_id=?", (message_id, room_id)).fetchone()
+    if not message or not is_host_dispatch(connection, message_id):
+        raise LookupError(Text('没有这条主持人派活'))
+    should_be = should_be.strip()
+    if rating is not None and should_be:
+        handles = member_handles(connection, room_id)
+        if should_be not in handles:
+            choices = ", ".join(f"{label} ({name})" if label != name else name
+                                for name, label in member_display_names(connection, room_id).items())
+            raise ValueError(Text('未找到建议成员，可选成员：{members}', members=choices))
+        should_be = handles[should_be]
+    if rating is None:
+        connection.execute("DELETE FROM dispatch_feedback WHERE message_id=?", (message_id,))
+        connection.execute("DELETE FROM dispatch_feedback_cases WHERE message_id=?", (message_id,))
+    else:
+        connection.execute("""INSERT INTO dispatch_feedback VALUES (?,?,?,?,?)
+            ON CONFLICT(message_id) DO UPDATE SET rating=excluded.rating,should_be=excluded.should_be,
+                note=excluded.note,created_at=excluded.created_at""",
+                           (message_id, rating, should_be, note.strip(), utc_now()))
+        snapshot = dispatch_case(connection, message)
+        connection.execute("INSERT OR REPLACE INTO dispatch_feedback_cases (message_id,room_id,snapshot) VALUES (?,?,?)",
+                           (message_id, room_id, json.dumps(snapshot, ensure_ascii=False)))
+    return {"message_id": message_id, "dispatch_feedback": dispatch_feedback(connection, message_id)}
+
+
+def dispatch_attempts(connection, request):
+    """Read the current and replaced executions for one request, including their independent usage."""
+    rows = connection.execute("""SELECT e.id AS execution_id,e.status,e.model,e.effort,e.result,
+            CASE WHEN e.finished_at>0 THEN MAX(0,e.finished_at-e.created_at) END AS elapsed_seconds,
+            u.input,u.cache_read,u.cache_write,u.output,rr.retried_at
+        FROM member_executions e LEFT JOIN execution_usage u ON u.execution_id=e.id
+        LEFT JOIN retried_requests rr ON rr.execution_id=e.id AND rr.request_id=?
+        WHERE e.id=? OR e.id IN (SELECT execution_id FROM retried_requests WHERE request_id=?)
+        ORDER BY e.id""", (request["request_id"], request["execution_id"], request["request_id"]))
+    attempts = []
+    for row in rows:
+        attempt = dict(row)
+        usage = {key: attempt.pop(key) for key in ("input", "cache_read", "cache_write", "output")}
+        attempt["usage"] = usage if usage["input"] is not None else None
+        attempt["retried"] = attempt.pop("retried_at") is not None
+        result = attempt.pop("result")
+        attempt["invalidation_reason"] = execution_invalidation(attempt["status"], result)
+        attempts.append(attempt)
+    return attempts
+
+
+def execution_invalidation(status, result):
+    """Classify historical executions from the explicit server-generated cancellation text."""
+    if status == "failed":
+        return "failed"
+    if status != "cancelled":
+        return None
+    return {HOST_WITHDRAW_RESULT: "host_withdraw", OWNER_REWIND_RESULT: "user_rewind",
+            **dict.fromkeys(USER_STOP_RESULTS, "user_stop_or_retract")}.get(result)
+
+
+def request_invalidations(request, attempts, legacy_withdraw=False):
+    """Combine retained request provenance, transcript withdrawals and execution outcomes."""
+    reasons = {attempt["invalidation_reason"] for attempt in attempts if attempt["invalidation_reason"]}
+    if request["withdrawal"] == "rewound":
+        reasons.add("user_rewind")
+    elif request["withdrawal"] == "retracted":
+        reasons.add("user_stop_or_retract")
+    if request["host_withdrawn"]:
+        reasons.add("host_withdraw")
+    elif (request["cancel_reason"] == "user_stop" and request["execution_id"] is None
+          and not legacy_withdraw and not request["withdrawal"]):
+        reasons.add("user_stop_or_retract")
+    return [kind for kind in DISPATCH_INVALIDATIONS if kind in reasons]
+
+
+def dispatch_record(connection, message):
+    """Assemble a dispatch's source and the outcomes of the requests it created."""
+    message_id = message["id"]
+    host_withdrawal = connection.execute("SELECT legacy,redirect_message_id FROM dispatch_withdrawals WHERE message_id=?", (message_id,)).fetchone()
+    withdrawal = connection.execute("SELECT kind FROM message_withdrawals WHERE message_id=?", (message_id,)).fetchone()
+    requests = connection.execute("""WITH anchors(id) AS (
+            SELECT ? UNION SELECT json_extract(step.value,'$[2]')
+            FROM free_sequences s, json_each(s.steps) step WHERE s.message_id=?)
+        SELECT r.id AS request_id,r.chain_id,r.message_id AS anchor_id,r.execution_id,
+            r.status AS request_status,m.name,l.label,m.adapter,COALESCE(c.reason,'') AS cancel_reason,
+            COALESCE(w.kind,aw.kind,'') AS withdrawal,h.request_id IS NOT NULL AS host_withdrawn
+        FROM member_requests r JOIN room_members m ON m.id=r.member_id
+        LEFT JOIN member_labels l ON l.room_id=m.room_id AND l.name=m.name
+        LEFT JOIN request_cancel_reasons c ON c.request_id=r.id
+        LEFT JOIN message_withdrawals w ON w.message_id=r.message_id
+        LEFT JOIN message_withdrawals aw ON aw.message_id=r.answer_id
+        LEFT JOIN dispatch_withdrawn_requests h ON h.request_id=r.id
+        WHERE r.created_by='host' AND r.purpose='ask' AND r.message_id IN (SELECT id FROM anchors)
+        ORDER BY r.id""", (message_id, message_id)).fetchall()
+    members = []
+    for row in requests:
+        member = dict(row)
+        member.pop("chain_id")
+        member["member"] = member.pop("label") or default_label(member["name"])
+        member["attempts"] = dispatch_attempts(connection, row)
+        member["retried"] = any(attempt["retried"] for attempt in member["attempts"])
+        member["invalidation_reasons"] = request_invalidations(row, member["attempts"], bool(host_withdrawal and host_withdrawal["legacy"]))
+        member.pop("withdrawal")
+        member.pop("host_withdrawn")
+        members.append(member)
+    sources = connection.execute("SELECT DISTINCT execution_id FROM member_requests WHERE answer_id=? AND execution_id IS NOT NULL",
+                                 (message_id,))
+    versions = observed_host_versions(connection, [row[0] for row in sources])
+    reason = next((line.strip() for line in message["text"].splitlines()
+                   if line.lstrip().startswith("分工理由：")), "")
+    reasons = {reason for member in members for reason in member["invalidation_reasons"]}
+    if host_withdrawal:
+        reasons.add("host_withdraw")
+    if withdrawal:
+        reasons.add("user_rewind" if withdrawal["kind"] == "rewound" else "user_stop_or_retract")
+    return {"room_id": message["room_id"], "message_id": message_id, "created_at": message["created_at"], "archived": False,
+            "chain_id": requests[0]["chain_id"], "reason": reason,
+            "host_version": version_fields(versions[0]) if versions else None, "host_run": versions[0] if versions else None,
+            "members": members, "withdrawn": bool(host_withdrawal or withdrawal),
+            "redirect_message_id": host_withdrawal["redirect_message_id"] if host_withdrawal else None,
+            "invalidation_reasons": [kind for kind in DISPATCH_INVALIDATIONS if kind in reasons],
+            "feedback": dispatch_feedback(connection, message_id)}
+
+
+def list_dispatches(connection, after, room_id=None):
+    """Page live dispatches and retained ratings together by global message ID."""
+    if not connection.in_transaction:
+        connection.execute("BEGIN")
+    rows = connection.execute(f"""SELECT m.id,m.room_id,m.created_at,m.text,NULL AS snapshot FROM messages m
+        WHERE m.id>? AND (? IS NULL OR m.room_id=?)
+            AND NOT EXISTS(SELECT 1 FROM room_directory d WHERE d.room_id=m.room_id AND d.system_kind<>'')
+            AND {HOST_DISPATCH_SQL}
+        UNION ALL SELECT c.message_id,c.room_id,NULL,NULL,c.snapshot FROM dispatch_feedback_cases c
+        WHERE c.message_id>? AND (? IS NULL OR c.room_id=?)
+            AND NOT EXISTS(SELECT 1 FROM room_directory d WHERE d.room_id=c.room_id AND d.system_kind<>'')
+            AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=c.message_id)
+        ORDER BY 1 LIMIT ?""", (after, room_id, room_id, after, room_id, room_id, FEEDBACK_CASES_PAGE + 1)).fetchall()
+    records = [read_dispatch_case(row["snapshot"]) if row["snapshot"] is not None else dispatch_record(connection, row)
+               for row in rows[:FEEDBACK_CASES_PAGE]]
+    return {"records": records, "next_after": records[-1]["message_id"] if len(rows) > FEEDBACK_CASES_PAGE else None}
+
+
+def dispatch_case_context(connection, room_id, message_id):
+    """Capture nearby visible room messages in chronological order."""
+    where = """room_id=? AND NOT EXISTS(SELECT 1 FROM internal_task_messages WHERE message_id=messages.id)
+        AND NOT EXISTS(SELECT 1 FROM message_withdrawals WHERE message_id=messages.id)"""
+    before = connection.execute(f"""SELECT id,author,substr(text,1,?) AS text FROM messages
+        WHERE {where} AND id<? ORDER BY id DESC LIMIT ?""",
+                                (DISPATCH_CONTEXT_LIMIT, room_id, message_id, DISPATCH_CONTEXT_BEFORE)).fetchall()
+    after = connection.execute(f"""SELECT id,author,substr(text,1,?) AS text FROM messages
+        WHERE {where} AND id>? ORDER BY id LIMIT ?""",
+                               (DISPATCH_CONTEXT_LIMIT, room_id, message_id, DISPATCH_CONTEXT_AFTER))
+    return {"before": [dict(row) for row in reversed(before)], "after": [dict(row) for row in after]}
+
+
+def dispatch_case(connection, message):
+    """Add a bounded copy of the dispatch and its initiating owner's words to the retained case."""
+    record = dispatch_record(connection, message)
+    source = connection.execute("""SELECT text FROM messages WHERE id=? AND room_id=? AND author='用户'
+        AND NOT EXISTS(SELECT 1 FROM guest_message_sources WHERE message_id=messages.id)
+        AND NOT EXISTS(SELECT 1 FROM message_relays WHERE message_id=messages.id)""",
+                                (record["chain_id"], record["room_id"])).fetchone()
+    texts = {"dispatch_text": message["text"], "source_user_text": source["text"] if source else None,
+             "reason": record["reason"]}
+    return {**record, "archived": True, "rating": record["feedback"]["rating"],
+            "context": dispatch_case_context(connection, message["room_id"], message["id"]),
+            **{key: value[:DISPATCH_CASE_TEXT_LIMIT] if value is not None else None for key, value in texts.items()},
+            "truncated_fields": [key for key, value in texts.items() if value and len(value) > DISPATCH_CASE_TEXT_LIMIT]}
+
+
+def refresh_dispatch_cases(connection, room_id):
+    """Refresh existing snapshots against the room's final state before deleting its records."""
+    messages = connection.execute(f"""SELECT m.* FROM dispatch_feedback_cases c
+        JOIN messages m ON m.id=c.message_id JOIN dispatch_feedback f ON f.message_id=m.id
+        WHERE c.room_id=? AND {HOST_DISPATCH_SQL}""", (room_id,)).fetchall()
+    connection.executemany("UPDATE dispatch_feedback_cases SET snapshot=? WHERE message_id=?",
+                           ((json.dumps(dispatch_case(connection, message), ensure_ascii=False), message["id"])
+                            for message in messages))
+
+
+def read_dispatch_case(snapshot):
+    """Fill the archive fields a snapshot saved by an older server may lack."""
+    record = json.loads(snapshot)
+    return {"dispatch_text": None, "source_user_text": None, "truncated_fields": [], "context": {"before": [], "after": []},
+            "redirect_message_id": None, "host_run": None, **record,
+            "archived": True, "rating": record["feedback"]["rating"],
+            "members": [{"name": None, **member} for member in record["members"]]}
+
+
+def dispatch_chain_requests(connection, room_id, chain_id):
+    """Read the canonical requests, including user-originated ones and host hand-backs."""
+    return connection.execute("""SELECT r.id AS request_id,r.chain_id,r.message_id,r.answer_id,r.created_by,r.purpose,
+            r.status AS request_status,r.execution_id,COALESCE(w.kind,aw.kind,'') AS withdrawal
+        FROM member_requests r LEFT JOIN message_withdrawals w ON w.message_id=r.message_id
+        LEFT JOIN message_withdrawals aw ON aw.message_id=r.answer_id
+        WHERE r.room_id=? AND (r.chain_id=? OR r.chain_id=0 AND r.message_id=?) ORDER BY r.id""",
+                              (room_id, chain_id, chain_id)).fetchall()
+
+
+def dispatch_intervention_events(connection, room_id):
+    """Index the room's intervention events once for the current result page."""
+    rows = connection.execute("""SELECT id,at,kind,data FROM room_events WHERE room_id=? AND (
+        kind='dispatch.user_intervention' OR kind='request.changed' AND json_extract(data,'$.status')='cancelled' OR
+        kind='api.write' AND json_extract(data,'$.dispatch_interventions_recorded') IS NULL
+            AND (json_extract(data,'$.path') IN ('/stop','/rewind')
+            OR json_extract(data,'$.path') LIKE '/messages/%/retract'
+            OR json_extract(data,'$.path') LIKE '/members/%/interrupt')) ORDER BY id""", (room_id,))
+    by_chain, by_request = collections.defaultdict(list), collections.defaultdict(list)
+    legacy_operations = []
+    for row in rows:
+        data = json.loads(row["data"])
+        if row["kind"] == "request.changed":
+            by_request[data["request_id"]].append((row["at"], row["id"], data))
+        elif row["kind"] == "dispatch.user_intervention":
+            by_chain[data["chain_id"]].append(data)
+        else:
+            legacy_operations.append((row, data))
+    return by_chain, by_request, legacy_operations
+
+
+def chain_user_interventions(connection, requests, events, dispatches):
+    """Count successful owner operations and attribute redirect requests to the withdrawn chain."""
+    by_chain, by_request, legacy_operations = events
+    chain_id = requests[0]["chain_id"] or requests[0]["message_id"]
+    redirects = [record for record in dispatches if record["redirect_message_id"] is not None]
+    targeted = any(attempt["invalidation_reason"] == "host_withdraw" for record in redirects
+                   for member in record["members"] for attempt in member["attempts"])
+    counts = {"stop": 0, "retract": 0, "rewind": 0, "redirect": len({record["redirect_message_id"] for record in redirects}),
+              "targeted_dispatch": targeted}
+    for data in by_chain.get(chain_id, ()):
+        counts[data["operation"]] += 1
+        counts["targeted_dispatch"] |= bool(data["targeted_dispatch"])
+    changes = [change for row in requests for change in by_request.get(row["request_id"], ())]
+    if not changes and not any(row["withdrawal"] == "rewound" for row in requests):
+        return counts
+    for event, data in legacy_operations:
+        kind, affected = chain_operation(connection, event, data, changes, requests)
+        if affected:
+            counts[kind] += 1
+            counts["targeted_dispatch"] |= any(row["created_by"] == "host" and row["purpose"] == "ask"
+                                               and row["execution_id"] is not None for row in affected)
+    return counts
+
+
+def chain_operation(connection, event, data, changes, requests):
+    """Find the chain requests touched by one stop, retraction or rewind."""
+    path = data["path"]
+    end = event["at"] + data.get("elapsed_ms", 0) + 1
+    changed = [change for stamp, identifier, change in changes
+               if identifier < event["id"] and event["at"] - 1 <= stamp <= end]
+    if path.endswith("/retract"):
+        message_id = int(path.split("/")[2])
+        # An idempotent repeat has no new request transition.
+        ids = {change["request_id"] for change in changed}
+        return "retract", [row for row in requests if row["message_id"] == message_id and row["request_id"] in ids]
+    if path == "/rewind":
+        payload = data.get("payload")
+        message_id = payload.get("message_id") if isinstance(payload, dict) else None
+        if type(message_id) is not int:
+            return "rewind", []
+        ids = {change["request_id"] for change in changed}
+        return "rewind", [row for row in requests if row["request_id"] in ids
+                          or max(row["message_id"], row["answer_id"] or 0) >= message_id
+                          and row["withdrawal"] == "rewound"]
+    member_id = int(path.split("/")[2]) if path.endswith("/interrupt") else None
+    ids = set()
+    for change in changed:
+        if member_id is not None and change["member_id"] != member_id:
+            continue
+        execution = connection.execute("SELECT result FROM member_executions WHERE id=?",
+                                       (change.get("execution_id"),)).fetchone()
+        if (execution and execution["result"] in USER_STOP_RESULTS) or (execution is None and member_id is None):
+            ids.add(change["request_id"])
+    return "stop", [row for row in requests if row["request_id"] in ids]
+
+
+def chain_execution_totals(connection, requests):
+    """Deduplicate executions and total their known usage by final outcome."""
+    attempts = {}
+    for request in requests:
+        for attempt in dispatch_attempts(connection, request):
+            reason = attempt["invalidation_reason"]
+            withdrawn = attempt["execution_id"] == request["execution_id"] and request["withdrawal"]
+            dispatched = request["created_by"] == "host" and request["purpose"] == "ask"
+            void = dispatched and (reason and reason != "failed" or withdrawn and attempt["status"] != "failed")
+            segment = ("voided_dispatch" if void else "failed" if attempt["status"] == "failed"
+                       else "other_cancelled" if attempt["status"] == "cancelled" else "normal")
+            old = attempts.get(attempt["execution_id"])
+            if old is None or segment == "voided_dispatch":
+                attempts[attempt["execution_id"]] = (segment, attempt["usage"])
+    totals = {kind: dict.fromkeys(("input", "cache_read", "cache_write", "output"), 0)
+              for kind in ("voided_dispatch", "failed", "other_cancelled", "normal")}
+    with_usage = 0
+    for segment, usage in attempts.values():
+        if usage is not None:
+            with_usage += 1
+            for key, value in usage.items():
+                totals[segment][key] += value
+    return {**totals, "with_usage": with_usage, "executions": len(attempts)}, attempts.keys()
+
+
+def version_fields(run):
+    """Project the fingerprint shared across different host executions."""
+    return {key: run[key] for key in ("package_version", "prompt_hash", "skill_hash")}
+
+
+def chain_host_versions(connection, execution_ids):
+    """Read observed host versions and the models that ran with each one."""
+    runs = observed_host_versions(connection, execution_ids)
+    combinations = {tuple(version_fields(run).values()): version_fields(run) for run in runs}
+    return {"mixed": len(combinations) > 1, "values": list(combinations.values()), "runs": runs}
+
+
+def dispatch_chain_record(connection, source, events):
+    """Summarize one task chain and its dispatches against one database snapshot."""
+    room_id, chain_id = source["room_id"], source["id"]
+    requests = dispatch_chain_requests(connection, room_id, chain_id)
+    messages = connection.execute(f"""SELECT m.id,m.room_id,m.created_at,m.text FROM messages m
+        WHERE m.id IN (SELECT value FROM json_each(?)) AND {HOST_DISPATCH_SQL} ORDER BY m.id""",
+                                  (json.dumps(sorted({row["message_id"] for row in requests})),)).fetchall()
+    dispatches = [dispatch_record(connection, message) for message in messages]
+    invalidated = {reason: [record["message_id"] for record in dispatches if reason in record["invalidation_reasons"]]
+                   for reason in DISPATCH_INVALIDATIONS}
+    ended = all(row["request_status"] not in ("pending", "delivering") for row in requests)
+    tokens, execution_ids = chain_execution_totals(connection, requests)
+    return {"room_id": room_id, "chain_id": chain_id, "source_message_id": chain_id,
+            "started_at": source["created_at"], "ended": ended,
+            "dispatch_messages": len(dispatches), "dispatch_requests": sum(len(record["members"]) for record in dispatches),
+            "invalidated_dispatches": {kind: {"count": len(ids), "message_ids": ids} for kind, ids in invalidated.items()},
+            "user_interventions": chain_user_interventions(connection, requests, events, dispatches),
+            "unhandled_failure": ended and any(row["request_status"] == "failed" for row in requests),
+            "tokens": tokens, "host_versions": chain_host_versions(connection, execution_ids)}
+
+
+def list_dispatch_chains(connection, after, room_id=None):
+    """Page current task chains by the globally ordered initiating message ID."""
+    if not connection.in_transaction:
+        connection.execute("BEGIN")
+    rows = connection.execute("""SELECT m.id,m.room_id,m.created_at FROM messages m
+        WHERE m.id>? AND (? IS NULL OR m.room_id=?)
+        AND NOT EXISTS(SELECT 1 FROM room_directory d WHERE d.room_id=m.room_id AND d.system_kind<>'') AND (
+            EXISTS(SELECT 1 FROM member_requests r WHERE r.room_id=m.room_id AND r.chain_id=m.id) OR
+            EXISTS(SELECT 1 FROM member_requests r WHERE r.message_id=m.id AND r.chain_id=0))
+        ORDER BY m.id LIMIT ?""", (after, room_id, room_id, FEEDBACK_CASES_PAGE + 1)).fetchall()
+    page = rows[:FEEDBACK_CASES_PAGE]
+    events = {room: dispatch_intervention_events(connection, room) for room in {row["room_id"] for row in page}}
+    records = [dispatch_chain_record(connection, row, events[row["room_id"]]) for row in page]
+    return {"records": records, "next_after": records[-1]["chain_id"] if len(rows) > FEEDBACK_CASES_PAGE else None}
+
+
 def mark_scheduler_routing(connection, room_id, token, payload):
     """The local service marks a message while the decision model is analysing it, and clears the mark when done."""
     begin_write(connection)
@@ -3216,7 +3961,7 @@ def latest_messages(connection, room_id, params, where, values, size, bounded=Fa
                               [room_id, *values, size + 1]).fetchall()
     has_earlier = len(rows) > size
     shown = member_display_names(connection, room_id)
-    messages = [{**message, "author_label": shown.get(message["author"], message["author"])}
+    messages = [{**message, "author_label": message.get("author_label") or shown.get(message["author"], message["author"])}
                 for message in (message_with_attachments(connection, row) for row in reversed(rows[:size]))]
     result = {"messages": messages, "has_earlier": has_earlier}
     unfiltered = not any(params.get(name) for name in ("q", "author", "mention", "kind", "host", "submission_id"))
@@ -3255,7 +4000,7 @@ def query_messages(connection, room_id, params, token=""):
     rows = connection.execute(f"{MESSAGE_QUERY} WHERE {where} ORDER BY messages.id LIMIT ? OFFSET ?",
                               [room_id, *values, size + 1, (page - 1) * size]).fetchall()
     shown = member_display_names(connection, room_id)
-    messages = [{**message, "author_label": shown.get(message["author"], message["author"])}
+    messages = [{**message, "author_label": message.get("author_label") or shown.get(message["author"], message["author"])}
                 for message in (message_with_attachments(connection, row) for row in rows[:size])]
     if params.get("fold_visuals") in ("1", "en"):
         messages = [fold_message_visuals(message, params["fold_visuals"] == "en") for message in messages]
@@ -3638,7 +4383,7 @@ def turn_text(turn, room, language="zh"):
                           url=f"/r/{room_id}?participant={turn['expert']}", association=association_id, answer=answer), language)
 
 
-def protocol_text(room, language="zh"):
+def protocol_text(room, language, limit):
     """Describe the unified request/execution protocol separately from discussion material."""
     paragraphs = [
         Text("# 协作房间参与协议"),
@@ -3657,7 +4402,7 @@ def protocol_text(room, language="zh"):
         Text("原会话送达失败可等待 60 秒后自动重试，最多 3 次；重试用尽只失败该请求，并交回主持人判断跳过、重排或暂停，不自动暂停整场。结果不明的写入不作为新提交重发。"),
         Text("保存 state 与主持简报时，until 只覆盖实际已读原文。主动收束前先保存有依据的总结与状态，再 room conclusion 获取 blockers 和 revision，无阻碍后用 room limits --done --conclusion revision；有未处理内容或状态变化时拒绝收束。"),
         Text("message list --after 按 next_after/has_more 增量读取；message view 核对原文；历史可筛选 opinion/moderation/chat。内部任务不出现在普通消息列表、搜索和统计中，也没有普通发言的撤回或编辑入口。"),
-        Text("附件用 attachment upload/download，最多 10 个、单个 20 MiB；自动成员在完成执行前上传。回答正文最多 32000 个 Unicode 字符，摘要最多 1000 字，较长回答才附摘要，完整原文不截断。"),
+        Text("附件用 attachment upload/download，最多 10 个、单个 {limit} MiB；自动成员在完成执行前上传。回答正文最多 32000 个 Unicode 字符，摘要最多 1000 字，较长回答才附摘要，完整原文不截断。", limit=limit),
         Text("每次新内容使用新 submission_id，同次重试沿用编号、原文、凭据和执行/请求关联。按 submission_id 查询持久结果；读取失败不表示未写入，不能换身份或编号绕过拒绝。")
 ]
     return "\n\n".join(read_text(paragraph, language) for paragraph in paragraphs)
@@ -3773,7 +4518,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                                "method": self.command, "path": "/" + "/".join(parts[3:]), "status": status,
                                "client": self.headers.get("User-Agent", "").split(" ")[0][:60], "bridged": bool(getattr(self, "bridged", False)),
                                "token": self.headers.get("X-Discussion-Token", ""),
-                               "payload": getattr(self, "payload_cache", None) or getattr(self, "request_params", {}),
+                               "actor": getattr(self, "api_actor_override", None),
+                               "payload": {} if parts[3:5] == ["guest", "redeem"] else
+                               getattr(self, "payload_cache", None) or getattr(self, "request_params", {}),
                                "error": body.get("error", "") if status >= 400 and isinstance(body, dict) else "",
                                "error_text": body.get("error_text") if status >= 400 and isinstance(body, dict) else None}
         if content_type == "application/json":
@@ -3853,8 +4600,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         trace_id = self.headers.get(RELAY_READ_HEADER, "") if method == "GET" else ""
         self.relay_read_started = time.perf_counter() if RELAY_READ_ID.fullmatch(trace_id) else None
         self.payload_cache = None
+        self.has_explicit_room_token = bool(self.headers.get("X-Discussion-Token"))
         self.bridge_origin = None
         self.api_record = None
+        self.api_actor_override = None
         self.deferred_response = None
         self.started_ms = int(time.time() * 1000)
         self.streaming = False
@@ -3929,6 +4678,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def dispatch_routes(self, method, parsed, params, parts, text_mode):
         """Route one request and map validation, permission and lookup errors to their status codes."""
         try:
+            if self.headers.get("X-Discussion-Token") or guest_path(parts):
+                with closing(connect_db(self.server.database)) as guard_connection:
+                    guest_guard(guard_connection, self.headers, parts, method)
+            if method == "HEAD" or (method == "OPTIONS" and parts[:2] != ["api", "local"]):
+                return self.respond({"error": Text("地址不存在")}, 404)
             if self.page_host_request():
                 if parts[:3] == ["api", "local", "page"] and len(parts) >= 5 and method == "GET":
                     return self.serve_page_ticket(parts[3], parts[4:])
@@ -3955,6 +4709,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if method == "GET" and parsed.path == "/robots.txt":
                 return self.respond("User-agent: *\nAllow: /\n", content_type="text/plain")
             with closing(connect_db(self.server.database)) as connection, connection:
+                if guest_path(parts):
+                    return self.handle_guest_projection(connection, parts, params, method)
                 if is_external_path(parts):
                     return self.handle_external_api(connection, parts, params, method)
                 if text_mode and method == "GET":
@@ -3963,22 +4719,36 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         except AdminError as error:
             return self.respond(error_body(error), error.status)
         except PermissionError as error:
-            return self.respond(error_body(error), 403)
+            if getattr(error, "details", {}).get("code", "").startswith("guest_"):
+                self.close_connection = True
+            return self.respond(self.request_error(error, parts), 403)
         except (ValueError, TypeError) as error:
-            return self.respond(self.plain_error(error) if text_mode else error_body(error), 400,
+            return self.respond(self.plain_error(error) if text_mode else self.request_error(error, parts), 400,
                                 "text/plain" if text_mode else "application/json")
         except (IndexError, KeyError):
             logging.exception("Request failed")
             return self.respond(error_body(Text("服务器内部错误")), 500)
         except LookupError as error:
-            return self.respond(self.plain_error(error) if text_mode else error_body(error), 404,
+            return self.respond(self.plain_error(error) if text_mode else self.request_error(error, parts), 404,
                                 "text/plain" if text_mode else "application/json")
         except FileExistsError as error:
-            return self.respond(self.plain_error(error) if text_mode else error_body(error), 409,
+            return self.respond(self.plain_error(error) if text_mode else self.request_error(error, parts), 409,
                                 "text/plain" if text_mode else "application/json")
         except Exception:
             logging.exception("Request failed")
             return self.respond(error_body(Text("服务器内部错误")), 500)
+
+    def request_error(self, error, parts):
+        """Use the guest envelope on guest routes and for authorization refusals."""
+        body = error_body(error)
+        if guest_path(parts) or parts[:2] == ["api", "rooms"] and parts[3:4] == ["guest"] or body.get("code") == "guest_forbidden":
+            message = body["error"]
+            if message == "访客操作不可用" and reading_language(self.headers.get("Accept-Language", "")) == "en":
+                message = "The guest operation is unavailable."
+            return {**body, "ok": False, "error": {"message": message},
+                    "code": body.get("code", "guest_forbidden" if isinstance(error, PermissionError)
+                                     else "not_found" if isinstance(error, LookupError) else "invalid_input")}
+        return body
 
     def plain_error(self, error):
         """Render a `/r` reading error in the reader's Accept-Language; untemplated errors stay as raised."""
@@ -3992,6 +4762,23 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         """Handle JSON mutations and explicit binary attachment uploads."""
         self.dispatch("POST")
+
+    def do_HEAD(self):
+        """Apply the credential boundary to HEAD, which otherwise has no routes."""
+        self.dispatch("HEAD")
+
+    def send_error(self, code, message=None, explain=None):
+        """Apply the guest boundary even when the HTTP verb has no handler."""
+        if code == 501 and getattr(self, "headers", None) is not None and self.headers.get("X-Discussion-Token"):
+            parts = urlsplit(self.path).path.strip("/").split("/")
+            try:
+                with closing(connect_db(self.server.database)) as connection:
+                    guest_guard(connection, self.headers, parts, self.command)
+            except PermissionError as error:
+                self.close_connection = True
+                self.send_payload(403, "application/json", json.dumps(self.request_error(error, parts), ensure_ascii=False).encode("utf-8"))
+                return
+        super().send_error(code, message, explain)
 
     def stream_updates(self):
         """Stream invalidations without holding a database connection or exposing records."""
@@ -4031,9 +4818,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         """Handle preflight only for explicitly connected websites on the local bridge."""
-        if urlsplit(self.path).path.startswith("/api/local/"):
-            return self.dispatch("OPTIONS")
-        return self.respond({"error": Text('地址不存在')}, 404)
+        return self.dispatch("OPTIONS")
 
     def local_request_site(self, method):
         """Authenticate a local page or a site-bound browser connection before reading configuration."""
@@ -4083,11 +4868,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if route == ["share-job"] and method == "POST" and not self.server.local_launch:
             return self.respond({"enabled": False})
         site = self.local_request_site(method)
-        if method == "OPTIONS" and route in (["settings"], ["launch"], ["wipe-histories"], ["room-models"], ["room-skills"], ["room-files"], ["share-job"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["sessions"], ["api-key"], ["api-check"],
-                                             ["scheduler-check"], ["image-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]) or (method == "OPTIONS" and len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS + SITE_COMMANDS):
+        if method == "OPTIONS" and route in (["settings"], ["object-storage-settings"], ["launch"], ["wipe-histories"], ["room-models"], ["room-skills"], ["room-files"], ["share-job"], ["room-page"], ["room-media"], ["execution-details"], ["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"], ["room-profiles"], ["room-restore"], ["room-fork"], ["models"], ["sessions"], ["api-key"], ["api-check"],
+                                             ["scheduler-check"], ["image-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["notify"], ["pick-directory"], ["browse-directory"], ["projects"], ["presets"], ["workflows"], ["room-workflow"], ["room-settings"], ["machine-link"], ["device-pairing"], ["devices"]) or (method == "OPTIONS" and len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS + SITE_COMMANDS + STEWARD_COMMANDS):
             return self.respond({"ok": True})
-        if route == ["settings"] and method in ("GET", "POST"):
-            command = "settings"
+        if route in (["settings"], ["object-storage-settings"]) and method in ("GET", "POST"):
+            command = route[0]
         elif (route == ["storage"] and method in ("GET", "POST")) or (route == ["storage-clean"] and method == "POST"):
             with closing(connect_db(self.server.database)) as connection:
                 if self.bridge_origin or self.entry_member_request() or not self.admin_session(connection):
@@ -4109,7 +4894,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = "api-check"
         elif route == ["scheduler-check"] and method == "POST":
             command = "scheduler-check"
-        elif route in (["image-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"]) and method == "POST":
+        elif route in (["image-check"], ["image-settings"], ["tts-settings"], ["tts"], ["tts-release"], ["local-speech"], ["stt"], ["weixin"], ["notify"]) and method == "POST":
             command = route[0]
         elif route in (["room-member"], ["room-member-access"], ["room-member-allow"], ["room-member-adapter"], ["room-member-model"]) and method == "POST":
             command = route[0]
@@ -4134,6 +4919,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             command = route[0]
         elif route == ["machine-link"] and method == "POST":
             command = "machine-link"
+        elif len(route) == 1 and route[0] in STEWARD_COMMANDS and method == "POST":
+            command = route[0]
         elif len(route) == 1 and route[0] in INVITE_COMMANDS + INVITED_COMMANDS + SITE_COMMANDS and method == "POST":
             # Invites for members on other computers (runner/external_gateway.mjs), invited rooms (runner/external_client.mjs),
             # and website publishing commands (runner/site_deploy.mjs).
@@ -4353,13 +5140,14 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         elif self.server.entry_policy.enabled and not self.local_visitor():
             raise PermissionError(Text('需要本房间的控制凭据'))
 
-    def local_visitor(self):
+    def local_visitor(self, *, creating_room=False):
         """Whether this request may act as the loopback-only site's implicit administrator.
 
         The Host must name this loopback port, which defeats DNS rebinding, and a browser request must come from the site
         itself rather than another page. Programs on this computer can still send these headers; this guards browsers only.
+        During creation the caller supplies a new room capability; it is not an existing room credential.
         """
-        if not self.server.local_site or self.entry_member_request():
+        if not self.server.local_site or (self.entry_member_request() and not creating_room):
             return False
         host = self.headers.get("Host", "")
         if host not in (f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"):
@@ -4372,6 +5160,15 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def admin_session(self, connection):
         """Whether the request is from the administrator: a visitor of the loopback-only site itself, else a valid session."""
         return self.local_visitor() or session_valid(connection, self.admin_token())
+
+    def require_steward_creator(self, connection, new_token):
+        """Only a site manager can create a room whose member will see site-wide dispatches."""
+        if (self.read_only_request() or self.headers.get(ACTING_MEMBER_HEADER)
+                or not (self.bridged or self.local_visitor(creating_room=True) or session_valid(connection, self.admin_token()))):
+            raise PermissionError(Text('需要管理员身份'))
+        hashed = token_hash(new_token)
+        if hashed and connection.execute("SELECT 1 FROM room_members WHERE token_hash=? LIMIT 1", (hashed,)).fetchone():
+            raise PermissionError(Text('需要管理员身份'))
 
     def relay_bridge(self, parts):
         """Whether this request comes from the runner relaying a paired device; a bad or misplaced bridge credential fails.
@@ -4410,6 +5207,22 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Keep a cross-room reader to plain reads: no writes, no reads that change state, no private chats."""
         if self.read_only_request() and (method != "GET" or parts[3:4] in READ_ONLY_CLOSED or parts[5:6] == ["chat"]):
             raise PermissionError(Text('需要本房间的控制凭据'))
+
+    def check_steward_write(self, connection, room_id, route, token):
+        """Keep an archived steward read-only without preventing its owner from managing its lifecycle."""
+        steward = connection.execute("SELECT archived FROM room_directory WHERE room_id=? AND system_kind='steward'",
+                                     (room_id,)).fetchone()
+        if steward is None:
+            return
+        if route in (["archive"], ["restore"], ["delete"]):
+            require_owner(connection, room_id, token)
+            return
+        if route in (["members"], ["external-members"], ["guest", "invite"]):
+            require_owner(connection, room_id, token)
+            raise PermissionError(STEWARD_MEMBER_LIMIT)
+        # A published link must be revocable before the owner can destroy the room.
+        if steward["archived"] and (route != ["share-link"] or self.read_payload().get("link") is not None):
+            raise ValueError(Text('房间已存档；恢复后才能继续协作'))
 
     def handle_admin_api(self, connection, parts, method):
         """Serve administrator registration, login sessions and profile."""
@@ -4499,6 +5312,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
     def handle_api(self, connection, parts, params, method):
         """Handle room, state, and message operations used by the web UI."""
+        if parts == ["api", "attachment-limit"] and method == "GET":
+            limit = attachment_limit_mib(self.server.database)
+            return self.respond({"limit_mib": limit, **object_storage_limits(connection, self.server.database, limit)})
         if parts == ["api", "health"] and method == "GET":
             return self.respond({"ok": True})
         if parts[:2] == ["api", "admin"]:
@@ -4511,17 +5327,42 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if not self.admin_session(connection):
                 raise AdminError(Text('需要登录管理员账号'), 401)
             return self.respond(list_feedback_cases(connection, int(params.get("after", 0))))
+        if parts in (["api", "dispatches"], ["api", "analytics", "dispatches"]) and method == "GET":
+            analytics_view = parts[1] == "analytics"
+            token = self.headers.get("X-Discussion-Token")
+            if not analytics_view and token and not self.read_only_request():
+                if not is_active_steward_member(connection, token):
+                    raise PermissionError(Text('需要管理员身份'))
+            elif (self.read_only_request() or token
+                    or not (self.admin_session(connection) or analytics_view and self.bridged)):
+                raise AdminError(Text('需要登录管理员账号'), 401)
+            view = params.get("view", "chains" if analytics_view else "messages")
+            after = int(params.get("after", 0))
+            if view not in ("messages", "chains") or not 0 <= after < 2**63:
+                raise ValueError(Text('派活记录的视图或游标无效'))
+            listing = list_dispatch_chains if view == "chains" else list_dispatches
+            return self.respond(listing(connection, after, params.get("room")))
         if parts[1:2] in (["machines"], ["remote-launches"]):
             return self.handle_remote_launch_api(connection, parts, method)
         if parts == ["api", "revisions"] and method == "GET":
             return self.respond(room_revisions(connection, params))
         if parts == ["api", "sites"] and method == "GET":
             return self.respond(list_all_sites(connection))
+        if parts[1:3] == ["rooms", "cloud-attachments"]:
+            return self.handle_cloud_attachments(connection, parts[3:], method)
         if parts == ["api", "rooms"]:
             if method == "GET":
-                return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS, "last_room": last_room(connection),
-                                     "destructions": list_destructions(connection)})
-            room = create_room(connection, self.read_payload(), self.headers.get("X-Discussion-Token", ""))
+                limit = attachment_limit_mib(self.server.database)
+                return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS, "attachment_limit_mib": limit, "last_room": last_room(connection),
+                                     # Balances and plan use are the owner's: only the manager's page lists them.
+                                     "quotas": account_quotas(connection) if self.bridged or self.admin_session(connection) else {},
+                                     "destructions": list_destructions(connection),
+                                     **object_storage_limits(connection, self.server.database, limit)})
+            payload = self.read_payload()
+            token = self.headers.get("X-Discussion-Token", "")
+            if payload.get("system_kind") == "steward":
+                self.require_steward_creator(connection, token)
+            room = create_room(connection, payload, token)
             connection.commit()
             return self.respond(room, 200 if room["duplicate"] else 201)
         if parts == ["api", "rooms", "last"] and method == "POST":
@@ -4582,6 +5423,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         self.refuse_read_only(parts, method)
         self.admin_as_owner(connection, room_id)
         token = self.headers.get("X-Discussion-Token", "")
+        if method == "POST":
+            self.check_steward_write(connection, room_id, parts[3:], token)
         if self.headers.get("X-Discussion-Session"):
             record_reported_session(connection, room_id, token, {"session_id": self.headers.get("X-Discussion-Session"),
                                                                  "session_client": self.headers.get("X-Discussion-Session-Client")})
@@ -4597,6 +5440,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             host = require_member(connection, room_id, self.headers.get(ACTING_MEMBER_HEADER))
             if host["role"] != "host":
                 raise PermissionError(Text("只有房主或当前主持人可以读取"))
+            begin_write(connection)
+            if guest_mode_active(connection, room_id):
+                raise guest_error()
             body = self.read_payload()
             target = body.get("target_room_id")
             relay = {key: body[key] for key in ("limit", "expect", "reply_to") if key in body}
@@ -4620,6 +5466,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 drain_room_queue(connection, room_id)
             connection.commit()
             return self.respond(result, status)
+        if parts[3:4] == ["guest"]:
+            return self.handle_guest_owner(connection, parts, method, token)
         if parts[3:] == ["discussion"]:
             if method == "GET":
                 return self.respond(session_room(connection, room_id))
@@ -4746,11 +5594,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(result)
         if parts[3:] == ["executions", "changes"] and method == "GET":
             return self.respond(execution_changes_batch(connection, room_id, params.get("ids", ""), token))
-        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"], ["dispatches"], ["host-checkin"], ["room-link"], ["room-relay-sent"], ["host-actions"]):
+        if parts[3:4] in (["inbox"], ["executions"], ["members"], ["chats"], ["suggestions"], ["recommendations"], ["stop"], ["dispatches"], ["host-checkin"], ["quotas"], ["room-link"], ["room-relay-sent"], ["host-actions"]):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
-        if parts[3:4] in (["scheduler-decisions"], ["scheduler-routing"]):
+        if parts[3:4] in (["scheduler-decisions"], ["scheduler-routing"], ["dispatch-feedback"]):
             return self.handle_scheduler_api(connection, parts, method)
         if parts[3:] in (["share-link"], ["share-card"]) and method in ("GET", "POST"):
             # The manage token can renew, revoke or replace a public page: owner only. A request carrying a credential must
@@ -4855,7 +5703,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(result, 200 if result["duplicate"] else 201)
         if len(parts) == 5 and parts[3] == "messages" and method == "GET":
             message = get_message(connection, room_id, int(parts[4]), params, token)
-            message["author_label"] = member_display_names(connection, room_id).get(message["author"], message["author"])
+            if not message.get("author_label"):
+                message["author_label"] = member_display_names(connection, room_id).get(message["author"], message["author"])
             return self.respond(read_message_part(message, params))
         if parts[3:] == ["state"] and method == "POST":
             payload = self.read_payload()
@@ -4868,6 +5717,37 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         raise LookupError(Text('地址不存在'))
+
+    def handle_cloud_attachments(self, connection, route, method):
+        """Manage cloud files across the account using its own administrator authority."""
+        if (self.bridge_origin or self.read_only_request() or self.headers.get("X-Discussion-Token") is not None
+                or self.headers.get(ACTING_MEMBER_HEADER) or not self.admin_session(connection)):
+            raise PermissionError(Text('需要管理员登录'))
+        database = self.server.database
+        quota = object_storage_quota_mib(database)
+        if method == "GET" and not route:
+            rows = connection.execute(f"""SELECT a.*,r.title AS room_title FROM attachments a
+                JOIN rooms r ON r.id=a.room_id WHERE {LIVE_CLOUD_ATTACHMENTS} ORDER BY a.created_at DESC,a.id""").fetchall()
+            return self.respond({"attachments": [attachment_view(connection, row) for row in rows],
+                                 "used_bytes": sum(row["size"] for row in rows), "quota_mib": quota})
+        if method != "POST" or route != ["delete"]:
+            raise LookupError(Text('地址不存在'))
+        identifier = self.read_payload().get("id")
+        if not isinstance(identifier, str) or not re.fullmatch(r"[0-9a-f]{32}", identifier):
+            raise ValueError(Text('附件编号无效'))
+        row = connection.execute("SELECT * FROM attachments WHERE id=? AND storage='object' AND object_name IS NOT NULL",
+                                 (identifier,)).fetchone()
+        if row is None:
+            raise LookupError(Text('附件不存在'))
+        cleared = []
+        if row["cleared_at"] is None:
+            if not delete_remote_attachment(database, row, configured_storage(database)):
+                raise AdminError(Text("对象存储暂不可用"), 503)
+            cleared = mark_cleared_object_attachments(connection, [row])
+            if cleared:
+                self.server.hub.notify_update(row["room_id"])
+        return self.respond({"cleared": [item["id"] for item in cleared], "freed_bytes": sum(item["size"] for item in cleared),
+                             "used_bytes": object_storage_used_bytes(connection), "quota_mib": quota})
 
     def handle_attachments(self, connection, parts, params, method):
         """Handle bounded upload, discovery, metadata, and binary download."""
@@ -4889,13 +5769,18 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 raise PermissionError(Text('附件上传者须与凭据身份一致'))
             require_room(connection, room_id)
             length = int(self.headers.get("Content-Length", "-1"))
-            if not 0 <= length <= MAX_ATTACHMENT_BYTES:
-                return self.respond({"error": Text('单个附件最多 20 MiB，须提供 Content-Length')}, 413)
+            limit = attachment_limit_mib(self.server.database)
+            if not 0 <= length <= limit * 1024 * 1024:
+                return self.respond({"error": Text('单个附件最多 {limit} MiB，须提供 Content-Length', limit=limit)}, 413)
             data = self.rfile.read(length)
             if len(data) != length:
                 raise ValueError(Text('附件内容不完整'))
             result = store_attachment(connection, self.server.database, room_id, metadata, data)
             return self.respond(result, 200 if result["duplicate"] else 201)
+        if method == "POST" and parts[4:] == ["object"]:
+            return self.start_object_upload(connection, room_id)
+        if method == "POST" and len(parts) == 6 and parts[5] == "complete":
+            return self.complete_object_upload(connection, room_id, parts[4])
         if method == "POST" and len(parts) == 6 and parts[5] == "discard":
             return self.respond(discard_attachment(connection, self.server.database, room_id, parts[4], self.headers.get("X-Discussion-Token", "")))
         if method == "POST" and len(parts) == 6 and parts[5] == "import":
@@ -4910,44 +5795,119 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(store_attachment_thumbnail(connection, self.server.database, room_id, parts[4],
                                                          self.headers.get("X-Discussion-Token", ""), data))
         if method == "GET" and len(parts) in (5, 6):
-            attachment = get_attachment(connection, room_id, parts[4], params, self.headers.get("X-Discussion-Token", ""),
-                                        content=len(parts) == 6)
-            if len(parts) == 5:
-                return self.respond(attachment)
-            if parts[5] in ("content", "zip") and attachment.get("cleared_at"):
-                raise LookupError(Text('附件已被清理'))
-            if parts[5] == "content":
-                return self.respond_attachment(attachment, params.get("download") == "1")
-            if parts[5] == "thumbnail":
-                path = thumbnail_path(self.server.database, attachment)
-                if not attachment.get("thumbnail_type") or not path.is_file():
-                    raise LookupError(Text('附件不存在'))
-                return self.send_file(path, attachment["thumbnail_type"], attachment["file_name"], "inline")
-            if parts[5] == "zip":
-                path = attachment_path(self.server.database, attachment)
-                if not path.is_file():
-                    raise LookupError(Text('附件不存在'))
-                entries = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("entry")
-                if entries is None:
-                    return self.respond(zip_preview(path))
-                entry = entries[-1]
-                data = (zip_entry_bytes(path, attachment["sha256"], entry) if self.headers.get("Range")
-                        else zip_preview(path, entry))
-                return self.send_file(None, "application/octet-stream", entry.split("/")[-1], "attachment", data=data)
+            return self.read_room_attachment(connection, parts, params)
         raise LookupError(Text('地址不存在'))
+
+    def read_room_attachment(self, connection, parts, params):
+        """Return attachment metadata, local bytes or an authorized object-storage link."""
+        room_id = parts[2]
+        attachment = get_attachment(connection, room_id, parts[4], params, self.headers.get("X-Discussion-Token", ""),
+                                    content=len(parts) == 6)
+        if len(parts) == 5:
+            return self.respond(attachment)
+        if parts[5] == "content" and attachment.get("storage") == "object":
+            result = object_download_result(connection, self.server.database, attachment)
+            if params.get("link") == "1":
+                return self.respond(result)
+            self.send_response(302)
+            self.send_header("Location", result["url"])
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            return None
+        if parts[5] in ("content", "zip") and attachment.get("cleared_at"):
+            raise LookupError(Text('附件已被清理'))
+        if parts[5] == "content":
+            return self.respond_attachment(attachment, params.get("download") == "1")
+        if parts[5] == "thumbnail":
+            path = thumbnail_path(self.server.database, attachment)
+            if not attachment.get("thumbnail_type") or not path.is_file():
+                raise LookupError(Text('附件不存在'))
+            return self.send_file(path, attachment["thumbnail_type"], attachment["file_name"], "inline")
+        if parts[5] == "zip":
+            path = attachment_path(self.server.database, attachment)
+            if not path.is_file():
+                raise LookupError(Text('附件不存在'))
+            entries = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get("entry")
+            if entries is None:
+                return self.respond(zip_preview(path))
+            entry = entries[-1]
+            data = (zip_entry_bytes(path, attachment["sha256"], entry) if self.headers.get("Range")
+                    else zip_preview(path, entry))
+            return self.send_file(None, "application/octet-stream", entry.split("/")[-1], "attachment", data=data)
+        raise LookupError(Text('地址不存在'))
+
+    def start_object_upload(self, connection, room_id):
+        """Authorize and reserve an upload before returning a COS credential."""
+        payload = self.read_payload()
+        token = self.headers.get("X-Discussion-Token", "")
+        actor = payload.get("actor", self.request_params.get("actor"))
+        if actor is None:
+            try:
+                require_owner(connection, room_id, token)
+                actor = "用户"
+            except PermissionError:
+                actor = require_member(connection, room_id, token)["name"]
+        metadata = object_upload_metadata(payload, actor)
+        authorized = authorize_free_write(connection, room_id, token, "attachments", {"author": actor})
+        if (authorized if isinstance(authorized, str) else authorized["name"]) != actor:
+            raise PermissionError(Text("附件上传者须与凭据身份一致"))
+        require_room(connection, room_id)
+        client = configured_storage(self.server.database)
+        if not client:
+            raise FileExistsError(Text("对象存储未配置"))
+        record = reserve_object_attachment(connection, self.server.database, room_id, metadata)
+        connection.commit()
+        try:
+            upload = None if record["stored_at"] else client.upload(record["object_name"], record["size"], record["content_type"])
+        except StorageUnavailable:
+            raise AdminError(Text("对象存储暂不可用"), 503) from None
+        return self.respond({"attachment": attachment_view(connection, record), "upload": upload})
+
+    def complete_object_upload(self, connection, room_id, identifier):
+        """Verify size with the resource center and mark exactly the reserved row as stored."""
+        token = self.headers.get("X-Discussion-Token", "")
+        record = get_object_attachment(connection, room_id, identifier)
+        actor = authorize_free_write(connection, room_id, token, "attachments", {"author": record["actor"]})
+        if (actor if isinstance(actor, str) else actor["name"]) != record["actor"]:
+            raise PermissionError(Text("只能确认自己上传的附件"))
+        if record["cleared_at"] or not record["object_name"]:
+            raise AdminError(Text("文件已不在对象存储中"), 410)
+        if record["stored_at"]:
+            return self.respond({"attachment": attachment_view(connection, record)})
+        connection.commit()
+        client = configured_storage(self.server.database)
+        if not client:
+            raise AdminError(Text("对象存储暂不可用"), 503)
+        try:
+            size = client.file_size(record["object_name"])
+        except ObjectMissing:
+            raise FileExistsError(Text("对象存储尚未收到文件")) from None
+        except StorageUnavailable:
+            raise AdminError(Text("对象存储暂不可用"), 503) from None
+        if size != record["size"]:
+            raise FileExistsError(Text("对象存储中的文件大小与上传声明不一致"))
+        authorize_free_write(connection, room_id, token, "attachments", {"author": record["actor"]})
+        connection.execute("UPDATE attachments SET stored_at=? WHERE room_id=? AND id=? AND cleared_at IS NULL AND stored_at IS NULL",
+                           (utc_now(), room_id, identifier))
+        result = get_object_attachment(connection, room_id, identifier)
+        connection.commit()
+        return self.respond({"attachment": attachment_view(connection, result)})
 
     def import_attachment(self, connection, room_id, attachment_id):
         """Store the original bytes of an attachment recorded by an import; an existing file is kept."""
         length = int(self.headers.get("Content-Length", "-1"))
-        if not 0 <= length <= MAX_ATTACHMENT_BYTES:
-            return self.respond({"error": Text('单个附件最多 20 MiB，须提供 Content-Length')}, 413)
+        limit = attachment_limit_mib(self.server.database)
+        if not 0 <= length <= limit * 1024 * 1024:
+            return self.respond({"error": Text('单个附件最多 {limit} MiB，须提供 Content-Length', limit=limit)}, 413)
         data = self.rfile.read(length)
         attachment = imported_attachment(connection, room_id, attachment_id, self.headers.get("X-Discussion-Token", ""), data)
         path = attachment_path(self.server.database, attachment)
         if not path.is_file():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
-        return self.respond({"attachment": attachment_view(attachment)})
+        return self.respond({"attachment": attachment_view(connection, attachment)})
 
     def respond_attachment(self, attachment, download):
         """Serve stored bytes with a safe disposition, never as executable HTML."""
@@ -5018,6 +5978,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             result = mark_scheduler_routing(connection, room_id, token, self.read_payload())
         elif len(parts) == 5 and parts[3] == "scheduler-decisions" and method == "POST":
             result = rate_scheduler_decision(connection, room_id, int(parts[4]), token, self.read_payload())
+        elif len(parts) == 5 and parts[3] == "dispatch-feedback" and method == "POST":
+            result = rate_dispatch(connection, room_id, int(parts[4]), token, self.read_payload())
         else:
             raise LookupError(Text('地址不存在'))
         connection.commit()
@@ -5043,9 +6005,15 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Questions to the owner (backend/questions.py): read first, then write with the version read."""
         room_id = parts[2]
         if len(parts) == 4 and method == "GET":
-            return self.respond(questions.list_questions(connection, room_id, token, params, session_message_access(connection, room_id, params, token)))
+            result = questions.list_questions(connection, room_id, token, params, session_message_access(connection, room_id, params, token))
+            for question in result["questions"]:
+                add_guest_question_origin(connection, room_id, question)
+            if isinstance(result.get("last_ask"), dict):
+                add_guest_question_origin(connection, room_id, result["last_ask"])
+            return self.respond(result)
         if len(parts) == 5 and parts[4].isdigit() and method == "GET":
-            return self.respond(questions.view_question(connection, room_id, int(parts[4]), token, session_message_access(connection, room_id, params, token)))
+            result = questions.view_question(connection, room_id, int(parts[4]), token, session_message_access(connection, room_id, params, token))
+            return self.respond(add_guest_question_origin(connection, room_id, result))
         if method != "POST":
             raise LookupError(Text('地址不存在'))
         payload = self.read_payload()
@@ -5064,6 +6032,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if len(parts) == 4:
             result = questions.ask_question(connection, require_room(connection, room_id), token, payload,
                                             append_free_message, get_message)
+            add_guest_question_origin(connection, room_id, result)
         elif len(parts) == 6 and parts[4].isdigit() and parts[5] == "answer":
             result = questions.answer_question(connection, room_id, int(parts[4]), token, payload)
         elif len(parts) == 6 and parts[4].isdigit() and parts[5] in ("recommend", "decide"):
@@ -5075,8 +6044,38 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             raise LookupError(Text('地址不存在'))
         return result
 
+    def handle_guest_owner(self, connection, parts, method, token):
+        """Serve owner controls and authenticated loopback runner actions."""
+        route = parts[4:]
+        local_host = self.headers.get("Host") in (f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}")
+        service = (self.has_explicit_room_token and self.server.local_site and self.client_address[0] == "127.0.0.1" and local_host
+                   and not self.bridged and self.headers.get("Origin") is None
+                   and self.headers.get("Sec-Fetch-Site") is None and self.headers.get(ACTING_MEMBER_HEADER) is None)
+        payload = self.read_payload() if method == "POST" else None
+        if service and len(route) == 1 and route[0] in GUEST_SERVICE_ACTIONS:
+            require_owner(connection, parts[2], token)
+            self.api_actor_override = "local_service"
+        data = guest_owner_api(connection, parts[2], route, method, token, payload=payload, service=service,
+                               acting_token=self.headers.get(ACTING_MEMBER_HEADER, ""))
+        connection.commit()
+        return self.respond({"ok": True, "data": data})
+
+    def handle_guest_projection(self, connection, parts, params, method):
+        """Commit a guest write before notifying room subscribers."""
+        data = guest_projection(connection, parts, method, self.headers.get("X-Discussion-Token", ""), params, self.read_payload)
+        connection.commit()
+        if method == "POST":
+            self.server.hub.notify_update(parts[3])
+        return self.respond({"ok": True, "data": data})
+
     def handle_external_api(self, connection, parts, params, method):
         """Member-scope routes for an external member (backend/external_members.py); its only way into the room."""
+        room_id, route = parts[3], parts[4:]
+        token = self.headers.get("X-Discussion-Token", "")
+        if route == ["attachments", "object"] and method == "POST":
+            require_external(connection, room_id, token)
+            raise PermissionError(Text("外部成员不能上传对象存储附件"))
+
         def answer(connection, room_id, payload, member):
             result = append_message(connection, room_id, payload, member)
             receipt = message_receipt(connection, room_id, result)
@@ -5125,13 +6124,19 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "chat" and method in ("GET", "POST"):
             result = member_chat(connection, room_id, int(parts[4]), token, self.read_payload() if method == "POST" else None)
         elif len(parts) == 5 and parts[3] == "chats" and method == "POST":
-            result = chat_action(connection, room_id, int(parts[4]), token, self.read_payload())
+            payload = self.read_payload()
+            begin_write(connection)
+            if payload.get("action") == "start" and guest_dispatch_held(connection, room_id):
+                raise guest_error(FileExistsError, "guest_waiting")
+            result = chat_action(connection, room_id, int(parts[4]), token, payload)
         elif len(parts) == 6 and parts[3] == "members" and parts[5] == "capabilities" and method == "POST":
             result = member_capability(connection, room_id, int(parts[4]), token, self.read_payload())
+        elif parts[3:] == ["quotas"] and method == "POST":
+            result = report_quota(connection, room_id, token, self.read_payload())
         elif parts[3:] == ["stop"] and method == "POST":
             result = stop_room(connection, room_id, token)
         elif len(parts) == 6 and parts[3] == "dispatches" and parts[4].isdigit() and parts[5] == "withdraw" and method == "POST":
-            result = withdraw_dispatch(connection, room_id, token, int(parts[4]))
+            result = withdraw_dispatch(connection, room_id, token, int(parts[4]), self.read_payload().get("execution_id"))
         elif parts[3:] == ["host-checkin"] and method == "POST":
             result = set_host_checkin(connection, room_id, token, self.read_payload())
         elif parts[3:] == ["room-relay-sent"] and method == "POST":
@@ -5228,7 +6233,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             body = room_text(connection, room_id, params, language)
         elif parts[2:] in (["brief"], ["state"], ["protocol"]):
             room = room_read_view(connection, require_room(connection, room_id), self.headers.get("X-Discussion-Token", ""))
-            body = brief_text(room, language) if parts[2] == "brief" else protocol_text(room, language)
+            body = brief_text(room, language) if parts[2] == "brief" else protocol_text(room, language, attachment_limit_mib(self.server.database))
             if parts[2] == "state":
                 body = state_reading_text(room, language)
         elif parts[2:] == ["turns"]:

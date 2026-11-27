@@ -140,6 +140,7 @@
   "你被邀请让自己的 AI 加入一个共议房间": "You are invited to bring your own AI into a CoDiscuss room",
   "你的 AI 在你自己的电脑上运行，用你自己的账号与额度；加入后对方点名即唤醒，受次数与期限上限约束。": "Your AI runs on your own computer with your own account and quota; once you join, it starts when named, within a wake count and time limit.",
   "对方开放的项目内容会经你的 AI 发送给它的模型服务商。": "Project content they open reaches your AI's model provider.",
+  "旧版客户端若提示找不到电脑，请更新 AI CoDiscuss，再打开这个邀请链接。": "If an older client cannot find the computer, update AI CoDiscuss and reopen this invitation.",
   "用本机共议加入": "Join with CoDiscuss on this computer",
   "按钮打开这台电脑上的共议（需已安装并运行 codiscuss）。也可以复制链接，在共议左栏“外部房间”里粘贴，或运行 codiscuss join。": "The button opens CoDiscuss on this computer (codiscuss must be installed and running). You can also copy the link and paste it under \"External rooms\" in the left sidebar, or run codiscuss join.",
   "邀请内容只在地址的 # 之后，浏览器不会把它发给网站。": "The invitation lives only after the # in the address; browsers never send it to the website.",

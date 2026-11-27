@@ -15,17 +15,20 @@ MEMORY.local.md
 
 # Repository skills: only whitelisted skills are shared
 .agents/skills/*
-!.agents/skills/codiscuss-setup/
-!.agents/skills/codiscuss-draft-cleanup/
 !.agents/skills/discuss-host/
 !.agents/skills/discuss-participant/
 !.agents/skills/discuss-goal/
 !.agents/skills/discuss-session/
-!.agents/skills/discuss-report/
-!.agents/skills/share-card/
 !.agents/skills/workflow-creator/
-!.agents/skills/local-tts-setup/
-!.agents/skills/local-stt-setup/
+.agents/steward-skills/*
+!.agents/steward-skills/codiscuss-draft-cleanup/
+!.agents/steward-skills/discuss-report/
+!.agents/steward-skills/share-card/
+!.agents/steward-skills/local-tts-setup/
+!.agents/steward-skills/local-stt-setup/
+!.agents/steward-skills/notify-setup/
+!.agents/steward-skills/dispatch-analysis/
+!.agents/steward-skills/cloudflare-deploy/
 
 # Runtime data
 data/

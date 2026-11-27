@@ -6,7 +6,8 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -18,7 +19,7 @@ import { forget_sent_images, image_tools, is_image_tool, MAX_MESSAGE_ATTACHMENTS
 import { BASH_MISSING, events as pi_events, find_bash, pi_delivery, pi_home, session as pi_session } from './api_pi.mjs';
 import { is_web_tool, run_web_tool, web_search_key, web_tools } from './api_web.mjs';
 import { ensure_pi } from '../pi_runtime.mjs';
-import { execution_marker, not_sent } from './common.mjs';
+import { execution_marker, log_entries, newest_record, not_sent } from './common.mjs';
 import { DEFAULT_API_MAX_REQUESTS, takes_images } from './profiles.mjs';
 import { room_image } from '../image_service.mjs';
 import { site_fetch as entry_fetch } from '../entry_client.mjs';
@@ -880,21 +881,55 @@ async function api_chat(profile, binding, task) {
 /**
  * A task confined to the codiscuss subcommands (`task.tool_lockdown`) keeps only the room tools, which reach the site
  * bound to this execution: no project file tools, no registered commands, no image tools and no web tools. Pi's own tools are off anyway.
+ * With `task.lockdown_read_directories` (the protected level) it also keeps the read-only project file tools.
  */
 export function api_lockdown(task) {
   if (!task.tool_lockdown) return task;
   const { cwd, workdir, extra_directories, commands, image_generation, ...room } = task.api_context || {};
-  return { ...task, api_context: { ...room, tool_lockdown: true, project_access: 'read', no_web: true } };
+  // The protected level (an external user in the room) keeps the read-only file tools on the room's project directories.
+  const project = task.lockdown_read_directories?.length && cwd
+    ? { cwd, extra_directories: (extra_directories || []).map(item => ({ ...item, access: 'read' })) } : {};
+  return { ...task, api_context: { ...room, ...project, tool_lockdown: true, project_access: 'read', no_web: true } };
+}
+
+/** Read a prepaid balance only from DeepSeek's official service. */
+async function api_quota(profile, { home, service_home, fetch_impl = fetch } = {}) {
+  try {
+    if (new URL(profile.base_url).hostname !== 'api.deepseek.com') return null;
+    const key = read_api_key(service_home || home || process.env.DISCUSS_SERVICE_HOME || join(homedir(), '.codiscuss'), profile);
+    const response = await fetch_impl('https://api.deepseek.com/user/balance', {
+      headers: { Authorization: `Bearer ${key}` }, redirect: 'error', signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return null;
+    const info = (await response.json()).balance_infos?.[0];
+    return typeof info?.total_balance === 'string' ? { balance: { amount: info.total_balance, currency: info.currency } } : null;
+  } catch { return null; }
+}
+
+function pi_usage(id, options) {
+  const read = (file, type) => file && existsSync(file) && newest_record(file, 'assistant', entry =>
+    entry.type === type && entry.message?.role === 'assistant' && entry.message.usage);
+  const calls = options?.log_path && existsSync(options.log_path) ? log_entries(options.log_path)
+    .filter(entry => entry.type === 'message_end' && entry.message?.role === 'assistant' && entry.message.usage)
+    .map(entry => entry.message.usage) : [];
+  const usage = calls.at(-1) || read(pi_session.path(id, options), 'message');
+  const turn = calls.reduce((sum, call) => ({
+    input: sum.input + (call.input || 0), cache_read: sum.cache_read + (call.cacheRead || 0),
+    cache_write: sum.cache_write + (call.cacheWrite || 0), output: sum.output + (call.output || 0),
+  }), { input: 0, cache_read: 0, cache_write: 0, output: 0 });
+  const context = Number.isFinite(usage?.input) ? { used: usage.input + (usage.cacheRead || 0) + (usage.cacheWrite || 0), window: 0 } : null;
+  return usage ? { context, turn: calls.length ? turn : null } : null;
 }
 
 /** The model API's behaviour; its static facts are in profiles.mjs. */
 export const api = {
+  quota: api_quota,
   id: 'api',
   // Only a run confined to the codiscuss subcommands (a member lent to another computer's room) keeps our own tools.
   deliver: (profile, binding, task, spawn_process) => task.tool_lockdown ? api_delivery(profile, binding, api_lockdown(task), spawn_process)
     : native_delivery(profile, binding, task, spawn_process),
   chat: (profile, binding, task) => task.tool_lockdown ? api_chat(profile, binding, api_lockdown(task)) : native_delivery(profile, binding, task),
-  session: pi_session,
+  session: { ...pi_session, usage: pi_usage },
   events: pi_events,
   models: null,
 };

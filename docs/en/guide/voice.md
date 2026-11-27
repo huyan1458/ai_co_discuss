@@ -15,12 +15,7 @@ Choose services separately for “Read aloud” and “Voice input” under “S
 
 ### Install local text to speech and speech recognition
 
-The local-tts-setup and local-stt-setup skills are included with codiscuss setup and installed into the local AI software you select. You do not need to download the skills separately.
-
-Open a local AI conversation that has the CoDiscuss skills installed. This can be Claude Code, Codex, or agy in a terminal, or a local room member who can download files, run commands, and write to the local service directory. Ask it:
-
-- To install text to speech: “Please use the local-tts-setup skill to install and configure local text to speech.” To add the four VoxCPM2 voices, also ask it to install the VoxCPM2 model.
-- To install speech recognition: “Please use the local-stt-setup skill to install and configure local speech recognition.”
+If the local service you want is not installed, select “Ask the platform steward to install” for it in “Settings → Speech.” The installation changes your computer. Confirm to proceed, then follow progress in the [platform steward](steward.md) conversation. The setup skills ship with CoDiscuss and do not need to be installed into your AI software. To add the VoxCPM2 model, run `codiscuss steward ask local-tts-setup --confirm --note "Also install the VoxCPM2 model"`.
 
 Before downloading, choose a parent folder for the models. The default is `.codiscuss-models` in your user home. Read-aloud uses the `yovoice/` subfolder and recognition uses `crispasr/`. You can place them on different drives. On Windows, if C: has less than 30 GiB free and another drive has enough space, the AI suggests that drive. Existing installations continue using their original folders after an upgrade.
 
@@ -55,6 +50,21 @@ WeChat notifications use Tencent’s iLink bot channel with your **personal WeCh
   - Other text goes to the host, who interprets it or asks you a follow-up in the room.
   - If the question was answered, canceled, or updated, WeChat explains why and does not submit a stale answer.
 - **When a notification cannot be sent:** If the room is waiting for your answer or Goal confirmation and the latest WeChat notification failed, a dashed line above the question card on the Messages page gives the reason and how to fix it. “Settings → Notifications” also shows the time and reason of the failure. The most common cause is not having messaged the bot in WeChat for a long time, after which WeChat stops accepting notifications; send the bot any message in WeChat to restore it.
+
+## Other notification channels: Telegram, Discord, QQ, Feishu
+
+For guided setup, select “Ask the platform steward to configure” in “Settings → Notifications” and confirm, then continue in the [platform steward](steward.md) conversation. Enter channel credentials yourself in the web settings.
+
+Besides WeChat, “Settings → Notifications” can connect Telegram, Discord, a QQ official bot and a Feishu custom app bot. You can connect several, then enable and order them in the channel list at the top of the Notifications section: the first enabled channel is the “Primary” one. A reminder goes out on it first and, if it cannot send (not ready or the send fails), on the next channel in order; each reminder is sent once. A reply on any linked channel goes back to the room, with the same rules as WeChat (quoting a notification sends the reply to that notification’s room; replying to a question notification with an option number answers it). The local service connects to these channels directly, with no public address and no other software to install.
+
+1. Create your own bot on the platform and get its credentials: for Telegram, send `/newbot` to @BotFather for a Bot Token; for Discord, create an application in the Developer Portal, turn on the Message Content Intent and install the bot in a server you manage; for QQ, get the AppID and AppSecret from the QQ Open Platform; for Feishu, create a custom app, enable the bot capability and private-chat permissions, and choose the long connection for event subscription.
+2. Enter the credentials under that channel in “Settings → Notifications” and select “Save and verify.” The page shows a bind code valid for 10 minutes.
+3. Send the bind code to the bot in a private chat. Only the first account that sends the right code is linked as you; after that the bot only handles your private messages.
+4. Once it shows “Linked,” select “Send test” to confirm you receive it.
+
+Note: whether a QQ official bot may message you first depends on the permissions the platform grants; “Send test” tells you. Credentials stay on this computer.
+
+**QQ (personal account)**: another way to connect QQ. You run a program such as NapCat, SnowLuma or LLOneBot that logs in a QQ account (a dedicated spare account is best) and serves a OneBot 11 interface; enter its address (such as `ws://127.0.0.1:3001`) and access token under “QQ (personal account),” then send the bind code to that account in a private chat from your own QQ. It is an ordinary QQ user, so it can message you at any time; but it uses an unofficial protocol, the login may expire and need a new scan, the account may be restricted, and running the QQ client takes a few hundred MB of memory.
 
 ## Things to know
 

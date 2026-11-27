@@ -680,6 +680,125 @@ def failure_class_of(connection, execution_id):
     return row["failure_class"] if row else ""
 
 
+QUOTA_WINDOW_KINDS = ("five_hour", "seven_day", "other")
+MAX_QUOTA_WINDOWS = 8
+MAX_ACCOUNT_LENGTH = 120
+
+
+def checked_account(value):
+    """The account a usage report names: a software sign-in or `api:<key reference>`, never a key."""
+    if not isinstance(value, str) or not value.strip() or len(value) > MAX_ACCOUNT_LENGTH:
+        raise ValueError(Text("account 须为不超过 {value1} 字的非空字符串", value1=MAX_ACCOUNT_LENGTH))
+    return value.strip()
+
+
+def checked_quota_window(item):
+    """One usage-limit window of an account quota, or ValueError."""
+    fields = item if isinstance(item, dict) else {}
+    used, minutes, resets_at = fields.get("used"), fields.get("minutes"), fields.get("resets_at")
+    if fields.get("kind") not in QUOTA_WINDOW_KINDS or isinstance(used, bool) or not isinstance(used, (int, float)) \
+            or not 0 <= used <= 1 or any(type(number) is not int or number < 0 for number in (minutes, resets_at)):
+        raise ValueError(Text("quota.windows 每项须带 kind、0 到 1 的 used、整数 minutes 与 resets_at"))
+    models = fields.get("models", [])
+    if not isinstance(models, list) or len(models) > 20 or any(not isinstance(model, str) for model in models):
+        raise ValueError(Text("quota.windows 的 models 须为不超过 20 项的字符串数组"))
+    return {"kind": fields["kind"], "minutes": minutes, "used": used, "resets_at": resets_at, "group": str(fields.get("group") or "")[:80],
+            "models": [model[:60] for model in models]}
+
+
+def checked_quota(value):
+    """An account quota as the runner's adapter layer normalized it: `{windows: [{kind, minutes, used, resets_at, group}], balance?}`."""
+    windows = value.get("windows") if isinstance(value, dict) else None
+    if not isinstance(windows, list) or len(windows) > MAX_QUOTA_WINDOWS:
+        raise ValueError(Text("quota.windows 须为不超过 {value1} 项的数组", value1=MAX_QUOTA_WINDOWS))
+    result = {"windows": [checked_quota_window(item) for item in windows]}
+    balance = value.get("balance")
+    if balance is not None:
+        if not isinstance(balance, dict) or not isinstance(balance.get("amount"), str) or not isinstance(balance.get("currency", ""), str):
+            raise ValueError(Text("quota.balance 须带字符串 amount 与 currency"))
+        result["balance"] = {"amount": balance["amount"][:32], "currency": balance.get("currency", "")[:8]}
+    if not result["windows"] and "balance" not in result:
+        raise ValueError(Text("quota 须带 windows 或 balance"))
+    return result
+
+
+def save_account_quota(connection, account, quota, now):
+    """Keep the latest quota one account showed; every room on this site reads the same row."""
+    connection.execute("""INSERT INTO account_quotas (account,quota,updated_at) VALUES (?,?,?)
+        ON CONFLICT(account) DO UPDATE SET quota=excluded.quota,updated_at=excluded.updated_at""",
+                       (account, json.dumps(checked_quota(quota), ensure_ascii=False), now))
+
+
+def report_quota(connection, room_id, token, payload):
+    """The runner's reading of an account's quota taken without an agent turn (an adapter that can ask its software)."""
+    begin_write(connection)
+    require_owner(connection, room_id, token)
+    account = checked_account(payload.get("account"))
+    save_account_quota(connection, account, payload.get("quota"), int(time.time()))
+    connection.commit()
+    return {"account": account}
+
+
+def record_usage(connection, room_id, row, payload, now):
+    """One execution's usage report: its member's session context after the turn, and the account quota its output carried.
+    A report from an older execution than the one already kept leaves the member's context alone."""
+    account = checked_account(payload.get("account"))
+    context = payload.get("context")
+    if context is not None:
+        fields = context if isinstance(context, dict) else {}
+        used, window = fields.get("used"), fields.get("window")
+        if any(type(number) is not int or number < 0 for number in (used, window)):
+            raise ValueError(Text("context 须带非负整数 used 与 window"))
+        connection.execute("""INSERT INTO member_usage (member_id,room_id,execution_id,account,context_used,context_window,updated_at)
+            VALUES (?,?,?,?,?,?,?) ON CONFLICT(member_id) DO UPDATE SET execution_id=excluded.execution_id,account=excluded.account,
+            context_used=excluded.context_used,context_window=excluded.context_window,updated_at=excluded.updated_at
+            WHERE excluded.execution_id>=member_usage.execution_id""",
+                           (row["member_id"], room_id, row["id"], account, used, window, now))
+    else:
+        connection.execute("""INSERT INTO member_usage (member_id,room_id,execution_id,account,updated_at) VALUES (?,?,0,?,?)
+            ON CONFLICT(member_id) DO UPDATE SET account=excluded.account""", (row["member_id"], room_id, account, now))
+    if payload.get("quota") is not None:
+        save_account_quota(connection, account, payload["quota"], now)
+    if payload.get("turn") is not None:
+        counts = checked_turn(payload["turn"])
+        connection.execute("""INSERT INTO execution_usage (execution_id,room_id,member_id,input,cache_read,cache_write,output)
+            VALUES (?,?,?,?,?,?,?) ON CONFLICT(execution_id) DO UPDATE SET input=excluded.input,cache_read=excluded.cache_read,
+            cache_write=excluded.cache_write,output=excluded.output""",
+                           (row["id"], room_id, row["member_id"], *(counts[key] for key in TURN_FIELDS)))
+
+
+TURN_FIELDS = ("input", "cache_read", "cache_write", "output")
+
+
+def checked_turn(value):
+    """One execution's token counts `{input, cache_read, cache_write, output}`, each a non-negative integer."""
+    fields = value if isinstance(value, dict) else {}
+    counts = {key: fields.get(key, 0) for key in TURN_FIELDS}
+    if any(type(number) is not int or number < 0 for number in counts.values()):
+        raise ValueError(Text("turn 须带非负整数 input、cache_read、cache_write 与 output"))
+    return counts
+
+
+def member_usage(connection, member_id):
+    """`{account, context_used, context_window, updated_at, totals}` from the member's latest usage report, or None before
+    any; `totals` sums the token counts of all its executions in this room."""
+    row = connection.execute("SELECT account,context_used,context_window,updated_at FROM member_usage WHERE member_id=?",
+                             (member_id,)).fetchone()
+    if not row:
+        return None
+    totals = connection.execute("SELECT COUNT(*) AS runs,COALESCE(SUM(input),0) AS input,COALESCE(SUM(cache_read),0) AS cache_read,"
+                                "COALESCE(SUM(cache_write),0) AS cache_write,COALESCE(SUM(output),0) AS output "
+                                "FROM execution_usage WHERE member_id=?", (member_id,)).fetchone()
+    return {**dict(row), "totals": {key: totals[key] for key in TURN_FIELDS} if totals["runs"] else None}
+
+
+def account_quotas(connection, accounts=None):
+    """`{account: {windows, balance?, updated_at}}` for the given accounts, or every account this site keeps."""
+    rows = connection.execute("SELECT account,quota,updated_at FROM account_quotas").fetchall()
+    return {row["account"]: {**json.loads(row["quota"]), "updated_at": row["updated_at"]}
+            for row in rows if accounts is None or row["account"] in accounts}
+
+
 def quota_held_until(connection, member_id):
     """Until when a member out of quota waits: its latest execution failed on a usage limit and was not retried; else 0.
 
@@ -696,7 +815,8 @@ def quota_held_until(connection, member_id):
 
 def member_capability(connection, room_id, member_id, token, payload):
     """Record what one runner member can do, as the runner's adapter for it reports: what a rewind does to its session,
-    and the image model it generates images with ('' for none; an older runner that omits it keeps the stored one).
+    and the image model it generates images with ('' for none; an older runner that omits it keeps the stored one), and
+    optionally the account whose usage limits it draws on.
 
     Bound to one known member and replaced whole, so it takes no revision. Returns `{member_id, rewind, image_model}`.
     """
@@ -713,6 +833,11 @@ def member_capability(connection, room_id, member_id, token, payload):
     connection.execute("""INSERT INTO member_capabilities (member_id,room_id,rewind,image_model) VALUES (?,?,?,?)
         ON CONFLICT(member_id) DO UPDATE SET rewind=excluded.rewind,image_model=excluded.image_model""",
                        (member_id, room_id, payload["rewind"], image_model))
+    if "account" in payload:
+        # The account its configured software draws on, so its quota shows before its first run; reports keep it current.
+        connection.execute("""INSERT INTO member_usage (member_id,room_id,execution_id,account,updated_at) VALUES (?,?,0,?,?)
+            ON CONFLICT(member_id) DO UPDATE SET account=excluded.account""",
+                           (member_id, room_id, checked_account(payload["account"]), int(time.time())))
     return {"member_id": member_id, "rewind": payload["rewind"], "image_model": image_model}
 
 
@@ -1019,7 +1144,7 @@ def member_events(connection, room_id, token, member, events):
                or kind in ("execution.retry", "execution.late_answer") and data.get("execution_id") in executions
                or kind in ("message.posted", "message.withdrawn") and data.get("message_id") in messages
                or kind in ("request.created", "request.changed") and data.get("message_id") in messages
-               or kind.startswith("api.") and data.get("actor") == f"member:{member['name']}" and "/chat" not in str(data.get("path", "")))
+               or kind.startswith("api.") and data.get("actor") == f"member:{member['name']}" and not host_hidden_event(event))
         beyond = cutoff is not None and any(isinstance(data.get(field), int) and data[field] > cutoff
                                             for field in ("message_id", "answer_id", "reply_to"))
         if not own or beyond:
@@ -1034,7 +1159,7 @@ def member_events(connection, room_id, token, member, events):
 
 def host_hidden_event(event):
     """Private chats stay the owner's: the host's read of the event log leaves out their writes."""
-    path = str(event["data"].get("path", "")) if event["kind"] == "api.write" else ""
+    path = str(event["data"].get("path", "")) if event["kind"].startswith("api.") else ""
     return "/chat" in path
 
 
@@ -1111,7 +1236,9 @@ def recent_executions(connection, room_id, span=None):
         (SELECT source_id FROM execution_followups WHERE execution_id=e.id) AS followup_of,
         EXISTS(SELECT 1 FROM execution_schedules WHERE execution_id=e.id) AS scheduled,
         {BACKGROUND_SQL} AS background,
-        (SELECT tasks FROM execution_background_tasks WHERE execution_id=e.id) AS background_tasks
+        (SELECT tasks FROM execution_background_tasks WHERE execution_id=e.id) AS background_tasks,
+        (SELECT json_object('input',input,'cache_read',cache_read,'cache_write',cache_write,'output',output)
+            FROM execution_usage WHERE execution_id=e.id) AS turn_usage
         FROM {source} JOIN room_members m ON m.id=e.member_id WHERE e.room_id=?"""
     if span:
         low, high = span
@@ -1141,6 +1268,7 @@ def recent_executions(connection, room_id, span=None):
             "late_answer": json.loads(row["late_answer"]) if row["late_answer"] else None, "background": bool(row["background"]),
             "followup_of": row["followup_of"], "scheduled": bool(row["scheduled"]),
             "background_tasks": json.loads(row["background_tasks"]) if row["background_tasks"] else [],
+            "usage": json.loads(row["turn_usage"]) if row["turn_usage"] else None,
             "retried": bool(row["retried"]), "replaces_execution_id": row["replaces_execution_id"], "line": line,
             "interjections": execution_interjections(connection, row["id"], row["status"]),
             "retry": execution_retry(connection, row["id"])})
@@ -1312,6 +1440,7 @@ def free_view(connection, room_id):
                                                (row["id"],)).fetchone()[0]
         member["held_until"] = held_until(connection, row["id"])
         member["quota_until"] = quota_held_until(connection, row["id"])
+        member["usage"] = member_usage(connection, row["id"])
         if row["access"] == "external":
             member["external"] = external_members.room_view_field(connection, row["id"])
         members.append(member)
@@ -1351,7 +1480,8 @@ def free_view(connection, room_id):
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_rounds": max_rounds,
             "chain_rounds": progress, "recommendations": recent_recommendations(connection, room_id, now)[::-1],
             "queued_messages": queue_view(connection, room_id), "questions": questions.room_questions_view(connection, room_id),
-            "dispatches": dispatch_modes(connection, room_id, {row["message_id"] for row in requests if row["created_by"] == "host"})}
+            "dispatches": dispatch_modes(connection, room_id, {row["message_id"] for row in requests if row["created_by"] == "host"}),
+            "quotas": account_quotas(connection, {member["usage"]["account"] for member in members if member["usage"]})}
 
 
 def require_member(connection, room_id, token, name=None):
@@ -3125,6 +3255,16 @@ def stop_member_work(connection, member_id, reason, cancel_reason, keep_pending=
     discussion.after_member_stopped(connection, member_id)
 
 
+def record_dispatch_intervention(connection, room_id, operation, where, params=()):
+    """Record one owner operation per affected chain within its transaction."""
+    connection.execute(f"""INSERT INTO room_events(room_id,at,kind,data)
+        SELECT room_id,?,'dispatch.user_intervention',
+            json_object('chain_id',COALESCE(NULLIF(chain_id,0),message_id),'operation',?,
+                'targeted_dispatch',MAX(created_by='host' AND purpose='ask' AND execution_id IS NOT NULL))
+        FROM member_requests WHERE room_id=? AND ({where})
+        GROUP BY COALESCE(NULLIF(chain_id,0),message_id)""", (int(time.time() * 1000), operation, room_id, *params))
+
+
 def stop_room(connection, room_id, token):
     """Owner stops the whole free room: every live execution, open request and queued turn ends, so nothing restarts by itself.
 
@@ -3136,7 +3276,8 @@ def stop_room(connection, room_id, token):
         raise FileExistsError(Text("讨论进行中，请用暂停或结束讨论"))
     connection.execute("DELETE FROM free_queue WHERE room_id=?", (room_id,))
     pause_queue(connection, room_id)
-    stop_room_work(connection, room_id, Text("用户停止全部"), "user_stop")
+    record_dispatch_intervention(connection, room_id, "stop", "status IN ('pending','delivering')")
+    stop_room_work(connection, room_id, Text(OWNER_STOP_RESULT), "user_stop")
     questions.cancel_open(connection, room_id)
     return free_view(connection, room_id)
 
@@ -3160,7 +3301,28 @@ def stop_room_work(connection, room_id, reason, cancel_reason):
     settle_batches(connection, room_id)
 
 
-def withdraw_dispatch(connection, room_id, token, message_id):
+HOST_WITHDRAW_RESULT = "主持人撤回派活"
+OWNER_INTERRUPT_RESULT = "用户打断"
+OWNER_STOP_RESULT = "用户停止全部"
+OWNER_REWIND_RESULT = "用户回退了对话"
+
+
+def dispatch_redirect_message(connection, host_id, execution_id, dispatch_id):
+    """Find the newer owner message routed to this host during the withdrawal."""
+    if type(execution_id) is not int or execution_id <= 0:
+        return None
+    row = connection.execute("""WITH RECURSIVE turns(id) AS (
+            SELECT ? UNION SELECT c.next_id FROM execution_continuations c JOIN turns t ON t.id=c.execution_id)
+        SELECT MAX(m.id) FROM turns t JOIN member_executions e ON e.id=t.id
+        JOIN member_requests r ON r.execution_id=e.id JOIN messages m ON m.id=r.message_id
+        WHERE e.member_id=? AND e.status IN ('dispatched','started') AND r.created_by='user' AND m.author='用户' AND m.id>?
+          AND NOT EXISTS(SELECT 1 FROM guest_message_sources g WHERE g.message_id=m.id)
+          AND NOT EXISTS(SELECT 1 FROM message_relays WHERE message_id=m.id)""",
+                             (execution_id, host_id, dispatch_id)).fetchone()
+    return row[0]
+
+
+def withdraw_dispatch(connection, room_id, token, message_id, execution_id=None):
     """Take back one of the present host's dispatches: its relay or loop stops, waiting steps are cancelled, running ones
     stopped, and nothing hands back. The runner calls this with the owner credential for a host granted full control.
     """
@@ -3169,7 +3331,7 @@ def withdraw_dispatch(connection, room_id, token, message_id):
     message = connection.execute("SELECT author FROM messages WHERE room_id=? AND id=?", (room_id, message_id)).fetchone()
     if not message:
         raise LookupError(Text("消息不存在"))
-    host = connection.execute("SELECT name FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    host = connection.execute("SELECT id,name FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
     if not host or message["author"] != host["name"]:
         raise ValueError(Text("只能撤回当前主持人自己的派活消息；用户的消息由用户撤回"))
     sequences = "room_id=? AND message_id=? AND status IN ('running','checkpoint')"
@@ -3180,12 +3342,24 @@ def withdraw_dispatch(connection, room_id, token, message_id):
     taken = f"(r.batch_id IN ({marks}) OR r.message_id=? AND r.batch_id=0 AND r.created_by='host' AND r.purpose='ask')"
     live = connection.execute(f"""SELECT DISTINCT e.member_id FROM member_requests r JOIN member_executions e ON e.id=r.execution_id
         WHERE r.room_id=? AND {taken} AND e.status IN ('dispatched','started')""", (room_id, *batches, message_id)).fetchall()
+    affected = bool(live) or connection.execute(f"""SELECT 1 FROM member_requests r
+        WHERE r.room_id=? AND {taken} AND r.status IN ('pending','delivering') LIMIT 1""",
+                                                (room_id, *batches, message_id)).fetchone() is not None
+    redirect = dispatch_redirect_message(connection, host["id"], execution_id, message_id) if affected else None
     for row in live:
-        stop_member_work(connection, row[0], Text("主持人撤回派活"), "user_stop", keep_pending=True)
+        connection.execute("""INSERT OR IGNORE INTO dispatch_withdrawn_requests
+            SELECT r.id FROM member_requests r JOIN member_executions e ON e.id=r.execution_id
+            WHERE e.member_id=? AND e.status IN ('dispatched','started') AND r.status='delivering'""", (row[0],))
+        stop_member_work(connection, row[0], Text(HOST_WITHDRAW_RESULT), "user_stop", keep_pending=True)
     waiting = f"id IN (SELECT r.id FROM member_requests r WHERE r.room_id=? AND {taken} AND r.status='pending')"
+    connection.execute(f"INSERT OR IGNORE INTO dispatch_withdrawn_requests SELECT id FROM member_requests WHERE {waiting}",
+                       (room_id, *batches, message_id))
     record_cancel_reasons(connection, waiting, (room_id, *batches, message_id), "user_stop")
     connection.execute(f"UPDATE member_requests SET status='cancelled' WHERE {waiting}", (room_id, *batches, message_id))
     connection.execute(f"UPDATE free_batches SET settled=1 WHERE room_id=? AND batch_id IN ({marks})", (room_id, *batches))
+    if affected:
+        connection.execute("INSERT OR IGNORE INTO dispatch_withdrawals (message_id,redirect_message_id) VALUES (?,?)",
+                           (message_id, redirect))
     return free_view(connection, room_id)
 
 
@@ -3525,12 +3699,17 @@ def reserve_execution(connection, room_id, token, payload):
     begin_write(connection)
     if enforce_session_limits(connection, room_id):
         connection.commit()
+        begin_write(connection)
     client_id = str(payload.get("client_id", ""))
     if not 8 <= len(client_id) <= 100:
         raise ValueError(Text("client_id 须为 8–100 字符的本地投递编号"))
     previous = connection.execute("SELECT * FROM member_executions WHERE room_id=? AND client_id=?", (room_id, client_id)).fetchone()
     if previous:
         return execution_detail(connection, previous)
+    from .external_members import guest_error, guest_now, guest_phase, guest_refresh
+    now = guest_now()
+    if guest_phase(guest_refresh(connection, room_id, now), now) == "waiting":
+        raise guest_error(FileExistsError, "guest_waiting")
     expire_executions(connection, room_id)
     if connection.execute("SELECT archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()[0]:
         raise FileExistsError(Text("房间已存档，不再投递"))
@@ -3604,7 +3783,7 @@ def open_followup(connection, room_id, member, payload):
         VALUES (?,?,?,?,'followup',?,?,'delivering',?)""", (room_id, member["id"], anchor, origin["chain_id"], origin["created_by"], now, execution_id))
     connection.execute("INSERT INTO execution_followups (execution_id,source_id,reports) VALUES (?,?,?)",
                        (execution_id, source_id, json.dumps(reports, ensure_ascii=False)))
-    return execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
+    return program_execution_details(connection, execution_id, member)
 
 
 MAX_SCHEDULE_FIELD = 120
@@ -3662,9 +3841,28 @@ def open_scheduled(connection, room_id, member, payload):
                                  str(payload.get("cwd") or "")[:MAX_PATH_LENGTH])).lastrowid
     connection.execute("""INSERT INTO member_requests (room_id,member_id,message_id,chain_id,purpose,created_by,created_at,status,execution_id)
         VALUES (?,?,?,?,'scheduled','system',?,'delivering',?)""", (room_id, member["id"], notice, origin[0] if origin else notice, now, execution_id))
+    reported_source = scheduled.get("source_execution_id")
+    if type(reported_source) is int and connection.execute(
+        "SELECT 1 FROM member_executions WHERE id=? AND member_id=? AND id<?",
+        (reported_source, member["id"], execution_id)
+    ).fetchone():
+        source = reported_source
     connection.execute("INSERT INTO execution_schedules (execution_id,source_id,task_id,schedule) VALUES (?,?,?,?)",
                        (execution_id, source, scheduled["id"][:MAX_SCHEDULE_FIELD], schedule))
-    return execution_detail(connection, connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone())
+    return program_execution_details(connection, execution_id, member)
+
+
+def program_execution_details(connection, execution_id, member):
+    """Bind a software-started host turn to the version of the session it follows."""
+    row = connection.execute("SELECT * FROM member_executions WHERE id=?", (execution_id,)).fetchone()
+    detail = execution_detail(connection, row)
+    if member["role"] == "host":
+        versions = observed_host_versions(connection, [execution_id])
+        if versions:
+            version = {key: versions[0][key] for key in ("package_version", "prompt_hash", "skill_hash")}
+            record_host_execution_version(connection, row, version)
+            detail["host_version"] = version
+    return detail
 
 
 def followup_notice(connection, room_id, member, source_id):
@@ -3795,12 +3993,17 @@ def open_execution(connection, room_id, member, payload, request_ids=None):
 def execution_detail(connection, row):
     """Describe one execution with the requests it carries and the member's read cursor."""
     member = connection.execute("SELECT * FROM room_members WHERE id=?", (row["member_id"],)).fetchone()
-    requests = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.status,r.purpose,r.created_by,r.batch_id,
+    from .external_members import guest_origin
+    requests = [dict(item) for item in connection.execute("""SELECT r.id,r.message_id,r.status,r.purpose,r.created_by,r.batch_id,r.chain_id,
         sr.id AS session_request_id,sr.session_id,sr.round,sr.position,sr.read_until,sr.question AS source_question,
         t.cause_kind,t.cause_message_id AS source_message_id,t.cause_request_id
         FROM member_requests r LEFT JOIN session_requests sr ON sr.member_request_id=r.id
         LEFT JOIN task_message_sources t ON t.session_request_id=sr.id
         WHERE r.execution_id=? ORDER BY r.id""", (row["id"],))]
+    for request in requests:
+        origin = guest_origin(connection, request["message_id"], request.pop("chain_id"))
+        if origin:
+            request["origin"] = origin
     requests = [{**request, **review_request_context(connection, request), **sequence_request_context(connection, request), **handoff_outcome(connection, request),
                  **questions.request_context(connection, request), "texts": request_texts(connection, request["id"], request.get("session_request_id"))} for request in requests]
     detail = public_execution(row)
@@ -4130,6 +4333,37 @@ def execution_interjections(connection, execution_id, execution_status):
     return items
 
 
+def observed_host_versions(connection, execution_ids):
+    """Find each execution's own version, or the nearest version on its parent turn."""
+    rows = connection.execute("""WITH RECURSIVE lineage(root,id,depth) AS (
+            SELECT value,value,0 FROM json_each(?)
+            UNION ALL SELECT l.root,COALESCE(c.execution_id,f.source_id,s.source_id),l.depth+1
+            FROM lineage l LEFT JOIN execution_continuations c ON c.next_id=l.id
+            LEFT JOIN execution_followups f ON f.execution_id=l.id LEFT JOIN execution_schedules s ON s.execution_id=l.id
+            WHERE COALESCE(c.execution_id,f.source_id,s.source_id)<l.id),
+        versions AS (SELECT l.root AS execution_id,v.package_version,v.prompt_hash,v.skill_hash,
+            ROW_NUMBER() OVER(PARTITION BY l.root ORDER BY l.depth) AS priority
+            FROM lineage l JOIN host_execution_versions v ON v.execution_id=l.id)
+        SELECT v.execution_id,v.package_version,v.prompt_hash,v.skill_hash,e.model,e.effort
+        FROM versions v JOIN member_executions e ON e.id=v.execution_id WHERE v.priority=1 ORDER BY e.id""",
+                              (json.dumps(list(execution_ids)),))
+    return [dict(row) for row in rows]
+
+
+def record_host_execution_version(connection, row, version):
+    """Keep the delivery's version once for a host execution."""
+    if not isinstance(version, dict):
+        raise ValueError(Text("执行版本格式无效"))
+    package_version, prompt_hash, skill_hash = version.get("package_version"), version.get("prompt_hash"), version.get("skill_hash")
+    if (not isinstance(package_version, str) or not re.fullmatch(r"[0-9A-Za-z.+-]{1,80}", package_version)
+            or not isinstance(prompt_hash, str) or not re.fullmatch(r"(?:[a-f0-9]{12})?", prompt_hash)
+            or skill_hash is not None and (not isinstance(skill_hash, str) or not re.fullmatch(r"[a-f0-9]{16}", skill_hash))):
+        raise ValueError(Text("执行版本格式无效"))
+    if connection.execute("SELECT 1 FROM room_members WHERE id=? AND role='host'", (row["member_id"],)).fetchone():
+        connection.execute("INSERT OR IGNORE INTO host_execution_versions VALUES (?,?,?,?)",
+                           (row["id"], package_version, prompt_hash, skill_hash))
+
+
 def execution_action(connection, room_id, execution_id, token, payload, member=None):
     """Runner-side lifecycle: renew, fail, release undelivered work, report how the software was reached, whether a voided one stopped, or observed file changes."""
     begin_write(connection)
@@ -4168,9 +4402,14 @@ def execution_action(connection, room_id, execution_id, token, payload, member=N
         values = {field: payload.get(field, "") for field in ("model", "effort")}
         if any(not isinstance(value, str) for value in values.values()):
             raise ValueError(Text("model 与 effort 须为字符串"))
+        if member is None and "host_version" in payload:
+            record_host_execution_version(connection, row, payload["host_version"])
         for field, value in values.items():
             if value.strip():
                 connection.execute(f"UPDATE member_executions SET {field}=? WHERE id=?", (value.strip()[:MAX_MODEL_LENGTH], execution_id))
+    elif action == "usage":
+        # Read from the software after its turn, like the model, so a finished execution may still report.
+        record_usage(connection, room_id, row, payload, now)
     elif action == "denials":
         # Like file changes, read from the software's output once its process ends; recorded once.
         saved = connection.execute("INSERT OR IGNORE INTO execution_denials (execution_id,room_id,denials) VALUES (?,?,?)",
@@ -4432,7 +4671,12 @@ def interrupt_member(connection, room_id, member_id, token, by_host=""):
     """
     owned_member(connection, room_id, member_id, token)
     pause_queue(connection, room_id)
-    reason = Text("主持人 {host} 打断", host=by_host) if by_host else Text("用户打断")
+    reason = Text("主持人 {host} 打断", host=by_host) if by_host else Text(OWNER_INTERRUPT_RESULT)
+    if not by_host:
+        record_dispatch_intervention(connection, room_id, "stop",
+                                     "member_id=? AND status='delivering' AND execution_id IN ("
+                                     "SELECT id FROM member_executions WHERE member_id=? AND status IN ('dispatched','started'))",
+                                     (member_id, member_id))
     stop_member_work(connection, member_id, reason, "user_stop", keep_pending=True)
     if not by_host:
         connection.execute("INSERT OR REPLACE INTO member_schedule_stops (member_id,stopped_at) VALUES (?,?)",
@@ -4483,8 +4727,11 @@ def interrupt_for_message(connection, room_id, message_id):
 
 def withdrawals(connection, room_id):
     """The room's taken-back messages by id, so the page keeps them in place while AI readers skip them."""
-    return [dict(row) for row in connection.execute("""SELECT w.message_id,w.kind FROM message_withdrawal_rooms r
-        JOIN message_withdrawals w ON w.message_id=r.message_id WHERE r.room_id=? ORDER BY r.message_id""", (room_id,))]
+    return [{key: value for key, value in dict(row).items() if value is not None} for row in connection.execute(
+        """SELECT w.message_id,w.kind,g.label AS author_label FROM message_withdrawal_rooms r
+        JOIN message_withdrawals w ON w.message_id=r.message_id
+        LEFT JOIN guest_message_sources s ON s.message_id=r.message_id
+        LEFT JOIN room_guest_visits g ON g.guest_id=s.guest_id WHERE r.room_id=? ORDER BY r.message_id""", (room_id,))]
 
 
 def owner_message(connection, room_id, message_id):
@@ -4517,6 +4764,7 @@ def retract_message(connection, room_id, message_id, token):
         return {"message_id": message_id, "text": message["text"], "duplicate": True}
     if connection.execute("SELECT 1 FROM member_requests WHERE message_id=? AND status IN ('delivering','completed','failed')", (message_id,)).fetchone():
         raise FileExistsError(Text("已有成员开始处理这条消息，不能撤回；可以编辑这条消息回退到它之前"))
+    record_dispatch_intervention(connection, room_id, "retract", "message_id=?", (message_id,))
     connection.execute("UPDATE member_requests SET status='cancelled' WHERE message_id=? AND status='pending'", (message_id,))
     connection.execute("DELETE FROM free_queue WHERE message_id=?", (message_id,))
     connection.execute("INSERT INTO message_withdrawals (message_id,kind,created_at) VALUES (?,'retracted',?)", (message_id, int(time.time())))
@@ -4576,9 +4824,13 @@ def rewind_room(connection, room_id, token, payload):
     plan = rewind_plan(connection, room_id, message_id)
     if payload["revision"] != plan["revision"]:
         raise FileExistsError(Text("房间已有新的消息或执行，请重新读取回退计划后再确认"))
+    record_dispatch_intervention(connection, room_id, "rewind",
+                                 "message_id>=? OR answer_id>=? OR execution_id IN ("
+                                 "SELECT id FROM member_executions WHERE room_id=? AND status IN ('dispatched','started'))",
+                                 (message_id, message_id, room_id))
     now = int(time.time())
     for row in connection.execute("SELECT id FROM member_executions WHERE room_id=? AND status IN ('dispatched','started')", (room_id,)).fetchall():
-        finish_execution(connection, row["id"], "cancelled", Text("用户回退了对话"), "cancelled", "user_stop")
+        finish_execution(connection, row["id"], "cancelled", Text(OWNER_REWIND_RESULT), "cancelled", "user_stop")
     record_cancel_reasons(connection, "room_id=? AND message_id>=? AND status IN ('pending','failed')", (room_id, message_id), "user_stop")
     connection.execute("UPDATE member_requests SET status='cancelled' WHERE room_id=? AND message_id>=? AND status IN ('pending','failed')", (room_id, message_id))
     connection.execute("DELETE FROM free_queue WHERE room_id=? AND message_id>=?", (room_id, message_id))
@@ -4758,6 +5010,8 @@ HOST_ACTION_TEXTS = {
     "back": "主持人 {host} 请回了 {member}",
     "access:read": "主持人 {host} 把 {member} 的项目权限改为只读",
     "access:write": "主持人 {host} 把 {member} 的项目权限改为可写",
+    "access:auto": "主持人 {host} 把 {member} 的项目权限改为自动",
+    "access:full": "主持人 {host} 把 {member} 的项目权限改为全放开",
     "adapter": "主持人 {host} 把 {member} 的接入方式改为 {detail}",
     "label": "主持人 {host} 把 {member} 改名为 {detail}",
     "description": "主持人 {host} 更新了 {member} 的描述",
