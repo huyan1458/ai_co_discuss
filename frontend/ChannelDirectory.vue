@@ -25,9 +25,12 @@ import MemoBlock from "./memo-block.js";
 import { use_workflow_library } from "./workflow-library.js";
 import { use_invited_rooms } from "./external-members.js";
 import { use_analytics_page } from "./analytics-state.js";
+import { use_search_page } from "./search.js";
+import { failure_dismissed, is_unread, mark_read, mark_unread } from "./room-seen.js";
 import { locale, t } from "./i18n.js";
 import { expired_label } from "./sites.js";
 import moss_mark from "./moss-idle.png";
+import { room_attention } from "./moss.js";
 
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions"]);
 const { view, bridge, act, is_running } = inject("discussion");
@@ -40,7 +43,8 @@ const props = defineProps({ stewardSetup: Boolean });
 const { page_open: workflow_library_open } = use_workflow_library();
 const { page_open: invited_open } = use_invited_rooms();
 const { page_open: analytics_open } = use_analytics_page();
-const middle_page = computed(() => workflow_library_open.value || invited_open.value || analytics_open.value || props.stewardSetup);
+const { page_open: search_open } = use_search_page();
+const middle_page = computed(() => workflow_library_open.value || invited_open.value || analytics_open.value || search_open.value || props.stewardSetup);
 const project_rooms = computed(() => view.value.rooms.filter((room) => !room.system_kind));
 // Rooms MOSS opened are children of its own room, which the directory never lists: they stand at the top level
 // (their parent is not among the rows) and carry MOSS's small picture instead (#15330).
@@ -64,14 +68,32 @@ const mounted = computed(() => new Set([...children.value.values()].flat().map(r
 const open_room_running = computed(() => (view.value.room?.free?.members || [])
   .some((member) => ["dispatched", "started"].includes(member.execution?.status)));
 // Read by `branches` during setup (its watcher is immediate), so defined before it.
-const ATTENTION_RANK = { awaiting: 4, waiting_user: 3, failed: 2, running: 1 };
+const ATTENTION_RANK = { awaiting: 4, waiting_user: 3, failed: 2, quota: 1.8, new: 1.5, running: 1 };
+/**
+ * A row's state: the room's own attention, a dismissed failure hidden, and otherwise "有新结果" when the room has
+ * messages after the last one seen on this device and is not the open room (#15998, #16003).
+ */
+function row_attention(room) {
+  const own = room_attention(room, room_running(room));
+  if (own?.kind === "failed" && failure_dismissed(room)) return null;
+  if (own) return own;
+  // A failure that only waits for a usage limit to reset clears by itself: a hollow ring, not a red dot (#15998).
+  if (room.attention === "quota" && room.quota_resets_at * 1000 > Date.now()) {
+    const time = new Date(room.quota_resets_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    return { kind: "quota", label: t("额度用完，{time} 恢复", { time }) };
+  }
+  return is_unread(room) && room.id !== view.value.room?.id ? { kind: "new", label: t("有新结果") } : null;
+}
+// Every state in the time column is a dot before the time (#15907, Fable #15923): amber for waiting on the owner, with
+// the room name brightened; green breathing for running; red ringed for failed. Words stay in the tooltip and for readers.
+const WAITING_KINDS = new Set(["awaiting", "waiting_user"]);
 const attention_rank = (state) => ATTENTION_RANK[state?.kind] || 0;
 const branches = computed(() => {
   const result = new Map();
   function visit(room) {
     const group = children.value.get(room.id) || [];
     const descendants = group.map(visit);
-    const own = room_attention(room, room_running(room));
+    const own = row_attention(room);
     const branch = { running: room_running(room) || descendants.some(item => item.running),
       // A folded parent speaks for its children: the one most in need of the user (#15332 suggestion 1).
       attention: [own, ...descendants.map(item => item.attention)].reduce((best, item) => attention_rank(item) > attention_rank(best) ? item : best, null),
@@ -194,21 +216,21 @@ function recovery_items(item) {
 // The request still in flight is saved as a record too, but it shows as the room being created until its result is known.
 const unconfirmed_launches = computed(() => view.value.launch.recoveries.filter((item) => item.id !== view.value.creating_room?.submission_id));
 
+// The open room is read up to its latest message as it arrives (the list's latest_id follows new messages).
+watch(() => {
+  const room = (view.value.rooms || []).find((item) => item.id === view.value.room?.id);
+  return room && !middle_page.value ? `${room.id}:${room.latest_id}` : "";
+}, () => {
+  const room = (view.value.rooms || []).find((item) => item.id === view.value.room?.id);
+  if (room && !middle_page.value && is_unread(room)) mark_read(bridge, room);
+}, { immediate: true });
+
 function room_row(room, index, count) {
   return { items: actions(room), active: !middle_page.value && room.id === view.value.room?.id,
     archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room),
-    attention: room_attention(room, room_running(room)), destroying: view.value.destroying.includes(room.id) };
+    attention: row_attention(room), destroying: view.value.destroying.includes(room.id) };
 }
 
-/** The row's one-line state, with the wait timestamp taking precedence over legacy attention. */
-function room_attention(room, running) {
-  if (room.waiting_user_since > 0) return { kind: "awaiting", label: t("在等你") };
-  const { attention } = room;
-  if (attention === "waiting_user") return { kind: attention, label: t("等你回答") };
-  if (attention === "failed") return { kind: attention, label: t("执行失败") };
-  if (attention === "running" || running) return { kind: "running", label: t("进行中") };
-  return null;
-}
 /** Whether a room is at work; the open room's own live state is the fresher one. */
 function room_running(room) {
   return room.id === view.value.room?.id ? open_room_running.value : Boolean(room.running);
@@ -217,17 +239,22 @@ function room_running(room) {
 function listed_count(id) {
   return listed_counts.value.get(id) || ROOM_BATCH_COUNT;
 }
-/** List recent rooms and keep branches that are at work, open, or waiting for the user visible. */
+/**
+ * Whether a room stays listed past the folder's count: it is at work or open. A room waiting for the user is not pinned;
+ * it takes its place by time like any other (#16131).
+ */
+function pinned_room(room) {
+  const branch = branches.value.get(room.id);
+  return branch.running || branch.selected;
+}
+/** List recent rooms and keep branches that are at work or open visible. */
 function visible_rooms(folder) {
   const roots = top_rooms(folder);
   if (manual_order.value) return roots;
   const held = held_directory.value?.folders.get(folder.id);
   const limit = listed_count(folder.id) + added_root_count(folder, roots);
-  return roots.filter((room, index) => {
-    if (held_directory.value) return index < limit || held?.visible.has(room.id);
-    const branch = branches.value.get(room.id);
-    return index < limit || branch.running || branch.selected || branch.attention?.kind === "awaiting";
-  });
+  return roots.filter((room, index) => index < limit
+    || (held_directory.value ? held?.pinned.has(room.id) : pinned_room(room)));
 }
 function top_rooms(folder) {
   const roots = folder.rooms.filter(room => !mounted.value.has(room.id));
@@ -262,10 +289,12 @@ watch([directory_hovered, directory_focused, manual_order], ([hovered, focused, 
   } else if (!held_directory.value) {
     held_directory.value = {
       folders: new Map(folders.value.map(folder => {
-        const order = top_rooms(folder).map(room => room.id);
-        const listed = new Set(order.slice(0, listed_count(folder.id)));
-        const visible = new Set(visible_rooms(folder).map(room => room.id).filter(id => !listed.has(id)));
-        return [folder.id, { order, ids: new Set(order), visible }];
+        const roots = top_rooms(folder);
+        const order = roots.map(room => room.id);
+        // Every pinned room, wherever it stands: folding the folder shrinks the count while held, and a pinned room
+        // inside the old count must not drop out with it (#16121).
+        const pinned = new Set(roots.filter(pinned_room).map(room => room.id));
+        return [folder.id, { order, ids: new Set(order), pinned }];
       })),
       children: new Map([...children.value].map(([id, group]) => [id, group.map(room => room.id)])),
     };
@@ -297,6 +326,16 @@ function directory_rows(folder) {
   append(visible_rooms(folder), 0);
   return rows;
 }
+/**
+ * Rooms waiting for the user that "show more" hides, children included. A waiting room is marked on whatever hides it:
+ * its own row when listed, this control when folded behind it, the folder heading when the folder is closed, and the
+ * directory heading when the whole list is closed (#16140, Fable #16142).
+ */
+function hidden_waiting(folder) {
+  const count = (room) => (room.waiting_user_since > 0 ? 1 : 0) + (children.value.get(room.id) || []).reduce((sum, kid) => sum + count(kid), 0);
+  const visible = new Set(visible_rooms(folder));
+  return top_rooms(folder).filter((room) => !visible.has(room)).reduce((sum, room) => sum + count(room), 0);
+}
 /** The label of a folder's show-more control, empty when the folder has nothing to fold. */
 function list_toggle_label(folder) {
   if (manual_order.value || top_rooms(folder).length <= ROOM_BATCH_COUNT) return "";
@@ -317,8 +356,9 @@ function toggle_room_list(folder) {
 function folder_head(folder, index) {
   const items = folder.id ? folder_actions(folder, index) : [];
   const head = { items, collapsed: !folder_open(folder.id), active: view.value.room?.folder_id === folder.id,
-    creating: view.value.directory_pending.includes("create-room"), running: !folder_open(folder.id) && folder.rooms.some((room) => room_running(room)) };
-  head.key = JSON.stringify([folder, head.collapsed, head.active, head.creating, head.running, items.map((group) => group.map((item) => [item.label, item.disabled]))]);
+    creating: view.value.directory_pending.includes("create-room"), running: !folder_open(folder.id) && folder.rooms.some((room) => room_running(room)),
+    waiting: folder_open(folder.id) ? 0 : folder.rooms.filter((room) => room.waiting_user_since > 0).length };
+  head.key = JSON.stringify([folder, head.collapsed, head.active, head.creating, head.running, head.waiting, items.map((group) => group.map((item) => [item.label, item.disabled]))]);
   return head;
 }
 // Folders stay as the user left them. Opening a room whose folder is closed opens that folder once; nothing is ever
@@ -473,7 +513,10 @@ function select_room(event, room) {
 
 /** Keep actions targeted to the clicked channel without changing the open draft. */
 function actions(room) {
+  const state = row_attention(room)?.kind;
   return [[
+    ...(state === "new" || state === "failed" ? [{ label: t("标为已读"), icon: "i-lucide-check-check", onSelect: () => mark_read(bridge, room, true) }] : []),
+    ...(state !== "new" && !WAITING_KINDS.has(state) && room.latest_id ? [{ label: t("标为未读"), icon: "i-lucide-mail", onSelect: () => mark_unread(bridge, room) }] : []),
     { label: t("重命名"), icon: "i-lucide-pencil", disabled: !can_rename(room), onSelect: () => start_rename(room) },
     { label: t("分享"), icon: "i-lucide-share-2", children: [
       { label: t("分享房间"), icon: "i-lucide-share-2", onSelect: () => emit("manage", { room, action: "share_prepare" }) },
@@ -507,9 +550,9 @@ function actions(room) {
     <div class="channel-directory-heading">
       <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open">
         <UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ directory_title }}
-        <small v-if="waiting_count" class="channel-waiting-count" :title="t('{count} 个房间在等你', { count: waiting_count })">
+        <small v-if="!rooms_open && waiting_count" class="channel-waiting-count" :title="t('{count} 个房间在等你', { count: waiting_count })">
           <span class="sr-only">{{ t("{count} 个房间在等你", { count: waiting_count }) }}</span>
-          <span aria-hidden="true">{{ t("{count} 在等你", { count: waiting_count }) }}</span>
+          <span aria-hidden="true">{{ waiting_count }}</span>
         </small>
       </button>
       <div class="channel-directory-actions">
@@ -530,7 +573,7 @@ function actions(room) {
        <MemoBlock v-if="folder.id" :deps="[head.key]">
        <UContextMenu :items="head.items" :ui="{ content: 'channel-menu channel-topic-menu' }">
        <div class="channel-folder-row" :class="{ active: head.collapsed && head.active }">
-       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="folder.name" :aria-expanded="!head.collapsed" :title="t('拖动文件夹排序；上下方向键移动')" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="head.collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><i v-if="head.running && !folder.pending" class="channel-room-running" :title="t('正在执行')" /><small v-else-if="folder.pending" class="channel-directory-count" aria-hidden="true">{{ t('保存中') }}</small></button>
+       <button class="channel-folder-heading" data-drop-folder data-drag-handle type="button" :disabled="folder.pending" :aria-label="folder.name" :aria-expanded="!head.collapsed" :title="t('拖动文件夹排序；上下方向键移动')" @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_folder', { id: folder.order_id, direction: -1 })" @keydown.down.prevent="act('move_folder', { id: folder.order_id, direction: 1 })" @click="toggle_folder(folder.id)"><UIcon :name="head.collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><UIcon name="i-lucide-folder" /><span class="channel-folder-name">{{ folder.name }}</span><small v-if="head.waiting" class="channel-waiting-count" :title="t('{count} 个房间在等你', { count: head.waiting })"><span class="sr-only">{{ t("{count} 个房间在等你", { count: head.waiting }) }}</span><span aria-hidden="true">{{ head.waiting }}</span></small><i v-if="head.running && !folder.pending" class="channel-room-running" :title="t('正在执行')" /><small v-else-if="folder.pending" class="channel-directory-count" aria-hidden="true">{{ t('保存中') }}</small></button>
         <div class="channel-folder-actions">
           <UTooltip :text="t('在{name}中新建房间', { name: folder.name })"><UButton icon="i-lucide-plus" :aria-label="t('在{name}中新建房间', { name: folder.name })" :disabled="folder.pending || head.creating" size="xs" color="neutral" variant="ghost" @click="emit('create', folder.id ? folder : null)" /></UTooltip>
           <UDropdownMenu :items="head.items" :content="{ align: 'start', side: 'bottom', sideOffset: 6 }" :ui="{ content: 'channel-menu channel-topic-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="t('管理文件夹 {name}', { name: folder.name })" :title="t('文件夹选项')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
@@ -540,13 +583,13 @@ function actions(room) {
        </MemoBlock>
        </template>
        <div v-if="folder_open(folder.id)" :class="folder.id ? 'channel-folder-rooms' : 'channel-root-rooms'" :data-drop-folder="folder.id ? undefined : ''">
-      <MemoBlock v-for="{ room, index, count, depth, expanded, label, highlight, rollup } in directory_rows(folder)" :key="room.id" :deps="[JSON.stringify(room), index, count, depth, expanded, label, highlight, rollup?.kind, by_moss(room), row_state, room_time(room), Boolean(share_link(room)), renaming_id === room.id]">
+      <MemoBlock v-for="{ room, index, count, depth, expanded, label, highlight, rollup } in directory_rows(folder)" :key="room.id" :deps="[JSON.stringify(room), index, count, depth, expanded, label, highlight, rollup?.kind, row_attention(room)?.kind, by_moss(room), row_state, room_time(room), Boolean(share_link(room)), renaming_id === room.id]">
       <template v-for="row in [room_row(room, index, count)]" :key="room.id">
       <UContextMenu :items="row.items" :content="{ onCloseAutoFocus: keep_rename_focus }" :ui="{ content: 'channel-menu channel-topic-menu' }">
         <div class="channel-room-row" :class="{ active: row.active || highlight, 'is-destroying': row.destroying}" :style="{ marginInlineStart: depth ? `calc(${depth} * var(--channel-nav-text, 13px))` : undefined }" :data-drag-room="room.id" :inert="row.destroying || undefined">
           <button class="channel-room-grip" data-drag-handle :aria-label="t('拖动 {name}', { name: room.title })" :title="t('拖动排序；上下方向键移动')"  @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
           <div class="channel-room-content"><UTooltip v-if="label" :text="label" :ui="{ content: 'channel-topic-tooltip' }"><button class="channel-child-toggle" type="button" :aria-expanded="expanded" :aria-label="label" @click.stop="toggle_parent(room.id)"><UIcon :name="expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" /></button></UTooltip><span v-if="renaming_id === room.id" class="channel-room-rename"><input :ref="set_rename_input" v-model="rename_text" :maxlength="ROOM_TITLE_MAX" :aria-label="t('{name} 的新名称', { name: room.title })" autocomplete="off"
-            @keydown.enter="rename_enter($event, room)" @keydown.esc.prevent.stop="renaming_id = ''" @blur="commit_rename(room)" @click.stop @dblclick.stop @contextmenu.stop /></span><button v-else class="channel-room-select" data-drag-title :title="row.title" :aria-label="row.attention ? undefined : room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="bridge.start_drag($event)" @click="select_room($event, room)"><span class="channel-room-name"><UIcon v-if="room.preset === 'task'" name="i-lucide-clipboard-check" class="channel-room-mark channel-room-task" :title="t('任务房间：一位成员独立完成一件事，做完由程序回报')" :aria-label="t('任务房间')" /><img v-else-if="by_moss(room)" class="channel-room-mark channel-room-moss" :src="moss_mark" :title="t('由 MOSS 新建')" :alt="t('由 MOSS 新建')" /><span>{{ room.title }}</span><small class="channel-room-count">{{ room.message_count ?? 0 }}</small><UIcon v-if="room.pinned" name="i-lucide-pin" class="channel-room-pin" :aria-label="t('已固定')" /></span><small v-if="rollup || row.attention" class="channel-room-time channel-room-attention" :data-attention="(rollup || row.attention).kind">{{ (rollup || row.attention).label }}</small><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button></div>
+            @keydown.enter="rename_enter($event, room)" @keydown.esc.prevent.stop="renaming_id = ''" @blur="commit_rename(room)" @click.stop @dblclick.stop @contextmenu.stop /></span><button v-else class="channel-room-select" data-drag-title :data-waiting="WAITING_KINDS.has((rollup || row.attention)?.kind) || (rollup || row.attention)?.kind === 'new' || undefined" :title="row.title" :aria-label="row.attention ? undefined : room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="bridge.start_drag($event)" @click="select_room($event, room)"><span class="channel-room-name"><UIcon v-if="room.preset === 'task'" name="i-lucide-clipboard-check" class="channel-room-mark channel-room-task" :title="t('任务房间：一位成员独立完成一件事，做完由程序回报')" :aria-label="t('任务房间')" /><img v-else-if="by_moss(room)" class="channel-room-mark channel-room-moss" :src="moss_mark" :title="t('由 MOSS 新建')" :alt="t('由 MOSS 新建')" /><span>{{ room.title }}</span><small class="channel-room-count">{{ room.message_count ?? 0 }}</small><UIcon v-if="room.pinned" name="i-lucide-pin" class="channel-room-pin" :aria-label="t('已固定')" /></span><small v-if="rollup || row.attention" class="channel-room-time channel-room-attention" :data-attention="(rollup || row.attention).kind" :title="(rollup || row.attention).label"><span class="channel-room-dot" aria-hidden="true" /><span class="sr-only">{{ (rollup || row.attention).label }}</span><span aria-hidden="true">{{ row.time }}</span></small><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button></div>
           <div class="channel-room-actions">
             <UTooltip :text="room.archived ? t('恢复房间') : room.pinned ? t('已固定的房间不能存档') : t('存档房间')" :ui="{ content: 'channel-topic-tooltip' }">
               <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="room.archived ? t('恢复 {name}', { name: room.title }) : t('存档 {name}', { name: room.title })" class="channel-room-archive" size="xs" color="neutral" variant="ghost" :disabled="row.archiving || (!room.archived && room.pinned)" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
@@ -557,7 +600,7 @@ function actions(room) {
       </UContextMenu>
       </template>
       </MemoBlock>
-      <button v-if="list_toggle_label(folder)" type="button" class="channel-room-more" @click="toggle_room_list(folder)">{{ list_toggle_label(folder) }}</button>
+      <button v-if="list_toggle_label(folder)" type="button" class="channel-room-more" @click="toggle_room_list(folder)">{{ list_toggle_label(folder) }}<small v-for="count in [hidden_waiting(folder)]" v-show="count" :key="count" class="channel-waiting-count" :title="t('{count} 个房间在等你', { count })"><span class="sr-only">{{ t("{count} 个房间在等你", { count }) }}</span><span aria-hidden="true">{{ count }}</span></small></button>
       <div v-if="view.creating_room && (view.creating_room.folder_id || '') === folder.id" class="channel-room-row channel-room-creating" :class="{ active: view.creating_room.opened && !view.room?.id }" role="status" :aria-label="t('正在创建：{name}', { name: view.creating_room.title })">
         <span aria-hidden="true"></span>
         <span class="channel-room-select"><span>{{ view.creating_room.title }}</span><UIcon name="i-lucide-loader-circle" class="animate-spin" /></span>
@@ -622,8 +665,7 @@ function actions(room) {
 </template>
 
 <style scoped>
-.channel-waiting-count { padding-inline: 5px; border-radius: 6px; white-space: nowrap; color: var(--ui-warning); font-size: var(--channel-nav-meta); }
-.channel-room-attention[data-attention="awaiting"] { color: var(--ui-warning); font-weight: 500; }
+.channel-waiting-count { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; margin-left: 6px; padding: 0 5px; border-radius: 8px; background: color-mix(in srgb, var(--ui-warning) 12%, transparent); color: var(--ui-warning); font-size: 11px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
 .share-jobs { display: grid; gap: .65rem; margin-bottom: 1rem; }
 .share-jobs h3 { font-weight: 600; }
 .share-job { display: grid; gap: .35rem; border-bottom: 1px solid var(--ui-border); padding: .45rem 0 .7rem; }

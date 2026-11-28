@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .analytics_dispatch import dispatch_quality
 from .analytics_live import live_snapshot
 from .moss_results import DELEGATED_SENDS
-from .analytics_issues import concurrency_series, issues as attention_issues, unfinished_series
+from .analytics_issues import bucket_rooms, concurrency_series, issues as attention_issues, unfinished_series
 from .texts import Text
 
 CACHE_SECONDS = 60
@@ -367,13 +367,14 @@ def time_stats(connection, requests, executions, bounds, now, sealed):
             seen.add(r["message_id"])
         if start <= r["created_at"] < end and r["dispatched"] is not None and r["dispatched"] >= r["created_at"]:
             waits.append(r["dispatched"] - r["created_at"])
-    spans, member_spans = defaultdict(list), defaultdict(list)
+    spans, member_spans, shown_spans = defaultdict(list), defaultdict(list), defaultdict(list)
     elapsed, rework = [], []
     for r in executions:
         left, right = max(start, r["created_at"]), min(end, r["finished_at"] or now, now)
         if left < right:
             spans[r["room_id"]].append((left, right))
             member_spans[(r["room_id"], r["name"])].append((left, right))
+            shown_spans[(r["room_id"], r["label"] or r["name"])].append((left, right))
             folders[room_folder[r["room_id"]]]["execution_seconds"] += right-left
             room_rows[r["room_id"]]["execution_seconds"] += right-left
         if start <= r["created_at"] and r["finished_at"] >= r["created_at"] and r["finished_at"]:
@@ -387,6 +388,7 @@ def time_stats(connection, requests, executions, bounds, now, sealed):
     members, members_at = peak_concurrent(member_spans)
     peak = {"rooms": rooms, "at": rooms_at, "members": members, "members_at": members_at}
     concurrency = concurrency_series(member_spans, start, end)
+    concurrency["rooms"] = bucket_rooms(shown_spans, start, end, concurrency["step"])
     active_rooms = [room for room in room_rows.values() if room["initiated"] or room["execution_seconds"]]
     return {"folders": list(folders.values()), "rooms": active_rooms, "peak": peak, "concurrency": concurrency, "sealed_execution_seconds": counts["execution_seconds"],
             "execution_seconds": sum(f["execution_seconds"] for f in folders.values()) + counts["execution_seconds"],

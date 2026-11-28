@@ -25,7 +25,7 @@ const rows = computed(() => [
 
 <template>
   <UPopover v-if="total" :content="{ side: 'top', align: 'start', sideOffset: 6 }">
-    <button type="button" class="token-usage" :aria-label="label" @click.stop><UIcon name="i-lucide-database" /><span>{{ label }}</span></button>
+    <button type="button" class="token-usage" :aria-label="label" @click.stop><UIcon v-if="!compact" name="i-lucide-database" /><span>{{ label }}</span></button>
     <template #content>
       <div class="context-meter-panel">
         <div class="context-meter-head"><span class="context-meter-muted">{{ title || t('Token 用量') }}</span><span class="context-meter-figures">{{ total.toLocaleString() }}</span></div>

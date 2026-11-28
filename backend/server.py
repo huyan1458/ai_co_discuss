@@ -41,9 +41,9 @@ from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_mac
                             machine_launch_action, machine_sync, pair_machine, remote_launch_status, submit_machine_command,
                             submit_remote_launch)
 from .free_room import (active_members, add_member, after_free_message, after_proactive, authorize_free_write, check_answer, execution_action, free_view,
-                        inbox, interrupt_for_message, interrupt_member, queue_request_action, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
+                        inbox, interrupt_for_message, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
                         room_failure_wakes, room_quiet_checkins, save_room_access, view_execution, recent_executions, MAX_MESSAGE_ID)
-from .free_room import ROOM_ATTENTION_SQL, ROOM_WAITING_SINCE_SQL, STEWARD_SESSION_TEMPLATE, convert_suggestion, message_suggestions, replace_steward_member, save_suggestions, sync_participants
+from .free_room import ROOM_FAILURE_RESET_SQL, ROOM_WAITING_SINCE_SQL, STEWARD_SESSION_TEMPLATE, convert_suggestion, message_suggestions, replace_steward_member, save_suggestions, sync_participants
 from .free_room import account_quotas, quota_usage, report_quota
 from .free_room import HOST_WITHDRAW_RESULT, OWNER_INTERRUPT_RESULT, OWNER_REWIND_RESULT, OWNER_STOP_RESULT, observed_host_versions
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
@@ -60,7 +60,8 @@ from .free_room import review_capability, review_roster, checked_review_plan, sa
 from .free_room import review_ready, advance_review, late_answer, execution_changes, execution_changes_batch, execution_diffs
 from .free_room import checked_sequence, continue_sequence, sequence_view
 from .windows_thumbnail import encode_preview
-from . import cloud_drive, cloud_shares, moss_results, questions
+from . import cloud_drive, cloud_shares, moss_delegation, moss_results, moss_window_messages, questions
+from .room_search import run_search
 from .visual_fences import fold_message_visuals
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label, default_label_text, is_ai, is_participant
 from .message_queue import drain as drain_queue, enqueue, enqueue_share, queue_action, queue_split, queue_view
@@ -305,6 +306,7 @@ CASE WHEN messages.author='用户' THEN (
     WHERE target.message_id=messages.id)
 ) END AS interjection_parent_id,
 EXISTS(SELECT 1 FROM proactive_messages p WHERE p.message_id=messages.id) AS proactive,
+EXISTS(SELECT 1 FROM moss_silent_answers s WHERE s.message_id=messages.id) AS silent,
 (SELECT f.source_id FROM execution_followups f WHERE f.execution_id=answered.execution_id) AS followup_of,
 EXISTS(SELECT 1 FROM execution_schedules s WHERE s.execution_id=answered.execution_id) AS scheduled,
 sent.target_room_id AS relay_sent_room, sent.host AS relay_sent_host, sent.target_message_id AS relay_sent_message_id,
@@ -737,6 +739,11 @@ def init_database(database, seed=True):
                 connection.execute("ALTER TABLE room_directory ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
             if "system_kind" not in directory_columns:
                 connection.execute("ALTER TABLE room_directory ADD COLUMN system_kind TEXT NOT NULL DEFAULT ''")
+            task_columns = {row[1] for row in connection.execute("PRAGMA table_info(moss_task_rooms)")}
+            if "source_window_id" not in task_columns:
+                connection.execute("ALTER TABLE moss_task_rooms ADD COLUMN source_window_id TEXT REFERENCES rooms(id) ON DELETE SET NULL")
+            if "source_message_id" not in task_columns:
+                connection.execute("ALTER TABLE moss_task_rooms ADD COLUMN source_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL")
             if "directories" not in {row[1] for row in connection.execute("PRAGMA table_info(topic_folders)")}:
                 connection.execute("ALTER TABLE topic_folders ADD COLUMN directories TEXT NOT NULL DEFAULT '[]'")
             # Images stored before sizes were recorded keep NULL here and are measured when first read (with_image_sizes).
@@ -801,8 +808,14 @@ def require_room(connection, room_id):
     directory = connection.execute("SELECT archived,detached,pinned,system_kind FROM room_directory WHERE room_id=?", (room_id,)).fetchone()
     room["archived"], room["detached"], room["pinned"] = bool(directory[0]), bool(directory[1]), bool(directory[2])
     room["system_kind"] = directory["system_kind"]
-    room["preset"] = "task" if connection.execute("SELECT 1 FROM moss_task_rooms WHERE room_id=?", (room_id,)).fetchone() else ""
-    if room["system_kind"] == "steward" and room["archived"]:
+    if room["system_kind"] == moss_window_messages.GROUP_KIND:
+        window = connection.execute("SELECT channel,chat_id FROM moss_windows WHERE room_id=?", (room_id,)).fetchone()
+        room["window"] = dict(window) if window else None
+    task = connection.execute("SELECT source_window_id,source_message_id FROM moss_task_rooms WHERE room_id=?", (room_id,)).fetchone()
+    room["preset"] = "task" if task else ""
+    if task and task["source_window_id"]:
+        room.update(dict(task))
+    if room["system_kind"] in ("steward", "steward_private") and room["archived"]:
         room["archived_at"] = steward_archived_at(connection, room_id)
     room["folder_id"] = connection.execute("SELECT folder_id FROM room_folder_assignments WHERE room_id=?", (room_id,)).fetchone()[0]
     # The number the next sent file takes, so the composer shows `[图片 #n]` as it will be saved. Queued messages post
@@ -1186,7 +1199,19 @@ def room_progress(connection, room_id):
         {**execution, "stale": execution["lease_until"] <= now} for execution in json.loads(row["executions"])]}
 
 
-def list_rooms(connection, params=None):
+def room_list_attention(row, archived):
+    """Choose the list indicator and expose a reset time only while quota is the indicated state."""
+    if archived:
+        return {"attention": "", "quota_resets_at": None}
+    if row["waiting_user_since"] is not None:
+        return {"attention": "waiting_user", "quota_resets_at": None}
+    reset = row["failure_reset_at"]
+    if reset is not None:
+        return {"attention": "quota" if reset else "failed", "quota_resets_at": reset or None}
+    return {"attention": "running" if row["running"] else "", "quota_resets_at": None}
+
+
+def list_rooms(connection, params=None, *, include_group_windows=False, exclude_steward=False):
     """Return rooms, optionally locating a single persisted creation request."""
     params = params or {}
     identifier = submission_value(params["submission_id"]) if "submission_id" in params else None
@@ -1200,27 +1225,71 @@ def list_rooms(connection, params=None):
             ORDER BY m.id DESC LIMIT 1) AS latest_speech_at,
         EXISTS (SELECT 1 FROM member_executions e WHERE e.room_id=rooms.id
             AND e.status IN ('dispatched','started') AND e.lease_until>:now) AS running,
-        {ROOM_ATTENTION_SQL} AS attention,
+        {ROOM_FAILURE_RESET_SQL} AS failure_reset_at,
+        COALESCE(reads.owner_read_until,stats.latest_id,0) AS owner_read_until,
+        COALESCE(reads.failure_dismissed_at,0) AS failure_dismissed_at,
         CASE WHEN EXISTS(SELECT 1 FROM moss_task_rooms t WHERE t.room_id=rooms.id) THEN 'task' ELSE '' END AS preset,
         {ROOM_WAITING_SINCE_SQL} AS waiting_user_since
-        FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id {where}
+        FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id
+        LEFT JOIN room_owner_reads reads ON reads.room_id=rooms.id {where}
         GROUP BY rooms.id ORDER BY rooms.created_at, rooms.id""", {"now": int(time.time()), "submission_id": identifier})
     directory = {row["room_id"]: dict(row) for row in connection.execute("SELECT * FROM room_directory")}
+    windows = {row["room_id"]: {"channel": row["channel"], "chat_id": row["chat_id"]}
+               for row in connection.execute("SELECT room_id,channel,chat_id FROM moss_windows")} if include_group_windows else {}
     assignments = {row["room_id"]: row["folder_id"] for row in connection.execute("SELECT room_id,folder_id FROM room_folder_assignments")}
     # Only the public part of a share link, expired ones too (the share site keeps them renewable until the operator
     # purges them); the manage token stays behind the owner-only share-link read.
     links = {row["room_id"]: {"url": row["url"], "expires_at": row["expires_at"]} for row in connection.execute(
         "SELECT room_id,url,expires_at FROM room_share_links")}
-    rooms = [{**dict(row), "archived": bool(directory[row["id"]]["archived"]), "detached": bool(directory[row["id"]]["detached"]),
+    rooms = [{**{key: row[key] for key in row.keys() if key != "failure_reset_at"},
+              "archived": bool(directory[row["id"]]["archived"]), "detached": bool(directory[row["id"]]["detached"]),
               "pinned": bool(directory[row["id"]]["pinned"]), "running": bool(row["running"]),
-              "attention": "" if directory[row["id"]]["archived"] else row["attention"] or ("running" if row["running"] else ""),
+              **room_list_attention(row, directory[row["id"]]["archived"]),
               "system_kind": directory[row["id"]]["system_kind"],
               "destroy_after_days": directory[row["id"]]["destroy_after_days"], "destroy_from": destroy_from(connection, dict(row), directory[row["id"]]) if directory[row["id"]]["destroy_after_days"] else None,
               "destroy_blocked": destroy_blocked(connection, row["id"]) if directory[row["id"]]["destroy_after_days"] else False,
               "folder_id": assignments[row["id"]], "texts": room_display_texts(connection, dict(row)),
-              "share_link": links.get(row["id"])} for row in rows]
+              "share_link": links.get(row["id"]), **({"window": windows[row["id"]]} if row["id"] in windows else {})}
+             for row in rows
+             if (include_group_windows or directory[row["id"]]["system_kind"] not in
+                 (moss_window_messages.GROUP_KIND, "steward_private"))
+             and (not exclude_steward or directory[row["id"]]["system_kind"] != "steward")]
     return {"rooms": sorted(rooms, key=lambda room: directory[room["id"]]["position"]),
             **folder_directory(connection)}
+
+
+def mark_owner_read(connection, room_id, token, payload):
+    """Write the owner's shared read cursor and optional failure dismissal at a specific message."""
+    begin_write(connection)
+    require_owner(connection, room_id, token)
+    message_id = payload.get("message_id")
+    unread = payload.get("unread", False)
+    dismiss = payload.get("dismiss_failure", False)
+    if type(message_id) is not int or not 0 <= message_id <= MAX_MESSAGE_ID:
+        raise ValueError(Text("message_id 须为非负消息编号"))
+    if type(unread) is not bool or type(dismiss) is not bool:
+        raise ValueError(Text("unread 和 dismiss_failure 须为布尔值"))
+    if message_id and not connection.execute("""SELECT 1 FROM messages m WHERE m.room_id=? AND m.id=?
+        AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)""", (room_id, message_id)).fetchone():
+        raise LookupError(Text("消息不存在"))
+    position = visible_anchor_before(connection, room_id, message_id) if unread else message_id
+    current = connection.execute("SELECT owner_read_until,failure_dismissed_at FROM room_owner_reads WHERE room_id=?",
+                                 (room_id,)).fetchone()
+    if current:
+        if not unread:
+            position = max(position, current["owner_read_until"])
+        dismissed = max(current["failure_dismissed_at"], message_id if dismiss else 0)
+    else:
+        dismissed = message_id if dismiss else 0
+    result = {"owner_read_until": position, "failure_dismissed_at": dismissed}
+    if current is None or dict(current) != result:
+        connection.execute("""INSERT INTO room_owner_reads(room_id,owner_read_until,failure_dismissed_at) VALUES(?,?,?)
+            ON CONFLICT(room_id) DO UPDATE SET owner_read_until=excluded.owner_read_until,
+                failure_dismissed_at=excluded.failure_dismissed_at""", (room_id, position, dismissed))
+        connection.execute("""INSERT INTO room_revisions(room_id,revision)
+            SELECT ?, COALESCE(MAX(revision),0)+1 FROM room_revisions WHERE 1
+            ON CONFLICT(room_id) DO UPDATE SET revision=excluded.revision""", (room_id,))
+    return result
 
 
 SHARE_ID = re.compile(r"[A-Za-z0-9_-]{22}")
@@ -1640,6 +1709,12 @@ def remember_last_room(connection, payload):
     return {"last_room": room_id}
 
 
+def quota_pins(connection):
+    """Read the site's ordered pinned quota rows, or None before the first save."""
+    row = connection.execute("SELECT value FROM site_preferences WHERE key='quota_pins'").fetchone()
+    return json.loads(row[0]) if row else None
+
+
 def folder_record(row):
     """Return one folder with its project paths decoded."""
     return {**dict(row), "directories": json.loads(row["directories"])}
@@ -1806,6 +1881,8 @@ def manage_room(connection, room_id, action, payload):
     elif action in ("archive", "restore"):
         if action == "restore" and room["archived"] and room["system_kind"] == "steward":
             require_no_active_steward(connection)
+        if action == "restore" and room["archived"] and room["system_kind"] == "steward_private":
+            require_no_active_steward_private(connection)
         if action == "archive":
             session = current_session(connection, room_id, active_only=True)
             if session and session["status"] == "active":
@@ -2253,32 +2330,50 @@ def require_no_active_steward(connection):
         raise error
 
 
+def require_no_active_steward_private(connection):
+    """Reject a second active private MOSS window and identify the existing room."""
+    row = connection.execute("SELECT room_id FROM room_directory WHERE system_kind='steward_private' AND archived=0").fetchone()
+    if row:
+        error = FileExistsError(Text('私聊窗口已存在'))
+        error.details = {"room_id": row["room_id"]}
+        raise error
+
+
 def steward_member(connection, token):
     """Recognize a MOSS credential, including a revoked one so it cannot go through the owner proxy."""
     hashed = token_hash(token)
     if not hashed:
         return None
-    return connection.execute("""SELECT m.room_id,m.name,(d.archived=0 AND m.status='active' AND m.role='host') AS active
+    return connection.execute("""SELECT m.room_id,m.name,d.system_kind,
+        (d.archived=0 AND m.status='active' AND m.role='host') AS active
         FROM room_members m
         JOIN room_directory d ON d.room_id=m.room_id
-        WHERE d.system_kind='steward' AND m.token_hash=? ORDER BY active DESC LIMIT 1""", (hashed,)).fetchone()
+        WHERE d.system_kind IN ('steward','steward_private') AND m.token_hash=? ORDER BY active DESC LIMIT 1""", (hashed,)).fetchone()
 
 
 def is_active_steward_member(connection, token):
     """Recognize the current MOSS credential without granting it owner rights."""
     member = steward_member(connection, token)
-    return bool(member and member["active"])
+    return bool(member and member["active"] and member["system_kind"] == "steward")
 
 
-def create_room(connection, payload, control_token=""):
+def create_room(connection, payload, control_token="", *, delegation=None):
     """Create a credential-protected collaboration room, binding retries to the original credentials."""
     if payload.get("mode", "free") != "free":
         raise ValueError(Text('房间模式只能为 free'))
     system_kind = payload.get("system_kind", "")
-    if system_kind not in ("", "steward"):
-        raise ValueError(Text("system_kind 只能为空字符串或 steward"))
+    if system_kind not in ("", "steward", "steward_private", "steward_group"):
+        raise ValueError(Text("system_kind 只能为空字符串、steward、steward_private 或 steward_group"))
+    window = payload.get("window")
+    if system_kind == "steward_group":
+        if (not isinstance(window, dict) or set(window) != {"channel", "chat_id"}
+                or any(not isinstance(window[key], str) or not window[key].strip() for key in ("channel", "chat_id"))):
+            raise ValueError(Text("群窗口须提供有效的 channel 与 chat_id"))
+        window = {key: window[key].strip() for key in ("channel", "chat_id")}
+    elif "window" in payload:
+        raise ValueError(Text("window 仅用于 steward_group 房间"))
     members = member_values(payload.get("members"))
-    if system_kind == "steward" and len(members) != 1:
+    if system_kind in ("steward", "steward_private", "steward_group") and len(members) != 1:
         raise ValueError(STEWARD_MEMBER_LIMIT)
     preset = payload.get("preset", "")
     if preset not in ("", "task") or preset and (system_kind or len(members) != 1 or members[0]["access"] != "runner"
@@ -2286,6 +2381,9 @@ def create_room(connection, payload, control_token=""):
         raise ValueError(Text("任务房间必须是只有一位新会话托管成员的普通房间"))
     payload = {**payload, "experts": {member["name"]: "cli" for member in members}}
     settings = topic_values(payload)
+    if system_kind in ("steward_private", moss_window_messages.GROUP_KIND) and (
+            members[0]["access"] != "runner" or settings["host"] != members[0]["name"]):
+        raise ValueError(Text("私聊或群窗口须由唯一托管成员担任主持人"))
     limits = limit_values(payload["limits"]) if "limits" in payload else None
     if not token_hash(control_token):
         raise ValueError(Text('建房须提供房主控制凭据'))
@@ -2303,8 +2401,12 @@ def create_room(connection, payload, control_token=""):
         request_text += ":folder:" + json.dumps(folder_id, ensure_ascii=False)
     if system_kind:
         request_text += ":system_kind:" + system_kind
+    if window:
+        request_text += ":window:" + json.dumps(window, ensure_ascii=False, sort_keys=True)
     if preset:
         request_text += ":preset:" + preset
+    if delegation:
+        request_text += ":delegation:" + json.dumps(delegation, sort_keys=True, ensure_ascii=False)
     begin_write(connection)
     if identifier:
         previous = connection.execute("SELECT * FROM room_creations WHERE submission_id=?", (identifier,)).fetchone()
@@ -2312,16 +2414,31 @@ def create_room(connection, payload, control_token=""):
             if previous["request_text"] != request_text:
                 raise FileExistsError(Text('该建房提交编号已被其他内容使用'))
             return {**require_room(connection, previous["room_id"]), "duplicate": True, "submission_id": identifier}
+    if system_kind == "steward_group":
+        existing = connection.execute("""SELECT w.room_id,d.archived FROM moss_windows w
+            JOIN room_directory d ON d.room_id=w.room_id WHERE w.channel=? AND w.chat_id=?""",
+                                      (window["channel"], window["chat_id"])).fetchone()
+        if existing:
+            if existing["archived"]:
+                raise ValueError(Text("该群窗口已归档；请先显式恢复原房间"))
+            return {**require_room(connection, existing["room_id"]), "duplicate": True, "submission_id": identifier}
     if system_kind == "steward":
         require_no_active_steward(connection)
+    if system_kind == "steward_private":
+        require_no_active_steward_private(connection)
     if folder_id is not None and connection.execute("SELECT 1 FROM topic_folders WHERE id=?", (folder_id,)).fetchone() is None:
         raise ValueError(Text('文件夹不存在'))
     room_id = uuid.uuid4().hex[:12]
     connection.execute("INSERT INTO rooms (id,title,goal,created_at) VALUES (?,?,?,?)", (room_id, settings["title"], settings["goal"], utc_now()))
     if system_kind:
         connection.execute("UPDATE room_directory SET system_kind=?,position=0 WHERE room_id=?", (system_kind, room_id))
+    if window:
+        connection.execute("INSERT INTO moss_windows(room_id,channel,chat_id) VALUES(?,?,?)",
+                           (room_id, window["channel"], window["chat_id"]))
     if preset:
-        connection.execute("INSERT INTO moss_task_rooms(room_id) VALUES(?)", (room_id,))
+        connection.execute("INSERT INTO moss_task_rooms(room_id,source_window_id,source_message_id) VALUES(?,?,?)",
+                           (room_id, delegation["source_window_id"] if delegation else None,
+                            delegation["source_message_id"] if delegation else None))
     connection.execute("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?", (folder_id, room_id))
     if identifier:
         connection.execute("INSERT INTO room_creations (submission_id,room_id,request_text) VALUES (?,?,?)", (identifier, room_id, request_text))
@@ -2661,6 +2778,12 @@ def message_with_attachments(connection, row):
         origin = guest_origin(connection, message["id"])
         if origin:
             message.update(origin=origin, author_label=origin["label"])
+    elif message["source"] == moss_window_messages.EXTERNAL_SOURCE:
+        origin = moss_window_messages.external_origin(connection, message["id"])
+        if origin:
+            message.update(external=origin, author_label=origin["sender_name"])
+    if message.pop("silent", False):
+        message["silent"] = True
     if is_host_dispatch(connection, message["id"]):
         message["host_dispatch"] = True
         message["dispatch_feedback"] = dispatch_feedback(connection, message["id"])
@@ -3491,9 +3614,67 @@ def update_room_waits(connection, room_id, message_id, actor, payload):
                            (room_id, message_id, actor["id"], message_time))
 
 
+def append_external_group_message(connection, room, payload):
+    """Record a channel message immediately, without running ordinary owner routing."""
+    author, text, submission_id, reply_to = message_values(payload)
+    if author != "用户" or payload.get("submitted_by", "用户") != "用户":
+        raise PermissionError(Text('房间控制凭据只能以用户身份发言'))
+    if not text or attachment_ids(payload) or payload.get("relay") is not None:
+        raise ValueError(Text("群窗口只接收纯文本的外部消息"))
+    sender_id, label, platform_id, mentioned, owner = moss_window_messages.external_fields(payload)
+    room_id = room["id"]
+    prior = connection.execute("SELECT message_id FROM external_message_sources WHERE room_id=? AND platform_message_id=?",
+                               (room_id, platform_id)).fetchone()
+    if prior:
+        return {"message": get_message(connection, room_id, prior["message_id"]), "duplicate": True}
+    if room["archived"]:
+        raise ValueError(Text('房间已存档；恢复后才能继续协作'))
+    if connection.execute("SELECT 1 FROM messages WHERE room_id=? AND submission_id=?", (room_id, submission_id)).fetchone():
+        raise FileExistsError(Text('这个提交编号已被另一条内容使用，请为新发言生成新编号'))
+    check_message_references(connection, room_id, {"reply_to": reply_to})
+    message_id = connection.execute("""INSERT INTO messages(room_id,author,text,reply_to,source,submission_id,created_at)
+        VALUES(?,?,?,?,?,?,?)""", (room_id, f"external:{sender_id}", text, reply_to,
+                                  moss_window_messages.EXTERNAL_SOURCE, submission_id, utc_now())).lastrowid
+    connection.execute("INSERT INTO message_details(message_id,kind,submitted_by) VALUES(?, 'chat', ?)", (message_id, label))
+    connection.execute("""INSERT INTO external_message_sources(message_id,room_id,sender_id,sender_name,platform_message_id,mentioned,owner)
+        VALUES(?,?,?,?,?,?,?)""", (message_id, room_id, sender_id, label, platform_id, mentioned, owner))
+    return {"message": get_message(connection, room_id, message_id), "duplicate": False}
+
+
+def wake_group_window(connection, room_id, payload):
+    """Queue exactly one request for a saved event when the runner decides to wake MOSS."""
+    begin_write(connection)
+    room = require_room(connection, room_id)
+    if room["system_kind"] != moss_window_messages.GROUP_KIND:
+        raise ValueError(Text("只有群窗口可以按外部消息唤醒"))
+    message_id = payload.get("message_id")
+    if type(message_id) is not int or not 0 < message_id <= 2**63 - 1:
+        raise ValueError(Text("message_id 须为本房间的消息编号"))
+    source = connection.execute("""SELECT 1 FROM external_message_sources s
+        LEFT JOIN message_withdrawals w ON w.message_id=s.message_id
+        WHERE s.room_id=? AND s.message_id=? AND w.message_id IS NULL""", (room_id, message_id)).fetchone()
+    if not source:
+        raise LookupError(Text("本房间不存在可唤醒的外部消息"))
+    previous = connection.execute("SELECT id FROM member_requests WHERE room_id=? AND message_id=? ORDER BY id LIMIT 1",
+                                  (room_id, message_id)).fetchone()
+    if previous:
+        return {"request_id": previous["id"], "message_id": message_id, "duplicate": True}
+    if room["archived"]:
+        raise ValueError(Text('房间已存档；恢复后才能继续协作'))
+    host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'",
+                              (room_id,)).fetchone()
+    if not host:
+        raise ValueError(Text("群窗口没有可唤醒的成员"))
+    insert_request(connection, room_id, host["id"], message_id, message_id, "ask", "system")
+    request_id = connection.execute("SELECT id FROM member_requests WHERE message_id=? AND member_id=?",
+                                    (message_id, host["id"])).fetchone()["id"]
+    return {"request_id": request_id, "message_id": message_id, "duplicate": False}
+
+
 def append_free_message(connection, room, payload, actor):
     """Append a free-room message: the owner's creates requests, a member's completes its execution."""
     awaiting_user = awaiting_user_flag(payload, actor)
+    silent = payload.get("silent") is True
     if payload.get("kind") == "moderation":
         if any(payload.get(field) for field in ("next_review", "review_scope", "review_roster", "sequential", "loop", "parallel", "gates", "detach", "need_rounds", "keep_working")):
             raise ValueError(Text('主持说明不能声明评审授权、依次接力或申请轮数；请在派活时提交'))
@@ -3526,6 +3707,7 @@ def append_free_message(connection, room, payload, actor):
         if ((previous.get("relay_room") or None) != (payload.get("relay") or {}).get("room_id")
                 or any(previous[key] != renumbered_expected(expected, payload, previous)[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by"))
                 or [item["id"] for item in previous["attachments"]] != identifiers
+                or silent != previous.get("silent", False)
                 or awaiting_user != bool(connection.execute("SELECT 1 FROM room_waits WHERE message_id=?", (previous["id"],)).fetchone())):
             raise FileExistsError(Text('这个提交编号已被另一条内容使用，请为新发言生成新编号'))
         check_review_retry(connection, room_id, previous["id"], payload)
@@ -3552,6 +3734,8 @@ def append_free_message(connection, room, payload, actor):
                                 (room_id, author, text, reply_to, expected["source"], submission_id, utc_now()))
     connection.execute("INSERT INTO message_details (message_id,kind,submitted_by) VALUES (?,?,?)",
                        (cursor.lastrowid, "chat", submitted_by))
+    if silent:
+        connection.execute("INSERT INTO moss_silent_answers(message_id) VALUES(?)", (cursor.lastrowid,))
     connection.execute("INSERT INTO message_summaries (message_id,text,author) VALUES (?,?,?)",
                        (cursor.lastrowid, expected["summary"], expected["summary_by"]))
     link_message_attachments(connection, room_id, cursor.lastrowid, identifiers, text, payload)
@@ -3688,6 +3872,7 @@ def append_message(connection, room_id, payload, actor):
     begin_write(connection)
     room = require_room(connection, room_id)
     if payload.get("steward_proactive") is True:
+        moss_window_messages.validate_message_flags(room, payload, actor)
         if "awaiting_user" in payload:
             raise ValueError(Text("awaiting_user 只能用于绑定执行的回答或主动发言"))
         return append_steward_trigger(connection, room, payload, actor)
@@ -3728,15 +3913,20 @@ def post_host_relay(connection, host, target, payload, execution_id):
         raise ValueError(Text("成员回答须关联本次执行编号 execution_id"))
     payload["text"] = message_values(payload)[1]
     begin_write(connection)
-    room = require_room(connection, target)
     source = connection.execute("SELECT system_kind FROM room_directory WHERE room_id=?", (room_id,)).fetchone()
-    if source["system_kind"] == "steward":
+    if source["system_kind"] == moss_window_messages.GROUP_KIND and (
+            payload.get("interrupt") is True or not moss_delegation.may_post_to(connection, room_id, target)):
+        raise PermissionError(Text("群窗口只能给自己创建的委托房间传话，不能打断执行"))
+    room = require_room(connection, target)
+    if source["system_kind"] in ("steward", "steward_private"):
         if room["system_kind"] or payload.get("interrupt") is True:
             raise PermissionError(Text("MOSS 只能给项目房间的主持人留言，不能打断执行"))
         if not any(member["role"] == "host" for member in active_members(connection, target).values()):
             raise FileExistsError(Text("目标房间没有在场的主持人"))
     if delegation := moss_results.delegation_for_reply(connection, target, room_id, incoming.get("reply_to")):
         return post_moss_report(connection, host, payload, execution_id, delegation)
+    if room["system_kind"] == moss_window_messages.GROUP_KIND:
+        raise PermissionError(Text("只有已关联的群委托才能向群窗口回报"))
     request = connection.execute("""SELECT r.id,r.answer_id,m.submission_id,m.text,s.target_message_id,s.queued_id,s.interrupted FROM member_requests r
         JOIN message_relays relay ON relay.message_id=r.message_id
         LEFT JOIN messages m ON m.id=r.answer_id LEFT JOIN room_relay_sends s ON s.message_id=r.answer_id
@@ -3828,6 +4018,9 @@ def post_moss_report(connection, host, payload, execution_id, delegation):
 
 def append_room_message(connection, room, payload, actor):
     """Append to a resolved room under the current write lock."""
+    moss_window_messages.validate_message_flags(room, payload, actor)
+    if room["system_kind"] == moss_window_messages.GROUP_KIND and actor == "用户":
+        return append_external_group_message(connection, room, payload)
     room_id = room["id"]
     if not payload.get("relay"):
         return append_free_message(connection, room, payload, actor)
@@ -4364,7 +4557,23 @@ def scheduler_decision_view(connection, room_id, decision_id, token):
     return result
 
 
-def message_filters(room_id, params):
+def search_scope(connection, room_id, token, cutoff):
+    """Share the transcript and execution reading boundary between both search entry points."""
+    reader = None
+    if cutoff is not None and token:
+        try:
+            reader = require_member(connection, room_id, token)["id"]
+        except PermissionError:
+            pass
+    return {"room": room_id, "cutoff": cutoff, "reader": reader}
+
+
+def has_search_options(params):
+    """Opt into room-search matching without changing the original message-list q."""
+    return params.get("search") == "1" or any(key in params for key in ("case", "word", "regex"))
+
+
+def message_filters(room_id, params, search_anchors=None):
     """Build exact and incremental filters without expanding the read scope."""
     query = str(params.get("q", "")).strip()
     author = str(params.get("author", "")).strip()
@@ -4372,7 +4581,10 @@ def message_filters(room_id, params):
     clauses = ["room_id=?"]
     values = [room_id]
     clauses.append("NOT EXISTS (SELECT 1 FROM internal_task_messages task WHERE task.message_id=messages.id)")
-    if query:
+    if search_anchors is not None:
+        clauses.append("messages.id IN (SELECT value FROM json_each(?))")
+        values.append(json.dumps(sorted(search_anchors)))
+    elif query:
         clauses.append("(instr(lower(messages.text), lower(?)) > 0 OR CAST(messages.id AS TEXT)=?)")
         values.extend([query, query.lstrip("#")])
     if author:
@@ -4436,7 +4648,7 @@ def latest_messages(connection, room_id, params, where, values, size, bounded=Fa
     return result
 
 
-def query_messages(connection, room_id, params, token=""):
+def query_messages(connection, room_id, params, token="", *, search_database=None):
     """Read one bounded page; incremental cursors advance only through returned rows."""
     room = connection.execute("""SELECT EXISTS(
         SELECT 1 FROM discussion_sessions WHERE room_id=rooms.id AND status='active'
@@ -4446,13 +4658,21 @@ def query_messages(connection, room_id, params, token=""):
     # Expiring a discussion can invalidate the execution or request used to read its context.
     if room["active_session"] and enforce_session_limits(connection, room_id):
         connection.commit()
+    use_search = search_database is not None and has_search_options(params)
+    if use_search and not connection.in_transaction:
+        connection.execute("BEGIN")
     page = max(1, int(params.get("page", 1)))
     size = min(MAX_PAGE_SIZE, max(1, int(params.get("limit", PAGE_SIZE))))
     cutoff = session_message_access(connection, room_id, params, token)
+    anchors = None
+    if use_search:
+        scope = search_scope(connection, room_id, token, cutoff)
+        results = run_search(connection, search_database, [({}, scope)], (params, MESSAGE_QUERY, False))
+        anchors = {match["anchor_message_id"] for match in results["matches"]}
     if params.get("author"):
         # A member is named as the room shows it (display name) or by its ID; both find the same messages.
         params = {**params, "author": member_handles(connection, room_id).get(str(params["author"]).strip(), params["author"])}
-    where, values = message_filters(room_id, params)
+    where, values = message_filters(room_id, params, anchors)
     if cutoff is not None:
         where += " AND messages.id<=?"
         values.append(cutoff)
@@ -4499,7 +4719,7 @@ def query_messages(connection, room_id, params, token=""):
         after = int(params.get("after", 0))
         result.update(next_after=messages[-1]["id"] if messages else after, has_more=has_more)
         # The unfiltered transcript also takes the cards of its batch, for history older than the room view's recent cards.
-        unfiltered = not any(params.get(name) for name in ("q", "author", "mention", "kind", "host", "submission_id"))
+        unfiltered = not use_search and not any(params.get(name) for name in ("q", "author", "mention", "kind", "host", "submission_id"))
         if params.get("cards") == "1" and cutoff is None and unfiltered and params.get("withdrawn") == INCLUDE_WITHDRAWN:
             result["cards"] = history_cards(connection, room_id, (int(params["after"]), result["next_after"] if result["has_more"] else None))
     return result
@@ -5040,7 +5260,8 @@ class DiscussionServer(ThreadingHTTPServer):
         self.local_site = not hub and address[0] in ("127.0.0.1", "::1", "localhost")
         self.admin_setup_key = os.getenv("DISCUSS_ADMIN_SETUP_KEY") or secrets.token_urlsafe(18)
         service_home = os.getenv("DISCUSS_SERVICE_HOME")
-        self.connections_file = Path(service_home) / "site-connections.json" if service_home else None
+        self.service_home = Path(service_home).resolve() if service_home else None
+        self.connections_file = self.service_home / "site-connections.json" if self.service_home else None
         # A hosted instance serves only callers that prove they hold its key (backend/entry_guard.py).
         self.entry_policy = EntryPolicy()
         super().__init__(address, DiscussionHandler)
@@ -5274,8 +5495,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def dispatch_routes(self, method, parsed, params, parts, text_mode):
         """Route one request and map validation, permission and lookup errors to their status codes."""
         try:
-            if self.headers.get("X-Discussion-Token") or guest_path(parts):
+            if self.headers.get("X-Discussion-Token") or self.headers.get(ACTING_MEMBER_HEADER) or guest_path(parts):
                 with closing(connect_db(self.server.database)) as guard_connection:
+                    self.guard_moss_window_access(guard_connection, parts, method)
                     guest_guard(guard_connection, self.headers, parts, method)
             if method == "HEAD" or (method == "OPTIONS" and parts[:2] != ["api", "local"]):
                 return self.respond({"error": Text("地址不存在")}, 404)
@@ -5308,6 +5530,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 return self.respond("User-agent: *\nAllow: /\n", content_type="text/plain")
             with closing(connect_db(self.server.database)) as connection:
                 with connection:
+                    self.guard_private_window_access(connection, parts, method)
+                    self.guard_group_window_request(connection, parts, method)
+                    self.scope_read_only(connection, parts, method)
                     if guest_path(parts):
                         return self.handle_guest_projection(connection, parts, params, method)
                     if is_external_path(parts):
@@ -5339,6 +5564,142 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         except Exception:
             logging.exception("Request failed")
             return self.respond(error_body(Text("服务器内部错误")), 500)
+
+    @staticmethod
+    def group_window_room(parts):
+        """Recognize the room in JSON, text, and external room paths."""
+        if parts[:2] == ["api", "rooms"] and len(parts) >= 3:
+            return parts[2]
+        if parts[:3] == ["api", "external", "rooms"] and len(parts) >= 4:
+            return parts[3]
+        return parts[1] if parts[:1] == ["r"] and len(parts) >= 2 else None
+
+    def guard_private_window_access(self, connection, parts, method):
+        """Keep private-chat records out of ordinary rooms and protect their direct room routes."""
+        target = self.group_window_room(parts)
+        target_row = connection.execute("SELECT system_kind FROM room_directory WHERE room_id=?", (target,)).fetchone() if target else None
+        hashes = [token_hash(self.headers.get(name, "")) for name in
+                  ("X-Discussion-Token", ACTING_MEMBER_HEADER)]
+        hashes = [value for value in hashes if value]
+        source_private = False
+        if hashes:
+            placeholders = ",".join("?" for _ in hashes)
+            source_private = connection.execute(f"""SELECT 1 FROM room_members m JOIN room_directory d ON d.room_id=m.room_id
+                WHERE m.token_hash IN ({placeholders}) AND d.system_kind='steward_private'
+                UNION ALL SELECT 1 FROM room_modes a JOIN room_directory d ON d.room_id=a.room_id
+                WHERE a.control_hash IN ({placeholders}) AND d.system_kind='steward_private' LIMIT 1""",
+                                                (*hashes, *hashes)).fetchone() is not None
+        if target_row and target_row["system_kind"] == "steward" and source_private:
+            raise PermissionError(Text("私聊窗口不能跨房读取主理人房间"))
+        if source_private and target is None and method == "GET" and parts == ["api", "search"]:
+            raise PermissionError(Text("私聊窗口不能读取全站搜索结果"))
+        if not target_row:
+            return
+        if target_row["system_kind"] != "steward_private":
+            return
+        explicit = bool(self.headers.get("X-Discussion-Token") or self.headers.get(ACTING_MEMBER_HEADER))
+        if explicit:
+            if hashes:
+                placeholders = ",".join("?" for _ in hashes)
+                authorized = connection.execute(f"""SELECT 1 FROM room_modes WHERE room_id=? AND control_hash IN ({placeholders})
+                    UNION ALL SELECT 1 FROM room_members WHERE room_id=? AND token_hash IN ({placeholders})
+                        AND role='host' AND status='active' LIMIT 1""", (target, *hashes, target, *hashes)).fetchone()
+                if authorized:
+                    return
+            raise PermissionError(Text("私聊窗口需要房主或托管成员凭据"))
+        if self.bridged or self.local_visitor() or self.admin_session(connection):
+            return
+        raise PermissionError(Text("私聊窗口需要房主或托管成员凭据"))
+
+    def private_window_credential(self, connection):
+        """Whether either supplied room credential belongs to the private MOSS window."""
+        hashes = [token_hash(self.headers.get(name, "")) for name in
+                  ("X-Discussion-Token", ACTING_MEMBER_HEADER)]
+        hashes = [value for value in hashes if value]
+        if not hashes:
+            return False
+        placeholders = ",".join("?" for _ in hashes)
+        return connection.execute(f"""SELECT 1 FROM room_members m JOIN room_directory d ON d.room_id=m.room_id
+            WHERE m.token_hash IN ({placeholders}) AND d.system_kind='steward_private'
+            UNION ALL SELECT 1 FROM room_modes a JOIN room_directory d ON d.room_id=a.room_id
+            WHERE a.control_hash IN ({placeholders}) AND d.system_kind='steward_private' LIMIT 1""",
+                                 (*hashes, *hashes)).fetchone() is not None
+
+    def guard_moss_window_access(self, connection, parts, method):
+        """Keep group member credentials off other rooms and global routes."""
+        hashes = [token_hash(self.headers.get(name, "")) for name in
+                  ("X-Discussion-Token", ACTING_MEMBER_HEADER)]
+        hashes = [value for value in hashes if value]
+        if not hashes:
+            return
+        placeholders = ",".join("?" for _ in hashes)
+        member = connection.execute(f"""SELECT m.room_id FROM room_members m JOIN room_directory d ON d.room_id=m.room_id
+            WHERE d.system_kind='steward_group' AND m.token_hash IN ({placeholders}) LIMIT 1""", hashes).fetchone()
+        if member and self.group_window_room(parts) != member["room_id"]:
+            if method == "POST" and parts == ["api", "rooms"] and self.headers.get(ACTING_MEMBER_HEADER) and self.headers.get(moss_delegation.WINDOW_TOKEN_HEADER):
+                return  # The creation route binds both source credentials and the active external request.
+            raise PermissionError(Text("群窗口成员凭据只能访问本群窗口"))
+
+    def is_group_host_relay(self, connection, room_id, route, method):
+        """Allow the runner's relay and bookkeeping only for this group's own task rooms."""
+        if method != "POST" or route not in (["host-room-post"], ["room-relay-sent"], ["room-link"]) or self.read_only_request():
+            return False
+        require_owner(connection, room_id, self.headers.get("X-Discussion-Token", ""))
+        host = require_member(connection, room_id, self.headers.get(ACTING_MEMBER_HEADER, ""))
+        if host["role"] != "host":
+            raise PermissionError(Text("只有活动群窗口的主持人可以委托"))
+        if route == ["host-room-post"]:
+            return True  # post_host_relay validates the target under the write lock.
+        payload = self.read_payload()
+        target = payload.get("target_room_id") if route == ["room-relay-sent"] else payload.get("room_id")
+        if not moss_delegation.may_post_to(connection, room_id, target) or (route == ["room-link"] and payload.get("relation") != "child"):
+            raise PermissionError(Text("群窗口只能给自己创建的委托房间传话，不能打断执行"))
+        return True
+
+    def guard_group_window_request(self, connection, parts, method):
+        """Require explicit room authority for group windows and keep member credentials scoped."""
+        target = self.group_window_room(parts)
+        if target is None:
+            return
+        directory = connection.execute("SELECT system_kind FROM room_directory WHERE room_id=?", (target,)).fetchone()
+        if not directory or directory["system_kind"] != "steward_group":
+            return
+        token = self.headers.get("X-Discussion-Token", "")
+        acting = self.headers.get(ACTING_MEMBER_HEADER, "")
+        hashes = [token_hash(value) for value in (token, acting) if value]
+        member = None
+        if hashes:
+            placeholders = ",".join("?" for _ in hashes)
+            member = connection.execute(f"""SELECT m.room_id,d.system_kind FROM room_members m
+                JOIN room_directory d ON d.room_id=m.room_id WHERE m.token_hash IN ({placeholders})
+                ORDER BY d.system_kind='steward_group' DESC LIMIT 1""", hashes).fetchone()
+        if member:
+            if member["system_kind"] != "steward_group" or member["room_id"] != target:
+                raise PermissionError(Text("其他房间成员凭据不能读取群窗口"))
+            route = parts[3:] if parts[:2] == ["api", "rooms"] else []
+            if acting:
+                if self.is_group_host_relay(connection, target, route, method):
+                    return
+                raise PermissionError(Text("群窗口成员凭据不能与房主凭据混用"))
+            protected = (*DIRECTORY_OPERATIONS, *ADMIN_OPERATIONS,
+                         "backup", "host-room-post", "room-links", "room-link", "room-relay-sent",
+                         "host-actions", "host-checkin", "steward-work", "steward-member")
+            if route and route[0] in protected:
+                raise PermissionError(Text("群窗口成员凭据不能执行房间管理操作"))
+            if method != "GET" and (not route or route[0] not in ("messages", "questions", "attachments")):
+                raise PermissionError(Text("群窗口成员凭据只可提交消息、问题或附件"))
+            return
+        if token or acting:
+            try:
+                require_owner(connection, target, token)
+            except PermissionError:
+                raise PermissionError(Text("读取群窗口需要该群房主凭据"))
+            if acting:
+                raise PermissionError(Text("群窗口成员凭据不能与房主凭据混用"))
+            return
+        if self.bridged or self.local_visitor() or session_valid(connection, self.admin_token()):
+            return
+        raise PermissionError(Text("读取群窗口需要房主或管理员身份"))
 
     def request_error(self, error, parts):
         """Use the guest envelope on guest routes and for authorization refusals."""
@@ -5845,6 +6206,53 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Whether the request is from the administrator: a visitor of the loopback-only site itself, else a valid session."""
         return self.local_visitor() or session_valid(connection, self.admin_token())
 
+    def can_list_group_windows(self, manager):
+        """Match the room directory's group-window visibility for list and search."""
+        return (manager and not self.read_only_request() and not self.has_explicit_room_token
+                and not self.headers.get(ACTING_MEMBER_HEADER))
+
+    def search_rooms(self, connection, params, room_id=None):
+        """Search only the rooms and transcript portions this caller can read."""
+        connection.execute("BEGIN")
+        token = self.headers.get("X-Discussion-Token", "")
+        if room_id is not None:
+            if not connection.execute("SELECT 1 FROM rooms WHERE id=?", (room_id,)).fetchone():
+                raise LookupError(Text("房间不存在"))
+            rooms = [{"id": room_id}]
+        elif str(params.get("message", "")).isdigit():
+            return self.locate_message(connection, int(params["message"]))
+        elif params.get("q"):
+            manager = self.bridged or self.admin_session(connection)
+            rooms = list_rooms(connection, include_group_windows=self.can_list_group_windows(manager),
+                               exclude_steward=self.private_window_credential(connection))["rooms"]
+        else:
+            rooms = []
+        scopes = []
+        for room in rooms:
+            if room.get("archived") and params.get("archived") == "0":
+                continue
+            target = room["id"]
+            cutoff = session_message_access(connection, target, params if room_id else {}, token)
+            summary = {"room_id": target, **{key: room[key] for key in ("title", "archived") if key in room}}
+            scopes.append((summary, search_scope(connection, target, token, cutoff)))
+        return run_search(connection, self.server.database, scopes, (params, MESSAGE_QUERY, room_id is None))
+
+    def locate_message(self, connection, message_id):
+        """Name the room holding a `#123` quoted elsewhere, only among the rooms this caller's search may list."""
+        row = connection.execute("SELECT room_id FROM messages WHERE id=?", (message_id,)).fetchone()
+        manager = self.bridged or self.admin_session(connection)
+        rooms = list_rooms(connection, include_group_windows=self.can_list_group_windows(manager),
+                            exclude_steward=self.private_window_credential(connection))["rooms"] if row else []
+        room = next((room for room in rooms if room["id"] == row["room_id"]), None)
+        if room is None:
+            raise LookupError(Text("消息不存在"))
+        # The same per-message reading boundary and internal-task exclusion as reading it in that room; never confirm a hidden one.
+        try:
+            get_message(connection, room["id"], message_id, {}, self.headers.get("X-Discussion-Token", ""))
+        except (LookupError, PermissionError) as error:
+            raise LookupError(Text("消息不存在")) from error
+        return {"room_id": room["id"], "title": room.get("title", ""), "message_id": message_id}
+
     def require_steward_creator(self, connection, new_token):
         """Only a site manager can create a room whose member will see site-wide dispatches."""
         if (self.read_only_request() or self.headers.get(ACTING_MEMBER_HEADER)
@@ -5854,12 +6262,34 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if hashed and connection.execute("SELECT 1 FROM room_members WHERE token_hash=? LIMIT 1", (hashed,)).fetchone():
             raise PermissionError(Text('需要管理员身份'))
 
+    def create_group_delegation(self, connection, payload, child_token):
+        """Create a task and its source connection with the two proven group credentials."""
+        owner = self.headers.get(moss_delegation.WINDOW_TOKEN_HEADER, "")
+        acting = self.headers.get(ACTING_MEMBER_HEADER, "")
+        if not owner or not acting or child_token in (owner, acting) or self.read_only_request():
+            raise PermissionError(Text("群委托须携带来源窗口的控制凭据和主持成员凭据"))
+        if (payload.get("preset") != "task" or payload.get("system_kind") or payload.get("folder_id") is not None
+                or payload.get("project_access") != "write" or payload.get("extra_directories")):
+            raise ValueError(Text("群窗口只能创建可写的群委托任务房间"))
+        submission = submission_value(payload.get("submission_id"))
+        begin_write(connection)
+        source = moss_delegation.delegation_source(connection, payload, owner, acting)
+        cwd = moss_delegation.delegation_directory(self.server.service_home, source, submission, payload.get("cwd"))
+        binding = {key: source[key] for key in ("source_window_id", "source_message_id")}
+        room = create_room(connection, payload, child_token, delegation={**binding, "cwd": cwd})
+        parent, child = source["source_window_id"], room["id"]
+        if not room["duplicate"]:
+            record_room_link(connection, parent, owner, {"relation": "child", "room_id": child, "host": source["host"]})
+            record_room_link(connection, child, child_token, {"relation": "parent", "room_id": parent, "host": source["host"]})
+            connection.moss_updates.add(parent)
+        return {**room, "parent_room_id": parent, "delegation_cwd": cwd}
+
     def relay_bridge(self, parts):
         """Whether this request comes from the runner relaying a paired device; a bad or misplaced bridge credential fails.
 
         The runner holds one bridge token per paired website and this site keeps only its hash. A bridged request acts
         as the administrator, so it is accepted only from this computer's loopback, on a loopback-only site, and only
-        for room, folder, revision and published-site routes.
+        for room, folder, revision, search and published-site routes.
         """
         credential = self.headers.get("X-CoDiscuss-Bridge")
         if credential is None:
@@ -5873,7 +6303,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         project_cloud = parts[:3] == ["api", "local", "project-files"] and (
             len(parts) == 4 and parts[3] in {"cloud", "cloud-upload", "cloud-land"}
             or len(parts) == 5 and parts[3] == "cloud" and re.fullmatch(r"[a-f0-9]{32}", parts[4]))
-        if not project_cloud and parts != ["api", "quota-usage"] and (
+        if not project_cloud and parts not in (["api", "quota-usage"], ["api", "quota-pins"], ["api", "search"]) and (
                 parts[:1] != ["api"] or parts[1:2] not in (["rooms"], ["folders"], ["revisions"], ["sites"], ["analytics"])):
             raise PermissionError(Text('本机中转不允许访问该地址'))
         return True
@@ -5891,6 +6321,24 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Whether a task of another room is reading this one: it may read, and nothing it does may change the room."""
         return bool(self.headers.get(READ_ONLY_HEADER))
 
+    def scope_read_only(self, connection, parts, method):
+        """Validate the originating credential without using it as the target room reader."""
+        if not self.read_only_request():
+            return
+        hashed = token_hash(self.headers.get("X-Discussion-Token", ""))
+        room_route = parts[:2] == ["api", "rooms"] or (parts[:1] == ["r"] and len(parts) >= 2)
+        if method != "GET" or not room_route or not hashed or self.headers.get(ACTING_MEMBER_HEADER) or not connection.execute(
+            "SELECT 1 FROM room_members WHERE token_hash=? UNION ALL SELECT 1 FROM room_modes WHERE control_hash=? LIMIT 1",
+            (hashed, hashed),
+        ).fetchone():
+            raise PermissionError(Text("跨房只读须携带来源房间凭据"))
+        target_room = self.group_window_room(parts)
+        target_window = connection.execute("SELECT 1 FROM room_directory WHERE room_id=? AND system_kind IN ('steward_group','steward_private')",
+                                           (target_room,)).fetchone()
+        if not target_window:
+            # The former anonymous-read path, including the existing loopback site's implicit owner.
+            del self.headers["X-Discussion-Token"]
+
     def refuse_read_only(self, parts, method):
         """Keep a cross-room reader to plain reads: no writes, no reads that change state, no private chats."""
         if self.read_only_request() and (method != "GET" or parts[3:4] in READ_ONLY_CLOSED or parts[5:6] == ["chat"]):
@@ -5898,7 +6346,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
     def check_steward_write(self, connection, room_id, route, token):
         """Keep an archived steward read-only without preventing its owner from managing its lifecycle."""
-        steward = connection.execute("SELECT archived FROM room_directory WHERE room_id=? AND system_kind='steward'",
+        steward = connection.execute("SELECT archived,system_kind FROM room_directory WHERE room_id=? AND system_kind IN ('steward','steward_private','steward_group')",
                                      (room_id,)).fetchone()
         if steward is None:
             return
@@ -5911,6 +6359,12 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         # A published link must be revocable before the owner can destroy the room.
         if steward["archived"] and (route != ["share-link"] or self.read_payload().get("link") is not None):
             raise ValueError(Text('房间已存档；恢复后才能继续协作'))
+
+    def require_group_ingress_owner(self, connection, room_id):
+        """Group intake and wake require the runner's explicit room control credential."""
+        if not self.has_explicit_room_token or self.headers.get(ACTING_MEMBER_HEADER):
+            raise PermissionError(Text("需要本房间的控制凭据"))
+        require_owner(connection, room_id, self.headers.get("X-Discussion-Token", ""))
 
     def steward_member_write(self, connection, parts):
         """Scope both a MOSS member credential and a runner request carrying it on behalf of that member."""
@@ -5934,6 +6388,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             current = steward_member(connection, acting_token)
             if current and current["active"] and current["room_id"] == target:
                 return None  # Existing routes still require the source room owner's credential.
+        if target is None and not route and member["system_kind"] == "steward_private" and member["active"]:
+            return None  # The private host may use its existing create-room permission.
         if target != member["room_id"] and route == ["archive"] and not self.read_only_request():
             self.read_payload()
             begin_write(connection)
@@ -6062,6 +6518,20 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if not re.fullmatch(r"(?:[1-9]|1[0-9]|2[0-6])", weeks):
                 raise ValueError(Text("{value1} 须为 {value2}–{value3} 的整数", value1="weeks", value2=1, value3=26))
             return self.respond(quota_usage(connection, int(weeks), int(time.time())))
+        if parts == ["api", "quota-pins"] and method == "POST":
+            if not (self.bridged or self.admin_session(connection)):
+                raise PermissionError(Text('需要管理员身份'))
+            pins = self.read_payload().get("pins")
+            if (not isinstance(pins, list) or len(pins) > 3
+                    or any(not isinstance(pin, str) or not 1 <= len(pin) <= 200 or "|" not in pin
+                           or re.search(r"[\ud800-\udfff]", pin) for pin in pins)
+                    or len(set(pins)) != len(pins)):
+                return self.respond({"code": "invalid_quota_pins"}, 400)
+            connection.execute("INSERT INTO site_preferences (key,value) VALUES ('quota_pins',?) "
+                               "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(pins),))
+            connection.commit()
+            self.server.hub.notify_update(None)
+            return self.respond({"pins": pins})
         if parts == ["api", "scheduler-feedback"] and method == "GET":
             if not self.admin_session(connection):
                 raise AdminError(Text('需要登录管理员账号'), 401)
@@ -6087,6 +6557,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(room_revisions(connection, params))
         if parts == ["api", "sites"] and method == "GET":
             return self.respond(list_all_sites(connection))
+        if parts == ["api", "search"] and method == "GET":
+            return self.respond(self.search_rooms(connection, params))
         if parts[1:3] == ["rooms", "cloud-attachments"]:
             if parts[4:5] == ["shares"]:
                 return cloud_shares.manage(self, connection, parts[3:], method, require_owner)
@@ -6094,16 +6566,23 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if parts == ["api", "rooms"]:
             if method == "GET":
                 limit = attachment_limit_mib(self.server.database)
-                return self.respond({**list_rooms(connection, params), "participants": PARTICIPANTS, "attachment_limit_mib": limit, "last_room": last_room(connection),
+                manager = self.bridged or self.admin_session(connection)
+                group_manager = self.can_list_group_windows(manager)
+                return self.respond({**list_rooms(connection, params, include_group_windows=group_manager,
+                                                  exclude_steward=self.private_window_credential(connection)), "participants": PARTICIPANTS, "attachment_limit_mib": limit, "last_room": last_room(connection),
                                      # Balances and plan use are the owner's: only the manager's page lists them.
-                                     "quotas": account_quotas(connection) if self.bridged or self.admin_session(connection) else {},
+                                     "quotas": account_quotas(connection) if manager else {},
+                                     "quota_pins": quota_pins(connection) if manager else None,
                                      "destructions": list_destructions(connection),
                                      **object_storage_limits(connection, self.server.database, limit)})
             payload = self.read_payload()
             token = self.headers.get("X-Discussion-Token", "")
-            if payload.get("system_kind") == "steward" or payload.get("preset") == "task":
-                self.require_steward_creator(connection, token)
-            room = create_room(connection, payload, token)
+            if "source_window_id" in payload or "source_message_id" in payload or self.headers.get(moss_delegation.WINDOW_TOKEN_HEADER):
+                room = self.create_group_delegation(connection, payload, token)
+            else:
+                if payload.get("system_kind") in ("steward", "steward_private", "steward_group") or payload.get("preset") == "task":
+                    self.require_steward_creator(connection, token)
+                room = create_room(connection, payload, token)
             connection.commit()
             return self.respond(room, 200 if room["duplicate"] else 201)
         if parts == ["api", "rooms", "last"] and method == "POST":
@@ -6162,6 +6641,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         self.refuse_read_only(parts, method)
+        if parts[3:] == ["search"] and method == "GET":
+            return self.respond(self.search_rooms(connection, params, room_id))
+        if parts[3:] == ["window-wake"] and method == "POST":
+            self.require_group_ingress_owner(connection, room_id)
+            result = wake_group_window(connection, room_id, self.read_payload())
+            connection.commit()
+            return self.respond(result)
         if parts[3:] == ["steward-work"] and method == "GET":
             return self.read_steward_work(connection, room_id)
         if parts[3:] == ["steward-member"] and method == "POST":
@@ -6183,6 +6669,17 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             record_reported_session(connection, room_id, token, {"session_id": self.headers.get("X-Discussion-Session"),
                                                                  "session_client": self.headers.get("X-Discussion-Session-Client")})
             connection.commit()
+        if parts[3:] == ["owner-read"] and method in ("GET", "POST"):
+            if self.headers.get(ACTING_MEMBER_HEADER):
+                raise PermissionError(Text("需要本房间的控制凭据"))
+            if method == "GET":
+                require_owner(connection, room_id, token)
+                return self.respond({"message_id": connection.execute(
+                    "SELECT COALESCE(MAX(latest_id),0) FROM room_message_stats WHERE room_id=?", (room_id,)
+                ).fetchone()[0]})
+            result = mark_owner_read(connection, room_id, token, self.read_payload())
+            connection.commit()
+            return self.respond(result)
         if parts[3:] == ["room-links"] and method == "GET":
             require_owner_or_host(connection, room_id, token)
             limit = int(params.get("limit", 0))
@@ -6344,12 +6841,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         if parts[3:] == ["queue"] and method == "POST":
-            payload = self.read_payload()
-            if payload.get("action") in ("request_send", "request_cancel"):
-                result = queue_request_action(connection, room_id, token, payload)
-                connection.commit()
-                return self.respond(result)
-            result = queue_action(connection, room_id, token, payload, post_queued, check_queued, interrupt_for_message)
+            result = queue_action(connection, room_id, token, self.read_payload(), post_queued, check_queued, interrupt_for_message)
             connection.commit()
             return self.respond(result)
         if parts[3:] == ["executions", "changes"] and method == "GET":
@@ -6456,13 +6948,16 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(result)
         if parts[3:] == ["messages"]:
             if method == "GET":
-                return self.respond(query_messages(connection, room_id, params, token))
+                return self.respond(query_messages(connection, room_id, params, token, search_database=self.server.database))
             payload = self.read_payload()
+            if free_actor == "用户" and "external" in payload and require_room(connection, room_id)["system_kind"] == moss_window_messages.GROUP_KIND:
+                self.require_group_ingress_owner(connection, room_id)
             result = append_message(connection, room_id, payload, free_actor)
             receipt = message_receipt(connection, room_id, result)
             if receipt:
                 result["receipt"] = receipt
-            drain_room_queue(connection, room_id)
+            if not (result.get("message") or {}).get("external"):
+                drain_room_queue(connection, room_id)
             connection.commit()
             return self.respond(result, 200 if result["duplicate"] else 201)
         if len(parts) == 5 and parts[3] == "messages" and method == "GET":
@@ -6951,10 +7446,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         """Show the steward's cross-room work only to its owner or a trusted local entry."""
         if self.read_only_request() or self.headers.get(ACTING_MEMBER_HEADER):
             raise PermissionError(Text('需要本房间的控制凭据'))
-        if self.bridged or self.local_visitor():
-            self.admin_as_owner(connection, room_id)
+        self.admin_as_owner(connection, room_id)
         require_owner(connection, room_id, self.headers.get("X-Discussion-Token", ""))
-        if not connection.execute("SELECT 1 FROM room_directory WHERE room_id=? AND system_kind='steward'", (room_id,)).fetchone():
+        if not connection.execute("SELECT 1 FROM room_directory WHERE room_id=? AND system_kind IN ('steward','steward_private','steward_group')",
+                                  (room_id,)).fetchone():
             raise LookupError(Text('房间不存在'))
         return self.respond(moss_results.steward_work(connection, room_id))
 

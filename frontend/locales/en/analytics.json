@@ -202,7 +202,6 @@
   "最近 1 小时完成": "Completed in the last hour",
   "共结束 {count} 次运行": "{count} runs ended",
   "{folder} / {room}": "{folder} / {room}",
-  "最近 1 小时结束的运行": "Runs that ended in the last hour",
   "{time} 结束 · 用时 {duration}": "Ended {time} · took {duration}",
   "显示全部 {count} 次": "Show all {count}",
   "{count} 次运行出错": "{count} runs errored",
@@ -232,5 +231,13 @@
   "提前重置": "Early resets",
   "{value1} 次": "{value1} times",
   "剩余重置卡 {value1} 张": "{value1} reset credits left",
-  "读取失败": "Could not read"
+  "读取失败": "Could not read",
+  "活跃的房间": "Active rooms",
+  "{running} 位在跑 · 最近 1 小时 {runs} 次运行 · {messages} 条消息": "{running} running · {runs} runs and {messages} messages in the last hour",
+  "最近 1 小时 {runs} 次运行 · {messages} 条消息": "{runs} runs and {messages} messages in the last hour",
+  "{count} 次出错": "{count} errors",
+  "{time} 最后活动": "Last active {time}",
+  "最近 1 小时出错的运行": "Runs that errored in the last hour",
+  "{when} 在跑的房间": "Rooms running at {when}",
+  "另有 {count} 个房间": "{count} more rooms"
 }

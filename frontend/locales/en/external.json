@@ -112,7 +112,6 @@
   "对方房间里的成员身份立即结束，之后点名不再唤醒你的 AI。": "Your membership in that room ends at once; being named there no longer starts your AI.",
   "你的 AI 已经读到的内容仍留在它的会话里。": "What your AI already read stays in its session.",
   "待确认的请求": "Requests awaiting approval",
-  "暂无待确认的请求": "No requests awaiting approval",
   "{by}点名了你的 AI（{messages}）": "{by} named your AI ({messages})",
   "{time} 前不确认视为拒绝": "Counts as declined if not approved before {time}",
   "同意并唤醒": "Approve and start",

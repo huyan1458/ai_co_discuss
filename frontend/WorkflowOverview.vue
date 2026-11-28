@@ -9,11 +9,12 @@ import { computed, inject } from "vue";
 import { use_workflow_library, workflow_key, workflow_problem } from "./workflow-library.js";
 import HelpTip from "./HelpTip.vue";
 import WorkflowThumb from "./WorkflowThumb.vue";
+import WorkflowTrustDialog from "./WorkflowTrustDialog.vue";
 import { t } from "./i18n.js";
 
 const library = use_workflow_library();
 const { bridge } = inject("discussion");
-const { available, global_workflows, project_workflows, project_roots, writable_roots, all_list, all_global, all_project, all_roots, overview_filter, renaming, rename_text, pending_items } = library;
+const { available, global_workflows, project_workflows, project_roots, writable_roots, all_list, all_global, all_project, all_roots, overview_filter, renaming, rename_text, pending_items, trusting, trust_submitting } = library;
 
 // 全局 first, then one group per saved project that has workflows; empty groups are not shown (#15723: 新建 and 复制到项目
 // pick the project from their own menus). Until the computer's full list is read (or on an older computer without it),
@@ -69,6 +70,8 @@ function state_label(item) {
   if (item.readonly) return t("只读");
   return "";
 }
+// "待信任" opens the trust prompt itself (#16106), the same one as the card's menu and the room's "/".
+const awaits_trust = (item) => state_label(item) === t("待信任");
 const state_tone = (item) => item.error || item.unavailable?.length ? "warn" : item.needs_trust ? "trust" : "";
 // Experts across the main flow and its sub-workflows (`total_cards`); an older list only counts the main flow (`cards`).
 const expert_count = (item) => item.total_cards ?? item.cards ?? 0;
@@ -122,7 +125,8 @@ function lineup(item) {
             </span>
             <span v-else>{{ t("{count} 位专家", { count: expert_count(item) }) }}</span>
             <span v-if="sub_count(item)">{{ t("{count} 个子工作流", { count: sub_count(item) }) }}</span>
-            <span v-if="state_label(item)" class="workflow-overview-state" :data-tone="state_tone(item)">{{ state_label(item) }}</span>
+            <button v-if="awaits_trust(item)" type="button" class="workflow-overview-state is-action" data-tone="trust" :title="t('查看并信任')" @click="trusting = item">{{ state_label(item) }}</button>
+            <span v-else-if="state_label(item)" class="workflow-overview-state" :data-tone="state_tone(item)">{{ state_label(item) }}</span>
             <span v-if="home" class="workflow-overview-home">{{ home }}</span>
           </p>
           <UDropdownMenu v-if="renaming !== workflow_key(item)" :disabled="pending_items.has(workflow_key(item))" :items="library.item_menu(item)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-topic-menu' }">
@@ -131,6 +135,7 @@ function lineup(item) {
         </div>
       </li>
     </ul>
+    <WorkflowTrustDialog :prompt="trusting" :submitting="trust_submitting" @confirm="library.confirm_trust" @cancel="trusting = null" />
   </section>
 </template>
 
@@ -164,6 +169,8 @@ function lineup(item) {
 .workflow-overview-lineup > small { margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; }
 .workflow-overview-state { padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 7%, transparent); color: var(--ui-text-muted); }
 .workflow-overview-state[data-tone="warn"] { background: color-mix(in srgb, var(--ui-warning) 16%, transparent); color: var(--ui-warning); }
+.workflow-overview-state.is-action { border: 0; font: inherit; cursor: pointer; }
+@media (hover: hover) { .workflow-overview-state.is-action:hover { background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 28%, transparent); } }
 .workflow-overview-state[data-tone="trust"] { background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 16%, transparent); color: var(--channel-accent, var(--ui-primary)); }
 .workflow-overview-menu { position: absolute; top: 8px; right: 10px; }
 .workflow-overview-rename { display: flex; }

@@ -828,6 +828,18 @@ function open_row(row, event, piece = null) {
 // The card keeps this far inside the window, and is never cut shorter than this to stay level with what was pointed at.
 const DETAIL_MARGIN_PX = 8;
 const DETAIL_MIN_HEIGHT_PX = 320;
+/** The part of the window where the card can be seen: the window cut by every ancestor that clips (the scrolling page
+ *  sits under the room's header and tabs, so the window's top alone let an upward card slide under them, 2026-11-28). */
+function visible_band(element) {
+  let top = DETAIL_MARGIN_PX, bottom = window.innerHeight - DETAIL_MARGIN_PX;
+  for (let node = element?.parentElement; node && node !== document.body; node = node.parentElement) {
+    if (!/auto|scroll|hidden|clip/.test(getComputedStyle(node).overflowY)) continue;
+    const rect = node.getBoundingClientRect();
+    top = Math.max(top, rect.top + DETAIL_MARGIN_PX);
+    bottom = Math.min(bottom, rect.bottom - DETAIL_MARGIN_PX);
+  }
+  return { top, bottom };
+}
 function show_detail(row, target, piece) {
   if (row.item.segments_pending) want_phases([row.item.id]);
   const id = piece ? piece_id(row, piece) : "";
@@ -847,12 +859,13 @@ function show_detail(row, target, piece) {
   const right_limit = card.width - DETAIL_MARGIN_PX;
   const start = box.left - card.left;
   const left = start + width <= right_limit ? start : box.right - card.left - width;
-  const below = window.innerHeight - DETAIL_MARGIN_PX - box.bottom - 4;
-  const above = box.top - 4 - DETAIL_MARGIN_PX;
+  const band = visible_band(wf_element.value);
+  const below = band.bottom - box.bottom - 4;
+  const above = box.top - 4 - band.top;
   const flip = !beside && below < Math.min(window.innerHeight * 0.7, 600) && above > below;
   const top = beside ? box.top : flip ? box.top - 4 : box.bottom + 4;
   detail_anchor.value = { width, top: top - card.top, left: Math.max(names_end, Math.min(left, right_limit - width)),
-    flip, max_height: beside ? Math.max(DETAIL_MIN_HEIGHT_PX, window.innerHeight - DETAIL_MARGIN_PX - top) : Math.max(0, flip ? above : below) };
+    flip, max_height: beside ? Math.max(DETAIL_MIN_HEIGHT_PX, band.bottom - top) : Math.max(0, flip ? above : below) };
   if (beside) nextTick(() => keep_in_window(box, beside));
 }
 /** Once drawn, a card that runs past the window's bottom moves up, never above the window's top, and beside a name never
@@ -861,8 +874,9 @@ function keep_in_window(box, beside) {
   const element = detail_element.value;
   if (!element || !detail_anchor.value) return;
   const rect = element.getBoundingClientRect();
-  const overflow = rect.bottom - (window.innerHeight - DETAIL_MARGIN_PX);
-  const room = Math.max(0, rect.top - DETAIL_MARGIN_PX);
+  const band = visible_band(wf_element.value);
+  const overflow = rect.bottom - band.bottom;
+  const room = Math.max(0, rect.top - band.top);
   const lift = Math.min(overflow, room, beside ? rect.bottom - box.bottom : room);
   if (lift > 0) detail_anchor.value = { ...detail_anchor.value, top: detail_anchor.value.top - lift };
 }
@@ -1039,7 +1053,7 @@ const selected_notes = computed(() => {
 
       <div ref="controls_element" class="wf-controls" :class="{ 'is-sticky': replaying && !overview }">
         <div class="wf-toolbar">
-          <p class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
+          <p v-if="headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
           <span class="wf-tools" :inert="overview || !timeline?.executions.length" :class="{ 'is-inactive': overview || !timeline?.executions.length }" :title="overview ? VIEW_MODES[0].label : !timeline?.executions.length ? t('正在读取执行时间线') : undefined">
             <!-- Icon and words on a wide page, the icon alone on a phone (matching RealtimeView); the words stay as title and label. -->
             <button type="button" class="wf-tool" :title="t('缩小')" :aria-label="t('缩小')" :disabled="!zoomed" @click="zoom_by(1 / BUTTON_ZOOM)"><UIcon name="i-lucide-zoom-out" /></button>
@@ -1054,7 +1068,7 @@ const selected_notes = computed(() => {
               <UIcon name="i-lucide-square" /><span class="wf-tool-label">{{ t('结束回放') }}</span></button>
           </span>
         </div>
-        <div class="wf-player" :class="{ 'is-placeholder': !replaying || overview }" :inert="!replaying || overview">
+        <div v-if="replaying && !overview" class="wf-player">
           <span class="wf-player-time">{{ player_time }}</span>
           <input type="range" class="wf-scrub" min="0" :max="bounds.duration" step="100" :value="replay.position" :aria-label="t('回放位置')" @input="scrub" />
           <span class="wf-speeds" role="group" :aria-label="t('回放速度')">
@@ -1336,9 +1350,8 @@ const selected_notes = computed(() => {
 .wf-controls { display: grid; gap: 8px; padding: 12px 16px 10px; border-bottom: 1px solid var(--wf-border); background: var(--wf-surface); }
 .wf-controls.is-sticky { position: sticky; top: var(--wf-sticky-top, 0px); z-index: 4; }
 .wf-toolbar { display: grid; gap: 6px; }
-.wf-toolbar .wf-headline { height: 40px; overflow: auto; scrollbar-gutter: stable; }
 .wf-toolbar .wf-tools.is-inactive { opacity: .4; }
-.wf-state.is-placeholder, .wf-player.is-placeholder { visibility: hidden; }
+.wf-state.is-placeholder { visibility: hidden; }
 .wf-head-line .wf-state { width: 11em; overflow: hidden; white-space: nowrap; }
 .wf-tools, .wf-speeds { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .wf-tools { display: grid; grid-template-columns: 2rem 2rem repeat(4, minmax(0, 6.5rem)); justify-content: start; }

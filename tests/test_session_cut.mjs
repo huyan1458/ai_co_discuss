@@ -282,14 +282,17 @@ test('clearing the software conversations is refused outside an account running 
   assert.throws(() => wipe_histories(home, { DISCUSS_ENTRY_KEY_FILE: join(home, 'key') }), /独立 Windows 用户/);
 });
 
-test('a destroyed room removes the draft folder made for it, with its recycled files, unless another room works there', t => {
+test('a destroyed room removes its draft unless shared, leaving legacy recycled files alone', t => {
   const home = join(home_fixture(t), 'service'), workspace = `${home}-workspace`, trash = `${home}-workspace-trash`;
   const own = join(workspace, '测试-0ec270'), shared = join(workspace, '共用-123456'), project = join(home, 'project');
   for (const folder of [own, shared, project, join(trash, 'a-11111111', 'item')]) mkdirSync(folder, { recursive: true });
   writeFileSync(join(own, 'test.txt'), 'x');
   writeFileSync(join(trash, 'a-11111111', 'meta.json'), JSON.stringify({ root: own, path: 'old.txt', name: 'old.txt', kind: 'file' }));
+  const old = join(trash, 'a-11111111', 'item', 'old.txt');
+  writeFileSync(old, 'keep');
   assert.deepEqual(destroy_draft_space(home, { cwd: own }, new Set()), [{ kind: 'draft_space', state: 'deleted' }]);
-  assert.equal(existsSync(own) || existsSync(join(trash, 'a-11111111')), false);
+  assert.equal(existsSync(own), false);
+  assert.equal(readFileSync(old, 'utf8'), 'keep');
   assert.deepEqual(destroy_draft_space(home, { cwd: shared }, new Set([shared])), [{ kind: 'draft_space', state: 'kept', detail: 'shared' }]);
   // A project the user chose is theirs: destroying the room leaves it alone.
   assert.deepEqual(destroy_draft_space(home, { cwd: project }, new Set()), []);

@@ -74,7 +74,7 @@
 ### 平台主理人
 
 - `codiscuss steward status` 查看[平台主理人](steward.md)的房间、设置与技能是否可用。
-- `codiscuss steward settings --help` 查看软件、模型、强度、项目权限、工作目录与允许技能的设置选项。
+- `codiscuss steward settings --help` 查看软件、模型、强度、工作目录与允许技能的设置选项。
 - `codiscuss steward ask share-card --room ROOM` 为指定房间发起分享卡请求，结果在主理人对话中查看。
 - `codiscuss steward ask discuss-report --room ROOM --note "整理指定消息范围，保存到所指定的本机目录"` 为已有讨论生成报告。
 - `codiscuss steward ask codiscuss-draft-cleanup --note "盘点草稿，不删除"` 盘点本机草稿。服务必须仍能派发主理人任务。

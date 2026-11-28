@@ -485,7 +485,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
 <template>
   <section class="merged-section room-overview" :aria-label="t('成员与设置')">
     <!-- The room's project directories lead the page: every member works in them. One row each, the main one locked once set. -->
-    <section class="overview-section overview-project" :aria-label="t('项目目录')">
+    <section v-if="saved?.registered || view.launch.available" class="overview-section overview-project" :aria-label="t('项目目录')">
       <header class="overview-project-head"><UIcon name="i-lucide-folder-tree" /><h3>{{ t("项目目录") }}</h3>
         <span v-if="saved?.registered" class="overview-muted" :class="{ 'overview-phone-hidden': saved.project_directory }">{{ saved.project_directory
           ? t('成员按自己的项目权限读写其他目录，在别处工作的成员只读。改动从各成员下一次执行起生效，会话保留。')
@@ -500,9 +500,9 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
         </template>
         <ProjectDirectoryField v-else-if="directories_editable" v-model="main_draft" compact :placeholder="t('为本房间设置项目目录的完整路径')" :disabled="saving_directories" />
         <span v-else class="overview-muted">{{ t("未指定") }}</span>
-        <div v-if="directories_editable" class="overview-directories-actions">
-          <UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" :disabled="!directories_changed || saving_directories" @click="reset_directories" />
-          <UButton :label="t('保存')" size="xs" class="channel-primary-button" :disabled="!directories_changed" :loading="saving_directories" @click="save_directories" />
+        <div v-if="directories_editable && directories_changed" class="overview-directories-actions">
+          <UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" :disabled="saving_directories" @click="reset_directories" />
+          <UButton :label="t('保存')" size="xs" class="channel-primary-button" :loading="saving_directories" @click="save_directories" />
         </div>
       </div>
       <div v-else class="overview-directories">
@@ -515,7 +515,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
       <h3 class="overview-phone-hidden">{{ t("成员") }}</h3>
       <!-- Usage limits belong to an account, not a member: each account the members draw on is listed once here (#15303). -->
       <AccountQuotas />
-      <p class="overview-local" role="status">{{ local_state?.text }}<button v-if="local_state?.retry" type="button" class="subtle-link" @click="bridge.reload_room_models()">{{ t("重试") }}</button></p>
+      <p v-if="local_state" class="overview-local" role="status">{{ local_state.text }}<button v-if="local_state.retry" type="button" class="subtle-link" @click="bridge.reload_room_models()">{{ t("重试") }}</button></p>
       <template v-for="group in member_groups" :key="group.away">
       <button v-if="group.away" type="button" class="away-divider" :aria-expanded="!folded_away_rooms.has(room.id)" @click="folded_away_rooms.has(room.id) ? folded_away_rooms.delete(room.id) : folded_away_rooms.add(room.id)">
         <UIcon :name="folded_away_rooms.has(room.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" />{{ t('已离开 {value1}', { value1: group.members.length }) }}
@@ -682,7 +682,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
         <form v-if="model_edit" class="overview-model-form" @submit.prevent="save_model">
           <label v-if="model_typed"><span>{{ t("模型 ID") }}</span><UInput v-model.trim="model_edit.draft.model" :aria-label="t('{name} 使用的模型 ID', { name: model_edit.name })" class="w-full" /></label>
           <label v-else><span>{{ t("模型") }}</span><div class="model-picker"><USelect :model-value="model_edit.draft.model || '__default__'" :items="model_state.items" :title="model_state.source" size="sm" :ui="{ base: 'model-select', content: 'model-select-menu' }" :aria-label="t('{name} 使用的模型', { name: model_edit.name })" class="w-full" @update:model-value="pick_model" /><ModelRefresh :loading="model_state.refreshing" :disabled="!view.launch.available" @refresh="bridge.load_launch_models(model_edit.name, true, model_edit.draft)" /></div></label>
-          <p v-if="!model_typed" class="overview-muted overview-model-status" role="status">{{ model_state.loading ? t('正在读取软件模型列表…') : model_state.error }}</p>
+          <p v-if="!model_typed && (model_state.loading || model_state.error)" class="overview-muted" role="status">{{ model_state.loading ? t('正在读取软件模型列表…') : model_state.error }}</p>
           <EffortSlider v-if="model_efforts" :caption="t('强度')" :items="model_efforts" :model-value="model_edit.draft.effort" :label="t('{name} 的思考强度', { name: model_edit.name })" @update:model-value="model_edit.draft.effort = $event" />
           <p v-else class="overview-muted">{{ model_state.effort_note }}</p>
           <div class="overview-model-actions">
@@ -823,9 +823,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
 .overview-main-tag { flex-shrink: 0; align-self: center; margin-right: 8px; padding: 1px 6px; border-radius: 4px; background: var(--ui-bg-accented, rgba(255,255,255,.06)); color: var(--ui-text-muted); font-size: 11px; }
 .overview-directories-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .overview-address code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.overview-local { display: flex; align-items: start; gap: 10px; height: 2.6em; overflow: auto; margin: 0 0 8px; color: var(--ui-text-muted); font-size: 12px; }
-.overview-project { height: 11rem; overflow: auto; scrollbar-gutter: stable; }
-.overview-model-status { height: 2.6em; overflow: auto; }
+.overview-local { display: flex; gap: 10px; margin: 0 0 8px; color: var(--ui-text-muted); font-size: 12px; }
 .overview-result { margin: 8px 0 0; color: var(--ui-text-muted); font-size: 12px; }
 /* Same card as the members above, one setting per row. */
 .overview-settings { margin: 0; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg-elevated); font-size: 13px; }

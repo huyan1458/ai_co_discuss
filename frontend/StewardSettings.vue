@@ -1,12 +1,15 @@
 <script setup>
 import { computed, inject, onMounted, reactive, ref } from "vue";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
-import { access_options } from "../runner/expert_prompts.mjs";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import HelpTip from "./HelpTip.vue";
 import ModelEffortPicker from "./ModelEffortPicker.vue";
+import MossGroupFields from "./MossGroupFields.vue";
+import MossWindowSettings from "./MossWindowSettings.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import RosterAdd from "./RosterAdd.vue";
+import { is_platform_skill, skill_label } from "./moss-skills.js";
+import { WINDOW_DEFAULTS, moss_window_key, window_changes } from "./moss.js";
 import { locale, t } from "./i18n.js";
 
 /**
@@ -14,7 +17,10 @@ import { locale, t } from "./i18n.js";
  * MOSS's rail. Every change in the dialog waits for 保存 and is applied together, so nothing here takes effect unseen (#15598).
  */
 const { view, bridge } = inject("discussion");
-const props = defineProps({ choosing: Boolean, changeSoftware: Boolean });
+// `window`: whose settings to show (§12): "" the owner's own window (主理人, everything below), "private" the private
+// chat's, or a group's key ("<channel>:<chat_id>"). `focus: "windows"` opens the main settings at 聊天窗口.
+const props = defineProps({ choosing: Boolean, changeSoftware: Boolean, window: { type: String, default: "" }, focus: { type: String, default: "" } });
+const window_mode = computed(() => !props.window ? "" : props.window === "private" ? "private" : "group");
 const emit = defineEmits(["done"]);
 const saved = ref(null);
 const draft = ref({});
@@ -38,19 +44,33 @@ const adapters = computed(() => {
   }
   return result;
 });
-const candidates = computed(() => [...adapters.value.values()].map(item => ({ ...item, selected: item.value === draft.value.adapter })));
-const card_platform = computed(() => adapters.value.get(draft.value.adapter)?.platform || adapter_profile(draft.value.adapter)?.platform);
+// The software, model and strength shown are the window's own: 主理人's, or the private chat's (`settings.private`, §12.1),
+// with the same controls for both.
+const soft = computed(() => window_mode.value === "private" ? draft.value.private || {} : draft.value);
+function set_soft(patch) {
+  if (window_mode.value === "private") draft.value = { ...draft.value, private: { ...(draft.value.private || {}), ...patch } };
+  else draft.value = { ...draft.value, ...patch };
+}
+const candidates = computed(() => [...adapters.value.values()].map(item => ({ ...item, selected: item.value === soft.value.adapter })));
+const card_platform = computed(() => adapters.value.get(soft.value.adapter)?.platform || adapter_profile(soft.value.adapter)?.platform);
 // Choosing MOSS's software is one pick, not adding members (#15658): a single-choice row in the new-room chips' look, then a
 // card with the software and its model; model and effort stay at the software's defaults unless 高级 is opened.
-const chosen = computed(() => adapters.value.get(draft.value.adapter) || null);
+const chosen = computed(() => adapters.value.get(soft.value.adapter) || null);
 // The profile the model list is read with: this computer's software settings for the platform, with MOSS's own choice
 // over them, as the expert card reads a preset's (choosing other software clears model and strength back to its defaults).
-const moss_profile = computed(() => ({ ...(view.value.launch.profiles?.[card_platform.value] || {}), adapter: draft.value.adapter, model: draft.value.model || "", effort: draft.value.effort || "" }));
-// Project access is no first-run question: read-only by default, raised when an install or deploy asks for it. The
-// settings dialog keeps one control for those who set it by hand.
-const access_items = computed(() => access_options(draft.value.adapter, bridge.full_only_hint(draft.value.adapter)).filter((item) => !item.disabled));
+const moss_profile = computed(() => ({ ...(view.value.launch.profiles?.[card_platform.value] || {}), adapter: soft.value.adapter, model: soft.value.model || "", effort: soft.value.effort || "" }));
+// 主理人's own fields go to `steward-settings` as they are; the private chat's go there as `private` with only what changed
+// (its `cwd` and `room_id` are the computer's); each group's go one by one through `group-settings` (#16072).
+const OWN_FIELDS = new Set(["private", "windows"]);
 const changed = computed(() => saved.value ? Object.fromEntries(Object.entries(draft.value)
-  .filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(saved.value[key]))) : {});
+  .filter(([key, value]) => !OWN_FIELDS.has(key) && JSON.stringify(value) !== JSON.stringify(saved.value[key]))) : {});
+const PRIVATE_FIELDS = ["adapter", "model", "effort", "project_access", "skills"];
+const private_changes = computed(() => {
+  const now = draft.value.private || {}, before = saved.value?.private || {};
+  return Object.fromEntries(PRIVATE_FIELDS.filter((field) => JSON.stringify(now[field] ?? "") !== JSON.stringify(before[field] ?? "")).map((field) => [field, now[field] ?? ""]));
+});
+const window_patches = computed(() => Object.entries(draft.value.windows || {})
+  .map(([key, value]) => [key, window_changes(value, saved.value?.windows?.[key])]).filter(([, patch]) => Object.keys(patch).length));
 
 // Who joins a room MOSS creates: kept in the computer's new-room preferences (`members`, `host`); with none the runner takes
 // the first configured AI (#15335). Edited here as a draft like the rest.
@@ -98,20 +118,38 @@ function set_hours(edge, value) { if (value) set_proactive({ active_hours: { ...
 const shown_duties = computed(() => duties.value.filter((item) => !dropped_duties.has(item.id)));
 const shown_mutes = computed(() => mutes.value.filter((item) => !dropped_mutes.has(item.id)));
 
-const dirty = computed(() => Object.keys(changed.value).length > 0 || spawn_changed.value || dropped_duties.size > 0 || dropped_mutes.size > 0);
+const dirty = computed(() => Object.keys(changed.value).length > 0 || Object.keys(private_changes.value).length > 0 || window_patches.value.length > 0
+  || spawn_changed.value || dropped_duties.size > 0 || dropped_mutes.size > 0);
+// The private chat's project access: read-only by default, 自动 when the owner raises it; separate from 主理人's (§12.1).
+const PRIVATE_ACCESS = [{ value: "read", label: t("只读") }, { value: "auto", label: t("自动") }];
 
-const skill_labels = {
-  "dispatch-analysis": t("派活分析"),
-  "share-card": t("AI 制作分享卡"),
-  "local-tts-setup": t("安装本机朗读"),
-  "local-stt-setup": t("安装本机语音输入"),
-  "notify-setup": t("配置通知渠道"),
-  "discuss-report": t("整理讨论报告"),
-  "codiscuss-draft-cleanup": t("共议占用盘点与清理"),
-  "cloudflare-deploy": t("部署线上站点"),
-  "codiscuss-help": t("使用帮助与排障"),
-  "rooms-overview": t("房间总览"),
-};
+// The private chat's and a group's own settings sit in the same draft (`private`, `windows`) and save with 保存 (§12.3).
+const private_draft = computed(() => draft.value.private || {});
+function set_private(patch) {
+  const next = { ...private_draft.value, ...patch };
+  draft.value = { ...draft.value, private: next };
+}
+function allow_private_skill(id, allowed) {
+  const selected = new Set(private_draft.value.skills || []);
+  if (allowed) selected.add(id); else selected.delete(id);
+  set_private({ skills: skills.value.map((skill) => skill.id).filter((item) => selected.has(item)) });
+}
+const group_draft = computed(() => draft.value.windows?.[props.window] || {});
+function set_group(patch) {
+  const next = { ...group_draft.value, ...patch };
+  for (const [field, value] of Object.entries(next)) if (value === "" || value == null) delete next[field];
+  draft.value = { ...draft.value, windows: { ...(draft.value.windows || {}), [props.window]: next } };
+}
+// Today's counts for the open group, read from the computer's group list; zero until they arrive.
+const group_today = ref({ used_today: 0, tasks_used_today: 0 });
+async function load_group_today() {
+  const [channel, chat_id] = props.window.split(":");
+  try {
+    const { groups } = await bridge.local_request("notify", { channel, action: "groups" });
+    const group = (groups || []).find((item) => item.id === chat_id);
+    if (group) group_today.value = { used_today: group.used_today ?? 0, tasks_used_today: group.tasks_used_today ?? 0 };
+  } catch { /* The counts stay at zero; the settings themselves still load and save. */ }
+}
 
 /** Load this computer's archived MOSS conversations without blocking settings. */
 async function load_history() {
@@ -153,15 +191,41 @@ async function load() {
     saved.value = split_proactive({ ...status.settings, ...(status.configured === false ? { adapter: "" } : {}) });
     draft.value = { ...saved.value };
     skills.value = status.skills;
+    group_skills.value = status.group_skills || [];
   } catch (error) { bridge.notify("error", error.message); }
 }
-onMounted(() => { load(); if (!props.choosing) load_history(); });
+// The skills a group may be given (`steward.group_skills`, `[{id, platform}]`); a group's own choice is in its `skills`.
+const group_skills = ref([]);
+const form = ref(null);
+onMounted(async () => {
+  if (window_mode.value === "group") load_group_today();
+  if (!props.choosing && !window_mode.value) load_history();
+  await load();
+  // Opened from the window list's "+": straight to the group list.
+  if (props.focus === "windows") requestAnimationFrame(() => form.value?.querySelector(".moss-windows-settings")?.scrollIntoView({ block: "start" }));
+});
 
 function choose_adapter(adapter) {
-  if (adapter === draft.value.adapter) return;
-  draft.value = { ...draft.value, adapter, model: "", effort: "" };
-  const supported = access_options(adapter, bridge.full_only_hint(adapter)).filter(item => !item.disabled);
-  if (!supported.some(item => item.value === draft.value.project_access)) draft.value.project_access = supported[0]?.value || "auto";
+  if (adapter === soft.value.adapter) return;
+  set_soft({ adapter, model: "", effort: "" });
+}
+
+/** A group's name for messages: its window's room title (an open group has one), else its number. */
+function group_title(key, chat_id) {
+  return view.value.rooms.find((room) => room.system_kind === "steward_group" && moss_window_key(room) === key)?.title || chat_id;
+}
+/** Each changed group through `group-settings`; a group the computer refuses keeps its edits and says why. */
+async function save_windows() {
+  let all_saved = true;
+  for (const [key, patch] of window_patches.value) {
+    const [channel, chat_id] = key.split(":");
+    try {
+      const result = await bridge.local_request("notify", { action: "group-settings", channel, chat_id, settings: patch });
+      const merged = { ...(saved.value.windows?.[key] || {}), ...patch, ...Object.fromEntries(Object.keys(WINDOW_DEFAULTS).filter((field) => field in (result || {})).map((field) => [field, result[field]])) };
+      saved.value = { ...saved.value, windows: { ...(saved.value.windows || {}), [key]: merged } };
+    } catch (error) { bridge.notify("error", t("「{name}」的设置没有保存：{error}", { name: group_title(key, chat_id), error: error.message })); all_saved = false; }
+  }
+  return all_saved;
 }
 
 function submit() {
@@ -192,7 +256,8 @@ async function remove_marked(marked, list, action) {
 /** Apply everything changed in the dialog at once: settings, who joins MOSS's rooms, removed duties and mutes. */
 async function save() {
   if (saving.value) return;
-  const patch = changed.value;
+  const own = changed.value;
+  const patch = Object.keys(private_changes.value).length ? { ...own, private: private_changes.value } : own;
   const proposed = spawn.value;
   const roster = spawn_changed.value ? { members: proposed.members, host: proposed.host || "" } : null;
   saving.value = true;
@@ -202,13 +267,15 @@ async function save() {
       const status = await bridge.local_request("steward-settings", roster ? { ...patch, create_preferences: roster } : patch);
       const settings = split_proactive(status.settings);
       for (const key of Object.keys(settings)) {
-        if (JSON.stringify(draft.value[key]) === JSON.stringify(patch[key] ?? saved.value[key])) draft.value[key] = settings[key];
+        if (!OWN_FIELDS.has(key) && JSON.stringify(draft.value[key]) === JSON.stringify(patch[key] ?? saved.value[key])) draft.value[key] = settings[key];
       }
-      saved.value = settings;
+      saved.value = { ...settings, windows: saved.value.windows };
       skills.value = status.skills;
       busy = Boolean(status.busy);
       if (Object.hasOwn(patch, "skills")) document.dispatchEvent(new Event("discuss:steward-skills-changed"));
     }
+    // A group that was not saved keeps the dialog open with its edits; everything else is already saved.
+    if (!await save_windows()) return;
     if (roster) {
       bridge.write_create_preferences(roster, { persisted: true });
       if (spawn.value === proposed) spawn.value = null;
@@ -229,10 +296,11 @@ async function save() {
 <template>
   <section class="steward-settings">
     <div class="steward-settings-body" :class="{ 'is-choosing': choosing }">
-    <form v-if="saved" class="steward-settings-form" @submit.prevent="submit">
-      <section class="steward-group">
+    <form v-if="saved" ref="form" class="steward-settings-form" @submit.prevent="submit">
+      <!-- 主理人's and the private chat's software: the same choice row and card for both (#16079). -->
+      <section v-if="window_mode !== 'group'" class="steward-group">
         <h4 v-if="!choosing">{{ t("软件") }}</h4>
-        <div v-if="(choosing || changing_software) && candidates.length" class="steward-software-choices" role="radiogroup" :aria-label="t('选择 MOSS 软件')">
+        <div v-if="(choosing || changing_software || (window_mode === 'private' && !soft.adapter)) && candidates.length" class="steward-software-choices" role="radiogroup" :aria-label="t('选择 MOSS 软件')">
           <button v-for="item in candidates" :key="item.value" type="button" role="radio" :aria-checked="item.selected" :class="{ 'is-selected': item.selected }" @click="choose_adapter(item.value)">
             <UAvatar :src="item.icon" :text="item.initials" size="2xs" class="channel-avatar" :class="item.style" /><span>{{ item.name }}</span>
           </button>
@@ -241,21 +309,39 @@ async function save() {
         <div v-if="chosen" class="steward-software-card">
           <div class="steward-software-name"><UAvatar :src="chosen.icon" :text="chosen.initials" size="sm" class="channel-avatar" :class="chosen.style" /><strong>{{ chosen.name }}</strong></div>
           <!-- The expert card's own model list, refresh and strength (#15717): one way to choose a model across the site. -->
-          <ModelEffortPicker v-if="card_platform" :key="draft.adapter" :name="card_platform" :profile="moss_profile" portable
-            @model="draft = { ...draft, model: $event === '__default__' ? '' : String($event || '').trim(), effort: '' }"
-            @effort="draft = { ...draft, effort: $event }" @reset="draft = { ...draft, model: '', effort: '' }" />
+          <ModelEffortPicker v-if="card_platform" :key="soft.adapter" :name="card_platform" :profile="moss_profile" portable
+            @model="set_soft({ model: $event === '__default__' ? '' : String($event || '').trim(), effort: '' })"
+            @effort="set_soft({ effort: $event })" @reset="set_soft({ model: '', effort: '' })" />
         </div>
-        <p v-if="choosing && candidates.length && !draft.adapter" class="steward-software-hint">{{ t("先选一个软件") }}</p>
-        <UButton v-if="!choosing && !changing_software" class="justify-self-start" icon="i-lucide-arrow-left-right" :label="t('更换软件')" size="xs" color="neutral" variant="soft" @click="changing_software = true" />
+        <!-- Before a pick, the card's slot holds the hint at the card's size, so 开始对话 does not move (#15841). -->
+        <div v-if="choosing && candidates.length && !draft.adapter" class="steward-software-card is-empty"><p class="steward-software-hint">{{ t("先选一个软件") }}</p></div>
+        <UButton v-if="!choosing && !changing_software && chosen" class="justify-self-start" icon="i-lucide-arrow-left-right" :label="t('更换软件')" size="xs" color="neutral" variant="soft" @click="changing_software = true" />
       </section>
-      <section v-if="!choosing && access_items.length > 1" class="steward-group">
-        <h4>{{ t("项目权限") }}<HelpTip :text="t('默认只读；要运行命令时会先问你是否调高。')" /></h4>
-        <div class="steward-access" role="radiogroup" :aria-label="t('项目权限')">
-          <button v-for="item in access_items" :key="item.value" type="button" role="radio" :aria-checked="draft.project_access === item.value" :class="{ 'is-selected': draft.project_access === item.value }"
-            :title="item.hint ? t(item.hint) : undefined" @click="draft = { ...draft, project_access: item.value }">{{ t(item.label) }}</button>
-        </div>
-      </section>
-      <template v-if="!choosing">
+      <!-- The private chat's own settings (§12.1, §12.3): how it talks and which skills it gets; platform skills stay with 主理人. -->
+      <template v-if="window_mode === 'private'">
+        <section class="steward-group">
+          <h4>{{ t("项目权限") }}<HelpTip :text="t('默认只读；调到自动后，私聊里的 MOSS 能运行命令、改文件。和主理人的设置互不影响。')" /></h4>
+          <div class="steward-access" role="radiogroup" :aria-label="t('项目权限')">
+            <button v-for="item in PRIVATE_ACCESS" :key="item.value" type="button" role="radio" :aria-checked="(soft.project_access || 'read') === item.value"
+              :class="{ 'is-selected': (soft.project_access || 'read') === item.value }" @click="set_soft({ project_access: item.value })">{{ item.label }}</button>
+          </div>
+        </section>
+        <section class="steward-group">
+          <h4>{{ t("说话方式") }}</h4>
+          <UTextarea :model-value="draft.habits?.private || ''" :maxlength="500" :rows="2" autoresize :maxrows="6" class="w-full"
+            :placeholder="t('留空沿用 MOSS 现在的说话方式')" @update:model-value="draft = { ...draft, habits: { ...(draft.habits || {}), private: $event } }" />
+        </section>
+        <section class="steward-group">
+          <h4>{{ t("私聊可用的技能") }}<HelpTip :text="t('私聊里看不到没勾选的技能；安装、部署、配置类只在主理人里可用。')" /></h4>
+          <UCheckbox v-for="skill in skills" :key="skill.id" :label="skill_label(skill)" :disabled="skill.available === false || is_platform_skill(skill)"
+            :description="is_platform_skill(skill) ? t('只在主理人里可用') : undefined"
+            :model-value="!is_platform_skill(skill) && Boolean(private_draft.skills?.includes(skill.id))" @update:model-value="allow_private_skill(skill.id, $event)" />
+        </section>
+      </template>
+      <!-- A group's own settings, the same fields as its row in 聊天窗口. -->
+      <MossGroupFields v-else-if="window_mode === 'group'" :value="group_draft" :used-today="group_today.used_today" :tasks-today="group_today.tasks_used_today"
+        :adapter="draft.adapter" :platform="card_platform || ''" :skills="group_skills" @update="set_group" />
+      <template v-if="!choosing && !window_mode">
         <section class="steward-group">
           <h4>{{ t("工作目录") }}</h4>
           <ProjectDirectoryField v-model="draft.cwd" compact />
@@ -308,9 +394,10 @@ async function save() {
             </ul>
           </template>
         </section>
+        <MossWindowSettings v-model:habits="draft.habits" v-model:windows="draft.windows" :adapter="draft.adapter" :platform="card_platform || ''" :skills="group_skills" />
         <section class="steward-group">
           <h4>{{ t("允许的技能") }}</h4>
-          <UCheckbox v-for="skill in skills" :key="skill.id" :label="skill_labels[skill.id] || skill.id" :disabled="!skill.available"
+          <UCheckbox v-for="skill in skills" :key="skill.id" :label="skill_label(skill)" :disabled="!skill.available"
             :model-value="draft.skills?.includes(skill.id)" @update:model-value="allow_skill(skill.id, $event)" />
         </section>
       </template>
@@ -320,14 +407,18 @@ async function save() {
       </div>
     </form>
     <div v-else class="steward-settings-form" role="status" :aria-label="t('读取中…')">
-      <section v-for="group in (choosing ? 1 : 4)" :key="group" class="steward-group" aria-hidden="true">
+      <section v-if="choosing" class="steward-group" aria-hidden="true">
+        <USkeleton class="h-[30px] w-full rounded-full" />
+        <USkeleton class="steward-software-card" />
+      </section>
+      <section v-for="group in (choosing ? 0 : 4)" :key="group" class="steward-group" aria-hidden="true">
         <USkeleton class="h-4 w-24" />
         <USkeleton class="h-9 w-full" />
       </section>
-      <USkeleton class="h-9 w-24" />
+      <USkeleton class="h-8 w-24" :class="{ 'justify-self-center': choosing }" />
     </div>
     </div>
-    <section v-if="!choosing" class="steward-group steward-history">
+    <section v-if="!choosing && !window_mode" class="steward-group steward-history">
       <h4>{{ t("旧对话") }}</h4>
       <p v-if="visible_history && !visible_history.length" class="fine-print">{{ t("没有存档的 MOSS 对话") }}</p>
       <ul v-else-if="visible_history" class="grid gap-2">
@@ -346,21 +437,27 @@ async function save() {
 
 <style scoped>
 .steward-settings-body { block-size: min(34rem, 58dvh); overflow: auto; scrollbar-gutter: stable; }
-.steward-settings-body.is-choosing { block-size: min(16rem, 45dvh); }
+/* The first choice shows whole: no box of its own to scroll, the page scrolls if the window is short (#15841). */
+.steward-settings-body.is-choosing { block-size: auto; overflow: visible; scrollbar-gutter: auto; }
+.is-choosing .steward-settings-form { gap: 14px; }
+.is-choosing .steward-software-card { min-block-size: 168px; }
 .steward-settings-form { display: grid; gap: 18px; padding-top: 4px; }
 .steward-group { display: grid; gap: 8px; min-width: 0; }
 .steward-group > h4 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .steward-history { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
 .steward-settings-actions { display: flex; gap: 8px; }
 /* One pick among the configured software: the new-room chips' pill look, the chosen one filled (#15658). */
-.steward-software-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.steward-software-choices, .steward-access { display: flex; flex-wrap: wrap; gap: 6px; }
 .steward-software-choices > button, .steward-access > button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 3px 12px 3px 4px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-toned); font-size: 13px; transition: background .12s, border-color .12s, color .12s; }
 .steward-access > button { padding: 3px 12px; }
 @media (hover: hover) { .steward-software-choices > button:hover, .steward-access > button:hover { border-color: var(--ui-border-accented); color: var(--ui-text-highlighted); } }
 :is(.steward-software-choices, .steward-access) > button.is-selected { border-color: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 70%, transparent); background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 16%, transparent); color: var(--ui-text-highlighted); font-weight: 600; }
-.steward-access { display: flex; flex-wrap: wrap; gap: 6px; }
-.steward-software-card { display: grid; gap: 8px; width: min(100%, 320px); padding: 12px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-text) 3%, transparent); text-align: left; }
-.steward-software-name { display: flex; align-items: center; gap: 8px; }
+/* The model list's loading or error line shares the 恢复默认 row instead of a blank row of its own (#15841). */
+.steward-software-card { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "name name" "field field" "effort effort" "defaults catalog"; align-content: start; gap: 8px; width: min(100%, 340px); padding: 12px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-text) 3%, transparent); text-align: left; }
+.steward-software-card.is-empty { grid-template-areas: none; place-content: center; }
+.steward-software-name { grid-area: name; display: flex; align-items: center; gap: 8px; }
+.steward-software-card :deep(.expert-card-field) { grid-area: field; }
+.steward-software-card :deep(.model-effort-slot) { grid-area: effort; }
 .steward-software-name > strong { color: var(--ui-text-highlighted); font-size: 14px; }
 /* What stays as text reads one step larger and brighter than the old fine print (#15685). */
 .steward-settings :deep(.fine-print) { color: var(--ui-text-muted); font-size: 13px; line-height: 1.55; }
@@ -368,10 +465,10 @@ async function save() {
 .steward-label { color: var(--ui-text-toned); font-size: 13px; }
 /* The shared model picker as it sits in MOSS's card: label and control in two columns, its notes and 恢复默认 in the flow. */
 .steward-software-card :deep(.expert-card-field) { display: grid; grid-template-columns: 3em minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-muted); font-size: 12px; }
-.steward-software-card :deep(.expert-card-catalog) { display: flex; gap: 8px; margin-left: calc(3em + 8px); color: var(--ui-text-dimmed); font-size: 11px; overflow-wrap: anywhere; }
+.steward-software-card :deep(.expert-card-catalog) { grid-area: catalog; display: flex; gap: 8px; min-width: 0; color: var(--ui-text-dimmed); font-size: 11px; text-align: right; }
 .steward-software-card :deep(.expert-card-catalog > button) { flex-shrink: 0; color: var(--channel-accent); }
 .steward-software-card :deep(.expert-card-note) { margin: 0; color: var(--ui-text-muted); font-size: 12px; }
-.steward-software-card :deep(.expert-card-defaults) { justify-self: start; padding: 0; color: var(--ui-text-muted); font-size: 12px; }
+.steward-software-card :deep(.expert-card-defaults) { grid-area: defaults; justify-self: start; padding: 0; color: var(--ui-text-muted); font-size: 12px; }
 .steward-software-card :deep(.expert-card-defaults:hover:not(:disabled)) { color: var(--channel-accent); }
 .steward-software-card :deep(.expert-card-defaults:disabled) { opacity: .4; }
 .steward-software-hint { margin: 0; color: var(--ui-text-muted); font-size: 13px; }

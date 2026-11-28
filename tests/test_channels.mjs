@@ -35,14 +35,14 @@ test('a notice goes once to the primary channel, and to the next one in order on
 });
 
 const MOSS_LOCALES = [
-  ['zh-CN', '来源渠道：second', '已发给 MOSS。', 'MOSS 正在处理上一件事，你的消息已排队',
-    '已把消息作为插话发给 MOSS。', 'MOSS 正在等你在网页回答一个问题，这条消息已排队', 'MOSS 尚未配置', '在网页查看完整回答'],
-  ['en', 'Source channel: second', 'Sent to MOSS.', 'MOSS is still working on the previous request. Your message is queued.',
-    'Your message was sent to MOSS as an interjection.', 'MOSS is waiting for you to answer a question on the website. Your message is queued.',
+  ['zh-CN', '来源渠道：second', 'MOSS 正在处理上一件事，你的消息已排队',
+    'MOSS 正在等你在网页回答一个问题，这条消息已排队', 'MOSS 尚未配置', '在网页查看完整回答'],
+  ['en', 'Source channel: second', 'MOSS is still working on the previous request. Your message is queued.',
+    'MOSS is waiting for you to answer a question on the website. Your message is queued.',
     'MOSS is not configured', 'Read the full reply on the website'],
 ];
 
-for (const [locale, source, sent, queued, steered, question_queued, setup, full_reply] of MOSS_LOCALES) {
+for (const [locale, source, queued, question_queued, setup, full_reply] of MOSS_LOCALES) {
   test(`MOSS channel receipts, steering, and website-only approvals (${locale})`, async t => {
     const home = mkdtempSync(join(tmpdir(), 'codiscuss-moss-channel-'));
     const old_locale = process.env.CODISCUSS_LANG;
@@ -58,7 +58,7 @@ for (const [locale, source, sent, queued, steered, question_queued, setup, full_
     let busy = false, long = false, raced = false;
     const request = async (_config, path, payload) => {
       if (!path) return view;
-      if (path === '/messages/31') return { text: long ? 'x'.repeat(1700) : '**answer**\n\nverbatim' };
+      if (path === '/messages/31') return { text: long ? '字'.repeat(3600) : '**answer**\n\nverbatim', summary: 'overview' };
       if (path.startsWith('/messages?')) return { messages: busy ? [] : [{ id: 21 }] };
       calls.push({ path, payload });
       if (path === '/executions/10' && raced) throw new Error('HTTP 409 execution already ended');
@@ -67,7 +67,7 @@ for (const [locale, source, sent, queued, steered, question_queued, setup, full_
     };
     const receive = (channel = 'second') => route_moss_message(home, { config, channel, label: channel,
       text: 'original**\n/rooms-overview', request, post: post_steward_channel_message });
-    assert.equal(await receive(), sent);
+    assert.equal(await receive(), '');
     assert.equal(calls[0].payload.text, `${source}\n\noriginal**\n/rooms-overview`);
     assert.equal(calls[0].payload.author, '用户');
     assert.equal(calls[0].payload.queue, true);
@@ -76,7 +76,7 @@ for (const [locale, source, sent, queued, steered, question_queued, setup, full_
     busy = true;
     assert.equal(await receive(), queued);
     view.free.members[0].execution.capabilities.steer = true;
-    assert.equal(await receive(), steered);
+    assert.equal(await receive(), '');
     assert.equal(calls.at(-1).payload.action, 'interject');
     assert.equal(await receive('first'), queued);
     assert.equal(calls.at(-1).path, '/messages', 'different channel cannot take over a running turn');
@@ -113,6 +113,61 @@ for (const [locale, source, sent, queued, steered, question_queued, setup, full_
   });
 }
 
+test('MOSS uses channel limits, retries only unsent parts, and never sends mixed-source answers in chat', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-moss-parts-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const config = { site: 'http://site', room: 'moss' }, link = 'http://site/?moss=moss';
+  const room = { title: 'MOSS', free: { requests: [], members: [], questions: [] } };
+  let message_id = 20, body = '', reads = 0;
+  const request = async (_config, path) => {
+    if (!path) return room;
+    reads += 1;
+    return { text: body, summary: 'Overview' };
+  };
+  const sent = new Map();
+  let refused = true;
+  const send = async (_home, { key, only, paragraphs: [text] }) => {
+    if (sent.has(key)) return { status: 'duplicate' };
+    if (refused && key.endsWith(':2') && only === 'discord') throw new Error('try later');
+    sent.set(key, text);
+    return { status: 'sent' };
+  };
+  const flush = () => flush_moss_channel_replies(home, { config, room, request, link, send });
+  const receive = async (channel, extra = []) => {
+    const id = ++message_id;
+    await route_moss_message(home, { config, channel, label: channel, text: 'request', request,
+      post: async () => ({ message_id: id }) });
+    room.free.requests = [{ message_id: id, answer_id: 100 + id }, ...extra.map(other => ({ message_id: other, answer_id: 100 + id }))];
+    return `moss:moss:${100 + id}`;
+  };
+  body = '🙂'.repeat(3000);
+  const discord = await receive('discord');
+  await assert.rejects(flush(), /try later/);
+  assert.equal(sent.get(discord).length, 2000);
+  refused = false;
+  await flush();
+  assert.deepEqual([discord, `${discord}:2`, `${discord}:3`].map(key => sent.get(key)).join(''), body);
+  assert.equal(sent.size, 3);
+
+  body = '字'.repeat(3498);
+  const weixin = await receive('weixin');
+  await flush();
+  assert.equal(Buffer.byteLength(sent.get(weixin)), 3498);
+  assert.equal([weixin, `${weixin}:2`, `${weixin}:3`].map(key => sent.get(key)).join(''), body);
+  body += '字';
+  const overflow = await receive('weixin');
+  await flush();
+  assert.match(sent.get(overflow), /^Overview/);
+  assert.ok(sent.get(overflow).endsWith(link));
+  assert.equal(sent.has(`${overflow}:2`), false);
+
+  const mixed = await receive('telegram', [999]);
+  const previous_reads = reads;
+  await flush();
+  assert.equal(reads, previous_reads);
+  assert.ok(sent.get(mixed).endsWith(link));
+});
+
 test('new channel messages go to MOSS, ordinary quoted notices do not, and a web-only notice cannot take replies', async t => {
   const home = mkdtempSync(join(tmpdir(), 'codiscuss-moss-quotes-'));
   const { channel } = fake('fake');
@@ -122,7 +177,7 @@ test('new channel messages go to MOSS, ordinary quoted notices do not, and a web
   t.after(() => { CHANNELS.splice(0, CHANNELS.length, ...saved); rmSync(home, { recursive: true, force: true }); });
   const ordinary = { site: 's', room: 'ordinary' }, moss = { site: 's', room: 'moss' };
   await send_notice(home, { room: ordinary, paragraphs: ['ordinary'], question: { id: 42, version: 3 } });
-  await send_notice(home, { room: moss, paragraphs: ['MOSS reply'], verbatim: true });
+  await send_notice(home, { key: 'moss:moss:1', room: moss, paragraphs: ['MOSS reply'], verbatim: true });
   await send_notice(home, { room: moss, paragraphs: ['approval http://site/?moss=moss'], web_only: true, verbatim: true });
   const posted = [];
   await receive_replies(home, { on_moss: async reply => { posted.push(reply); return 'new'; },
@@ -134,4 +189,14 @@ test('new channel messages go to MOSS, ordinary quoted notices do not, and a web
   assert.equal(await inbound({ text: 'follow-up', quoted: [{ text: 'MOSS reply' }] }), moss.room);
   assert.equal(await inbound({ text: 'yes', quoted: [{ text: 'approval' }] }), 'approval http://site/?moss=moss');
   assert.equal(posted.length, 3);
+  const reason = 'HTTP 502: internal upstream';
+  const logs = [];
+  const fail = () => { throw new Error(reason); };
+  await receive_replies(home, { on_moss: fail, on_reply: fail, log: value => logs.push(value) });
+  for (const quoted of [[], [{ text: 'MOSS reply' }]]) {
+    const receipt = await inbound({ text: 'retry', quoted });
+    assert.match(receipt, /没能发给 MOSS|couldn’t reach MOSS/);
+    assert.doesNotMatch(receipt, /HTTP|upstream/);
+  }
+  assert.equal(logs.filter(value => value.includes(reason)).length, 2);
 });

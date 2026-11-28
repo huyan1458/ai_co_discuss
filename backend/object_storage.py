@@ -198,9 +198,13 @@ class ResourceCenter:
     def file_size(self, name):
         """Return the recorded size of an existing object."""
         data = self.request("GET", "/file-info", fileName=name)
-        if not isinstance(data, dict) or type(data.get("size")) is not int or data.get("isDirectory"):
+        size = data.get("size") if isinstance(data, dict) else None
+        # The resource center answers the size as a decimal string ("5"), though its guide shows a number.
+        if isinstance(size, str) and size.isascii() and size.isdigit():
+            size = int(size)
+        if type(size) is not int or data.get("isDirectory"):
             raise StorageUnavailable()
-        return data["size"]
+        return size
 
     def download(self, name):
         """Request a short-lived URL for the stored object."""

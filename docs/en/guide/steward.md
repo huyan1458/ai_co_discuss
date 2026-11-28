@@ -27,11 +27,38 @@ MOSS chooses where to handle a task without asking you to approve the routing. P
 
 Tasks MOSS sends to its own child rooms appear on the handoff card. “Completed” means the child room returned a result, and the card shows a summary. MOSS reviews every round and reports back briefly when the result passes. If MOSS asks for revisions, the original card goes back to in progress and shows the new result when it arrives. Child rooms ask MOSS for decisions first, and the card shows “Waiting for MOSS.” If MOSS cannot decide within your authorization, it asks you in the main conversation and relays your answer. If a question in the child room is already waiting for your answer, the task card shows “Waiting for you” without sending reminders or marking the task as unreported.
 
-## Contact MOSS through a notification channel
+## Choose a MOSS window
 
-After choosing an AI app for MOSS, send a new message in a linked notification channel. MOSS replies in that same channel and includes a web link for long answers. Replying directly to a notice still goes to the room that sent it. Replying directly to a MOSS answer goes back to MOSS.
+- **Steward**: use the website for installation, deployment, platform settings, and proactive reports.
+- **Private chat**: your direct messages across linked channels arrive here, and answers go back to the original channel. A quoted reply to a proactive report goes to the Steward window. A quoted reply to another room's notice goes to that room. The Steward and Private chat windows have separate new messages, AI sessions, and settings. Older history stays where it is.
+- **Group**: each enabled group has its own window. You can read the record on the website but cannot send a message to the group from it. On a phone, open the window list from the conversation header.
+
+Private chat is read-only by default and can be set to “Automatic” independently. It can create rooms and pass messages between them. Platform skills are not listed, and the CLI blocks platform-changing commands. If you raise access, the local process may still be able to call local interfaces or edit configuration files directly. Use the Steward window for platform changes. Private chat restrictions are not a local sandbox.
+
+There is no separate acknowledgment for successful direct messages. You’ll see a notice if a message is queued, MOSS isn’t configured, or delivery fails. Replies are split to fit the channel’s message limit. Above three messages, MOSS sends an overview and a web link.
 
 New messages wait in the queue while MOSS is busy. If the AI app supports live interjections and the current request came from the same channel, your message can be added to the running task. If MOSS is waiting for you to answer a question, new messages from the website or a notification channel are queued. Answer the question card on the website to let the queue continue, or select “Send now” on a queued message to have MOSS handle that message first. Channel messages cannot answer questions or grant approvals.
+
+## Add MOSS to a group chat
+
+Group windows currently support QQ groups linked through a personal account using OneBot. They receive text and can send images and files. This is an unofficial protocol, and QQ may restrict or ban the account. Enable it only in groups where you have agreed to record messages.
+
+First add the QQ account used by MOSS to the group in QQ. Then choose either way to turn it on:
+
+- **On the website**: select “+” at the bottom of the MOSS window list to see MOSS’s QQ number. Search for the group and confirm the settings. If a group you just joined is missing, refresh the list. The dialog warns you if it can verify that your linked owner account is not a member. If membership cannot be verified, it shows no warning. The option to post an introduction is off by default.
+- **In the QQ group**: from the linked owner account, @mention MOSS and write `开始工作` (“start working”). MOSS confirms in the group or explains why it cannot start. Defaults are “Do small things,” 30 wake-ups and 5 delegations per day, with no readable folder or skills selected. The command checks the linked account ID. Other accounts cannot use it, even with the owner's display name.
+
+To stop MOSS, turn off the group in its website settings, or @mention MOSS from the same owner account in QQ and write `停止工作` (“stop working”). MOSS confirms a successful in-group command. It stops receiving and replying to new messages, keeps the existing record, and does not leave the QQ group.
+
+If a configured scheduler request fails, MOSS still handles direct mentions and messages from the owner. Existing limits and permissions apply, and MOSS decides whether to reply. Other messages are recorded without waking MOSS. The group settings show the latest failure.
+
+Use the group settings to change the daily limits, model and effort, description, and speaking style. Group access stays read-only, with one optional read-only folder and your choice of skills. No project folder is attached by default. Check the software note for its file-access limits. Group members cannot grant more access or ask MOSS to read private chats. MOSS asks the owner ordinary questions in the group and takes sensitive matters to private chat. Open the group window on the MOSS page to read messages and see their senders, including messages MOSS did not answer. You cannot post to the group from the website.
+
+When MOSS is waiting for your answer in a group, quote its question or @mention MOSS. With smart routing enabled, a plain message also counts if the decision model recognizes it as your reply. Only the linked owner account can answer. To dismiss the question, open “Settings” → “Chat windows,” expand the group, and select “Clear.” Clearing ends the wait without granting approval.
+
+When smart routing is configured, eligible group messages use a decision-model call. A wake-up also uses quota for the selected model. Without smart routing, only an @mention can wake MOSS, and a wake-up does not guarantee a reply. In that mode, MOSS follows the task policy in its instructions without a decision-model check.
+
+If the group software cannot browse, research is delegated. Work such as reviewing multiple sources or generating files goes to a separate task room. That room can write only to the group's dedicated workspace and does not mount your projects. The result returns to the group window so MOSS can reply in the original group. Each group defaults to five delegated tasks from other members per day. The owner's requests do not count.
 
 ## Set up proactive reports
 
@@ -46,9 +73,8 @@ In “MOSS configuration,” open “Proactive reports,” turn on “Let MOSS r
 
 - Hover over the MOSS avatar to see “MOSS is idle,” “MOSS is working,” or “MOSS is waiting for your reply.” The room directory shows statuses such as “Needs input,” “Run failed,” and “In progress.” Reopening the site still takes you to the last room you had open.
 - MOSS can read room status on the same site. Installation, deployment, cleanup, and deletion each require confirmation.
-- Select “Settings” in the right sidebar to change the model, effort, project access, “Working directory,” and “Allowed skills.” On a phone, open the sidebar from the header. Project access is read-only if you have never set it. After saving your skill list, select any new skills you want to use after an upgrade.
-- Help and troubleshooting still work with read-only access. Speech installation, notification setup, deployment, storage analysis, and discussion reports require higher access. When the confirmation dialog offers “Raise to Auto and send,” it saves “Automatic” access before sending the request. The admin panel only directs you to MOSS “Settings” to raise access before requesting storage analysis. From the command line, run `codiscuss steward settings --access auto` and retry.
-- When access is above read-only, the software summary in the right sidebar highlights it. Select “Back to read-only” and confirm when done. Access does not revert automatically.
+- Select “Settings” in the right sidebar to change the model, effort, “Working directory,” and “Allowed skills.” On a phone, open the sidebar from the header. After saving your skill list, select any new skills you want to use after an upgrade.
+- The Steward window handles platform tasks such as speech installation, notification setup, and deployment. Those actions still require confirmation each time. From the command line, use `codiscuss steward ask SKILL --confirm`. Only direct messages from the linked owner account are accepted. Group messages can wake that group's window, not the Steward or Private chat windows.
 - Select “Change software” on the app card to switch apps in the same conversation. The messages and conversation link stay the same. If a task is still in progress, it continues and you see “MOSS is working. The software change takes effect once it is idle.” The new app starts a fresh AI session and uses “MOSS” as its display name. “Past conversations” lets you view previously archived conversations or confirm permanent deletion. In the terminal, use `codiscuss steward history` or `codiscuss steward delete ROOM --confirm`.
 - See the current session's context usage next to “Fresh start” in the right sidebar. To clear that context, select “Fresh start” and confirm, or run `codiscuss steward renew`. The app, model, conversation history, duties, and settings stay the same. If MOSS is working, it finishes the task before starting the new session.
 - Both “Change software” and “Fresh start” add a divider to the conversation when the switch takes effect. The divider names the app used for the new session.

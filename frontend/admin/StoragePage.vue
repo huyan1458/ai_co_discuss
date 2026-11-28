@@ -28,11 +28,7 @@ async function analyze_storage() {
   try {
     await call("storage/steward", {});
     notify("info", t("已发送占用分析请求，请到 MOSS 对话查看。"));
-  } catch (failure) {
-    // The panel only explains: raising MOSS's access is a setting on its own page, not something to do from here (#15640).
-    if (failure.code === "steward_access_too_low") notify("warning", t("MOSS 现在是只读，分析占用要运行命令。请先在网站的 MOSS 设置里把项目权限调到“自动”，再回来重试。"));
-    else notify("error", failure.message);
-  }
+  } catch (failure) { notify("error", failure.message); }
   finally { analyzing.value = false; }
 }
 

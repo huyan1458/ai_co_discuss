@@ -357,6 +357,28 @@ def concurrency_series(spans, start, end, step=None):
     return {"step": step, "points": buckets}
 
 
+BUCKET_ROOMS = 8
+
+
+def bucket_rooms(spans, start, end, step):
+    """Which rooms ran in each time step and with which members, for the timeline's hover panel (#15959).
+
+    `spans` is keyed by (room_id, member) like the concurrency series; each step lists at most BUCKET_ROOMS rooms, the
+    ones with the most members first, plus `more` when others were cut."""
+    buckets = [defaultdict(set) for _ in range(-(-max(1, end - start) // step))]
+    for (room_id, member), intervals in spans.items():
+        for left, right in intervals:
+            first, last = (max(start, left) - start) // step, (min(end, right) - 1 - start) // step
+            for index in range(max(0, first), min(len(buckets) - 1, last) + 1):
+                buckets[index][room_id].add(member)
+    result = []
+    for rooms in buckets:
+        ordered = sorted(rooms.items(), key=lambda item: (-len(item[1]), item[0]))
+        result.append({"rooms": [{"room_id": room_id, "members": sorted(members)} for room_id, members in ordered[:BUCKET_ROOMS]],
+                       "more": max(0, len(ordered) - BUCKET_ROOMS)})
+    return result
+
+
 def unfinished_series(rows, start, end, step=None):
     """Runs that did not finish, per time step of [start, end) by when they started: the red marks on the timeline."""
     step = step or series_step(start, end)

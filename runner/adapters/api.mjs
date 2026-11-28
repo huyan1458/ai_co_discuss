@@ -18,6 +18,7 @@ import { file_tools, is_file_tool, open_project, run_file_tool, WRITE_TOOLS } fr
 import { forget_sent_images, image_tools, is_image_tool, MAX_MESSAGE_ATTACHMENTS, run_image_tool, unsent_images } from './api_images.mjs';
 import { BASH_MISSING, events as pi_events, find_bash, pi_delivery, pi_home, session as pi_session } from './api_pi.mjs';
 import { is_web_tool, run_web_tool, web_search_key, web_tools } from './api_web.mjs';
+import { mark_question_public } from '../question_weixin.mjs';
 import { ensure_pi } from '../pi_runtime.mjs';
 import { execution_marker, log_entries, newest_record, not_sent } from './common.mjs';
 import { DEFAULT_API_MAX_REQUESTS, takes_images } from './profiles.mjs';
@@ -84,12 +85,14 @@ function can_read_other_rooms(context) {
 }
 
 function room_headers(context) {
-  return context.cross_room_read ? { 'X-Discussion-Read-Only': '1' } : { 'X-Discussion-Token': context.token };
+  return context.cross_room_read ? { 'X-Discussion-Read-Only': '1', 'X-Discussion-Token': context.cross_room_token } : { 'X-Discussion-Token': context.token };
 }
 
 /** Expose only tools belonging to this task's role; an external task gets only what its relay passes. */
 export function participant_tools(context) {
   const tools = role_tools(context);
+  if (context.allowed_room_tools) return tools.filter(item =>
+    context.allowed_room_tools.includes(item.name) || (context.allow_public_web && is_web_tool(item.name)));
   if (can_read_other_rooms(context)) {
     for (const item of tools.filter(item => CROSS_ROOM_TOOLS.has(item.name))) {
       item.parameters.properties.room = { type: 'string', pattern: '^[A-Za-z0-9_-]+$', description: '同站点目标房间编号，省略时读取本房间' };
@@ -109,7 +112,16 @@ function role_tools(context) {
     tool('read_goal', '读取 Goal 的目标、状态、续跑次数、用时与是否空闲'),
     // With Pi's own tools (a writable member) its read/edit/write/bash replace our file tools and registered commands.
     ...repo_tools(context), ...(context.native_shell ? [] : [...file_tools(context.project), ...command_tools(context.commands, context.project)]), ...web_tools(context), ...image_tools(context.image)];
+  if (context.moss_window_access) tools.push(
+    tool('create_task_room', '在当前群窗口内委派任务。使用稳定的 submission_id 重试。',
+      { title: TEXT, text: TEXT, submission_id: TEXT }, ['title', 'text', 'submission_id']),
+    tool('post_task_room', '只向本群窗口自己建立的委托房间传话。',
+      { room_id: TEXT, text: TEXT, submission_id: TEXT }, ['room_id', 'text', 'submission_id']));
+  if (context.window_skill_catalog?.length) tools.push(tool('read_window_skill',
+    `读取房主为本窗口选择的技能：${context.window_skill_catalog.map(({ id, description }) => `${id}: ${description}`).join(' / ')}`,
+    { id: TEXT }, ['id']));
   const answer = { text: { ...TEXT, maxLength: 32000 }, summary: { ...TEXT, maxLength: 1000 }, reply_to: NUMBER,
+    ...(context.silent_answer ? { silent: { type: 'boolean', description: '不向渠道发言。text 写给房主看的简短理由。' } } : {}),
     also_request_ids: { type: 'array', items: NUMBER, maxItems: 20, description: '执行中又排队给你、这条回答已一并交付的普通请求编号（read_execution 的 queued_requests），同时关闭；不相关的不要填' },
     ...(context.image ? { attachments: { type: 'array', maxItems: MAX_MESSAGE_ATTACHMENTS, items: TEXT,
       description: `要随回答发出的图片附件 ID，按顺序：本次生成的，或 task.unsent_images 里之前生成未发出的；不填则发出本次生成的全部图片（最多 ${MAX_MESSAGE_ATTACHMENTS} 张）` } } : {}) };
@@ -123,6 +135,8 @@ function role_tools(context) {
   tools.push(tool('read_question', '读取向用户提出的问题：不填 id 读房间待答问题（按呈现顺序）与你最近一次提问 last_ask，填 id 读该问题的题目、状态、version 与历史', { id: NUMBER }),
     tool('ask_question', '向用户提问，一次保存问题组与说明消息。blocking: true 时 contract 必须为 handoff：explanation 就是本次请求的交付（写明已完成部分、各候选完整说明、需要用户提供什么），保存后本次执行结束，用户回答后以新请求交回你（接力则交下一棒）；blocking: false 时 contract 为 supplement：只补充说明，执行继续，之后照常 submit_chat。题干与选项标签只写简短说明，候选正文写在 explanation 里，选项 anchor 填候选所在小标题；refs 只填依据的消息编号',
       { contract: { type: 'string', enum: ['handoff', 'supplement'] }, blocking: { type: 'boolean' }, explanation: { ...TEXT, maxLength: 32000 },
+        ...(context.question_visibility ? { group_visibility: { type: 'string', enum: ['group', 'private'],
+          description: '只有题干、选项和说明都适合全群看到时用 group。涉房主隐私、权限、其他房间或拿不准时用 private。' } } : {}),
         summary: { ...TEXT, maxLength: 1000 }, refs: { type: 'array', items: NUMBER, maxItems: 20 },
         // Item and option fields as DeepSeek Harness's ask_user_question names them (.dev/plans/Agent参与体验整改/DSH提问工具对照.md).
         questions: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'object', properties: { id: TEXT, question: { ...TEXT, maxLength: 500 },
@@ -358,6 +372,7 @@ function write_action(context, name, args) {
   const proactive = context.role === 'host' && args.proactive === true;
   if (name === 'submit_chat') return with_stable_submission(context, name, { path: '/messages', body: {
     author: actor, submitted_by: actor, source: 'api', text: args.text, kind: 'chat',
+    ...(context.silent_answer && args.silent === true ? { silent: true } : {}),
     summary: args.summary, reply_to: args.reply_to, ...(proactive ? { proactive: true } : { execution_id: context.execution_id }),
     ...(!proactive && Array.isArray(args.also_request_ids) && args.also_request_ids.length ? { also_request_ids: args.also_request_ids } : {}),
     ...(args.attachment_ids?.length ? { attachment_ids: args.attachment_ids } : {}),
@@ -419,13 +434,28 @@ async function run_tool(context, call) {
   try { args = typeof call.arguments === 'string' ? JSON.parse(call.arguments) : call.arguments || {}; }
   catch { return { result: { error: '工具参数必须为 JSON 对象' } }; }
   if (!args || typeof args !== 'object' || Array.isArray(args)) return { result: { error: '工具参数必须为 JSON 对象' } };
+  if (call.name === 'read_window_skill') {
+    const skill = context.window_skill_catalog?.find(item => item.id === args.id);
+    if (!skill) return { result: { error: 'This skill is not enabled for this window.' } };
+    return { result: { text: readFileSync(skill.path, 'utf8') } };
+  }
+  if (context.moss_window_access && ['create_task_room', 'post_task_room'].includes(call.name)) {
+    const { host_control } = await import('../discussion_launch.mjs');
+    const create = call.name === 'create_task_room';
+    try {
+      return { result: await host_control(context.home, create ? 'create-room' : 'room-post', {
+        access_file: context.moss_window_access, ...(create ? { preset: 'task', title: args.title } : { room: args.room_id }),
+        text: args.text, submission_id: args.submission_id,
+      }) };
+    } catch (error) { return { result: { error: error.message } }; }
+  }
   if (args.room !== undefined) {
     if (!CROSS_ROOM_TOOLS.has(call.name) || !can_read_other_rooms(context)
         || typeof args.room !== 'string' || !/^[A-Za-z0-9_-]+$/.test(args.room)) {
       return { result: { error: '此工具无法读取指定房间' } };
     }
     if (args.room !== context.room) {
-      context = { ...context, room: args.room, token: undefined, execution_id: undefined, cross_room_read: true };
+      context = { ...context, room: args.room, cross_room_token: context.token, token: undefined, execution_id: undefined, cross_room_read: true };
     }
   }
   if (is_file_tool(call.name)) {
@@ -503,6 +533,10 @@ async function run_tool(context, call) {
     // A handoff question, a recommendation or a decision delivers this execution's answer through its own message.
     if (action.terminal && action.path.startsWith('/questions')) context.last_submission = { outcome: 'accepted', operation: call.name,
       question_id: result.question_id ?? result.question?.id, message_id: result.message_id, submission_id: action.body.submission_id };
+    if (context.question_visibility && call.name === 'ask_question' && args.group_visibility === 'group') {
+      try { mark_question_public(context.home, context.room, result.question_id ?? result.question?.id, result.question?.version ?? result.version); }
+      catch { /* No recorded public marker means the owner gets a private notice. */ }
+    }
     return { result: answer && result.receipt ? result.receipt : result,
       terminal: action.terminal || (['ask_interjection', 'advance_review', 'continue_sequence'].includes(call.name) && result.execution_completed === true) };
   }
@@ -610,6 +644,7 @@ ${subs.join('\n\n')}` : ''}`;
 
 /** Map the shared skills onto the API environment, which has room tools and, with a project, file tools. */
 export function system_prompt(context) {
+  if (context.tool_lockdown && context.task_system_prompt) return context.task_system_prompt;
   const host = context.role === 'host';
   const discussion = Boolean(context.discussion_request);
   const environment = `你是 AI CoDiscuss 房间中的 ${context.participant}，职责为 ${context.role}（${discussion ? '房间开启的讨论中的执行' : '房间请求'}）。使用中文。
@@ -891,7 +926,7 @@ export function api_lockdown(task) {
   // The protected level (an external user in the room) keeps the read-only file tools on the room's project directories.
   const project = task.lockdown_read_directories?.length && cwd
     ? { cwd, extra_directories: (extra_directories || []).map(item => ({ ...item, access: 'read' })) } : {};
-  return { ...task, api_context: { ...room, ...project, tool_lockdown: true, project_access: 'read', no_web: true } };
+  return { ...task, api_context: { ...room, ...project, tool_lockdown: true, project_access: 'read', no_web: room.allow_public_web !== true } };
 }
 
 /** Read a prepaid balance only from DeepSeek's official service. */

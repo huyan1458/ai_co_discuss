@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { statfsSync, statSync } from 'node:fs';
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+import { account_space } from './account_space.mjs';
 import { t } from './i18n.mjs';
 import { speech_model_directories } from './speech_directories.mjs';
 
@@ -264,6 +265,9 @@ export async function measure(home, options = {}) {
     if (relative(external, await realpath_fn(external))) throw new Error('Redirected project drafts directory');
     queue.push({ path: external, group: DRAFTS_DIR, depth: 1, in_drafts: true, in_local: false, room_key: '' });
   }
+  if (options.members) for (const path of await moss_group_workspaces(home, state)) {
+    queue.push({ path, depth: 1, in_drafts: false, in_local: true, room_key: '' });
+  }
   while (queue.length && !state.truncated) {
     await scan_directory(queue.shift(), queue, state, config);
   }
@@ -277,6 +281,22 @@ export async function measure(home, options = {}) {
     room_unreadable: { ...state.room_unreadable },
     truncated: state.truncated,
   };
+}
+
+/** Count the generated group work trees as local storage, without walking owner-selected read directories. */
+async function moss_group_workspaces(home, state) {
+  const workspace = join(account_space(home).workspace, 'steward-windows');
+  let groups;
+  try { groups = await readdir(workspace, { withFileTypes: true }); }
+  catch (error) { if (error.code !== 'ENOENT') state.unreadable++; return []; }
+  const roots = [];
+  for (const group of groups) {
+    if (!group.isDirectory() || !/^[0-9a-f]{64}$/.test(group.name)) continue;
+    const work = join(workspace, group.name, 'work');
+    try { if ((await lstat(work)).isDirectory() && !relative(work, await realpath(work))) roots.push(work); }
+    catch (error) { if (error.code !== 'ENOENT') state.unreadable++; }
+  }
+  return roots;
 }
 
 /**

@@ -198,7 +198,31 @@ CREATE TABLE IF NOT EXISTS moss_decision_links (
 );
 CREATE INDEX IF NOT EXISTS moss_decision_delegation ON moss_decision_links(delegation_id);
 CREATE TABLE IF NOT EXISTS moss_task_rooms (
-    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    source_window_id TEXT REFERENCES rooms(id) ON DELETE SET NULL,
+    source_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL
+);
+-- A MOSS group window is bound to one channel chat; restore its archived room before reusing it.
+CREATE TABLE IF NOT EXISTS moss_windows (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    UNIQUE(channel,chat_id)
+);
+-- Platform message identity and sender metadata for messages received through an external MOSS window.
+CREATE TABLE IF NOT EXISTS external_message_sources (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    sender_id TEXT NOT NULL,
+    sender_name TEXT NOT NULL,
+    platform_message_id TEXT NOT NULL,
+    mentioned INTEGER NOT NULL CHECK(mentioned IN (0,1)),
+    owner INTEGER NOT NULL CHECK(owner IN (0,1)),
+    UNIQUE(room_id,platform_message_id)
+);
+-- A private answer that the group-window runner records but does not deliver to the group.
+CREATE TABLE IF NOT EXISTS moss_silent_answers (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE
 );
 -- An owner-credential message the host of another room sent here through `host-control room-post`: where it came from.
 -- Only a label; the write itself is the owner's, so it routes and wakes like the owner's own message.
@@ -1250,6 +1274,18 @@ INSERT INTO room_message_stats(room_id,message_count,latest_id)
     LEFT JOIN messages m ON m.room_id=r.id
         AND NOT EXISTS(SELECT 1 FROM internal_task_messages t WHERE t.message_id=m.id)
     WHERE NOT EXISTS(SELECT 1 FROM room_message_stats stats WHERE stats.room_id=r.id) GROUP BY r.id;
+CREATE TABLE IF NOT EXISTS room_owner_reads (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+    owner_read_until INTEGER NOT NULL,
+    failure_dismissed_at INTEGER NOT NULL DEFAULT 0
+);
+-- Existing rooms start at their current head on upgrade, with subsequent reads shared across devices.
+INSERT OR IGNORE INTO room_owner_reads(room_id,owner_read_until)
+    SELECT room_id,latest_id FROM room_message_stats;
+CREATE TRIGGER IF NOT EXISTS owner_read_new_room AFTER INSERT ON rooms
+BEGIN
+    INSERT INTO room_owner_reads(room_id,owner_read_until) VALUES(NEW.id,0);
+END;
 CREATE TRIGGER IF NOT EXISTS message_stats_room AFTER INSERT ON rooms
 BEGIN
     INSERT INTO room_message_stats(room_id) VALUES(NEW.id);

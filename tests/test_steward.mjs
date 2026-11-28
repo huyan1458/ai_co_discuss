@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -10,7 +11,7 @@ import { free_task_files, user_request_texts } from '../runner/free_runner.mjs';
 import { relayed_command, run_launch_command } from '../runner/remote_launch.mjs';
 import { DiscussionService, read_registry } from '../runner/discussion_service.mjs';
 import { proactive_settings, revise_proactive_list, steward_proactive_tick } from '../runner/steward_proactive.mjs';
-import { require_steward_skill, steward_cli, steward_defaults, steward_message, steward_settings_patch, steward_skill } from '../runner/steward.mjs';
+import { require_steward_skill, steward_cli, steward_defaults, steward_message, steward_settings_patch, steward_skill, steward_status, steward_task_catalog, sync_steward_platform_skills } from '../runner/steward.mjs';
 
 function temp(t) {
   const path = mkdtempSync(join(tmpdir(), 'steward-'));
@@ -118,13 +119,14 @@ test('steward defaults are read-only until launch and settings may only change e
   add_skill(home, '.agents/steward-skills', 'dispatch-analysis');
   const settings = { participants: { Claude: { adapter: 'claude', model: 'opus', effort: 'high' } } };
   const defaults = steward_defaults(home, settings, home);
-  assert.deepEqual(defaults, { adapter: '', model: '', effort: '', project_access: 'read',
-    cwd: join(`${home}-workspace`, 'steward'), skills: ['dispatch-analysis', 'share-card'], create_rooms: true, proactive: proactive_settings() });
+  assert.deepEqual(defaults, { adapter: '', model: '', effort: '', project_access: 'full',
+    cwd: join(`${home}-workspace`, 'steward'), skills: ['dispatch-analysis', 'share-card'], create_rooms: true, proactive: proactive_settings(),
+    habits: { private: '', group: '' }, windows: {} });
   assert.equal(steward_defaults(home, { ...settings, steward: { adapter: 'claude' } }, home).model, 'opus');
   assert.equal(existsSync(defaults.cwd), false);
   assert.deepEqual(steward_settings_patch({ room_id: 'wrong', skills: ['share-card', 'share-card'], effort: '' }), { skills: ['share-card'], effort: '' });
   assert.throws(() => steward_settings_patch({ cwd: 'relative', skills: ['discuss-host'] }));
-  assert.throws(() => steward_settings_patch({ project_access: 'own' }));
+  assert.deepEqual(steward_settings_patch({ project_access: 'own' }), {});
   assert.throws(() => steward_settings_patch({ create_rooms: 'off' }));
 });
 
@@ -209,8 +211,8 @@ test('request text localizes full sentences and CLI and remote actions use the s
   assert.match(steward_message('share-card', { room_id: 'r' }, 'en-US'), /^\/share-card\n\nUse the specified skill[^\n]+\n\nTask context:\n[\s\S]*"room_id": "r"/);
   assert.match(steward_message('share-card', '补充', 'zh-CN'), /^\/share-card\n\n请使用指定技能[^\n]+\n\n任务上下文：\n补充$/);
   const dispatch = (...args) => args;
-  assert.deepEqual(await steward_cli(['settings', '--access', 'read', '--skills', 'share-card'], dispatch),
-    ['steward-settings', { project_access: 'read', skills: ['share-card'] }]);
+  assert.deepEqual(await steward_cli(['settings', '--effort', 'high', '--skills', 'share-card'], dispatch),
+    ['steward-settings', { effort: 'high', skills: ['share-card'] }]);
   assert.deepEqual(await steward_cli(['settings', '--create-rooms', 'off'], dispatch), ['steward-settings', { create_rooms: false }]);
   assert.deepEqual(await steward_cli(['settings', '--create-rooms', 'on'], dispatch), ['steward-settings', { create_rooms: true }]);
   await assert.rejects(steward_cli(['settings', '--room-limit', '4'], dispatch), { code: 'ERR_PARSE_ARGS_UNKNOWN_OPTION' });
@@ -460,47 +462,113 @@ test('nothing opens or posts until the user chooses software, even with a config
   assert.equal(existsSync(join(home, 'launches')), false);
 });
 
-test('default read-only blocks command and file skills before launch and updates older room profiles before delivery', async t => {
+test('MOSS always runs with full access: no setting raises or lowers it, and command skills go to MOSS itself', async t => {
   const { home, requests, options } = await steward_fixture(t);
   const command = (action, input) => steward_command(home, action, input, options);
-  const additional_skills = ['codiscuss-draft-cleanup', 'discuss-report'];
-  await command('steward-settings', { skills: ['local-tts-setup', ...additional_skills] });
-  const request = { skill: 'local-tts-setup', confirmed: true };
-  await assert.rejects(command('steward-request', request), { code: 'steward_access_too_low' });
-  await assert.rejects(steward_cli(['ask', 'local-tts-setup', '--confirm'], command), { code: 'steward_access_too_low' });
-  for (const skill of additional_skills) {
-    await assert.rejects(command('steward-request', { skill }), { code: 'steward_access_too_low' });
-    await assert.rejects(steward_cli(['ask', skill], command), { code: 'steward_access_too_low' });
-  }
-  assert.equal(requests.length, 0);
-  assert.equal(existsSync(join(home, 'launches')), false);
+  await command('steward-settings', { skills: ['local-tts-setup', 'codiscuss-draft-cleanup', 'discuss-report'] });
+  // A level saved by an older version, or sent by an older page or command, is ignored.
+  const settings_path = join(home, 'launch-settings.json');
+  const saved = JSON.parse(readFileSync(settings_path, 'utf8'));
+  writeFileSync(settings_path, JSON.stringify({ ...saved, steward: { ...saved.steward, project_access: 'read' } }));
+  assert.equal((await command('steward-settings', { project_access: 'read' })).settings.project_access, 'full');
+  await assert.rejects(steward_cli(['settings', '--access', 'read'], command));
   await command('steward', { open: true });
   const [path] = read_registry(home);
   const config = () => JSON.parse(readFileSync(path, 'utf8'));
-  const old = config();
-  old.participants.Codex.project_access = 'auto';
-  writeFileSync(path, JSON.stringify(old));
+  assert.equal(config().participants.Codex.project_access, 'full');
+  // A room from an older version is brought to full access before the next delivery.
+  writeFileSync(path, JSON.stringify({ ...config(), participants: { Codex: { ...config().participants.Codex, project_access: 'read' } } }));
   assert.equal(await activate_steward_for_delivery(config()), true);
-  assert.equal(config().participants.Codex.project_access, 'read');
-  await command('steward-settings', { project_access: 'auto' });
-  assert.ok((await command('steward-request', request)).message_id);
-  assert.ok((await command('steward-request', { skill: 'codiscuss-draft-cleanup' })).message_id);
-  assert.equal(config().participants.Codex.project_access, 'auto');
+  assert.equal(config().participants.Codex.project_access, 'full');
+  for (const request of [{ skill: 'local-tts-setup', confirmed: true }, { skill: 'codiscuss-draft-cleanup' }, { skill: 'discuss-report' }]) {
+    const sent = await command('steward-request', request);
+    assert.equal(sent.room_id, config().room);
+    assert.ok(requests.at(-1).text.startsWith(`/${request.skill}\n`));
+  }
+  assert.equal(read_registry(home).length, 1, 'no task room is made for them');
 });
 
-test('the service links to MOSS setup without creating anything, then posts channel requests as the owner', async t => {
+test('unquoted DMs use an independent private MOSS and quoted reports stay in their original room', async t => {
   const { home, requests, options } = await steward_fixture(t, { selected: false });
   const service = new DiscussionService(home);
   const reply = { channel: 'telegram', label: 'Telegram', text: 'How do I get started?' };
   assert.match(await service.moss_reply(reply), /\?moss=settings$/);
   assert.equal(requests.length, 0);
   await steward_command(home, 'steward-settings', { adapter: 'codex_cli', skills: [] }, options);
+  const main = await steward_command(home, 'steward', { open: true }, options);
+  assert.match(await service.moss_reply(reply), /\?moss=settings$/);
+  await steward_command(home, 'steward-settings', { window: 'private', adapter: 'codex_cli', skills: [] }, options);
   await service.moss_reply(reply);
-  assert.equal(requests.length, 2);
-  assert.equal(requests[0].system_kind, 'steward');
-  assert.equal(requests[1].author, '用户');
-  assert.equal(requests[1].queue, true);
-  assert.match(requests[1].text, /Telegram\n\nHow do I get started\?$/);
+  assert.equal(requests.length, 3);
+  assert.equal(requests[1].system_kind, 'steward_private');
+  assert.equal(requests[2].author, '用户');
+  assert.equal(requests[2].queue, true);
+  assert.match(requests[2].text, /Telegram\n\nHow do I get started\?$/);
+  const saved = launch_settings(home).steward;
+  assert.notEqual(saved.private.room_id, main.room_id);
+  const configs = read_registry(home).map(file => JSON.parse(readFileSync(file, 'utf8')));
+  const main_config = configs.find(config => config.room === main.room_id);
+  const private_config = configs.find(config => config.room === saved.private.room_id);
+  assert.equal(private_config.cwd, join(dirname(main_config.cwd), 'steward-private'));
+  assert.equal(private_config.participants.Codex.project_access, 'read');
+  await steward_command(home, 'steward-settings', { window: 'private', project_access: 'auto' }, options);
+  assert.equal((await steward_command(home, 'steward', { window: 'private' })).settings.project_access, 'auto');
+  assert.equal((await steward_command(home, 'steward')).settings.project_access, 'full');
+  await assert.rejects(steward_command(home, 'steward-request', { window: 'private', skill: 'cloudflare-deploy', confirmed: true }, options));
+  await service.moss_reply({ ...reply, text: 'Reply to the quoted report' }, { config: main_config, wake() {} });
+  assert.match(requests.at(-1).text, /Reply to the quoted report/);
+});
+
+test('platform skills are copied for the steward but never advertised in other MOSS windows', t => {
+  const home = temp(t);
+  const project = process.cwd();
+  save_launch_settings(home, {}, { skills: ['local-stt-setup'], private: { skills: ['share-card'] }, windows: { 'fake:7': { skills: ['share-card'] } } });
+  sync_steward_platform_skills(home, project);
+  const config = { api_home: home, project };
+  const [main] = steward_task_catalog(config);
+  assert.ok(main.path.endsWith(join('steward', 'skills', 'local-stt-setup', 'SKILL.md')));
+  assert.notEqual(main.path, steward_skill(main.id, project));
+  assert.equal(readFileSync(main.path, 'utf8'), readFileSync(steward_skill(main.id, project), 'utf8'));
+  assert.deepEqual(steward_task_catalog(config, 'private').map(skill => skill.id), ['share-card']);
+  assert.deepEqual(steward_task_catalog(config, 'group', 'fake:7').map(skill => skill.id), ['share-card']);
+  const { skills, group_skills } = steward_status(home, launch_settings(home));
+  for (const list of [skills, group_skills]) {
+    assert.ok(list.every(skill => typeof skill.platform === 'boolean'));
+    assert.equal(list.find(skill => skill.id === 'local-stt-setup').platform, true);
+    assert.equal(list.find(skill => skill.id === 'share-card').platform, false);
+  }
+});
+
+test('marked task credentials block platform changes through the CLI while allowing read-only status', t => {
+  const home = temp(t);
+  const file = join(home, 'access.json');
+  const other = join(home, 'other.json');
+  writeFileSync(other, '{}');
+  const run = args => spawnSync(process.execPath, ['runner/codiscuss.mjs', ...args], {
+    encoding: 'utf8', env: { ...process.env, DISCUSS_SERVICE_HOME: home, DISCUSS_ACCESS_FILE: file }, windowsHide: true,
+  });
+  for (const window of ['private', 'group']) {
+    writeFileSync(file, JSON.stringify({ window }));
+    for (const args of [['admin', 'status'], ['setup'], ['install'], ['update'], ['uninstall'], ['local', 'settings'], ['site', 'publish'],
+      ['service', 'stop'], ['service', 'remove'], ['service', 'autostart', 'on'], ['--json', 'stop'],
+      ['steward', 'settings', '--adapter', 'api'], ['launch', 'settings', '--file', file], ['launch', 'notify', 'group-enable', 'fake', '7'],
+      ['launch', 'device-pairing'], ['launch', 'api-key', '--file', file], ['launch', 'site-list']]) {
+      const result = run(args);
+      assert.equal(result.status, 1, args.join(' '));
+      assert.match(result.stderr, /更改本机平台|change the local platform/);
+    }
+    for (const args of [['service', 'stop', '--access-file', other], ['room', 'view', `--access-file=${other}`]]) {
+      const result = run(args);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /绑定的凭据|bound.*credential|credential.*bound/i);
+    }
+    assert.equal(typeof JSON.parse(run(['service', 'status', '--json']).stdout).home, 'string');
+    assert.ok(Array.isArray(JSON.parse(run(['service', 'list', '--json']).stdout).configs));
+    assert.equal(run(['launch', 'projects']).status, 0);
+    assert.equal(JSON.parse(run(['steward', 'status']).stdout).window, window);
+    const card = run(['share-card', 'materials', '--help']);
+    assert.equal(card.status, window === 'private' ? 0 : 1);
+  }
 });
 
 test('an existing steward room records its own software instead of guessing a participant default', async t => {

@@ -81,7 +81,8 @@ GUIDANCE = {
     "concluded": "话题已收束；停止本讨论自己的后台任务并核对实际状态。",
 }
 BRIEF_FIELDS = ("id", "title", "goal", "host", "user_request", "background", "boundaries", "experts")
-ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at")
+ROOM_LIST_FIELDS = ("id", "title", "goal", "message_count", "latest_id", "created_at",
+                    "owner_read_until", "failure_dismissed_at", "attention", "quota_resets_at")
 # A posted message echoes only what proves where it landed; the full text stays one `message view` away.
 RECEIPT_FIELDS = ("id", "author", "kind", "execution_id", "request_message_id", "reply_to", "submission_id",
                   "created_at", "summary", "proactive")
@@ -366,6 +367,11 @@ def room_commands(subcommands, registry):
             parser.add_argument("--submission-id", type=submission_id, help="按建房提交编号精确查询")
         elif action in ("view", "brief"):
             parser.add_argument("--request", type=positive_int, help="手动成员：按自己的有效请求限制可读原文")
+    read_help = json.loads(os.getenv("CODISCUSS_OWNER_READ_HELP", "{}"))
+    read = add_leaf(subcommands, registry, "room read", read_help.get("command", "更新房主的房间已读位置"), True)
+    read.add_argument("--message", type=non_negative_int, help=read_help.get("message", "指定消息编号，省略时读取房间最新消息编号"))
+    read.add_argument("--unread", action="store_true", help=read_help.get("unread", "标为未读"))
+    read.add_argument("--dismiss-failure", action="store_true", help=read_help.get("dismiss", "标为已读并忽略当前失败"))
     events = add_leaf(subcommands, registry, "room events",
                       "读取房间事件记录：房主与当前主持人读全部（主持人看不到私聊与消息正文），其他成员只读与本人有关的事件；用户与程序的每次写入（含被拒的）及其引起的状态变化，按发生顺序，用于排查问题；默认最新 500 条", True)
     paging = events.add_mutually_exclusive_group()
@@ -684,6 +690,14 @@ def build_parser(prog="discuss"):
         group = subcommands.add_parser(name, help=f"{name} 操作", allow_abbrev=False)
         add_common(group)
         register(group.add_subparsers(dest="action", required=True), registry)
+    search_help = json.loads(os.getenv("CODISCUSS_SEARCH_HELP", "{}"))
+    search = add_leaf(subcommands, registry, "search", search_help.get("command", "搜索房间消息、执行进展和附件名"))
+    search.add_argument("keyword", help=search_help.get("keyword", "关键词或正则表达式"))
+    search.add_argument("--room", dest="search_room", type=room_id,
+                        help=search_help.get("room", "仅搜索此房间；省略时搜索全部房间（含已存档）"))
+    search.add_argument("--case", action="store_true", help=search_help.get("case", "区分大小写"))
+    search.add_argument("--word", action="store_true", help=search_help.get("word", "全字匹配"))
+    search.add_argument("--regex", action="store_true", help=search_help.get("regex", "使用正则表达式"))
     add_leaf(subcommands, registry, "health", "检查目标站点的 HTTP 健康接口")
     api = add_leaf(subcommands, registry, "api", "直接调用本站 /api 或 /r；请求体原样传送")
     api.add_argument("path", help="本站路径，可含查询参数；禁止完整 URL")
@@ -888,6 +902,9 @@ def plan_room(args):
             payload["folder_id"] = args.folder_id
         return RequestPlan("/api/rooms", "POST", payload, "overview")
     base = f"/api/rooms/{args.room}"
+    if args.action == "read":
+        return RequestPlan(base + "/owner-read", "POST", {"message_id": args.message, "unread": args.unread,
+                           "dismiss_failure": args.dismiss_failure})
     if args.action == "limits":
         if args.done:
             return RequestPlan(base + "/limits", "POST", {"actor": require_actor(args), "action": "done",
@@ -1284,13 +1301,22 @@ def plan_question(args):
     return RequestPlan(f"{base}/{args.id}/{args.action}", "POST", body)
 
 
+def plan_search(args):
+    """Send the same search parameters as the page, with any bound room read context."""
+    params = {"q": args.keyword, **{key: str(int(getattr(args, key))) for key in ("case", "word", "regex")}}
+    if args.search_room is None:
+        return RequestPlan("/api/search", params={**params, "archived": "1"})
+    args.room = args.search_room
+    return RequestPlan(f"/api/rooms/{args.room}/search", params={**params, **read_context_params(args)})
+
+
 def build_plan(args):
     """Validate local input before constructing any network request."""
     stdin_count = sum(value == "-" for key, value in vars(args).items()
                       if key.endswith("_file") or key == "input")
     if stdin_count > 1:
         raise CliError("一次命令只能有一个字段从标准输入读取")
-    handlers = {"room": plan_room, "message": plan_message, "turn": plan_turn,
+    handlers = {"room": plan_room, "message": plan_message, "search": plan_search, "turn": plan_turn,
                 "attachment": plan_attachment,
                 "state": plan_state, "api": plan_api,
                 "run": plan_run, "goal": plan_goal, "mode": plan_mode, "execution": plan_execution, "member": plan_member, "review": plan_review, "sequence": plan_sequence, "question": plan_question}
@@ -2037,10 +2063,15 @@ def access_headers(args, site, path, method="GET"):
     reading = f"/r/{access.get('room', '')}"
     steward_dispatches = (access.get("steward") is True and method == "GET" and target == "/api/dispatches"
                           and getattr(args, "operation", "") == "room dispatches")
+    site_search = (method == "GET" and target == "/api/search" and getattr(args, "operation", "") == "search"
+                   and os.getenv("CODISCUSS_TOOL_LOCKDOWN") != "1" and not access.get("tool_lockdown"))
     room_path = target == expected or target.startswith(expected + "/") or target == reading or target.startswith(reading + "/")
-    if access.get("site", "").rstrip("/") != site or not (creation or room_path or steward_dispatches):
+    if access.get("site", "").rstrip("/") != site or not (creation or room_path or steward_dispatches or site_search):
         if cross_room_read(access, site, method, target):
-            return {READ_ONLY_HEADER: "1"}
+            token = access.get("token")
+            if not isinstance(token, str) or not 32 <= len(token) <= 256:
+                raise CliError("凭据文件中的 token 无效")
+            return {READ_ONLY_HEADER: "1", "X-Discussion-Token": token}
         raise CliError("凭据文件不属于本次站点和房间")
     token = access.get("token")
     if not isinstance(token, str) or not 32 <= len(token) <= 256:
@@ -2200,6 +2231,10 @@ def run(args, registry):
             result = external_send(plan, access, timeout)
         else:
             headers = access_headers(args, site, plan.path, plan.method)
+            if getattr(args, "operation", "") == "room read" and plan.body["message_id"] is None:
+                reading = RequestPlan(plan.path)
+                snapshot = send_request(reading, url, timeout, headers) if headers else send_request(reading, url, timeout)
+                plan.body["message_id"] = snapshot["message_id"]
             value = send_request(plan, url, timeout, headers) if headers else send_request(plan, url, timeout)
             result = project_result(value, plan, site)
         if getattr(args, "operation", "") == "room create":

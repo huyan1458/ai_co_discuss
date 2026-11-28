@@ -1538,10 +1538,13 @@ ROOM_WAITING_SINCE_SQL = """(
     )
 )"""
 
-ROOM_ATTENTION_SQL = """CASE
-    WHEN ({waiting_since}) IS NOT NULL THEN 'waiting_user'
-    WHEN EXISTS(SELECT 1 FROM member_requests r
+# NULL means no current failure. Zero means an ordinary failure (including a quota already reset).
+# If several members are waiting for quota, show the earliest known reset unless another failure needs attention.
+ROOM_FAILURE_RESET_SQL = """(
+    SELECT MIN(CASE WHEN f.failure_class='quota' AND f.reset_at>:now THEN f.reset_at ELSE 0 END)
+        FROM member_requests r
         JOIN member_executions e ON e.id=r.execution_id JOIN room_members m ON m.id=e.member_id
+        LEFT JOIN execution_failures f ON f.execution_id=e.id
         WHERE r.room_id=rooms.id AND r.status='failed' AND e.status='failed' AND m.status='active'
         AND NOT EXISTS(SELECT 1 FROM member_executions newer
             WHERE newer.member_id=e.member_id AND newer.room_id=e.room_id AND newer.id>e.id)
@@ -1565,8 +1568,8 @@ ROOM_ATTENTION_SQL = """CASE
             AND handled.status='completed' AND handled.execution_id>e.id)
         AND NOT EXISTS(SELECT 1 FROM member_requests handoff WHERE r.batch_id>0 AND handoff.room_id=r.room_id
             AND handoff.message_id=r.batch_id AND handoff.purpose='handoff' AND handoff.status='completed'
-            AND handoff.execution_id>e.id)) THEN 'failed'
-    END""".format(waiting_since=ROOM_WAITING_SINCE_SQL)
+            AND handoff.execution_id>e.id)
+)"""
 
 
 def open_room_waits(connection, room_id):
@@ -4858,7 +4861,7 @@ def interrupt_member(connection, room_id, member_id, token, by_host=""):
     return free_view(connection, room_id)
 
 
-def interrupt_for_message(connection, room_id, message_id, member_id=None):
+def interrupt_for_message(connection, room_id, message_id):
     """The owner's "send now" of a queued message to members still at work (user 2026-11-23, #7819): a member whose
     software takes an interjection hears of it in its running turn, which then also answers it; any other is
     interrupted and takes it, with the interrupted work, next.
@@ -4875,8 +4878,7 @@ def interrupt_for_message(connection, room_id, message_id, member_id=None):
         JOIN room_members m ON m.id=r.member_id
         JOIN member_executions e ON e.member_id=r.member_id AND e.status IN ('dispatched','started')
         LEFT JOIN execution_capabilities c ON c.execution_id=e.id
-        WHERE r.room_id=? AND r.message_id=? AND r.status='pending' AND (? IS NULL OR r.member_id=?)""",
-        (room_id, message_id, member_id, member_id)).fetchall()
+        WHERE r.room_id=? AND r.message_id=? AND r.status='pending'""", (room_id, message_id)).fetchall()
     steerable = [row for row in busy if (row["steer"] or row["resume"]) and row["interjections"] < MAX_INTERJECTIONS]
     stopped = [row for row in busy if row not in steerable]
     blocked = [row["name"] for row in stopped if row["stoppable"] == 0]
@@ -4897,30 +4899,6 @@ def interrupt_for_message(connection, room_id, message_id, member_id=None):
     if stopped:
         settle_batches(connection, room_id)
     return bool(busy)
-
-
-def queue_request_action(connection, room_id, token, payload):
-    """The owner acts on a request waiting in the queue tray for a member still at work (user 2026-11-28, #15670):
-    `request_send` hands it to the running execution now (an interjection, or a stop when the software takes none),
-    `request_cancel` cancels that one request; the member's other work and the rest of its batch go on.
-
-    Raises:
-        LookupError: the request has started, finished or been cancelled meanwhile.
-        FileExistsError: the member can neither take an interjection nor be stopped; the request keeps waiting.
-    """
-    require_owner(connection, room_id, token)
-    begin_write(connection)
-    request = connection.execute("""SELECT id,message_id,member_id FROM member_requests
-        WHERE id=? AND room_id=? AND status='pending' AND execution_id IS NULL""", (payload.get("request_id"), room_id)).fetchone()
-    if not request:
-        raise LookupError(Text("这条排队请求已开始、已完成或已取消"))
-    if payload.get("action") == "request_send":
-        interrupt_for_message(connection, room_id, request["message_id"], request["member_id"])
-    else:
-        record_cancel_reasons(connection, "id=?", (request["id"],), "user_stop")
-        connection.execute("UPDATE member_requests SET status='cancelled' WHERE id=?", (request["id"],))
-        settle_batches(connection, room_id)
-    return queue_view(connection, room_id)
 
 
 def withdrawals(connection, room_id):
@@ -5094,11 +5072,13 @@ def replace_steward_member(connection, room_id, token, payload, now):
     begin_write(connection)
     require_owner(connection, room_id, token)
     directory = connection.execute("SELECT system_kind,archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()
-    if directory["system_kind"] != "steward":
-        raise FileExistsError(Text("只有 MOSS 房间可以用此操作更换软件"))
+    if directory["system_kind"] not in ("steward", "steward_private"):
+        raise FileExistsError(Text("只有主理人或私聊 MOSS 房间可以用此操作更换软件"))
     if directory["archived"]:
         raise FileExistsError(Text("房间已存档；恢复后才能继续协作"))
     member = member_value(payload)
+    if directory["system_kind"] == "steward_private" and member["access"] != "runner":
+        raise ValueError(Text("私聊窗口须由托管成员担任主持人"))
     hashed = token_hash(member["token"])
     current = connection.execute("SELECT * FROM room_members WHERE room_id=? AND status<>'removed'", (room_id,)).fetchone()
     if current and current["status"] == "active" and current["token_hash"] == hashed and all(

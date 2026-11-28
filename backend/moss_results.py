@@ -64,7 +64,9 @@ def is_child_delegation(connection, parent, child):
     return connection.execute("""SELECT 1 FROM room_links l
         JOIN room_directory d ON d.room_id=l.other_room_id
         WHERE l.room_id=? AND l.other_room_id=? AND l.relation='parent'
-        AND d.system_kind='steward' AND d.archived=0""", (child, parent)).fetchone() is not None
+        AND d.archived=0 AND (d.system_kind IN ('steward','steward_private') OR
+          (d.system_kind='steward_group' AND EXISTS (SELECT 1 FROM moss_task_rooms t
+            WHERE t.room_id=l.room_id AND t.source_window_id=l.other_room_id)))""", (child, parent)).fetchone() is not None
 
 
 def delegation_for_reply(connection, parent, child, reply_to):
@@ -197,7 +199,10 @@ def report(connection, row, outcome, message_id=None, summary=""):
         host = current_host(connection, row["parent"])
         if host:
             review = row["message_id"]
-            insert_request(connection, row["parent"], host, review, review, "notice", "system")
+            task = connection.execute("SELECT source_message_id FROM moss_task_rooms WHERE room_id=? AND source_window_id=?",
+                                      (row["child"], row["parent"])).fetchone()
+            chain = (task["source_message_id"] if task else None) or review
+            insert_request(connection, row["parent"], host, review, chain, "notice", "system")
     if outcome == "completed":
         connection.execute("UPDATE room_relay_sends SET state='replied' WHERE message_id=? AND state<>'replied'", (row["message_id"],))
     summary = summary.strip()[:REPORT_LIMIT]

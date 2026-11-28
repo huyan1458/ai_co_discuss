@@ -173,6 +173,8 @@ function create_library({ view, bridge }) {
   }
   // The workflow whose deletion awaits confirmation (its composite key), and the action waiting on "放弃未保存的修改？".
   const deleting = ref(""), leaving = ref(null);
+  // The project workflow whose trust prompt is open on the page (#16106), and whether its trust is being recorded.
+  const trusting = ref(null), trust_submitting = ref(false);
   // Why the open workflow cannot simply be saved: "changed" or "exists".
   const conflict = ref("");
   const deleting_label = computed(() => workflows.value.find((item) => workflow_key(item) === deleting.value)?.label || parse_key(deleting.value)?.id || deleting.value);
@@ -694,17 +696,18 @@ function create_library({ view, bridge }) {
   function item_menu(item) {
     const is_project = item.scope === "project";
     const key = workflow_key(item);
+    const groups = item.needs_trust ? [[{ label: t("信任…"), icon: "i-lucide-shield-check", onSelect: () => { trusting.value = item; } }]] : [];
     if (is_project && item.readonly) {
-      return [[
+      return [...groups, [
         { label: t("导出"), icon: "i-lucide-download", disabled: Boolean(item.error), onSelect: () => export_workflow(item) },
         { label: t("复制到全局"), icon: "i-lucide-copy", disabled: Boolean(item.error), onSelect: () => copy_workflow(item, "global") },
       ]];
     }
-    const groups = [[
+    groups.push([
       { label: t("重命名"), icon: "i-lucide-pencil", disabled: Boolean(item.error), onSelect: () => start_rename(item) },
       { label: item.disabled ? t("启用") : t("停用"), icon: item.disabled ? "i-lucide-circle-play" : "i-lucide-circle-pause", onSelect: () => set_disabled(item, !item.disabled) },
       { label: t("导出"), icon: "i-lucide-download", disabled: Boolean(item.error), onSelect: () => export_workflow(item) },
-    ]];
+    ]);
     if (is_project) {
       groups.push([
         { label: t("移至全局"), icon: "i-lucide-arrow-up-right", disabled: Boolean(item.error), onSelect: () => move_workflow(item, "global") },
@@ -767,6 +770,21 @@ function create_library({ view, bridge }) {
   }
 
   /** Switch a workflow off (no room may enable or keep using it) or back on. */
+  /** Record this computer's trust in a project workflow (its elevated cards and commands), from the page's trust prompt. */
+  async function confirm_trust() {
+    const item = trusting.value;
+    if (!item || trust_submitting.value) return;
+    trust_submitting.value = true;
+    try {
+      await bridge.local_request("workflows", { action: "trust", id: item.id, ...scope_params(item) });
+      trusting.value = null;
+      bridge.notify("info", t("已信任项目工作流「{name}」", { name: item.label || item.id }));
+      await bridge.reload_workflows();
+      if (current_room_id.value) bridge.reload_room_models?.().catch(() => {});
+    } catch (error) { bridge.notify("error", error.message); }
+    finally { trust_submitting.value = false; }
+  }
+
   async function set_disabled(item, disabled) {
     const key = workflow_key(item);
     if (pending_items.value.has(key)) return;
@@ -782,7 +800,7 @@ function create_library({ view, bridge }) {
   return {
     conflict, reload, refresh_list, available,
     workflows, global_workflows, project_workflows, project_roots, writable_roots,
-    page_open, overview, overview_filter, open_overview, back_to_overview, flow_of, prefetch, all_list, all_global, all_project, all_roots, draft, saved_id, saved_scope, saved_project_id, saved_key,
+    trusting, trust_submitting, confirm_trust, page_open, overview, overview_filter, open_overview, back_to_overview, flow_of, prefetch, all_list, all_global, all_project, all_roots, draft, saved_id, saved_scope, saved_project_id, saved_key,
     active_scope, active_project_id, active_project_name, scope_label, draft_readonly, set_draft_target,
     canvas_key, scope, subs, current, reserved, open_scope, enter_sub, add_sub, remove_sub,
     commands_allowed, busy, loading, failure, pending_items, retry: () => retry_read?.(),

@@ -4,6 +4,23 @@ import moss_waiting_src from "./moss-waiting.png";
 import { t } from "./i18n.js";
 
 /**
+ * MOSS's three kinds of window (`.dev/plans/MOSS对外窗口/` §12.1): the owner's own (主理人), the private chat every channel
+ * comes into (私聊), and one per chat group. Each is a room of its kind; all show as MOSS pages.
+ */
+export const MOSS_KINDS = ["steward", "steward_private", "steward_group"];
+export const is_moss_room = (room) => MOSS_KINDS.includes(room?.system_kind);
+/** The key a group window's settings are kept under (`steward.windows`), from its room's `window`. */
+export const moss_window_key = (room) => room?.window ? `${room.window.channel}:${room.window.chat_id}` : "";
+/** A group window's settings when the owner has not set them (the computer's own defaults, `group-settings`). */
+export const WINDOW_DEFAULTS = { habit: "", about: "", work_policy: "small", daily_limit: 30, daily_tasks: 5, model: "", effort: "", read_directory: "", skills: [] };
+/** The fields of one group's draft that differ from what is saved, defaults filled in: what `group-settings` is sent. */
+export function window_changes(draft = {}, saved = {}) {
+  const value = (source, field) => source[field] ?? WINDOW_DEFAULTS[field];
+  return Object.fromEntries(Object.keys(WINDOW_DEFAULTS).filter((field) => JSON.stringify(value(draft, field)) !== JSON.stringify(value(saved, field)))
+    .map((field) => [field, value(draft, field)]));
+}
+
+/**
  * MOSS's picture for its room's state: waiting on the user, at work, or idle. No text label; the title says it on hover.
  * @param {object|undefined} room The MOSS room from the room list (`attention`, `running`).
  * @param {boolean} [running] The open room's own live state, fresher than the list's.
@@ -13,6 +30,20 @@ export function moss_avatar(room, running = false) {
   if (room?.attention === "waiting_user") return { src: moss_waiting_src, title: t("MOSS 在等你回答"), state: "waiting" };
   if (running || room?.running || room?.attention === "running") return { src: moss_running_src, title: t("MOSS 正在工作"), state: "running" };
   return { src: moss_idle_src, title: t("MOSS 待机"), state: "idle" };
+}
+
+/**
+ * A room's one-line state at the end of its sidebar row (MOSS's entry uses the same, #15888); the wait timestamp
+ * takes precedence over legacy attention.
+ * @returns {{ kind: string, label: string } | null}
+ */
+export function room_attention(room, running) {
+  if (room.waiting_user_since > 0) return { kind: "awaiting", label: t("在等你") };
+  const { attention } = room;
+  if (attention === "waiting_user") return { kind: attention, label: t("等你回答") };
+  if (attention === "failed") return { kind: attention, label: t("执行失败") };
+  if (attention === "running" || running) return { kind: "running", label: t("进行中") };
+  return null;
 }
 
 /** Whether the open room has a run going, from its live member states (fresher than the room list). */

@@ -13,7 +13,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from backend.server import DiscussionServer, connect_db, expired_rooms, init_database, reading_field
+from backend.server import DiscussionServer, connect_db, expired_rooms, init_database, list_rooms, reading_field
 
 
 class StewardRoomTests(unittest.TestCase):
@@ -403,6 +403,36 @@ class StewardRoomTests(unittest.TestCase):
             "submission_id": uuid.uuid4().hex,
         }, self.owner)
         self.assertEqual(status, 400, result)
+
+    def test_private_window_is_unique_hidden_from_room_directories_and_not_cross_readable(self):
+        owner_token, member_token = uuid.uuid4().hex, uuid.uuid4().hex
+        status, room = self.create("steward_private", owner_token=owner_token, member_token=member_token)
+        self.assertEqual(status, 201, room)
+        self.assertEqual(room["system_kind"], "steward_private")
+        self.assertEqual(self.request(f"/api/rooms/{room['id']}", token=owner_token)[1]["system_kind"], "steward_private")
+
+        with closing(connect_db(self.database)) as connection:
+            self.assertNotIn(room["id"], {item["id"] for item in list_rooms(connection)["rooms"]})
+            managed = list_rooms(connection, include_group_windows=True)["rooms"]
+            self.assertIn(room["id"], {item["id"] for item in managed})
+
+        duplicate = self.create("steward_private", owner_token=uuid.uuid4().hex, member_token=uuid.uuid4().hex)
+        self.assertEqual(duplicate[0], 409, duplicate[1])
+        self.assertEqual(duplicate[1]["error_text"]["template"], "私聊窗口已存在")
+        self.assertNotEqual(self.request("/api/dispatches?view=chains", token=member_token)[0], 200)
+
+        other_owner = uuid.uuid4().hex
+        self.create(owner_token=other_owner, member_token=uuid.uuid4().hex)
+        status, denied = self.request(f"/api/rooms/{room['id']}/messages", token=other_owner,
+                                      headers={"X-Discussion-Read-Only": "1"})
+        self.assertEqual(status, 403, denied)
+
+        main_owner, main_member = uuid.uuid4().hex, uuid.uuid4().hex
+        main = self.create("steward", owner_token=main_owner, member_token=main_member)[1]
+        status, denied = self.request(f"/api/rooms/{main['id']}/messages", token=member_token,
+                                      headers={"X-Discussion-Read-Only": "1"})
+        self.assertEqual(status, 403, denied)
+        self.assertEqual(self.request(f"/api/rooms/{main['id']}/messages", token=member_token)[0], 403)
 
     def test_local_steward_actions_forward_payload_and_allow_options(self):
         self.server.local_launch = True

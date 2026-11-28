@@ -255,6 +255,10 @@ class AnalyticsTests(HostRoomTests):
         live = self.report("&range=live")["live"]
         self.assertEqual([(item["execution_id"], item["member"]) for item in live["running"]], [(running, "Codex")])
         self.assertEqual(live["waiting"], [])  # a failed run is not a wait (#15793)
+        self.assertEqual(len(live["timeline"]["rooms"]), 60)
+        room, = live["rooms"]
+        self.assertEqual((room["room_id"], room["running"], room["runs"], room["errors"], room["members"]),
+                         (self.room["id"], 1, 2, 1, 2))
         self.assertEqual((live["errors"], len(live["timeline"]["points"]), live["timeline"]["step"]), (1, 60, 60))
 
     def test_marked_wait_live_and_history_with_delivery_receipt(self):

@@ -10,7 +10,7 @@ System rooms (the platform steward) and archived rooms are left out, as everywhe
 import re
 from collections import defaultdict
 
-from .analytics_issues import concurrency_series, not_finished, unfinished_series
+from .analytics_issues import bucket_rooms, concurrency_series, not_finished, unfinished_series
 
 WINDOW = 3600
 MINUTE = 60
@@ -97,24 +97,59 @@ def waiting_for_owner(connection, now):
     return sorted(merged(items), key=lambda item: (item["since"] is None, item["since"] or 0))
 
 
+def active_rooms(connection, rows, running, start):
+    """Rooms with anything in the last hour, busiest first: who runs now, runs and errors this hour, messages, last activity.
+
+    Added for #15931 (the live view said who was working but not which rooms were busy)."""
+    rooms = defaultdict(lambda: {"running": 0, "runs": 0, "errors": 0, "messages": 0, "last_at": 0, "members": set()})
+    for run in running:
+        room = rooms[run["room_id"]]
+        room["running"] += 1
+        room["members"].add(run["member"])
+        room["last_at"] = max(room["last_at"], run["started_at"])
+    for row in rows:
+        if row["created_at"] < start and not (row["finished_at"] and row["finished_at"] >= start):
+            continue
+        room = rooms[row["room_id"]]
+        room["runs"] += 1
+        room["errors"] += int(not_finished(row))
+        room["members"].add(row["name"])
+        room["last_at"] = max(room["last_at"], row["finished_at"] or row["created_at"])
+    for row in connection.execute(f"""SELECT m.room_id,count(*) AS count,max(CAST(strftime('%s',m.created_at) AS INTEGER)) AS last_at
+            FROM messages m {ROOMS.format('m')} WHERE CAST(strftime('%s',m.created_at) AS INTEGER)>=? GROUP BY m.room_id""", (start,)):
+        room = rooms[row["room_id"]]
+        room["messages"] = row["count"]
+        room["last_at"] = max(room["last_at"], row["last_at"] or 0)
+    folders = dict(connection.execute("""SELECT a.room_id,f.name FROM room_folder_assignments a
+        JOIN topic_folders f ON f.id=a.folder_id"""))
+    result = [{"room_id": room_id, "folder": folders.get(room_id), **{k: v for k, v in values.items() if k != "members"},
+               "members": len(values["members"])} for room_id, values in rooms.items()]
+    return sorted(result, key=lambda room: (-room["running"], -room["last_at"]))
+
+
 def live_snapshot(connection, now):
     """The live view: running members, the last hour's finished runs and timeline, the queue, and what waits."""
     connection.execute("BEGIN")
     start = now - WINDOW
     rows = connection.execute(RECENT, (now, start)).fetchall()
-    spans = defaultdict(list)
+    spans, shown = defaultdict(list), defaultdict(list)
     for row in rows:
         left, right = max(start, row["created_at"]), min(now, row["finished_at"] or now)
         if left < right:
             spans[(row["room_id"], row["name"])].append((left, right))
+            shown[(row["room_id"], row["label"] or row["name"])].append((left, right))
     timeline = concurrency_series(spans, start, now, MINUTE)
+    timeline["rooms"] = bucket_rooms(shown, start, now, MINUTE)
     timeline["unfinished"] = unfinished_series(rows, start, now, MINUTE)
     timeline["start"] = start
     finished = sorted((row for row in rows if row["finished_at"] and row["finished_at"] >= start),
                       key=lambda row: row["finished_at"], reverse=True)
     hour = {"completed": sum(1 for row in finished if row["status"] == "completed"),
             "errors": sum(1 for row in rows if not_finished(row) and row["created_at"] >= start),
-            "runs": [run_item(connection, row, now) for row in finished[:RECENT_LIMIT]], "total": len(finished)}
-    return {"live": {"at": now, "running": [run_item(connection, row, now) for row in connection.execute(RUNNING, (now,))],
+            # Only the runs that went wrong are listed (#15953): a finished good run asks nothing of the owner, and the
+            # rooms above already say where the hour's work went.
+            "runs": [run_item(connection, row, now) for row in finished if not_finished(row)][:RECENT_LIMIT], "total": len(finished)}
+    running = [run_item(connection, row, now) for row in connection.execute(RUNNING, (now,))]
+    return {"live": {"at": now, "running": running, "rooms": active_rooms(connection, rows, running, start),
                      "queue": queue(connection), "waiting": waiting_for_owner(connection, now), "hour": hour,
                      "errors": hour["errors"], "timeline": timeline}}

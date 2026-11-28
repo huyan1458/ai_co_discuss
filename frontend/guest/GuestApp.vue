@@ -136,9 +136,7 @@ const END_TEXTS = {
           <UIcon :name="item.icon" />{{ item.label }}
         </button>
       </nav>
-      <div class="guest-connection-slot">
-        <p v-if="visit.offline.value" class="guest-offline" role="status">{{ t("暂时连不上对方电脑，正在重试；倒计时照常进行。") }}</p>
-      </div>
+      <p v-if="visit.offline.value" class="guest-offline" role="status">{{ t("暂时连不上对方电脑，正在重试；倒计时照常进行。") }}</p>
       <section class="guest-panel" role="tabpanel">
         <p v-if="TABS.find((item) => item.value === tab)?.disabled" class="guest-locked"><UIcon name="i-lucide-lock" />{{ TABS.find((item) => item.value === tab).hint }}</p>
         <GuestMessages v-else-if="tab === 'messages'" :visit="visit" />
@@ -170,8 +168,7 @@ const END_TEXTS = {
 .guest-title small { color: var(--ui-text-muted); font-size: 12px; }
 .guest-clock { flex: none; color: var(--ui-text-toned); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .guest-clock.is-ending { color: var(--ui-error); }
-.guest-connection-slot { flex: none; height: 30px; }
-.guest-offline { display: flex; align-items: center; box-sizing: border-box; height: 100%; overflow: auto; margin: 0; padding: 4px 16px; background: color-mix(in srgb, var(--ui-warning) 14%, var(--ui-bg)); color: var(--ui-warning); font-size: 12px; line-height: 1.4; }
+.guest-offline { margin: 0; padding: 6px 16px; background: color-mix(in srgb, var(--ui-warning) 14%, transparent); color: var(--ui-warning); font-size: 12px; }
 .guest-tabs { display: flex; gap: 2px; padding: 6px 12px 0; border-bottom: 1px solid var(--ui-border); overflow-x: auto; }
 .guest-tabs button { display: inline-flex; flex: none; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-bottom: 2px solid transparent; color: var(--ui-text-muted); font-size: 13px; }
 .guest-tabs button > span { width: 14px; height: 14px; }
@@ -184,7 +181,6 @@ const END_TEXTS = {
 .guest-top, .guest-tabs { padding-inline: max(16px, calc((100% - 960px) / 2)); }
 .guest-panel { flex: 1; min-height: 0; overflow: hidden; }
 @media (max-width: 480px) {
-  .guest-connection-slot { height: 42px; }
   .guest-card { padding: 24px 14px; }
   .guest-facts { grid-template-columns: 1fr; gap: 2px; }
   .guest-facts dd { margin-bottom: 8px; }

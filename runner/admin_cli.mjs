@@ -96,6 +96,7 @@ API 密钥、技能、工作流、系统提示词（目标同上）
   + t('  quota-usage [--weeks N]  查看订阅利用情况') + '\n'
   + t('  storage attachment-limit [MiB]  查看或调整单个附件上限') + '\n'
   + t('  storage analyze  让 MOSS 盘点共议占用') + '\n'
+  + t('  notify groups CHANNEL；notify group-enable|group-disable|group-clear-pending CHANNEL CHAT_ID  管理 MOSS 群窗口') + '\n'
   + t('  storage object [--account NAME] [[--url URL --key-file FILE|- | --use-admin] [--retention-days N] [--quota-mib N] [--threshold-mib N] | --test | --clear]  管理云空间') + '\n'
   + t('  storage object [list | link ID | delete ID [--purge]] [--account NAME]  查看、下载或删除云空间文件') + '\n'
   + t('  storage object [trash | restore ID [--folder]] [--account NAME]  列出回收站或还原，删除默认进回收站') + '\n'
@@ -540,6 +541,11 @@ export async function admin_cli(args, { client = panel_client, print = text => p
     return result;
   }
   const commands = {
+    notify: () => {
+      const [action, channel, chat_id] = rest;
+      if (!(action === 'groups' && rest.length === 2 || ['group-enable', 'group-disable', 'group-clear-pending'].includes(action) && rest.length === 3)) throw new Error(HELP);
+      return call('notify/moss-groups', { action, channel, ...(chat_id ? { chat_id } : {}) });
+    },
     storage: () => {
       if (!rest.length) return call('storage');
       if (rest.length === 1 && rest[0] === 'analyze') return call('storage/steward', {});

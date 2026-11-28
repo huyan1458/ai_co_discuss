@@ -1041,6 +1041,41 @@ test("the file page's selection bar greys out what does not apply and a batch ke
   assert.equal(shares.at(-1), 1);
 });
 
+test("the recycle bin icon counts what is in the cloud recycle bin from anywhere in the cloud space", async () => {
+  const { use_cloud_drive } = await import("../frontend/cloud-drive.js");
+  const bin = { folder: { id: "trash", path: [{ id: "root" }, { id: "trash" }] }, folders: [{ id: "d1" }], files: [{ id: "f1" }, { id: "f2" }] };
+  const asked = [];
+  const bridge = { notify() {}, request: async (route) => {
+    const place = new URLSearchParams(route.split("?")[1]).get("folder");
+    asked.push(place);
+    return place === "trash" ? bin : { folder: { id: place, path: [{ id: "root" }] }, folders: [], files: [] };
+  } };
+  const cloud = use_cloud_drive(bridge);
+  await cloud.open("root");
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(cloud.trash_count.value, 3, "read outside the bin");
+  assert.ok(asked.includes("trash"));
+  bin.files = [];
+  asked.length = 0;
+  await cloud.open("trash");
+  assert.equal(cloud.trash_count.value, 1, "in the bin, taken from its own listing");
+  assert.deepEqual(asked, ["trash"], "no second read while in the bin");
+  const fresh = use_cloud_drive(bridge);
+  bin.files = [{ id: "f3" }];
+  fresh.count_trash();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(fresh.trash_count.value, 2, "a project tab reads the count without opening the cloud space");
+});
+
+test("the transfer list shows what is going first, then failures, then what is finished, and its badge counts them", async () => {
+  const { ordered_transfers, transfer_counts } = await import("../frontend/transfers.js");
+  const rows = [{ id: "done", status: "done" }, { id: "failed", status: "failed" }, { id: "new", status: "running" }, { id: "gone", status: "cancelled" },
+    { id: "queued", status: "queued" }, { id: "cut", status: "interrupted" }];
+  assert.deepEqual(ordered_transfers(rows).map(row => row.id), ["new", "queued", "failed", "cut", "done", "gone"], "newest first within each group");
+  assert.deepEqual(transfer_counts(rows), { active: 2, failed: 2 });
+  assert.deepEqual(transfer_counts([]), { active: 0, failed: 0 }, "no badge when nothing is listed");
+});
+
 test("deleting in the panel says what went to the recycle bin and frees space only for what is gone", async () => {
   const { cloud_delete_notices, delete_cloud_files } = await import("../frontend/object-storage-fields.js");
   const answers = { a: { trashed: ["a"], freed_bytes: 0 }, b: { cleared: ["b"], freed_bytes: 2048 } };

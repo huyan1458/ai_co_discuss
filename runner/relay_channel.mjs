@@ -48,7 +48,8 @@ const RESPONSE_MAX_BYTES = 700 * 1024;
 // The website closes the whole connection on a frame over 1 MiB, failing every request on it; a larger answer is
 // replaced by an error so only that request fails.
 const FRAME_MAX_BYTES = 1024 * 1024 - 1024;
-const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions|sites|analytics|quota-usage)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
+const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions|sites|analytics|quota-usage)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.*~%=&,:+-]*)?$/;
+const SEARCH_API_PATH = /^\/api\/search(?:\?[A-Za-z0-9_.*~%=&,:+-]*)?$/;
 const PROJECT_CLOUD = 'project-files/cloud';
 const PROJECT_CLOUD_STATUS = /^project-files\/cloud\/[a-f0-9]{32}$/;
 const PROJECT_CLOUD_WRITES = new Map([['project-cloud', PROJECT_CLOUD],
@@ -133,13 +134,15 @@ function log_relay_read(home, site, timing, status, buffered_bytes) {
 }
 
 /**
- * Read or write one room route on the local website as this computer's bridge. Only room, folder and revision routes
- * of the local website itself are reachable; the device cannot name another address. Binary content comes back as base64.
+ * Forward an allowed local website route as this computer's bridge.
+ * The device cannot name another address. Binary content comes back as base64.
  */
 export async function room_api(home, site, payload, { fetcher = site_fetch, device, timing } = {}) {
   const { method = 'GET', path, body, token, offset = 0, etag } = payload || {};
   const cloud = typeof path === 'string' && path.startsWith('/api/local/') ? project_cloud_method(path.slice('/api/local/'.length)) : '';
-  if (!['GET', 'POST'].includes(method) || typeof path !== 'string' || !(ROOM_API_PATH.test(path) || cloud === method) || path.includes('..')
+  const quota_pins = method === 'POST' && path === '/api/quota-pins';
+  const search = method === 'GET' && typeof path === 'string' && SEARCH_API_PATH.test(path);
+  if (!['GET', 'POST'].includes(method) || typeof path !== 'string' || !(ROOM_API_PATH.test(path) || search || cloud === method || quota_pins) || path.split('?', 1)[0].includes('..')
       || !Number.isSafeInteger(offset) || offset < 0) {
     return { status: 400, body: { error: '中转请求地址无效' } };
   }

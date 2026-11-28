@@ -294,6 +294,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.cli("member", "register", room["id"], "--access-file", access_file(manual))["registered_at"], registered["registered_at"])
         self.rejected(["member", "register", room["id"], "--access-file", access_file(automatic)], code=1)
 
+    def test_room_read_uses_latest_message_and_can_mark_it_unread(self):
+        saved = self.cli("message", "post", self.room, "--as", "用户", "--body", "first")["message"]["id"]
+        result = self.cli("room", "read", self.room, "--dismiss-failure")
+        self.assertEqual(result, {"owner_read_until": saved, "failure_dismissed_at": saved})
+        result = self.cli("room", "read", self.room, "--unread")
+        self.assertEqual(result, {"owner_read_until": 0, "failure_dismissed_at": saved})
+
     def test_message_post_reports_the_hosting_claude_session(self):
         """A Claude Code session's own ID rides along on posts so the local service can take a manual member over."""
         args = ["--site", self.base, "message", "post", self.room, "--as", "用户", "--body", "x", "--submission-id", str(uuid.uuid4()), "--dry-run"]

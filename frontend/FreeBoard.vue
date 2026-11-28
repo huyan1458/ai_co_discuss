@@ -511,7 +511,7 @@ watch(() => room.value.id, () => { starting.value = false; });
         <UButton :label="t('结束')" icon="i-lucide-square" size="xs" color="neutral" variant="outline" class="pb-action" data-tone="danger" :title="t('结束 Goal，主持人不再自动推进；正在进行的工作不受影响')"
           :loading="is_running('goal_control')" @click="act('goal_control', 'clear')" />
       </div>
-      <p class="pb-goal-usage pb-goal-phase-note">{{ goal.status === 'active' && goal.phase !== 'doing' ? goal.phase_note : '' }}</p>
+      <p v-if="goal.status === 'active' && goal.phase !== 'doing' && goal.phase_note" class="pb-goal-usage">{{ goal.phase_note }}</p>
     </section>
     <section v-if="task && !discussion" class="pb-section" :aria-label="t('当前任务')">
       <h4>{{ t('当前任务') }}</h4>
@@ -624,7 +624,6 @@ watch(() => room.value.id, () => { starting.value = false; });
 .pb-popover-note { margin: 0; color: var(--ui-text-toned); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .pb-status-popover .pb-checkin { margin: 0; }
 .pb-status-popover .pb-rounds.is-warning .pb-bar > i { background: #e5a50a; }
-.pb-goal-phase-note { height: 3.2em; line-height: 1.6; overflow: auto; scrollbar-gutter: stable; }
 @media (pointer: coarse) {
   .pb-status-line, .pb-status-line > .pb-primary-slot { min-height: 36px; }
 }

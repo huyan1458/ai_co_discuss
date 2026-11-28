@@ -74,7 +74,7 @@ Used by room AI members or locally from the terminal to build custom share-card 
 ### Platform steward
 
 - `codiscuss steward status` shows the [platform steward](steward.md) conversation, settings, and skill availability.
-- `codiscuss steward settings --help` lists options for software, model, effort, project access, working directory, and allowed skills.
+- `codiscuss steward settings --help` lists options for software, model, effort, working directory, and allowed skills.
 - `codiscuss steward ask share-card --room ROOM` requests a share card for a room. View the result in the steward conversation.
 - `codiscuss steward ask discuss-report --room ROOM --note "Include the specified messages and save to the specified local folder"` requests a report on an existing discussion.
 - `codiscuss steward ask codiscuss-draft-cleanup --note "Inspect drafts only; do not delete"` requests a local draft inventory. The service must still be able to dispatch steward tasks.

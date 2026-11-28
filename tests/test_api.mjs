@@ -234,6 +234,13 @@ test('API web tools reach public pages only and stay off for tasks confined to t
     assert.ok(!names(context).includes('web_search'), 'no DeepSeek key, no search');
   }
   assert.ok(!names(api_lockdown({ tool_lockdown: true, api_context: {} }).api_context).includes('web_fetch'));
+  const group = api_lockdown({ tool_lockdown: true, api_context: {
+    role: 'member', allowed_room_tools: ['read_room'], allow_public_web: true,
+  } }).api_context;
+  const group_tools = participant_tools(group);
+  assert.ok(group_tools.some(tool => tool.name === 'web_fetch'));
+  await assert.rejects(execute_tool(group, { name: 'write', arguments: { path: 'probe.txt', content: 'synthetic' } }, group_tools), /不允许的工具/);
+  await assert.rejects(execute_tool(group, { name: 'edit', arguments: { path: 'probe.txt' } }, group_tools), /不允许的工具/);
   assert.ok(!names({ external_access: true, web_search_key: 'key' }).includes('web_search'));
 
   for (const address of ['127.0.0.1', '10.1.2.3', '100.71.206.50', '172.16.0.1', '192.168.1.1', '169.254.169.254', '::1', 'fd00::1', '::ffff:127.0.0.1']) assert.ok(is_private_address(address), address);
@@ -247,6 +254,8 @@ test('API web tools reach public pages only and stay off for tasks confined to t
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
   const origin = `http://127.0.0.1:${server.address().port}/`;
+  const group_fetch = await execute_tool(group, { name: 'web_fetch', arguments: { url: origin } }, group_tools);
+  assert.match(group_fetch.result.error, /本机或内网/);
   await assert.rejects(run_web_tool('web_fetch', { url: origin }), /本机或内网/);
   await assert.rejects(run_web_tool('web_fetch', { url: `http://localhost:${server.address().port}/` }), /本机或内网/);
   await assert.rejects(run_web_tool('web_fetch', { url: 'file:///C:/Windows/win.ini' }), /http/);

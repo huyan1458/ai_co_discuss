@@ -789,7 +789,7 @@ function panel_error(template, params = {}) {
 function error_body(error) {
   const error_text = error.error_text || { template: error.message, params: {} };
   return { error: error_text.template.replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(error_text.params, name) ? String(error_text.params[name]) : match),
-    error_text, ...(error.code === 'steward_access_too_low' ? { code: error.code } : {}) };
+    error_text };
 }
 
 function send_json(response, status, value) {
@@ -893,6 +893,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       return panel_object_storage(data, method, action, body, { limit: attachment_limit(data), quota_file: object_quota_path(data) });
     if (path === '/api/storage' && method === 'GET') return panel_storage(data, site_url(data));
     if (path === '/api/storage/steward' && method === 'POST') return panel_storage_steward(data);
+    if (path === '/api/notify/moss-groups' && method === 'POST') return panel_moss_groups(data, body);
     if (path === '/api/storage/clean' && method === 'POST') return panel_clean(data, site_url(data), body);
     if (path === '/api/storage/repair' && method === 'POST') return panel_repair(data, site_url(data), body);
     if (path === '/api/storage/attachments' && method === 'POST') return panel_room_attachments(site_url(data), body);
@@ -1761,6 +1762,18 @@ async function panel_storage_steward(data) {
   const result = await response.json();
   if (!response.ok) throw Object.assign(new Error(result.error), { status: response.status, error_text: result.error_text, code: result.code });
   return { room_id: result.room_id, message_id: result.message_id };
+}
+
+async function panel_moss_groups(data, input) {
+  if (!['groups', 'group-enable', 'group-disable', 'group-clear-pending'].includes(input?.action)) throw panel_error('接口不存在');
+  const { href } = new URL('api/local/notify', site_url(data));
+  const key_file = owner_key_file(data);
+  const response = await site_fetch(href, { method: 'POST', redirect: 'error',
+    headers: { 'Content-Type': 'application/json', 'X-CoDiscuss-Local': '1' }, body: JSON.stringify(input) },
+  existsSync(key_file) ? { key_file } : undefined);
+  const result = await response.json();
+  if (!response.ok) throw Object.assign(new Error(result.error), { status: response.status, error_text: result.error_text });
+  return result;
 }
 
 /** A runner script of the installed codiscuss package (npm puts its command beside node_modules), or this tree's copy. */

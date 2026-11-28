@@ -512,8 +512,18 @@ test('a paired device reads, writes and uploads to a protected instance through 
   assert.equal(sites.status, 200, JSON.stringify(sites.body));
   assert.ok(Array.isArray(sites.body.sites));
   const posted = await room_api(home, paired, { method: 'POST', path: `/api/rooms/${room.id}/messages`,
-    body: { author: '用户', text: '经中转的发言', submission_id: 'relay-protected-message' } });
+    body: { author: '用户', text: '经中转的发言 aXYb', submission_id: 'relay-protected-message' } });
   assert.ok([200, 201].includes(posted.status), JSON.stringify(posted.body));
+  const global_search = await room_api(home, paired, { path: '/api/search?q=a.*b' });
+  assert.equal(global_search.status, 200, JSON.stringify(global_search.body));
+  const room_search = await room_api(home, paired, { path: `/api/rooms/${room.id}/search?q=a.*b&regex=1` });
+  assert.equal(room_search.status, 200, JSON.stringify(room_search.body));
+  assert.equal(room_search.body.total, 1);
+  const matches = await room_api(home, paired, { path: `/api/rooms/${room.id}/messages?q=a..b&regex=1` });
+  assert.equal(matches.status, 200, JSON.stringify(matches.body));
+  assert.deepEqual(matches.body.messages.map(item => item.id), room_search.body.matches.map(item => item.anchor_message_id));
+  assert.equal((await room_api(home, paired, { path: '/api/search?q=a.*b', method: 'POST' })).status, 400);
+  assert.equal((await room_api(home, paired, { path: `/api/rooms/${room.id}/../search?q=a.*b` })).status, 400);
   const content = Buffer.from('中转附件');
   const uploaded = await room_upload(home, paired, { id: 'upload-relay-protected-1', path: `/api/rooms/${room.id}/attachments?file_name=note.txt&actor=%E7%94%A8%E6%88%B7&submission_id=relay-protected-upload`,
     index: 0, total: 1, size: content.length, content_type: 'text/plain', data: content.toString('base64') });

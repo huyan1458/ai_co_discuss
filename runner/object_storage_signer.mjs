@@ -155,7 +155,9 @@ async function access_object(context, action, name) {
   }
   const result = await center_request(credentials, action, name);
   if (action === 'presigned-download-url') return { url: result?.url, expiresAt: result?.expiresAt };
-  const { size, isDirectory } = result ?? {};
+  const { isDirectory } = result ?? {};
+  // The resource center answers the size as a decimal string ("5"), though its guide shows a number.
+  const size = typeof result?.size === 'string' && /^\d+$/.test(result.size) ? Number(result.size) : result?.size;
   if (!Number.isSafeInteger(size) || size < 0 || isDirectory) throw unavailable();
   if (row && !row.deleting && !row.stored) {
     if (size === row.size) row.stored = true;

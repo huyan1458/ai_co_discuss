@@ -49,15 +49,12 @@ onMounted(async () => {
 const SERVICES_POLL_MS = 10_000;
 const services = ref({});
 const install_skill = ref("");
-// Installing needs MOSS above read-only: the confirmation says so and raises it before sending (#15623).
-const install_read_only = ref(false);
 async function ask_install(skill) {
   if (!await bridge.ensure_steward_configured()) return;
-  install_read_only.value = bridge.steward_read_only();
   install_skill.value = skill;
 }
 function confirm_install() {
-  if (install_skill.value) bridge.request_steward(install_skill.value, {}, { confirmed: true, raise_access: install_read_only.value });
+  if (install_skill.value) bridge.request_steward(install_skill.value, {}, { confirmed: true });
 }
 let services_timer = 0;
 /** Read whether the local services run; a failed read keeps the last state. */
@@ -302,8 +299,8 @@ onBeforeUnmount(stop_preview);
       </template>
     </UCollapsible>
     <ConfirmDialog :open="Boolean(install_skill)" :title="install_skill === 'local-tts-setup' ? t('安装本机朗读') : t('安装本机语音输入')"
-      :description="install_read_only ? t('MOSS 将下载所需组件并更改本机语音设置。MOSS 现在是只读，确认后会先把它的项目权限调到“自动”，再发送。') : t('MOSS 将下载所需组件并更改本机语音设置。')"
-      :confirm-label="install_read_only ? t('调到自动并发送') : undefined" @update:open="!$event && (install_skill = '')" @confirm="confirm_install" />
+      :description="t('MOSS 将下载所需组件并更改本机语音设置。')"
+      @update:open="!$event && (install_skill = '')" @confirm="confirm_install" />
   </section>
 </template>
 

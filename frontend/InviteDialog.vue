@@ -389,8 +389,7 @@ async function refresh_after(invited_any) {
           <template v-if="!invite_workflow"><ExternalExpertCard v-for="item in external_drafts" :key="`external-${item.id}`" v-model:draft="item.draft" :paths="room_directories" @remove="external_drafts = external_drafts.filter((entry) => entry !== item)" /></template>
           <ExternalGuestCard v-if="guest_card && !invite_workflow" v-model:draft="guest_card.draft" :occupied="guest_occupied" @remove="guest_card = null" />
         </div>
-        <!-- Always rendered once cards exist, so switching a card's mode never changes the dialog height. -->
-        <p v-if="invite_picks.length" class="fine-print" :class="{ 'pb-invite-reserved': !(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')) }" :aria-hidden="!(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual'))">{{ t("手动启动的成员排在程序启动的成员之后加入队列。") }}</p>
+        <template v-if="invite_picks.length"><p v-if="invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')" class="fine-print">{{ t("手动启动的成员排在程序启动的成员之后加入队列。") }}</p></template>
         <p v-else-if="submitting" class="pb-invite-empty">{{ t("正在加入成员…") }}</p>
         <p v-else-if="!invite_workflow && !external_drafts.length && !guest_card" class="pb-invite-empty">{{ t("选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。") }}</p>
         <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available || guest_card && !view.launch.available && !view.launch.remote" role="alert" class="fine-print">{{ t("邀请需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
@@ -430,8 +429,8 @@ async function refresh_after(invited_any) {
 .pb-invite-options label.is-selected { color: var(--ui-text-highlighted); background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-control); }
 .pb-invite-options input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .pb-invite .fine-print { margin: -6px 0 0; }
-.pb-invite-reserved { visibility: hidden; }
 .pb-invite-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
-.pb-invite-content { height: min(50dvh, 32rem); overflow: auto; scrollbar-gutter: stable; }
+/* Grows with the cards (no standing blank); the dialog is top-anchored in channel.css so adding a card never moves the pickers above. */
+.pb-invite-content { max-height: min(50dvh, 32rem); overflow: auto; scrollbar-gutter: stable; }
 .pb-invite-footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; }
 </style>

@@ -2,6 +2,14 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.47 (2026-11-28 06:35)
+
+- New: "Find in room" at the top of a room (`Ctrl+F`) searches messages, execution progress, and attachment names; "Search" in the left sidebar searches every room and MOSS on this computer at once.
+- New: MOSS can join QQ groups: click "+" in the window list on the website, or have the room owner @ MOSS in the group with "开始工作" (start work). Each group gets its own window and settings.
+- Changed: MOSS is split into "Main", "Private chat", and one window per group, each with its own history, session, and settings; channel private chat is read-only by default.
+- Changed: When a member is waiting for your reply, the room name in the left sidebar brightens with a yellow dot, and "Rooms" shows how many rooms are waiting. Read status syncs across devices.
+- Changed: While a member is busy, a single queue line under the message lists who it is waiting for; when the host asks for more rounds, the right panel shows the reason and you can click "Approve N rounds".
+
 ## 0.5.46 (2026-11-28 02:04)
 
 - New: The "Analytics" page adds "Subscription use": how much of each subscription you used over the past 8 weeks, how often you hit limits, and whether to upgrade or downgrade.

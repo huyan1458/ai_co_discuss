@@ -1,20 +1,19 @@
 /**
- * Changes the file page makes to project and draft folders: new folders, rename, move, copy, delete into a recycle
- * area, upload in parts, and saving an edited text file. Every function takes an already resolved root (one of the
+ * Changes the file page makes to project and draft folders: new folders, rename, move, copy, permanent deletion,
+ * upload in parts, and saving an edited text file. Every function takes an already resolved root (one of the
  * folders the caller may use, see `room_files` in discussion_launch.mjs) and a path relative to it; nothing here reads
  * a path the request names in full. The root folders themselves are never renamed, moved or deleted here: rooms and
  * AI sessions know them by path.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { project_path, project_root } from './project_files.mjs';
 
 import { attachment_limit } from './attachment_policy.mjs';
 import { t } from './i18n.mjs';
 export const EDIT_MAX_BYTES = 1024 * 1024;
-export const TRASH_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 // The smallest part a page sends (through the relay), bounding how many parts an upload of a given size may have.
 const UPLOAD_PART_MIN_BYTES = 64 * 1024;
 const UPLOAD_PART_MAX_BYTES = 4 * 1024 * 1024;
@@ -75,9 +74,6 @@ function check_unused(target, info, rooms_in) {
   if (rooms.length) throw new Error(`有 ${rooms.length} 个房间在使用这个文件夹（或其中的文件夹）作为项目目录，不能改名、移动、替换或删除`);
 }
 
-/** The disk a path is on, for telling whether a move copies. */
-const drive_key = path => parse(resolve(path)).root.toLowerCase();
-
 /** Whether `inner` is `outer` or lies inside it. */
 function inside(outer, inner) {
   const rest = relative(same_key(outer), same_key(inner));
@@ -89,30 +85,15 @@ function free_name(folder, name) {
   const extension = extname(name), stem = extension && extension !== name ? name.slice(0, -extension.length) : name;
   for (let number = 1; ; number += 1) {
     const candidate = `${stem} (${number})${extension && extension !== name ? extension : ''}`;
-    if (!existsSync(join(folder, candidate))) return candidate;
+    if (!lstatSync(join(folder, candidate), { throwIfNoEntry: false })) return candidate;
   }
 }
 
-/**
- * Move a file or folder; across disks it is copied and then removed. When removing the original fails part way (a file
- * in use), the error carries `copied: true`: the copy is whole, and only it still has everything.
- */
-export function move_path(from, to, { rename = renameSync } = {}) {
-  try { rename(from, to); }
-  catch (error) {
-    if (error.code !== 'EXDEV') throw error;
-    cpSync(from, to, { recursive: true, errorOnExist: true, force: false, filter: source => !lstatSync(source).isSymbolicLink() });
-    try { rmSync(from, { recursive: true, force: true }); }
-    catch (failure) { throw Object.assign(failure, { copied: true }); }
-  }
-}
-
-/** The size and number of entries under a folder or file, refusing what is too large to copy at once (or holds a link, with `links`). */
-function copy_budget(target, { links = false } = {}) {
+/** The size and number of entries under a folder or file, refusing what is too large to copy at once. */
+function copy_budget(target) {
   let bytes = 0, entries = 0;
   const walk = path => {
     const info = lstatSync(path);
-    if (info.isSymbolicLink() && links) throw new Error('回收区在另一个磁盘上，含链接的文件夹无法移进回收区，请让 AI 处理');
     if (info.isSymbolicLink()) return;
     entries += 1;
     if (info.isFile()) bytes += info.size;
@@ -122,77 +103,29 @@ function copy_budget(target, { links = false } = {}) {
   walk(target);
 }
 
-/**
- * The recycle area: one folder per removed item, holding the item and a note of where it came from. It lies outside
- * every project, so AI members searching a project do not read what was deleted.
- */
-export class RecycleArea {
-  constructor(directory) { this.directory = directory; }
+function project_error(template, params, cause) {
+  return Object.assign(new Error(t(template, params), { cause }), { error_text: { template, params } });
+}
 
-  /** Move one file or folder in; `root` and `path` say where it came from, for restoring. */
-  keep(target, { root, path, kind }, { rename = renameSync } = {}) {
-    this.purge();
-    const id = `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-    const folder = join(this.directory, id);
-    // Across disks the item is copied: a large one would hold the request (and the disk), so it is refused first.
-    if (drive_key(target) !== drive_key(this.directory)) copy_budget(target, { links: true });
-    mkdirSync(join(folder, 'item'), { recursive: true });
-    // The note comes first, so an item that reached the area can always be listed and restored.
-    writeFileSync(join(folder, 'meta.json'), JSON.stringify({ root, path, name: basename(target), kind, deleted_at: new Date().toISOString() }));
-    try { move_path(target, join(folder, 'item', basename(target)), { rename }); }
-    catch (error) {
-      // A copy made before the original could be fully removed is the only whole one left: it stays in the area.
-      if (error.copied) throw new Error('部分文件正被占用，原处没有删干净；回收区里有完整副本，可在回收区还原或关闭占用的程序后再删一次');
-      rmSync(folder, { recursive: true, force: true });
-      throw error;
-    }
-    return id;
-  }
+function stage_delete(target) {
+  const stage = mkdtempSync(join(dirname(target), '.codiscuss-delete-'));
+  const item = join(stage, 'item');
+  try { renameSync(target, item); }
+  catch (error) { rmSync(stage, { force: true, recursive: true }); throw error; }
+  return { stage, item };
+}
 
-  /** What is kept, newest first; the root folder is named only by its last part. */
-  list() {
-    this.purge();
-    if (!existsSync(this.directory)) return [];
-    return readdirSync(this.directory).flatMap(id => {
-      try {
-        const meta = JSON.parse(readFileSync(join(this.directory, id, 'meta.json'), 'utf8'));
-        const info = statSync(join(this.directory, id, 'item', meta.name));
-        return [{ id, name: meta.name, path: meta.path, kind: meta.kind, root_name: basename(meta.root), deleted_at: meta.deleted_at,
-          size: info.isFile() ? info.size : null }];
-      } catch { return []; }
-    }).sort((left, right) => String(right.deleted_at).localeCompare(String(left.deleted_at)));
+function remove_stage(stage) {
+  try { rmSync(stage, { recursive: true }); }
+  catch (error) {
+    throw project_error('原位置已移除旧内容，但未能彻底删除。请关闭占用的程序后清理同级目录 {name}。', { name: basename(stage) }, error);
   }
+}
 
-  /**
-   * Put one item back where it was. `allowed(root)` says whether its root folder is still one the caller may use; a
-   * name taken meanwhile gets a free one, and a folder deleted meanwhile is made again.
-   */
-  restore(id, allowed) {
-    if (typeof id !== 'string' || !/^[a-z0-9]+-[a-f0-9]{8}$/.test(id)) throw new Error('回收区条目无效');
-    const folder = join(this.directory, id);
-    let meta;
-    try { meta = JSON.parse(readFileSync(join(folder, 'meta.json'), 'utf8')); } catch { throw new Error('回收区条目已不存在，请刷新后重试'); }
-    if (!allowed(meta.root)) throw new Error('原来的项目或草稿文件夹已不在你可用的范围内，无法还原');
-    const root = project_root(meta.root);
-    const parts = parts_of(meta.path);
-    const parent = join(root, ...parts.slice(0, -1));
-    if (!inside(root, parent)) throw new Error('回收区条目无效');
-    mkdirSync(parent, { recursive: true });
-    folder_in(root, parts.slice(0, -1).join('/'));
-    const name = existsSync(join(parent, meta.name)) ? free_name(parent, meta.name) : meta.name;
-    move_path(join(folder, 'item', meta.name), join(parent, name));
-    rmSync(folder, { recursive: true, force: true });
-    return { path: [...parts.slice(0, -1), name].join('/'), root_name: basename(meta.root) };
-  }
-
-  /** Drop what has been kept longer than the keeping period. */
-  purge(now = Date.now()) {
-    if (!existsSync(this.directory)) return;
-    for (const id of readdirSync(this.directory)) {
-      const created = parseInt(id.split('-')[0], 36);
-      if (Number.isFinite(created) && now - created > TRASH_KEEP_MS) rmSync(join(this.directory, id), { recursive: true, force: true });
-    }
-  }
+function delete_target(target, info) {
+  if (!info.isDirectory()) return unlinkSync(target);
+  // A recursive remove can fail after deleting only some children. Keep that work off the original path.
+  remove_stage(stage_delete(target).stage);
 }
 
 /** Create one folder in `path`. */
@@ -218,39 +151,72 @@ export function rename_entry(root, path, name, rooms_in = null) {
   return { path: [...parts_of(path).slice(0, -1), wanted].join('/') };
 }
 
-/** Move one entry into the recycle area. */
-export function delete_entry(root, path, recycle, rooms_in = null) {
+/** Permanently delete one entry without leaving a partly removed tree at its original path. */
+export function delete_entry(root, path, rooms_in = null) {
   const entry = entry_in(root, path);
   check_unused(entry.target, entry.info, rooms_in);
-  const id = recycle.keep(entry.target, { root, path: entry.path, kind: entry.info.isDirectory() ? 'directory' : 'file' });
-  return { trash_id: id };
+  delete_target(entry.target, entry.info);
+  return { deleted: true, path: entry.path };
 }
 
 /**
- * The name a new entry takes in `folder`: its own when free; when taken, `replace` moves the old one into the
- * recycle area, `keep_both` picks a free name, and no choice answers `{ conflict: true }` without changing anything.
+ * Pick a name and validate a replacement without touching the destination until the new contents are ready.
  */
-function place_name(folder, name, conflict, recycle, origin, { source = '', rooms_in = null } = {}) {
+function place_name(folder, name, conflict, { source = '', rooms_in = null } = {}) {
   const target = join(folder, name);
-  if (!existsSync(target)) return { name };
-  // Replacing the very entry being pasted, or a folder that holds it, would recycle the source: both are kept instead.
+  const info = lstatSync(target, { throwIfNoEntry: false });
+  if (!info) return { name };
+  // Replacing the entry being pasted, or a folder that holds it, would remove the source.
   if (conflict === 'keep_both' || (conflict === 'replace' && source && inside(target, source))) return { name: free_name(folder, name) };
   if (conflict !== 'replace') return { conflict: true, name };
-  const info = lstatSync(target);
   if (info.isSymbolicLink()) throw new Error('链接（含 Windows junction）不能在网页上改动');
   check_unused(target, info, rooms_in);
-  recycle.keep(target, { ...origin, kind: info.isDirectory() ? 'directory' : 'file' });
-  return { name };
+  return { name, previous: info };
 }
 
-/** Place a verified file beside its temporary copy, reusing the local upload naming and recycle rules. */
-export function place_project_download({ root, path, name, temporary, conflict, recycle, publish }) {
+function install_entry(source, target, previous, is_directory = false) {
+  if (!previous || (!previous.isDirectory() && !is_directory)) return renameSync(source, target);
+  const { stage, item } = stage_delete(target);
+  try { renameSync(source, target); }
+  catch (error) {
+    try {
+      if (lstatSync(target, { throwIfNoEntry: false })) throw error;
+      renameSync(item, target);
+    } catch (failure) {
+      throw project_error('替换失败，旧内容保留在同级目录 {name}。', { name: basename(stage) }, failure);
+    }
+    rmSync(stage, { recursive: true });
+    throw error;
+  }
+  remove_stage(stage);
+}
+
+function copy_entry(source, target) {
+  cpSync(source, target, { recursive: true, errorOnExist: true, force: false, filter: path => !lstatSync(path).isSymbolicLink() });
+}
+
+function paste_target(entry, target, previous, move) {
+  if (move) {
+    try { return install_entry(entry.target, target, previous, entry.info.isDirectory()); }
+    catch (error) { if (error.code !== 'EXDEV') throw error; }
+  }
+  if (!previous && !move) return copy_entry(entry.target, target);
+  const stage = mkdtempSync(join(dirname(target), '.codiscuss-copy-'));
+  const incoming = join(stage, 'item');
+  try {
+    copy_entry(entry.target, incoming);
+    install_entry(incoming, target, previous, entry.info.isDirectory());
+  } finally { rmSync(stage, { recursive: true, force: true }); }
+  if (move) delete_target(entry.target, entry.info);
+}
+
+/** Place a verified file atomically. A different incoming name never overwrites an existing file. */
+export function place_project_download({ root, path, name, temporary, conflict }) {
   const folder = folder_in(root, path), wanted = check_name(name);
-  const origin = { root, path: [...parts_of(path), wanted].join('/') };
   if (conflict === 'replace' && lstatSync(join(folder, wanted), { throwIfNoEntry: false })?.isDirectory())
     throw new Error(t('不能用云空间文件替换文件夹'));
-  const { name: placed } = place_name(folder, wanted, conflict ?? 'keep_both', recycle, origin);
-  publish(temporary, join(folder, placed));
+  const { name: placed, previous } = place_name(folder, wanted, conflict ?? 'keep_both');
+  (previous ? renameSync : linkSync)(temporary, join(folder, placed));
   return [...parts_of(path), placed].join('/');
 }
 
@@ -258,7 +224,7 @@ export function place_project_download({ root, path, name, temporary, conflict, 
  * Copy or move one entry into a folder, possibly of another root. A folder cannot go into itself; links inside a
  * copied folder are left out.
  */
-export function paste_entry({ source_root, source_path, root, path, mode, conflict, recycle, rooms_in = null }) {
+export function paste_entry({ source_root, source_path, root, path, mode, conflict, rooms_in = null }) {
   if (!['copy', 'move'].includes(mode)) throw new Error('粘贴方式只能为复制或移动');
   const entry = entry_in(source_root, source_path);
   if (mode === 'move') check_unused(entry.target, entry.info, rooms_in);
@@ -266,11 +232,10 @@ export function paste_entry({ source_root, source_path, root, path, mode, confli
   if (entry.info.isDirectory() && inside(entry.target, folder)) throw new Error('不能把文件夹放进它自己或它的子文件夹');
   if (mode === 'move' && same_key(entry.parent) === same_key(folder)) return { path: entry.path, unchanged: true };
   if (mode === 'copy') copy_budget(entry.target);
-  const placed = place_name(folder, entry.name, conflict, recycle, { root, path: [...parts_of(path), entry.name].join('/') }, { source: entry.target, rooms_in });
+  const placed = place_name(folder, entry.name, conflict, { source: entry.target, rooms_in });
   if (placed.conflict) return placed;
   const target = join(folder, placed.name);
-  if (mode === 'move') move_path(entry.target, target);
-  else cpSync(entry.target, target, { recursive: true, errorOnExist: true, force: false, filter: source => !lstatSync(source).isSymbolicLink() });
+  paste_target(entry, target, placed.previous, mode === 'move');
   return { path: [...parts_of(path), placed.name].join('/') };
 }
 
@@ -279,7 +244,7 @@ export function paste_entry({ source_root, source_path, root, path, mode, confli
  * root in one step. Parts may be resent; an upload left unfinished for an hour is dropped. A name already taken
  * follows `conflict` (see `place_name`), and without a choice the file keeps both.
  */
-export function upload_part({ root, path, name, upload_id, index, total, size, data, conflict, parts_directory, recycle }) {
+export function upload_part({ root, path, name, upload_id, index, total, size, data, conflict, parts_directory, rooms_in }) {
   const wanted = check_name(name);
   if (typeof upload_id !== 'string' || !UPLOAD_ID.test(upload_id) || !Number.isSafeInteger(total) || total < 1
     || !Number.isSafeInteger(index) || index < 0 || index >= total || !Number.isSafeInteger(size) || size < 0 || typeof data !== 'string') {
@@ -312,20 +277,22 @@ export function upload_part({ root, path, name, upload_id, index, total, size, d
   if (received > size) { rmSync(store, { recursive: true, force: true }); throw new Error('上传的内容超过声明的大小，已放弃，请重新上传'); }
   if (missing.length) return { received: total - missing.length, missing };
   const bytes = Buffer.concat([...Array(total).keys()].map(part => readFileSync(join(store, `${part}.part`))));
+  if (bytes.length !== size) { rmSync(store, { recursive: true, force: true }); throw new Error('文件不完整，请重新上传'); }
+  const placed = place_name(folder, wanted, conflict || 'keep_both', { rooms_in });
+  write_whole(join(folder, placed.name), bytes, placed.previous);
   rmSync(store, { recursive: true, force: true });
-  if (bytes.length !== size) throw new Error('文件不完整，请重新上传');
-  const placed = place_name(folder, wanted, conflict || 'keep_both', recycle, { root, path: [...parts_of(path), wanted].join('/') });
-  write_whole(join(folder, placed.name), bytes);
   const answer = { path: [...parts_of(path), placed.name].join('/'), size: bytes.length };
   writeFileSync(finished, JSON.stringify(answer));
   return answer;
 }
 
 /** Write a file in one step: a temporary file beside it, then a rename over it. */
-function write_whole(target, bytes) {
+function write_whole(target, bytes, previous) {
   const temporary = join(dirname(target), `.${basename(target)}.${randomUUID().slice(0, 8)}.codiscuss-tmp`);
-  writeFileSync(temporary, bytes);
-  try { renameSync(temporary, target); } catch (error) { rmSync(temporary, { force: true }); throw error; }
+  try {
+    writeFileSync(temporary, bytes);
+    install_entry(temporary, target, previous);
+  } catch (error) { rmSync(temporary, { force: true }); throw error; }
 }
 
 const version_of = bytes => createHash('sha256').update(bytes).digest('hex').slice(0, 16);

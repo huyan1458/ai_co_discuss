@@ -119,7 +119,7 @@ export function guard_remote_request(command, input, { projects, participants, h
   const saved = Object.values(participants || {});
   const known = Object.fromEntries(SOFTWARE_FIELDS.map(field => [field, new Set(saved.map(profile => profile[field]).filter(Boolean))]));
   walk(input, (key, value) => {
-    if (key === 'cwd' && value) guard_remote_directories([value], { projects, home, kept });
+    if (['cwd', 'read_directory'].includes(key) && value) guard_remote_directories([value], { projects, home, kept });
     else if (key === 'extra_directories' && Array.isArray(value)) guard_remote_directories(value, { projects, home, kept });
     else if (SOFTWARE_FIELDS.includes(key) && value && !known[key].has(value)) throw new Error(`其他设备不能更改软件位置（${key}），请在电脑上设置`);
     // 全放开 may be given to a room's member; it never becomes a saved default from afar.

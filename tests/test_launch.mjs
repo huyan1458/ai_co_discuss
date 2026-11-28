@@ -495,7 +495,7 @@ test('project cloud landing validates the destination and only releases complete
   assert.throws(() => cloud_landing_target(project, '../private', []));
   assert.throws(() => cloud_landing_target(project, 'dest', [dest]));
   const target = cloud_landing_target(project, 'dest', []), id = 'a'.repeat(32);
-  const request = { id, site: 'http://127.0.0.1', room: 'abc123', token: 'fixture-token', target, recycle: join(home, 'recycle') };
+  const request = { id, site: 'http://127.0.0.1', room: 'abc123', token: 'fixture-token', target };
   const meta = { id, purpose: 'inbound', file_name: 'notes.txt', size: 3 };
   const calls = [];
   const fetch_site = async (url, init) => {
@@ -527,7 +527,13 @@ test('project cloud landing validates the destination and only releases complete
   assert.equal(readFileSync(join(dest, 'notes.txt'), 'utf8'), 'old');
   assert.equal(readFileSync(join(dest, 'notes (1).txt'), 'utf8'), 'new');
   assert.equal(calls.at(-1), 'release');
-  assert.deepEqual(await land_cloud_project({ ...request, attachment_id: id }, { fetch_site, fetch_cos }), { path: 'dest/attachment.txt' });
+  const attachment = { ...request, attachment_id: id, conflict: 'replace' };
+  writeFileSync(join(dest, 'attachment.txt'), 'old');
+  await assert.rejects(land_cloud_project(attachment, { fetch_site, fetch_cos: async () => new Response('x') }));
+  assert.equal(readFileSync(join(dest, 'attachment.txt'), 'utf8'), 'old');
+  assert.deepEqual(await land_cloud_project(attachment, { fetch_site, fetch_cos }), { path: 'dest/attachment.txt' });
+  assert.equal(readFileSync(join(dest, 'attachment.txt'), 'utf8'), 'new');
+  assert.deepEqual(readdirSync(dest).sort(), ['attachment.txt', 'notes (1).txt', 'notes.txt']);
   assert.equal(calls.filter(item => item === 'release').length, 1);
 });
 
@@ -538,7 +544,7 @@ test('cross-room project cloud landing claims exactly one attachment without a r
   const target = cloud_landing_target(directory, '', []);
   const id = 'a'.repeat(32), attachment_id = 'b'.repeat(32), attachment_grant = 'c'.repeat(64);
   const request = { id, site: 'http://127.0.0.1:8765', room: 'target-room', token: 'target-room-token',
-    attachment_room: 'source-room', attachment_id, target, recycle: join(directory, 'recycle') };
+    attachment_room: 'source-room', attachment_id, target };
   const attachment = { id: attachment_id, room_id: 'source-room', file_name: 'notes.txt', size: 3, storage: 'object', stored: true, message_id: 2 };
   const link = { url: 'https://cos.example.invalid/download', size: 3 };
   const reads = [];
@@ -575,7 +581,7 @@ test('project cloud landing redeems an account cloud file without releasing the 
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const cloud_file_id = 'b'.repeat(32), attachment_grant = 'c'.repeat(64);
   const request = { id: 'a'.repeat(32), site: 'http://127.0.0.1:8765', room: 'target-room', token: 'target-room-token',
-    cloud_file_id, target: cloud_landing_target(directory, '', []), recycle: join(directory, 'recycle') };
+    cloud_file_id, target: cloud_landing_target(directory, '', []) };
   const cloud_file = { id: cloud_file_id, room_id: null, file_name: 'empty.txt', size: 0, stored: true };
   const link = { url: 'https://cos.example.invalid/download', size: cloud_file.size };
   const seen = [];
@@ -727,21 +733,22 @@ test('the file page reaches an account\'s projects and drafts by id, and a folde
   assert.deepEqual(listed.projects.map(item => [item.name, item.rooms]), [['年度方案', [config.room]]]);
   assert.deepEqual(listed.drafts.map(item => item.name), ['草稿-abc'], 'an empty draft is not listed');
   assert.ok(!JSON.stringify(listed).includes(f.directory), 'the page never sees where the folders are');
-  // Copy a draft's file into the room's project, by the draft's id; then the draft can go to the recycle area, the project cannot.
+  // Copy a draft's file into the room's project by id; an unused draft can be deleted, but the active project cannot.
   const draft = listed.drafts[0].id;
   assert.deepEqual((await room_files(f.home, { ...input, op: 'paste', mode: 'copy', source: { root: draft, path: '笔记.txt' }, root: 0, path: '' })).path, '笔记.txt');
   assert.equal(readFileSync(join(projects, '年度方案', '笔记.txt'), 'utf8'), '草稿');
   await assert.rejects(room_files(f.home, { ...input, op: 'delete-root', root: listed.projects[0].id }), /1 个房间/);
   await room_files(f.home, { ...input, op: 'delete-root', root: draft });
   assert.ok(!existsSync(join(f.directory, 'alice', 'workspace', '草稿-abc')));
-  const [kept] = (await room_files(f.home, { ...input, op: 'trash' })).entries;
-  assert.equal(kept.name, '草稿-abc');
-  await room_files(f.home, { ...input, op: 'restore', id: kept.id });
-  assert.ok(existsSync(join(f.directory, 'alice', 'workspace', '草稿-abc', '笔记.txt')));
+  assert.ok(!existsSync(join(f.directory, 'alice', 'trash')));
+  for (const op of ['trash', 'restore', 'empty-trash']) await assert.rejects(room_files(f.home, { ...input, op }), /文件操作只能为|Supported file operations/);
   await assert.rejects(room_files(f.home, { ...input, op: 'mkdir', root: 'not-a-folder-id', path: '', name: '新' }), /已不存在/);
   // A download reads a file the preview would not open.
   const saved = await room_media(f.home, { ...input, path: '笔记.txt', download: true });
   assert.equal(saved.content_type, 'application/octet-stream');
+  assert.deepEqual(await room_files(f.home, { ...input, op: 'delete', path: '笔记.txt' }),
+    { room_id: config.room, deleted: true, path: '笔记.txt' });
+  assert.ok(!existsSync(join(projects, '年度方案', '笔记.txt')));
 });
 
 test('room skills require owner authentication and ignore caller supplied software and directories, locally and over relay', async t => {

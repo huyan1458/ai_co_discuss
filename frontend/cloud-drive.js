@@ -158,7 +158,7 @@ export async function walk_dropped(entries) {
  * Args:
  *   bridge: the page's bridge (request, preview, uploads, thumbnails, notify).
  * Returns:
- *   { place, listing, loading, query, thumbnails, transfers_empty, path, folders, files, in_trash, special, usage, can,
+ *   { place, listing, loading, query, thumbnails, transfers_empty, path, folders, files, in_trash, trash_count, count_trash, special, usage, can,
  *     reload, open, upload, mkdir, rename, move, remove, restore, empty_trash, download, save_one, preview, share_api }.
  */
 export function use_cloud_drive(bridge) {
@@ -172,6 +172,11 @@ export function use_cloud_drive(bridge) {
   let serial = 0;
 
   const in_trash = computed(() => place.value === "trash");
+  const trash_count = ref(0);
+  function count_trash() {
+    bridge.request(`${BASE}?${new URLSearchParams({ folder: "trash" })}`)
+      .then((bin) => { trash_count.value = (bin.folders || []).length + (bin.files || []).length; }).catch(() => {});
+  }
   const special = computed(() => SPECIAL_PLACES.includes(place.value));
   const searching = computed(() => Boolean(query.value.trim()));
   // Read-only places first, then the user's folders; an empty "传输暂存" is left out.
@@ -212,6 +217,9 @@ export function use_cloud_drive(bridge) {
         bridge.request(`${BASE}?${new URLSearchParams({ folder: "transfers" })}`)
           .then((transfers) => { transfers_empty.value = !(transfers.files || []).length; }).catch(() => {});
       }
+      // The recycle bin icon's number: what is in the bin, counted again whenever a listing is read (a change reads one).
+      if (place.value === "trash" && !searching.value) trash_count.value = (answer.folders || []).length + (answer.files || []).length;
+      else if (place.value !== "trash") count_trash();
     } catch (error) {
       if (mine !== serial) return;
       // A folder gone meanwhile leaves for the top.
@@ -345,6 +353,6 @@ export function use_cloud_drive(bridge) {
     revoke: (file, share) => bridge.request(`${share_route(file)}/${encodeURIComponent(share.id)}/revoke`, {}),
   };
 
-  return { place, listing, loading, query, thumbnails, transfers_empty, path, folders, files, in_trash, special, searching, usage, can,
+  return { place, listing, loading, query, thumbnails, transfers_empty, path, folders, files, in_trash, trash_count, count_trash, special, searching, usage, can,
     reload, open, upload, mkdir, rename, move, remove, restore, empty_trash, download, save_one, preview, child_folders, share_api };
 }

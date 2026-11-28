@@ -135,6 +135,12 @@ function live_where(run) {
   return run.folder ? t("{folder} / {room}", { folder: run.folder, room }) : room;
 }
 const LIVE_STATUS_ICONS = { completed: "i-lucide-circle-check", failed: "i-lucide-circle-x", cancelled: "i-lucide-circle-slash" };
+/** One active room's hour in a sentence: who runs now, runs this hour, messages. Errors are shown apart, in red. */
+function live_room_summary(room) {
+  return room.running
+    ? t("{running} 位在跑 · 最近 1 小时 {runs} 次运行 · {messages} 条消息", { running: room.running, runs: room.runs, messages: room.messages })
+    : t("最近 1 小时 {runs} 次运行 · {messages} 条消息", { runs: room.runs, messages: room.messages });
+}
 const live_clock = (stamp) => new Date(stamp * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 const live_updated = computed(() => (live.value ? new Date(live.value.at * 1000).toLocaleTimeString() : ""));
 function refresh(manual) {
@@ -266,7 +272,7 @@ const timeline = computed(() => {
   const peak_value = Math.max(1, ...points);
   const worst = Math.max(1, ...unfinished);
   const slot = CHART_W / points.length;
-  const shared = { peak_value, slot, step: series.step, points, unfinished,
+  const shared = { peak_value, slot, step: series.step, points, unfinished, rooms: series.rooms || [],
     area: (scale) => {
       const y = (value) => CHART_H - (value / peak_value) * (CHART_H - 8) * scale;
       const line = points.map((value, index) => `${(index + 0.5) * slot},${y(value).toFixed(1)}`).join(" L");
@@ -283,13 +289,7 @@ const timeline = computed(() => {
   const stamp = (index) => new Date(origin + index * series.step * 1000);
   const label_every = Math.max(1, Math.ceil((points.length * series.step) / 86400 / AXIS_LABELS)) * Math.max(1, Math.round(86400 / series.step));
   return {
-    peak_value, slot, step: series.step, points, unfinished,
-    area: (scale) => {
-      const y = (value) => CHART_H - (value / peak_value) * (CHART_H - 8) * scale;
-      const line = points.map((value, index) => `${(index + 0.5) * slot},${y(value).toFixed(1)}`).join(" L");
-      return { fill: `M0,${CHART_H} L${line} L${CHART_W},${CHART_H} Z`, stroke: `M${line}` };
-    },
-    marks: unfinished.map((count, index) => (count ? { x: index * slot, h: Math.max(3, (count / worst) * MARK_H), count, index } : null)).filter(Boolean),
+    ...shared,
     labels: points.map((_, index) => index).filter((index) => index % label_every === 0)
       .map((index) => ({ x: (index / points.length) * 100, text: stamp(index).toLocaleDateString(undefined, { month: "numeric", day: "numeric", timeZone: "UTC" }) })),
     when: (index) => {
@@ -693,6 +693,15 @@ async function copy_share_card() {
                     :x1="(hovered_slot + 0.5) * timeline.slot" :x2="(hovered_slot + 0.5) * timeline.slot" y1="0" :y2="CHART_H + MARK_H + 6" />
                 </svg>
                 <span v-for="label in timeline.labels" :key="label.x" class="analytics-axis-label" :style="{ left: `${label.x}%` }">{{ label.text }}</span>
+                <!-- Which rooms ran in the pointed step, each a link (#15959); pointer moves inside the panel keep it put. -->
+                <div v-if="hovered_slot >= 0 && timeline.rooms[hovered_slot]?.rooms.length" class="analytics-timeline-panel"
+                  :class="{ 'is-left': hovered_slot > timeline.points.length / 2 }" :style="{ left: `${((hovered_slot + 0.5) / timeline.points.length) * 100}%` }" @mousemove.stop>
+                  <strong>{{ t("{when} 在跑的房间", { when: timeline.when(hovered_slot) }) }}</strong>
+                  <button v-for="room in timeline.rooms[hovered_slot].rooms" :key="room.room_id" type="button" @click.stop="open_room(room.room_id)">
+                    <span>{{ room_label(room.room_id) }}</span><small>{{ room.members.join(" · ") }}</small>
+                  </button>
+                  <small v-if="timeline.rooms[hovered_slot].more" class="analytics-dim">{{ t("另有 {count} 个房间", { count: timeline.rooms[hovered_slot].more }) }}</small>
+                </div>
               </div>
             </div>
             <div v-else class="analytics-timeline">
@@ -712,6 +721,17 @@ async function copy_share_card() {
             </div>
           </section>
 
+          <section v-if="live.rooms?.length" class="analytics-block">
+            <div class="analytics-block-head"><h2>{{ t("活跃的房间") }}<span class="analytics-count">{{ live.rooms.length }}</span></h2></div>
+            <div class="analytics-panel analytics-live-list">
+              <button v-for="room in live.rooms" :key="room.room_id" type="button" class="analytics-live-room-row" @click="open_room(room.room_id)">
+                <span class="analytics-live-dot" :class="{ 'is-idle': !room.running }" aria-hidden="true" />
+                <span class="analytics-live-where"><strong>{{ live_where(room) }}</strong><span class="analytics-dim">{{ live_room_summary(room) }}<template v-if="room.errors"> · </template><span v-if="room.errors" class="analytics-live-error">{{ t("{count} 次出错", { count: room.errors }) }}</span></span></span>
+                <span class="analytics-dim analytics-live-side">{{ t("{time} 最后活动", { time: live_clock(room.last_at) }) }}</span>
+              </button>
+            </div>
+          </section>
+
           <section v-if="live.running.length" class="analytics-block">
             <div class="analytics-block-head"><h2>{{ t("正在进行") }}<span class="analytics-count">{{ live.running.length }}</span></h2></div>
             <div class="analytics-panel analytics-live-list">
@@ -725,7 +745,7 @@ async function copy_share_card() {
           </section>
 
           <section v-if="live.hour.runs.length" class="analytics-block">
-            <div class="analytics-block-head"><h2>{{ t("最近 1 小时结束的运行") }}<span class="analytics-count">{{ live.hour.total }}</span></h2></div>
+            <div class="analytics-block-head"><h2>{{ t("最近 1 小时出错的运行") }}<span class="analytics-count">{{ live.hour.runs.length }}</span></h2></div>
             <div class="analytics-panel analytics-live-list">
               <button v-for="run in live_recent" :key="run.execution_id" type="button" class="analytics-live-run" @click="open_run(run)">
                 <UIcon :name="LIVE_STATUS_ICONS[run.status] || 'i-lucide-circle'" class="analytics-live-icon" :class="{ 'is-error': run.error, 'is-done': run.status === 'completed' }" />
@@ -739,7 +759,7 @@ async function copy_share_card() {
             </div>
           </section>
 
-          <p v-if="!live.running.length && !live.waiting.length && !live.hour.runs.length" class="analytics-calm"><UIcon name="i-lucide-circle-check" />{{ t("现在很安静：没有在跑的专家，也没有等你处理的事。") }}</p>
+          <p v-if="!live.running.length && !live.waiting.length && !live.rooms?.length" class="analytics-calm"><UIcon name="i-lucide-circle-check" />{{ t("现在很安静：没有在跑的专家，也没有等你处理的事。") }}</p>
           <footer class="analytics-foot"><span>{{ t("每 10 秒自动刷新 · 更新于 {time}", { time: live_updated }) }}</span></footer>
         </template>
       </template>
@@ -785,6 +805,15 @@ async function copy_share_card() {
                   :x1="(hovered_slot + 0.5) * timeline.slot" :x2="(hovered_slot + 0.5) * timeline.slot" y1="0" :y2="CHART_H + MARK_H + 6" />
               </svg>
               <span v-for="label in timeline.labels" :key="label.x" class="analytics-axis-label" :style="{ left: `${label.x}%` }">{{ label.text }}</span>
+                <!-- Which rooms ran in the pointed step, each a link (#15959); pointer moves inside the panel keep it put. -->
+                <div v-if="hovered_slot >= 0 && timeline.rooms[hovered_slot]?.rooms.length" class="analytics-timeline-panel"
+                  :class="{ 'is-left': hovered_slot > timeline.points.length / 2 }" :style="{ left: `${((hovered_slot + 0.5) / timeline.points.length) * 100}%` }" @mousemove.stop>
+                  <strong>{{ t("{when} 在跑的房间", { when: timeline.when(hovered_slot) }) }}</strong>
+                  <button v-for="room in timeline.rooms[hovered_slot].rooms" :key="room.room_id" type="button" @click.stop="open_room(room.room_id)">
+                    <span>{{ room_label(room.room_id) }}</span><small>{{ room.members.join(" · ") }}</small>
+                  </button>
+                  <small v-if="timeline.rooms[hovered_slot].more" class="analytics-dim">{{ t("另有 {count} 个房间", { count: timeline.rooms[hovered_slot].more }) }}</small>
+                </div>
             </div>
           </div>
           <div v-else class="analytics-timeline">
@@ -1275,6 +1304,14 @@ async function copy_share_card() {
 .analytics-key.is-run { background: var(--channel-accent); }
 .analytics-key.is-fail { background: var(--ui-error); }
 .analytics-timeline-plot { position: relative; height: 180px; cursor: crosshair; }
+.analytics-timeline-panel { position: absolute; top: 4px; z-index: 5; display: grid; gap: 2px; width: 260px; max-height: 170px; overflow-y: auto; padding: 8px; transform: translateX(10px); border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg-elevated); box-shadow: 0 8px 24px rgb(0 0 0 / .35); cursor: default; }
+.analytics-timeline-panel.is-left { transform: translateX(calc(-100% - 10px)); }
+.analytics-timeline-panel > strong { padding: 2px 6px 4px; font-size: 11.5px; font-weight: 600; color: var(--ui-text-muted); }
+.analytics-timeline-panel button { display: grid; gap: 1px; padding: 5px 6px; border: 0; border-radius: 6px; background: none; text-align: left; cursor: pointer; }
+.analytics-timeline-panel button:hover { background: color-mix(in srgb, var(--ui-text) 6%, transparent); }
+.analytics-timeline-panel button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--ui-text-highlighted); }
+.analytics-timeline-panel button small, .analytics-timeline-panel > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-inline: 6px 0; font-size: 11.5px; color: var(--ui-text-muted); }
+.analytics-timeline-panel button small { padding: 0; }
 .analytics-timeline-plot.is-empty { display: grid; place-items: center; color: var(--ui-text-muted); cursor: default; }
 .analytics-timeline-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .analytics-area { fill: color-mix(in srgb, var(--channel-accent) 22%, transparent); }
@@ -1381,6 +1418,10 @@ async function copy_share_card() {
 .analytics-live-where strong { font-weight: 500; }
 .analytics-live-who span, .analytics-live-where span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .analytics-live-dot { justify-self: center; width: 8px; height: 8px; border-radius: 50%; background: var(--ui-success); animation: analytics-breathe 1.6s ease-in-out infinite; }
+.analytics-live-dot.is-idle { background: var(--ui-text-dimmed); animation: none; }
+.analytics-live-room-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) 200px; align-items: center; gap: 12px; padding: 7px 18px; border: 0; background: none; text-align: left; cursor: pointer; }
+.analytics-live-room-row:hover { background: color-mix(in srgb, var(--ui-text) 4%, transparent); }
+.analytics-live-error { color: var(--ui-error); }
 .analytics-live-icon.is-error { color: var(--ui-error); }
 .analytics-live-icon.is-done { color: var(--ui-success); }
 @keyframes analytics-breathe { 50% { opacity: 0.35; transform: scale(0.8); } }
@@ -1547,6 +1588,8 @@ async function copy_share_card() {
   .analytics-table.is-dispatch :is(th, td):nth-child(4) { display: none; }
   .analytics-live-run { grid-template-columns: 16px minmax(0, 1fr) auto; gap: 4px 10px; padding: 8px 14px; }
   .analytics-live-run .analytics-live-where { grid-column: 2 / 4; grid-row: 2; }
+  .analytics-live-room-row { grid-template-columns: 16px minmax(0, 1fr) auto; gap: 4px 10px; padding: 8px 14px; }
+  .analytics-live-room-row .analytics-live-where span { white-space: normal; }
   .analytics-live-row { padding: 8px 14px; }
   .analytics-table.is-dispatch td:first-child:not([colspan]) { min-width: 96px; }
   .analytics-table.is-dispatch td.num { white-space: normal; }

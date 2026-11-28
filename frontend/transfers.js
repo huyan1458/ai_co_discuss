@@ -25,6 +25,19 @@ export function active_transfers() {
   return transfers.rows.filter((row) => row.status === "queued" || row.status === "running").length;
 }
 
+const GROUP_ORDER = { queued: 0, running: 0, failed: 1, interrupted: 1 };
+
+/** The rows in the order the list shows them: going, then failed or interrupted, then finished; newest first in each. */
+export function ordered_transfers(rows = transfers.rows) {
+  const group = (row) => GROUP_ORDER[row.status] ?? 2;
+  return rows.map((row, index) => [row, index]).sort((left, right) => group(left[0]) - group(right[0]) || left[1] - right[1]).map(([row]) => row);
+}
+
+/** What the transfer icon's badge says: the rows going, and the failed or interrupted ones (the badge turns red). */
+export function transfer_counts(rows = transfers.rows) {
+  return { active: rows.filter((row) => GROUP_ORDER[row.status] === 0).length, failed: rows.filter((row) => GROUP_ORDER[row.status] === 1).length };
+}
+
 function row_of(id) { return transfers.rows.find((row) => row.id === id); }
 
 function remember() {

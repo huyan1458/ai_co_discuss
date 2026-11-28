@@ -343,7 +343,7 @@ onBeforeUnmount(pause);
         </template>
       </div>
     </div>
-    <div class="rt-player" :class="{ 'is-idle': position == null }" :inert="position == null">
+    <div v-if="position != null" class="rt-player">
       <span class="rt-player-time" :title="when(position ?? model.start)">{{ when(position ?? model.start) }}</span>
       <input type="range" class="rt-scrub" min="0" :max="span" step="1000" :value="position == null ? 0 : position - model.start" :aria-label="t('回放位置')" @input="scrub" />
       <span class="rt-speeds" role="group" :aria-label="t('回放速度')">
@@ -409,7 +409,6 @@ onBeforeUnmount(pause);
 .rt-task:hover { border-color: var(--wf-accent); }
 .rt-task span { display: block; overflow: hidden; text-overflow: ellipsis; }
 .rt-player { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; font-size: 12px; }
-.rt-player.is-idle { visibility: hidden; }
 .rt-player-time { flex: 0 0 16ch; color: var(--wf-text); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rt-scrub { flex: 1; min-width: 120px; accent-color: var(--wf-accent); cursor: pointer; }
 .rt-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--tone, var(--wf-plain)); }

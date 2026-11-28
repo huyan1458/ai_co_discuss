@@ -1,16 +1,17 @@
 <script setup>
 import { computed, inject, onMounted, reactive, ref, watch } from "vue";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
-import { access_label } from "../runner/expert_prompts.mjs";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import ContextMeter from "./ContextMeter.vue";
 import StewardSettings from "./StewardSettings.vue";
-import { delegation_state, report_state_label, report_tone } from "./moss.js";
-import { context_fraction, member_usage, tokens } from "./quota.js";
+import { delegation_state, moss_running, moss_window_key, report_state_label, report_tone, room_attention } from "./moss.js";
+import { member_usage } from "./quota.js";
 import { t } from "./i18n.js";
 
 /**
- * MOSS's rail: which software it runs on, the two ways to give it a fresh session, and the work it has sent out with
- * where each piece stands. Settings open in a dialog from here (#15598).
+ * MOSS's rail, laid out as a room's rail is (#15890): the software it runs on as one member row (state light, context
+ * ring, the menu for a fresh session), then the work it has sent out with where each piece stands. Settings open in a
+ * dialog from here (#15598). MOSS has no project access to show: it always runs with full access (#15951).
  * Emits `open-room` with a room id when a row is chosen.
  */
 const { view, bridge, act } = inject("discussion");
@@ -19,21 +20,28 @@ const settings = ref(null);
 const settings_open = ref(false);
 const change_software = ref(false);
 
-// MOSS's own member in its room: its context in use shows beside 换个新脑子, the same meter as any member's card (#15623).
+// MOSS's own member in its room: its context in use is the same ring as on any member's row (#15623).
 const moss_member = computed(() => (view.value.room?.free?.members || []).find((member) => member.status !== "removed"));
 const moss_usage = computed(() => moss_member.value ? member_usage(view.value, moss_member.value.name) : null);
-// The context in use as a hairline under the model (#15685): its share, and the counts on hover.
-const context = computed(() => {
-  const fraction = context_fraction(moss_usage.value);
-  if (fraction === null) return null;
-  const usage = moss_usage.value;
-  return { percent: Math.round(fraction * 100), tone: fraction >= .9 ? "error" : fraction >= .7 ? "warn" : "",
-    title: t("上下文 {percent}% · {used} / {window}", { percent: Math.round(fraction * 100), used: tokens(usage.context_used), window: tokens(usage.context_window) }) };
+// The same light and words as the room's row in the sidebar (#15888), grey 空闲 when nothing is going on.
+const STATUS_TONES = { awaiting: "warning", waiting_user: "warning", failed: "error", running: "primary" };
+const status = computed(() => {
+  const room = view.value.room;
+  const listed_room = view.value.rooms.find((item) => item.id === room?.id) || room;
+  const attention = listed_room ? room_attention(listed_room, moss_running(room)) : null;
+  return { label: attention?.label || t("空闲"), tone: STATUS_TONES[attention?.kind] || "neutral" };
 });
-// 换个新脑子 and 更换软件 are rare and weighty, so they wait in 更多 beside 设置.
+// Which of MOSS's windows this rail belongs to (§12.1): its settings are that window's own.
+const kind = computed(() => view.value.room?.system_kind);
+const settings_window = computed(() => kind.value === "steward_private" ? "private" : kind.value === "steward_group" ? moss_window_key(view.value.room) : "");
+const settings_title = computed(() => kind.value === "steward_private" ? t("私聊设置")
+  : kind.value === "steward_group" ? t("「{name}」的设置", { name: view.value.room?.title || "" }) : t("MOSS 配置"));
+// 换个新脑子 and 更换软件 are rare and weighty, so they wait in the row's menu. Both act on 主理人's session and
+// software, so in another window they stay in the menu, greyed, saying where to do it.
+const elsewhere = computed(() => kind.value !== "steward");
 const more_items = computed(() => [[
-  { label: t("换个新脑子"), icon: "i-lucide-brain", disabled: !software.value || renewing.value, onSelect: () => { renew_confirm.value = true; } },
-  { label: t("更换软件"), icon: "i-lucide-arrow-left-right", onSelect: () => open_settings(true) },
+  { label: t("换个新脑子"), icon: "i-lucide-brain", disabled: elsewhere.value || !software.value || renewing.value, description: elsewhere.value ? t("在主理人窗口里操作") : undefined, onSelect: () => { renew_confirm.value = true; } },
+  { label: t("更换软件"), icon: "i-lucide-arrow-left-right", disabled: elsewhere.value, description: elsewhere.value ? t("在主理人窗口里操作") : undefined, onSelect: () => open_settings(true) },
 ]]);
 
 async function load() {
@@ -48,7 +56,7 @@ const software = computed(() => {
   const profile = adapter_profile(value.adapter);
   const platform = profile?.platform || bridge.platform_of(value.adapter);
   return { name: profile ? t(profile.label) : value.adapter, identity: bridge.identities[platform] || {},
-    model: value.model || t("软件默认模型"), access: t(access_label(value.project_access)), raised: value.project_access && value.project_access !== "read" };
+    setup: [value.model || t("软件默认模型"), value.effort].filter(Boolean).join(" · ") };
 });
 
 function open_settings(software_change = false) {
@@ -58,21 +66,6 @@ function open_settings(software_change = false) {
 function settings_done(saved) {
   settings_open.value = false;
   if (saved) settings.value = saved;
-}
-
-// Above read-only MOSS can run commands on this computer while it reads outside content; the rail says so and offers
-// the way back (#15640). Raising it is done where it is needed: the install, deploy and inventory confirmations.
-const lower_confirm = ref(false);
-const lowering = ref(false);
-async function lower_access() {
-  if (lowering.value) return;
-  lowering.value = true;
-  try {
-    const status = await bridge.local_request("steward-settings", { project_access: "read" });
-    settings.value = status.settings || { ...settings.value, project_access: "read" };
-    bridge.notify("info", t("MOSS 已改回只读"));
-  } catch (error) { bridge.notify("error", error.message); }
-  finally { lowering.value = false; }
 }
 
 // A fresh session for the same software and model, by the user's hand only (#15576): the room, its record and settings stay.
@@ -147,27 +140,33 @@ const loaded_work = computed(() => {
 </script>
 
 <template>
-  <section class="moss-rail" :aria-label="t('MOSS')">
-    <div class="moss-software">
-        <div class="moss-software-name">
-          <UAvatar v-if="software" :src="software.identity.icon" :text="software.identity.initials" size="sm" class="channel-avatar" :class="software.identity.style" />
-          <USkeleton v-else class="size-8 shrink-0 rounded-full" />
-          <strong>{{ software?.name || (settings ? t("还没有选择软件") : t("正在读取…")) }}</strong>
+  <!-- A room's rail in structure and classes: title bar level with the page header, flat sections, a member row. -->
+  <div class="moss-rail progress-board is-docked">
+    <header class="pb-header"><strong>MOSS</strong></header>
+    <section class="pb-section" :aria-label="t('软件')">
+      <h4 class="moss-heading">{{ t("软件") }}<button type="button" class="pb-link" @click="open_settings()">{{ t("设置") }}</button></h4>
+      <!-- The same three lines whether loading or loaded, so nothing below moves when the settings arrive. -->
+      <div class="pb-member moss-member">
+        <UAvatar v-if="software" :src="software.identity.icon" :text="software.identity.initials" size="xs" class="channel-avatar" :class="software.identity.style" />
+        <USkeleton v-else class="size-6 shrink-0 rounded-full" />
+        <div class="pb-member-body">
+          <div class="pb-member-name">
+            <template v-if="settings"><span class="moss-member-label">{{ software?.name || t("还没有选择软件") }}</span></template>
+            <USkeleton v-else class="h-3 w-28" :aria-label="t('正在读取…')" />
+          </div>
+          <div class="moss-setup" translate="no" :title="software?.setup">
+            <span v-if="settings" class="notranslate">{{ software?.setup || "—" }}</span>
+            <USkeleton v-else class="h-2.5 w-20" />
+          </div>
+          <div class="pb-member-status" :class="`is-${status.tone}`"><span class="pb-dot"></span><span class="pb-member-status-text" role="status">{{ status.label }}</span><ContextMeter :usage="moss_usage" mode="row" class="pb-member-usage" /></div>
         </div>
-        <dl>
-          <div><dt>{{ t("模型") }}</dt><dd>{{ software?.model || "—" }}</dd></div>
-          <div class="moss-context" :title="context?.title"><dt>{{ t("上下文") }}</dt><dd><template v-if="context"><span class="moss-context-bar" :data-tone="context.tone" role="meter" :aria-label="context.title" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="context.percent"><i :style="{ width: `${context.percent}%` }" /></span><small>{{ context.percent }}%</small></template><template v-else>—</template></dd></div>
-          <div><dt>{{ t("项目") }}</dt><dd :class="{ 'moss-access-raised': software?.raised }">{{ software?.access || "—" }}<UButton v-if="software?.raised" size="xs" variant="link" color="warning" class="moss-access-lower" :label="t('改回只读')" :loading="lowering" @click="lower_confirm = true" /></dd></div>
-        </dl>
-      <div class="moss-software-actions">
-        <UButton icon="i-lucide-settings-2" :label="t('设置')" size="sm" color="neutral" variant="soft" @click="open_settings()" />
         <UDropdownMenu :items="more_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
-          <UButton icon="i-lucide-ellipsis" :label="t('更多')" size="sm" color="neutral" variant="ghost" :loading="renewing" />
+          <UButton icon="i-lucide-ellipsis" size="xs" color="neutral" variant="ghost" :title="t('更多')" :aria-label="t('更多')" :loading="renewing" />
         </UDropdownMenu>
       </div>
-    </div>
-    <section class="moss-work" :aria-label="t('派出的工作')">
-      <h4>{{ t("派出的工作") }}</h4>
+    </section>
+    <section class="pb-section moss-work" :aria-label="t('派出的工作')">
+      <h4 class="moss-heading">{{ t("派出的工作") }}<span v-if="work.length">{{ work.length }}</span></h4>
       <ul v-if="work.length">
         <li v-for="item in work" :key="item.id">
           <button type="button" :class="{ 'is-archived': item.archived }" :title="item.archived ? t('已存档') : t('打开房间')" @click="emit('open-room', item.id)">
@@ -178,50 +177,43 @@ const loaded_work = computed(() => {
           <UButton v-if="!item.archived" icon="i-lucide-archive" size="xs" color="neutral" variant="ghost" class="moss-work-archive" :title="t('存档房间')" :aria-label="t('存档 {name}', { name: item.title })" @click="archive_target = item" />
         </li>
       </ul>
-      <p v-else class="fine-print">{{ t("MOSS 还没有派出工作。它把事情交给其他房间时，会列在这里。") }}</p>
+      <p v-else class="moss-work-empty">{{ t("这个窗口还没有派出工作。MOSS 把事情交给其他房间时，会列在这里。") }}</p>
       <USwitch v-if="archived_count" v-model="show_archived" size="xs" class="moss-work-archived" :label="t('显示已存档（{count}）', { count: archived_count })" />
     </section>
-    <UModal v-model:open="settings_open" :title="t('MOSS 配置')" :ui="{ content: 'glass-panel studio-modal moss-settings-modal', body: 'dialog-body' }">
-      <template #body><StewardSettings :change-software="change_software" @done="settings_done" /></template>
+    <UModal v-model:open="settings_open" :title="settings_title" :ui="{ content: 'glass-panel studio-modal moss-settings-modal', body: 'dialog-body' }">
+      <template #body><StewardSettings :key="settings_window" :window="settings_window" :change-software="change_software" @done="settings_done" /></template>
     </UModal>
     <ConfirmDialog :open="Boolean(archive_target)" :title="t('存档「{name}」', { name: archive_target?.title || '' })" :description="t('存档后房间移入已存档列表，记录保留，可随时恢复。')"
       :confirm-label="t('存档')" @update:open="!$event && (archive_target = null)" @confirm="archive_room" />
-    <ConfirmDialog v-model:open="lower_confirm" :title="t('改回只读')" :description="t('MOSS 将只能读取，不能运行命令或改本机文件；之后安装、部署、占用盘点时会先问你是否调高。')" :confirm-label="t('改回只读')" @confirm="lower_access" />
     <ConfirmDialog v-model:open="renew_confirm" :title="t('换个新脑子')" :description="t('MOSS 会用同一个软件和模型开始新的会话，当前会话的上下文会清掉；房间记录、职责和配置都保留。')" :confirm-label="t('换新会话')" @confirm="renew" />
-  </section>
+  </div>
 </template>
 
 <style scoped>
-.moss-rail { display: grid; gap: 18px; align-content: start; padding: 16px; }
-/* Grid rows shrink to the rail, so a long room name gives way to its state instead of pushing it out. */
-.moss-rail > *, .moss-work ul, .moss-work li { min-width: 0; }
-.moss-software { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-text) 3%, transparent); }
-.moss-software-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.moss-software-name > strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-.moss-software dl { display: grid; gap: 4px; margin: 0; font-size: 12px; }
-.moss-software dl > div { display: grid; grid-template-columns: 4.5em minmax(0, 1fr); gap: 8px; }
-.moss-software dl > div:last-child { min-height: 2.9em; }
-.moss-software dt { color: var(--ui-text-dimmed); }
-.moss-software dd { margin: 0; overflow: hidden; color: var(--ui-text-toned); text-overflow: ellipsis; white-space: nowrap; }
-.moss-software-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.moss-work { display: grid; gap: 6px; }
-.moss-work > h4 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
-.moss-work ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+/* Section spacing, heading type, the member row, lights and the title bar all come from the room rail (`pb-*`). */
+.moss-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.moss-heading > span { font-weight: 400; font-variant-numeric: tabular-nums; }
+.moss-heading > .pb-link { margin: 0; font-weight: 400; letter-spacing: 0; }
+/* The one row is not something to press, so it has no hover fill and starts flush with the heading. */
+.moss-member { align-items: start; padding: 4px 0; }
+.moss-member:hover { background: none; }
+.moss-member > :first-child { margin-top: 1px; }
+.moss-member .pb-member-body { display: grid; gap: 2px; }
+.moss-member .pb-member-body > div { display: flex; align-items: center; height: 18px; }
+.moss-member .pb-member-body > .pb-member-name { height: 20px; }
+.moss-member-label { flex-shrink: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.moss-setup { min-width: 0; color: var(--ui-text-dimmed); font-size: 12px; }
+.moss-setup > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moss-work ul { display: grid; gap: 2px; min-width: 0; margin: 0 -8px; padding: 0; list-style: none; }
 /* Each row's archive button sits at its end; with a mouse it shows on hover, on touch it stays. */
-.moss-work li { display: flex; align-items: center; gap: 2px; }
+.moss-work li { display: flex; align-items: center; gap: 2px; min-width: 0; }
 @media (hover: hover) and (pointer: fine) { .moss-work-archive { opacity: 0; } .moss-work li:is(:hover, :focus-within) .moss-work-archive { opacity: 1; } }
-.moss-access-raised { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; white-space: normal !important; color: var(--ui-warning) !important; font-weight: 600; }
-.moss-access-lower { padding: 0 !important; font-weight: 400; }
-.moss-software dd:has(.moss-context-bar) { display: flex; align-items: center; gap: 8px; overflow: visible; }
-.moss-context-bar { flex: 1; height: 4px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 10%, transparent); }
-.moss-context-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--channel-accent, var(--ui-primary)); }
-.moss-context-bar[data-tone="warn"] > i { background: var(--ui-warning); }
-.moss-context-bar[data-tone="error"] > i { background: var(--ui-error); }
-.moss-context small { flex-shrink: 0; color: var(--ui-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.moss-work li > button:first-child { flex: 1; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 6px 8px; border-radius: 8px; text-align: left; font-size: 13px; }
-@media (hover: hover) { .moss-work li > button:first-child:hover { background: var(--channel-ghost-hover); } }
+/* A long room name gives way to its state instead of pushing it out. */
+.moss-work li > button:first-child { flex: 1; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 32px; padding: 0 8px; border-radius: 6px; text-align: left; font-size: 13px; }
+@media (hover: hover) { .moss-work li > button:first-child:hover { background: color-mix(in srgb, var(--ui-bg-accented) 60%, transparent); } }
 .moss-work li > button.is-archived { opacity: .6; }
-.moss-work-archived { margin-top: 4px; }
 .moss-work-icon { flex-shrink: 0; width: 14px; height: 14px; color: var(--ui-text-dimmed); }
 .moss-work-title { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-toned); text-overflow: ellipsis; white-space: nowrap; }
+.moss-work-empty { margin: 0; color: var(--ui-text-dimmed); font-size: 12px; line-height: 1.7; }
+.moss-work-archived { margin-top: 8px; }
 </style>

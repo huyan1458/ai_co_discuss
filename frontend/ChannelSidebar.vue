@@ -1,24 +1,37 @@
 <script setup>
-import { computed, inject, ref } from "vue";
+import { computed, inject, ref, watch } from "vue";
 import ChangelogDialog from "./ChangelogDialog.vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
 import InvitedRooms from "./InvitedRooms.vue";
 import { use_workflow_library, workflow_problem } from "./workflow-library.js";
 import { use_analytics_page } from "./analytics-state.js";
-import { moss_avatar as moss_picture, moss_running } from "./moss.js";
+import { use_search_page } from "./search.js";
+import { is_moss_room, moss_avatar as moss_picture, moss_running, room_attention } from "./moss.js";
 import { t } from "./i18n.js";
 
 /** The room sidebar, shared by the docked desktop column and the tablet and phone drawer. */
-const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions", "workflows", "invited", "analytics", "settings"]);
+const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions", "workflows", "invited", "analytics", "search", "settings"]);
 const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
 const { page_open: analytics_open } = use_analytics_page();
+const { page_open: search_open } = use_search_page();
+const ADMIN_TOOLS_KEY = "codiscuss.admin-tools";
+const remembered_tools = (() => { try { return localStorage.getItem(ADMIN_TOOLS_KEY) === "1"; } catch { return false; } })();
 const can_view_analytics = computed(() => !view.value.share && Boolean(view.value.admin?.local || view.value.admin?.logged_in));
+// Until this browser's access is known, draw the tools as last time; once known, draw the truth and remember it.
+const show_admin_tools = computed(() => (view.value.admin?.loaded ? can_view_analytics.value : remembered_tools && !view.value.share));
+watch(() => view.value.admin?.loaded && can_view_analytics.value, (value) => {
+  if (!view.value.admin?.loaded) return;
+  try { localStorage.setItem(ADMIN_TOOLS_KEY, value ? "1" : "0"); } catch { /* storage blocked */ }
+});
 const unavailable_tools = computed(() => view.value.admin?.loaded ? t("登录后可用") : t("正在确认访问权限…"));
 const props = defineProps({ stewardSetup: Boolean });
 const moss_room = computed(() => view.value.rooms.find(room => room.system_kind === "steward" && !room.archived));
-const moss_avatar = computed(() => moss_picture(moss_room.value, moss_room.value?.id === view.value.room?.id && moss_running(view.value.room)));
-const moss_current = computed(() => props.stewardSetup || Boolean(moss_room.value && !analytics_open.value && !page_open.value && view.value.room?.id === moss_room.value.id));
+const moss_live = computed(() => moss_room.value?.id === view.value.room?.id && moss_running(view.value.room));
+const moss_avatar = computed(() => moss_picture(moss_room.value, moss_live.value));
+// The same lamp and words as a room row's end (#15888).
+const moss_attention = computed(() => moss_room.value ? room_attention(moss_room.value, moss_live.value || Boolean(moss_room.value.running)) : null);
+const moss_current = computed(() => props.stewardSetup || Boolean(moss_room.value && !analytics_open.value && !search_open.value && !page_open.value && (view.value.room?.id === moss_room.value.id || is_moss_room(view.value.room))));
 /** An existing MOSS room opens at once like any room; only a first visit waits for this computer to set one up. */
 function open_moss() {
   if (moss_room.value) emit("select", moss_room.value.id);
@@ -68,9 +81,10 @@ const account_status = computed(() => {
     <!-- One column of equal rows, icon then label, as Claude's sidebar (user #15318): no row is a button-shaped block. -->
     <nav class="channel-fixed-tools" :aria-label="t('常用入口')">
       <button type="button" class="channel-nav-item" :disabled="view.directory_pending.includes('create-room')" @click="emit('create', null)"><UIcon name="i-lucide-plus" /><span>{{ t("新建房间") }}</span></button>
-      <button type="button" class="channel-nav-item" :class="{ active: moss_current }" :disabled="!can_view_analytics" :title="can_view_analytics ? moss_avatar.title : unavailable_tools" :aria-label="moss_avatar.title" :aria-current="moss_current ? 'page' : undefined" @click="open_moss"><img class="channel-moss-avatar moss-avatar" :class="`is-${moss_avatar.state}`" :src="moss_avatar.src" alt="" /><span>{{ t("MOSS") }}</span></button>
+      <button v-if="show_admin_tools" type="button" class="channel-nav-item" :class="{ active: moss_current }" :disabled="!can_view_analytics" :title="can_view_analytics ? moss_avatar.title : unavailable_tools" :aria-label="moss_avatar.title" :aria-current="moss_current ? 'page' : undefined" @click="open_moss"><img class="channel-moss-avatar moss-avatar" :class="`is-${moss_avatar.state}`" :src="moss_avatar.src" alt="" /><span>{{ t("MOSS") }}</span><small v-if="moss_attention" class="channel-room-time channel-room-attention" :data-attention="moss_attention.kind">{{ moss_attention.label }}</small></button>
       <button type="button" class="channel-nav-item" :class="{ active: page_open }" :aria-current="page_open ? 'page' : undefined" @click="open_workflows"><UIcon name="i-lucide-network" /><span>{{ t("工作流") }}</span><i v-if="workflows_need_care" class="channel-nav-dot" :title="t('有工作流需要处理')" /></button>
-      <button type="button" class="channel-nav-item" :class="{ active: analytics_open }" :disabled="!can_view_analytics" :title="can_view_analytics ? undefined : unavailable_tools" :aria-current="analytics_open ? 'page' : undefined" @click="emit('analytics')"><UIcon name="i-lucide-bar-chart-3" /><span>{{ t("统计") }}</span></button>
+      <button v-if="show_admin_tools" type="button" class="channel-nav-item" :class="{ active: analytics_open }" :disabled="!can_view_analytics" :title="can_view_analytics ? undefined : unavailable_tools" :aria-current="analytics_open ? 'page' : undefined" @click="emit('analytics')"><UIcon name="i-lucide-bar-chart-3" /><span>{{ t("统计") }}</span></button>
+      <button type="button" class="channel-nav-item" :class="{ active: search_open }" :aria-current="search_open ? 'page' : undefined" @click="emit('search')"><UIcon name="i-lucide-search" /><span>{{ t("搜索") }}</span></button>
     </nav>
     <div v-keep-reading class="channel-sidebar-content">
       <ChannelDirectory :steward-setup="stewardSetup" @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" @destructions="emit('destructions')" />
@@ -81,7 +95,7 @@ const account_status = computed(() => {
       <UAvatar :src="bridge.identities[author]?.icon" :text="bridge.identities[author]?.initials" :alt="bridge.display_name(author)" size="sm" class="channel-avatar" :class="bridge.identities[author]?.style" />
       <span class="channel-self"><strong>{{ bridge.display_name(author) }}</strong><span class="channel-connection" :class="{ 'is-action': account_status }"><span :class="{ connected: view.connected }" :title="view.connected ? t('网站已连接') : t('网站未连接')"></span>{{ account_status || (view.connected ? t('网站已连接') : view.reconnecting ? t('正在重新连接…') : view.rooms_loading ? t('正在连接…') : t('网站未连接')) }}</span></span>
     </button>
-    <div :title="view.connected ? t('网站已连接') : undefined"><UTooltip :text="t('重新连接')"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" class="channel-icon-button" :aria-label="t('重新连接网站')" :loading="view.reconnecting" :disabled="view.connected" @click="bridge.reconnect()" /></UTooltip></div>
+    <UTooltip v-if="!view.connected" :text="t('重新连接')"><UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" size="sm" class="channel-icon-button" :aria-label="t('重新连接网站')" :loading="view.reconnecting" @click="bridge.reconnect()" /></UTooltip>
     <UTooltip :text="t('设置')"><UButton icon="i-lucide-settings-2" color="neutral" variant="ghost" size="sm" class="channel-icon-button" :aria-label="t('设置')" @click="emit('settings')" /></UTooltip>
   </footer>
   </aside>

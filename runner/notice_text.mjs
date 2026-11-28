@@ -47,11 +47,11 @@ export function system_text(text) {
 }
 
 /** Split text on code points so each chunk stays under iLink's payload size. */
-export function split_text(text, limit = CHUNK_BYTES) {
+export function split_text(text, limit = CHUNK_BYTES, measure = Buffer.byteLength) {
   const chunks = [];
   let chunk = '', bytes = 0;
   for (const character of text) {
-    const size = Buffer.byteLength(character);
+    const size = measure(character);
     if (bytes + size > limit) { chunks.push(chunk); chunk = ''; bytes = 0; }
     chunk += character;
     bytes += size;

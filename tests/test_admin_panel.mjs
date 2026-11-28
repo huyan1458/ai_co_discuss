@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
@@ -989,21 +989,6 @@ test('storage analyze uses the same guarded panel route and asks its own local s
   const refused = await request('/api/storage/steward', { cookie, body: {} });
   assert.equal(refused.status, 403);
   assert.equal((await refused.json()).error, 'skill not allowed');
-  const template = 'MOSS 当前为只读。此技能需要运行命令或写入本机文件。请先在 MOSS 设置中把项目权限调到“自动”，再重试。';
-  const code = 'steward_access_too_low';
-  refusal = { status: 400, body: { error: template, error_text: { template, params: {} }, code } };
-  const read_only = await request('/api/storage/steward', { cookie, body: {} });
-  assert.equal(read_only.status, 400);
-  assert.deepEqual(await read_only.json(), refusal.body);
-  const args = ['storage', 'analyze', '--data', data];
-  const guidance = /只读.*运行命令.*自动|read-only.*run commands.*Auto/;
-  await assert.rejects(admin_cli(args, { print() {} }), { code, message: guidance });
-  const { error, stderr } = await new Promise(resolve => {
-    execFile(process.execPath, ['runner/codiscuss.mjs', 'admin', ...args], (error, _, stderr) => resolve({ error, stderr }));
-  });
-  assert.equal(error?.code, 1);
-  assert.match(stderr, /^\[steward_access_too_low\] /);
-  assert.match(stderr, guidance);
 });
 
 test('the admin command line works the panel with the owner key only, and does what the panel does', async () => {

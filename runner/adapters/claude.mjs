@@ -239,7 +239,7 @@ export function claude_lockdown(task) {
   // The protected level (an external user in the room) also reads the room's project directories, never writes them.
   const project = task.lockdown_read_directories || [];
   const readable = [task.member_directory, task.draft_directory, ...(task.skill_directories || []), ...project].filter(Boolean);
-  const commands = TASK_SUBCOMMANDS.flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
+  const commands = [...TASK_SUBCOMMANDS, ...(task.lockdown_commands || [])].flatMap(command => [`Bash(codiscuss ${command} *)`, `PowerShell(codiscuss ${command} *)`]);
   const tools = project.length ? 'Bash,PowerShell,Read,Write,Edit,Glob,Grep' : 'Bash,PowerShell,Read,Write,Edit';
   return ['--restricted', '--settings', LOCKDOWN_HOOK_SETTINGS, '--tools', tools, '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-chrome', '--add-dir', ...readable,
@@ -259,6 +259,7 @@ export function claude_lockdown_env(task, env = process.env, home = homedir()) {
   const own = Object.fromEntries(Object.entries(settings).filter(([, value]) => typeof value === 'string'));
   // Without --safe-mode (see claude_lockdown), CLAUDE.md and memory are turned off here.
   return { ...own, CODISCUSS_TOOL_LOCKDOWN: '1', CODISCUSS_LOCKDOWN_DIRECTORY: task.draft_directory, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
+    CODISCUSS_LOCKDOWN_COMMANDS: JSON.stringify(task.lockdown_commands || []),
     CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_ORG_MEMORY: '1' };
 }
 

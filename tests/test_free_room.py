@@ -149,6 +149,36 @@ class SingleMemberTests(FreeRoomTests):
         shown = self.request(self.path)[1]["free"]["executions"][0]
         self.assertEqual((shown["model"], shown["effort"]), ("claude-sonnet-5-5", "high"))
 
+    def test_quota_pins_are_ordered_site_preferences_for_managers(self):
+        """The local manager and paired devices share pins; unset and cleared have distinct meanings."""
+        path = "/api/quota-pins"
+        pins = ["Codex|", "Antigravity|Gemini Models", "Claude|"]
+        self.assertEqual(self.request(path, {"pins": pins}, self.owner)[0], 403)
+        self.server.local_site = True
+        self.assertIsNone(self.request("/api/rooms")[1]["quota_pins"])
+        self.assertEqual(self.request(path, {"pins": pins}), (200, {"pins": pins}))
+        for invalid in (None, "Claude|", [123], ["Claude"], ["x" * 200 + "|"],
+                        ["Codex|", "Codex|"], [*pins, "Antigravity|Other"]):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(self.request(path, {"pins": invalid})[0], 400)
+        self.assertEqual(self.request("/api/rooms")[1]["quota_pins"], pins)
+
+        bridge_key = "a" * 64
+        site = "https://paired.example"
+        connections = Path(self.directory.name) / "connections.json"
+        connections.write_text(json.dumps({"sites": {site: {"bridge_hash": hashlib.sha256(bridge_key.encode()).hexdigest()}}}),
+                               encoding="utf-8")
+        self.server.connections_file = connections
+        headers = {"X-CoDiscuss-Bridge": bridge_key, "X-CoDiscuss-Bridge-Site": site,
+                   "Content-Type": "application/json"}
+        with urlopen(Request(self.base + "/api/rooms", headers=headers), timeout=10) as response:
+            self.assertEqual(json.loads(response.read())["quota_pins"], pins)
+        with urlopen(Request(self.base + path, data=b'{"pins":[]}', headers=headers), timeout=10) as response:
+            self.assertEqual(json.loads(response.read()), {"pins": []})
+        self.assertEqual(self.request("/api/rooms")[1]["quota_pins"], [])
+        self.server.local_site = False
+        self.assertIsNone(self.request("/api/rooms")[1]["quota_pins"])
+
     def test_quota_usage_tracks_changed_windows_and_retains_early_reset_demand(self):
         """The admin gets a grouped summary with distinct cap hits and reset usage restored."""
         now = int(time.time())
@@ -947,26 +977,6 @@ class SingleMemberTests(FreeRoomTests):
         status, _ = self.request(f"/api/rooms/{parent}/messages", {"author": "用户", "text": "反向打断",
             "submission_id": uuid.uuid4().hex, "relay": {"room_id": self.room["id"], "host": "Claude"}, "interrupt": True}, self.owner)
         self.assertEqual(status, 403)
-
-    def test_requests_waiting_for_a_busy_member_are_in_the_queue_and_can_be_sent_or_cancelled(self):
-        """A request made of a member still at work lists in the queue tray; send-now steers it in, cancel drops only it."""
-        self.say("一")
-        running = self.reserve()[1]
-        self.request(f"{self.path}/executions/{running['id']}", {"action": "delivery", "stoppable": True, "progress": True, "steer": True}, self.owner)
-        self.say("二")
-        waiting = self.request(self.path)[1]["free"]["queued_messages"]["waiting_requests"]
-        self.assertEqual([(item["member"], item["text"], item["send_mode"]) for item in waiting], [("Claude", "二", "steer")])
-        sent = self.request(f"{self.path}/queue", {"action": "request_send", "request_id": waiting[0]["request_id"]}, self.owner)
-        self.assertEqual((sent[0], sent[1]["waiting_requests"]), (200, []))
-        inbox = self.request(self.path + "/inbox", token=self.owner)[1]
-        self.assertEqual(len(inbox["executions"][0]["interjections"]), 1)
-        self.say("三")
-        third = self.request(self.path)[1]["free"]["queued_messages"]["waiting_requests"][0]
-        cancelled = self.request(f"{self.path}/queue", {"action": "request_cancel", "request_id": third["request_id"]}, self.owner)
-        self.assertEqual((cancelled[0], cancelled[1]["waiting_requests"]), (200, []))
-        self.assertEqual(self.request(f"{self.path}/queue", {"action": "request_cancel", "request_id": third["request_id"]}, self.owner)[0], 404)
-        statuses = {r["message_id"]: r["status"] for r in self.request(self.path)[1]["free"]["requests"]}
-        self.assertEqual(statuses.get(third["message_id"], "cancelled"), "cancelled")
 
     def test_send_now_interrupts_a_busy_recipient_unless_it_cannot_stop(self):
         """Send-now stops the recipient's turn so the message goes next; an unstoppable recipient keeps it queued."""
@@ -1787,6 +1797,36 @@ class MultiMemberTests(FreeRoomTests):
         woken = [item["purpose"] for item in self.request(self.path)[1]["free"]["requests"] if item["member"] == "Codex"]
         self.assertEqual(woken, ["notice"])
 
+    def test_owner_read_positions_are_shared_and_only_unread_can_move_back(self):
+        first = self.say("First", to=["Claude"])[1]["message"]["id"]
+        last = self.say("Second", to=["Claude"])[1]["message"]["id"]
+        url = f"{self.path}/owner-read"
+        self.assertEqual(self.request(url, token=self.owner), (200, {"message_id": last}))
+        self.assertEqual(self.request(url, {"message_id": last}, self.member)[0], 403)
+        self.assertEqual(self.request(url, {}, self.owner)[0], 400)
+        self.assertEqual(self.request(url, {"message_id": last, "unread": 1}, self.owner)[0], 400)
+        self.assertEqual(self.request(url, {"message_id": last + 1000}, self.owner)[0], 404)
+
+        def room_data():
+            return next(row for row in self.request("/api/rooms")[1]["rooms"] if row["id"] == self.room["id"])
+
+        self.assertEqual(room_data()["owner_read_until"], 0)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("DELETE FROM room_owner_reads WHERE room_id=?", (self.room["id"],))
+        self.assertEqual(room_data()["owner_read_until"], last)
+        init_database(self.database, seed=False)
+        newest = self.say("Third", to=["Claude"])[1]["message"]["id"]
+        self.assertGreater(newest, last)
+        self.assertEqual(room_data()["owner_read_until"], last)
+
+        saved = {"owner_read_until": last, "failure_dismissed_at": last}
+        self.assertEqual(self.request(url, {"message_id": last, "dismiss_failure": True}, self.owner), (200, saved))
+        self.assertEqual(self.request(url, {"message_id": first, "dismiss_failure": True}, self.owner), (200, saved))
+        saved["owner_read_until"] = first
+        self.assertEqual(self.request(url, {"message_id": last, "unread": True}, self.owner), (200, saved))
+        room = next(row for row in self.request("/api/rooms")[1]["rooms"] if row["id"] == self.room["id"])
+        self.assertEqual({key: room[key] for key in saved}, saved)
+
     def test_quota_failure_is_classified_held_and_retry_warns(self):
         """必 9: a usage-limit failure tells the host it is lasting with the reset time, holds deliveries, and retry warns."""
         self.say("请 Claude 看看", to=["Claude"])
@@ -1799,6 +1839,16 @@ class MultiMemberTests(FreeRoomTests):
                                             "failure_class": "quota", "resets": "3pm", "reset_at": reset_at}, self.owner)
         self.assertEqual(status, 200, failed)
         self.assertEqual(failed["failure"], {"class": "quota", "resets": "3pm", "reset_at": reset_at, "lasting": True})
+        def attention():
+            room = next(item for item in self.request("/api/rooms")[1]["rooms"] if item["id"] == self.room["id"])
+            return room["attention"], room["quota_resets_at"]
+
+        self.assertEqual(attention(), ("quota", reset_at))
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE execution_failures SET reset_at=1 WHERE execution_id=?", (failing["id"],))
+        self.assertEqual(attention(), ("failed", None))
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE execution_failures SET reset_at=? WHERE execution_id=?", (reset_at, failing["id"]))
         notice = self.messages()[-1][1]
         self.assertIn("额度已用尽", notice)
         self.assertIn("重置时间：3pm", notice)
@@ -1814,6 +1864,7 @@ class MultiMemberTests(FreeRoomTests):
         status, retried = self.request(f"{self.path}/executions/{again[1]['id']}", {"action": "retry"}, self.owner)
         self.assertEqual(status, 200, retried)
         self.assertIn("额度重置前重试多半仍会失败", retried["warning"])
+        self.assertEqual(attention(), ("", None))
         self.assertEqual(self.reserve_for("Claude")[0], 200, "the owner's retry lifts the hold")
 
     def test_signed_out_and_truncated_failures_are_classified_without_a_quota_hold(self):

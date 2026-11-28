@@ -34,11 +34,8 @@ const invite = ref(null);
 const unbinding = ref(null);
 const unbinding_open = ref(false);
 const deploy_open = ref(false);
-// Deploying needs MOSS above read-only (#15623).
-const deploy_read_only = ref(false);
 async function ask_deploy() {
   if (!await bridge.ensure_steward_configured()) return;
-  deploy_read_only.value = bridge.steward_read_only();
   deploy_open.value = true;
 }
 const RENEW_SOON_MS = 7 * 86400000;
@@ -175,8 +172,8 @@ const date = (time) => new Date(time).toLocaleString(locale, { month: "numeric",
       <UButton :label="t('让 MOSS 部署')" icon="i-lucide-cloud-upload" color="neutral" variant="outline" class="pb-action" size="sm" @click="ask_deploy" />
     </div>
     <ConfirmDialog v-model:open="deploy_open" :title="t('部署线上站点')"
-      :description="deploy_read_only ? t('MOSS 会准备部署方案。写入 Cloudflare 前会列出实际资源和操作，等你确认。MOSS 现在是只读，确认后会先把它的项目权限调到“自动”，再发送。') : t('MOSS 会准备部署方案。写入 Cloudflare 前会列出实际资源和操作，等你确认。')"
-      :confirm-label="deploy_read_only ? t('调到自动并发送') : undefined" @confirm="bridge.request_steward('cloudflare-deploy', {}, { confirmed: true, raise_access: deploy_read_only })" />
+      :description="t('MOSS 会准备部署方案。写入 Cloudflare 前会列出实际资源和操作，等你确认。')"
+      @confirm="bridge.request_steward('cloudflare-deploy', {}, { confirmed: true })" />
 
     <form v-if="needs_pairing" class="dialog-form device-pair" :aria-label="t('配对这台设备')" @submit.prevent="pair">
       <p class="fine-print">{{ t('扫描电脑本机网页 设置 → 添加设备 的二维码，或输入配对码。') }}</p>

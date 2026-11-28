@@ -1,5 +1,5 @@
 /** What a destroyed room leaves on this computer: its members' AI sessions, removed through the adapters, and the report. */
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { account_space } from './account_space.mjs';
@@ -15,7 +15,7 @@ export function room_draft_space(home, config) {
 }
 
 /**
- * Remove a destroyed room's own draft folder, with whatever of it waits in the recycle area, unless another room
+ * Remove a destroyed room's own draft folder unless another room
  * registered here still works in it. Returns receipt items (none when the room had no draft folder).
  *
  * @param {string} home The service home.
@@ -27,14 +27,6 @@ export function destroy_draft_space(home, config, used) {
   if (!folder || !existsSync(folder)) return [];
   if (used.has(folder)) return [{ kind: 'draft_space', state: 'kept', detail: 'shared' }];
   try { rmSync(folder, { recursive: true, force: true, maxRetries: 3 }); } catch { /* Checked below. */ }
-  // Files deleted from the folder earlier sit in the recycle area beside the draft space, noted with their folder.
-  const { projects_root, workspace } = account_space(home);
-  const trash = projects_root ? join(dirname(projects_root), 'trash') : `${workspace}-trash`;
-  for (const id of existsSync(trash) ? readdirSync(trash) : []) {
-    try {
-      if (resolve(JSON.parse(readFileSync(join(trash, id, 'meta.json'), 'utf8')).root) === folder) rmSync(join(trash, id), { recursive: true, force: true });
-    } catch { /* Not one of this folder's. */ }
-  }
   return [{ kind: 'draft_space', state: existsSync(folder) ? 'failed' : 'deleted' }];
 }
 

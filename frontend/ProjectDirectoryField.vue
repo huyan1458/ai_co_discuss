@@ -288,9 +288,9 @@ async function save_projects() {
     </button>
     <UInput :model-value="cwd" :placeholder="props.placeholder" variant="none" class="project-path" :aria-label="t('项目目录完整路径')" :disabled="props.disabled" @update:model-value="type_cwd" @blur="check_typed" />
     <slot name="badge" />
-    <UButton icon="i-lucide-bookmark-plus" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="t('加入常用项目')" :title="savable ? t('加入常用项目') : t('选择或填写项目目录')" :disabled="props.disabled || !savable" @click="save_temporary" />
-    <UButton icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="native ? t('在本机选择项目目录') : t('浏览电脑上的文件夹')"
-      :title="!native ? t('浏览电脑上常用项目中的文件夹') : picking ? t('目录选择窗口已打开，请在本机窗口中选择') : t('在本机选择文件夹')" :loading="picking" :disabled="props.disabled || !browsable" @click="pick_directory" />
+    <UButton v-if="savable" icon="i-lucide-bookmark-plus" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="t('加入常用项目')" :title="t('加入常用项目')" :disabled="props.disabled" @click="save_temporary" />
+    <UButton v-if="browsable" icon="i-lucide-folder-open" color="neutral" variant="ghost" size="xs" class="project-browse" :aria-label="native ? t('在本机选择项目目录') : t('浏览电脑上的文件夹')"
+      :title="!native ? t('浏览电脑上常用项目中的文件夹') : picking ? t('目录选择窗口已打开，请在本机窗口中选择') : t('在本机选择文件夹')" :loading="picking" :disabled="props.disabled" @click="pick_directory" />
     <slot name="actions" />
   </div>
 
@@ -378,14 +378,12 @@ async function save_projects() {
           <li v-if="!folder.entries.length && !folder.loading && !folder.error" class="folder-empty">{{ folder.path ? t('没有子文件夹') : t('电脑上还没有常用项目，请先在电脑上添加') }}</li>
         </ul>
         <div class="project-footer">
-          <UButton :label="t('加载更多')" color="neutral" variant="ghost" :loading="folder.loading" :disabled="folder.next_offset === null" @click="open_folder(folder.path, true)" />
+          <UButton v-if="folder.next_offset !== null" :label="t('加载更多')" color="neutral" variant="ghost" :loading="folder.loading" @click="open_folder(folder.path, true)" />
           <UButton :label="t('取消')" color="neutral" variant="ghost" @click="finish_folder('')" />
           <UButton :label="t('选择此文件夹')" class="channel-primary-button" :disabled="!folder.path || folder.loading" @click="finish_folder(folder.path)" />
         </div>
-        <div class="folder-note">
-          <p v-if="folder.truncated" class="project-note">{{ t('文件夹过多，只列出了一部分') }}</p>
+        <p v-if="folder.truncated" class="project-note">{{ t('文件夹过多，只列出了一部分') }}</p>
           <p v-if="folder.error" role="alert" class="project-error"><UIcon name="i-lucide-circle-alert" />{{ folder.error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" @click="open_folder(folder.path)" /></p>
-        </div>
       </div>
     </template>
   </UModal>
@@ -461,7 +459,6 @@ async function save_projects() {
 .folder-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .folder-path { overflow: hidden; color: var(--ui-text-muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; direction: rtl; text-align: left; }
 .folder-list { display: flex; flex-direction: column; height: min(45dvh, 360px); margin: 0; padding: 0; overflow-y: auto; scrollbar-gutter: stable; list-style: none; }
-.folder-note { height: 2.5rem; overflow: auto; scrollbar-gutter: stable; }
 .folder-entry { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 8px; border-radius: 6px; color: var(--ui-text-highlighted); font-size: 13px; text-align: left; }
 .folder-entry:hover:not(:disabled) { background: var(--channel-ghost-hover, var(--ui-bg-elevated)); }
 .folder-entry > [class*="icon"] { flex-shrink: 0; width: 14px; height: 14px; color: var(--channel-accent); }

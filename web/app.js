@@ -648,7 +648,7 @@ const RELAY_CIPHER_INFO = "codiscuss-relay-v1";
 // The rooms kept on the paired computer are read and written through its relay connection; only room routes go there.
 const RELAY_PROTOCOL = "codiscuss-relay";
 const RELAY_PING_MS = 25000;
-const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions|sites|analytics)(\/|\?|$)/;
+const ROOM_RELAY_PATH = /^\/api\/(rooms|folders|revisions|sites|analytics|search)(\/|\?|$)/;
 // One part is base64-encoded, encrypted and base64-encoded again (about 16/9 of its size), and the sealed request
 // must stay inside the hosted site's 512 KiB request limit (backend/worker.mjs MAX_BODY_BYTES). Parts stay small enough
 // for a slow phone network to carry one well inside its wait: 256 KiB parts took 3.4 s each on a phone, and one that ran
@@ -762,7 +762,7 @@ function external_member_identity(name) {
 function external_identity(name) {
   return /^Custom-ext[0-9]*$/.test(name) || state.room?.members?.some(member => member.name === name && member.access === 'external');
 }
-const state = { attachment_limit_mib: 20, object_storage: false, rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", mention_only: false, host_only: false, authors: [], card_kinds: [],
+const state = { attachment_limit_mib: 20, object_storage: false, rooms: [], folders: [], room: null, page: 1, pages: 1, query: "", query_options: null, mention_only: false, host_only: false, authors: [], card_kinds: [],
   named_followup: false, create_discussion: false, create_goal: null,
   archive_view: false, directory_sort: "manual", management: null, dragged_room: null, folder_moves: new Map(), folder_version: 0,
   reply_to: null, tab: "discussion", refresh_version: 0, context_dirty: false, topic_dirty: false,
@@ -992,6 +992,26 @@ function notify(level, message, options = {}) {
 }
 
 /** Show a rethrown error in its own wording, so the action dispatcher does not show it again. */
+/**
+ * Pin account lines under the message box, in order (at most 3; `[]` pins none). Shown at once; the site keeps one copy
+ * for every device, and a failed save puts the previous pins back and says why.
+ */
+async function save_quota_pins(pins) {
+  const previous = state.quota_pins ?? null;
+  const serial = (state.quota_pins_saving || 0) + 1;
+  state.quota_pins = pins;
+  state.quota_pins_saving = serial;
+  publish_view();
+  try { await request_json("/api/quota-pins", { pins }); }
+  catch (error) {
+    if (state.quota_pins_saving === serial) state.quota_pins = previous;
+    notify_failure(error, t('常驻额度未能保存'));
+  } finally {
+    if (state.quota_pins_saving === serial) state.quota_pins_saving = 0;
+    publish_view();
+  }
+}
+
 function notify_failure(error, message) {
   notify("error", message);
   error.notified = true;
@@ -2188,7 +2208,7 @@ function render_messages(result) {
 /** The read of one transcript batch after message `after`. */
 function history_batch_path(room_id, query, after) {
   // Large batches: a long transcript loads in one round-trip, and the site counts the room's messages once, not per batch.
-  const params = new URLSearchParams({ q: query, withdrawn: "include", limit: MESSAGE_HISTORY_BATCH });
+  const params = new URLSearchParams({ q: query, withdrawn: "include", limit: MESSAGE_HISTORY_BATCH, ...query_match_params(query) });
   // The full transcript also takes the cards of each batch; a search shows no cards.
   if (!query) params.set("cards", "1");
   params.set("after", after);
@@ -2202,7 +2222,14 @@ function latest_batch_path(room_id, before, limit) {
 
 /** Key the unfiltered transcript separately from each server-side search. */
 function message_history_key(room_id, query = "") {
-  return `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include" })}`;
+  return `${room_id}?${new URLSearchParams({ q: query, withdrawn: "include", ...query_match_params(query) })}`;
+}
+
+/** The find bar's switches for a text filter: the site then matches as the room search does (rows = the matches' anchors). */
+function query_match_params(query) {
+  const options = query && state.query_options;
+  if (!options) return {};
+  return { case: options.case ? "1" : "0", word: options.word ? "1" : "0", regex: options.regex ? "1" : "0", search: "1" };
 }
 
 /** Keep the active transcript available even if other rooms or searches fill the cache. */
@@ -2330,9 +2357,11 @@ async function load_source_filter_history(authors) {
 }
 
 /** Changing the search term relinquishes any in-flight prepend from the previous transcript. */
-function set_message_query(query) {
-  if (state.query !== query) earlier_read = null;
+function set_message_query(query, options = null) {
+  const query_options = query && options ? { case: Boolean(options.case), word: Boolean(options.word), regex: Boolean(options.regex) } : null;
+  if (state.query !== query || JSON.stringify(state.query_options) !== JSON.stringify(query_options)) earlier_read = null;
   state.query = query;
+  state.query_options = query_options;
 }
 
 /** A historical message is retractable only if its request history is known. */
@@ -2526,6 +2555,8 @@ async function refresh_room({ room: read_room = true } = {}) {
   if (directory.destructions) state.destructions = directory.destructions;
   // Account quotas this site keeps, shared by every room: the new-room cards show them for each software.
   if (directory.quotas) state.quotas = directory.quotas;
+  // Which account lines stay under the message box, one setting for the whole site; a save in flight is not overwritten.
+  if ("quota_pins" in directory && !state.quota_pins_saving) state.quota_pins = directory.quota_pins;
   settle_destructions();
   warn_expiring_rooms();
   render_rooms();
@@ -2639,6 +2670,7 @@ async function select_room(room_id) {
   state.sending_preview = null;
   state.page = 1;
   state.query = "";
+  state.query_options = null;
   state.mention_only = false;
   state.host_only = false;
   state.authors = [];
@@ -2692,8 +2724,11 @@ async function select_room(room_id) {
   try { await reading; }
   catch (error) { if (state.room?.id === room_id && !state.messages.length) state.messages_failure = error.message; throw error; }
   finally {
-    if (state.opening === reading) state.opening = null;
-    if (state.messages_loading && state.room?.id === room_id) { state.messages_loading = false; publish_view(); }
+    const opened = state.opening === reading;
+    if (opened) state.opening = null;
+    if (state.messages_loading && state.room?.id === room_id) state.messages_loading = false;
+    // A cached room shows at once while this read is still out; the page waits for it (`opening`) before locating a newer message.
+    if (opened && state.room?.id === room_id) publish_view();
   }
 }
 
@@ -3642,6 +3677,7 @@ async function finish_message(result, job) {
   show_toast(t('留言已保存 · #{value1}', { value1: result.message.id }));
   room_timing_mark("receipt", { message_id: result.message.id });
   state.query = "";
+  state.query_options = null;
   state.mention_only = false;
   state.host_only = false;
   state.authors = [];
@@ -3849,7 +3885,7 @@ async function send_queued(id) {
   const item = state.room?.free?.queued_messages?.items?.find(entry => entry.id === id);
   const visible = item?.message_id && state.messages.some(message => message.id === item.message_id);
   const preview = item && !visible && !state.sending_preview
-    ? { author: "用户", text: item.text, created_at: new Date().toISOString(), saved_id: item.message_id || null,
+    ? { id: `queued-${id}`, author: "用户", text: item.text, created_at: new Date().toISOString(), saved_id: item.message_id || null,
       files: item.attachments.map(file => ({ name: file.file_name })) } : null;
   if (preview) { state.sending_preview = preview; publish_view(); }
   try { await queue_request({ action: "send", id }, (queue) => { if (preview && queue?.message_id) preview.saved_id = queue.message_id; }); }
@@ -3865,9 +3901,9 @@ let shared_read = null;
 function shared_room_refresh(full, saved = false) {
   const room_id = state.room?.id;
   if (!saved && shared_read && shared_read.room_id === room_id && shared_read.version === state.refresh_version
-    && shared_read.query === state.query && shared_read.tab === state.tab && (shared_read.full || !full)) return { promise: shared_read.promise, joined: true };
+    && shared_read.query === message_history_key(room_id, state.query) && shared_read.tab === state.tab && (shared_read.full || !full)) return { promise: shared_read.promise, joined: true };
   const promise = refresh_room({ room: full });
-  const read = { room_id, full, query: state.query, tab: state.tab, version: state.refresh_version, promise };
+  const read = { room_id, full, query: message_history_key(room_id, state.query), tab: state.tab, version: state.refresh_version, promise };
   shared_read = read;
   return { promise: promise.finally(() => { if (shared_read === read) shared_read = null; }), joined: false };
 }
@@ -5589,26 +5625,14 @@ function check_steward_configuration(status, { opened = false } = {}) {
   return false;
 }
 
-// MOSS's project access as last read: installing and deploying need more than read-only (#15623).
-let steward_access = "";
 async function ensure_steward_configured() {
-  try {
-    const status = await local_launch_request("steward", {});
-    steward_access = status.settings?.project_access || "";
-    return check_steward_configuration(status);
-  } catch (error) { notify("error", error.message); return false; }
+  try { return check_steward_configuration(await local_launch_request("steward", {})); }
+  catch (error) { notify("error", error.message); return false; }
 }
-/** Whether MOSS is read-only as last read, so an install or deploy would be refused until it is raised. */
-function steward_read_only() { return steward_access === "read"; }
 
 /** Send one platform task and offer to open its result without leaving the current page. */
-async function request_steward(skill, context = {}, { confirmed = false, raise_access = false } = {}) {
+async function request_steward(skill, context = {}, { confirmed = false } = {}) {
   if (!await ensure_steward_configured()) return;
-  // 调到自动并发送: the access is saved first, and the request goes only once the computer has taken it.
-  if (raise_access) {
-    try { await local_launch_request("steward-settings", { project_access: "auto" }); steward_access = "auto"; }
-    catch (error) { notify("error", error.message); return; }
-  }
   try {
     const { room_id } = await local_launch_request("steward-request", {
       skill, context, lang: window.codiscuss_i18n?.locale, submission_id: new_submission_id(),
@@ -5620,12 +5644,7 @@ async function request_steward(skill, context = {}, { confirmed = false, raise_a
     });
   } catch (error) {
     if (error.code === "steward_not_configured") check_steward_configuration({ configured: false });
-    else if (error.code === "steward_access_too_low") {
-      steward_access = "read";
-      notify("warning", t("MOSS 现在是只读，安装和部署需要先把它的项目权限调到“自动”。"), {
-        duration: 20000, actions: [{ label: t("调到自动并发送"), onClick: () => request_steward(skill, context, { confirmed, raise_access: true }) }],
-      });
-    } else notify("error", error.message);
+    else notify("error", error.message);
   }
 }
 
@@ -9813,15 +9832,15 @@ function view_snapshot() {
     recipient_previews: [...recipient_previews.values()].filter(item => item.room_id === state.room?.id),
     archive_pending: [...state.archive_changes.keys()], import_progress: structuredClone(state.import_progress),
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
-    destroying: [...state.destroying.keys()], dissolving: [...state.dissolving], destructions: state.destructions, quotas: state.quotas || {},
+    destroying: [...state.destroying.keys()], dissolving: [...state.dissolving], destructions: state.destructions, quotas: state.quotas || {}, quota_pins: state.quota_pins ?? null,
     connected: state.connected, reconnecting: state.reconnecting, rooms_loading: state.rooms_loading, observed_until: state.observed_until, resuming: state.resuming, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
     attachment_limit_mib: state.attachment_limit_mib, object_storage: state.object_storage, object_threshold_mib: state.object_threshold_mib || state.attachment_limit_mib,
     pending_land: state.pending_land || null,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url, placeholder: item.placeholder || "" })),
     upload_status: state.upload_status, sending_message: send_queue.some(job => job.room_id === state.room?.id), sending_previews, sending_preview: sending_previews[0] || null, queueing_previews: room_queueing_previews(), queue_reading: state.queue_reading, queue_taking: [...state.queue_taking],
     failed_sends: state.failed_sends.filter(job => job.room_id === state.room?.id).map((failed) => ({ id: failed.id, ...failed.preview })),
-    mention_only: state.mention_only, host_only: state.host_only, authors: state.authors, card_kinds: state.card_kinds,
-    source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), messages_failure: state.messages_failure || "", reply_to: state.reply_to, queued_taken: state.queued_taken, composer_restored: state.composer_restored,
+    mention_only: state.mention_only, host_only: state.host_only, authors: state.authors, card_kinds: state.card_kinds, query_options: state.query_options,
+    source_filter: state.mention_only || state.host_only || state.authors.length > 0 || state.card_kinds.length > 0, messages_loading: Boolean(state.messages_loading), opening: Boolean(state.opening), messages_failure: state.messages_failure || "", reply_to: state.reply_to, queued_taken: state.queued_taken, composer_restored: state.composer_restored,
     has_earlier: Boolean(transcript?.has_earlier), loading_earlier: Boolean(transcript && earlier_read?.key === transcript.key),
     access: access_snapshot(), admin: admin_snapshot(), entry_account: state.entry_account || "",
     device: { pairing_machine: state.device.pairing_machine, id: state.device.id, needs: state.device.needs, pairing_code: state.device.pairing_code,
@@ -9901,12 +9920,13 @@ function set_view_reply(message) {
 }
 
 /** Apply filters to the continuous transcript through the existing controller. */
-async function filter_view({ query = state.query, mention = state.mention_only, host = state.host_only, authors = state.authors, kinds = state.card_kinds, page = 1 }) {
-  const same_query = query.trim() === state.query && page === state.page;
+async function filter_view({ query = state.query, options = state.query_options, mention = state.mention_only, host = state.host_only, authors = state.authors, kinds = state.card_kinds, page = 1 }) {
+  const same_query = query.trim() === state.query && page === state.page
+    && JSON.stringify(query.trim() && options ? { case: Boolean(options.case), word: Boolean(options.word), regex: Boolean(options.regex) } : null) === JSON.stringify(state.query_options);
   if (mention !== state.mention_only || host !== state.host_only
       || JSON.stringify(authors) !== JSON.stringify(state.authors)
       || JSON.stringify(kinds) !== JSON.stringify(state.card_kinds)) earlier_read = null;
-  set_message_query(query.trim());
+  set_message_query(query.trim(), options);
   state.mention_only = mention;
   state.host_only = host;
   state.authors = [...authors];
@@ -10930,8 +10950,6 @@ async function execute_view_action(name, value) {
     queue_send: send_queued, queue_delete: delete_queued, question_answer: question_request,
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
     queue_edit: edit_queued,
-    queue_request_send: request_id => queue_request({ action: "request_send", request_id }),
-    queue_request_cancel: request_id => queue_request({ action: "request_cancel", request_id }),
     copy_reading: () => copy_text(`${room_site()}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);
@@ -10950,8 +10968,8 @@ function change_view_theme(theme) {
 
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input, rate_dispatch, upload_progress,
   write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, clear_card_drafts, preset_origin, preset_origin_info, preset_skilled, describe_member, set_chain_rounds, continue_chain, expert_presets, project_presets, load_project_presets, clear_project_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, trust_expert_preset, workflow_key, preset_key, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
-  launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, remove_launch_projects, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, write_create_relay_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
-  start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request, open_steward, show_steward_room, request_steward, ensure_steward_configured, steward_read_only,
+  save_quota_pins, launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, remove_launch_projects, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, write_create_relay_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
+  start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request, open_steward, show_steward_room, request_steward, ensure_steward_configured,
   attachment_markup, link_attachment_placeholders, attachment_download_link, attachment_size, attachment_file_icon, add_attachments, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url, attachment_thumbnail_url, attachment_range_reader, read_zip_directory,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   reload_workflows, trust_project_workflow, confirm_workflow_trust, dismiss_workflow_trust, save_card_preset, import_expert, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_auto_destroy, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, lstatSync, mkdirSync, openAsBlob, readFileSync, readdirSync, realpathSync, statSync, writeFileSync, linkSync } from 'node:fs';
+import { createReadStream, lstatSync, mkdirSync, openAsBlob, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { mkdtemp, open, rm } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, sep } from 'node:path';
 import { Readable } from 'node:stream';
@@ -11,7 +11,7 @@ import { site_fetch } from './entry_client.mjs';
 import { atomic_json } from './files.mjs';
 import { t } from './i18n.mjs';
 import { project_path, project_root } from './project_files.mjs';
-import { check_name, place_project_download, RecycleArea } from './project_manage.mjs';
+import { check_name, place_project_download } from './project_manage.mjs';
 
 const MAX_BYTES = 2 * 1024 ** 3;
 const MAX_ZIP_ENTRIES = 65534;
@@ -274,8 +274,7 @@ export async function land_cloud_project(request, { fetch_site = site_fetch, fet
     finally { await fd.close(); }
     validate();
     progress('landing', 0.95);
-    path = place_project_download({ root: target.base, path: target.path, name, temporary, conflict,
-      recycle: new RecycleArea(request.recycle), publish: linkSync });
+    path = place_project_download({ root: target.base, path: target.path, name, temporary, conflict });
   } finally { await rm(temporary, { force: true }); }
   if (inbound_id) {
     try { await cloud_request(request, `/${inbound_id}/release`, {}, fetch_site); }

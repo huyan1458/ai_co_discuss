@@ -1,4 +1,4 @@
-import { t } from './i18n.js';
+import { locale, t } from './i18n.js';
 import { quota_account } from '../runner/adapters/profiles.mjs';
 /**
  * How full a member's session context is, how much of its account's usage limits is gone and the tokens its runs took,
@@ -15,8 +15,9 @@ const percent = (fraction) => `${Math.round(fraction * 100)}%`;
 const clock = (seconds) => new Date(seconds * 1000).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 // A reset within a day reads as a time of day, a later one with its weekday (#15754).
 const DAY_SECONDS = 86400;
-export const reset_time = (seconds) => new Date(seconds * 1000).toLocaleString([], seconds - Date.now() / 1000 < DAY_SECONDS
-  ? { hour: '2-digit', minute: '2-digit' } : { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+// 24-hour clock in the page's language, never the browser's “04:10 AM” (#15866).
+export const reset_time = (seconds) => new Date(seconds * 1000).toLocaleString(locale, seconds - Date.now() / 1000 < DAY_SECONDS
+  ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' } : { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 // A reading older than this says how old it is; a fresher one says nothing about it.
 const STALE_SECONDS = 30 * 60;
 function read_age(updated_at) {
@@ -193,3 +194,48 @@ export function account_peaks(view) {
     return { account: item.account, level: peak?.level || '', text: `${item.name} ${peak ? peak.text : quota_text(item.quota)}` };
   });
 }
+
+// How many lines stay under the message box; the owner picks which in the account panel (#15866).
+export const PINNED_LINES = 3;
+
+/**
+ * One line per account and model group, the unit the account panel lists and the owner pins: `{key, account, name,
+ * group, five, seven, balance, updated_at, level}`. `five` / `seven` are a window `{used, resets_at}`, `{open: true}`
+ * where the group has a weekly limit but no 5-hour one (shown ∞), or null where nothing was read (shown —). A prepaid
+ * model API has only `balance`. Every account the site knows (the manager's list) and the room's members draw on, by name.
+ */
+export function quota_lines(view) {
+  const accounts = [...new Set([...Object.keys(view?.quotas || {}), ...room_accounts(view).map((item) => item.account)])].sort();
+  const lines = accounts.flatMap((account) => {
+    const quota = account_quota(view, account);
+    const name = account.replace(/^api:/, '');
+    if (!quota) return [];
+    if (!quota.windows?.length) return quota.balance ? [{ key: `${account}|`, account, name, group: '', five: null, seven: null, balance: quota.balance, updated_at: quota.updated_at, level: '' }] : [];
+    return groups(quota).map(([group, items]) => {
+      const pick = (kind) => items.find((item) => item.kind === kind) || null;
+      const seven = pick('seven_day');
+      const five = pick('five_hour') || (seven ? { open: true } : null);
+      const used = Math.max(0, ...items.map((item) => item.used || 0));
+      return { key: `${account}|${group || ''}`, account, name, group: group || '', five, seven, balance: null, updated_at: quota.updated_at, level: used_level(used) };
+    });
+  });
+  // A group for another vendor's models inside one account (agy's "Claude and GPT models") is left out where that vendor
+  // has an account of its own here: the owner uses it directly and reads its limits there (#15982).
+  const own = new Set(lines.filter((line) => !line.group).map((line) => line.name.toLowerCase()));
+  return lines.filter((line) => !line.group || !own.has(line.group.split(/\s+/)[0].toLowerCase()));
+}
+
+/** The lines under the message box: the owner's pins in their order, or the first PINNED_LINES while never set (null). */
+export function pinned_lines(view, lines = quota_lines(view)) {
+  const pins = view?.quota_pins;
+  if (!Array.isArray(pins)) return lines.slice(0, PINNED_LINES);
+  return pins.map((key) => lines.find((line) => line.key === key)).filter(Boolean);
+}
+
+/** A window cell's text: `65%`, `∞` where there is no such limit, `—` where nothing was read. */
+export function cell_text(window) {
+  return window?.open ? '∞' : Number.isFinite(window?.used) ? percent(window.used) : '—';
+}
+
+/** The read age a line shows under its name, '' while fresh. */
+export const line_age = (line) => read_age(line.updated_at);

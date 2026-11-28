@@ -181,6 +181,7 @@ function on_key(event) {
           <pre class="ev-raw">{{ JSON.stringify({ id: selected_event.id, kind: selected_event.kind, at: selected_event.at, data: selected_event.data }, null, 2) }}</pre>
         </div>
       </aside>
+      <aside v-else class="ev-inspector ev-inspector-empty" aria-hidden="true">{{ t("点一行查看详情") }}</aside>
     </div>
   </section>
 </template>
@@ -197,6 +198,7 @@ function on_key(event) {
 .ev { display: grid; grid-template-columns: minmax(0, 1fr) clamp(280px, 36%, 420px); align-items: start; gap: 12px; margin-top: 4px; }
 .ev-ledger, .ev-inspector { min-width: 0; border: 1px solid var(--ev-border); border-radius: 10px; background: var(--ui-bg-muted); }
 .ev-inspector { position: sticky; top: 8px; max-height: calc(100dvh - 180px); display: flex; flex-direction: column; box-shadow: var(--channel-shadow-float, 0 8px 24px #0004); }
+.ev-inspector.ev-inspector-empty { padding: 20px 14px; border-style: dashed; background: none; box-shadow: none; color: var(--ev-muted); font-size: 12px; text-align: center; }
 .ev-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; border-bottom: 1px solid var(--ev-border); }
 .ev-ledger > .ev-head { display: grid; grid-template-columns: 13ch minmax(0, 1fr) max-content; }
 .ev-ledger .ev-title, .ev-filter-slot > button { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -240,6 +242,7 @@ function on_key(event) {
 @container (max-width: 660px) {
   .ev { grid-template-columns: minmax(0, 1fr); }
   .ev-ledger, .ev-inspector { grid-area: 1 / 1; }
+  .ev-inspector-empty { display: none; }
   .ev.has-inspector .ev-ledger { visibility: hidden; }
   .ev-row { grid-template-columns: max-content 32px minmax(0, 1fr); }
 }

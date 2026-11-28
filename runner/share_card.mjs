@@ -160,7 +160,11 @@ export function resolve_materials_auth({ explicit_site = '', room_id = '', acces
     throw new ShareCardError(t('凭据文件不属于本次站点'), { code: 'auth' });
   }
   if (access.room && room_id && room_id !== access.room) {
-    return { site, headers: { [READ_ONLY_HEADER]: '1' }, cross_room: true };
+    const token = access.token;
+    if (typeof token !== 'string' || token.length < 32 || token.length > 256) {
+      throw new ShareCardError(t('凭据文件中的 token 无效'), { code: 'auth' });
+    }
+    return { site, headers: { [READ_ONLY_HEADER]: '1', 'X-Discussion-Token': token }, cross_room: true };
   }
   const token = access.token;
   if (typeof token !== 'string' || !token.trim()) {

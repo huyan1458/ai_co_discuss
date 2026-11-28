@@ -93,6 +93,8 @@ function toggle() {
         variant="link" color="neutral" size="xs" class="channel-answer-toggle" :class="{ 'is-folded': !open }" :aria-expanded="open"
         :aria-label="open ? t('收起过程说明') : t('展开 {count} 段过程说明', { count })" @click="toggle" />
       <span v-if="!live && steps" class="execution-steps">{{ count ? t(' · {count} 步', { count: steps }) : t('{count} 步', { count: steps }) }}</span>
+      <!-- More about how the answer was made, on the same line (the answer card's tokens, #16077). -->
+      <slot />
     </div>
   </div>
 </template>

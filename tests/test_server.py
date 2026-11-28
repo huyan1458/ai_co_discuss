@@ -672,6 +672,136 @@ class DiscussionTests(unittest.TestCase):
             "author": "用户", "text": text, "submission_id": submission_id, "reply_to": reply_to,
         })
 
+    def test_room_search_matches_messages_and_returns_utf16_ranges(self):
+        """Search exposes safe message matches with snippet-relative UTF-16 ranges."""
+        message = self.post("猫🐈 alpha ALPHA alphabet", "search-fixture-001")[1]["message"]
+        base = f"/api/rooms/{self.room['id']}/search"
+        status, result = self.request(base + "?q=alpha")
+        self.assertEqual(status, 200)
+        match = next(item for item in result["matches"] if item["message_id"] == message["id"])
+        self.assertEqual(match["kind"], "message")
+        self.assertEqual(match["ranges"], [[4, 9], [10, 15], [16, 21]])
+        self.assertEqual(match["anchor_message_id"], message["id"])
+        case = self.request(base + "?q=alpha&case=1")[1]
+        self.assertEqual(case["matches"][0]["ranges"], [[4, 9], [16, 21]])
+        word = self.request(base + "?q=alpha&word=1")[1]
+        self.assertEqual(word["matches"][0]["ranges"], [[4, 9], [10, 15]])
+        number = self.request(f"{base}?q=%23{message['id']}")[1]["matches"][0]
+        self.assertEqual(number["snippet"], f"#{message['id']}")
+        self.assertEqual(self.request(base + "?" + urlencode({"q": "^猫", "regex": 1}))[1]["total"], 1)
+        status, error = self.request(base + "?q=%5B&regex=1")
+        self.assertEqual(status, 400)
+        self.assertIn("unterminated character set", error["error"])
+
+    def test_message_list_search_mode_uses_search_filters_and_keeps_legacy_q(self):
+        """Opt-in search mode shares search anchors while legacy q keeps its prior substring behavior."""
+        first = self.post("needle NEEdle needlessly", "search-list-fixture-001")[1]["message"]
+        second = self.post("NEEDLE only", "search-list-fixture-002")[1]["message"]
+        base = f"/api/rooms/{self.room['id']}/messages"
+        legacy = self.request(base + "?q=needle")[1]["messages"]
+        self.assertEqual({item["id"] for item in legacy}, {first["id"], second["id"]})
+        search = self.request(base + "?q=needle&case=1")[1]["messages"]
+        self.assertEqual([item["id"] for item in search], [first["id"]])
+        whole_word = self.request(base + "?q=needle&search=1&word=1")[1]["messages"]
+        self.assertEqual([item["id"] for item in whole_word], [first["id"], second["id"]])
+        regex = self.request(base + "?q=%5Eneed&search=1&regex=1&case=1")[1]["messages"]
+        self.assertEqual([item["id"] for item in regex], [first["id"]])
+        status, error = self.request(base + "?q=%5B&search=1&regex=1")
+        self.assertEqual(status, 400)
+        self.assertIn("unterminated character set", error["error"])
+
+    def test_global_search_scopes_to_accessible_rooms_and_includes_archived(self):
+        """Global search returns permitted local room groups and honors archived filtering."""
+        message = self.post("cross room needle", "global-search-fixture-001")[1]["message"]
+        base = "/api/search?q=needle"
+        result = self.request(base)[1]
+        group = next(room for room in result["rooms"] if room["room_id"] == self.room["id"])
+        self.assertEqual(group["matches"][0]["message_id"], message["id"])
+        located = self.request(f"/api/search?message={message['id']}")[1]
+        self.assertEqual((located["room_id"], located["message_id"]), (self.room["id"], message["id"]))
+        self.assertEqual(self.request("/api/search?message=999999999")[0], 404)
+        self.request(f"/api/rooms/{self.room['id']}/archive", {"actor": "用户"})
+        self.assertIn(self.room["id"], {room["room_id"] for room in self.request(base + "&archived=1")[1]["rooms"]})
+        self.assertNotIn(self.room["id"], {room["room_id"] for room in self.request(base + "&archived=0")[1]["rooms"]})
+
+    def test_room_search_matches_execution_notes_failures_and_posted_attachment_names(self):
+        """Cross-source matches retain their transcript anchors and exclude withdrawn or pending attachments."""
+        self.configure_host(start=False)
+        base = f"/api/rooms/{self.room['id']}"
+        hidden = self.post("search-needle withdrawn", "search-withdrawn")[1]["message"]
+        self.assertEqual(self.request(f"{base}/messages/{hidden['id']}/retract", {})[0], 200)
+        params = urlencode({"actor": "用户", "file_name": "search-needle.txt", "submission_id": "search-attachment"})
+        attachment = json.loads(self.attachment_request(base + "/attachments?" + params, b"data")[2])["attachment"]
+        self.assertEqual(self.request(base + "/search?q=search-needle")[1]["total"], 0)
+        status, saved = self.request(base + "/messages", {"author": "用户", "text": "任务", "to": ["Codex"],
+            "attachment_ids": [attachment["id"]], "submission_id": "search-execution-message"})
+        self.assertEqual(status, 201, saved)
+        message_id = saved["message"]["id"]
+        execution_id = self.reserve_member("Codex")["execution_id"]
+        execution = f"{base}/executions/{execution_id}"
+        self.assertEqual(self.request(execution, {"action": "renew", "notes": [{"seq": 1, "text": "search-needle note"}]})[0], 200)
+        self.assertEqual(self.request(execution, {"action": "fail", "reason": "search-needle failure"})[0], 200)
+        hits = self.request(base + "/search?q=search-needle")[1]["matches"]
+        self.assertEqual([item["kind"] for item in hits], ["attachment", "execution", "execution"])
+        self.assertTrue(all(item["message_id"] == item["anchor_message_id"] == message_id for item in hits))
+        self.assertEqual(hits[0]["attachment_id"], attachment["id"])
+        self.assertEqual([item["execution_id"] for item in hits[1:]], [execution_id, execution_id])
+        self.assertEqual(hits[2]["note_seq"], 1)
+        status, page = self.request(base + "/messages?q=search-needle&search=1&withdrawn=include&after=0")
+        self.assertEqual(status, 200, page)
+        self.assertEqual({item["id"] for item in page["messages"]}, {item["anchor_message_id"] for item in hits})
+        legacy = self.request(base + "/messages?q=search-needle")[1]["messages"]
+        self.assertNotIn(message_id, {item["id"] for item in legacy})
+
+    def test_search_preserves_discussion_cutoff_and_excludes_internal_and_private_text(self):
+        """Neither search endpoint can turn hidden content into matches or counts."""
+        if self.external:
+            self.skipTest("requires the local SQLite fixture")
+        self.configure_host(start=False)
+        room_id = self.room["id"]
+        before = self.post("cutoff-needle before", "search-before-cutoff")[1]["message"]["id"]
+        self.session_action("start", goal="形成独立观点")
+        after = self.post("cutoff-needle after", "search-after-cutoff")[1]["message"]["id"]
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.execute("""UPDATE session_state SET phase='initial',read_until=?
+                WHERE session_id IN (SELECT id FROM discussion_sessions WHERE room_id=?)""", (before, room_id))
+            changed = connection.execute("""UPDATE messages SET text='cutoff-needle internal'
+                WHERE room_id=? AND id IN (SELECT message_id FROM internal_task_messages)""", (room_id,))
+            self.assertGreater(changed.rowcount, 0)
+            connection.execute("""INSERT INTO private_chats(room_id,member_id,submission_id,text,created_at,updated_at)
+                SELECT room_id,id,'search-private','cutoff-needle private',0,0
+                FROM room_members WHERE room_id=? AND name='Codex'""", (room_id,))
+        path = f"/api/rooms/{room_id}/search?q=cutoff-needle"
+        member = self.member_tokens["Antigravity"]
+        owner = self.request(path)[1]
+        limited = self.request(path, token=member)[1]
+        global_result = self.request("/api/search?q=cutoff-needle", token=member)[1]
+        self.assertEqual([item["message_id"] for item in owner["matches"]], [before, after])
+        self.assertEqual([item["message_id"] for item in limited["matches"]], [before])
+        self.assertEqual(global_result["rooms"][0]["matches"], limited["matches"])
+        self.assertEqual(self.request(f"/api/search?message={before}", token=member)[1]["room_id"], room_id)
+        self.assertEqual(self.request(f"/api/search?message={after}", token=member)[0], 404)
+        path = f"/api/rooms/{room_id}/messages?q=cutoff-needle&search=1"
+        filtered = self.request(path, token=member)[1]
+        self.assertEqual([item["id"] for item in filtered["messages"]], [before])
+
+    def test_search_caps_payloads_without_hiding_totals(self):
+        """Room and grouped searches apply different result caps to the same ordered history."""
+        if self.external:
+            self.skipTest("requires the local SQLite fixture")
+        room_id = self.room["id"]
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.executemany("""INSERT INTO messages(room_id,author,text,source,submission_id,created_at)
+                VALUES (?,'用户','cap-needle','user',?,'2026-11-28T00:00:00Z')""",
+                [(room_id, f"search-cap-{index}") for index in range(1001)])
+        one = self.request(f"/api/rooms/{room_id}/search?q=cap-needle")[1]
+        grouped = self.request("/api/search?q=cap-needle")[1]
+        group = grouped["rooms"][0]
+        self.assertEqual((one["total"], len(one["matches"]), one["truncated"]), (1001, 1000, True))
+        self.assertEqual((grouped["total"], group["total"], len(group["matches"]), grouped["truncated"]),
+                         (1001, 1001, 50, True))
+        self.assertEqual(group["matches"], one["matches"][:50])
+
     def attachment_request(self, path, data=None, headers=None):
         """Read raw bytes so content headers and binary round trips are verified."""
         actor = parse_qs(urlsplit(path).query).get("actor", ["用户"])[0]
@@ -819,7 +949,7 @@ class DiscussionTests(unittest.TestCase):
                         "policy": "dummy", "qAk": "dummy-id", "qKeyTime": "1;2", "qSignature": "dummy", "qSignAlgorithm": "sha1"}}
             if method == "GET" and path == "/file-info":
                 object_name = params["fileName"][0]
-                return {"succeed": True, "data": {"size": objects[object_name]}} if object_name in objects else {"succeed": False, "code": 404}
+                return {"succeed": True, "data": {"size": str(objects[object_name])}} if object_name in objects else {"succeed": False, "code": 404}
             self.assertEqual((method, path, params["expiresIn"]), ("GET", "/presigned-download-url", ["600"]))
             if params["fileName"][0] not in objects:
                 return {"succeed": False, "code": 404}

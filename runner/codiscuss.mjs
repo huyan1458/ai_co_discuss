@@ -83,9 +83,23 @@ function website_cli(args) {
   const executable = local_settings().python || (process.platform === 'win32' ? 'python' : 'python3');
   const result = spawnSync(executable, ['-X', 'utf8', WEBSITE_CLIENT, ...args], {
     stdio: 'inherit', windowsHide: true, env: { ...process.env, DISCUSS_CLI_NAME: 'codiscuss', CODISCUSS_NODE: process.execPath,
+      CODISCUSS_OWNER_READ_HELP: JSON.stringify({
+        command: t('更新房主的房间已读位置'),
+        message: t('指定消息编号，省略时读取房间最新消息编号'),
+        unread: t('标为未读'),
+        dismiss: t('标为已读并忽略当前失败'),
+      }),
       CODISCUSS_DISPATCH_HELP: JSON.stringify({
         list: t('管理员读取主持人派活记录'),
         rate: t('房主为一条主持人派活评分或撤回评分'),
+      }),
+      CODISCUSS_SEARCH_HELP: JSON.stringify({
+        command: t('搜索房间消息、执行进展和附件名'),
+        keyword: t('关键词或正则表达式'),
+        room: t('仅搜索此房间；省略时搜索全部房间（含已存档）'),
+        case: t('区分大小写'),
+        word: t('全字匹配'),
+        regex: t('使用正则表达式'),
       }) },
   });
   if (result.error) throw new Error(t('网站操作需要 Python 3.10+，无法启动 {value1}：{value2}', { value1: executable, value2: result.error.message }));
@@ -154,17 +168,46 @@ export function lockdown_access_guard(args, env = process.env) {
   });
 }
 
+/** Both restricted MOSS windows use the original task credential, not a caller's replacement flag. */
+async function moss_window_guard(args) {
+  const flag = args.findIndex(arg => /^--access-file(?:=|$)/.test(arg));
+  const file = process.env.DISCUSS_ACCESS_FILE || (flag >= 0 ? args[flag].split(/=(.*)/s)[1] ?? args[flag + 1] : '');
+  if (!file) return;
+  const { readFileSync } = await import('node:fs');
+  const { window } = JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+  if (!['private', 'group'].includes(window)) return;
+  lockdown_access_guard(args, { CODISCUSS_TOOL_LOCKDOWN: '1', DISCUSS_ACCESS_FILE: file, DISCUSS_ACCESS: process.env.DISCUSS_ACCESS });
+  const [command, sub, action] = args;
+  const input = args.some(arg => /^--(?:file|stdin)(?:=|$)/.test(arg));
+  const status = !input && (['settings', 'object-storage-settings', 'presets', 'projects', 'image-settings', 'tts-settings',
+    'local-speech', 'weixin', 'devices', 'browse-directory'].includes(sub) ||
+    (sub === 'notify' && [undefined, 'status', 'groups'].includes(action)));
+  const room_control = sub === 'host-control' && (window === 'group' ? ['create-room', 'room-post'].includes(action)
+    : ['rooms', 'folders', 'create-room', 'room-post', 'archive-room'].includes(action));
+  const service_read = (command === 'service' && ['status', 'list', 'help', '--help', '-h'].includes(sub)) ||
+    (command === '--json' && ['status', 'list'].includes(sub));
+  const private_skill = window === 'private' && (['analytics', 'schema'].includes(command) ||
+    (['execution', 'state'].includes(command) && sub === 'view') ||
+    (command === 'share-card' && ['materials', 'render', 'help', '--help', '-h'].includes(sub)));
+  if (service_read || private_skill || ['help', '--help', '-h', 'status', 'list'].includes(command) ||
+      (command === 'steward' && (['help', '--help', '-h', 'status'].includes(sub) || (sub === 'settings' && args.length === 2))) ||
+      (command === 'launch' && (status || room_control || ['help', '--help', '-h'].includes(sub))) ||
+      ['room', 'message', 'attachment', 'question', 'turn', 'search'].includes(command)) return;
+  throw new Error(t('此窗口不能通过命令行更改本机平台。'));
+}
+
 /** Keep startup convenient while separating local service management from website operations. */
 async function main(args = process.argv.slice(2)) {
   const [command] = args;
   lockdown_access_guard(args);
-  if (['--help', '-h', 'help'].includes(command)) return process.stdout.write(HELP + '\n  ' + t('analytics  查看全房间协作统计') + '\n  ' + t('steward  查看、配置或请求MOSS') + '\n');
+  await moss_window_guard(args);
+  if (['--help', '-h', 'help'].includes(command)) return process.stdout.write(HELP + '\n  ' + t('analytics  查看全房间协作统计') + '\n  ' + t('steward  查看、配置或请求MOSS') + '\n  ' + t('search  搜索单个或全部房间') + '\n');
   if (command === 'service') return service_cli(args.slice(1));
   if (command === 'launch') {
     // A restricted run (子Task5 CONTRACT §5) may not read local files through launch commands.
     (await import('./external_client.mjs')).lockdown_launch_guard(args.slice(1));
-    return launch_main(args.slice(1));
   }
+  if (command === 'launch') return launch_main(args.slice(1));
   if (['install', 'setup'].includes(command)) return setup_main(command, args.slice(1));
   if (command === 'local') return local_main(args.slice(1));
   if (command === 'analytics') return (await import('./analytics.mjs')).analytics_cli(args.slice(1));
@@ -184,7 +227,6 @@ async function main(args = process.argv.slice(2)) {
 }
 
 main().catch(error => {
-  const prefix = error.code === 'steward_access_too_low' ? `[${error.code}] ` : '';
-  process.stderr.write(`${prefix}${error.message}\n`);
+  process.stderr.write(`${error.message}\n`);
   process.exitCode = 1;
 });

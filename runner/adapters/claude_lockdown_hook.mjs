@@ -64,16 +64,16 @@ export function literal_words(command) {
  * @param {string} command The Bash or PowerShell command line.
  * @returns {boolean}
  */
-export function allowed_command(command) {
+export function allowed_command(command, extra = []) {
   const words = literal_words(command);
   if (!words || !['codiscuss', 'codiscuss.cmd'].includes(words[0])) return false;
-  return TASK_SUBCOMMANDS.some(sub => sub.split(' ').every((part, index) => words[index + 1] === part));
+  return [...TASK_SUBCOMMANDS, ...extra].some(sub => sub.split(' ').every((part, index) => words[index + 1] === part));
 }
 
 /** Decide one hook event; returns the exit code and the message for a refusal. */
-export function decide(event) {
+export function decide(event, extra = []) {
   if (!['Bash', 'PowerShell'].includes(event?.tool_name)) return { code: 0, message: '' };
-  if (allowed_command(event.tool_input?.command)) return { code: 0, message: '' };
+  if (allowed_command(event.tool_input?.command, extra)) return { code: 0, message: '' };
   return { code: 2, message: `本次运行已收窄，只能运行单独一条 codiscuss 子命令（${TASK_SUBCOMMANDS.join('、')}）。`
     + '参数不论在不在引号里，只能含字母、数字、中文等非 ASCII 字符和 _ - . / : = , + #；空格和单个反斜杠只能在引号里。'
     + '正文含其他符号（如 & | < > ( ) ^ % ! ; $ 反引号、中文引号）时，写进草稿目录的文件，用 --body-file 传入 / '
@@ -84,7 +84,10 @@ export function decide(event) {
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   let event = null;
   try { event = JSON.parse(readFileSync(0, 'utf8').replace(/^﻿/, '')); } catch { /* Refused below. */ }
-  const { code, message } = event ? decide(event) : { code: 2, message: 'unreadable hook input' };
+  let extra = [];
+  try { extra = JSON.parse(process.env.CODISCUSS_LOCKDOWN_COMMANDS || '[]'); } catch { /* No extra permission. */ }
+  const commands = ['launch host-control create-room', 'launch host-control room-post'].filter(command => Array.isArray(extra) && extra.includes(command));
+  const { code, message } = event ? decide(event, commands) : { code: 2, message: 'unreadable hook input' };
   if (message) process.stderr.write(`${message}\n`);
   process.exitCode = code;
 }

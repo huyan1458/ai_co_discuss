@@ -6,7 +6,29 @@
  * decide" action.
  */
 import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { atomic_json } from './files.mjs';
 import { t } from './i18n.mjs';
+
+function question_visibility_file(home, room, id, version) {
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(room) || !Number.isSafeInteger(id) || id <= 0
+      || !Number.isSafeInteger(version) || version <= 0) throw new Error('Invalid local question identity');
+  return join(home, 'notify', 'moss-question-visibility', `${room}-${id}-${version}.json`);
+}
+
+/** Persist an explicit public marker for this version of a question. */
+export function mark_question_public(home, room, id, version = 1) {
+  const file = question_visibility_file(home, room, id, version);
+  mkdirSync(join(home, 'notify', 'moss-question-visibility'), { recursive: true, mode: 0o700 });
+  atomic_json(file, { public: true });
+}
+
+/** Unmarked questions may not be sent to a public audience. */
+export function question_is_public(home, room, id, version) {
+  try { return JSON.parse(readFileSync(question_visibility_file(home, room, id, version), 'utf8')).public === true; }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
 
 // The longest option description a notice repeats; the full text is in the room.
 const DESCRIPTION_CHARS = 80;

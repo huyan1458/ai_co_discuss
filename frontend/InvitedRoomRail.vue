@@ -78,24 +78,18 @@ const status = computed(() => {
     <header v-if="!drawer" class="pb-header"><strong>{{ t("外部房间") }}</strong><span class="pb-mode">{{ record.machine_name || "" }}</span></header>
     <section class="pb-status" :class="`is-${status.tone}`" :aria-label="t('状态')">
       <div class="pb-status-line"><span class="pb-dot"></span><strong role="status" :title="status.hint || undefined">{{ status.title }}</strong></div>
-      <p class="pb-status-detail invited-status-detail" :title="status.detail">{{ status.detail || "—" }}</p>
-      <UPopover :content="{ align: 'start' }">
-        <UButton icon="i-lucide-bell" :label="t('待确认的请求')" :disabled="!record.approvals?.length" :title="record.approvals?.length ? undefined : t('暂无待确认的请求')" size="xs" color="neutral" variant="ghost" />
-        <template #content>
-          <section class="invited-pending" :aria-label="t('待确认的请求')">
-            <h4>{{ t("待确认的请求") }}</h4>
-            <div v-for="approval in record.approvals" :key="approval.id" class="invited-pending-item">
-              <p class="invited-pending-text">{{ t("{by}点名了你的 AI（{messages}）", { by: BY[approval.created_by] || t("对方"), messages: (approval.message_ids || []).map((id) => `#${id}`).join(" ") }) }}</p>
-              <small v-if="approval.expires_at">{{ t("{time} 前不确认视为拒绝", { time: date(approval.expires_at) }) }}</small>
-              <div class="invited-pending-actions">
-                <UButton :label="t('同意并唤醒')" icon="i-lucide-play" size="xs" color="neutral" variant="outline" class="pb-action" data-tone="success" :loading="busy === `decide:${approval.id}`" :disabled="Boolean(busy)" @click="invited.approve(record.id, approval.id)" />
-                <UButton :label="t('拒绝')" size="xs" color="neutral" variant="ghost" :disabled="Boolean(busy)" @click="invited.refuse(record.id, approval.id)" />
-              </div>
-            </div>
-            <p v-if="!record.approvals?.length">{{ t("暂无待确认的请求") }}</p>
-          </section>
-        </template>
-      </UPopover>
+      <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
+    </section>
+    <section v-if="record.approvals?.length" class="pb-section invited-pending" :aria-label="t('待确认的请求')">
+      <h4>{{ t("待确认的请求") }}</h4>
+      <div v-for="approval in record.approvals" :key="approval.id" class="invited-pending-item">
+        <p class="invited-pending-text">{{ t("{by}点名了你的 AI（{messages}）", { by: BY[approval.created_by] || t("对方"), messages: (approval.message_ids || []).map((id) => `#${id}`).join(" ") }) }}</p>
+        <small v-if="approval.expires_at">{{ t("{time} 前不确认视为拒绝", { time: date(approval.expires_at) }) }}</small>
+        <div class="invited-pending-actions">
+          <UButton :label="t('同意并唤醒')" icon="i-lucide-play" size="xs" color="neutral" variant="outline" class="pb-action" data-tone="success" :loading="busy === `decide:${approval.id}`" :disabled="Boolean(busy)" @click="invited.approve(record.id, approval.id)" />
+          <UButton :label="t('拒绝')" size="xs" color="neutral" variant="ghost" :disabled="Boolean(busy)" @click="invited.refuse(record.id, approval.id)" />
+        </div>
+      </div>
     </section>
     <section v-if="lockdown && !ended" class="pb-section">
       <div class="invited-callout" role="status" :title="lockdown">
@@ -157,8 +151,6 @@ const status = computed(() => {
 </template>
 
 <style scoped>
-.invited-status-detail { min-height: 1.6em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.invited-pending { width: min(360px, calc(100vw - 24px)); max-height: 50vh; overflow: auto; padding: 10px; }
 .invited-pending-item { display: flex; flex-direction: column; gap: 4px; padding: 10px; border: 1px solid color-mix(in srgb, var(--ui-warning) 28%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--ui-warning) 8%, transparent); }
 .invited-pending-item + .invited-pending-item { margin-top: 6px; }
 .invited-pending-text { margin: 0; font-size: 12px; overflow-wrap: anywhere; }

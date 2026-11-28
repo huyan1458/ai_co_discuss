@@ -140,11 +140,15 @@ test('confined Claude keeps the user settings env, which --restricted would drop
   assert.equal(claude_lockdown_env(task, { CLAUDE_CONFIG_DIR: join(root, 'missing') }).CODISCUSS_TOOL_LOCKDOWN, '1');
 });
 
-test('a confined model API member keeps only its room tools', () => {
+test('a confined model API member keeps only its room tools', async () => {
   const api_context = { site: 'http://127.0.0.1:1', room: 'r', token: 't', cwd: '/project', workdir: '/project', project_access: 'write',
     extra_directories: [{ path: '/other', access: 'write' }], commands: { directory: '/wf', list: [{ id: 'x', access: 'read' }] }, image_generation: true };
   const confined = api_lockdown({ tool_lockdown: true, api_context }).api_context;
-  assert.deepEqual(confined, { site: 'http://127.0.0.1:1', room: 'r', token: 't', project_access: 'read', no_web: true });
+  assert.deepEqual(confined, { site: 'http://127.0.0.1:1', room: 'r', token: 't', project_access: 'read', no_web: true, tool_lockdown: true });
+  const tools = participant_tools(confined);
+  for (const name of ['read', 'glob', 'run_command', 'web_fetch']) {
+    await assert.rejects(execute_tool(confined, { name, arguments: {} }, tools));
+  }
   const plain = { tool_lockdown: false, api_context };
   assert.equal(api_lockdown(plain), plain);
 });

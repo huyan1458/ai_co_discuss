@@ -59,9 +59,9 @@ function symbol_hint(command) {
 }
 
 /** Allow only the discussion website commands, without shell separators or expressions. */
-export function agy_rule() {
+export function agy_rule(extra_commands = []) {
   const safe = '[^;&|<>$`()\\r\\n]';
-  return `command(regex:^codiscuss(\\.cmd)?( --site ${safe.replace('[^', '[^ ')}+)? (${TASK_SUBCOMMANDS.join('|')})( ${safe}*)?$)`;
+  return `command(regex:^codiscuss(\\.cmd)?( --site ${safe.replace('[^', '[^ ')}+)? (${[...TASK_SUBCOMMANDS, ...extra_commands].join('|')})( ${safe}*)?$)`;
 }
 
 /** Native headless review blocks unapproved shell commands; a wildcard grant in global or outside-of-project settings could bypass session rules. */
@@ -280,7 +280,7 @@ function agy_lockdown_grants(task, user_home) {
   if (protected_paths.some(directory => within_directory(directory, task.draft_directory))) {
     throw new Error('agy 草稿目录不能位于运行目录、项目、技能或 .gemini 配置目录中，未交付任务');
   }
-  return { allow: [agy_rule(), write_rule(task.draft_directory)],
+  return { allow: [agy_rule(task.lockdown_commands), write_rule(task.draft_directory)],
     deny: [...new Set([...protected_paths.map(write_rule), 'mcp(*)', 'read_url(*)', ...agy_saved_grants(user_home)])] };
 }
 

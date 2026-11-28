@@ -7,20 +7,28 @@
  * - `id`, `label`: a stable id (also its settings and CLI name) and the name shown to the owner.
  * - `bound(home)`, `ready(home)`: credentials saved; able to send now (some channels need the owner to message first).
  * - `status(home)`: what the settings page shows, never a secret; `last_failure` when the latest send failed.
- * - `deliver(home, text, options)`: send one plain-text notice to the owner; returns the message ids a quoted reply
+ * - `capabilities.groups`, `capabilities.text_limit`, `capabilities.media`: group support, text limit and optional
+ *   outbound media support `{images, files, max_bytes}`. Missing media support means text only.
+ * - `groups(home)`: list the bound account's group memberships as `{id, title}` when supported.
+ * - `deliver(home, text, options)`: send one plain-text notice to the owner, or to `options.chat` for a group;
+ *   group media is an optional `options.media: [{path, name, type}]` list using local paths and `image|file` types.
+ *   `options.reply_to` names an optional quoted message. Returns the message ids a quoted reply
  *   may name. Throws on failure after recording it for `status`.
  * - `receive(home, {on_message, log, signal, fetch_impl})`: until `signal` aborts, hand each owner message
- *   (`{text, quoted: [{id, text}], media}`) to `on_message` and send back the receipt text it returns, if any. Waits
+ *   (`{text, quoted: [{id, text}], media}`) to `on_message` and send back the receipt text it returns, if any.
+ *   Group events instead go to `on_group` with `chat`, `sender`, `mentioned` and `message_id`, without a receipt. Waits
  *   quietly while unbound, so binding from the page starts it without a restart.
  * - `command(home, action, input)`: its own binding actions (login, unbind…), or null for an unknown action.
  * - `not_ready`: what a test says when the channel is bound but cannot send yet.
  */
-import { mkdirSync, readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { atomic_json } from './files.mjs';
+import { site_fetch } from './entry_client.mjs';
 import { t } from './i18n.mjs';
-import { format_notice, plain_text } from './notice_text.mjs';
+import { format_notice, plain_text, split_text } from './notice_text.mjs';
 import { discord_channel } from './channel_discord.mjs';
 import { feishu_channel } from './channel_feishu.mjs';
 import { onebot_channel } from './channel_onebot.mjs';
@@ -29,6 +37,90 @@ import { telegram_channel } from './channel_telegram.mjs';
 import { legacy_notices, weixin_channel } from './weixin.mjs';
 
 export const CHANNELS = [weixin_channel, telegram_channel, discord_channel, qq_channel, onebot_channel, feishu_channel];
+const GROUP_FILE_TIMEOUT_MS = 15_000;
+
+function private_group_url(raw, hosts) {
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase().replace(/\.$/, '');
+    return hosts.has(host) || host === 'localhost' || host === '[::1]' || /^127\./.test(host)
+      || new URLSearchParams(url.hash.slice(1)).has('codiscuss-connect') || url.searchParams.has('codiscuss-connect');
+  } catch { return false; }
+}
+
+/** Strip configured owner sites and pairing links from group text, not public destinations. */
+export function group_public_text(text, private_sites = []) {
+  const hosts = new Set(private_sites.flatMap(site => {
+    try { return [new URL(site).hostname.toLowerCase().replace(/\.$/, '')]; } catch { return []; }
+  }));
+  const hidden = url => private_group_url(url, hosts);
+  return String(text || '').replace(/\[([^\]\n]*)\]\((https?:\/\/[^\s()<>]+)\)/gi, (whole, label, url) =>
+    hidden(url) ? label : whole).replace(/https?:\/\/(?:\[[0-9a-f:.]+\])?[^\s<>()`"'\[\]，。；！？、]*/gi, url => {
+    const core = url.replace(/[.,;!?]+$/, '');
+    return hidden(core) ? url.slice(core.length) : url;
+  }).trim();
+}
+
+/** Resolve the owner's configured local, online, relay and direct site addresses. */
+export async function group_private_sites(home, site) {
+  const { machine_links } = await import('./remote_launch.mjs');
+  const links = machine_links(home);
+  return [site, ...Object.keys(links.sites || {}), links.direct?.site].filter(Boolean);
+}
+
+async function group_attachment_response(config, attachment, fetch_site) {
+  const url = `${config.site}/api/rooms/${config.room}/attachments/${encodeURIComponent(attachment.id)}/content`;
+  const init = { redirect: 'error', signal: AbortSignal.timeout(GROUP_FILE_TIMEOUT_MS) };
+  const response = await fetch_site(attachment.storage === 'object' ? `${url}?link=1` : url,
+    { ...init, headers: { 'X-Discussion-Token': config.token } });
+  if (!response.ok || attachment.storage !== 'object') return response;
+  const payload = await response.json();
+  const signed = new URL((payload.data ?? payload).url);
+  if (signed.protocol !== 'https:') throw new Error(t('群附件下载失败。'));
+  return fetch_site(signed.href, init);
+}
+
+async function bounded_group_data(response, limit) {
+  if (!response.ok || !response.body) throw new Error(t('群附件下载失败。'));
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.byteLength;
+    if (size > limit) throw group_media_too_large();
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, size);
+}
+
+function group_media_too_large() {
+  return Object.assign(new Error(t('附件超过渠道大小上限，未发送。')), { code: 'group_media_too_large' });
+}
+
+/** Download one published room attachment into a temporary file and send it once. */
+export async function send_group_attachment(home, target, attachment, fetch_site = site_fetch) {
+  const { channel, config, options, enabled } = target;
+  const supports = channel.capabilities?.media;
+  const type = attachment.content_type?.startsWith('image/') ? 'image' : 'file';
+  if (!supports?.[type === 'image' ? 'images' : 'files'] || !Number.isSafeInteger(supports.max_bytes) || supports.max_bytes <= 0) {
+    throw new Error(t('此渠道不支持发送该类型的附件。'));
+  }
+  if (attachment.size > supports.max_bytes) throw group_media_too_large();
+  const data = await group_attachment_response(config, attachment, fetch_site)
+    .then(response => bounded_group_data(response, supports.max_bytes))
+    .catch(error => { throw error.code === 'group_media_too_large' ? error : new Error(t('群附件下载失败。')); });
+  if (attachment.sha256 && createHash('sha256').update(data).digest('hex') !== attachment.sha256) {
+    throw new Error(t('群附件下载失败。'));
+  }
+  if (enabled && !enabled()) return false;
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-group-media-'));
+  try {
+    const path = join(directory, 'attachment');
+    writeFileSync(path, data, { mode: 0o600 });
+    const ids = await channel.deliver(home, '', { ...options, media: [{ path, name: attachment.file_name || 'attachment', type }] });
+    if (!ids?.length) throw new Error(t('群消息未取得送达回执。'));
+    return true;
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+}
 const RECENT_NOTICES = 50;
 const store_path = home => join(home, 'notify', 'notices.json');
 // The owner's choice of channels: `{order: [id], enabled: [id]}`; the first enabled one is the primary.
@@ -152,20 +244,29 @@ async function route(home, channel, item, on_reply, on_moss, log) {
     if (!target) return await on_moss({ channel: channel.id, label: channel.label, text: item.text });
     return await on_reply({ site: target.site, room: target.room, text: item.text,
       ...(on_moss ? { channel: channel.id, label: channel.label } : {}),
+      ...(target.key?.startsWith('moss-group-owner:') ? { owner_notice: target.key, platform_id: item.message_id } : {}),
       ...(target.question_id ? { question_id: target.question_id, version: target.version } : {}) });
   } catch (error) {
     log(`${channel.label}回复未能发到房间 ${target?.room || 'MOSS'}：${error.message}`);
+    if (!target || target.key?.startsWith('moss:')) return t('这条消息没能发给 MOSS，请稍后重试。');
     return t('未能发到房间：{error}', { error: error.message });
   }
 }
 
 /** Receive the owner's replies on every channel until `signal` aborts; `on_reply` posts one and returns a receipt. */
-export async function receive_replies(home, { on_reply, on_moss, log = () => {}, signal, fetch_impl, websocket_impl } = {}) {
+export async function receive_replies(home, { on_reply, on_moss, on_group, log = () => {}, signal, fetch_impl, websocket_impl } = {}) {
   await Promise.all(CHANNELS.map(channel => channel.receive(home, {
-    on_message: item => route(home, channel, item, on_reply, on_moss, log), log, signal, fetch_impl, websocket_impl })));
+    on_message: item => route(home, channel, item, on_reply, on_moss, log),
+    ...(on_group && channel.capabilities?.groups ? { on_group: item => on_group(channel, item) } : {}),
+    log, signal, fetch_impl, websocket_impl })));
 }
 
-const MOSS_REPLY_LIMIT = 1600;
+const MOSS_MAX_PARTS = 3;
+const MOSS_OVERVIEW_CHARACTERS = 500;
+// Weixin already splits by UTF-8 bytes. Use the other transports' text limits, with a conservative QQ bot limit.
+const MOSS_CHARACTER_LIMITS = { telegram: 4096, discord: 2000, onebot: 4000, qq: 2000 };
+// Feishu limits the serialized request to 150 KB, including its envelope and the double-encoded content field.
+const FEISHU_TEXT_BUDGET = 149_000;
 const MOSS_QUEUE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const moss_routes_path = home => join(home, 'notify', 'moss-replies.json');
 const moss_queue_path = home => join(home, 'notify', 'moss-queue-receipts.json');
@@ -189,6 +290,12 @@ function record_moss_queue_receipt(home, now = Date.now()) {
 function moss_routes(home) {
   try { return JSON.parse(readFileSync(moss_routes_path(home), 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+}
+
+/** A private-channel task is identified by local routing receipts, not by strings in a user message. */
+export function moss_private_channel_task(home, room, requests) {
+  const routes = Object.values(moss_routes(home)).filter(item => item.room === room);
+  return requests.length > 0 && requests.every(request => routes.some(item => item.message_id === request.message_id));
 }
 
 function change_moss_routes(home, change) {
@@ -231,7 +338,7 @@ export async function route_moss_message(home, { config, channel, label, text, r
   if (execution) {
     try {
       await request(config, `/executions/${execution.id}`, { action: 'interject', text: content, submission_id, live_only: true });
-      return t('已把消息作为插话发给 MOSS。');
+      return '';
     } catch (error) {
       if (![400, 409].includes(error.status) && !/^HTTP 40[09]\b/.test(error.message)) throw error;
     }
@@ -240,7 +347,7 @@ export async function route_moss_message(home, { config, channel, label, text, r
   change_moss_routes(home, all => { all[submission_id] = route; });
   const result = await post(config, { text: content, submission_id }, request);
   change_moss_routes(home, all => { if (all[submission_id]) Object.assign(all[submission_id], result); });
-  if (!result.queued) return t('已发给 MOSS。');
+  if (!result.queued) return '';
   record_moss_queue_receipt(home);
   return waiting_question ? t('MOSS 正在等你在网页回答一个问题，这条消息已排队')
     : t('MOSS 正在处理上一件事，你的消息已排队');
@@ -257,6 +364,11 @@ async function resolve_moss_routes(home, config, room, request) {
   return routes;
 }
 
+/** Resolve promoted channel messages before their next task, even if that room has no previous answer. */
+export function refresh_moss_private_routes(home, config, room, request) {
+  return resolve_moss_routes(home, config, room, request);
+}
+
 export function moss_question_channels(home, config, room, question_id) {
   const question = room?.free?.questions?.find(item => item.id === question_id);
   if (!question) return [];
@@ -265,12 +377,33 @@ export function moss_question_channels(home, config, room, question_id) {
     anchors.has(route.message_id)).map(route => route.channel))];
 }
 
-function moss_answer_text(message, link, isolated) {
-  if (!isolated) return t('MOSS 已处理，完整回答请在网页查看。{link}', { link });
+function split_moss_answer(text, channel) {
+  if (channel === 'feishu') {
+    return split_text(text, FEISHU_TEXT_BUDGET, char => Buffer.byteLength(JSON.stringify(JSON.stringify(char).slice(1, -1))) - 2);
+  }
+  const limit = MOSS_CHARACTER_LIMITS[channel];
+  return limit ? split_text(text, limit, char => channel === 'discord' || channel === 'qq' ? char.length : 1) : split_text(text);
+}
+
+function moss_answer_parts(message, link, isolated, channel) {
+  if (!isolated) return [t('MOSS 已处理，完整回答请在网页查看。{link}', { link })];
   const body = String(message.text || '');
-  if ([...body].length <= MOSS_REPLY_LIMIT) return body;
-  const overview = [...plain_text(message.summary || body)].slice(0, MOSS_REPLY_LIMIT).join('');
-  return `${overview}…\n\n${t('在网页查看完整回答：{link}', { link })}`;
+  const parts = split_moss_answer(body, channel);
+  if (parts.length <= MOSS_MAX_PARTS) return parts;
+  const overview = [...plain_text(message.summary || body)];
+  const excerpt = overview.slice(0, MOSS_OVERVIEW_CHARACTERS).join('');
+  const tail = t('在网页查看完整回答：{link}', { link });
+  return split_moss_answer(`${excerpt}${overview.length > MOSS_OVERVIEW_CHARACTERS ? '…' : ''}\n\n${tail}`, channel);
+}
+
+async function send_moss_parts(home, target, parts, send) {
+  const key = `moss:${target.room.room}:${target.answer_id}`;
+  for (let index = 0; index < parts.length; index += 1) {
+    const result = await send(home, { key: index ? `${key}:${index + 1}` : key, only: target.channel,
+      room: target.room, paragraphs: [parts[index]], verbatim: true });
+    if (!['sent', 'duplicate'].includes(result.status)) return false;
+  }
+  return parts.length > 0;
 }
 
 export async function flush_moss_channel_replies(home, { config, room, request, link, send = send_notice }) {
@@ -285,11 +418,9 @@ export async function flush_moss_channel_replies(home, { config, room, request, 
     const isolated = sources.every(item => routes.some(([, source]) =>
       source.message_id === item.message_id && source.channel === route.channel));
     const message = isolated ? await request(config, `/messages/${answer_id}`) : {};
-    const body = moss_answer_text(message, link, isolated);
-    if (!body) continue;
-    const result = await send(home, { key: `moss:${config.room}:${answer_id}`, only: route.channel,
-      room: { site: config.site, room: config.room, title: room.title }, paragraphs: [body], verbatim: true });
-    if (['sent', 'duplicate'].includes(result.status)) change_moss_routes(home, all => { delete all[id]; });
+    const parts = moss_answer_parts(message, link, isolated, route.channel);
+    const target = { answer_id, channel: route.channel, room: { site: config.site, room: config.room, title: room.title } };
+    if (await send_moss_parts(home, target, parts, send)) change_moss_routes(home, all => { delete all[id]; });
   }
 }
 
@@ -297,7 +428,7 @@ export async function flush_moss_channel_replies(home, { config, room, request, 
 export function channels_status(home) {
   const enabled = enabled_channels(home);
   return arranged(home).map(({ channel, enabled: on }) => ({ id: channel.id, label: channel.label, fields: channel.fields || [],
-    enabled: on, primary: enabled[0] === channel, ...channel.status(home) }));
+    capabilities: channel.capabilities || { groups: false }, enabled: on, primary: enabled[0] === channel, ...channel.status(home) }));
 }
 
 /**

@@ -64,7 +64,7 @@ test('shared timeline_metrics matches frontend timeline-model exports and calcul
   assert.deepEqual(metrics.model.steps, from_frontend.steps);
 });
 
-test('share_card_materials enforces bound site matching and read-only cross-room rules without leaking tokens', async () => {
+test('share_card_materials enforces bound site matching and same-site read-only cross-room rules', async () => {
   const access = { site: 'http://room.test', room: 'r1', member: 'Gemini', token: 'secret-room1-token-abcdefghijklmnopqrstuvwxyz' };
 
   const same = resolve_materials_auth({ room_id: 'r1', access });
@@ -75,8 +75,7 @@ test('share_card_materials enforces bound site matching and read-only cross-room
   const cross = resolve_materials_auth({ room_id: 'r2', access });
   assert.equal(cross.site, 'http://room.test');
   assert.equal(cross.cross_room, true);
-  assert.deepEqual(cross.headers, { 'X-Discussion-Read-Only': '1' });
-  assert.equal(cross.headers['X-Discussion-Token'], undefined);
+  assert.deepEqual(cross.headers, { 'X-Discussion-Read-Only': '1', 'X-Discussion-Token': access.token });
 
   let fetched = 0;
   const spy_fetch = async () => { fetched += 1; throw new Error('must not fetch'); };
@@ -103,7 +102,7 @@ test('share_card_materials enforces bound site matching and read-only cross-room
   const cross_data = await share_card_materials({ room_id: 'r2', access, fetcher: cross_fetcher });
   assert.equal(cross_data.room.id, 'r2');
   assert.ok(seen_headers.length >= 3);
-  assert.ok(seen_headers.every((h) => h['X-Discussion-Read-Only'] === '1' && !h['X-Discussion-Token']));
+  assert.ok(seen_headers.every((h) => h['X-Discussion-Read-Only'] === '1' && h['X-Discussion-Token'] === access.token));
 });
 
 test('share_card_materials filters withdrawn items, rewrites project paths, skips question receipts, quotes filenames, and flags truncation', async () => {

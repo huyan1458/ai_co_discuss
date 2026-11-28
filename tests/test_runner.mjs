@@ -200,6 +200,17 @@ test('smart scheduling maps one neutral question set to both providers and reads
   assert.throws(() => validate_scheduler(home, { ...jev, provider: 'decisions' }), /Base URL 已变化/);
   const failing = async () => ({ ok: false, status: 401, json: async () => ({ error: 'secret detail' }) });
   await assert.rejects(decide(home, jev, '状态', questions, failing), error => /HTTP 401/.test(error.message) && !error.message.includes('secret detail'));
+  // A dropped connection is retried once and reports its cause; a timeout is reported as such without retrying.
+  let calls = 0;
+  const flaky = async () => { calls += 1; if (calls === 1) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); return { ok: true, json: async () => ({ answers: {} }) }; };
+  await decide(home, jev, '状态', questions, flaky);
+  assert.equal(calls, 2);
+  const reset = async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); };
+  await assert.rejects(decide(home, jev, '状态', questions, reset), /连接失败（ECONNRESET）/);
+  let timeouts = 0;
+  const slow = async () => { timeouts += 1; throw new DOMException('timed out', 'TimeoutError'); };
+  await assert.rejects(decide(home, jev, '状态', questions, slow), /请求超时/);
+  assert.equal(timeouts, 1);
   // A free-room message moves only on a confident pick; everyone or no one needs the higher threshold, anything else stays with the host.
   const reply = (choice, confidence) => async () => ({ ok: true, json: async () => ({ answers: { handler: { type: 'choice', choice, confidence, probabilities: {} } } }) });
   const input = { title: '房间', context: [], message: { id: 3, author: '用户', text: '修一下登录', reply_to: 2 }, host: { name: 'Claude', description: 'Claude（Claude Code）' },
@@ -1628,6 +1639,28 @@ async function cli_delivery_fixture(t, adapter, options = {}) {
   await process_fixture.calls[0].closed;
   return { directory, user_home, config, access_path, task, result, bindings, errors, failure_options, denials, exits, activities, background_lists, ...process_fixture };
 }
+
+test('Claude 2.1.332 quota errors in stream-json report the reset time without retrying', async t => {
+  const resets = '4:10am (America/Los_Angeles)';
+  const refusal = "You've hit your 5-hour limit · resets " + resets;
+  const before = Math.floor(Date.now() / 1000);
+  const run = await cli_delivery_fixture(t, 'claude', { events: [
+    { type: 'system', subtype: 'init', session_id: 'claude-session', claude_code_version: '2.1.332' },
+    { type: 'assistant', is_api_error_message: true, error: 'rate_limit', api_error: 'usage_limit_reached',
+      message: { content: [{ type: 'text', text: refusal }] } },
+    { type: 'result', subtype: 'success', is_error: true, api_error: 'usage_limit_reached', result: refusal },
+  ] });
+  assert.deepEqual(run.errors, [`Claude 5-hour 用量已达上限，${resets} 重置`]);
+  assert.equal(run.exits, 0);
+  assert.equal(run.failure_options.length, 1);
+  const { failure_class, retryable, resets: reported, reset_at } = run.failure_options[0];
+  assert.equal(failure_class, 'quota');
+  assert.equal(retryable, false);
+  assert.equal(reported, resets);
+  assert.ok(Number.isSafeInteger(reset_at) && reset_at > before);
+  const time = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Los_Angeles', hour: '2-digit', minute: '2-digit' });
+  assert.equal(time.format(new Date(reset_at * 1000)), '04:10');
+});
 
 test('agy lists the background work its tool steps show and ends it as the steps and the result say (1.5.16 shapes)', async t => {
   const step = (index, state, tool_name, extra = {}) => ({ event: 'step_update', step_update: { step_index: index, state, step_type: tool_name === 'invoke_subagent' ? 'subagent' : 'tool', tool_name, ...extra } });

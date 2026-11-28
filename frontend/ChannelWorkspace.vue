@@ -12,14 +12,18 @@ import DiscussionHistory from "./DiscussionHistory.vue";
 import RoomOverview from "./RoomOverview.vue";
 import StewardSettings from "./StewardSettings.vue";
 import MossRail from "./MossRail.vue";
+import MossWindowList from "./MossWindowList.vue";
 import WorkflowOverview from "./WorkflowOverview.vue";
-import { moss_avatar, moss_running } from "./moss.js";
+import { is_moss_room, moss_avatar, moss_running } from "./moss.js";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
 import EventLog from "./EventLog.vue";
 import ProjectFiles from "./ProjectFiles.vue";
 import WorkflowLibrary from "./WorkflowLibrary.vue";
 import AnalyticsPage from "./AnalyticsPage.vue";
 import { use_analytics_page } from "./analytics-state.js";
+import SearchPage from "./SearchPage.vue";
+import RoomFindBar from "./RoomFindBar.vue";
+import { find_handoff, use_search_page } from "./search.js";
 import InvitedRoomPage from "./InvitedRoomPage.vue";
 import InvitedRoomRail from "./InvitedRoomRail.vue";
 import JoinInvitedDialog from "./JoinInvitedDialog.vue";
@@ -69,7 +73,18 @@ const TIMELINE_VIEWS = [{ value: "waterfall", label: t("瀑布") }, { value: "ev
 const timeline_view = ref("waterfall");
 const modal = ref("");
 const steward_setup = ref(false);
-const steward_room = computed(() => room.value?.system_kind === "steward" && !room.value.archived);
+// MOSS's three windows (§12.1) are all MOSS pages: 主理人, the private chat every channel comes into, and one per group.
+const steward_room = computed(() => is_moss_room(room.value) && !room.value.archived);
+const moss_page_title = computed(() => {
+  const kind = room.value?.system_kind;
+  if (kind === "steward_group") return t("MOSS · {name}", { name: room.value.title || room.value.window?.chat_id || "" });
+  return kind === "steward_private" ? t("MOSS · 私聊") : t("MOSS · 主理人");
+});
+// The window list (§12.2) is a column left of the conversation where it fits, else a drawer opened from the header; the
+// conversation and right rail keep their place and width whichever window is open.
+const MOSS_LIST_MIN_VIEWPORT = 1200;
+const moss_list_docked = computed(() => steward_room.value && !middle_page.value && !steward_setup.value && viewport_width.value >= MOSS_LIST_MIN_VIEWPORT);
+const moss_windows_open = ref(false);
 // Before MOSS has a room there is no state to show: its picture at rest.
 const moss_setup = computed(() => moss_avatar(null));
 const moss_title = computed(() => moss_avatar(view.value.rooms.find((item) => item.id === room.value?.id) || room.value, moss_running(room.value)));
@@ -80,7 +95,6 @@ const nav_open = ref(false);
 const info_open = ref(false);
 const summary = field("state-input");
 const brief = field("brief-input");
-const search = field("search-input");
 const LAYOUT_KEY = "ai-codiscuss-channel-layout";
 const EFFECT_OPTIONS = [{ value: "full", label: t("完整") }, { value: "reduced", label: t("精简") }];
 // How readily long answers fold; ChannelDiscussion.vue MESSAGE_FOLD_LEVELS gives each level's heights.
@@ -134,7 +148,7 @@ const rail_inline = computed(() => viewport_width.value >= RAIL_BREAKPOINT);
 const nav_docked = computed(() => rail_inline.value && !nav_collapsed.value);
 // The rail and channel tools stay in place without a room so the layout never jumps; room-only controls are disabled.
 // A file preview docked beside the messages takes the rail's place until it closes; the rail's own setting is kept.
-const show_rail = computed(() => (invited_page.value || !workflow_page.value && !analytics_page.value && !steward_setup.value && view.value.tab === "discussion") && !rail_collapsed.value && !file_preview.dock_width);
+const show_rail = computed(() => (invited_page.value || !workflow_page.value && !analytics_page.value && !search_page_open.value && !steward_setup.value && view.value.tab === "discussion") && !rail_collapsed.value && !file_preview.dock_width);
 const reserve_rail = computed(() => show_rail.value || (!middle_page.value && Boolean(room.value) && !rail_collapsed.value && !file_preview.dock_width));
 const message_tools = computed(() => Boolean(room.value) && view.value.tab === "discussion");
 const rail_toggles = computed(() => rail_inline.value && !file_preview.dock_width);
@@ -266,7 +280,9 @@ const invited_rooms = use_invited_rooms();
 const { page_open: invited_page, selected: invited_record } = invited_rooms;
 const analytics = use_analytics_page();
 const { page_open: analytics_page } = analytics;
-const middle_page = computed(() => workflow_page.value || invited_page.value || analytics_page.value || steward_setup.value);
+const search_page = use_search_page();
+const { page_open: search_page_open } = search_page;
+const middle_page = computed(() => workflow_page.value || invited_page.value || analytics_page.value || search_page_open.value || steward_setup.value);
 watch(() => !share.value && Boolean(view.value.admin?.local || view.value.admin?.logged_in), (allowed) => {
   if (!allowed && analytics_page.value && view.value.admin?.loaded) analytics.close();
 });
@@ -318,16 +334,33 @@ function open_archives() { nav_open.value = false; modal.value = "archives"; }
 /** Switch the room view (leaving the workflow page) and close the mobile navigation. */
 
 /** The sidebar opened the workflow page: close the mobile navigation. */
-function open_workflows() { nav_open.value = false; steward_setup.value = false; invited_rooms.close(); analytics.close(); }
+function open_workflows() { nav_open.value = false; steward_setup.value = false; invited_rooms.close(); analytics.close(); search_page.close(); }
 
 /** The sidebar chose an invited room: show it in the middle (leaving the workflow page) and close the mobile navigation. */
-function open_invited(id) { nav_open.value = false; workflow_library.close_page(() => { steward_setup.value = false; analytics.close(); invited_rooms.open(id); }); }
+function open_invited(id) { nav_open.value = false; workflow_library.close_page(() => { steward_setup.value = false; analytics.close(); search_page.close(); invited_rooms.open(id); }); }
 
 /** The sidebar opened the owner analytics page: fill the middle and close the mobile navigation. */
-function open_analytics() { nav_open.value = false; workflow_library.close_page(() => { steward_setup.value = false; invited_rooms.close(); analytics.open(); }); }
+function open_analytics() { nav_open.value = false; workflow_library.close_page(() => { steward_setup.value = false; invited_rooms.close(); search_page.close(); analytics.open(); }); }
+
+/** The search page over every room, from the sidebar (empty) or a room's find bar (with its words and switches). */
+function open_search(request = {}) {
+  nav_open.value = false;
+  workflow_library.close_page(() => { steward_setup.value = false; invited_rooms.close(); analytics.close(); search_page.open(request.query || "", request.options || null); });
+}
+
+/** A search result: open its room on that row, the room's find bar taking over the same search. */
+async function open_search_match({ room_id, anchor_message_id, query, options }) {
+  find_handoff.value = { room_id, anchor_message_id, query, options };
+  choose_room(room_id);
+  for (let tries = 0; tries < 50 && room.value?.id !== room_id; tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+  if (room.value?.id === room_id && view.value.tab !== "discussion") act("tab", "discussion");
+}
+
+/** The find bar's current match: show its row in the transcript. */
+function show_find_match(id) { discussion_view.value?.show_match(Number(id)); }
 
 /** Select a shared room (leaving the workflow/analytics page) and close the mobile navigation. */
-function choose_room(id) { nav_open.value = false; workflow_library.close_page(() => { steward_setup.value = false; invited_rooms.close(); analytics.close(); act("room", id); }); }
+function choose_room(id) { nav_open.value = false; workflow_library.close_page(() => { steward_setup.value = false; invited_rooms.close(); analytics.close(); search_page.close(); act("room", id); }); }
 
 const open_steward = (event) => { modal.value = ""; choose_room(event.detail); };
 function open_settings() {
@@ -339,6 +372,7 @@ function open_steward_setup() {
   workflow_library.close_page(() => {
     invited_rooms.close();
     analytics.close();
+    search_page.close();
     modal.value = "";
     info_open.value = false;
     steward_setup.value = true;
@@ -378,6 +412,48 @@ async function open_room_message({ room_id, message_id }) {
   open_detail(message_id);
 }
 
+/** A `#123` from another room was opened in its own room: where reading was, so the transcript's pill leads back. */
+const room_return = ref(null);
+// Up to 15 s for the other room's first messages on a slow phone network.
+const ROOM_SHOWN_TRIES = 150;
+watch(() => room.value?.id, (id) => { if (room_return.value && id && id !== room_return.value.target) room_return.value = null; });
+/** Wait (bounded) until the switched-to room is shown with its first messages read: locating an older one needs that history. */
+async function room_shown(room_id) {
+  const ready = () => room.value?.id === room_id && !view.value.messages_loading && !view.value.opening;
+  for (let tries = 0; tries < ROOM_SHOWN_TRIES && !ready(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+  if (!ready()) return false;
+  await nextTick();
+  return true;
+}
+/** Follow a `#123` into the room that holds it; a chain of such jumps keeps the first room as the way back. */
+async function open_quoted_message({ room_id, message_id, from }) {
+  const origin = room_return.value && room_return.value.target === from.room_id ? room_return.value : from;
+  // Back into the room the chain started from: there is no other room to return to.
+  room_return.value = origin.room_id === room_id ? null : { ...origin, target: room_id };
+  if (view.value.tab !== "discussion") act("tab", "discussion");
+  choose_room(room_id);
+  if (await room_shown(room_id)) discussion_view.value?.peek_message(Number(message_id), null, { way_back: false });
+  else if (room.value?.id === room_id) bridge.notify("warning", t('房间还没加载完，未能定位 #{id}', { id: message_id }));
+}
+/** Back to the room, its filter, reading place and tab before the jump. */
+async function return_to_room() {
+  const origin = room_return.value;
+  room_return.value = null;
+  if (!origin) return;
+  choose_room(origin.room_id);
+  if (!await room_shown(origin.room_id)) {
+    if (room.value?.id === origin.room_id) bridge.notify("warning", t('房间还没加载完，未能回到原位置'));
+    return;
+  }
+  const filter = origin.filter;
+  if (filter && (filter.query || filter.mention || filter.host || filter.authors.length || filter.kinds.length)) {
+    await act("filter", filter);
+    await nextTick();
+  }
+  // The anchor belongs to that room's (filtered) view: show it there without clearing the filter.
+  if (!origin.tail && typeof origin.anchor === "number") discussion_view.value?.show_match(origin.anchor);
+  origin.back_to_tab?.();
+}
 /** Show a message in place in the transcript for a moment; the transcript offers a way back to where reading (and the tab) was. */
 async function open_detail(id) {
   info_open.value = false;
@@ -428,7 +504,7 @@ function create_channel(folder = null) {
   bridge.reset_create_form(folder); target_folder.value = folder; modal.value = "create";
 }
 // Leave an invited room or analytics page only once a new room is actually submitted, not when opening the dialog and cancelling.
-watch(() => view.value.creating_room?.opened, (opened) => { if (opened) { steward_setup.value = false; invited_rooms.close(); analytics.close(); } });
+watch(() => view.value.creating_room?.opened, (opened) => { if (opened) { steward_setup.value = false; invited_rooms.close(); analytics.close(); search_page.close(); } });
 
 /** Open folder creation after closing the mobile directory. */
 function create_folder() { target_folder.value = null; nav_open.value = false; modal.value = "folder"; }
@@ -575,10 +651,11 @@ function resize_nav_by_key(event) {
 
 <template>
   <div class="channel-shell" :class="{ 'channel-share': share, 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': !nav_docked, 'channel-has-rail': reserve_rail }" :style="layout_style">
-    <ChannelSidebar v-if="nav_docked"  :steward-setup="steward_setup" :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @analytics="open_analytics" @settings="open_settings" />
+    <ChannelSidebar v-if="nav_docked"  :steward-setup="steward_setup" :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @analytics="open_analytics" @search="open_search()" @settings="open_settings" />
     <div v-if="nav_docked" class="channel-nav-resizer" role="separator" tabindex="0" :aria-label="t('调整房间栏宽度')" aria-orientation="vertical" aria-controls="channel-sidebar" :aria-valuemin="NAV_MIN" :aria-valuemax="nav_max" :aria-valuenow="effective_nav_width" :aria-valuetext="t('{count} 像素', { count: effective_nav_width })" :title="t('拖动调整房间栏宽度，也可使用方向键')" @pointerdown="start_nav_resize" @pointermove="resize_nav" @pointerup="finish_nav_resize" @pointercancel="finish_nav_resize" @lostpointercapture="finish_nav_resize" @keydown="resize_nav_by_key"></div>
 
-    <main class="channel-main">
+    <main class="channel-main" :class="{ 'has-moss-windows': moss_list_docked }">
+      <aside v-if="moss_list_docked" class="channel-moss-windows"><MossWindowList @open-room="choose_room" @notify-settings="open_settings()" /></aside>
       <div ref="topbar" class="channel-topbar" :class="{ 'is-overlay': !middle_page && (room || creating_preview) && view.tab === 'discussion' }">
         <header class="channel-header">
           <UTooltip v-if="rail_inline" :text="nav_collapsed ? t('展开房间栏') : t('收起房间栏')"><UButton icon="i-lucide-panel-left" color="neutral" variant="ghost" size="sm" class="channel-desktop-nav channel-icon-button channel-panel-toggle" :aria-label="nav_collapsed ? t('展开房间栏') : t('收起房间栏')" :aria-expanded="!nav_collapsed" aria-controls="channel-sidebar" @click="nav_collapsed = !nav_collapsed" /></UTooltip>
@@ -605,36 +682,42 @@ function resize_nav_by_key(event) {
             <div class="channel-title"><div class="channel-title-copy"><h1>{{ t("统计") }}</h1></div></div>
             <span class="channel-header-context">{{ t("全房间行为分析") }}</span>
           </template>
+          <template v-else-if="search_page_open">
+            <span class="channel-title-icon"><UIcon name="i-lucide-search" /></span>
+            <div class="channel-title"><div class="channel-title-copy"><h1>{{ t("搜索") }}</h1></div></div>
+            <span class="channel-header-context">{{ t("全部房间") }}</span>
+          </template>
           <template v-else-if="steward_setup">
             <span class="channel-title-icon"><img class="channel-moss-title" :src="moss_setup.src" alt="" /></span>
             <div class="channel-title"><div class="channel-title-copy"><h1>{{ t("MOSS") }}</h1></div></div>
           </template>
           <template v-else>
-            <span class="channel-title-icon"><img v-if="room?.system_kind === 'steward'" class="channel-moss-title moss-avatar" :class="`is-${moss_title.state}`" :src="moss_title.src" :title="moss_title.title" :alt="moss_title.title" /><UIcon v-else name="i-lucide-hash" /></span>
-            <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.system_kind === 'steward' ? t('MOSS') : room?.title || creating_title">{{ room?.system_kind === 'steward' ? t('MOSS') : room?.title || creating_title || t('共议') }}</h1></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">{{ t("已存档") }}</UBadge></div>
+            <span class="channel-title-icon"><img v-if="room?.system_kind?.startsWith('steward')" class="channel-moss-title moss-avatar" :class="`is-${moss_title.state}`" :src="moss_title.src" :title="moss_title.title" :alt="moss_title.title" /><UIcon v-else name="i-lucide-hash" /></span>
+            <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.system_kind?.startsWith('steward') ? moss_page_title : room?.title || creating_title">{{ room?.system_kind?.startsWith('steward') ? moss_page_title : room?.title || creating_title || t('共议') }}</h1></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">{{ t("已存档") }}</UBadge></div>
           </template>
           <span v-if="room && !middle_page && !steward_room" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ t("{count} 条记录", { count: room.message_count }) }}<template v-if="created_label"><span>·</span><time :datetime="room.created_at" :title="new Date(room.created_at).toLocaleString(locale, { hour12: false })">{{ created_label }}</time></template></span>
           <span v-else-if="creating_preview && !middle_page" class="channel-header-context">{{ t("消息") }}<span>·</span>{{ t("正在创建") }}</span>
           <div class="channel-header-actions">
+            <!-- On a narrow screen MOSS's windows open from here, first among the actions on every MOSS window, so nothing shifts between them. -->
+            <UButton v-if="steward_room && !moss_list_docked && !middle_page" icon="i-lucide-messages-square" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-moss-windows-toggle"
+              :aria-label="t('切换 MOSS 的窗口')" :title="t('切换 MOSS 的窗口')" :aria-expanded="moss_windows_open" @click="moss_windows_open = true" />
             <span v-if="show_work_status" class="channel-work-status" :class="`is-${work_status.tone}`" :title="work_status.title">
               <span v-if="work_status.members.length" class="channel-work-avatars"><UAvatar v-for="member in work_status.members" :key="member.id" :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="2xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" /></span>
               <span class="channel-work-text" role="status">{{ work_status.text }}</span><span class="pb-dot"></span>
             </span>
-            <form v-if="!share && !middle_page" class="channel-search" :title="message_tools ? undefined : t('请在消息标签使用搜索和筛选')" @submit.prevent="message_tools && act('filter', { query: search })">
-              <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" :placeholder="t('搜索消息')" :aria-label="t('搜索讨论记录')" :disabled="!message_tools" class="channel-search-input">
-                <template #trailing><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="channel-search-clear" :aria-label="t('清除搜索')" :disabled="!message_tools || !(search || view.query)" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" :aria-label="t('搜索')" :disabled="!message_tools" /></template>
-              </UInput>
-            </form>
+            <RoomFindBar v-if="!share && !middle_page" :room-id="room?.id || ''" :disabled="!message_tools" @locate="show_find_match" @global="open_search" />
             <!-- Not modal: a modal menu blocks taps outside it, so on phones the filter icon could not close it again (user 2026-11-25, #10412). -->
             <span v-if="!share && !middle_page" class="inline-flex" :title="message_tools ? t('筛选消息与卡片') : t('请在消息标签使用搜索和筛选')"><UDropdownMenu :modal="false" :items="source_filter_items" :disabled="!message_tools" :content="source_filter_content" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" :aria-label="t('筛选消息与卡片')" :disabled="!message_tools" /></UDropdownMenu></span>
           </div>
-          <UTooltip v-if="!workflow_page && !analytics_page && !steward_setup" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_toggles && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
+          <UTooltip v-if="!workflow_page && !analytics_page && !search_page_open && !steward_setup" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_toggles && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
           <UTooltip v-else-if="workflow_page && !workflow_overview && !workflow_stacked && (workflow_draft || workflow_loading)" :text="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md：主持人照它派活')"><UButton icon="i-lucide-panel-right" label="SKILL.md" color="neutral" variant="ghost" size="sm" class="channel-workflow-skill-toggle channel-panel-toggle" :aria-label="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md')" :aria-expanded="workflow_skill_open" :aria-pressed="workflow_skill_open" aria-controls="workflow-skill-panel" @click="workflow_library.set_skill_open(!workflow_skill_open)" /></UTooltip>
         </header>
         <div v-if="(room || creating_preview) && !middle_page" class="channel-tabbar">
           <UTabs v-model="selected_tab" :items="room ? tabs : creating_tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" :aria-label="t('房间视图')" />
         </div>
-        <section v-if="room && !middle_page && !steward_room" class="channel-host-brief" :aria-label="t('主持简报')">
+        <!-- Only while there is a brief (a discussion runs or paused): an always-on empty row was a placeholder with nothing
+             in it (#16043). Starting or ending a discussion is the user's own change of mode, so the row may come and go. -->
+        <section v-if="room && !middle_page && !steward_room && show_brief" class="channel-host-brief" :aria-label="t('主持简报')">
           <div class="channel-brief-inner">
             <div class="channel-brief-heading">
               <button type="button" class="channel-brief-toggle" :disabled="!show_brief" :title="show_brief ? undefined : t('暂无主持简报')" :aria-label="brief_collapsed ? t('展开主持简报') : t('收起主持简报')" :aria-expanded="!brief_collapsed" aria-controls="channel-brief-content" @click="toggle_brief"><UIcon :name="brief_collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><strong>{{ t("主持简报") }}</strong><span class="channel-brief-preview">{{ show_brief ? brief_preview : t("暂无主持简报") }}</span></button>
@@ -651,6 +734,7 @@ function resize_nav_by_key(event) {
       <div v-else-if="workflow_page" class="channel-body channel-workflow-body"><WorkflowLibrary /></div>
       <div v-else-if="invited_page" class="channel-body"><div class="channel-content"><InvitedRoomPage /></div></div>
       <div v-else-if="analytics_page" class="channel-body"><div class="channel-content"><AnalyticsPage @open-room="choose_room" @open-message="open_room_message" /></div></div>
+      <div v-else-if="search_page_open" class="channel-body"><div class="channel-content"><SearchPage @open-match="open_search_match" /></div></div>
       <!-- MOSS's first page, in the look of its conversation: its picture and one line in the middle, then the choice (#15610). -->
       <div v-if="steward_setup" class="channel-body"><div class="channel-content"><div class="steward-setup-page">
         <img class="steward-setup-avatar" :src="moss_setup.src" alt="" />
@@ -666,7 +750,7 @@ function resize_nav_by_key(event) {
       </div></div></div>
       <div v-else-if="room" v-show="!middle_page" class="channel-body" :class="{ 'channel-body-discussion': view.tab === 'discussion', 'is-moss': steward_room }">
         <div class="channel-content">
-        <ChannelDiscussion ref="discussion_view" v-show="view.tab === 'discussion'" @detail="open_detail" @edit="modal = 'edit'" />
+        <ChannelDiscussion ref="discussion_view" v-show="view.tab === 'discussion'" :room-return="room_return && room?.id === room_return.target ? room_return : null" @detail="open_detail" @edit="modal = 'edit'" @open-room-message="open_quoted_message" @return-room="return_to_room" />
         <div v-if="share && SHARE_LOCKED[view.tab]" class="content-page channel-share-locked" role="tabpanel" :aria-label="SHARE_LOCKED[view.tab].title">
           <div class="channel-share-locked-sample" aria-hidden="true"><div v-for="row in SHARE_SAMPLE_ROWS" :key="row" class="channel-share-locked-row" :style="{ width: `${row}%` }"></div></div>
           <div class="channel-share-locked-note"><UIcon :name="SHARE_LOCKED[view.tab].icon" /><h2>{{ SHARE_LOCKED[view.tab].title }}</h2><p>{{ SHARE_LOCKED[view.tab].text }}</p>
@@ -754,10 +838,13 @@ function resize_nav_by_key(event) {
 
     <ShareDialog />
     <USlideover v-model:open="nav_open" side="left" :title="t('房间导航')" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-navigation-drawer' }">
-      <template #content><ChannelSidebar  :steward-setup="steward_setup" :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @analytics="open_analytics" @settings="open_settings" /></template>
+      <template #content><ChannelSidebar  :steward-setup="steward_setup" :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @analytics="open_analytics" @search="open_search()" @settings="open_settings" /></template>
     </USlideover>
-    <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :content="{ onInteractOutside: keep_drawer_for_file_float }" :title="invited_page ? t('外部房间') : steward_room ? t('MOSS') : room.title" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.host && !steward_room ? t('{value1} 主持', { value1: bridge.display_name(room.host) }) : ''" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
+    <USlideover v-if="room || invited_page" v-model:open="info_open" side="right" :content="{ onInteractOutside: keep_drawer_for_file_float }" :title="invited_page ? t('外部房间') : steward_room ? moss_page_title : room.title" :description="invited_page ? [invited_record?.room_title, invited_record?.machine_name].filter(Boolean).join(' · ') : room.host && !steward_room ? t('{value1} 主持', { value1: bridge.display_name(room.host) }) : ''" :ui="{ overlay: 'channel-drawer-overlay', content: 'progress-drawer', body: 'progress-drawer-body' }">
       <template #body><InvitedRoomRail v-if="invited_page" drawer /><MossRail v-else-if="steward_room" :key="room.id" @open-room="info_open = false; choose_room($event)" /><div v-else-if="share" inert class="channel-share-inert"><FreeBoard /></div><FreeBoard v-else @history="info_open = false; open_consensus()" @locate="(name) => locate_member(name, { close_drawer: true })" /></template>
+    </USlideover>
+    <USlideover v-model:open="moss_windows_open" side="bottom" :title="t('MOSS 的窗口')" :ui="{ overlay: 'channel-drawer-overlay', content: 'channel-moss-windows-drawer' }">
+      <template #body><MossWindowList drawer @open-room="moss_windows_open = false; choose_room($event)" @notify-settings="moss_windows_open = false; open_settings()" /></template>
     </USlideover>
     <FilePreview />
     <JoinInvitedDialog />
@@ -766,15 +853,15 @@ function resize_nav_by_key(event) {
 </template>
 
 <style scoped>
-.steward-setup-page { display: grid; justify-items: center; gap: 10px; width: min(100%, 720px); margin-inline: auto; padding: clamp(24px, 10vh, 96px) 18px 24px; text-align: center; }
+.steward-setup-page { display: grid; justify-items: center; gap: 10px; width: min(100%, 720px); margin-inline: auto; padding: clamp(20px, 6vh, 64px) 18px 24px; text-align: center; }
 .steward-setup-page > h2 { margin: 0; color: var(--ui-text-highlighted); font-size: 22px; font-weight: 650; }
-.steward-setup-page > p { max-width: 30em; margin: 0 0 14px; color: var(--ui-text-muted); font-size: 14px; line-height: 1.6; }
+.steward-setup-page > p { max-width: 30em; margin: 0 0 6px; color: var(--ui-text-muted); font-size: 14px; line-height: 1.6; }
 .steward-setup-page > :deep(.steward-settings) { width: 100%; text-align: left; }
 .steward-setup-page :deep(.steward-settings-actions) { justify-content: center; }
 .steward-setup-page :deep(.steward-software-choices) { justify-content: center; }
 .steward-setup-page :deep(:is(.steward-software-card, .steward-software-hint)) { justify-self: center; }
 .steward-setup-avatar { width: 64px; height: 64px; object-fit: contain; }
-.steward-setup-can { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; width: 100%; margin: 0 0 18px; padding: 0; list-style: none; text-align: left; }
+.steward-setup-can { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; width: 100%; margin: 0 0 8px; padding: 0; list-style: none; text-align: left; }
 .steward-setup-can > li { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--ui-border-muted); border-radius: 10px; color: var(--ui-text-toned); font-size: 13px; line-height: 1.5; }
 .steward-setup-can > li > :deep(svg) { width: 16px; height: 16px; color: var(--channel-accent, var(--ui-primary)); }
 @media (max-width: 640px) { .steward-setup-can { grid-template-columns: minmax(0, 1fr); } .steward-setup-can > li { grid-template-columns: auto minmax(0, 1fr); align-items: start; } }

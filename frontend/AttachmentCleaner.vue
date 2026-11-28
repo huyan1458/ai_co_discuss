@@ -208,7 +208,7 @@ defineExpose({ reload });
         </li></template>
       </ul>
     </div>
-    <p class="cleaner-result-note cleaner-empty" role="status"><template v-if="cleared_count">{{ cloud ? t("已删除 {count} 项", { count: cleared_count }) : t("已清理 {count} 项", { count: cleared_count }) }}</template></p>
+    <p v-if="cleared_count" class="cleaner-empty" role="status">{{ cloud ? t("已删除 {count} 项", { count: cleared_count }) : t("已清理 {count} 项", { count: cleared_count }) }}</p>
     <footer class="cleaner-footer">
       <span :title="t('已选 {count} 项，将释放 {size}', { count: chosen.size, size: format_storage_bytes(chosen_bytes) })">{{ t("已选 {count} 项，将释放 {size}", { count: chosen.size, size: format_storage_bytes(chosen_bytes) }) }}</span>
       <button v-if="cloud" type="button" class="cleaner-clear" :class="{ 'is-confirming': confirming }" :disabled="!chosen.size || clearing" @click="clear_chosen">
@@ -238,7 +238,6 @@ defineExpose({ reload });
 .cleaner-chip[aria-pressed="true"] { color: #3973f9; border-color: #3973f9; background: color-mix(in srgb, #3973f9 10%, transparent); }
 .cleaner-list { height: min(39vh, 320px); margin: 0; padding: 0; overflow-y: auto; scrollbar-gutter: stable; list-style: none; }
 .cleaner-list > .cleaner-empty { padding: 8px 4px; }
-.cleaner-result-note { min-height: 18px; }
 .cleaner-row { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 2px 4px; border-radius: 6px; cursor: pointer; }
 .cleaner-row:hover { background: color-mix(in srgb, currentColor 6%, transparent); }
 .cleaner-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -35,7 +35,10 @@
  *   a project directory); `images` (a usual delivery takes the woken messages' images with the prompt, as a
  *   screenshot pasted into the software does; measured on Claude Code 2.1.325 and Codex CLI 0.163, 2026-11-14;
  *   `'configured'` when the member's own `image_input` setting says its model reads images, see `takes_images`); `access_env` (its process takes the credential file by environment); `enforces_read_only`
- *   (its sandbox enforces a read-only project); `ripgrep` (bundles rg for reading on Windows); `file_tools` (works on
+ *   (its sandbox enforces a read-only project); `confines_reads` (group tool lockdown confines local reads to the
+ *   allowed directories); `lockdown_public_web` (can fetch public pages in group lockdown);
+ *   `lockdown_draft_write` (can write its own drafts, not the read-only directory). Unverified defaults to false.
+ *   `ripgrep` (bundles rg on Windows); `file_tools` (works on
  *   the project only through the runner's file tools, running no commands); `limits_directories` (a directory it may
  *   only read stays read-only even while it may write elsewhere and run commands: a sandbox or file tools, not rules
  *   that a command could bypass); `chat` (the owner's private chat runs as a turn of its own session and its reply is
@@ -143,7 +146,8 @@ export const ADAPTER_PROFILES = {
     windows_command: 'codiscuss',
     // Confined by --restricted --tools, dontAsk and our PreToolUse hook, which alone stops its own read-only commands
     // (claude_lockdown, 2.1.332 measured 2026-11-27); a taken-over manual member keeps its own window.
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, resume: true, images: true, capture: FINAL_REMARK, tool_lockdown: true, system_prompt: 'session',
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, chat: true, resume: true, images: true, capture: FINAL_REMARK, tool_lockdown: true,
+      confines_reads: true, lockdown_draft_write: true, system_prompt: 'session',
       // Only the window's session log marks a fire; a `-p` process loses its schedules when it exits (2.1.326).
       schedule_reports: 'window' },
     // The card shows only Claude's text between tool calls, not its thinking; without this rule it wrote one line per
@@ -193,7 +197,9 @@ export const ADAPTER_PROFILES = {
     // the protocol: the owner says so on the card (`image_input`). Confined (lent to another computer's room), it keeps
     // only our room tools (api_lockdown).
     windows_command: 'codiscuss',
-    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, chat: true, images: 'configured', capture: FINAL_REMARK, tool_lockdown: true, system_prompt: 'session' },
+    // Group windows use tool_lockdown with bounded file tools and explicitly enabled public web tools, not native Pi.
+    capabilities: { delivery: PROCESS, rewind: 'cut', project: true, access_env: true, enforces_read_only: true, confines_reads: true, lockdown_public_web: true,
+      chat: true, images: 'configured', capture: FINAL_REMARK, tool_lockdown: true, system_prompt: 'session' },
   },
 };
 
@@ -272,7 +278,9 @@ export function lockdown_support(id, config = {}) {
 /** What an adapter can do; an unknown adapter can do nothing. */
 export function adapter_capabilities(id) {
   const profile = ADAPTER_PROFILES[id];
-  if (!profile) return { delivery: IN_APP, rewind: 'kept', project: false, capture: false };
+  const group_defaults = { confines_reads: false, lockdown_public_web: false, lockdown_draft_write: false };
+  if (!profile) return { delivery: IN_APP, rewind: 'kept', project: false, capture: false, ...group_defaults };
+  const capabilities = { ...group_defaults, ...profile.capabilities };
   return profile.sandbox_needs_desktop && no_desktop()
-    ? { ...profile.capabilities, no_sandbox: true, enforces_read_only: false, limits_directories: false } : profile.capabilities;
+    ? { ...capabilities, no_sandbox: true, enforces_read_only: false, limits_directories: false, ...group_defaults } : capabilities;
 }

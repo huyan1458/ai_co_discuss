@@ -114,6 +114,10 @@
   "复制原文链接": "Copy original message link",
   "复制正文": "Copy text",
   "返回原位置": "Back to where you were",
+  "返回「{title}」": "Back to “{title}”",
+  "返回原房间": "Back to previous room",
+  "房间还没加载完，未能定位 #{id}": "The room hasn't finished loading, so #{id} couldn't be shown",
+  "房间还没加载完，未能回到原位置": "The room hasn't finished loading, so you couldn't be returned to where you were",
   "无法定位 #{value1}：{value2}": "Can't find #{value1}: {value2}",
   "从这里分支": "Branch from here",
   "将回退 {value1} 条记录（含这条），进行中的工作会停止": "Roll back {value1} records including this one; ongoing work will stop",
@@ -390,5 +394,6 @@
   "较早的（{value1}）": "Earlier ({value1})",
   "esc 关闭 · 单项后台工作不能在这里停止": "esc to close · a single background task cannot be stopped here",
   "后台": "Background",
-  "后台还有 {value1} 项工作在运行，明细见私聊": "{value1} background tasks still running; see the private chat for details"
+  "后台还有 {value1} 项工作在运行，明细见私聊": "{value1} background tasks still running; see the private chat for details",
+  "{member} 排队中：做完当前这件后接 #{message}": "{member} is queued to take #{message} after finishing the current task"
 }

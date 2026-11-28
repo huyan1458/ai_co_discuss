@@ -112,8 +112,10 @@ const bar_text = computed(() => state.value?.mode === "trust"
       </div>
     </template>
   </section>
-  <div v-else-if="variant === 'bar'" class="guest-bar-slot">
-  <div v-if="shown" class="channel-reply-draft channel-queue-hint guest-bar" :class="{ 'is-ending': ending, 'is-trust': phase === 'active' && state.mode === 'trust' }" role="status">
+  <!-- The bar's 32px is kept only while an external guest is invited, waiting or present, so its phases swap in place;
+       a room with no guest keeps no empty band above the text box (#15852). -->
+  <div v-else-if="variant === 'bar' && shown" class="guest-bar-slot">
+  <div class="channel-reply-draft channel-queue-hint guest-bar" :class="{ 'is-ending': ending, 'is-trust': phase === 'active' && state.mode === 'trust' }" role="status">
     <UIcon name="i-lucide-user-round" />
     <span v-if="phase === 'invited'">{{ t("外部用户邀请待打开 · {time} 前有效", { time: invite_until }) }}</span>
     <span v-else-if="phase === 'waiting'">{{ t("{name} 等待入场：本房间有任务在运行", { name }) }}</span>

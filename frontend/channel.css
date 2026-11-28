@@ -187,10 +187,15 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 @keyframes channel-room-breathe { 50% { opacity: .35; box-shadow: 0 0 2px #22c55e33; } }
 /* A room's one-line state in its time's place, as Claude's "Needs input": only what asks for the user is coloured;
    a working room keeps the breathing dot before a quiet "进行中". */
-.channel-room-attention { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.channel-room-attention[data-attention="waiting_user"] { color: var(--ui-warning); font-weight: 500; }
-.channel-room-attention[data-attention="failed"] { color: var(--ui-error); font-weight: 500; }
-.channel-room-attention[data-attention="running"]::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #22c55e; animation: channel-room-breathe 2s ease-in-out infinite; }
+.channel-room-attention { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.channel-room-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; }
+.channel-room-attention[data-attention="running"] .channel-room-dot { background: #22c55e; animation: channel-room-breathe 2s ease-in-out infinite; }
+.channel-room-attention:is([data-attention="waiting_user"], [data-attention="awaiting"]) .channel-room-dot { background: var(--ui-warning); }
+.channel-room-attention[data-attention="new"] .channel-room-dot { background: var(--ui-info, #3b82f6); }
+.channel-room-attention[data-attention="quota"] .channel-room-dot { width: 8px; height: 8px; background: none; box-shadow: inset 0 0 0 1.5px var(--ui-text-dimmed); }
+/* Red differs from green by more than hue (colour-blind users): it holds still and carries a ring. */
+.channel-room-attention[data-attention="failed"] .channel-room-dot { background: var(--ui-error); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-error) 30%, transparent); }
+.channel-room-select[data-waiting] .channel-room-name > span:not([class*="icon"]) { color: var(--ui-text-highlighted); font-weight: 500; }
 .channel-room-select > span:not([class*="icon"]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 /* The message count stays visible after a long title, hinting when a room has grown long (user 2026-11-25, #10417). */
 .channel-room-name { display: flex; align-items: baseline; }
@@ -271,6 +276,12 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-main { position: relative; }
 .channel-topbar { position: relative; z-index: 20; flex-shrink: 0; border-bottom: 1px solid var(--channel-edge-panel); background: var(--channel-topbar-bg); box-shadow: var(--channel-shadow-bar); -webkit-backdrop-filter: var(--channel-glass-filter); backdrop-filter: var(--channel-glass-filter); }
 .channel-topbar.is-overlay { position: absolute; top: 0; left: 0; right: 0; }
+/* MOSS's window list (§12.2): a fixed 260px column at the start of the middle area, scrolling on its own; the header,
+   conversation and rail sit to its right in the same place for every window. */
+.channel-main.has-moss-windows { --moss-windows-width: 260px; padding-left: var(--moss-windows-width); }
+.channel-main.has-moss-windows > .channel-topbar.is-overlay { left: var(--moss-windows-width); }
+.channel-moss-windows { position: absolute; inset: 0 auto 0 0; z-index: 21; width: var(--moss-windows-width); border-right: 1px solid var(--channel-edge-panel, var(--ui-border-muted)); background: var(--ui-bg); }
+.channel-moss-windows-drawer { max-height: 80dvh; }
 .channel-body-discussion .channel-transcript { padding-top: calc(var(--channel-topbar-height, 0px) + 16px); }
 /* The transcript's lower edge fades into the composer. A mask on the scroller itself repaints all of its content every
    scroll frame (measured ~14x more frame time on long rooms), so a fixed gradient over the same grid cell draws the fade. */
@@ -421,6 +432,29 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-search-input:has(.channel-search-clear) input { padding-right: 54px; }
 .channel-search-input [class*="icon"] { width: 14px; height: 14px; color: #929ba9; }
 .channel-search-input [data-slot="trailing"] > button { width: 23px; height: 23px; padding: 4px; border-radius: 3px; }
+/* The room's find bar (RoomFindBar.vue): box with three switches, a fixed-width count and five buttons, so nothing moves
+   between no search, matches, no results and show-only-matches. A narrow header folds it behind one search button and
+   opens it over the tabs, as VSCode's find widget sits over the editor. */
+.channel-header { position: relative; }
+.channel-find { gap: 2px; }
+.channel-find-input { width: 200px; }
+.channel-find-input input { padding-right: 78px; }
+.channel-find-input [data-slot="trailing"] { gap: 1px; padding-right: 3px; }
+.channel-find-switch[aria-pressed="true"] { color: #c4caff; background: #5865f22b; }
+.channel-find-count { flex-shrink: 0; width: 64px; height: 17px; overflow: hidden; line-height: 17px; color: var(--ui-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.channel-find-count.is-empty { color: var(--ui-error); }
+.channel-find-button { flex-shrink: 0; justify-content: center; width: 24px; height: 24px; padding: 4px; }
+.channel-find-button[aria-pressed="true"] { color: #c4caff; background: #5865f22b; }
+.channel-find-toggle { display: none; }
+@container (max-width: 1000px) { .channel-work-status { max-width: 180px; } }
+@container (max-width: 860px) {
+  .channel-find-toggle { display: inline-flex; }
+  .channel-find:not(.is-open) { display: none; }
+  .channel-header .channel-find.is-open { position: absolute; top: calc(100% + 4px); right: 8px; left: 8px; z-index: 30; display: flex; max-width: 560px; margin-left: auto; padding: 4px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-bg-elevated); box-shadow: 0 6px 20px #0000003d; }
+  .channel-header .channel-find.is-open .channel-find-input { flex: 1 1 auto; width: auto; min-width: 0; }
+}
+::highlight(codiscuss-find) { background-color: rgb(250 204 21 / 0.35); }
+::highlight(codiscuss-find-current) { background-color: rgb(249 115 22 / 0.7); }
 .channel-source-filter[aria-pressed="true"] { color: #c4caff !important; background: #5865f22b; }
 .channel-work-status { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 240px; height: 29px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--ui-text-toned); font-size: 12px; white-space: nowrap; }
 .channel-work-avatars { display: flex; }
@@ -591,6 +625,8 @@ body.progress-drawer-open .file-float { pointer-events: auto; }
 /* MOSS's settings in the rail or the phone drawer: the page's own padding, and grid rows that shrink to it. */
 :is(.channel-rail-board, .progress-drawer-body) > .moss-rail { min-width: 0; }
 html[data-theme^="channel"] .moss-settings-modal { max-width: min(560px, calc(100vw - 24px)); }
+/* "加入群" grows with its group list: pinned by its top edge instead of centred, so nothing above the list moves when it loads. */
+html[data-theme^="channel"] .moss-join-modal { top: min(12dvh, 96px) !important; bottom: auto !important; translate: -50% 0 !important; }
 .steward-settings form > * { min-width: 0; }
 .channel-participants .channel-directory-heading { padding: 0 10px 8px; min-height: 26px; font-size: 11px; }
 .channel-person { display: flex; width: 100%; padding: 7px 10px; gap: 11px; color: #c1c7d2; border-radius: 5px; font-weight: 400; text-align: left; }
@@ -708,16 +744,6 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 .channel-message-container { display: flex !important; align-items: flex-start !important; gap: 14px !important; padding: 0 !important; }
 .channel-message-body { position: relative; flex: 1 !important; min-width: 0 !important; padding: 0 !important; max-width: none !important; }
 .channel-message-byline { display: flex; align-items: center; gap: 10px; min-height: 28px; padding: 0 58px 0 0; margin-bottom: 16px; }
-/* MOSS's room is one conversation, as Claude Duet: its answers lie flat on the page and the user's own words sit in a
-   bubble on the right (user #15318). Only the frame changes; bylines, actions and failure cards stay as in any room. */
-:root[data-theme^="channel"] .channel-body.is-moss .channel-message { margin-bottom: 10px !important; padding: 10px 6px !important; border-color: transparent; background: transparent; box-shadow: none; }
-:root[data-theme^="channel"] .channel-body.is-moss .channel-message[data-author="user"] { width: fit-content !important; max-width: min(85%, 640px); margin-left: auto !important; padding: 12px 16px !important; border-radius: 18px; background: color-mix(in srgb, var(--channel-accent) 14%, var(--ui-bg-elevated)); }
-.channel-body.is-moss .channel-message[data-author="user"] .channel-message-byline { margin-bottom: 6px; }
-/* A signature in MOSS's room is MOSS (or you) and the time: room labels such as 主持, the source, the round, the model and
-   the message number belong to rooms with several members (#15685). The answer's footer keeps the model and usage. */
-.channel-body.is-moss .channel-message-author > :not(strong), .channel-body.is-moss .channel-message-byline .channel-message-model,
-.channel-body.is-moss .channel-message-facts > :not(time) { display: none; }
-:root[data-theme^="channel"] .channel-body.is-moss .channel-message.channel-failed-execution { border-color: color-mix(in srgb, var(--ui-error) 30%, transparent); }
 /* A delegation in MOSS's room: one bordered block, the task's title and state on top, its conclusion as the body. */
 .channel-delegation { display: grid; gap: 6px; margin: 0 16px 14px; padding: 10px 14px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-text) 3%, transparent); }
 .channel-delegation > header { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -761,9 +787,6 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 .channel-message-model { display: inline-flex; flex-wrap: nowrap; column-gap: 0; min-width: 0; white-space: nowrap; color: var(--ui-text-toned); }
 .channel-model-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
 .channel-model-effort { flex: none; white-space: pre; }
-/* An answer's provenance at its end: model and effort, then this turn's tokens, one grey line that wraps on a phone. */
-.channel-message-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px 8px; margin-top: 6px; color: var(--ui-text-dimmed); font-size: 11px; line-height: 18px; }
-.channel-message-footer .channel-message-model { min-width: 0; max-width: 100%; color: inherit; }
 .channel-message-id { font-size: 11px !important; font-weight: 400; line-height: 15px !important; color: #929aa7; padding: 0 !important; }
 .channel-message-text { margin-top: 2px; color: #d7dbe3; font-size: calc(16px * var(--card-text-scale, 1)); line-height: 1.6; overflow-wrap: anywhere; }
 /* Error/warning text gets its own box so a failure never reads like an answer; same left-bar tint as .access-failure. */
@@ -884,6 +907,8 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 .channel-composer-column { max-width: var(--channel-reading-width); margin: 0 auto; padding: 0 16px; }
 /* A share page keeps the composer in place, disabled, with the way to a room of one's own inside it. */
 .channel-share-composer :is(textarea, [data-slot="base"]) { cursor: not-allowed; opacity: .7; }
+/* A group window's box keeps the height of the writable box in the other MOSS windows (§12.2): same footer height. */
+.channel-share-composer.is-group-window .channel-composer-footer { padding: 4px 10px 10px !important; }
 .channel-share-composer .channel-composer-footer { flex-wrap: nowrap; justify-content: space-between !important; gap: 12px !important; padding: 2px 10px 10px 16px !important; }
 .channel-share-stamp { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
 .channel-share-stamp > .iconify { flex-shrink: 0; }
@@ -974,9 +999,9 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .channel-composer-note { display: flex; justify-content: space-between; gap: 10px; padding: 7px 4px 0; font-size: 11px; line-height: 16px; color: #929cad; }
 .channel-note-divider { margin-inline: 6px; color: #677181; }
 .channel-draft-length { white-space: nowrap; font-variant-numeric: tabular-nums; color: #858f9f; }
-.channel-composer-note > span:first-child { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.channel-composer-note > span:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* The account limits sit right of the recipient hint, before the key hints; the hint gives way first (#15745). */
-.channel-composer-note .channel-composer-quota { margin-left: auto; }
+.channel-composer-note .channel-composer-quota { flex: none; margin-left: auto; }
 .channel-quota-alert { display: none; }
 .channel-draft-length .is-near-limit { color: #f0b232; }
 /* Shortcut hints only appear while the composer has focus. */
@@ -1191,6 +1216,8 @@ html[data-theme^="channel"] .channel-manage-modal .fine-print { margin: 0; }
 html[data-theme^="channel"] .channel-folder-modal input { height: 40px; font-size: 13px; outline: none; }
 html[data-theme^="channel"] .studio-modal.channel-create-modal { width: calc(100vw - 32px); max-width: 920px; }
 html[data-theme^="channel"] .studio-modal.pb-invite-modal { width: calc(100vw - 32px); max-width: 920px; }
+/* Top-anchored instead of centered: the body grows with the picked cards, and a centered dialog would move the pickers up on every add. */
+html[data-theme^="channel"] .studio-modal.pb-invite-modal { top: max(16px, 8dvh); --tw-translate-y: 0; }
 html[data-theme^="channel"] .studio-modal.session-browser-modal { width: calc(100vw - 32px); max-width: 920px; }
 @media (max-width: 720px) {
   html[data-theme^="channel"] .studio-modal.session-browser-modal { width: calc(100vw - 24px); height: calc(100dvh - 32px); }
@@ -1273,7 +1300,9 @@ html[data-theme^="channel"] .theme-choices > button.chosen { border-color: var(-
 html[data-theme^="channel"] .theme-check { border-color: var(--ui-border-accented); color: var(--ui-text-inverted); }
 html[data-theme^="channel"] .chosen .theme-check { border-color: transparent; background: var(--channel-accent); }
 html[data-theme^="channel"] .theme-choices small { color: #a1aab9; }
-.channel-reading-setting { margin-top: 16px; padding-top: 14px; border-top: 1px solid #ffffff0d; }
+.channel-reading-setting { border-top: 1px solid #ffffff0d; }
+/* Collapsible settings (system prompts, speech, notifications) line up with the rows above: same height, same divider. */
+.channel-reading-setting :is(.prompts-header, .speech-header, .weixin-header) { min-height: 62px; align-items: center; }
 .channel-reading-setting h3 { margin-bottom: 10px; color: #cbd3df; font-size: 12px; font-weight: 500; }
 /* The language is one choice among few names: label and a compact picker on one row. */
 .channel-language-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -1281,7 +1310,8 @@ html[data-theme^="channel"] .theme-choices small { color: #a1aab9; }
 /* 设置 → 外观 / 阅读 / 房间偏好: each setting is a row (name left, choices right), rows of a group split by hairlines. */
 .channel-settings-group { margin-top: 4px; }
 .theme-choices + .channel-settings-group { margin-top: 8px; }
-.channel-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) 240px; align-items: center; gap: 6px 16px; padding: 10px 0; border-top: 1px solid #ffffff0d; }
+/* Every settings row is as tall as one with a choice bar (32px buttons + 4px inset + border), whatever its control. */
+.channel-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) 240px; align-items: center; gap: 6px 16px; min-height: 63px; padding: 10px 0; border-top: 1px solid #ffffff0d; }
 .channel-settings-group > .channel-setting-row:first-child { border-top: 0; }
 .channel-setting-row h3 { margin: 0; color: #cbd3df; font-size: 12px; font-weight: 500; }
 .channel-setting-row > :not(h3):not(.fine-print) { justify-self: end; }
@@ -1361,6 +1391,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
 @media (min-width: 1900px) {
   .channel-overview { margin-inline: 22px; }
   .channel-search-input { width: 220px; }
+  .channel-find-input { width: 240px; }
 }
 @media (max-width: 1199px) {
   .channel-member-rail, .channel-rail-resizer { display: none; }
@@ -1372,6 +1403,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-header-actions { gap: 3px; }
   .channel-title h1 { font-size: 14px; }
   .channel-search-input { width: 152px; }
+  .channel-find-input { width: 180px; }
 }
 @media (max-width: 700px) {
   .channel-shell { display: flex; }
@@ -1455,9 +1487,11 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-composer-column { padding: 0 8px; }
   .channel-editor { min-height: 36px; padding: 8px 10px 4px !important; }
   .channel-composer-footer { padding: 0 6px 5px !important; gap: 3px !important; }
+  .channel-share-composer.is-group-window .channel-composer-footer { padding: 0 6px 5px !important; }
   .channel-composer-note { display: none; }
   .channel-quota-alert { display: flex; height: 22px; padding: 0 4px; overflow: hidden; align-items: center; font-size: 11px; color: #929cad; }
   .channel-quota-alert .account-quota-pill { max-width: 100%; min-height: 0; overflow: hidden; }
+  .channel-quota-alert:empty { display: none; }
   html[data-theme^="channel"] .content-page { padding: 24px 18px; }
 }
 @media (hover: none) {

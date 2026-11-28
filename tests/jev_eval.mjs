@@ -10,14 +10,13 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { saved_api_keys } from '../runner/discussion_api.mjs';
-import { service_home } from '../runner/discussion_service.mjs';
 import { DISCUSSION_GUIDED_PROMPT_VERSION as DISCUSSION_PROMPT_VERSION, GOAL_PROMPT_VERSION, REVIEW_PROMPT_VERSION, ROUTE_GUIDED_PROMPT_VERSION as ROUTE_PROMPT_VERSION, SCHEDULER_MODE, SEQUENCE_PROMPT_VERSION, decide_sequence_checkpoint, SCHEDULER_PROVIDERS, decide_interjection, decide_review_completion,
-  decide_goal_wake, decide_next_speaker, decide_round, route_free_message } from '../runner/scheduler.mjs';
+  GROUP_PROMPT_VERSION, GROUP_COSTLY_PROMPT_VERSION, decide_group_message, decide_group_output, decide_goal_wake, decide_next_speaker, decide_round, route_free_message } from '../runner/scheduler.mjs';
 
 const { values: options } = parseArgs({ options: { provider: { type: 'string', default: 'jev' }, model: { type: 'string' },
-  repeat: { type: 'string', default: '1' }, only: { type: 'string' }, out: { type: 'string' }, baseline: { type: 'string' } } });
+  repeat: { type: 'string', default: '1' }, only: { type: 'string' }, out: { type: 'string' }, baseline: { type: 'string' }, home: { type: 'string' } } });
 const { fixtures, cases } = JSON.parse(readFileSync(new URL('./jev_cases.json', import.meta.url), 'utf8'));
-const home = service_home();
+const home = options.home ?? (await import('../runner/discussion_service.mjs')).service_home();
 const provider = SCHEDULER_PROVIDERS[options.provider];
 if (!provider) throw new Error(`供应商只能为 ${Object.keys(SCHEDULER_PROVIDERS).join(' / ')}`);
 const api_key_ref = saved_api_keys(home)[provider.base_url];
@@ -27,6 +26,7 @@ const REPEAT = Math.max(1, Number.parseInt(options.repeat, 10) || 1);
 
 /** Run one case through the same function the runner uses; returns what the system did and what the model chose. */
 async function run_case(item) {
+  if (['moss_group', 'moss_group_output', 'moss_group_costly'].includes(item.scene)) return run_group_case(item);
   const context = item.context || [];
   const message = { id: Math.max(0, ...context.map(entry => entry.id)) + 1, author: '用户', text: item.message, reply_to: item.reply_to };
   const free = fixtures.free;
@@ -70,6 +70,29 @@ async function run_case(item) {
   }
   const result = await decide_round(home, scheduler, { ...talk, last_speaker: talk.experts.at(-1) });
   return { result, acted: result.action === 'continue' ? 'continue' : '__host__' };
+}
+
+async function run_group_case(item) {
+  const input = { title: '社区活动群', moss_name: 'MOSS', ...item.input };
+  const output = item.scene === 'moss_group_output';
+  const result = await (output ? decide_group_output : decide_group_message)(home, scheduler, input);
+  if (result.error) throw new Error(result.error);
+  if (output) {
+    const evidence = result.detail[item.predicate === 'duplicate' ? 1 : 0];
+    result.detail = [{ ...evidence, probabilities: { note: evidence.probabilities['是'], send: evidence.probabilities['否'] } }];
+  }
+  if (item.scene === 'moss_group_costly') {
+    const index = result.input.questions.findIndex(question => question.name === 'costly');
+    const evidence = result.detail[index];
+    result.detail = [{ ...evidence, probabilities: { costly: evidence.probabilities['是'], small: evidence.probabilities['否'] } }];
+    return { result, acted: result.action === 'respond' ? result.costly ? 'costly' : 'small' : result.action };
+  }
+  const acted = result.action === 'owner' && result.visibility === 'private' ? 'owner_private' : result.action;
+  return { result, acted };
+}
+
+function group_attributes(item, result) {
+  return Object.entries(item.fields || {}).every(([key, expected]) => result[key] === expected);
 }
 
 /**
@@ -117,9 +140,12 @@ for (const item of selected) {
     const probability = probabilities[item.expect] ?? null;
     const spread = REPEAT > 1 ? asked_runs.map(run => run.probabilities?.[item.expect] ?? 0) : [];
     const last = runs.at(-1).result;
+    const picked_status = item.expect_first ? most_common(runs.map(run => first_status(item, run.result, run.acted))) : status_of(item.expect, choice, acted, item.accept);
+    const fields_match = runs.every(run => group_attributes(item, run.result));
     const entry = { id: item.id, scene: item.scene, note: item.note, expect: item.expect, choice, acted, runs: REPEAT,
       confidence: last.confidence ?? null, expected_probability: probability, probabilities, duration_ms: asked_runs.at(-1).duration_ms,
-      status: item.expect_first ? most_common(runs.map(run => first_status(item, run.result, run.acted))) : status_of(item.expect, choice, acted, item.accept),
+      status: fields_match ? picked_status : 'FAIL',
+      ...(item.fields ? { expected_fields: item.fields, actual_fields: Object.fromEntries(Object.keys(item.fields).map(key => [key, last[key]])) } : {}),
       ...(spread.length ? { expected_range: [Math.min(...spread), Math.max(...spread)] } : {}),
       ...(item.expect_first ? { expect_first: item.expect_first, first_choice: last.detail[1]?.choice ?? null,
         first: last.first ?? null, first_probabilities: last.detail[1]?.probabilities ?? {} } : {}) };
@@ -131,6 +157,7 @@ for (const item of selected) {
       .map(([value, share]) => `${value} ${Number(share).toFixed(2)}`).join(' / ');
     const first = item.expect_first ? ` · 首位 ${entry.first_choice} → ${entry.first ?? '未安排'}（期望 ${item.expect_first}）` : '';
     console.log(`${entry.status.padEnd(4)} ${item.id.padEnd(4)} ${item.scene.padEnd(12)} 期望 ${item.expect} · 选 ${choice} · 执行 ${acted} · 期望项概率 ${probability?.toFixed?.(2) ?? '-'}${range}${delta} · ${entry.duration_ms}ms  [${top}]${first}  ${item.note}`);
+    if (!fields_match) console.log(`  辅助判断不符：${JSON.stringify(entry.actual_fields)}，期望 ${JSON.stringify(item.fields)}`);
   } catch (error) {
     results.push({ id: item.id, scene: item.scene, expect: item.expect, status: 'ERROR', error: error.message });
     console.log(`ERROR ${item.id} ${error.message}`);
@@ -138,7 +165,8 @@ for (const item of selected) {
 }
 const count = status => results.filter(item => item.status === status).length;
 console.log(`\n${scheduler.provider}/${scheduler.model} · 每条 ${REPEAT} 次 · 路由提示版本 ${ROUTE_PROMPT_VERSION} · 讨论提示版本 ${DISCUSSION_PROMPT_VERSION} · 评审提示版本 ${REVIEW_PROMPT_VERSION} · 循环提示版本 ${SEQUENCE_PROMPT_VERSION} · Goal 提示版本 ${GOAL_PROMPT_VERSION} · `
-  + `PASS ${count('PASS')} / WEAK ${count('WEAK')} / FAIL ${count('FAIL')} / ERROR ${count('ERROR')}，共 ${results.length} 条`);
+  + `群窗口提示版本 ${GROUP_PROMPT_VERSION} · 耗时提示版本 ${GROUP_COSTLY_PROMPT_VERSION} · PASS ${count('PASS')} / WEAK ${count('WEAK')} / FAIL ${count('FAIL')} / ERROR ${count('ERROR')}，共 ${results.length} 条`);
 if (options.out) writeFileSync(options.out, JSON.stringify({ provider: scheduler.provider, model: scheduler.model, mode: SCHEDULER_MODE, repeat: REPEAT, route_prompt: ROUTE_PROMPT_VERSION,
-  discussion_prompt: DISCUSSION_PROMPT_VERSION, review_prompt: REVIEW_PROMPT_VERSION, sequence_prompt: SEQUENCE_PROMPT_VERSION, goal_prompt: GOAL_PROMPT_VERSION, ran_at: new Date().toISOString(), results }, null, 2));
+  discussion_prompt: DISCUSSION_PROMPT_VERSION, review_prompt: REVIEW_PROMPT_VERSION, sequence_prompt: SEQUENCE_PROMPT_VERSION, goal_prompt: GOAL_PROMPT_VERSION,
+  group_prompt: GROUP_PROMPT_VERSION, group_costly_prompt: GROUP_COSTLY_PROMPT_VERSION, ran_at: new Date().toISOString(), results }, null, 2));
 if (count('FAIL') || count('ERROR')) process.exitCode = 1;

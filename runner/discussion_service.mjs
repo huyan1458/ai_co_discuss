@@ -18,8 +18,11 @@ import { relay_health_writer } from './relay_health.mjs';
 import { resolve_locale, t } from './i18n.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, LIVE, member_drafts, write_proactive_access } from './free_runner.mjs';
-import { can_notify, flush_moss_channel_replies, moss_approval_text, moss_question_channels, moss_setup_text,
+import { CHANNELS, can_notify, flush_moss_channel_replies, moss_approval_text, moss_question_channels, moss_setup_text,
   notice_sent, receive_replies, route_moss_message, send_notice } from './channels.mjs';
+import { answer_moss_group_question, flush_moss_group, moss_window_key, moss_windows, route_moss_group, send_moss_group_question } from './moss_windows.mjs';
+import { SCHEDULER_PROVIDERS } from './scheduler.mjs';
+import { saved_api_keys } from './discussion_api.mjs';
 import { answer_by_weixin } from './question_weixin.mjs';
 import { OPERATOR_EVENTS_FILE, account_space, drafts_root } from './account_space.mjs';
 import { install_pi, pi_outdated } from './pi_runtime.mjs';
@@ -314,6 +317,17 @@ async function moss_phone_link(home, site, room = '') {
   return url.href;
 }
 
+function group_ops(home, config, log, wake) {
+  const channel = CHANNELS.find(item => item.id === config.moss_window.channel && item.capabilities?.groups);
+  if (!channel?.ready(home)) return null;
+  const path = join(home, 'launch-settings.json');
+  const choice = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')).create_preferences?.scheduler : null;
+  const base_url = SCHEDULER_PROVIDERS[choice?.provider]?.base_url;
+  const api_key_ref = base_url && saved_api_keys(home)[base_url];
+  const scheduler = choice?.enabled !== false && choice?.model && api_key_ref ? { ...choice, base_url, api_key_ref } : null;
+  return { channel, config, log, wake, scheduler, request: api, send: send_notice };
+}
+
 class RoomWorker {
   constructor(path, create_runner, log, home) {
     this.path = path;
@@ -340,13 +354,18 @@ class RoomWorker {
     // A settled scheduling decision changed the room; its next step should not wait for the next poll.
     if (this.runner.on_decided) this.runner.on_decided = () => this.wake();
     // A goal waiting on the owner reaches their Weixin, when this computer has one bound.
-    if ('notifier' in this.runner) this.runner.notifier = { ready: () => can_notify(this.home), sent: key => notice_sent(this.home, key),
+    if ('notifier' in this.runner) this.runner.notifier = {
+      ready: () => config.moss_window ? Boolean(group_ops(this.home, config, this.log)) : can_notify(this.home), sent: key => notice_sent(this.home, key),
       send: async notice => {
         if (config.steward && notice.question) {
           const link = await moss_phone_link(this.home, notice.room.site, notice.room.room);
           const safe = { ...notice, paragraphs: [moss_approval_text(link)], question: null, web_only: true, verbatim: true };
           const channels = moss_question_channels(this.home, config, this.runner.room, notice.question.id);
           return send_notice(this.home, { ...safe, ...(channels.length === 1 ? { only: channels[0] } : {}) });
+        }
+        if (config.moss_window && notice.question) {
+          const ops = group_ops(this.home, config, this.log, () => this.wake());
+          return ops ? send_moss_group_question(this.home, ops, notice) : { status: 'unbound' };
         }
         const link = await phone_link(this.home, notice.room.site, notice.room.room);
         const opening = link ? [`打开房间（需在已配对的设备上）：${link}`] : [];
@@ -415,7 +434,11 @@ class RoomWorker {
       if (!this.runner) this.open();
       await this.refresh_control();
       const result = await this.runner.tick();
-      if (this.config.steward) await this.flush_moss_replies();
+      if (this.config.steward || this.config.steward_private) await this.flush_moss_replies();
+      if (this.config.moss_window) {
+        const ops = group_ops(this.home, this.config, this.log);
+        if (ops) await flush_moss_group(this.home, ops, this.runner.room);
+      }
       await this.adopt_manual_members();
       Object.assign(this.state, { status: TICK_STATES[result], error: '' });
       this.idle = this.runner.idle?.() === true;
@@ -834,17 +857,17 @@ export class DiscussionService {
     const { post_steward_channel_message, steward_site } = await import('./steward.mjs');
     if (!current) {
       const { steward_command } = await import('./discussion_launch.mjs');
-      const status = await steward_command(this.home, 'steward');
+      const status = await steward_command(this.home, 'steward', { window: 'private' });
       if (!status.configured) {
         const link = await moss_phone_link(this.home, steward_site(this.home));
         return moss_setup_text(link);
       }
-      const opened = await steward_command(this.home, 'steward', { open: true, lang: resolve_locale() },
+      const opened = await steward_command(this.home, 'steward', { window: 'private', open: true, lang: resolve_locale() },
         { start_service: async () => ({ running: true }) });
       for (const path of read_registry(this.home)) {
         if (registered_identity(path)?.room !== opened.room_id) continue;
         const config = validate_config(configuration_snapshot(path).config, dirname(path));
-        if (config.steward) current = { config, wake: () => this.workers.get(path)?.wake() };
+        if (config.steward_private) current = { config, wake: () => this.workers.get(path)?.wake() };
         break;
       }
     }
@@ -856,10 +879,44 @@ export class DiscussionService {
     current.wake();
     return received;
   }
-  async weixin_reply({ site, room, text, question_id, version, channel, label }) {
+  async moss_group_message(channel, item) {
+    const window = moss_windows(this.home)[moss_window_key(channel.id, item.chat.id)];
+    const owner = channel.owner_id?.(this.home);
+    if (owner && item.sender?.id === owner && item.mentioned === true) {
+      const text = item.text?.trim();
+      if (text === '开始工作' || (text === '停止工作' && window?.enabled)) {
+        const { moss_group_channel_control } = await import('./discussion_launch.mjs');
+        return moss_group_channel_control(this.home, channel, item, text === '开始工作');
+      }
+    }
+    if (!window?.enabled) return;
+    const path = read_registry(this.home).find(file => registered_identity(file)?.room === window.room);
+    if (!path) return;
+    const config = configuration_snapshot(path).config;
+    if (config.moss_window?.channel !== channel.id || config.moss_window?.chat_id !== item.chat.id) return;
+    const ops = group_ops(this.home, config, this.log, () => this.workers.get(path)?.wake());
+    if (ops) await route_moss_group(this.home, ops, item);
+  }
+
+  async weixin_reply({ site, room, text, question_id, version, channel, label, owner_notice, platform_id }) {
     const worker = [...this.workers.values()].find(item => item.config?.site === site && item.config?.room === room);
     if (!worker) throw new Error('这台电脑已不再接入该房间');
-    if (worker.config.steward && channel) return this.moss_reply({ channel, label, text, question_id }, worker);
+    if ((worker.config.steward || worker.config.steward_private) && channel) return this.moss_reply({ channel, label, text, question_id }, worker);
+    if (worker.config.moss_window && question_id) {
+      const ops = group_ops(this.home, worker.config, this.log, () => worker.wake());
+      return ops ? answer_moss_group_question(this.home, ops, { question_id, version, text }) : '';
+    }
+    if (worker.config.moss_window && !question_id) {
+      const group = worker.config.moss_window;
+      const key = moss_window_key(group.channel, group.chat_id);
+      const pending = moss_windows(this.home)[key]?.pending_owner;
+      const ops = group_ops(this.home, worker.config, this.log, () => worker.wake());
+      if (!ops || !pending || owner_notice !== `moss-group-owner:${room}:${pending.message_id}`) return '';
+      const id = ops.channel.owner_id(this.home);
+      await route_moss_group(this.home, ops, { chat: { kind: 'group', id: group.chat_id }, sender: { id, name: t('负责人') },
+        text, owner: true, owner_notice: true, message_id: `private-${channel}-${platform_id || randomUUID()}` });
+      return '';
+    }
     // A reply to a question's notice answers that question (or leaves it to the host), never a plain message.
     if (question_id) {
       const confirmation = await answer_by_weixin((path, payload) => api(worker.config, path, payload), { question_id, version, text });
@@ -1230,6 +1287,10 @@ export async function run_service(home, output = () => {}) {
       updated_at: Math.floor(Date.now() / 1000), rooms: [] });
     // Loaded lazily: the relay runs launches, and the launch module itself depends on this one.
     const { relay_commands, sync_remote_launches } = await import('./remote_launch.mjs');
+    if (existsSync(join(home, 'launch-settings.json')) && JSON.parse(readFileSync(join(home, 'launch-settings.json'), 'utf8')).steward?.adapter) {
+      const { sync_steward_platform_skills } = await import('./steward.mjs');
+      try { sync_steward_platform_skills(home); } catch (error) { log_line(error.message); }
+    }
     const { start_relay_channels } = await import('./relay_channel.mjs');
     if ((await import('./admin_account.mjs')).remove_legacy_admin_accounts(home)) log_line('已删除旧版本明文保存的管理员密码文件 admin-accounts.json');
     const health = relay_health_writer(home);
@@ -1241,6 +1302,7 @@ export async function run_service(home, output = () => {}) {
     (await import('./external_client.mjs')).start_external_client(home, { log: log_line, signal: relay_stop.signal });
     // The owner's Weixin replies come back here and go to the room their notice came from.
     receiving = receive_replies(home, { on_reply: reply => service.weixin_reply(reply), on_moss: reply => service.moss_reply(reply),
+      on_group: (channel, item) => service.moss_group_message(channel, item),
       log: log_line, signal: relay_stop.signal })
       .catch(error => log_line(`微信收件停止：${error.message}`));
     let synced_at = 0, channels_checked_at = 0, swept_at = 0, relay_failed_at = 0;

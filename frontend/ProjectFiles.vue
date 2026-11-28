@@ -28,10 +28,10 @@ const root_name = computed(() => account_root.value ? account_root.value.name : 
 const current_path = ref(shown && (shown.account ? shown.account.id === account_root.value?.id : shown.directory === directory.value) ? shown.path : "");
 const listing = ref(null);
 const loading = ref(false);
-// "roots": the account's projects and drafts; "trash": the recycle area; "folder": one folder.
+// "roots": the account's projects and drafts; "folder": one folder; "cloud": the cloud space. Projects have no recycle
+// area: deleting there is for good, after a confirmation (user #15944).
 const mode = ref(shown?.mode === "roots" ? "roots" : "folder");
 const roots = ref(null);
-const trash = ref(null);
 const section_failure = ref("");
 const busy = ref(false);
 // A name being typed: `{ kind: "mkdir" | "rename" | "project", entry, value }`.
@@ -108,7 +108,7 @@ function open_account_root(item) {
   open_project("");
 }
 
-/** Read the account's projects and drafts or recycle area, replacing only the active request. */
+/** Read the account's projects and drafts, replacing only the active request. */
 async function read_section(section) {
   if (left_page) return;
   const request = ++listing_request;
@@ -121,16 +121,14 @@ async function read_section(section) {
   try {
     const answer = await bridge.manage_room_files(room_id, { op: section });
     if (request !== listing_request) return;
-    if (section === "roots") roots.value = answer;
-    else trash.value = answer.entries;
+    roots.value = answer;
   } catch (error) {
     if (request !== listing_request) return;
-    section_failure.value = section === "roots" ? t('读取项目列表失败：{value1}', { value1: error.message }) : t('读取回收区失败：{value1}', { value1: error.message });
+    section_failure.value = t('读取项目列表失败：{value1}', { value1: error.message });
     bridge.notify("error", section_failure.value);
   } finally { if (request === listing_request) loading.value = false; }
 }
 const show_roots = () => read_section("roots");
-const show_trash = () => read_section("trash");
 
 // The account's cloud space, the last of the directory tabs: one drive for the whole account, the same from every room.
 // It is drawn with this page's own frame (tools, tabs, path bar, columns, row menus); cloud-drive.js gives its data and
@@ -371,9 +369,10 @@ async function finish_naming() {
   }
 }
 
-/** Move one entry into the recycle area. */
+/** Delete one entry for good, once the user confirms: projects keep no recycle area. */
 function remove(entry) {
-  change({ op: "delete", path: entry.path }, t('已移到回收区：{value1}', { value1: entry.name }));
+  if (!window.confirm(t("确定删除“{name}”？删除后无法恢复。", { name: entry.name }))) return;
+  change({ op: "delete", path: entry.path }, t("已删除 {name}", { name: entry.name }));
 }
 
 /** Copy or cut one entry, or several chosen ones, for pasting in another folder (of this or another project). */
@@ -562,23 +561,13 @@ async function download(entry) {
   catch (error) { bridge.notify("error", t('下载失败：{value1}', { value1: error.message })); }
 }
 
-/** Put one recycled item back where it was. */
-async function restore(item) {
-  busy.value = true;
-  try {
-    const answer = await bridge.manage_room_files(room_id, { op: "restore", id: item.id });
-    bridge.notify("info", t('已还原到 {value1}/{value2}', { value1: answer.root_name, value2: answer.path }));
-    trash.value = trash.value.filter((entry) => entry.id !== item.id);
-  } catch (error) { bridge.notify("error", error.message); }
-  finally { busy.value = false; }
-}
-
-/** Move a whole draft (or an account project) into the recycle area. */
+/** Delete a whole draft (or an account project) for good, once the user confirms. */
 async function remove_root(item) {
+  if (!window.confirm(t("确定删除“{name}”？删除后无法恢复。", { name: item.name }))) return;
   busy.value = true;
   try {
     await bridge.manage_room_files(room_id, { op: "delete-root", root: item.id });
-    bridge.notify("info", t('已移到回收区：{value1}', { value1: item.name }));
+    bridge.notify("info", t("已删除 {name}", { name: item.name }));
     await show_roots();
   } catch (error) { bridge.notify("error", error.message); }
   finally { busy.value = false; }
@@ -606,7 +595,6 @@ function root_lock(item) {
   return "";
 }
 
-const deleted_time = (value) => modified_time(value);
 
 // Where the list was before each move (opening a folder, the path bar, the project list, the recycle area, another
 // directory) and, after going back, where it came from, so it steps back and forward as a file manager does, also with
@@ -633,7 +621,6 @@ function navigate(move) {
 /** Show one remembered place. */
 function show_place(place) {
   if (place.mode === "roots") return show_roots();
-  if (place.mode === "trash") return show_trash();
   if (place.mode === "cloud") return cloud_visible.value ? show_cloud(place.cloud) : show_roots();
   account_root.value = place.account;
   root.value = place.account ? place.account.id : place.root;
@@ -711,19 +698,22 @@ function side_button(event) {
   else go_forward();
 }
 
-/** The rarely used tools of the heading: refreshing what is shown, and going into or out of the recycle area. */
-// In the cloud space the same place holds its recycle bin ("回收站"), and in the bin a way to empty it.
-const more_items = computed(() => mode.value === "cloud" ? [
-  { label: t('刷新'), icon: "i-lucide-refresh-cw", disabled: cloud.loading.value, onSelect: () => cloud.reload() },
-  cloud.in_trash.value ? { label: t('返回云空间'), icon: "i-lucide-cloud", onSelect: () => navigate(() => show_cloud("root")) }
-    : { label: t('回收站'), icon: "i-lucide-trash", onSelect: () => navigate(() => show_cloud("trash")) },
-  ...(cloud.in_trash.value ? [{ label: t('清空回收站'), icon: "i-lucide-trash-2", color: "error", onSelect: () => cloud.empty_trash() }] : []),
-] : [
-  { label: t('刷新'), icon: "i-lucide-refresh-cw", disabled: loading.value || busy.value,
-    onSelect: () => mode.value === "roots" ? show_roots() : mode.value === "trash" ? show_trash() : (read_directory(current_path.value), sweep_folders()) },
-  mode.value === "trash" ? { label: t('返回文件夹'), icon: "i-lucide-folder-open", onSelect: () => navigate(() => open_project(current_path.value)) }
-    : { label: t('回收区'), icon: "i-lucide-trash", onSelect: () => navigate(show_trash) },
+/** The rarely used tools of the heading: refreshing what is shown, and emptying the cloud space's recycle bin. */
+// The same items in the same order on every tab: emptying the bin is greyed out anywhere but in the bin.
+const more_items = computed(() => [
+  mode.value === "cloud" ? { label: t('刷新'), icon: "i-lucide-refresh-cw", disabled: cloud.loading.value, onSelect: () => cloud.reload() }
+    : { label: t('刷新'), icon: "i-lucide-refresh-cw", disabled: loading.value || busy.value,
+      onSelect: () => mode.value === "roots" ? show_roots() : (read_directory(current_path.value), sweep_folders()) },
+  ...(cloud_visible.value ? [{ label: t('清空回收站'), icon: "i-lucide-trash-2", color: "error", disabled: !in_bin.value, onSelect: () => cloud.empty_trash() }] : []),
 ]);
+
+// The heading's recycle icon is the cloud space's recycle bin only (user #15942; projects have none): from a project
+// tab it switches to the cloud space and opens the bin. Shown pressed while in it, where pressing it again leaves, as the
+// path bar does. Its number is the bin's count, read when the page opens and with each cloud listing.
+const in_bin = computed(() => mode.value === "cloud" && cloud.in_trash.value);
+const bin_title = computed(() => in_bin.value ? t('返回云空间') : t('云空间回收站'));
+function toggle_bin() { navigate(() => show_cloud(in_bin.value ? "root" : "trash")); }
+watch(cloud_visible, (visible) => { if (visible) cloud.count_trash(); }, { immediate: true });
 // The directory tabs: the room's project directories, then the cloud space; shown with one directory too when the
 // cloud space is there, so it has somewhere to sit.
 // It stays in every section of the page (projects list, recycle area, an account folder), with no tab chosen there, so
@@ -743,7 +733,6 @@ const tool_blocks = computed(() => {
     };
   }
   if (mode.value === "roots") return { upload: t("先打开一个项目或草稿再上传"), create: roots.value?.can_create_project ? "" : t("这里不能新建项目"), layout: t("这里只有列表视图") };
-  if (mode.value === "trash") return { upload: t("回收区里不能上传"), create: t("回收区里不能新建文件夹"), layout: t("这里只有列表视图") };
   return { upload: "", create: "", layout: "" };
 });
 
@@ -807,15 +796,16 @@ function move_chosen() {
   take_many([...folders, ...files], "move");
 }
 
-/** Delete the chosen entries: a project's go to its recycle area; the cloud space follows its own rules. */
+/** Delete the chosen entries: a project's for good once confirmed; the cloud space follows its own rules. */
 async function delete_chosen(permanent = false) {
   const { files, folders } = chosen.value;
   selected.value = new Set();
   if (mode.value === "cloud") return cloud.remove(files, folders, permanent || cloud.in_trash.value);
   const entries = [...folders, ...files], from = root.value, folder = current_path.value;
+  if (!window.confirm(t("确定删除这 {count} 项？删除后无法恢复。", { count: entries.length }))) return;
   const failed = await run_batch(t("删除 {count} 项", { count: entries.length }), "delete", entries,
     async (entry) => { await bridge.manage_room_files(room_id, { root: from, op: "delete", path: entry.path }); });
-  if (!failed.length) bridge.notify("info", t("已移到回收区：{value1}", { value1: t('{count} 项', { count: entries.length }) }));
+  if (!failed.length) bridge.notify("info", t("已删除 {name}", { name: t('{count} 项', { count: entries.length }) }));
   if (root.value === from && current_path.value === folder) read_directory(folder);
 }
 
@@ -883,7 +873,7 @@ function open_entry(entry) {
       <div><h2>{{ t('项目文件') }}</h2></div>
       <div class="project-files-tools">
         <!-- The same four icons in the same order on every tab and in every folder (user 2026-11-28, #15757): adding files,
-             a new folder, how they are shown, then "更多操作" (refreshing, the recycle area). One that does not apply
+             a new folder, how they are shown, the transfer list, the recycle bin, then "更多操作" (refreshing, the recycle area). One that does not apply
              is greyed out in place, its wrapper saying why (a disabled button shows no tooltip of its own). -->
         <UButton v-if="clipboard && mode === 'folder'" icon="i-lucide-clipboard-paste" color="neutral" variant="soft" size="sm" :label="t('粘贴')" :title="t('粘贴 {value1}', { value1: clipboard.name })" :disabled="busy" @click="paste" />
         <span class="project-files-tool" :title="tool_blocks.upload || (mode === 'cloud' ? t('上传文件或文件夹（单个不超过 2 GiB）') : t('上传文件（单个不超过 {limit} MiB）', { limit: view.attachment_limit_mib }))">
@@ -903,6 +893,12 @@ function open_entry(entry) {
         <input ref="file_input" type="file" multiple hidden @change="upload_files($event.target.files)" />
         <input ref="cloud_files_input" type="file" multiple hidden @change="cloud_pick_files($event.target.files)" />
         <input ref="cloud_folder_input" type="file" multiple webkitdirectory hidden @change="cloud_pick_folder($event.target.files)" />
+        <!-- Always here, before "更多操作": its badge counts what is going and turns red on a failure (#15875). -->
+        <TransferList />
+        <span v-if="cloud_visible" class="project-files-tool project-files-bin" :title="bin_title">
+          <UButton icon="i-lucide-trash" color="neutral" :variant="in_bin ? 'soft' : 'ghost'" size="sm" :aria-label="bin_title" :aria-pressed="in_bin" @click="toggle_bin" />
+          <span v-if="cloud.trash_count.value" class="project-files-badge" aria-hidden="true">{{ cloud.trash_count.value > 99 ? "99+" : cloud.trash_count.value }}</span>
+        </span>
         <UDropdownMenu :items="more_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
           <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('更多操作')" :title="t('更多操作')" :loading="loading || busy" />
         </UDropdownMenu>
@@ -921,9 +917,9 @@ function open_entry(entry) {
     <UModal :open="Boolean(asking)" :title="t('文件已存在')" :close="false" :dismissible="false">
       <template #body>
         <div v-if="asking" class="project-files-ask">
-          <p>{{ t('“{value1}”已存在。', { value1: asking.name }) }}</p>
+          <p>{{ t('“{value1}”已存在。替换后旧内容无法恢复。', { value1: asking.name }) }}</p>
           <div>
-            <UButton :label="t('替换并保留旧版')" color="primary" size="xs" @click="answer_conflict('replace')" />
+            <UButton :label="t('替换')" color="primary" size="xs" @click="answer_conflict('replace')" />
             <UButton :label="t('保留两份')" color="neutral" variant="outline" size="xs" @click="answer_conflict('keep_both')" />
             <UButton :label="t('跳过')" color="neutral" variant="ghost" size="xs" @click="answer_conflict(null)" />
             <label v-if="asking.many" class="project-files-ask-all"><input v-model="ask_all" type="checkbox" />{{ t('其余都按此处理') }}</label>
@@ -931,8 +927,6 @@ function open_entry(entry) {
         </div>
       </template>
     </UModal>
-
-    <TransferList />
 
     <div ref="explorer" class="project-explorer" :aria-busy="loading || busy" @dragover="cloud_drop" @drop="cloud_drop">
       <!-- With entries chosen, their actions take the path bar's row at its height, so the list below does not move; the
@@ -982,7 +976,6 @@ function open_entry(entry) {
             </button>
           </template>
         </template>
-        <template v-else-if="mode === 'trash'"><UIcon name="i-lucide-chevron-right" class="project-crumb-separator" /><button type="button" disabled aria-current="location" :title="t('回收区（保留 30 天）')">{{ t('回收区') }}</button></template>
       </nav>
       </div>
 
@@ -994,7 +987,7 @@ function open_entry(entry) {
         <UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="naming = null" />
       </form>
 
-      <div v-if="mode !== 'folder' && loading && (mode === 'roots' ? !roots : !trash)" class="project-files-rows" role="status" :aria-label="t('正在读取…')">
+      <div v-if="mode !== 'folder' && loading && !roots" class="project-files-rows" role="status" :aria-label="t('正在读取…')">
         <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-check"></span><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
       </div>
       <p v-if="mode !== 'folder' && section_failure" class="project-files-empty">
@@ -1014,7 +1007,7 @@ function open_entry(entry) {
               <span class="project-file-actions">
                 <time :datetime="item.modified_at">{{ modified_time(item.modified_at) }}</time>
                 <UButton icon="i-lucide-trash-2" color="neutral" variant="ghost" size="xs" :aria-label="t('删除 {value1}', { value1: item.name })"
-                  :title="root_lock(item) || t('移到回收区')" :disabled="loading || busy || Boolean(root_lock(item))" @click="remove_root(item)" />
+                  :title="root_lock(item) || t('删除后无法恢复')" :disabled="loading || busy || Boolean(root_lock(item))" @click="remove_root(item)" />
               </span>
             </div>
             <p v-if="roots && !roots[group.key].length" class="project-files-empty is-small">{{ group.key === 'projects' ? t('还没有项目') : t('没有草稿') }}</p>
@@ -1098,20 +1091,6 @@ function open_entry(entry) {
         <footer v-if="cloud.listing.value" class="project-files-footer">
           <span>{{ t('{value1} 项', { value1: cloud.folders.value.length + cloud.files.value.length }) }}<template v-if="cloud.in_trash.value"> · {{ t('回收站里的文件保留 30 天，仍占用空间') }}</template></span>
         </footer>
-      </template>
-
-      <template v-else-if="mode === 'trash'">
-        <div class="project-files-rows">
-          <div v-for="item in trash || []" :key="item.id" class="project-file-row is-root"><span class="project-file-check"></span>
-            <span class="project-file-name" :title="`${item.root_name}/${item.path}`"><UIcon :name="item.kind === 'directory' ? 'i-lucide-folder' : file_type(item.name)[1]" class="project-file-icon" /><span>{{ item.root_name }}/{{ item.path }}</span></span>
-            <span class="project-file-size">{{ file_size(item.size) }}</span>
-            <span class="project-file-actions">
-              <time :datetime="item.deleted_at">{{ deleted_time(item.deleted_at) }}</time>
-              <UButton icon="i-lucide-undo-2" color="neutral" variant="ghost" size="xs" :label="t('还原')" :disabled="loading || busy" @click="restore(item)" />
-            </span>
-          </div>
-          <p v-if="trash && !trash.length" class="project-files-empty"><UIcon name="i-lucide-trash" />{{ t('回收区是空的') }}</p>
-        </div>
       </template>
 
       <template v-else-if="mode === 'folder'">
@@ -1208,6 +1187,9 @@ function open_entry(entry) {
 .project-files-heading h2 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
 .project-files-heading p { margin: 0; color: var(--ui-text-muted); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .project-files-tools { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.project-files-bin { position: relative; }
+.project-files-badge { position: absolute; top: 0; right: 0; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--ui-text-muted); color: var(--ui-bg);
+  font-size: 9px; font-weight: 600; line-height: 14px; text-align: center; pointer-events: none; font-variant-numeric: tabular-nums; }
 
 .project-roots { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
 .project-roots button { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 4px 10px; border: 1px solid var(--ui-border); border-radius: 6px;

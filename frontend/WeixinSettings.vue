@@ -15,11 +15,8 @@ import ConfirmDialog from "./ConfirmDialog.vue";
 
 const { bridge } = inject("discussion");
 const confirm_setup = ref(false);
-// Changing this computer's notification setup needs MOSS above read-only (#15623).
-const setup_read_only = ref(false);
 async function ask_setup() {
   if (!await bridge.ensure_steward_configured()) return;
-  setup_read_only.value = bridge.steward_read_only();
   confirm_setup.value = true;
 }
 const status = ref(null), unavailable = ref(""), busy = ref(""), open = ref(false);
@@ -148,8 +145,8 @@ async function act(action, message) {
       </template>
     </UCollapsible>
     <ConfirmDialog v-model:open="confirm_setup" :title="t('配置通知渠道')"
-      :description="setup_read_only ? t('MOSS 将引导你配置通知，并可能更改本机的通知设置。MOSS 现在是只读，确认后会先把它的项目权限调到“自动”，再发送。') : t('MOSS 将引导你配置通知，并可能更改本机的通知设置。')"
-      :confirm-label="setup_read_only ? t('调到自动并发送') : undefined" @confirm="bridge.request_steward('notify-setup', {}, { confirmed: true, raise_access: setup_read_only })" />
+      :description="t('MOSS 将引导你配置通知，并可能更改本机的通知设置。')"
+      @confirm="bridge.request_steward('notify-setup', {}, { confirmed: true })" />
   </section>
 </template>
 

@@ -1,8 +1,15 @@
-﻿import { parseArgs } from 'node:util';
+﻿import { readFileSync } from 'node:fs';
+import { parseArgs } from 'node:util';
 
 import { local_settings } from './discussion_setup.mjs';
 import { site_fetch } from './entry_client.mjs';
 import { t } from './i18n.mjs';
+
+/** Whether the bound task credential belongs to the MOSS private window. */
+function private_window(file) {
+  try { return JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, '')).window === 'private'; }
+  catch { return false; }
+}
 
 /** Read the local administrator's analytics snapshot and print its summary or complete JSON. */
 export async function analytics_cli(args) {
@@ -11,7 +18,8 @@ export async function analytics_cli(args) {
     json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }
   } });
   if (values.help) return console.log(t('用法：codiscuss analytics [--range today|7d|30d|all] [--scope all|current] [--from YYYY-MM-DD --to YYYY-MM-DD] [--json]'));
-  if (process.env.DISCUSS_ACCESS_FILE) throw new Error(t('需要管理员身份'));
+  // Task credentials stay refused, except the MOSS private window: the owner's read-only analytics are its job.
+  if (process.env.DISCUSS_ACCESS_FILE && private_window(process.env.DISCUSS_ACCESS_FILE) !== true) throw new Error(t('需要管理员身份'));
   const url = new URL('/api/analytics', 'http://127.0.0.1:' + (local_settings().port || 8765));
   for (const key of ['range', 'from', 'to', 'scope']) if (values[key] !== undefined) url.searchParams.set(key, values[key]);
   url.searchParams.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
