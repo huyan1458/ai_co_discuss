@@ -670,11 +670,25 @@ async function handle_api(database, request, parts, setup_key = "", relay = null
   throw new HttpError(404, "地址不存在");
 }
 
-/** Dispatch Worker requests; everything outside /api is a static page asset. */
+/** Forward only the share token to the selected computer. Rooms and share state live there. */
+async function handle_public_cloud_share(request, env, path) {
+  const match = /^\/api\/cloud-share\/([0-9a-f]{32})\/([0-9a-f]{64})(?:\/([0-9A-Za-z]{4}))?$/.exec(path);
+  if (request.method !== "GET" || request.body || (request.headers.get("Content-Length") ?? "0") !== "0" ||
+      request.headers.has("Transfer-Encoding") || !match || !env.RELAY)
+    return new Response(null, { status: 404, headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
+  const relay = await machine_relay(env, match[1]);
+  return relay.fetch("https://relay.internal/", { method: "POST", headers: {
+    "X-Relay-Role": "cloud-share", "X-Cloud-Share-Token": match[2], "Accept-Language": request.headers.get("Accept-Language") || "zh",
+    ...(match[3] ? { "X-Cloud-Share-Code": match[3] } : {}),
+  } });
+}
+
+/** Dispatch Worker requests, including public links to the computer and static page assets. */
 async function fetch_request(request, env) {
   const url = new URL(request.url);
   const parts = url.pathname.replace(/^\/+|\/+$/g, "").split("/");
   try {
+    if (parts[0] === "api" && parts[1] === "cloud-share") return await handle_public_cloud_share(request, env, url.pathname);
     if (url.pathname === "/robots.txt") return respond("User-agent: *\nAllow: /\n", 200, true);
     if (parts[0] !== "api") return env.ASSETS.fetch(request);
     if (!["GET", "POST"].includes(request.method)) return new Response(null, { status: 501 });

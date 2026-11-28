@@ -39,6 +39,7 @@ class AdminTests(unittest.TestCase):
         self.database = Path(self.directory.name) / "admin.db"
         init_database(self.database, seed=False)
         self.server = DiscussionServer(("127.0.0.1", 0), self.database)
+        self.server.daemon_threads = False
         self.server.local_site = False
         self.server.admin_setup_key = SETUP_KEY
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
@@ -47,8 +48,8 @@ class AdminTests(unittest.TestCase):
 
     def tearDown(self):
         self.server.shutdown()
-        self.server.server_close()
         self.thread.join()
+        self.server.server_close()
         self.directory.cleanup()
 
     def request(self, path, payload=None, admin="", token="", machine="", source=""):
@@ -327,13 +328,14 @@ class RelayBridgeTests(unittest.TestCase):
         finally:
             os.environ.pop("DISCUSS_SERVICE_HOME") if previous is None else os.environ.__setitem__("DISCUSS_SERVICE_HOME", previous)
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
+        self.server.daemon_threads = False
         self.thread.start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
 
     def tearDown(self):
         self.server.shutdown()
-        self.server.server_close()
         self.thread.join()
+        self.server.server_close()
         self.directory.cleanup()
 
     def request(self, path, payload=None, bridge=None, site=SITE, token=""):

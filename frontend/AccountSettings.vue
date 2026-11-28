@@ -2,9 +2,7 @@
 import { computed, inject, reactive, ref, watch } from "vue";
 import DeviceSettings from "./DeviceSettings.vue";
 import SecretKeyInput from "./SecretKeyInput.vue";
-import AttachmentCleaner from "./AttachmentCleaner.vue";
-import { delete_cloud_files, object_storage_fields, object_storage_values } from "./object-storage-fields.js";
-import { format_storage_bytes } from "./storage-format.js";
+import { object_storage_fields, object_storage_values } from "./object-storage-fields.js";
 import { locale, t } from './i18n.js';
 
 const { view, bridge } = inject("discussion");
@@ -64,14 +62,9 @@ async function save_storage_field(field) {
   } catch (error) { bridge.notify("error", error.message); }
   finally { storage_busy.value = ""; }
 }
-// The account's cloud space files, listed and deleted by the room site with the owner's sign-in.
-const cloud_open = ref(false);
-const read_cloud = () => bridge.request("/api/rooms/cloud-attachments");
-const delete_cloud = (ids) => delete_cloud_files(ids, (id) => bridge.request("/api/rooms/cloud-attachments/delete", { id }));
-function cloud_deleted(result) {
-  bridge.notify("info", t("已释放 {size}", { size: format_storage_bytes(result.freed_bytes) }));
-  if (result.error) bridge.notify("error", result.error);
-}
+// The owner can let this account use the owner's own cloud space instead of a key of its own; only the owner changes it.
+// The files themselves are managed in the file page's "云空间".
+const uses_admin_storage = computed(() => storage.value?.mode === "admin");
 async function manage_storage(action) {
   if (action === "clear" && !window.confirm(t("清除后超过上限的文件将无法上传，已存于对象存储的附件也无法下载。确认清除？"))) return;
   storage_busy.value = action;
@@ -247,30 +240,32 @@ async function save_password() {
       </template>
     </div>
     <section v-if="can_set_storage && storage" class="account-devices" aria-labelledby="account-object-storage">
-      <h4 id="account-object-storage">{{ t("云空间（对象存储）") }} <small v-if="saved_storage_key && storage.managed">· {{ t("管理员提供") }}</small></h4>
-      <UFormField :label="t('资源中心地址')" class="w-full">
-        <UInput v-model="storage_url" type="url" :disabled="Boolean(storage_busy)" :aria-label="t('资源中心地址')" class="w-full" />
-      </UFormField>
-      <UFormField :label="t('对象存储 Key')" class="w-full">
-        <SecretKeyInput :key="`${normalized_storage_url()} ${storage.api_key_ref}`" :save="save_storage_key" :saved="Boolean(saved_storage_key)" :disabled="Boolean(storage_busy) || !normalized_storage_url()" :label="t('对象存储 Key')" :placeholder="t('填写 Key，失焦或回车保存')" @error="(error) => bridge.notify('error', error.message)" />
-      </UFormField>
+      <h4 id="account-object-storage">{{ t("云空间（对象存储）") }} <small v-if="uses_admin_storage || (saved_storage_key && storage.managed)">· {{ t("管理员提供") }}</small></h4>
+      <p v-if="uses_admin_storage" class="account-storage-note">{{ t("本账号使用管理员的云空间，由管理员在管理面板设置，不需要填写 Key。") }}</p>
+      <template v-else>
+        <UFormField :label="t('资源中心地址')" class="w-full">
+          <UInput v-model="storage_url" type="url" :disabled="Boolean(storage_busy)" :aria-label="t('资源中心地址')" class="w-full" />
+        </UFormField>
+        <UFormField :label="t('对象存储 Key')" class="w-full">
+          <SecretKeyInput :key="`${normalized_storage_url()} ${storage.api_key_ref}`" :save="save_storage_key" :saved="Boolean(saved_storage_key)" :disabled="Boolean(storage_busy) || !normalized_storage_url()" :label="t('对象存储 Key')" :placeholder="t('填写 Key，失焦或回车保存')" @error="(error) => bridge.notify('error', error.message)" />
+        </UFormField>
+      </template>
       <!-- The quota is the computer owner's to set (management panel), so a hosted account only sees it here. -->
       <UFormField v-for="field in storage_fields" :key="field.key" :label="field.label" :help="field.key === 'quota_mib' ? t('由管理员在管理面板设置。') : field.help" class="w-full">
         <UInput v-model.number="storage_values[field.key]" type="number" :min="field.min" :max="field.max" step="1" :disabled="Boolean(storage_busy) || field.key === 'quota_mib'" :aria-label="field.label" class="w-32" @change="save_storage_field(field)" />
       </UFormField>
       <div class="account-actions">
-        <UButton :label="t('测试连接')" :loading="storage_busy === 'test'" :disabled="Boolean(storage_busy) || !saved_storage_key" color="neutral" variant="soft" size="sm" @click="manage_storage('test')" />
-        <UButton :label="cloud_open ? t('收起云空间') : t('管理云空间')" :disabled="!storage.configured" color="neutral" variant="soft" size="sm" @click="cloud_open = !cloud_open" />
-        <UButton :label="t('清除')" :loading="storage_busy === 'clear'" :disabled="Boolean(storage_busy) || !storage.configured" color="neutral" variant="ghost" size="sm" @click="manage_storage('clear')" />
+        <UButton v-if="!uses_admin_storage" :label="t('测试连接')" :loading="storage_busy === 'test'" :disabled="Boolean(storage_busy) || !saved_storage_key" color="neutral" variant="soft" size="sm" @click="manage_storage('test')" />
+        <UButton v-if="!uses_admin_storage" :label="t('清除')" :loading="storage_busy === 'clear'" :disabled="Boolean(storage_busy) || !storage.configured" color="neutral" variant="ghost" size="sm" @click="manage_storage('clear')" />
       </div>
-      <AttachmentCleaner v-if="cloud_open && storage.configured" cloud class="w-full" :load="read_cloud" :clear="delete_cloud"
-        @cleared="cloud_deleted" @failed="(message) => bridge.notify('error', message)" />
+      <p v-if="storage.configured" class="account-storage-note">{{ t("在文件页的“云空间”里管理文件。") }}</p>
     </section>
   </section>
 </template>
 
 <style scoped>
 .account-devices { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.account-storage-note { margin: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.5; }
 .account-devices h4, .account-form h4 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .account-device-list { display: flex; flex-direction: column; gap: 4px; width: 100%; margin: 0; padding: 0; list-style: none; }
 .account-device-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; padding: 6px 8px; border: 1px solid var(--ui-border-muted); border-radius: 8px; }

@@ -46,7 +46,7 @@ const ITEM_TEXTS = {
   roster: [t('管理成员名单'), t('邀请本机已配置的软件，暂离、移除、请回成员')],
   pacing: [t('推进方式'), t('调整发言顺序，开启和控制讨论与 Goal，给自己设定时检查')],
   workflows: [t('工作流'), t('保存并启用工作流，邀请工作流所需的成员')],
-  create_rooms: [t('新建房间'), t('从本房间新建房间并在其中分派工作；新房间不能再新建房间')],
+  create_rooms: [t('新建子房间'), t('从本房间新建房间并在其中分派工作；新房间不能再新建房间')],
 };
 const current = computed(() => edits.get(props.roomId)?.value ?? normalize_host_permissions(props.permissions, props.modelValue));
 const all = computed(() => current.value.items.length === HOST_ITEMS.length ? true : current.value.items.length ? "indeterminate" : false);

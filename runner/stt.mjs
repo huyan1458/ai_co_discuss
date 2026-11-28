@@ -106,7 +106,7 @@ export async function stt_part(home, input, request = fetch, start = undefined) 
   if (!/^[a-f0-9-]{36}$/i.test(upload_id || '') || !Number.isInteger(index) || index < 0 || typeof data !== 'string') throw new Error('录音片段无效');
   const settings = tts_settings(home);
   const service = STT_PROVIDERS.find(item => item.id === settings.stt_provider);
-  if (!settings.stt_key_ref) throw new Error(service.local ? t('本机语音识别尚未安装，请在语音设置中选择“让平台主理人安装”')
+  if (!settings.stt_key_ref) throw new Error(service.local ? t('本机语音识别尚未安装，请在语音设置中选择“让 MOSS 安装”')
     : `语音输入使用${service.label}：请在设置的“语音”中填写${service.label} API Key`);
   const part = Buffer.from(data, 'base64');
   if (part.length > PART_MAX_BYTES || part.length % 2) throw new Error('录音片段无效');

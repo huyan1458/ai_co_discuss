@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 from backend.entry_guard import EntryPolicy
 from backend.runtime import token_hash
 from backend.server import DiscussionServer, connect_db, init_database
-from test_external_members import server_routes
+from tests.test_external_members import server_routes
 
 
 class GuestBackendTests(unittest.TestCase):
@@ -27,6 +27,7 @@ class GuestBackendTests(unittest.TestCase):
         self.database = Path(directory.name) / "room.sqlite3"
         init_database(self.database, seed=False)
         self.server = DiscussionServer(("127.0.0.1", 0), self.database)
+        self.server.daemon_threads = False
         self.server.local_site = True
         self.server.entry_policy = EntryPolicy("")
         self.addCleanup(self.server.server_close)

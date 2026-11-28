@@ -27,7 +27,7 @@ import MemberNameEdit from "./MemberNameEdit.vue";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import MemoBlock from "./memo-block.js";
 import { member_actions, project_files } from "./member-actions.js";
-import { member_quota, member_usage } from "./quota.js";
+import { account_quota, member_quota, member_usage, quota_rows } from "./quota.js";
 import ContextMeter from "./ContextMeter.vue";
 import { access_label, access_options, MAX_EXPERT_PROMPT } from "../runner/expert_prompts.mjs";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
@@ -42,6 +42,11 @@ const CODEX_OPTIONS = [{ value: "codex_cli", label: "CLI" }, { value: "codex", l
 const ADAPTER_LABELS = { api: "API", codex: "App", antigravity: "App" };
 const room = computed(() => view.value.room);
 const free = computed(() => !["active", "paused"].includes(room.value.session?.status));
+// Each account the present members draw on, once, with every window and when it resets; a model API's key reference loses its prefix.
+const account_rows = computed(() => [...new Set((room.value.free?.members || []).filter((member) => member.status === "active")
+  .map((member) => member.usage?.account).filter(Boolean))]
+  .map((account) => ({ account, name: account.replace(/^api:/, ""), rows: quota_rows(account_quota(view.value, account)) }))
+  .filter((item) => item.rows.length));
 const saved = computed(() => view.value.launch.room_models?.room_id === room.value.id ? view.value.launch.room_models : null);
 // While an external user is in under the conservative mode, a member reads as temporarily read-only or paused, here as in the rail.
 const guest_state = use_guest_state(bridge, () => (view.value.access?.can_manage && !view.value.share ? room.value?.id : "")).state;
@@ -508,6 +513,12 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
     <div class="page-heading overview-heading"><div><h2>{{ t("成员与设置") }}</h2><p class="overview-phone-hidden">{{ t("成员的接入、权限与全部操作，以及房间的协作设置；右栏成员菜单是同样操作的快捷入口。") }}</p></div><UButton v-if="!room.archived" icon="i-lucide-plus" :label="t('邀请 AI 加入')" variant="outline" color="neutral" class="channel-surface-button" :disabled="!view.access?.can_manage" @click="inviting = true" /></div>
     <section class="overview-section">
       <h3 class="overview-phone-hidden">{{ t("成员") }}</h3>
+      <!-- Usage limits belong to an account, not a member: each account the members draw on is listed once here (#15303). -->
+      <ul v-if="account_rows.length" class="overview-quotas" :aria-label="t('账号额度')">
+        <li v-for="item in account_rows" :key="item.account"><strong>{{ item.name }}</strong>
+          <span v-for="row in item.rows" :key="row.key"><i v-if="row.level" class="context-meter-dot" :class="`is-${row.level}`" aria-hidden="true" />{{ `${row.name} ${row.value}` }}<small v-if="row.note">{{ row.note }}</small></span>
+        </li>
+      </ul>
       <p v-if="local_state" class="overview-local" role="status">{{ local_state.text }}<button v-if="local_state.retry" type="button" class="subtle-link" @click="bridge.reload_room_models()">{{ t("重试") }}</button></p>
       <template v-for="group in member_groups" :key="group.away">
       <button v-if="group.away" type="button" class="away-divider" :aria-expanded="!folded_away_rooms.has(room.id)" @click="folded_away_rooms.has(room.id) ? folded_away_rooms.delete(room.id) : folded_away_rooms.add(room.id)">
@@ -523,7 +534,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
               @pointercancel="finish_drag($event, true)" @lostpointercapture="finish_drag($event, true)"
               @keydown.up.prevent="commit_move(member.name, movable_names.indexOf(member.name) - 1)" @keydown.down.prevent="commit_move(member.name, movable_names.indexOf(member.name) + 1)"><UIcon name="i-lucide-grip-vertical" /></button>
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-            <div class="member-card-name"><strong><MemberNameEdit :name="member.name" :editable="Boolean(view.access?.can_manage)" /><span v-if="bridge.display_name(member.name) !== member.name" class="member-id">{{ member.name }}</span><ContextMeter :usage="member_usage(view, member.name)" :quota="member_quota(view, member.name)" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
+            <div class="member-card-name"><strong><MemberNameEdit :name="member.name" :editable="Boolean(view.access?.can_manage)" /><ContextMeter :usage="member_usage(view, member.name)" :quota="member_quota(view, member.name)" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
             <!-- The host's crown sits where the other cards offer 设为主持人, so every card shows it in one place. -->
             <span v-if="member.role === 'host'" class="member-card-host is-current" :title="t('主持人')"><UIcon name="i-lucide-crown" /><span data-slot="label">{{ t('主持人') }}</span></span>
             <UButton v-else-if="actions(member).host" class="member-card-host" :title="actions(member).host.label" :icon="actions(member).host.icon" :label="actions(member).host.label" size="xs" variant="ghost" color="neutral" :disabled="actions(member).host.disabled" @click="actions(member).host.onSelect()" />
@@ -562,6 +573,8 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
               </div>
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
             </dd></div>
+            <!-- The context at the card's end, always; it moves up beside the name only once it runs low (#15303). -->
+            <div v-if="member_usage(view, member.name)?.context_used"><dt>{{ t("上下文") }}</dt><dd><ContextMeter :usage="member_usage(view, member.name)" :quota="member_quota(view, member.name)" mode="full" /></dd></div>
             </template>
             <div v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="bridge.display_path(saved.participants[member.name].outside_directory)">
               <UIcon name="i-lucide-triangle-alert" /><span>{{ t('在 {path} 工作，房间目录{access}', { path: bridge.display_path(saved.participants[member.name].outside_directory), access: saved.participants[member.name].outside_enforced ? t('只读') : t('只读（仅任务要求，程序拦不住）') }) }}</span></div>
@@ -641,7 +654,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
         </div>
       </div>
       <p v-if="room_storage.room_tone === 'error'" class="pb-storage-note">
-        {{ t('本房间草稿已超限，派活已暂停。可先点击下方“清理临时文件”；如需盘点历史草稿，请找平台主理人。') }}
+        {{ t('本房间草稿已超限，派活已暂停。可先点击下方“清理临时文件”；如需盘点历史草稿，请找 MOSS。') }}
       </p>
       <p v-else-if="room_storage.room_tone === 'warning'" class="pb-storage-note">
         {{ t('本房间草稿已达 80% 以上，接近上限时将停止派活。') }}
@@ -764,6 +777,11 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
 .member-card-facts dd { display: flex; align-items: center; min-height: 28px; margin: 0; color: var(--ui-text); }
 .overview-model { gap: 2px; min-width: 0; }
 /* An external member's second row: how long it is lent takes the first two columns, its open directories the third. */
+.overview-quotas { display: grid; gap: 4px; margin: 0 0 12px; padding: 0; list-style: none; font-size: 12px; color: var(--ui-text-muted); }
+.overview-quotas li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+.overview-quotas strong { min-width: 6em; color: var(--ui-text); font-weight: 500; }
+.overview-quotas span { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.overview-quotas small { margin-left: 4px; color: var(--ui-text-dimmed); font-size: 11px; }
 .member-card-facts > .overview-span { grid-column: 1 / span 2; }
 /* External members that ended, under the cards: one quiet line each, with a way to invite them back. */
 .overview-ended { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
@@ -863,7 +881,6 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
   .overview-settings dt { width: auto; }
 }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
-.member-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 4px; color: var(--ui-text-muted); font-size: 11px; font-weight: 400; }
 .pb-storage { color: var(--ui-text-dimmed); font-size: 12px; }
 .pb-storage summary { cursor: pointer; }
 .pb-storage[open] summary { margin-bottom: 8px; }

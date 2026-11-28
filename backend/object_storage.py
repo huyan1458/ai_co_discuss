@@ -6,10 +6,14 @@ import re
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+from .admin import AdminError
+from .texts import Text
 
 OBJECT_MAX_BYTES = 2 * 1024**3
 REQUEST_TIMEOUT = 6
+ADMIN_REQUEST_TIMEOUT = 7
 DOWNLOAD_SECONDS = 600
 MAX_RESPONSE_BYTES = 64 * 1024
 KEY_REFERENCE = re.compile(r"[a-f0-9-]{36}", re.IGNORECASE)
@@ -30,6 +34,29 @@ class StorageUnavailable(Exception):
 
 class ObjectMissing(StorageUnavailable):
     """The resource center confirmed the object does not exist."""
+
+
+class ManagedStorageOffline(StorageUnavailable):
+    """The hosted instance could not reach its administrator's loopback service."""
+
+
+class ManagedStorageQuota(StorageUnavailable):
+    """The administrator's quota did not allow another object reservation."""
+
+    def __init__(self, used, quota):
+        super().__init__()
+        self.used = used
+        self.quota = quota
+
+
+def storage_http_error(error):
+    """Translate object storage failures for room HTTP routes."""
+    if isinstance(error, ManagedStorageOffline):
+        return AdminError(Text("云空间暂不可用（管理员服务未运行）"), 503)
+    if isinstance(error, ManagedStorageQuota):
+        return AdminError(Text("云空间已用 {used} 字节，上限 {quota} MiB，请先清理云空间",
+                               used=error.used, quota=error.quota), 409)
+    return AdminError(Text("对象存储暂不可用"), 503)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -110,6 +137,8 @@ def configured_storage(database):
     home = storage_home(database)
     try:
         config = private_record(home / SETTINGS_NAME)
+        if isinstance(config, dict) and config.get("mode") == "admin":
+            return AdministratorStorage(os.environ.get("DISCUSS_OBJECT_STORAGE_ADMIN_FILE"))
         ref = config["api_key_ref"]
         directory = home / "api-keys"
         if not isinstance(ref, str) or not KEY_REFERENCE.fullmatch(ref) or directory.is_symlink():
@@ -187,3 +216,70 @@ class ResourceCenter:
             self.request("DELETE", "/file", fileName=name)
         except ObjectMissing:
             pass
+
+
+class AdministratorStorage(ResourceCenter):
+    """Apply the same COS response rules to calls signed by the local administrator."""
+
+    def __init__(self, credential_file):
+        self.credential_file = credential_file
+
+    def credentials(self):
+        """Read the account-bound token by path, so server-side rotation takes effect on the next call."""
+        try:
+            record = private_record(Path(self.credential_file))
+            account, port, token = record["account"], record["port"], record["token"]
+            if (not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,31}", account) or type(port) is not int or
+                    not 1 <= port <= 65535 or not re.fullmatch(r"[a-f0-9]{64}", token)):
+                raise ValueError()
+            return account, port, token
+        except (OSError, ValueError, TypeError, KeyError):
+            raise ManagedStorageOffline() from None
+
+    def request(self, method, path, payload=None, **params):
+        """Send an operation to the loopback signer without consulting the system HTTP proxy."""
+        account, port, token = self.credentials()
+        source = (payload or params)["fileName"]
+        if not source.startswith("codiscuss/"):
+            raise StorageUnavailable()
+        name = f"codiscuss/{account}/{source.removeprefix('codiscuss/')}"
+        data = {"account": account, "name": name}
+        if path == "/upload-credential":
+            data.update(size=payload["maxSizeBytes"], content_type=payload["contentType"])
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        request = Request(f"http://127.0.0.1:{port}/internal/object-storage{path}",
+                          json.dumps(data).encode("utf-8"), headers, method="POST")
+        try:
+            with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=ADMIN_REQUEST_TIMEOUT) as response:
+                body = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(body) > MAX_RESPONSE_BYTES:
+                    raise StorageUnavailable()
+                result = json.loads(body)
+        except HTTPError as error:
+            with error:
+                raise self.request_error(error) from None
+        except (URLError, OSError):
+            raise ManagedStorageOffline() from None
+        except ValueError:
+            raise StorageUnavailable() from None
+        if not isinstance(result, dict) or result.get("succeed") is not True:
+            raise StorageUnavailable()
+        return result.get("data")
+
+    @staticmethod
+    def request_error(error):
+        """Accept only recognized signer error statuses and validated quota counts."""
+        try:
+            result = json.loads(error.read(MAX_RESPONSE_BYTES + 1))
+            if not isinstance(result, dict) or result.get("code") != error.code:
+                return StorageUnavailable()
+            if error.code == 404:
+                return ObjectMissing()
+            if error.code == 409:
+                params = result.get("error_text", {}).get("params", {})
+                used, quota = params.get("used"), params.get("quota")
+                if type(used) is int and used >= 0 and type(quota) is int and 1 <= quota <= MAX_QUOTA_MIB:
+                    return ManagedStorageQuota(used, quota)
+        except (OSError, ValueError, AttributeError):
+            pass
+        return StorageUnavailable()

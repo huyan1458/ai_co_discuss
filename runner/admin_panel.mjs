@@ -7,7 +7,7 @@
  * session that only the owner can start: the icon (or `codiscuss panel open`) opens the page with a key kept in the
  * owner's private service directory.
  */
-import { attachment_limit, checked_quota, clear_object_storage, object_quota_path, object_storage_status, policy_path, save_attachment_limit, save_object_quota, save_object_storage, test_object_storage } from './attachment_policy.mjs';
+import { CLOUD_STORAGE_RESERVED_NAME, attachment_limit, checked_quota, clear_object_storage, object_quota_path, object_storage_status, policy_path, save_attachment_limit, save_object_quota, save_object_storage, test_object_storage } from './attachment_policy.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, realpathSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -27,15 +27,19 @@ import { STT_PROVIDERS, TTS_PROVIDERS } from './tts_providers.mjs';
 import { ensure_tunnel, stop_tunnel, start_tunnel_setup, tunnel_setup_state, tunnel_status } from './hosting_tunnel.mjs';
 import { pairing_origins, update_pairing_origins, RELAY_REGIONS } from './device_auth.mjs';
 import { machine_links, save_machine_links } from './remote_launch.mjs';
+import { network_report } from './network_log.mjs';
 import { read_relay_health, request_relay_reconnect } from './relay_health.mjs';
 import { instance_recovery } from './instance_recovery.mjs';
 import { mark_backup_release, reserve_project_root, set_project_migration } from '../gateway/gateway.mjs';
 import { backup_operation, migration_folders, move_project_files } from './project_migration.mjs';
 import { require_idle_os_user } from './os_users.mjs';
 import { DIRECT_ACCOUNTS_FILE } from '../gateway/direct.mjs';
+import { hosted_cloud_base } from '../gateway/cloud_share.mjs';
+import { CLOUD_SHARE_BASE_HEADER } from '../backend/cloud_share_routes.mjs';
 import { apply_login, cancel_login, LOGIN_METHODS, login_progress, login_status, logout, start_login, submit_login } from './cli_login.mjs';
-import { clear_instance_flag, create_os_user, install_shared_runtime, restrict_other_drives, instance_flag_set, instance_key_file, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
+import { clear_instance_flag, create_os_user, install_shared_runtime, restrict_other_drives, instance_flag_set, instance_key_file, instance_storage_token, place_instance_key, read_os_users, remove_os_user, run_as_user, shared_cli_state, shared_executables, shared_paths,
   start_instance_as_user } from './os_users.mjs';
+import { admin_storage_granted, create_object_storage_signer, grant_admin_storage } from './object_storage_signer.mjs';
 import { install_workflows, outdated_workflows, shipped_workflows } from './discussion_skills.mjs';
 import { list_workflows, workflows_home } from './workflows.mjs';
 import { launch_settings, save_managed_prompt } from './discussion_launch.mjs';
@@ -561,12 +565,14 @@ function run_instance(data, name, command) {
     // Whatever was set up first, the instance starts on the shared copies its Windows user can run.
     use_shared_programs(data, name);
     if (!existsSync(policy_path(data))) save_attachment_limit(data, attachment_limit(data));
-    return start_instance_as_user(data, name, service, local_script, process.execPath, { key_file });
+    return start_instance_as_user(data, name, service, local_script, process.execPath, {
+      key_file, panel_port: read_state(data)?.port || DEFAULT_PORT,
+    });
   }
   // An isolated instance runs as a scheduled task that comes back when the computer starts unless it was stopped here.
   if (read_os_users(data)[name]) clear_instance_flag(name);
   else set_instance_wanted(data, name, command === 'start');
-  const { DISCUSS_ENTRY_KEY_FILE: _inherited, ...environment } = process.env;
+  const { DISCUSS_ENTRY_KEY_FILE: _inherited, DISCUSS_OBJECT_STORAGE_ADMIN_FILE: _storage, ...environment } = process.env;
   const child = spawn(process.execPath, [LOCAL_SCRIPT, command, '--json'], { stdio: 'ignore', windowsHide: true,
     env: { ...environment, DISCUSS_ATTACHMENT_POLICY_FILE: policy_path(data), DISCUSS_OBJECT_STORAGE_QUOTA_FILE: object_quota_path(data, name),
       DISCUSS_SERVICE_HOME: service, ...(key_file ? { DISCUSS_ENTRY_KEY_FILE: key_file } : {}) } });
@@ -726,15 +732,50 @@ function panel_object_storage(home, method, action, body, options) {
   throw panel_error('接口不存在');
 }
 
-/** Forward this panel's authenticated cloud inventory request to the selected account's own site. */
-async function panel_object_files(local, key_file, deleting, body) {
-  const route = 'api/rooms/cloud-attachments' + (deleting ? '/delete' : '');
+/** Forward an authenticated cloud file request to the selected account's own site. */
+async function panel_object_files(local, key_file, action, body) {
+  const id = body?.id;
+  if (!['list', 'trash'].includes(action) && (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id))) throw panel_error('附件编号无效');
   const init = { redirect: 'error', signal: AbortSignal.timeout(15_000) };
-  if (deleting) Object.assign(init, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: body?.id }) });
-  const response = await site_fetch(new URL(route, local).href, init, key_file ? { key_file } : undefined);
+  if (action === 'list') return panel_cloud_request(local, key_file, '', init);
+  if (action === 'trash') {
+    const result = await panel_cloud_request(local, key_file, '?folder=trash', init);
+    if (!Array.isArray(result.files) || !Array.isArray(result.folders)) throw panel_error('账号站点尚不支持云空间回收站');
+    return result;
+  }
+  if (action === 'link') return panel_cloud_request(local, key_file, `/${id}/content?link=1`, init);
+  // Old sites permanently delete a single `id`. Never send that legacy shape for a reversible delete.
+  const payload = action === 'delete' ? { ids: [id], permanent: body.permanent === true }
+    : { [body.folder === true ? 'folder_ids' : 'ids']: [id] };
+  return panel_cloud_request(local, key_file, `/${action}`, {
+    ...init, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
+async function panel_cloud_request(local, key_file, suffix, init) {
+  const response = await site_fetch(new URL(`api/rooms/cloud-attachments${suffix}`, local).href, init, key_file ? { key_file } : undefined);
   const result = await response.json();
   if (!response.ok) throw Object.assign(new Error(result.error || t('接口不存在')), { status: response.status, error_text: result.error_text });
   return result;
+}
+
+function panel_cloud_shares(local, key_file, { method, route, base }, body) {
+  const [file_id, shares, share_id, action] = route;
+  const id = /^[a-f0-9]{32}$/;
+  if (!id.test(file_id) || shares !== 'shares' || !(route.length === 2 && ['GET', 'POST'].includes(method)
+      || route.length === 4 && method === 'POST' && id.test(share_id) && action === 'revoke')) throw panel_error('接口不存在');
+  const headers = { 'Content-Type': 'application/json', ...(base ? { [CLOUD_SHARE_BASE_HEADER]: base } : {}) };
+  return panel_cloud_request(local, key_file, '/' + route.join('/'), {
+    method, headers, body: method === 'POST' ? JSON.stringify(body || {}) : undefined,
+    redirect: 'error', signal: AbortSignal.timeout(15_000),
+  });
+}
+
+function panel_object_file_action(method, route) {
+  if (method === 'GET' && !route.length) return 'list';
+  if (route.length === 1 && method === 'GET' && route[0] === 'trash') return 'trash';
+  if (route.length === 1 && method === 'POST' && ['delete', 'link', 'restore'].includes(route[0])) return route[0];
+  throw panel_error('接口不存在');
 }
 
 // ---- HTTP ----
@@ -747,7 +788,8 @@ function panel_error(template, params = {}) {
 /** Preserve the legacy Chinese error and let the page choose its own language. */
 function error_body(error) {
   const error_text = error.error_text || { template: error.message, params: {} };
-  return { error: error_text.template.replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(error_text.params, name) ? String(error_text.params[name]) : match), error_text };
+  return { error: error_text.template.replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(error_text.params, name) ? String(error_text.params[name]) : match),
+    error_text, ...(error.code === 'steward_access_too_low' ? { code: error.code } : {}) };
 }
 
 function send_json(response, status, value) {
@@ -762,6 +804,21 @@ function read_body(request, limit = BODY_LIMIT) {
     request.on('end', () => { try { done(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { fail(panel_error('请求不是 JSON')); } });
     request.on('error', fail);
   });
+}
+
+async function handle_storage_signing(request, response, signer, action) {
+  if (request.method !== 'POST' || request.socket.remoteAddress !== '127.0.0.1' ||
+      request.headers.host !== `127.0.0.1:${request.socket.localPort}` || request.headers.origin)
+    return send_json(response, 403, error_body(panel_error('只接受本机访问')));
+  try {
+    const body = await read_body(request, BODY_LIMIT);
+    const result = await signer.request(action, body, request.headers.authorization);
+    return send_json(response, 200, { succeed: true, data: result });
+  } catch (error) {
+    const status = error.status || (error.error_text ? 400 : 503);
+    const safe = error.error_text ? error : panel_error('对象存储暂不可用');
+    return send_json(response, status, { ...error_body(safe), code: status });
+  }
 }
 
 function cookie(request, name) {
@@ -799,6 +856,11 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     set_account_external, reconcile_external, autostart_enabled, set_autostart, entry_overview, start_entry, stop_entry, keep_tunnel, start_tunnel_setup, set_entry_way, set_relay_url, connect_site, make_access_code, join_relay, protect_account, start_verified, hand_over: () => {}, ...ops };
   let reconnecting_tunnel;
   const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+  const isolated_account = ops.storage_isolated || (name => Boolean(read_os_users(data)[name]?.user));
+  const signer = create_object_storage_signer(data, name => {
+    const account = read_accounts(data)[name];
+    return account && !account.disabled && isolated_account(name) ? (ops.storage_token || instance_storage_token)(name) : null;
+  }, ops.now);
   const recovery = instance_recovery(data, { wanted: name => wanted_port(data, name, ops.instance_flag_set || instance_flag_set),
     probe: ops.instance_state || instance_state, start: name => op.start_verified(data, name), now: ops.now,
     on_block(name) { if (read_os_users(data)[name]) (ops.clear_instance_flag || clear_instance_flag)(name); } });
@@ -821,9 +883,11 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     }
     if (path === '/api/storage/attachment-limit' && method === 'GET') return { limit_mib: attachment_limit(data) };
     if (path === '/api/storage/attachment-limit' && method === 'POST') return save_attachment_limit(data, body.limit_mib);
-    if (path === '/api/storage/object/files' && method === 'GET' || path === '/api/storage/object/files/delete' && method === 'POST') {
+    if (section === 'storage' && name === 'object' && action === 'files') {
       const key_file = owner_key_file(data);
-      return panel_object_files(site_url(data), existsSync(key_file) ? key_file : '', method === 'POST', body);
+      if (parts[4] === 'shares') return panel_cloud_shares(site_url(data), existsSync(key_file) ? key_file : '',
+        { method, route: parts.slice(3) }, body);
+      return panel_object_files(site_url(data), existsSync(key_file) ? key_file : '', panel_object_file_action(method, parts.slice(3)), body);
     }
     if (section === 'storage' && name === 'object' && parts.length <= 3)
       return panel_object_storage(data, method, action, body, { limit: attachment_limit(data), quota_file: object_quota_path(data) });
@@ -922,6 +986,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       after_change();
       return { region: body.region };
     }
+    if (method === 'POST' && section === 'site' && name === 'network') return network_report(data, body);
     if (method === 'POST' && section === 'site' && name === 'reconnect') {
       const bound = bound_site(data), service = op.service_overview(data);
       if (!bound) throw panel_error('尚未绑定自建中转');
@@ -990,6 +1055,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       // Its online-site binding goes first, or the owner could never unbind the computer afterwards.
       await change_external(data, name, false, { removing: true }).catch(() => {});
       op.remove_account(data, name);
+      grant_admin_storage(data, name, false);
       return { removed: name, kept: account_home(data, name) };
     });
     // A start is reported only once the instance serves as the account is set (protected or not).
@@ -999,7 +1065,13 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     // again for the new one by the next reconcile (#5660).
     // Taken down first and for real: a failure stops the change, or the new user could never open what is left (#5666).
     if (method === 'POST' && action === 'os-user') await change_external(data, name, false);
-    if (method === 'POST' && action === 'os-user' && extra === 'remove') { set_instance_wanted(data, name, false); op.remove_os_user(data, name); after_change(); return { ok: true }; }
+    if (method === 'POST' && action === 'os-user' && extra === 'remove') {
+      set_instance_wanted(data, name, false);
+      op.remove_os_user(data, name);
+      grant_admin_storage(data, name, false);
+      after_change();
+      return { ok: true };
+    }
     if (method === 'POST' && action === 'os-user') {
       const result = op.create_os_user(data, name, account_home(data, name), { project_data_root: read_accounts(data)[name].project_data_root });
       op.use_shared_programs(data, name);
@@ -1012,13 +1084,27 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
     if (method === 'POST' && action === 'env' && extra === 'skills') return op.account_skills(data, name, { install: body.install || [], remove: body.remove || [] });
     if (method === 'POST' && action === 'env' && extra === 'prompt') return op.account_env(data, name, 'prompt', { home: instance_home(data, name), prompt: String(body.text ?? '') });
     const service = instance_home(data, name);
-    if (action === 'object-storage' && extra === 'files' && (parts.length === 4 && method === 'GET'
-      || parts.length === 5 && parts[4] === 'delete' && method === 'POST')) {
+    if (action === 'object-storage' && extra === 'files') {
       const target = read_accounts(data)[name];
-      return panel_object_files(`http://127.0.0.1:${target.port}/`, target.protected ? instance_key_file(name) : '', method === 'POST', body);
+      if (parts[5] === 'shares') return panel_cloud_shares(`http://127.0.0.1:${target.port}/`, target.protected ? instance_key_file(name) : '',
+        { method, route: parts.slice(4), base: hosted_cloud_base(data, entry_settings(data), name) }, body);
+      return panel_object_files(`http://127.0.0.1:${target.port}/`, target.protected ? instance_key_file(name) : '', panel_object_file_action(method, parts.slice(4)), body);
     }
-    if (action === 'object-storage' && parts.length <= 4)
-      return panel_object_storage(service, method, extra, body, { limit: attachment_limit(data), quota_file: object_quota_path(data, name) });
+    if (action === 'object-storage' && parts.length <= 4) {
+      const enabling = method === 'POST' && !extra && body?.mode === 'admin';
+      const granted = admin_storage_granted(data, name);
+      if (enabling && name === CLOUD_STORAGE_RESERVED_NAME) throw panel_error('“{name}”是云空间保留名称', { name });
+      if (enabling && !isolated_account(name)) throw panel_error('请先隔离此托管账号，再启用管理员云空间');
+      if (enabling && !object_storage_status(data).configured) throw panel_error('请先配置管理员的云空间');
+      if (method === 'POST' && extra === 'test' && granted && object_storage_status(service).mode === 'admin')
+        return test_object_storage(data);
+      const result = panel_object_storage(service, method, extra, body, {
+        limit: attachment_limit(data), quota_file: object_quota_path(data, name), admin_allowed: enabling || granted,
+      });
+      if (enabling || method === 'POST' && extra !== 'test' && result.mode !== 'admin' && granted)
+        grant_admin_storage(data, name, enabling);
+      return result;
+    }
     if (method === 'GET' && action === 'workflows') return op.account_workflows(service);
     // Set up again (safe to repeat): it installs the shipped workflows the account lacks and keeps the rest.
     if (method === 'POST' && action === 'workflows' && extra === 'install') { await op.prepare_account(data, name); return op.account_workflows(service); }
@@ -1032,6 +1118,8 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url, 'http://127.0.0.1');
+      if (url.pathname.startsWith('/internal/object-storage/'))
+        return await handle_storage_signing(request, response, signer, url.pathname.slice('/internal/object-storage/'.length));
       // Only a page this browser opened from this address; anything else (another site, a renamed host) is refused.
       if (!hosts.has(String(request.headers.host || ''))) return send_json(response, 403, error_body(panel_error('只接受本机访问')));
       if (url.pathname === '/enter' || (url.pathname === '/' && url.searchParams.has('key'))) {
@@ -1078,6 +1166,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
   });
   // The same operations without HTTP, for `codiscuss admin` run elevated (the steps that need administrator rights).
   server.api = api;
+  server.sweep_object_storage = () => signer.sweep();
   server.recover_instances = async () => {
     if (hosting_enabled(data)) await Promise.all(Object.keys(read_accounts(data)).map(name => recovery.check(name)));
   };
@@ -1647,7 +1736,7 @@ function site_url(data) {
   catch { return 'http://127.0.0.1:8765/'; }
 }
 
-/** Send a read-only storage inventory request via this panel owner's local website. */
+/** Request a storage inventory without deletion via this panel owner's local website. */
 async function panel_storage_steward(data) {
   const { href } = new URL('api/local/steward-request', site_url(data));
   const key_file = owner_key_file(data);
@@ -1658,7 +1747,7 @@ async function panel_storage_steward(data) {
       context: t('请盘点共议占用并报告结果，不要删除任何文件。') }),
   }, existsSync(key_file) ? { key_file } : undefined);
   const result = await response.json();
-  if (!response.ok) throw Object.assign(new Error(result.error), { status: response.status, error_text: result.error_text });
+  if (!response.ok) throw Object.assign(new Error(result.error), { status: response.status, error_text: result.error_text, code: result.code });
   return { room_id: result.room_id, message_id: result.message_id };
 }
 
@@ -1720,12 +1809,17 @@ function run_panel(data, port) {
 `, { value1: error.message })));
   // The entry's outside address runs on its own; the panel keeps it as set now and every minute (restarted if it stopped
   // or its settings changed, stopped when the entry is off).
+  let sweeping_storage = false;
   const keep = () => {
     server.recover_instances().catch(error => process.stderr.write(t('托管实例巡检失败：{reason}\n', { reason: error.message })));
+    if (!sweeping_storage) {
+      sweeping_storage = true;
+      server.sweep_object_storage().catch(() => process.stderr.write(t('管理员云空间清扫失败') + '\n'))
+        .finally(() => { sweeping_storage = false; });
+    }
     keep_tunnel(data).catch(error => process.stderr.write(t(`隧道：{value1}
 `, { value1: error.message }))).then(() => reconcile_external(data)).catch(() => {});
   };
-  keep();
   const keeper = setInterval(keep, TUNNEL_CHECK_MS);
   // Hosted accounts' failures reach the owner's Weixin; one pass at a time.
   let relaying = false;
@@ -1739,6 +1833,7 @@ function run_panel(data, port) {
   }, RELAY_MS);
   server.listen(port, '127.0.0.1', () => {
     writeFileSync(state_path(data), JSON.stringify(state), { mode: 0o600 });
+    keep();
     process.stdout.write(t(`管理面板已启动：http://127.0.0.1:{value1}
 `, { value1: port }));
     finish_update(data).catch(error => process.stderr.write(t(`更新收尾失败：{value1}

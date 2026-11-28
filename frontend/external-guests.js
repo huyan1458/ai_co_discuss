@@ -18,11 +18,12 @@ const MINUTE_S = 60, HOUR_S = 60 * MINUTE_S;
 /** Longest total stay, from entering the room (API.md §1). */
 export const MAX_DURATION_S = 24 * HOUR_S;
 export const DEFAULT_DURATION_S = 15 * MINUTE_S;
+// Compact labels (no space) so the four choices fit on the invite card's back in both languages.
 export const DURATIONS = [
-  { value: 15 * MINUTE_S, label: t("15 分钟") },
-  { value: HOUR_S, label: t("1 小时") },
-  { value: 4 * HOUR_S, label: t("4 小时") },
-  { value: MAX_DURATION_S, label: t("24 小时") },
+  { value: 15 * MINUTE_S, label: t("15分钟") },
+  { value: HOUR_S, label: t("1小时") },
+  { value: 4 * HOUR_S, label: t("4小时") },
+  { value: MAX_DURATION_S, label: t("24小时") },
 ];
 /** What the owner can add while the guest is in the room; the total never passes MAX_DURATION_S. */
 export const EXTENSIONS = [{ value: 15 * MINUTE_S, label: t("+15 分钟") }, { value: HOUR_S, label: t("+1 小时") }];

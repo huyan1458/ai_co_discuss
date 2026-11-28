@@ -26,6 +26,40 @@ vm.createContext = (sandbox = {}, ...rest) => {
   return create_context(sandbox, ...rest);
 };
 
+test("failed relay observations survive an offline feedback attempt and are acknowledged on reconnection", async () => {
+  const machine = { id: "pc", name: "Computer" }, pending = [], sent = [];
+  let result = { status: "offline", worker_ms: 12, rpc_ms: 4 };
+  const context = vm.createContext({ relay_machine: machine, crypto, performance, relay_time_reports: pending,
+    computer_rooms_only: () => true, seal_relay_request: async (_, id, payload) => { sent.push(payload); return {}; },
+    request_json: async () => result, offline_error: () => new Error("offline"), queue_relay_report: (_, row) => pending.push(row),
+    open_relay_response: async () => ({}), relay_recovered() {} });
+  vm.runInContext(source.slice(source.indexOf("async function relay_exchange"), source.indexOf("/** Queue one operation")), context);
+  await assert.rejects(context.relay_exchange("room-upload", {}), /offline/);
+  assert.equal(pending[0].worker, 12);
+  assert.equal(pending[0].operation, "room-upload");
+  await assert.rejects(context.relay_exchange("timing-report", {}), /offline/);
+  assert.equal(pending.length, 1);
+  result = { status: "done", response: {} };
+  await context.relay_exchange("timing-report", {});
+  assert.equal(sent.at(-1).timing_reports[0].failure, "offline");
+  assert.equal(pending.length, 0);
+});
+
+test("one offline notice per outage until the computer replies", () => {
+  const notices = [];
+  const context = vm.createContext({ document: { dispatchEvent: event => notices.push(event.detail) },
+    CustomEvent: class { constructor(type, { detail }) { this.detail = detail; } } });
+  vm.runInContext(source.slice(source.indexOf("const offline_notices"), source.indexOf("/** Show a rethrown error")), context);
+  const machine = { id: "pc", name: "Computer" };
+  for (let i = 0; i < 3; i++) context.notify("error", context.offline_error(machine).message);
+  assert.equal(notices.length, 1);
+  context.relay_recovered(machine);
+  assert.equal(notices[1].id, notices[0].id);
+  assert.equal(notices[1].level, "info");
+  context.notify("error", context.offline_error(machine).message);
+  assert.equal(notices.length, 3);
+});
+
 const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").replace(/\nrestore_theme\(\);[\s\S]*$/, "");
 const discussion_source = readFileSync(new URL("../frontend/ChannelDiscussion.vue", import.meta.url), "utf8");
 
@@ -791,6 +825,187 @@ test("a file over the limit goes to object storage: reserve, post the form as gi
   state.object_threshold_mib = 10;
   assert.equal(context.goes_to_object_storage({ size: 15 * 1024 * 1024 }), true, "a file over the threshold goes to the cloud space though within the limit");
   assert.equal(context.goes_to_object_storage({ size: 5 * 1024 * 1024 }), false, "a file under the threshold stays an ordinary attachment");
+  // Opened on the computer itself, a file within the attachment limit reaches the site directly.
+  Object.assign(state, { admin: { local: true } });
+  context.location = { hostname: "127.0.0.1" };
+  assert.equal(context.goes_to_object_storage({ size: 15 * 1024 * 1024 }), false, "on the computer, over the threshold but within the limit stays local");
+  assert.equal(context.goes_to_object_storage({ size: 30 * 1024 * 1024 }), true, "on the computer, over the limit still goes to the cloud space");
+  context.location = { hostname: "codiscuss.example.com" };
+  assert.equal(context.goes_to_object_storage({ size: 15 * 1024 * 1024 }), true, "reached from elsewhere, the threshold applies");
+});
+
+test("the transfer list runs page uploads three at a time, retries a failure, and after a reload follows only background tasks", async () => {
+  const stored = new Map([["codiscuss-transfers", JSON.stringify([{ name: "素材.zip", kind: "drive" }, { name: "成片.mp4", kind: "land", task_id: "t1" }])]]);
+  globalThis.localStorage = { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value) };
+  const { transfers, transfer, resume_transfers } = await import(`../frontend/transfers.js?case=${Date.now()}`);
+  const followed = [];
+  resume_transfers(null, async (item) => { followed.push(item.task_id); return { path: "成片.mp4" }; });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(transfers.rows.find(row => row.name === "素材.zip").status, "interrupted", "a page-made upload cannot outlive a reload");
+  assert.deepEqual(followed, ["t1"], "a background task is followed again");
+
+  let running = 0, most = 0;
+  const releases = [];
+  const jobs = Array.from({ length: 5 }, (_, index) => transfer(`文件${index}`, "drive", () => new Promise(resolve => {
+    running += 1; most = Math.max(most, running);
+    releases.push(() => { running -= 1; resolve(index); });
+  }), { parallel: true, browser: true }));
+  for (let step = 0; step < 5; step += 1) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    releases.shift()?.();
+  }
+  await Promise.all(jobs);
+  assert.equal(most, 3, "page uploads run three at a time");
+
+  let tries = 0;
+  const outcome = await transfer("网络抖动.bin", "drive", async () => { tries += 1; if (tries < 2) throw new Error("断线"); return "ok"; }, { parallel: true, retries: 1 });
+  assert.equal(outcome.ok, true);
+  assert.equal(tries, 2, "a failed upload is tried again by itself");
+  const failed = await transfer("坏文件.bin", "drive", async () => { throw new Error("拒绝"); }, { retries: 0 });
+  const row = transfers.rows.find(item => item.id === failed.id);
+  assert.equal(row.status, "failed");
+  assert.equal(typeof row.retry, "function", "a failed row can be tried again by hand");
+  delete globalThis.localStorage;
+});
+
+test("a project file downloads through the cloud space only away from the computer and when larger than the threshold", async () => {
+  const routes = [];
+  let on_computer = false;
+  const state = { object_storage: true, object_threshold_mib: 20, attachment_limit_mib: 50 };
+  const context = vm.createContext({ state, notify() {}, opened_on_this_computer: () => on_computer,
+    download_project_file: async (room, path) => routes.push(["plain", path]),
+    download_project_via_cloud: async (room, { path, kind }) => routes.push(["cloud", path, kind]) });
+  vm.runInContext(source.slice(source.indexOf("// How often a computer's cloud task is asked about"), source.indexOf("/**\n * Remember a cloud space file to land")), context);
+  const big = { path: "成片.mp4", root: 0, size: 30 * 1024 * 1024 }, small = { path: "说明.md", root: 0, size: 1024 };
+  await context.download_project_entry("one", big);
+  await context.download_project_entry("one", small);
+  on_computer = true;
+  await context.download_project_entry("one", big);
+  on_computer = false;
+  state.object_storage = false;
+  await context.download_project_entry("one", big);
+  assert.deepEqual(JSON.parse(JSON.stringify(routes)), [["cloud", "成片.mp4", "file"], ["plain", "说明.md"], ["plain", "成片.mp4"], ["plain", "成片.mp4"]]);
+});
+
+test("a download the cloud space cannot take falls back to the plain download and says why", async () => {
+  const routes = [], notified = [];
+  const context = vm.createContext({ state: { object_storage: true, object_threshold_mib: 20, attachment_limit_mib: 50 },
+    notify: (level, message) => notified.push([level, message]), opened_on_this_computer: () => false,
+    download_project_file: async (room, path) => routes.push(["plain", path]),
+    download_project_via_cloud: async () => { throw new Error("云空间已用满"); } });
+  vm.runInContext(source.slice(source.indexOf("// How often a computer's cloud task is asked about"), source.indexOf("/**\n * Remember a cloud space file to land")), context);
+  await context.download_project_entry("one", { path: "成片.mp4", root: 0, size: 30 * 1024 * 1024 });
+  assert.deepEqual(JSON.parse(JSON.stringify(routes)), [["plain", "成片.mp4"]]);
+  assert.deepEqual(notified.at(-1), ["warning", "云空间暂时用不了（云空间已用满），改用普通下载"]);
+});
+
+test("a cloud space video card offers a preview; a file no viewer shows offers only download and landing", () => {
+  const context = vm.createContext({ escape_html: text => String(text), ATTACHMENT_ACTION_ICONS: { preview: "", download: "", land: "" } });
+  vm.runInContext(source.slice(source.indexOf("// What a cloud space file can be looked at as"), source.indexOf("/** A cloud space file's content route")), context);
+  const start = source.indexOf("function object_attachment_actions(");
+  vm.runInContext(source.slice(start, source.indexOf("\n}\n", start) + 3), context);
+  const actions = (content_type) => [...context.object_attachment_actions({ id: "a", room_id: "one", file_name: "片子", content_type, size: 1 }, 'href="#"', "下载")
+    .matchAll(/data-attachment-action="([\w-]+)"/g)].map(match => match[1]);
+  assert.deepEqual(actions("video/mp4"), ["cloud-preview", "cloud-land"]);
+  assert.deepEqual(actions("application/pdf"), ["cloud-preview", "cloud-land"]);
+  assert.deepEqual(actions("application/zip"), ["cloud-land"], "a type outside the list is downloaded, not previewed");
+});
+
+test("attachment cards offer saving to the cloud space only for a sent local file with the cloud space set up", () => {
+  const state = { object_storage: true };
+  const context = vm.createContext({ state, SHARE: null, escape_html: text => String(text), cloud_copies: new Map() });
+  vm.runInContext(source.slice(source.indexOf("const ATTACHMENT_ACTION_ICONS"), source.indexOf("// Attachments being copied to the cloud space")), context);
+  const file = { id: "a".repeat(32), room_id: "one", file_name: "报告.pdf" };
+  const actions = (item, options) => [...context.attachment_actions(item, options).matchAll(/data-attachment-action="(\w+)"/g)].map(match => match[1]);
+  assert.deepEqual(actions(file, { preview: true }), ["preview", "download", "cloud"]);
+  assert.deepEqual(actions({ ...file, storage: "object" }), ["download"], "a file already in the cloud space is not copied again");
+  assert.deepEqual(actions({ ...file, cleared_at: "2026-11-27" }), ["download"]);
+  assert.match(context.attachment_actions(file, { overlay: true }), /^<span class="attachment-actions is-overlay"><span role="button"/, "icons over an image are not buttons inside its button");
+  state.object_storage = false;
+  assert.deepEqual(actions(file), ["download"], "without the cloud space there is nothing to save to");
+});
+
+test("the file page shows the cloud space only when it is set up, and only to the account's administrator", async () => {
+  const { cloud_space_visible } = await import("../frontend/object-storage-fields.js");
+  assert.equal(cloud_space_visible({ object_storage: true, admin: { local: true } }), true, "on the computer itself");
+  assert.equal(cloud_space_visible({ object_storage: true, admin: { logged_in: true } }), true, "signed in");
+  assert.equal(cloud_space_visible({ object_storage: false, admin: { local: true, logged_in: true } }), false, "not set up: hidden");
+  assert.equal(cloud_space_visible({ object_storage: true, admin: { local: false, logged_in: false } }), false, "without the administrator's identity the list cannot be read");
+  assert.equal(cloud_space_visible({}), false);
+});
+
+test("saving an attachment to the cloud space follows the site's task until it is done", async () => {
+  const requests = [], notified = [];
+  const answers = [{ task_id: "t1", status: "running", progress: 0 }, { status: "running", progress: 0.5 }, { status: "completed", progress: 1 }];
+  const context = vm.createContext({ notify: (level, message) => notified.push([level, message]), CSS: { escape: String },
+    document: { querySelectorAll: () => [], dispatchEvent() {} }, CustomEvent, setTimeout: callback => callback(),
+    request_json: async (url, payload) => { requests.push([url, payload === undefined ? "GET" : "POST"]); return answers.shift(); } });
+  vm.runInContext(source.slice(source.indexOf("// Attachments being copied to the cloud space"), source.indexOf("/** Act on one attachment icon")), context);
+  const route = "/api/rooms/one/attachments/a/cloud-copy";
+  await context.copy_attachment_to_cloud("one", "a", "录像.mp4");
+  assert.deepEqual(requests, [[route, "POST"], [route, "GET"], [route, "GET"]], "one start, then reads of the same task");
+  assert.deepEqual(notified, [["info", "“录像.mp4”已存到云空间"]]);
+  assert.equal(vm.runInContext("cloud_copies.size", context), 0, "the icon is plain again once the copy is over");
+  answers.push({ kind: "cloud_file", id: "c" });
+  requests.length = notified.length = 0;
+  await context.copy_attachment_to_cloud("one", "a", "录像.mp4");
+  assert.deepEqual(requests, [[route, "POST"]], "a copy the site already has needs no task");
+});
+
+test("an attachment's copy to the cloud space joins the file page's transfer list", async () => {
+  const { transfers, take_transfer } = await import(`../frontend/transfers.js?case=handoff-${Date.now()}`);
+  const notified = [];
+  const context = vm.createContext({ notify: (level, message) => notified.push([level, message]), CSS: { escape: String }, CustomEvent,
+    document: { querySelectorAll: () => [], dispatchEvent: (event) => take_transfer(event) }, setTimeout: callback => callback(),
+    request_json: async () => ({ kind: "cloud_file", id: "c" }) });
+  vm.runInContext(source.slice(source.indexOf("// Attachments being copied to the cloud space"), source.indexOf("/** Act on one attachment icon")), context);
+  await context.copy_attachment_to_cloud("one", "a", "录像.mp4");
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const row = transfers.rows.find(item => item.name === "录像.mp4");
+  assert.equal(row?.kind, "copy", "the copy is a row of the transfer list");
+  assert.equal(row.status, "done");
+  assert.deepEqual(notified, [["info", "“录像.mp4”已存到云空间"]], "said once, by the list's completion");
+});
+
+test("a permanent deletion asks again until the site says none remain, and stops when it makes no progress", async () => {
+  const { purge_in_batches } = await import("../frontend/object-storage-fields.js");
+  const rounds = [{ cleared: ["a", "b"], freed_bytes: 10, remaining: 3 }, { cleared: ["c", "d", "e"], freed_bytes: 20, remaining: 0 }];
+  const shares = [];
+  const total = await purge_in_batches(async () => rounds.shift(), share => shares.push(share));
+  assert.deepEqual([...total.cleared], ["a", "b", "c", "d", "e"]);
+  assert.equal(total.freed_bytes, 30);
+  assert.deepEqual(shares, [0.4, 1]);
+  await assert.rejects(purge_in_batches(async () => ({ cleared: [], remaining: 4 })), /4/, "a round that deletes nothing does not loop forever");
+});
+
+test("an attachment's copy remembers the site's task, and a reload follows it at the attachment's route", async () => {
+  const remembered = [];
+  const context = vm.createContext({ notify() {}, CSS: { escape: String }, CustomEvent, setTimeout: callback => callback(),
+    document: { querySelectorAll: () => [], dispatchEvent: (event) => { event.detail.accepted = true; context.handed = event.detail; } },
+    request_json: async (url, payload) => payload ? { task_id: "t9", status: "running", progress: 0 } : { status: "completed" } });
+  vm.runInContext(source.slice(source.indexOf("// Attachments being copied to the cloud space"), source.indexOf("/** Act on one attachment icon")), context);
+  await context.copy_attachment_to_cloud("one", "a", "录像.mp4");
+  await context.handed.run({ progress() {}, task: (task_id, where) => remembered.push([task_id, where]) });
+  assert.deepEqual(JSON.parse(JSON.stringify(remembered)), [["t9", { room_id: "one", attachment_id: "a" }]]);
+
+  const stored = new Map([["codiscuss-transfers", JSON.stringify([{ name: "录像.mp4", kind: "copy", task_id: "t9", source: { room_id: "one", attachment_id: "a" } }])]]);
+  globalThis.localStorage = { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value) };
+  const { transfers, resume_transfers } = await import(`../frontend/transfers.js?case=resume-${Date.now()}`);
+  const routes = [];
+  resume_transfers({ request: async (route) => { routes.push(route); return { status: "completed" }; }, project_cloud_status: async () => { throw new Error("wrong route"); } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(routes, ["/api/rooms/one/attachments/a/cloud-copy"]);
+  assert.equal(transfers.rows.find(row => row.name === "录像.mp4").status, "done", "followed on, not shown as interrupted");
+  delete globalThis.localStorage;
+});
+
+test("deleting in the panel says what went to the recycle bin and frees space only for what is gone", async () => {
+  const { cloud_delete_notices, delete_cloud_files } = await import("../frontend/object-storage-fields.js");
+  const answers = { a: { trashed: ["a"], freed_bytes: 0 }, b: { cleared: ["b"], freed_bytes: 2048 } };
+  const result = await delete_cloud_files(["a", "b"], async id => answers[id]);
+  assert.deepEqual([...result.trashed], ["a"]);
+  assert.deepEqual(cloud_delete_notices(result, bytes => `${bytes} B`), ["已移到回收站，30 天内可还原", "已释放 2048 B"]);
+  assert.deepEqual(cloud_delete_notices({ trashed: ["a"], cleared: [], freed_bytes: 0 }, String), ["已移到回收站，30 天内可还原"], "no “freed 0” after a move to the bin");
 });
 
 test("bringing a message back into the composer leaves object storage files out and says so", async () => {

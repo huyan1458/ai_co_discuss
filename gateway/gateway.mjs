@@ -7,7 +7,7 @@
  * treats as its own local page. The instance therefore trusts whatever reaches it from this computer; the entry is the only
  * thing between the network and it.
  */
-import { object_quota_path, policy_path } from '../runner/attachment_policy.mjs';
+import { CLOUD_STORAGE_RESERVED_NAME, object_quota_path, policy_path } from '../runner/attachment_policy.mjs';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
@@ -20,8 +20,11 @@ import { parseArgs } from 'node:util';
 
 import { ENTRY_KEY_PATTERN, verified_connection } from '../runner/entry_client.mjs';
 import { clear_instance_flag, read_os_users, secure_project_root } from '../runner/os_users.mjs';
+import { t } from '../runner/i18n.mjs';
 import { create_direct } from './direct.mjs';
 import { login_page } from './login_page.mjs';
+import { hosted_cloud_base } from './cloud_share.mjs';
+import { CLOUD_SHARE_BASE_HEADER, HOSTED_CLOUD_SHARE, local_cloud_share } from '../backend/cloud_share_routes.mjs';
 
 const SESSION_COOKIE = 'codiscuss_entry';
 const SESSION_SECONDS = 30 * 24 * 3600;
@@ -178,6 +181,11 @@ function new_credentials() {
  */
 export function add_account(data, name, port, project_data_root = '') {
   if (!NAME_PATTERN.test(name || '')) throw new Error('账号须为 2–32 位小写字母、数字、下划线或短横线，且以字母或数字开头');
+  if (name === CLOUD_STORAGE_RESERVED_NAME) {
+    const template = '“{name}”是云空间保留名称';
+    const params = { name };
+    throw Object.assign(new Error(t(template, params)), { error_text: { template, params } });
+  }
   if (RESERVED_NAMES.has(name)) throw new Error(`“${name}”不能作为入口账号：管理员使用这台电脑的默认实例，只能在本机或已配对的设备上访问`);
   const accounts = read_accounts(data);
   if (accounts[name]) throw new Error(`账号已存在：${name}`);
@@ -412,7 +420,7 @@ function cross_origin(request) {
  * that took the port of a stopped instance gets nothing of the request. Protection is that mark, never inferred from the
  * key: a protected account whose key is missing, malformed or unreadable is not forwarded at all.
  */
-async function forward(request, response, port, { protected: guarded = false, key = '' } = {}) {
+async function forward(request, response, port, { protected: guarded = false, key = '', cloud_base = '', share_path = '' } = {}) {
   const target = `127.0.0.1:${port}`;
   const headers = { ...request.headers, host: target };
   if (headers.origin) headers.origin = `http://${target}`;
@@ -420,6 +428,8 @@ async function forward(request, response, port, { protected: guarded = false, ke
   delete headers.cookie;
   // Only the entry speaks the handshake; a browser's own attempt is dropped.
   for (const name of ['x-codiscuss-entry', 'x-codiscuss-nonce', 'x-codiscuss-proof']) delete headers[name];
+  delete headers[CLOUD_SHARE_BASE_HEADER];
+  if (cloud_base) headers[CLOUD_SHARE_BASE_HEADER] = cloud_base;
   const unavailable = () => {
     if (response.headersSent) return response.destroy();
     // A page gets a page; the site's own requests get an error they already show as a notice.
@@ -429,12 +439,16 @@ async function forward(request, response, port, { protected: guarded = false, ke
     send_json(response, 502, { error: '工作台暂时连不上，请稍后再试' });
   };
   const options = { host: '127.0.0.1', port, path: request.url, method: request.method, headers };
+  if (share_path) {
+    options.path = share_path;
+    options.headers = { host: target, 'accept-language': headers['accept-language'] || 'zh' };
+  }
   // A protected account whose key is missing or unreadable is not forwarded at all: never as if it were unprotected.
   if (guarded && !key) { request.resume(); return unavailable(); }
   if (guarded) {
     let verified;
     try { verified = await verified_connection(port, key); } catch { request.resume(); return unavailable(); }
-    headers['x-codiscuss-entry'] = verified.header;
+    options.headers['x-codiscuss-entry'] = verified.header;
     Object.assign(options, { createConnection: () => verified.socket });
   }
   const upstream = http.request(options, reply => {
@@ -444,7 +458,8 @@ async function forward(request, response, port, { protected: guarded = false, ke
   });
   upstream.on('error', unavailable);
   response.on('close', () => upstream.destroy());
-  request.pipe(upstream);
+  if (share_path) { request.resume(); upstream.end(); }
+  else request.pipe(upstream);
 }
 
 /** The key protecting one account's instance, from the administrator's own copy; '' when it has none. */
@@ -511,6 +526,14 @@ export function create_gateway({ data, now = Date.now }) {
 
   async function handle(request, response) {
     const path = new URL(request.url, 'http://entry').pathname;
+    if (path === '/cloud-share' || path.startsWith('/cloud-share/')) {
+      const share = request.method === 'GET' && (request.headers['content-length'] ?? '0') === '0'
+        && request.headers['transfer-encoding'] === undefined && HOSTED_CLOUD_SHARE.exec(path);
+      const target = share && read_accounts(data)[share[1]];
+      if (!target || target.disabled) return send(response, 404, { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+      return forward(request, response, target.port, { protected: target.protected === true,
+        key: target.protected === true ? instance_key(data, share[1]) : '', share_path: local_cloud_share(share[2], share[3]) });
+    }
     if (cross_origin(request)) return send_json(response, 403, { error: '不接受来自其他网站的请求' });
     if (path === '/guest' || path.startsWith('/guest/') || path === '/api/guest' || path.startsWith('/api/guest/')) {
       return direct(request, response, false);
@@ -526,7 +549,10 @@ export function create_gateway({ data, now = Date.now }) {
     // The site asks this to tell a page opened through the entry from one opened at the instance itself.
     // It also names the account, so the site shows who is signed in when no display name was set (#5688).
     if (path === SESSION_PATH && request.method === 'GET') return account ? send_json(response, 200, { signed_in: true, account: account.name }) : send_json(response, 401, { error: '请先登录', code: 'entry_login' });
-    if (account) return forward(request, response, account.port, { protected: account.protected === true, key: account.protected === true ? instance_key(data, account.name) : '' });
+    if (account) return forward(request, response, account.port, { protected: account.protected === true,
+      key: account.protected === true ? instance_key(data, account.name) : '',
+      cloud_base: /^\/api\/rooms\/cloud-attachments\/[0-9a-f]{32}\/shares$/.test(path) && request.method === 'POST'
+        ? hosted_cloud_base(data, entry_settings(data), account.name) : '' });
     const page = request.method === 'GET' && String(request.headers.accept || '').includes('text/html');
     // A page goes to the sign-in; the site's own requests are told so, and it goes there itself (#5688).
     return page ? send(response, 302, { Location: LOGIN_PATH }) : send_json(response, 401, { error: '请先登录', code: 'entry_login' });

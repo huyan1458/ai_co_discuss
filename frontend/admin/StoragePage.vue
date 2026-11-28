@@ -9,7 +9,7 @@ import { t } from "../i18n.js";
 import { format_storage_bytes, normalize_storage_snapshot, storage_ratio, storage_tone } from "../storage-format.js";
 import AttachmentCleaner from "../AttachmentCleaner.vue";
 import SecretKeyInput from "../SecretKeyInput.vue";
-import { delete_cloud_files, object_storage_fields, object_storage_values } from "../object-storage-fields.js";
+import { cloud_delete_notices, delete_cloud_files, object_storage_fields, object_storage_values } from "../object-storage-fields.js";
 
 const { state, notify, refreshed, reload, storage_raw: raw, storage_loading: loading, storage_error: error, load_storage } = inject("panel");
 const preview = ref(null);
@@ -27,8 +27,12 @@ async function analyze_storage() {
   analyzing.value = true;
   try {
     await call("storage/steward", {});
-    notify("info", t("已发送占用分析请求，请到平台主理人对话查看。"));
-  } catch (failure) { notify("error", failure.message); }
+    notify("info", t("已发送占用分析请求，请到 MOSS 对话查看。"));
+  } catch (failure) {
+    // The panel only explains: raising MOSS's access is a setting on its own page, not something to do from here (#15640).
+    if (failure.code === "steward_access_too_low") notify("warning", t("MOSS 现在是只读，分析占用要运行命令。请先在网站的 MOSS 设置里把项目权限调到“自动”，再回来重试。"));
+    else notify("error", failure.message);
+  }
   finally { analyzing.value = false; }
 }
 
@@ -172,8 +176,24 @@ async function save_object_field(field) {
 const cloud_open = ref(false);
 const cloud_paths = computed(() => ({ list: `${object_paths.value.config}/files`, remove: `${object_paths.value.config}/files/delete` }));
 const delete_cloud = (ids) => delete_cloud_files(ids, (id) => call(cloud_paths.value.remove, { id }));
+// Share links of a cloud space file, made by the chosen account's own site and passed on by this panel (CloudShares.vue).
+const share_route = (file) => `${object_paths.value.config}/files/${encodeURIComponent(file.id)}/shares`;
+const cloud_shares = {
+  list: (file) => call(share_route(file)),
+  create: (file, days) => call(share_route(file), { days }),
+  revoke: (file, share) => call(`${share_route(file)}/${encodeURIComponent(share.id)}/revoke`, {}),
+};
+/** Save one cloud space file: the account's site signs a short link straight to the storage, passed on by this panel. */
+async function download_cloud(file) {
+  const { url } = await call(`${object_paths.value.config}/files/link`, { id: file.id });
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = file.file_name || "";
+  anchor.rel = "noopener";
+  anchor.click();
+}
 function cloud_deleted(result) {
-  notify("info", t("已释放 {size}", { size: format_storage_bytes(result.freed_bytes) }));
+  for (const message of cloud_delete_notices(result, format_storage_bytes)) notify("info", message);
   if (result.error) notify("error", result.error);
 }
 watch(object_account, () => { cloud_open.value = false; });
@@ -183,6 +203,12 @@ async function object_action(action, request) {
   try { return await request(); }
   catch (failure) { notify("error", failure.message); }
   finally { object_busy.value = ""; }
+}
+// A hosted account can use the owner's own cloud space, signed for it by this computer, instead of a key of its own.
+const object_admin_mode = computed(() => Boolean(object_account.value) && object_storage.value?.mode === "admin");
+async function save_object_mode(admin) {
+  const result = await object_action("mode", () => call(object_paths.value.config, { mode: admin ? "admin" : "own" }));
+  if (result) { show_object_storage(result); notify("info", t("已保存")); }
 }
 async function test_object_storage() {
   if (await object_action("test", () => call(`${object_paths.value.config}/test`, {}))) notify("info", t("连接成功"));
@@ -208,7 +234,7 @@ watch(refreshed, () => load_storage());
       <UIcon name="i-lucide-hard-drive" />{{ t("共议数据") }}
       <span class="panel-section-action storage-head-actions">
         <button type="button" class="panel-button is-outline is-small" :disabled="analyzing" @click="analyze_storage">
-          <UIcon name="i-lucide-sparkles" />{{ t("让平台主理人分析占用") }}
+          <UIcon name="i-lucide-sparkles" />{{ t("让 MOSS 分析占用") }}
         </button>
         <button type="button" class="panel-button is-plain is-small" :disabled="loading" @click="load_storage">
           <UIcon name="i-lucide-refresh-cw" :class="{ 'animate-spin': loading }" />{{ t("刷新") }}
@@ -225,17 +251,23 @@ watch(refreshed, () => load_storage());
       <span v-if="object_storage" class="panel-tag" :class="object_storage.configured ? 'is-green' : 'is-gray'">{{ object_storage.configured ? t("已配置") : t("未配置") }}</span>
       <span v-if="object_account && object_storage?.configured" class="panel-tag" :class="object_storage.managed ? 'is-blue' : 'is-gray'">{{ object_storage.managed ? t("管理员提供") : t("账号自行填写") }}</span>
     </h3>
-    <p class="panel-guide">{{ t("每个账号一份云空间，建在资源中心的对象存储上：大于门槛的附件（最大 2 GiB）存到这里，房间里发的大文件和成员交付的大文件都能从这里取走。只经房间附件进出，可设自动删除，也可在“管理云空间”里手动删除。未配置时只能发送上限以内的附件。存储桶须允许网页所在地址跨域上传。每个账号各用自己的 Key，与 API 密钥一起保存。") }}</p>
+    <p class="panel-guide">{{ t("每个账号一份云空间，建在资源中心的对象存储上：大于门槛的附件（最大 2 GiB）存到这里，房间里发的大文件和成员交付的大文件都能从这里取走，也可以在房间网页文件页的“云空间”里直接上传，不建文件夹。可设自动删除，也可在“管理云空间”里手动删除。未配置时只能发送上限以内的附件。存储桶须允许网页所在地址跨域上传。每个账号各用自己的 Key，与 API 密钥一起保存。") }}</p>
     <div v-if="state.hosting && state.accounts.length" class="panel-chips storage-object-accounts" role="group" :aria-label="t('配置哪个账号的对象存储')">
       <button type="button" class="panel-chip" :class="{ 'is-active': !object_account }" @click="object_account = ''">{{ t("管理员") }}</button>
       <button v-for="account in state.accounts" :key="account.name" type="button" class="panel-chip" :class="{ 'is-active': object_account === account.name }" @click="object_account = account.name">{{ account.name }}</button>
     </div>
     <div v-if="object_storage" class="panel-row storage-object-form">
-      <label class="panel-field">{{ t("资源中心地址") }}<input v-model.trim="object_url" class="panel-input" type="url" placeholder="https://…" spellcheck="false"></label>
-      <div class="panel-field">{{ t("Key") }}
-        <SecretKeyInput :key="`${object_account}\u0000${object_storage.api_key_ref || ''}\u0000${object_key_saved}`" :save="save_object_key" :saved="object_key_saved" :disabled="!object_url.trim()" :label="t('对象存储 Key')" :placeholder="t('填写 Key，失焦或回车保存')" size="sm" @error="(failure) => notify('error', failure.message)" />
-        <small v-if="object_account">{{ t("对方界面不显示 Key，但对方账号里的 AI 成员能读到本账号的密钥文件；请给每个账号单独的 Key。") }}</small>
-      </div>
+      <label v-if="object_account" class="panel-field storage-object-mode">
+        <span><input type="checkbox" :checked="object_admin_mode" :disabled="Boolean(object_busy)" @change="save_object_mode($event.target.checked)"> {{ t("使用管理员的云空间") }}</span>
+        <small>{{ t("打开后该账号不保存 Key：上传、下载和删除都由你这台电脑代为签发，只能操作该账号自己的目录，空间上限在这里强制执行；需要你的本机服务一直运行。") }}</small>
+      </label>
+      <template v-if="!object_admin_mode">
+        <label class="panel-field">{{ t("资源中心地址") }}<input v-model.trim="object_url" class="panel-input" type="url" placeholder="https://…" spellcheck="false"></label>
+        <div class="panel-field">{{ t("Key") }}
+          <SecretKeyInput :key="`${object_account}\u0000${object_storage.api_key_ref || ''}\u0000${object_key_saved}`" :save="save_object_key" :saved="object_key_saved" :disabled="!object_url.trim()" :label="t('对象存储 Key')" :placeholder="t('填写 Key，失焦或回车保存')" size="sm" @error="(failure) => notify('error', failure.message)" />
+          <small v-if="object_account">{{ t("对方界面不显示 Key，但对方账号里的 AI 成员能读到本账号的密钥文件；请给每个账号单独的 Key。") }}</small>
+        </div>
+      </template>
       <label v-for="field in object_fields" :key="field.key" class="panel-field">{{ field.label }}
         <input v-model.number="object_values[field.key]" class="panel-input storage-object-number" type="number" :min="field.min" :max="field.max" step="1" :disabled="Boolean(object_busy)" @change="save_object_field(field)">
         <small>{{ field.help }}</small></label>
@@ -246,7 +278,7 @@ watch(refreshed, () => load_storage());
         <button class="panel-button is-outline" type="button" :disabled="!object_storage.configured" @click="cloud_open = !cloud_open">{{ cloud_open ? t("收起云空间") : t("管理云空间") }}</button>
         <button class="panel-button is-outline storage-danger" type="button" :disabled="!object_storage.configured || Boolean(object_busy)" @click="clear_object_storage">{{ t("清除") }}</button>
       </div>
-      <AttachmentCleaner v-if="cloud_open && object_storage.configured" :key="object_account" cloud :load="() => call(cloud_paths.list)" :clear="delete_cloud"
+      <AttachmentCleaner v-if="cloud_open && object_storage.configured" :key="object_account" cloud :load="() => call(cloud_paths.list)" :clear="delete_cloud" :download="download_cloud" :shares="cloud_shares"
         @cleared="cloud_deleted" @failed="(message) => notify('error', message)" />
     </div>
     <div v-if="!snapshot && loading" class="panel-rows" role="status" :aria-label="t('正在统计存储占用…')">
@@ -463,6 +495,7 @@ watch(refreshed, () => load_storage());
 .storage-object-accounts { margin-bottom: 8px; }
 .storage-object-actions { display: flex; gap: 8px; }
 .storage-object-number { max-width: 140px; }
+.storage-object-mode > span { display: inline-flex; gap: 6px; align-items: center; }
 .storage-bar { height: 5px; width: 100%; max-width: 360px; margin: 2px 0; overflow: hidden; border-radius: 999px; background: var(--panel-tint); }
 .storage-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--panel-blue); transition: width .2s ease; }
 .storage-bar.is-warning > i { background: var(--panel-amber); }

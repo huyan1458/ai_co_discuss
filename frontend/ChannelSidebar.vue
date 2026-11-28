@@ -1,15 +1,16 @@
 <script>
 import { ref } from "vue";
-const workflows_open = ref(true);
+const workflows_open = ref(false);
 </script>
 
 <script setup>
-import { computed, inject, ref } from "vue";
+import { computed, inject, nextTick, ref } from "vue";
 import ChangelogDialog from "./ChangelogDialog.vue";
 import ChannelDirectory from "./ChannelDirectory.vue";
 import InvitedRooms from "./InvitedRooms.vue";
 import { use_workflow_library, workflow_key, workflow_problem } from "./workflow-library.js";
 import { use_analytics_page } from "./analytics-state.js";
+import { moss_avatar as moss_picture, moss_running } from "./moss.js";
 import { t } from "./i18n.js";
 
 /** The room sidebar, shared by the docked desktop column and the tablet and phone drawer. */
@@ -18,6 +19,23 @@ const { view, bridge, field } = inject("discussion");
 const author = field("author-select");
 const { page_open: analytics_open } = use_analytics_page();
 const can_view_analytics = computed(() => !view.value.share && Boolean(view.value.admin?.local || view.value.admin?.logged_in));
+const props = defineProps({ stewardSetup: Boolean });
+const moss_room = computed(() => view.value.rooms.find(room => room.system_kind === "steward" && !room.archived));
+const moss_avatar = computed(() => moss_picture(moss_room.value, moss_room.value?.id === view.value.room?.id && moss_running(view.value.room)));
+const moss_current = computed(() => props.stewardSetup || Boolean(moss_room.value && !analytics_open.value && !page_open.value && view.value.room?.id === moss_room.value.id));
+/** An existing MOSS room opens at once like any room; only a first visit waits for this computer to set one up. */
+function open_moss() {
+  if (moss_room.value) emit("select", moss_room.value.id);
+  else bridge.open_steward();
+}
+const workflow_list = ref(null);
+async function toggle_workflows() {
+  workflows_open.value = !workflows_open.value;
+  if (!workflows_open.value) return;
+  library.refresh_list();
+  await nextTick();
+  workflow_list.value?.scrollIntoView({ block: "nearest" });
+}
 const library = use_workflow_library();
 const {
   workflows, global_workflows, project_workflows, project_roots,
@@ -88,18 +106,20 @@ function row_icon(item) {
       <span class="channel-brand-text"><strong>{{ t("共议") }}</strong><span class="channel-brand-meta">CoDiscuss <button type="button" class="channel-version" :title="t('查看更新日志')" :aria-label="t('查看更新日志')" @click="open_changelog">v{{ app_version }}<i v-if="changelog_unread" class="channel-version-unread" :title="t('有未读的更新日志')" /><UIcon name="i-lucide-chevron-right" aria-hidden="true" /></button></span></span>
       <ChangelogDialog v-model:open="changelog_open" :version="app_version" />
     </header>
-    <div v-keep-reading class="channel-sidebar-content">
-      <ChannelDirectory @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" @destructions="emit('destructions')" />
-      <!-- Rooms on other computers this computer's AIs were invited to: their own section, opened in the middle like a room. -->
-      <InvitedRooms @open="emit('invited', $event)" />
-      <!-- The workflow library shows the current room's project workflows (when any) and global workflows. -->
-      <div class="channel-directory-heading channel-tools-heading">
-        <button type="button" class="channel-section-toggle" :aria-expanded="workflows_open" @click="workflows_open = !workflows_open; if (workflows_open) library.refresh_list()"><UIcon :name="workflows_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ t("工作流") }}</button>
+    <!-- One column of equal rows, icon then label, as Claude's sidebar (user #15318): no row is a button-shaped block. -->
+    <nav class="channel-fixed-tools" :aria-label="t('常用入口')">
+      <button type="button" class="channel-nav-item" :disabled="view.directory_pending.includes('create-room')" @click="emit('create', null)"><UIcon name="i-lucide-plus" /><span>{{ t("新建房间") }}</span></button>
+      <button v-if="can_view_analytics" type="button" class="channel-nav-item" :class="{ active: moss_current }" :title="moss_avatar.title" :aria-label="moss_avatar.title" :aria-current="moss_current ? 'page' : undefined" @click="open_moss"><img class="channel-moss-avatar moss-avatar" :class="`is-${moss_avatar.state}`" :src="moss_avatar.src" alt="" /><span>{{ t("MOSS") }}</span></button>
+      <div class="channel-nav-item-row" :class="{ open: workflows_open }">
+        <button type="button" class="channel-nav-item" :aria-expanded="workflows_open" @click="toggle_workflows"><UIcon name="i-lucide-network" /><span>{{ t("工作流") }}</span><UIcon :name="workflows_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="channel-nav-chevron" /></button>
         <div v-if="available" class="channel-directory-actions">
           <UDropdownMenu :items="add_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-plus" :aria-label="t('新建或导入工作流')" :title="t('新建或导入')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
         </div>
       </div>
-      <nav v-show="workflows_open" :aria-label="t('工作流列表')" class="channel-room-list channel-workflow-list">
+      <button v-if="can_view_analytics" type="button" class="channel-nav-item" :class="{ active: analytics_open }" :aria-current="analytics_open ? 'page' : undefined" @click="emit('analytics')"><UIcon name="i-lucide-bar-chart-3" /><span>{{ t("统计") }}</span></button>
+    </nav>
+    <div v-keep-reading class="channel-sidebar-content">
+      <nav v-show="workflows_open" ref="workflow_list" :aria-label="t('工作流列表')" class="channel-room-list channel-workflow-list">
         <template v-if="available">
           <template v-if="has_project_section">
             <p class="channel-workflow-group">{{ t("当前项目") }}</p>
@@ -143,14 +163,8 @@ function row_icon(item) {
         </template>
         <p v-else class="channel-directory-empty">{{ t("连接本机服务后管理工作流") }}</p>
       </nav>
-      <!-- Owner-only cross-room analytics entry, last in the left navigation, below workflows (2026-11-26 user request). -->
-      <!-- Styled as a section heading, a peer of “协作房间 / 外部房间 / 工作流”: the icon takes the chevron's place. -->
-      <div v-if="can_view_analytics" class="channel-directory-heading channel-tools-heading channel-analytics-heading" :class="{ 'is-current': analytics_open }">
-        <button type="button" class="channel-section-toggle" :aria-current="analytics_open ? 'page' : undefined" @click="emit('analytics')"><UIcon name="i-lucide-bar-chart-3" />{{ t("统计") }}</button>
-      </div>
-    </div>
-    <div v-if="can_view_analytics" class="channel-directory-heading channel-tools-heading" :class="{ 'is-current': !analytics_open && view.room?.system_kind === 'steward' }">
-      <button type="button" class="channel-section-toggle" :aria-current="!analytics_open && view.room?.system_kind === 'steward' ? 'page' : undefined" @click="bridge.open_steward()"><UIcon name="i-lucide-sparkles" />{{ t("平台主理人") }}</button>
+      <ChannelDirectory :steward-setup="stewardSetup" @select="emit('select', $event)" @manage="emit('manage', $event)" @create="emit('create', $event)" @create-folder="emit('create-folder')" @manage-folder="emit('manage-folder', $event)" @delete-folder="emit('delete-folder', $event)" @archive-folder="emit('archive-folder', $event)" @archives="emit('archives')" @destructions="emit('destructions')" />
+      <InvitedRooms @open="emit('invited', $event)" />
     </div>
   <footer class="channel-sidebar-footer">
     <button type="button" class="channel-self-button" :aria-label="t('账号与设置：{name}', { name: bridge.display_name(author) }) + (account_status ? t('，') + account_status : '')" @click="emit('settings')">
@@ -164,6 +178,25 @@ function row_icon(item) {
 </template>
 
 <style scoped>
+/* The fixed entries, as Claude's sidebar: equal 32px rows, a 16px glyph and the label, a quiet fill on hover and a
+   firmer one for the page on screen (user #15318). The room list below keeps its own rows. */
+.channel-fixed-tools { display: grid; gap: 1px; flex-shrink: 0; padding: 10px 8px 6px; border-bottom: 1px solid var(--channel-line); }
+.channel-nav-item { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; height: 32px; padding: 0 8px; border-radius: 8px; color: var(--ui-text-toned); font-size: var(--channel-nav-text); text-align: left; transition: background .12s, color .12s; }
+.channel-nav-item > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-nav-item > :deep(svg) { flex-shrink: 0; width: 16px; height: 16px; color: var(--ui-text-muted); }
+@media (hover: hover) { .channel-nav-item:hover:not(:disabled), .channel-nav-item-row:hover > .channel-nav-item { background: var(--channel-ghost-hover); color: var(--ui-text-highlighted); } }
+.channel-nav-item.active { background: var(--channel-ghost-active); color: var(--ui-text-highlighted); font-weight: 600; }
+.channel-nav-item:disabled { opacity: .55; }
+.channel-nav-item:focus-visible { box-shadow: inset 0 0 0 1px var(--ui-border-accented); }
+.channel-nav-item > .channel-nav-chevron { width: 13px; height: 13px; color: var(--ui-text-dimmed); }
+/* 工作流 keeps its "+" menu: it takes the chevron's place on hover, the way room rows trade time for actions. */
+.channel-nav-item-row { position: relative; }
+.channel-nav-item-row > .channel-directory-actions { position: absolute; top: 3px; right: 4px; }
+.channel-nav-item-row:is(:hover, :focus-within) > .channel-directory-actions, .channel-nav-item-row:has([data-state="open"]) > .channel-directory-actions { opacity: 1; pointer-events: auto; }
+@media (hover: hover) and (pointer: fine) { .channel-nav-item-row:is(:hover, :focus-within) .channel-nav-chevron { visibility: hidden; } }
+@media (hover: none), (pointer: coarse) { .channel-nav-item-row > .channel-directory-actions { opacity: 1; pointer-events: auto; right: 26px; } }
+/* MOSS's own picture stands in the glyph's place, a little larger so its state frame reads; no label beside it. */
+.channel-moss-avatar { width: 20px; height: 20px; margin: 0 -2px; object-fit: contain; flex-shrink: 0; }
 /* The version number opens the changelog. A small chevron after it says it can be opened without hover, which phones
    never show; no chip around it, so the brand line stays quiet (user 2026-11-23). */
 .channel-brand-text > .channel-brand-meta { display: flex; align-items: center; overflow: visible; }
@@ -174,5 +207,4 @@ function row_icon(item) {
 .channel-workflow-group { margin: 8px 0 2px; padding: 0 8px; overflow: hidden; color: var(--ui-text-dimmed); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .channel-workflow-group:first-child { margin-top: 2px; }
 .channel-workflow-empty { margin: 0; padding: 4px 8px 6px; color: var(--ui-text-dimmed); font-size: 12px; }
-.channel-analytics-heading.is-current .channel-section-toggle { color: var(--ui-text-highlighted); }
 </style>

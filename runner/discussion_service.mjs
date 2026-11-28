@@ -15,14 +15,16 @@ import { ensure_global_experts_migrated } from './experts.mjs';
 import { atomic_json } from './files.mjs';
 import * as storage_guard from './storage_guard.mjs';
 import { relay_health_writer } from './relay_health.mjs';
-import { t } from './i18n.mjs';
+import { resolve_locale, t } from './i18n.mjs';
 import { DiscussionStore, acquire_lock, api, load_config, pause_if_running, service_drafts, validate_config } from './discussion_runner.mjs';
 import { FreeRoomRunner, LIVE, member_drafts, write_proactive_access } from './free_runner.mjs';
-import { can_notify, notice_sent, receive_replies, send_notice } from './channels.mjs';
+import { can_notify, flush_moss_channel_replies, moss_approval_text, moss_question_channels, moss_setup_text,
+  notice_sent, receive_replies, route_moss_message, send_notice } from './channels.mjs';
 import { answer_by_weixin } from './question_weixin.mjs';
 import { OPERATOR_EVENTS_FILE, account_space, drafts_root } from './account_space.mjs';
 import { install_pi, pi_outdated } from './pi_runtime.mjs';
 import { site_fetch } from './entry_client.mjs';
+import { STEWARD_PROACTIVE_POLL_MS } from './steward_proactive.mjs';
 import { destroy_draft_space, destroy_room_sessions, room_bindings } from './room_destruction.mjs';
 
 // A destroyed room's cleanup result is reported a few times before giving up; the receipt then shows the room as still cleaning.
@@ -304,6 +306,14 @@ export async function phone_link(home, site, room) {
   return origin ? `${origin}/?room=${encodeURIComponent(room)}` : '';
 }
 
+async function moss_phone_link(home, site, room = '') {
+  const remote = await phone_link(home, site, room);
+  const url = new URL(remote || site);
+  url.searchParams.delete('room');
+  url.searchParams.set('moss', room || 'settings');
+  return url.href;
+}
+
 class RoomWorker {
   constructor(path, create_runner, log, home) {
     this.path = path;
@@ -332,6 +342,12 @@ class RoomWorker {
     // A goal waiting on the owner reaches their Weixin, when this computer has one bound.
     if ('notifier' in this.runner) this.runner.notifier = { ready: () => can_notify(this.home), sent: key => notice_sent(this.home, key),
       send: async notice => {
+        if (config.steward && notice.question) {
+          const link = await moss_phone_link(this.home, notice.room.site, notice.room.room);
+          const safe = { ...notice, paragraphs: [moss_approval_text(link)], question: null, web_only: true, verbatim: true };
+          const channels = moss_question_channels(this.home, config, this.runner.room, notice.question.id);
+          return send_notice(this.home, { ...safe, ...(channels.length === 1 ? { only: channels[0] } : {}) });
+        }
         const link = await phone_link(this.home, notice.room.site, notice.room.room);
         const opening = link ? [`打开房间（需在已配对的设备上）：${link}`] : [];
         return send_notice(this.home, { ...notice, paragraphs: [...notice.paragraphs, ...opening] });
@@ -399,6 +415,7 @@ class RoomWorker {
       if (!this.runner) this.open();
       await this.refresh_control();
       const result = await this.runner.tick();
+      if (this.config.steward) await this.flush_moss_replies();
       await this.adopt_manual_members();
       Object.assign(this.state, { status: TICK_STATES[result], error: '' });
       this.idle = this.runner.idle?.() === true;
@@ -412,6 +429,13 @@ class RoomWorker {
       this.log(`${this.state.site || ''}/${this.state.room || this.path}: ${STATUS_LABELS[this.state.status]}`);
     }
     this.state.checked_at = Math.floor(Date.now() / 1000);
+  }
+  async flush_moss_replies() {
+    try {
+      const { site, room } = this.config;
+      await flush_moss_channel_replies(this.home, { config: this.config, room: this.runner.room, request: api,
+        link: await moss_phone_link(this.home, site, room) });
+    } catch (error) { this.log(`MOSS channel: ${error.message}`); }
   }
   /** Confirm a 404 against the room itself, so a room deleted on the website is told apart from a missing route. */
   async deleted(error) {
@@ -502,9 +526,18 @@ export class DiscussionService {
     }
     if (this.push) for (const site of new Set([...this.workers.values()].map(worker => worker.state.site).filter(Boolean))) this.watch(site);
     const checks = this.check_revisions();
-    if (wait) await checks;
+    const proactive = this.check_steward_proactive();
+    if (wait) await Promise.all([checks, proactive]);
     if (wait) await Promise.all([...this.workers.values()].map(worker => worker.busy));
     this.write_status();
+  }
+  /** Check the account's MOSS triggers in the same polling loop, independently of project deliveries. */
+  check_steward_proactive() {
+    if (this.closed || this.steward_poll || Date.now() < (this.steward_poll_at || 0)) return this.steward_poll;
+    this.steward_poll_at = Date.now() + STEWARD_PROACTIVE_POLL_MS;
+    this.steward_poll = import('./discussion_launch.mjs').then(({ poll_steward_proactive }) => poll_steward_proactive(this.home))
+      .catch(error => this.log(`MOSS: ${error.message}`)).finally(() => { this.steward_poll = null; });
+    return this.steward_poll;
   }
   /** Start one room's tick; a room asked again while busy ticks once more right after. */
   start(path, worker) {
@@ -797,9 +830,36 @@ export class DiscussionService {
   }
   /** Pause running rooms and release every lock and child process, once their current ticks finish. */
   /** Post the owner's Weixin reply to the room it answers, as the owner, and check that room at once. */
-  async weixin_reply({ site, room, text, question_id, version }) {
+  async moss_reply(reply, current = null) {
+    const { post_steward_channel_message, steward_site } = await import('./steward.mjs');
+    if (!current) {
+      const { steward_command } = await import('./discussion_launch.mjs');
+      const status = await steward_command(this.home, 'steward');
+      if (!status.configured) {
+        const link = await moss_phone_link(this.home, steward_site(this.home));
+        return moss_setup_text(link);
+      }
+      const opened = await steward_command(this.home, 'steward', { open: true, lang: resolve_locale() },
+        { start_service: async () => ({ running: true }) });
+      for (const path of read_registry(this.home)) {
+        if (registered_identity(path)?.room !== opened.room_id) continue;
+        const config = validate_config(configuration_snapshot(path).config, dirname(path));
+        if (config.steward) current = { config, wake: () => this.workers.get(path)?.wake() };
+        break;
+      }
+    }
+    if (!current) throw new Error(t('这台电脑已不再接入该房间'));
+    const { config } = current;
+    const link = await moss_phone_link(this.home, config.site, config.room);
+    if (reply.question_id) return moss_approval_text(link);
+    const received = await route_moss_message(this.home, { ...reply, config, link, request: api, post: post_steward_channel_message });
+    current.wake();
+    return received;
+  }
+  async weixin_reply({ site, room, text, question_id, version, channel, label }) {
     const worker = [...this.workers.values()].find(item => item.config?.site === site && item.config?.room === room);
     if (!worker) throw new Error('这台电脑已不再接入该房间');
+    if (worker.config.steward && channel) return this.moss_reply({ channel, label, text, question_id }, worker);
     // A reply to a question's notice answers that question (or leaves it to the host), never a plain message.
     if (question_id) {
       const confirmation = await answer_by_weixin((path, payload) => api(worker.config, path, payload), { question_id, version, text });
@@ -1180,7 +1240,8 @@ export async function run_service(home, output = () => {}) {
     // Rooms on other computers this one was invited to: pull the requests named for its AI (runner/external_client.mjs).
     (await import('./external_client.mjs')).start_external_client(home, { log: log_line, signal: relay_stop.signal });
     // The owner's Weixin replies come back here and go to the room their notice came from.
-    receiving = receive_replies(home, { on_reply: reply => service.weixin_reply(reply), log: log_line, signal: relay_stop.signal })
+    receiving = receive_replies(home, { on_reply: reply => service.weixin_reply(reply), on_moss: reply => service.moss_reply(reply),
+      log: log_line, signal: relay_stop.signal })
       .catch(error => log_line(`微信收件停止：${error.message}`));
     let synced_at = 0, channels_checked_at = 0, swept_at = 0, relay_failed_at = 0;
     // A long-poll of its own: the site answers as soon as another device relays a command, and the next claim starts

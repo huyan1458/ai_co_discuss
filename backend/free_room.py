@@ -16,7 +16,7 @@ import time
 import uuid
 
 from .execution_diagnostics import diagnostic_detail, record_diagnostics
-from .identity import MAX_ROOM_AGENTS, default_label, is_ai
+from .identity import MAX_ROOM_AGENTS, default_label, is_ai, platform_of
 from .message_queue import pause as pause_queue, queue_view
 from .texts import BoundaryError, Text, incoming_text, load_texts, save_text, text_payload
 from .runtime import (LEASE_SECONDS, MAX_EXECUTION_SEGMENTS, begin_write, enforce_session_limits,
@@ -24,6 +24,7 @@ from .runtime import (LEASE_SECONDS, MAX_EXECUTION_SEGMENTS, begin_write, enforc
 
 # Adapter and client values are named by the runner's adapter layer; the site only checks their shape (AGENTS.md red line 9).
 ADAPTER_VALUE = re.compile(r"[a-z][a-z0-9_]{1,31}")
+STEWARD_SESSION_TEMPLATE = "steward_session"
 MAX_REVIEW_SCOPE = 2000
 MAX_REVIEW_INPUT = 60000
 REVIEW_STATE_SQL = """SELECT json_object(
@@ -1411,6 +1412,57 @@ def host_terms(connection, room_id):
     return terms
 
 
+# A retry moves the request off its failed execution. A newer, completed wake or hand-back handles the failure too.
+# For a user message in the same second as the failure, event IDs break the timestamp tie in write order.
+ROOM_WAITING_SINCE_SQL = """(
+    SELECT MIN(since) FROM (
+        SELECT created_at AS since FROM room_waits WHERE room_id=rooms.id AND ended_at=0
+        UNION ALL
+        SELECT waiting_since FROM room_questions WHERE room_id=rooms.id AND status='waiting_user'
+            AND (expires_at=0 OR expires_at>:now)
+        UNION ALL
+        SELECT COALESCE(NULLIF(phase_since,0),started_at) FROM room_goals WHERE room_id=rooms.id AND status='active' AND phase='pending'
+    )
+)"""
+
+ROOM_ATTENTION_SQL = """CASE
+    WHEN ({waiting_since}) IS NOT NULL THEN 'waiting_user'
+    WHEN EXISTS(SELECT 1 FROM member_requests r
+        JOIN member_executions e ON e.id=r.execution_id JOIN room_members m ON m.id=e.member_id
+        WHERE r.room_id=rooms.id AND r.status='failed' AND e.status='failed' AND m.status='active'
+        AND NOT EXISTS(SELECT 1 FROM member_executions newer
+            WHERE newer.member_id=e.member_id AND newer.room_id=e.room_id AND newer.id>e.id)
+        AND NOT EXISTS(SELECT 1 FROM messages user_message
+            WHERE user_message.room_id=r.room_id AND user_message.id>r.message_id AND user_message.author='用户'
+            AND user_message.source NOT IN ('system','notice')
+            AND NOT EXISTS(SELECT 1 FROM message_relays relay WHERE relay.message_id=user_message.id)
+            AND NOT EXISTS(SELECT 1 FROM guest_message_sources guest WHERE guest.message_id=user_message.id)
+            AND (CAST(strftime('%s',user_message.created_at) AS INTEGER)>e.finished_at
+                OR CAST(strftime('%s',user_message.created_at) AS INTEGER)=e.finished_at
+                AND EXISTS(SELECT 1 FROM room_events sent
+                    WHERE sent.room_id=e.room_id AND sent.kind='message.posted'
+                    AND json_extract(sent.data,'$.message_id')=user_message.id
+                    AND sent.id>(SELECT failed.id FROM room_events failed WHERE failed.room_id=e.room_id
+                        AND failed.kind='execution.changed' AND json_extract(failed.data,'$.execution_id')=e.id
+                        AND json_extract(failed.data,'$.status')='failed' ORDER BY failed.id DESC LIMIT 1))))
+        AND NOT EXISTS(SELECT 1 FROM message_withdrawals w WHERE w.message_id=r.message_id)
+        AND NOT EXISTS(SELECT 1 FROM free_host_wakes w JOIN member_requests handled
+            ON handled.room_id=w.room_id AND handled.message_id=w.message_id
+            WHERE w.room_id=r.room_id AND w.key IN ('failed:' || e.id, 'host_failed:' || e.id)
+            AND handled.status='completed' AND handled.execution_id>e.id)
+        AND NOT EXISTS(SELECT 1 FROM member_requests handoff WHERE r.batch_id>0 AND handoff.room_id=r.room_id
+            AND handoff.message_id=r.batch_id AND handoff.purpose='handoff' AND handoff.status='completed'
+            AND handoff.execution_id>e.id)) THEN 'failed'
+    END""".format(waiting_since=ROOM_WAITING_SINCE_SQL)
+
+
+def open_room_waits(connection, room_id):
+    """Return the active waits declared by members in their replies."""
+    return [dict(row) for row in connection.execute("""SELECT w.id,w.message_id,m.name AS member,w.created_at
+        FROM room_waits w JOIN room_members m ON m.id=w.member_id
+        WHERE w.room_id=? AND w.ended_at=0 ORDER BY w.created_at,w.id""", (room_id,))]
+
+
 def free_view(connection, room_id):
     """Summarize members, their live execution, recent requests and possible file conflicts."""
     now = int(time.time())
@@ -1477,6 +1529,7 @@ def free_view(connection, room_id):
     return {"failure_wakes": failure_wakes, "quiet_checkins": quiet_checkins, "host_checkin": {"minutes": checkin["interval_seconds"] // 60, "due_at": checkin["due_at"]} if checkin else None,
             "members": members, "host_terms": host_terms(connection, room_id), "ended_externals": external_members.ended_view(connection, room_id),
             "requests": requests[::-1], "executions": recent_executions(connection, room_id),
+            "waits": open_room_waits(connection, room_id),
             "conflicts": possible_conflicts(connection, room_id, names), "halted_chains": chains, "max_rounds": max_rounds,
             "chain_rounds": progress, "recommendations": recent_recommendations(connection, room_id, now)[::-1],
             "queued_messages": queue_view(connection, room_id), "questions": questions.room_questions_view(connection, room_id),
@@ -4278,6 +4331,8 @@ def add_interjection(connection, room_id, row, payload, now):
             raise FileExistsError(Text("submission_id 已用于另一条插话"))
         return public_interjection(earlier, row["status"])
     capability = connection.execute("SELECT steer,resume FROM execution_capabilities WHERE execution_id=?", (row["id"],)).fetchone()
+    if payload.get("live_only") is True and (not capability or not capability["steer"]):
+        raise FileExistsError(Text("这位成员的软件不支持执行中插话，可停止后带上这句话重问"))
     if not capability or not (capability["steer"] or capability["resume"]):
         raise FileExistsError(Text("这位成员的软件不支持执行中插话，可停止后带上这句话重问"))
     if connection.execute("SELECT COUNT(*) FROM execution_interjections WHERE execution_id=?", (row["id"],)).fetchone()[0] >= MAX_INTERJECTIONS:
@@ -4533,6 +4588,11 @@ def execution_action(connection, room_id, execution_id, token, payload, member=N
             "SELECT purpose FROM member_requests WHERE execution_id=? AND status='delivering'", (execution_id,))}
         if not purposes or not purposes <= {"notice", "followup", "scheduled"}:
             raise ValueError(Text("只有只带程序通知、续报或定时回报的执行可以不回答就结束"))
+        connection.execute("""INSERT OR IGNORE INTO stored_texts(owner,owner_id,field,template,params)
+            SELECT t.owner,t.owner_id,'quiet',t.template,t.params FROM stored_texts t
+            JOIN member_requests r ON r.message_id=t.owner_id
+            WHERE t.owner='message' AND t.field='trigger' AND t.template='steward_proactive'
+              AND r.execution_id=? AND r.status='delivering' AND r.answer_id IS NULL""", (execution_id,))
         finish_execution(connection, execution_id, "completed", Text("后台回报这一轮没有交来新内容，未发消息") if "followup" in purposes
                          else Text("定时这一轮没有需要处理的事，未发消息") if "scheduled" in purposes
                          else Text("没有需要处理的事，未发消息"), "completed")
@@ -4878,6 +4938,59 @@ def add_member(connection, room_id, token, payload, now):
     insert_member(connection, room_id, member, now)
     queue_invited_expert(connection, room_id, member["name"], now)
     sync_participants(connection, room_id)
+    return free_view(connection, room_id)
+
+
+def record_steward_session(connection, room_id, member_id, software, now):
+    """Mark a real session change in the conversation, without creating a model request."""
+    display = Text("MOSS 从这里开始新会话（{software}）", software=software)
+    message_id = connection.execute("""INSERT INTO messages(room_id,author,text,source,submission_id,created_at)
+        VALUES(?,'系统',?,'system',?,?)""", (room_id, str(display), f"steward-session-{member_id}", now)).lastrowid
+    connection.execute("INSERT INTO message_details(message_id,kind,submitted_by) VALUES(?,'notice','系统')", (message_id,))
+    save_text(connection, "message", message_id, "trigger", Text(STEWARD_SESSION_TEMPLATE))
+    save_text(connection, "message", message_id, "text", display)
+
+
+def replace_steward_member(connection, room_id, token, payload, now):
+    """Swap the one steward identity in place, leaving the room and its history intact."""
+    begin_write(connection)
+    require_owner(connection, room_id, token)
+    directory = connection.execute("SELECT system_kind,archived FROM room_directory WHERE room_id=?", (room_id,)).fetchone()
+    if directory["system_kind"] != "steward":
+        raise FileExistsError(Text("只有 MOSS 房间可以用此操作更换软件"))
+    if directory["archived"]:
+        raise FileExistsError(Text("房间已存档；恢复后才能继续协作"))
+    member = member_value(payload)
+    hashed = token_hash(member["token"])
+    current = connection.execute("SELECT * FROM room_members WHERE room_id=? AND status<>'removed'", (room_id,)).fetchone()
+    if current and current["status"] == "active" and current["token_hash"] == hashed and all(
+            current[key] == member[key] for key in ("name", "adapter", "access", "session_mode")):
+        return free_view(connection, room_id)
+    # An existing credential of another room must not become a site-wide MOSS credential.
+    if connection.execute("SELECT 1 FROM room_members WHERE token_hash=? UNION ALL SELECT 1 FROM room_modes WHERE control_hash=?",
+                          (hashed, hashed)).fetchone():
+        raise ValueError(Text("须提供独立的新成员凭证"))
+    expire_executions(connection, room_id)
+    if current and connection.execute("SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')",
+                                      (current["id"],)).fetchone():
+        return {**free_view(connection, room_id), "busy": True}
+    if current:
+        discussion.pause_session_for_host_change(connection, room_id)
+        stop_member_work(connection, current["id"], Text("成员已移除"), "member_removed", keep_pending=True)
+        connection.execute("UPDATE room_members SET status='removed' WHERE id=?", (current["id"],))
+    insert_member(connection, room_id, member, now)
+    if current:
+        replacement_id = connection.execute("SELECT id FROM room_members WHERE room_id=? AND name=?",
+                                            (room_id, member["name"])).fetchone()["id"]
+        connection.execute("UPDATE member_requests SET member_id=? WHERE member_id=? AND status='pending' AND execution_id IS NULL",
+                           (replacement_id, current["id"]))
+        software = payload.get("software_label")
+        if not isinstance(software, str) or not software.strip():
+            software = platform_of(member["name"]) or member["name"]
+        record_steward_session(connection, room_id, replacement_id, software.strip(), now)
+    label_members(connection, room_id, token, {"labels": {member["name"]: "MOSS"}})
+    sync_participants(connection, room_id)
+    settle_batches(connection, room_id)
     return free_view(connection, room_id)
 
 

@@ -15,6 +15,7 @@ import { analytics_card_blob, draw_analytics_card } from "./analytics-card.js";
 import { live_series, use_live_analytics, waited_text, waiting_title, WAITING_ICONS } from "./analytics-live.js";
 import { entrance, use_spring, wave } from "./analytics-motion.js";
 import { use_workflow_library } from "./workflow-library.js";
+import MossAnalytics from "./MossAnalytics.vue";
 import { t } from "./i18n.js";
 
 const emit = defineEmits(["open-room", "open-message"]);
@@ -28,6 +29,9 @@ const PRESETS = [
   { value: "all", label: t("全部时间") },
 ];
 const ISSUE_PREVIEW = 3;
+const STALL_PREVIEW = 5;
+const STALL_NOTICE_SECONDS = 3 * 60;
+const REASON_RUNS = 5;
 const AXIS_LABELS = 8;
 const FOLDER_SLOTS = 6;
 const MEMBER_PREVIEW = 8;
@@ -55,6 +59,7 @@ const loading = ref(false);
 const error = ref("");
 const members_expanded = ref(false);
 const issues_expanded = ref(false);
+const stalls_expanded = ref(false);
 const open_issues = ref(new Set());
 const model_sort = ref("executions");
 const hovered_slot = ref(-1);
@@ -110,12 +115,26 @@ const live_figures = computed(() => {
   if (!data) return [];
   const queued = data.queue.requests + data.queue.messages;
   return [
-    { key: "running", label: t("正在运行"), value: data.running.length, note: t("{count} 个房间", { count: live_rooms.value.length }) },
-    { key: "queue", label: t("排队中"), value: queued, note: queued ? t("{requests} 个待接手 · {messages} 条待发送", { requests: data.queue.requests, messages: data.queue.messages }) : "" },
+    { key: "running", label: t("正在运行"), value: data.running.length,
+      note: queued ? t("{rooms} 个房间 · {count} 个在排队", { rooms: live_rooms.value.length, count: queued }) : t("{count} 个房间", { count: live_rooms.value.length }) },
     { key: "waiting", label: t("等你处理"), value: data.waiting.length, note: "" },
-    { key: "errors", label: t("最近 1 小时出错"), value: data.errors, note: "" },
+    { key: "completed", label: t("最近 1 小时完成"), value: data.hour.completed, note: t("共结束 {count} 次运行", { count: data.hour.total }) },
+    { key: "errors", label: t("最近 1 小时出错"), value: data.hour.errors, note: "" },
   ];
 });
+const LIVE_RECENT_PREVIEW = 8;
+const live_recent_expanded = ref(false);
+const live_recent = computed(() => {
+  const runs = live.value?.hour.runs || [];
+  return live_recent_expanded.value ? runs : runs.slice(0, LIVE_RECENT_PREVIEW);
+});
+/** Where a run is: the room, under its folder when it has one. */
+function live_where(run) {
+  const room = room_label(run.room_id);
+  return run.folder ? t("{folder} / {room}", { folder: run.folder, room }) : room;
+}
+const LIVE_STATUS_ICONS = { completed: "i-lucide-circle-check", failed: "i-lucide-circle-x", cancelled: "i-lucide-circle-slash" };
+const live_clock = (stamp) => new Date(stamp * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 const live_updated = computed(() => (live.value ? new Date(live.value.at * 1000).toLocaleTimeString() : ""));
 function refresh(manual) {
   if (is_live.value) load_live(manual);
@@ -143,7 +162,7 @@ async function load(manual = false) {
 }
 
 onMounted(() => load(false));
-watch([preset, scope], () => { members_expanded.value = false; issues_expanded.value = false; open_issues.value = new Set(); regrow = true; load(false); });
+watch([preset, scope], () => { members_expanded.value = false; issues_expanded.value = false; stalls_expanded.value = false; open_issues.value = new Set(); regrow = true; load(false); });
 
 const overview = computed(() => report.value?.overview || null);
 const unassisted = computed(() => format_ratio(overview.value?.unassisted, overview.value?.ended));
@@ -152,8 +171,29 @@ const peak = computed(() => report.value?.time?.peak || { rooms: 0, at: null, me
 
 const approx = (dist) => (dist?.approximate ? "≈ " : "");
 const execution_seconds = computed(() => report.value?.time?.execution_seconds || 0);
-const issue_list = computed(() => report.value?.issues || []);
+const ISSUE_LEVELS = ["high", "normal", "info"];
+// Errored runs come merged by reason; several reasons side by side read as the same complaint repeated (#15252), so
+// they share one row with the reasons as its subtitle, and opening it lists each reason with its runs.
+const issue_list = computed(() => {
+  const issues = report.value?.issues || [];
+  const errored = issues.filter((item) => item.rule === "not_finished");
+  if (errored.length < 2) return issues;
+  const group = {
+    rule: "not_finished_group", params: {}, reasons: errored,
+    count: errored.reduce((sum, item) => sum + item.count, 0),
+    previous: errored.reduce((sum, item) => sum + (item.previous || 0), 0),
+    level: ISSUE_LEVELS.find((level) => errored.some((item) => item.level === level)) || "normal",
+  };
+  return [group, ...issues.filter((item) => item.rule !== "not_finished")];
+});
+/** The reasons under the merged errored-runs row, largest first: “reason count · reason count”. */
+const issue_reasons = (item) => item.reasons.map((reason) => t("{reason} {count}", { reason: issue_reason(reason.params), count: reason.count })).join(" · ");
 const visible_issues = computed(() => (issues_expanded.value ? issue_list.value : issue_list.value.slice(0, ISSUE_PREVIEW)));
+const stall_events = computed(() => {
+  const events = issue_list.value.find(item => item.rule === "stall")?.events || [];
+  return [...events.filter(event => !event.suspected), ...events.filter(event => event.suspected)];
+});
+const visible_stalls = computed(() => stalls_expanded.value ? stall_events.value : stall_events.value.slice(0, STALL_PREVIEW));
 
 watch(report, (data, before) => {
   if (!data) return;
@@ -285,11 +325,13 @@ function issue_title(item) {
   const count = item.count;
   switch (item.rule) {
     case "not_finished": return t("「{reason}」：{count} 次运行出错", { reason: issue_reason(item.params), count });
+    case "not_finished_group": return t("{count} 次运行出错", { count });
     case "interrupted": return t("你打断了 {who} {count} 次", { who, count });
     case "permission": return t("{who} 有 {count} 次运行被权限拦下", { who, count });
     case "late_recovery": return t("{who} 有 {count} 次先被判失败、后来又交回了回答", { who, count });
     case "unknown_model": return t("{software} 有 {count} 次运行没有记录模型", { software: who, count });
     case "scheduler": return t("「{room}」的智能调度收到 {count} 个差评", { room: item.params.title || item.params.room_id, count });
+    case "stall": return t("{count} 次停等", { count });
     default: return t("{rule}：{count} 次", { rule: item.rule, count });
   }
 }
@@ -314,8 +356,8 @@ function issue_meta(item) {
 }
 
 const ISSUE_ICONS = {
-  not_finished: "i-lucide-circle-x", interrupted: "i-lucide-hand", permission: "i-lucide-shield-alert",
-  late_recovery: "i-lucide-clock-alert", unknown_model: "i-lucide-circle-help", scheduler: "i-lucide-thumbs-down",
+  not_finished: "i-lucide-circle-x", not_finished_group: "i-lucide-circle-x", interrupted: "i-lucide-hand", permission: "i-lucide-shield-alert",
+  late_recovery: "i-lucide-clock-alert", unknown_model: "i-lucide-circle-help", scheduler: "i-lucide-thumbs-down", stall: "i-lucide-hourglass",
 };
 const issue_level = (item) => ({ high: "is-critical", normal: "is-normal", info: "is-info" })[item.level] || "is-normal";
 const toggle_issue = (key) => toggle_set(open_issues, key);
@@ -644,27 +686,40 @@ async function copy_share_card() {
             <div class="analytics-panel analytics-live-list">
               <button v-for="(item, index) in live.waiting" :key="`${item.kind}:${item.room_id}:${item.message_id}:${index}`" type="button" class="analytics-live-row" @click="open_run(item)">
                 <UIcon :name="WAITING_ICONS[item.kind] || 'i-lucide-circle-alert'" class="analytics-live-icon is-waiting" />
-                <span class="analytics-live-main"><strong>{{ waiting_title(item) }}</strong><span class="analytics-dim">{{ room_label(item.room_id) }}</span></span>
+                <span class="analytics-live-main"><strong>{{ waiting_title(item) }}<span v-if="item.count > 1" class="analytics-count">{{ item.count }}</span></strong><span class="analytics-dim">{{ room_label(item.room_id) }}</span></span>
                 <span class="analytics-dim analytics-live-side">{{ waited_text(item.since, live.at) }}</span>
               </button>
             </div>
           </section>
 
-          <section v-if="live_rooms.length" class="analytics-block">
+          <section v-if="live.running.length" class="analytics-block">
             <div class="analytics-block-head"><h2>{{ t("正在进行") }}<span class="analytics-count">{{ live.running.length }}</span></h2></div>
             <div class="analytics-panel analytics-live-list">
-              <template v-for="room in live_rooms" :key="room.room_id">
-                <button type="button" class="analytics-live-room" @click="open_room(room.room_id)">{{ room_label(room.room_id) }}</button>
-                <button v-for="run in room.runs" :key="run.execution_id" type="button" class="analytics-live-row" @click="open_run(run)">
-                  <UIcon :name="run.paused ? 'i-lucide-pause' : 'i-lucide-loader-circle'" class="analytics-live-icon" />
-                  <span class="analytics-live-main"><strong>{{ run.label }}</strong><span class="analytics-dim">{{ [run.model, run.effort].filter(Boolean).join(" · ") }}</span></span>
-                  <span class="analytics-dim analytics-live-side">{{ run.paused ? t("已暂停") : t("已运行 {duration}", { duration: format_duration(run.seconds) }) }}</span>
-                </button>
-              </template>
+              <button v-for="run in live.running" :key="run.execution_id" type="button" class="analytics-live-run" @click="open_run(run)">
+                <UIcon v-if="run.paused" name="i-lucide-pause" class="analytics-live-icon" /><span v-else class="analytics-live-dot" aria-hidden="true" />
+                <span class="analytics-live-who"><strong>{{ run.label }}</strong><span class="analytics-dim">{{ [run.model, run.effort].filter(Boolean).join(" · ") }}</span></span>
+                <span class="analytics-live-where"><strong>{{ live_where(run) }}</strong><span class="analytics-dim">{{ run.task }}</span></span>
+                <span class="analytics-dim analytics-live-side">{{ run.paused ? t("已暂停") : t("已运行 {duration}", { duration: format_duration(run.seconds) }) }}</span>
+              </button>
             </div>
           </section>
 
-          <p v-if="!live.running.length && !live.waiting.length" class="analytics-calm"><UIcon name="i-lucide-circle-check" />{{ t("现在很安静：没有在跑的专家，也没有等你处理的事。") }}</p>
+          <section v-if="live.hour.runs.length" class="analytics-block">
+            <div class="analytics-block-head"><h2>{{ t("最近 1 小时结束的运行") }}<span class="analytics-count">{{ live.hour.total }}</span></h2></div>
+            <div class="analytics-panel analytics-live-list">
+              <button v-for="run in live_recent" :key="run.execution_id" type="button" class="analytics-live-run" @click="open_run(run)">
+                <UIcon :name="LIVE_STATUS_ICONS[run.status] || 'i-lucide-circle'" class="analytics-live-icon" :class="{ 'is-error': run.error, 'is-done': run.status === 'completed' }" />
+                <span class="analytics-live-who"><strong>{{ run.label }}</strong><span class="analytics-dim">{{ [run.model, run.effort].filter(Boolean).join(" · ") }}</span></span>
+                <span class="analytics-live-where"><strong>{{ live_where(run) }}</strong><span class="analytics-dim">{{ run.task }}</span></span>
+                <span class="analytics-dim analytics-live-side">{{ t("{time} 结束 · 用时 {duration}", { time: live_clock(run.finished_at), duration: format_duration(run.seconds) }) }}</span>
+              </button>
+              <button v-if="live.hour.runs.length > LIVE_RECENT_PREVIEW" type="button" class="analytics-more" @click="live_recent_expanded = !live_recent_expanded">
+                {{ live_recent_expanded ? t("收起") : t("显示全部 {count} 次", { count: live.hour.runs.length }) }}
+              </button>
+            </div>
+          </section>
+
+          <p v-if="!live.running.length && !live.waiting.length && !live.hour.runs.length" class="analytics-calm"><UIcon name="i-lucide-circle-check" />{{ t("现在很安静：没有在跑的专家，也没有等你处理的事。") }}</p>
           <footer class="analytics-foot"><span>{{ t("每 10 秒自动刷新 · 更新于 {time}", { time: live_updated }) }}</span></footer>
         </template>
       </template>
@@ -733,13 +788,67 @@ async function copy_share_card() {
                 <UIcon :name="ISSUE_ICONS[item.rule] || 'i-lucide-circle-alert'" class="analytics-issue-icon" />
                 <span class="analytics-issue-main">
                   <strong>{{ issue_title(item) }}</strong>
+                  <small v-if="item.reasons">{{ issue_reasons(item) }}</small>
+                  <small v-if="item.rule === 'stall' && item.suspected_count">{{ t("另有 {count} 段疑似", { count: item.suspected_count }) }}</small>
                 </span>
-                <span v-if="comparable && item.previous && item.count !== item.previous" class="analytics-issue-trend" :class="item.count > item.previous ? 'is-more' : 'is-less'">
+                <span v-if="item.rule !== 'stall' && comparable && item.previous && item.count !== item.previous" class="analytics-issue-trend" :class="item.count > item.previous ? 'is-more' : 'is-less'">
                   <UIcon :name="item.count > item.previous ? 'i-lucide-arrow-up-right' : 'i-lucide-arrow-down-right'" />{{ Math.abs(item.count - item.previous) }}
                 </span>
                 <UIcon :name="open_issues.has(issue_key(item)) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" class="analytics-issue-chevron" />
               </button>
-              <div v-if="open_issues.has(issue_key(item))" class="analytics-issue-body">
+              <div v-if="open_issues.has(issue_key(item)) && item.reasons" class="analytics-issue-body">
+                <section v-for="reason in item.reasons" :key="issue_key(reason)" class="analytics-issue-reason">
+                  <h3>{{ issue_title(reason) }}</h3>
+                  <p v-if="issue_meta(reason)" class="analytics-issue-meta">{{ issue_meta(reason) }}</p>
+                  <ul v-if="reason.runs?.length" class="analytics-runs">
+                    <li v-for="run in reason.runs.slice(0, REASON_RUNS)" :key="run.execution_id">
+                      <button type="button" class="analytics-run" :title="t('打开房间')" @click="open_run(run)">
+                        <span class="analytics-run-time">{{ format_timestamp(run.created_at, report.range?.tz) }}</span>
+                        <span class="analytics-run-room">{{ run.title || run.room_id }}</span>
+                        <span class="analytics-run-member">{{ run.label || run.member }}</span>
+                        <span class="analytics-run-status" :class="`is-${run.status}`">{{ RUN_STATUS[run.status] || run.status }}</span>
+                        <span class="analytics-run-result">{{ run.failure_class ? failure_class_label(run.failure_class) : (run.result.startsWith('message:') ? '' : run.result) }}</span>
+                        <UIcon name="i-lucide-arrow-up-right" class="analytics-run-jump" />
+                      </button>
+                    </li>
+                  </ul>
+                  <p v-if="reason.runs?.length && Math.min(reason.runs.length, REASON_RUNS) < reason.count" class="analytics-dim analytics-small">{{ t("只列出最近 {shown} 次，共 {count} 次", { shown: Math.min(reason.runs.length, REASON_RUNS), count: reason.count }) }}</p>
+                </section>
+              </div>
+              <div v-else-if="item.rule === 'stall' && open_issues.has(issue_key(item))" class="analytics-issue-body">
+                <details v-for="event in visible_stalls" :key="`${event.room_id}:${event.message_id}`" class="analytics-stall-event">
+                  <summary>
+                    <strong>{{ event.title || room_label(event.room_id) }}</strong>
+                    <span>{{ event.end ? t("停了 {duration}", { duration: format_duration(event.seconds) }) : t("已等 {duration}", { duration: format_duration(event.seconds) }) }}</span>
+                    <span v-if="event.suspected">{{ t("疑似停等") }}</span>
+                    <span v-else-if="event.end">{{ event.end_reason === "user" ? t("你回复了") : t("已结束") }}</span>
+                    <span v-if="!event.suspected && (!event.end || event.seconds >= STALL_NOTICE_SECONDS)">{{ event.notified ? t("已发送提醒") : t("未查到提醒记录") }}</span>
+                  </summary>
+                  <p class="analytics-issue-meta">
+                    {{ format_timestamp(event.start, report.range?.tz) }}<template v-if="event.end"> — {{ format_timestamp(event.end, report.range?.tz) }}</template>
+                  </p>
+                  <p>
+                    <span>{{ t("停前消息") }} </span>
+                    <button type="button" class="analytics-scope-toggle" :title="t('打开房间')" @click="open_run(event)">
+                      {{ event.excerpt || t("打开房间") }} <UIcon name="i-lucide-arrow-up-right" class="analytics-run-jump" />
+                    </button>
+                  </p>
+                  <p v-if="event.reply_message_id">
+                    <span>{{ t("你的回复") }} </span>
+                    <button type="button" class="analytics-scope-toggle" @click="open_run({ room_id: event.room_id, message_id: event.reply_message_id })">
+                      {{ event.reply || t("查看回复") }} <UIcon name="i-lucide-arrow-up-right" class="analytics-run-jump" />
+                    </button>
+                  </p>
+                </details>
+                <button v-if="stall_events.length > STALL_PREVIEW" type="button" class="analytics-more" :aria-expanded="stalls_expanded" @click="stalls_expanded = !stalls_expanded">
+                  {{ stalls_expanded ? t("收起") : t("其余 {count} 条", { count: stall_events.length - STALL_PREVIEW }) }}
+                  <UIcon :name="stalls_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
+                </button>
+                <p v-if="stalls_expanded && stall_events.length < item.count + (item.suspected_count || 0)" class="analytics-dim analytics-small">
+                  {{ t("列出 {shown} 段，共 {count} 段", { shown: stall_events.length, count: item.count + (item.suspected_count || 0) }) }}
+                </p>
+              </div>
+              <div v-else-if="open_issues.has(issue_key(item))" class="analytics-issue-body">
                 <p v-if="issue_meta(item)" class="analytics-issue-meta">{{ issue_meta(item) }}</p>
                 <ul v-if="item.runs?.length" class="analytics-runs">
                   <li v-for="run in item.runs" :key="run.execution_id">
@@ -757,11 +866,13 @@ async function copy_share_card() {
                 <p v-if="item.rule === 'scheduler'" class="analytics-small"><button type="button" class="analytics-scope-toggle" @click="open_room(item.params.room_id)">{{ t("打开房间") }}</button></p>
               </div>
             </li>
+            <li v-if="issue_list.length > ISSUE_PREVIEW">
+              <button type="button" class="analytics-more" @click="issues_expanded = !issues_expanded">
+                {{ issues_expanded ? t("收起") : t("其余 {count} 条", { count: issue_list.length - ISSUE_PREVIEW }) }}
+                <UIcon :name="issues_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
+              </button>
+            </li>
           </ul>
-          <button v-if="issue_list.length > ISSUE_PREVIEW" type="button" class="analytics-more analytics-more-plain" @click="issues_expanded = !issues_expanded">
-            {{ issues_expanded ? t("收起") : t("其余 {count} 条", { count: issue_list.length - ISSUE_PREVIEW }) }}
-            <UIcon :name="issues_expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
-          </button>
         </section>
 
         <div class="analytics-details-head" :style="block_style(2)">{{ t("明细") }}</div>
@@ -984,6 +1095,12 @@ async function copy_share_card() {
           <p v-else class="analytics-calm analytics-calm-plain"><UIcon name="i-lucide-network" />{{ t("这段时间没有按工作流进行的运行。") }}</p>
         </details>
 
+        <!-- MOSS's own room is left out of the figures above; its routing has a section of its own (#15623). -->
+        <details class="analytics-detail" :style="block_style(7)">
+          <summary><h2><UIcon name="i-lucide-chevron-right" class="analytics-detail-chevron" />{{ t("MOSS") }}</h2><span class="analytics-dim">{{ t("分出去的工作") }}</span></summary>
+          <MossAnalytics :preset="preset" :tz="tz" />
+        </details>
+
         <details class="analytics-detail" :style="block_style(7)">
           <summary>
             <h2><UIcon name="i-lucide-chevron-right" class="analytics-detail-chevron" />{{ t("哪里卡住了") }}</h2>
@@ -1145,6 +1262,11 @@ async function copy_share_card() {
 .is-info .analytics-issue-icon { color: var(--ui-text-dimmed); }
 .analytics-issue-main { flex: 1; min-width: 0; }
 .analytics-issue-main strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: var(--ui-text-highlighted); }
+.analytics-issue-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ui-text-muted); }
+.analytics-issue-reason { display: grid; gap: 6px; }
+/* Under a reason heading every run shares that reason: its result column would only repeat it. */
+.analytics-issue-reason .analytics-run-result { display: none; }
+.analytics-issue-reason h3 { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--ui-text-toned); }
 .analytics-issue-trend { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
 .analytics-issue-trend :deep([class*="icon"]) { width: 12px; height: 12px; }
 .analytics-issue-trend.is-more { color: var(--viz-down); }
@@ -1152,6 +1274,12 @@ async function copy_share_card() {
 .analytics-issue-chevron { width: 14px; height: 14px; flex-shrink: 0; color: var(--ui-text-dimmed); }
 .analytics-issue-body { display: grid; gap: 8px; padding: 0 14px 12px 39px; }
 .analytics-issue-meta { margin: 0; font-size: 12px; line-height: 1.55; color: var(--ui-text-muted); font-variant-numeric: tabular-nums; }
+.analytics-stall-event { padding: 8px 10px; border: 1px solid var(--ui-border-muted); border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.analytics-stall-event summary { cursor: pointer; color: var(--ui-text-muted); }
+.analytics-stall-event summary > * { margin-inline-end: 8px; }
+.analytics-stall-event summary strong { color: var(--ui-text-highlighted); }
+.analytics-stall-event p { margin: 6px 0 0; }
+.analytics-stall-event button { max-width: 100%; text-align: start; }
 .analytics-reasons { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 12px; }
 .analytics-reason { display: inline-flex; align-items: baseline; min-width: 0; gap: 6px; max-width: 100%; padding: 2px 9px; border-radius: 6px; background: color-mix(in srgb, var(--ui-text) 6%, transparent); color: var(--ui-text-toned); }
 .analytics-reason span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1171,7 +1299,7 @@ async function copy_share_card() {
 .analytics-more-plain { border-top: 0; justify-content: flex-start; padding: 8px 2px 0; width: auto; }
 
 /* Details: everything else, folded under a title phrased as the owner's question. */
-.analytics-details-head { margin-top: 8px; font-size: 12px; font-weight: 600; letter-spacing: .04em; color: var(--ui-text-dimmed); }
+.analytics-details-head { margin-top: -6px; font-size: 12px; font-weight: 600; letter-spacing: .04em; color: var(--ui-text-dimmed); }
 .analytics-detail { border-top: 1px solid var(--ui-border-muted); }
 .analytics-detail summary { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 14px; padding: 14px 2px; cursor: pointer; list-style: none; }
 .analytics-detail summary::-webkit-details-marker { display: none; }
@@ -1202,8 +1330,17 @@ async function copy_share_card() {
 .analytics-dispatch-examples .analytics-chip { border: 0; cursor: pointer; }
 .analytics-dispatch-examples .analytics-chip:hover { color: var(--ui-text-highlighted); }
 .analytics-live-list { display: grid; padding: 4px 0; }
-.analytics-live-room { padding: 10px 18px 4px; border: 0; background: none; text-align: left; font-size: 12px; font-weight: 600; color: var(--ui-text-muted); cursor: pointer; }
-.analytics-live-room:hover { color: var(--ui-text-highlighted); }
+.analytics-live-run { display: grid; grid-template-columns: 18px 190px minmax(0, 1fr) 200px; align-items: center; gap: 12px; padding: 7px 18px; border: 0; background: none; text-align: left; cursor: pointer; }
+.analytics-live-run:hover { background: color-mix(in srgb, var(--ui-text) 4%, transparent); }
+.analytics-live-who, .analytics-live-where { display: grid; gap: 1px; min-width: 0; }
+.analytics-live-who strong, .analytics-live-where strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.analytics-live-where strong { font-weight: 500; }
+.analytics-live-who span, .analytics-live-where span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.analytics-live-dot { justify-self: center; width: 8px; height: 8px; border-radius: 50%; background: var(--ui-success); animation: analytics-breathe 1.6s ease-in-out infinite; }
+.analytics-live-icon.is-error { color: var(--ui-error); }
+.analytics-live-icon.is-done { color: var(--ui-success); }
+@keyframes analytics-breathe { 50% { opacity: 0.35; transform: scale(0.8); } }
+@media (prefers-reduced-motion: reduce) { .analytics-live-dot { animation: none; } }
 .analytics-live-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 18px; border: 0; background: none; text-align: left; cursor: pointer; }
 .analytics-live-row:hover { background: color-mix(in srgb, var(--ui-text) 4%, transparent); }
 .analytics-live-icon { width: 16px; height: 16px; color: var(--ui-text-muted); }
@@ -1211,7 +1348,7 @@ async function copy_share_card() {
 .analytics-live-main { display: grid; gap: 1px; min-width: 0; }
 .analytics-live-main strong { font-size: 13px; font-weight: 600; }
 .analytics-live-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.analytics-live-side { font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.analytics-live-side { font-size: 12px; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
 .analytics-figure.is-alert .analytics-figure-value { color: var(--ui-warning); }
 .analytics-sort { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: none; color: inherit; font: inherit; }
 .analytics-sort:hover, .analytics-sort[aria-pressed="true"] { color: var(--ui-text-highlighted); }
@@ -1364,6 +1501,9 @@ async function copy_share_card() {
   .analytics-table.is-workflow :is(th, td):is(:nth-child(3), :nth-child(5), :nth-child(6)) { display: none; }
   .analytics-table.is-workflow td:last-child { white-space: normal; }
   .analytics-table.is-dispatch :is(th, td):nth-child(4) { display: none; }
+  .analytics-live-run { grid-template-columns: 16px minmax(0, 1fr) auto; gap: 4px 10px; padding: 8px 14px; }
+  .analytics-live-run .analytics-live-where { grid-column: 2 / 4; grid-row: 2; }
+  .analytics-live-row { padding: 8px 14px; }
   .analytics-table.is-dispatch td:first-child:not([colspan]) { min-width: 96px; }
   .analytics-table.is-dispatch td.num { white-space: normal; }
   .analytics-mix { padding: 12px 14px 14px; }

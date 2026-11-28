@@ -8,7 +8,7 @@ The npm installation gives you a local site. It does not include a public online
 
 The online site does not store rooms or messages and has no account passwords. It stores the computers you link and their signed device lists. Room data stays on your computer.
 
-For help deploying or updating your own site, select “Ask the platform steward to deploy” in the device pairing area of Settings. The steward verifies the resources and asks before each Cloudflare write. The deployment conversation stays on your computer. If you switch AI apps, open or delete the archived [steward conversation](steward.md) under “Past conversations” in “Settings → Platform steward.” Managing that conversation does not change Cloudflare resources.
+For help deploying or updating your own site, select “Ask the platform steward to deploy” in the device pairing area of Settings. The steward verifies the resources and asks before each Cloudflare write. The deployment conversation stays on your computer. If you switch AI apps, use “Past conversations” under “Steward configuration” on the [Platform steward page](steward.md).
 
 If you installed with npm install --global ai_co_discuss, you need the source repository to deploy your own site. Clone it with `git clone https://github.com/huyan1458/ai_co_discuss.git`, or download and extract the source ZIP. The npm package does not include the full Cloudflare build source or deployment templates. Then follow the [deployment guide](../deployment.md#cloudflare-pages--d1) to create resources, initialize the database, and deploy.
 
@@ -80,6 +80,8 @@ Your phone and computer meet at a relay on Cloudflare. Choose where it lives in 
 After a change, the computer and paired devices reconnect by themselves; switch when no operation is in progress. Direct connections to Cloudflare from mainland China can lose packets and slow down at evening peak hours; a proxy on the phone is usually much faster. If the computer goes online through a proxy app such as Clash, you can route the online site address through a chosen node, then use Reconnect now in the panel or `codiscuss admin site reconnect`.
 
 ## Things to keep in mind
+
+When the network is unstable, run `codiscuss admin site network --since 24h --by 10m` on the computer to see failures, disconnects and latency by segment. Use ISO timestamps with offsets for `--since` and `--until` to compare two evenings.
 
 Phones support portrait layout only. Tablets support both portrait and landscape.
 

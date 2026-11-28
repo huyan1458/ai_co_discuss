@@ -22,6 +22,7 @@ import { ensure_pi } from '../pi_runtime.mjs';
 import { execution_marker, log_entries, newest_record, not_sent } from './common.mjs';
 import { DEFAULT_API_MAX_REQUESTS, takes_images } from './profiles.mjs';
 import { room_image } from '../image_service.mjs';
+import { t } from '../i18n.mjs';
 import { site_fetch as entry_fetch } from '../entry_client.mjs';
 
 // API participants follow the same skills that local software loads, read fresh for every execution.
@@ -308,6 +309,7 @@ async function read_attachment(context, args) {
   const meta = await room_request(context, `/attachments/${args.id}`);
   const view = { id: meta.id, file_name: meta.file_name, size: meta.size, content_type: meta.content_type, message_id: meta.message_id, sha256: meta.sha256 };
   if (meta.message_id) await room_request(context, execution_read_path(context, `/messages/${meta.message_id}`));
+  if (meta.storage === 'object') return { ...view, readable: false, reason: t('存于云空间，本成员读不到，请交给本机软件成员') };
   const type = String(meta.content_type || '');
   const text_like = type === 'application/octet-stream' || type === 'image/svg+xml' || type.startsWith('text/');
   // A model that takes images sees one read on demand through the same image input as the woken messages' (#3165).

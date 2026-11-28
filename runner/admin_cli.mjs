@@ -55,6 +55,7 @@ export const HELP = t(`用法：codiscuss admin <命令> [参数]（与管理面
   site disconnect                          解绑自建中转，已配对的设备不能再连到这台电脑
   site origins [list|add <url> [--subdomains]|remove <url>] 管理其他访问地址；仅撤销失去覆盖的设备
   site region [地区]                       查看或设置中转地区（auto、apac、apac-ne、apac-se、wnam、enam、weur、eeur、oc、sam、afr、me）
+  site network [--since TIME] [--until TIME] [--by 10m|1h]  网络异常与分段耗时报告
   site reconnect                           立即重连已绑定的自建中转
 
 登录入口与访问方式（需打开托管管理）
@@ -93,9 +94,11 @@ API 密钥、技能、工作流、系统提示词（目标同上）
 结果以 JSON 输出。--data 指定管理员服务目录（默认 ~/.codiscuss）。
 `) + t('  room-links A    查看父子房间') + '\n' + t('  storage [clean | repair [logs --confirm]]  查看用量、安全清理或深度修理日志') + '\n'
   + t('  storage attachment-limit [MiB]  查看或调整单个附件上限') + '\n'
-  + t('  storage analyze  让平台主理人盘点共议占用') + '\n'
-  + t('  storage object [--account NAME] [[--url URL --key-file FILE|-] [--retention-days N] [--quota-mib N] [--threshold-mib N] | --test | --clear]  管理云空间') + '\n'
-  + t('  storage object [list | delete ID] [--account NAME]  查看云空间文件或删除指定原件') + '\n'
+  + t('  storage analyze  让 MOSS 盘点共议占用') + '\n'
+  + t('  storage object [--account NAME] [[--url URL --key-file FILE|- | --use-admin] [--retention-days N] [--quota-mib N] [--threshold-mib N] | --test | --clear]  管理云空间') + '\n'
+  + t('  storage object [list | link ID | delete ID [--purge]] [--account NAME]  查看、下载或删除云空间文件') + '\n'
+  + t('  storage object [trash | restore ID [--folder]] [--account NAME]  列出回收站或还原，删除默认进回收站') + '\n'
+  + t('  storage object [share ID [--days N] | shares ID | revoke-share ID SHARE_ID] [--account NAME]  管理云空间分享链接') + '\n'
   + t('    保留天数 0–30（默认 0，不自动删除），空间上限默认 10240 MiB，走云空间门槛默认 20 MiB 且不超过附件上限') + '\n'
   + t('  storage attachments [ROOM [clear ID... --confirm]]  按房间查看附件占用、列出某房间附件或清理所选附件原件') + '\n'
   + t('  account add <名> --project-data-root <目录>   将新账号的项目、工作区和成员草稿放在指定目录') + '\n'
@@ -120,7 +123,11 @@ export async function panel_client(data) {
       headers: { cookie, origin, 'x-codiscuss-panel': '1', 'content-type': 'application/json' } });
     const response = await fetch(`${origin}/api/${path}`, init);
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error((result.error_text ? t(result.error_text.template, result.error_text.params) : result.error) || t('管理面板返回 {value1}', { value1: response.status }));
+    if (!response.ok) {
+      const message = (result.error_text ? t(result.error_text.template, result.error_text.params) : result.error)
+        || t('管理面板返回 {value1}', { value1: response.status });
+      throw Object.assign(new Error(message), typeof result.code === 'string' ? { code: result.code } : {});
+    }
     return result;
   };
 }
@@ -414,6 +421,18 @@ async function with_elevation(call, data) {
   return (path, body) => (body !== undefined && ELEVATED_PATHS.test(path) ? api('POST', `/api/${path}`, body) : call(path, body));
 }
 
+/** Format UTC buckets with segment percentiles in milliseconds, followed by timestamped evidence. */
+function format_network_report({ periods, events }) {
+  const lines = [t('UTC 时段 | 站点 | 请求 | 失败 | 断线 | 手机/网站/中转链路 p50,p90 毫秒 | 最高 p90')];
+  for (const row of periods) {
+    const timings = Object.values(row.segments).map(v => v.n ? `${v.p50},${v.p90}` : '—');
+    lines.push([row.at, row.site, row.requests, row.failures, row.disconnects, ...timings, row.worst_p90 || '—'].join(' | '));
+  }
+  if (!periods.length) lines.push(t('所选时段没有已写入的五分钟摘要'));
+  for (const { at, site, event, ...details } of events) lines.push(`${at} ${site} ${event} ${JSON.stringify(details)}`);
+  return lines.join('\n') + '\n';
+}
+
 function cloud_settings_flags(values) {
   const fields = [['retention-days', 'retention_days', checked_retention], ['quota-mib', 'quota_mib', checked_quota],
     ['threshold-mib', 'object_threshold_mib', checked_threshold]];
@@ -423,39 +442,71 @@ function cloud_settings_flags(values) {
 
 /** Run the object storage command through the same authenticated routes as the panel. */
 async function object_storage_command(call, values, action) {
-  const { url, 'key-file': key_file, test, clear, account } = values;
+  const { url, 'key-file': key_file, 'use-admin': use_admin, test, clear, account } = values;
   const target = account && !is_owner(account) ? `accounts/${encodeURIComponent(account)}` : 'owner';
   const path = is_owner(target) ? 'storage/object' : `${target}/object-storage`;
   const settings = cloud_settings_flags(values), has_settings = Object.keys(settings).length > 0;
-  const setting = Boolean(url || key_file) || has_settings;
+  if (use_admin && (is_owner(target) || url || key_file))
+    throw new Error(t('--use-admin 须指定托管账号，不能与 --url 或 --key-file 合用'));
+  const setting = Boolean(url || key_file || use_admin) || has_settings;
+  if (values.days !== undefined && action[0] !== 'share') throw new Error(HELP);
   if (action.length) {
-    if (!setting && !test && !clear && action.join(' ') === 'list') return call(`${path}/files`);
-    if (!setting && !test && !clear && action.length === 2 && action[0] === 'delete' && /^[a-f0-9]{32}$/.test(action[1]))
-      return call(`${path}/files/delete`, { id: action[1] });
-    throw new Error(HELP);
+    if (setting || test || clear) throw new Error(HELP);
+    return cloud_file_command(call, `${path}/files`, action, values);
   }
   if (Number(setting) + Number(Boolean(test)) + Number(Boolean(clear)) > 1 || Boolean(url) !== Boolean(key_file))
     throw new Error(t('绑定云空间密钥须同时提供 --url 和 --key-file，设置参数不能与 --test 或 --clear 合用'));
   if (test || clear) return call(`${path}/${test ? 'test' : 'clear'}`, {});
+  if (use_admin) return call(path, { ...settings, mode: 'admin' });
   if (!url) return call(path, has_settings ? settings : undefined);
   const api_key = readFileSync(key_file === '-' ? 0 : key_file, 'utf8').trim();
   const { api_key_ref } = await call(`${target}/keys`, { base_url: url, api_key });
   return call(path, { ...settings, base_url: url, api_key_ref });
 }
 
+function cloud_file_command(call, path, action, { days, purge, folder }) {
+  const [command, id] = action;
+  if (['share', 'shares', 'revoke-share'].includes(command)) return cloud_share_command(call, path, action, days);
+  if (action.length === 1 && command === 'list') return call(path);
+  if (action.length === 1 && command === 'trash') return call(`${path}/trash`);
+  if (action.length !== 2 || !/^[a-f0-9]{32}$/.test(id)) throw new Error(HELP);
+  if (command === 'link') return call(`${path}/link`, { id });
+  if (command === 'delete') return call(`${path}/delete`, { id, ...(purge ? { permanent: true } : {}) });
+  if (command === 'restore') return call(`${path}/restore`, { id, ...(folder ? { folder: true } : {}) });
+  throw new Error(HELP);
+}
+
+function cloud_share_command(call, path, action, days) {
+  const [command, file_id, share_id] = action, id = /^[a-f0-9]{32}$/;
+  if (!id.test(file_id) || action.length > 3) throw new Error(HELP);
+  const route = `${path}/${file_id}/shares`;
+  if (command === 'shares' && action.length === 2) return call(route);
+  if (command === 'revoke-share' && action.length === 3 && id.test(share_id)) return call(`${route}/${share_id}/revoke`, {});
+  if (command === 'share' && action.length === 2) {
+    if (days !== undefined && (!/^\d+$/.test(days) || Number(days) < 1 || Number(days) > 30))
+      throw new Error(t('分享有效期须为 1 到 30 天'));
+    return call(route, days === undefined ? {} : { days: Number(days) });
+  }
+  throw new Error(HELP);
+}
+
 /** Run one `codiscuss admin` command and print its result as JSON. */
 export async function admin_cli(args, { client = panel_client, print = text => process.stdout.write(text) } = {}) {
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: {
     subdomains: { type: 'boolean' }, data: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'no-isolate': { type: 'boolean' }, 'no-start': { type: 'boolean' },
+    since: { type: 'string' }, until: { type: 'string' }, by: { type: 'string' },
     'project-data-root': { type: 'string' },
     confirm: { type: 'boolean' },
-    url: { type: 'string' }, 'key-file': { type: 'string' }, 'retention-days': { type: 'string' }, test: { type: 'boolean' }, clear: { type: 'boolean' }, account: { type: 'string' },
+    url: { type: 'string' }, 'key-file': { type: 'string' }, 'use-admin': { type: 'boolean' }, 'retention-days': { type: 'string' }, test: { type: 'boolean' }, clear: { type: 'boolean' }, account: { type: 'string' },
     'quota-mib': { type: 'string' }, 'threshold-mib': { type: 'string' },
+    days: { type: 'string' }, purge: { type: 'boolean' }, folder: { type: 'boolean' },
     set: { type: 'string', multiple: true }, 'base-url': { type: 'string' }, key: { type: 'string' }, file: { type: 'string' }, group: { type: 'string' },
     full: { type: 'boolean' }, config: { type: 'string' }, site: { type: 'string' },
   } });
   const [command, ...rest] = positionals;
   if (!command || values.help || command === 'help') return print(HELP);
+  const cloud_action = command === 'storage' && rest[0] === 'object' ? rest[1] : null;
+  if (values.purge && cloud_action !== 'delete' || values.folder && cloud_action !== 'restore') throw new Error(HELP);
   const data = data_home(values.data);
   // These work without the panel; update starts it first when it is not running.
   const lifecycle = {
@@ -474,6 +525,12 @@ export async function admin_cli(args, { client = panel_client, print = text => p
     if (rest.length !== 1 || rest.some(id => !/^[a-zA-Z0-9_-]{1,64}$/.test(id))) throw new Error(HELP);
     const result = await call(`room-links/${command}`, { room: rest[0] });
     print(`${JSON.stringify(result, null, 2)}\n`);
+    return result;
+  }
+  if (command === 'site' && rest.join(' ') === 'network') {
+    const { since, until, by } = values;
+    const result = await call('site/network', { since, until, by });
+    print(format_network_report(result));
     return result;
   }
   const commands = {

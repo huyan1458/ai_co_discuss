@@ -2,6 +2,17 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.44 (2026-11-27 21:46)
+
+- New: "Cloud space": a drive for each account where you can create folders, upload, preview and download several files at once; deleted items go to the "Recycle bin" and can be restored within 30 days.
+- New: Share a cloud space file with a link valid for 1–30 days, optionally with "Require an access code".
+- New: Large files use the cloud space: attachments up to 2 GiB, big project files can be downloaded away from the computer, files can be "Save to cloud space" and cloud files "Bring into project".
+- New: Uploads, download preparation and other file jobs show their progress under "Transfers", where you can cancel or retry them.
+- New: When a member stops to wait for your reply, its room is marked "Waiting for you" in the sidebar, and a long wait sends a reminder through your notification channel.
+- Changed: "Platform steward" is renamed "MOSS", moves to the top of the sidebar and can answer how-to questions and tell you which rooms need you.
+- Changed: Members' context usage and account quota now sit together under "Members and settings", with a clear warning above 80%.
+- Changed: When the computer goes offline the page warns once and tells you when it reconnects; unsent messages for the same room share one reminder.
+
 ## 0.5.43 (2026-11-27 08:14)
 
 - New: "Platform steward": a dedicated chat where a local AI handles platform chores such as installing local voice, setting up notifications, making share cards and analyzing dispatch.

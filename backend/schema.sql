@@ -84,6 +84,40 @@ CREATE TABLE IF NOT EXISTS attachments (
     storage TEXT, object_name TEXT, stored_at TEXT,
     UNIQUE(room_id, submission_id)
 );
+CREATE TABLE IF NOT EXISTS cloud_folders (
+    id TEXT PRIMARY KEY,
+    parent_id TEXT REFERENCES cloud_folders(id) ON DELETE SET NULL,
+    name TEXT NOT NULL, created_at TEXT NOT NULL,
+    trashed_at TEXT, trash_root TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cloud_folders_live_name
+    ON cloud_folders(COALESCE(parent_id,''), name) WHERE trashed_at IS NULL;
+CREATE INDEX IF NOT EXISTS cloud_folders_parent ON cloud_folders(parent_id);
+CREATE INDEX IF NOT EXISTS cloud_folders_trash_root ON cloud_folders(trash_root);
+-- Independent copies survive removal of their source room; the account can still list, download or delete them.
+CREATE TABLE IF NOT EXISTS cloud_files (
+    id TEXT PRIMARY KEY,
+    room_id TEXT REFERENCES rooms(id) ON DELETE SET NULL,
+    source_kind TEXT NOT NULL CHECK(source_kind IN ('attachment','project_file','project_folder','upload')),
+    source_ref TEXT NOT NULL,
+    file_name TEXT NOT NULL, content_type TEXT NOT NULL,
+    size INTEGER NOT NULL, object_name TEXT NOT NULL,
+    submission_id TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL,
+    stored_at TEXT, cleared_at TEXT,
+    purpose TEXT NOT NULL DEFAULT 'keep', expires_at TEXT, source_version TEXT,
+    folder_id TEXT REFERENCES cloud_folders(id) ON DELETE SET NULL,
+    trashed_at TEXT, trash_root TEXT, thumbnail_type TEXT,
+    purge_started INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(room_id, submission_id)
+);
+CREATE INDEX IF NOT EXISTS cloud_files_folder ON cloud_files(folder_id);
+CREATE INDEX IF NOT EXISTS cloud_files_trash_root ON cloud_files(trash_root);
+CREATE UNIQUE INDEX IF NOT EXISTS cloud_drive_submissions ON cloud_files(submission_id)
+    WHERE room_id IS NULL AND source_kind='upload';
+CREATE INDEX IF NOT EXISTS cloud_transfers_due ON cloud_files(expires_at)
+    WHERE purpose != 'keep' AND cleared_at IS NULL;
+CREATE INDEX IF NOT EXISTS cloud_files_pending ON cloud_files(created_at)
+    WHERE stored_at IS NULL AND cleared_at IS NULL;
 CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id, position);
 -- Applied to existing databases too by init_database, which reruns this schema at startup.
 CREATE INDEX IF NOT EXISTS attachments_room_message ON attachments(room_id, message_id);
@@ -137,6 +171,34 @@ CREATE TABLE IF NOT EXISTS room_relay_sends (
     state TEXT NOT NULL DEFAULT 'delivered' CHECK(state IN ('queued','delivered','replied')),
     host TEXT NOT NULL,
     member TEXT NOT NULL DEFAULT ''
+);
+-- One tracked delegation per original MOSS send card. Child IDs stay useful as history even after deletion.
+CREATE TABLE IF NOT EXISTS moss_delegations (
+    message_id INTEGER PRIMARY KEY REFERENCES room_relay_sends(message_id) ON DELETE CASCADE,
+    state TEXT NOT NULL DEFAULT '' CHECK(state IN ('','waiting','waiting_user','completed','failed','cancelled','unreported')),
+    summary TEXT NOT NULL DEFAULT '',
+    result_message_id INTEGER,
+    reminder_message_id INTEGER,
+    review_message_id INTEGER,
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS moss_delegation_destination ON room_relay_sends(target_room_id,room_id);
+-- Each rework is still its own dispatch and review. The first card follows the latest attempt.
+CREATE TABLE IF NOT EXISTS moss_reworks (
+    message_id INTEGER PRIMARY KEY REFERENCES room_relay_sends(message_id) ON DELETE CASCADE,
+    root_message_id INTEGER NOT NULL REFERENCES room_relay_sends(message_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS moss_rework_root ON moss_reworks(root_message_id,message_id);
+-- A question sent back to MOSS belongs to a specific child delegation, even while queued.
+CREATE TABLE IF NOT EXISTS moss_decision_links (
+    parent_room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    submission_id TEXT NOT NULL,
+    delegation_id INTEGER NOT NULL REFERENCES room_relay_sends(message_id) ON DELETE CASCADE,
+    PRIMARY KEY(parent_room_id,submission_id)
+);
+CREATE INDEX IF NOT EXISTS moss_decision_delegation ON moss_decision_links(delegation_id);
+CREATE TABLE IF NOT EXISTS moss_task_rooms (
+    room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE
 );
 -- An owner-credential message the host of another room sent here through `host-control room-post`: where it came from.
 -- Only a label; the write itself is the owner's, so it routes and wakes like the owner's own message.
@@ -1352,6 +1414,12 @@ CREATE TRIGGER IF NOT EXISTS revision_relay_send_update AFTER UPDATE ON room_rel
 BEGIN
     UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=NEW.room_id;
 END;
+CREATE TRIGGER IF NOT EXISTS revision_moss_report_update AFTER UPDATE OF state,summary,result_message_id ON moss_delegations
+WHEN OLD.state IS NOT NEW.state OR OLD.summary IS NOT NEW.summary OR OLD.result_message_id IS NOT NEW.result_message_id
+BEGIN
+    UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions)
+        WHERE room_id=(SELECT room_id FROM room_relay_sends WHERE message_id=NEW.message_id);
+END;
 DROP TRIGGER IF EXISTS revision_message_withdrawal;
 CREATE TRIGGER revision_message_withdrawal AFTER INSERT ON message_withdrawals
 BEGIN
@@ -1798,6 +1866,44 @@ CREATE TABLE IF NOT EXISTS room_events (
     kind TEXT NOT NULL,
     data TEXT NOT NULL DEFAULT '{}'
 );
+CREATE TABLE IF NOT EXISTS room_waits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+    member_id INTEGER NOT NULL REFERENCES room_members(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    ended_at INTEGER NOT NULL DEFAULT 0,
+    end_message_id INTEGER NOT NULL DEFAULT 0,
+    end_reason TEXT NOT NULL DEFAULT '' CHECK(end_reason IN ('','user','superseded','withdrawn','member_removed'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS room_waits_open_member ON room_waits(member_id) WHERE ended_at=0;
+CREATE INDEX IF NOT EXISTS room_waits_open ON room_waits(room_id, created_at) WHERE ended_at=0;
+CREATE TRIGGER IF NOT EXISTS room_wait_opened AFTER INSERT ON room_waits BEGIN
+    INSERT INTO room_events(room_id,at,kind,data)
+    VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'wait.opened',
+        json_object('wait_id',NEW.id,'message_id',NEW.message_id,'member_id',NEW.member_id,'created_at',NEW.created_at));
+END;
+DROP TRIGGER IF EXISTS room_wait_closed;
+CREATE TRIGGER room_wait_closed AFTER UPDATE OF ended_at ON room_waits
+WHEN OLD.ended_at=0 AND NEW.ended_at>0 BEGIN
+    INSERT INTO room_events(room_id,at,kind,data)
+    VALUES (NEW.room_id,CAST((julianday('now')-2440587.5)*86400000 AS INTEGER),'wait.closed',
+        json_object('wait_id',NEW.id,'message_id',NEW.message_id,'member_id',NEW.member_id,
+                    'ended_at',NEW.ended_at,'end_message_id',NEW.end_message_id,'end_reason',NEW.end_reason));
+END;
+CREATE TRIGGER IF NOT EXISTS room_wait_message_withdrawn AFTER INSERT ON message_withdrawals BEGIN
+    UPDATE room_waits SET ended_at=NEW.created_at,end_reason='withdrawn'
+        WHERE message_id=NEW.message_id AND ended_at=0;
+END;
+CREATE TRIGGER IF NOT EXISTS room_wait_dispatch_withdrawn AFTER INSERT ON dispatch_withdrawals BEGIN
+    UPDATE room_waits SET ended_at=CAST(strftime('%s','now') AS INTEGER),end_reason='withdrawn'
+        WHERE message_id=NEW.message_id AND ended_at=0;
+END;
+CREATE TRIGGER IF NOT EXISTS room_wait_member_removed AFTER UPDATE OF status ON room_members
+WHEN OLD.status<>'removed' AND NEW.status='removed' BEGIN
+    UPDATE room_waits SET ended_at=CAST(strftime('%s','now') AS INTEGER),end_reason='member_removed'
+        WHERE member_id=NEW.id AND ended_at=0;
+END;
 CREATE TABLE IF NOT EXISTS stored_texts (
     owner TEXT NOT NULL,
     owner_id INTEGER NOT NULL,

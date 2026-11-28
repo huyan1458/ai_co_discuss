@@ -29,7 +29,7 @@ QUEUE_ERRORS = (ValueError, TypeError, LookupError, PermissionError, FileExistsE
 
 
 def room_busy(connection, room_id):
-    """A member still has an open request, a one-after-another turn waits, or a discussion runs.
+    """Work is still pending, or MOSS is waiting on an open blocking question.
 
     Work the host left running in the background (sent without a handoff, or kept working beside it, as in
     free_room.BACKGROUND_SQL) does not hold the owner's messages: the room goes on without waiting for it."""
@@ -37,8 +37,12 @@ def room_busy(connection, room_id):
           AND NOT (r.purpose='ask' AND r.created_by='host' AND (r.batch_id=0 OR EXISTS(
             SELECT 1 FROM member_requests k WHERE k.message_id=r.message_id AND k.purpose='keep_working')))
         UNION ALL SELECT 1 FROM free_queue_waiting WHERE room_id=?
-        UNION ALL SELECT 1 FROM discussion_sessions WHERE room_id=? AND status='active' LIMIT 1""",
-                              (room_id, room_id, room_id)).fetchone() is not None
+        UNION ALL SELECT 1 FROM discussion_sessions WHERE room_id=? AND status='active'
+        UNION ALL SELECT 1 FROM room_questions q JOIN room_directory d ON d.room_id=q.room_id
+          WHERE q.room_id=? AND d.system_kind='steward' AND q.blocking=1
+          AND q.status IN ('waiting_user','waiting_recommendation','delegated')
+          AND (q.expires_at=0 OR q.expires_at>?) LIMIT 1""",
+                              (room_id, room_id, room_id, room_id, int(time.time()))).fetchone() is not None
 
 
 def queue_view(connection, room_id):

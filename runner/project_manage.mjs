@@ -243,6 +243,17 @@ function place_name(folder, name, conflict, recycle, origin, { source = '', room
   return { name };
 }
 
+/** Place a verified file beside its temporary copy, reusing the local upload naming and recycle rules. */
+export function place_project_download({ root, path, name, temporary, conflict, recycle, publish }) {
+  const folder = folder_in(root, path), wanted = check_name(name);
+  const origin = { root, path: [...parts_of(path), wanted].join('/') };
+  if (conflict === 'replace' && lstatSync(join(folder, wanted), { throwIfNoEntry: false })?.isDirectory())
+    throw new Error(t('不能用云空间文件替换文件夹'));
+  const { name: placed } = place_name(folder, wanted, conflict ?? 'keep_both', recycle, origin);
+  publish(temporary, join(folder, placed));
+  return [...parts_of(path), placed].join('/');
+}
+
 /**
  * Copy or move one entry into a folder, possibly of another root. A folder cannot go into itself; links inside a
  * copied folder are left out.

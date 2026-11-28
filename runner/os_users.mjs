@@ -368,6 +368,7 @@ export function read_output(path) {
 // Well-known SIDs: the local Users group (every hosted account's Windows user belongs to it).
 const USERS_SID = 'S-1-5-32-545';
 const KEY_FILE = 'entry-key.json';
+const STORAGE_TOKEN_FILE = 'object-storage-admin.json';
 
 /**
  * Make `path` a folder whose rights the owner alone decides, and check what is actually in force afterwards.
@@ -460,6 +461,12 @@ export function secure_shared_root({ root = SHARED_ROOT, run = run_powershell } 
 /** Where an account's instance reads its key: inside the shared folder, in a folder only that account may read. */
 export function instance_key_file(account, root = SHARED_ROOT) {
   return join(root, 'keys', account, KEY_FILE);
+}
+
+/** Read the capability from the administrator-owned directory secured for this account. */
+export function instance_storage_token(account, root = SHARED_ROOT) {
+  try { return JSON.parse(readFileSync(join(root, 'keys', account, STORAGE_TOKEN_FILE), 'utf8')).token; }
+  catch { return null; }
 }
 
 /**
@@ -668,15 +675,17 @@ ${register_task_script(account, record.user, '$secure', owner_sid({ run }))}
  */
 export const ISOLATED_ACCOUNT_VARIABLE = 'CODISCUSS_ISOLATED_ACCOUNT';
 
-export function start_instance_as_user(data, account, service_home, local_script, node = process.execPath, { key_file = '', run = run_powershell } = {}) {
+export function start_instance_as_user(data, account, service_home, local_script, node = process.execPath, { key_file = '', panel_port, run = run_powershell } = {}) {
   const record = read_os_users(data)[account];
   if (!record) throw new Error(`账号 ${account} 还没有 Windows 用户，请先隔离这个账号`);
+  const storage_file = panel_port ? place_account_file(data, account, STORAGE_TOKEN_FILE,
+    JSON.stringify({ account, port: panel_port, token: randomBytes(32).toString('hex') }), { run }) : '';
   place_account_file(data, account, START_SCRIPT, `﻿$flag = ${quote(join(SHARED_ROOT, 'keys', account, RUN_FLAG))}
 if (-not (Test-Path -LiteralPath $flag)) { exit 0 }
 $env:DISCUSS_SERVICE_HOME = ${quote(service_home)}
 $env:DISCUSS_ATTACHMENT_POLICY_FILE = ${quote(policy_path(data))}
 $env:DISCUSS_OBJECT_STORAGE_QUOTA_FILE = ${quote(object_quota_path(data, account))}
-$env:Path = ${quote(`${COMMAND_ROOT};`)} + $env:Path
+${storage_file ? `$env:DISCUSS_OBJECT_STORAGE_ADMIN_FILE = ${quote(storage_file)}\n` : ''}$env:Path = ${quote(`${COMMAND_ROOT};`)} + $env:Path
 $env:${NO_DESKTOP_VARIABLE} = '1'
 $env:${ISOLATED_ACCOUNT_VARIABLE} = '1'
 ${key_file ? `$env:DISCUSS_ENTRY_KEY_FILE = ${quote(key_file)}\n` : ''}Set-Location -LiteralPath ${quote(service_home)}

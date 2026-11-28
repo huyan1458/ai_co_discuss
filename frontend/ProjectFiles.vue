@@ -1,8 +1,12 @@
 <script setup>
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { file_preview, file_size, file_type, folder_listings, modified_time, shown_folders } from "./file-preview.js";
+import { file_preview, file_size, file_type, folder_listings, modified_time, shown_folders, tile_icon } from "./file-preview.js";
 import { t } from './i18n.js';
 import ProjectFileThumbnail from "./ProjectFileThumbnail.vue";
+import CloudDrive from "./CloudDrive.vue";
+import TransferList from "./TransferList.vue";
+import { clear_transfer, transfer } from "./transfers.js";
+import { cloud_space_visible } from "./object-storage-fields.js";
 import { moves_sideways, side_swipe } from "./side-swipe.js";
 
 // The room's project directories, the main one first; with more than one, a switch above the list picks which is shown.
@@ -34,8 +38,7 @@ const naming = ref(null);
 const name_input = ref(null);
 // Copied or cut entry, pasted into the folder shown: `{ mode: "copy" | "move", root, path, name }`.
 const clipboard = ref(null);
-// Files being uploaded: `{ id, name, progress, error }`.
-const uploads = ref([]);
+// Transfers (uploads, copies, landings, download preparation) show in TransferList, shared with the cloud space view.
 const file_input = ref(null);
 // A question about a name already taken: `{ name, many, resolve }`, answered "replace", "keep_both" or null (skip).
 const asking = ref(null);
@@ -127,6 +130,21 @@ async function read_section(section) {
 }
 const show_roots = () => read_section("roots");
 const show_trash = () => read_section("trash");
+
+// The account's cloud space: one list for the whole account, the same from every room, read by the list itself.
+const cloud_visible = computed(() => cloud_space_visible(view.value));
+const cloud_drive = ref(null);
+function show_cloud() {
+  if (left_page) return;
+  listing_request++;
+  sweep_run++;
+  naming.value = null;
+  section_failure.value = "";
+  loading.value = false;
+  mode.value = "cloud";
+}
+// The cloud space taken away (its settings cleared) leaves the tab for the projects.
+watch(cloud_visible, (visible) => { if (!visible && mode.value === "cloud") show_roots(); });
 
 /** Show a folder the preview's breadcrumb asked for, now or once this list is shown. */
 function take_reveal() {
@@ -306,7 +324,13 @@ async function upload_files(files) {
   ask_all.value = false;
   const plans = [];
   for (const file of list) {
-    if (file.size > view.value.attachment_limit_mib * 1024 * 1024) { bridge.notify("warning", t('{value1} 超过 {limit} MiB，未上传；更大的文件请给 AI 下载链接或仓库地址', { limit: view.value.attachment_limit_mib, value1: file.name })); continue; }
+    // Over the part upload's limit, a file goes through the cloud space when the account has one, up to its 2 GiB.
+    const over = file.size > view.value.attachment_limit_mib * 1024 * 1024;
+    if (over && (!view.value.object_storage || file.size > CLOUD_MAX_BYTES)) {
+      bridge.notify("warning", view.value.object_storage ? t('{value1} 超过 2 GiB，未上传', { value1: file.name })
+        : t('{value1} 超过 {limit} MiB，未上传；更大的文件请给 AI 下载链接或仓库地址', { limit: view.value.attachment_limit_mib, value1: file.name }));
+      continue;
+    }
     let conflict = null;
     if (taken.has(file.name)) {
       conflict = for_all || await ask_conflict(file.name, list.length > 1);
@@ -317,39 +341,120 @@ async function upload_files(files) {
       if (ask_all.value && conflict) for_all = conflict;
       if (!conflict) continue;
     }
-    plans.push({ file, conflict });
+    plans.push({ file, conflict, cloud: over });
   }
-  let uploaded = 0;
-  for (const { file, conflict } of plans) {
-    const item = { id: crypto.randomUUID(), name: file.name, progress: 0, error: "" };
-    if (!left_page) uploads.value = [...uploads.value, item];
-    const update = (patch) => {
-      if (!left_page) uploads.value = uploads.value.map((entry) => entry.id === item.id ? { ...entry, ...patch } : entry);
-    };
-    try {
-      await bridge.upload_project_file(room_id, { ...target, file, conflict, on_progress: (progress) => update({ progress }) });
-      if (!left_page) uploads.value = uploads.value.filter((entry) => entry.id !== item.id);
-      uploaded += 1;
-    } catch (error) {
-      if (left_page) bridge.notify("error", t('{name} 上传失败：{reason}', { name: file.name, reason: error.message }));
-      else update({ error: error.message });
-    }
-  }
+  // Each file is a row of the transfer list, three at a time. A large one goes to the cloud space from this page (which
+  // can be cancelled) and is then landed in the folder by the computer (followed, also after a reload).
+  const results = await Promise.all(plans.map(({ file, conflict, cloud }) => transfer(file.name, "project", async ({ signal, progress, task }) => {
+    if (!cloud) return bridge.upload_project_file(room_id, { ...target, file, conflict, on_progress: progress });
+    const landing = await bridge.upload_project_via_cloud(room_id, target, file, { conflict, signal, on_progress: (share) => progress(share * CLOUD_SEND_SHARE) });
+    task(landing.task_id);
+    return follow_cloud_task(landing.task_id, (share) => progress(CLOUD_SEND_SHARE + share * (1 - CLOUD_SEND_SHARE)));
+  }, { parallel: true, retries: 0, browser: true, cancellable: cloud })));
+  const uploaded = results.filter((item) => item.ok).length;
   if (uploaded) {
     bridge.notify("info", t('已上传 {value1} 个文件', { value1: uploaded }));
     if (!left_page && mode.value === "folder" && root.value === target.root && current_path.value === target.path) read_directory(current_path.value);
   }
 }
 
+/**
+ * Whether a download goes through the cloud space: on a page away from the computer, for a folder or a file larger than
+ * the threshold, the bytes then skip the relay. On the computer itself, or for a small file, the plain download stays.
+ */
+function downloads_via_cloud(entry) {
+  if (!view.value.object_storage || bridge.opened_on_this_computer()) return false;
+  return entry.kind === "directory" || Number(entry.size) > (view.value.object_threshold_mib || view.value.attachment_limit_mib) * 1024 * 1024;
+}
+
+/**
+ * Download through the cloud space, its preparation shown in the upload list until the browser starts saving. Returns
+ * whether it did: when the cloud space cannot (full, unreachable, not set up) it says why and leaves the download to the
+ * plain way, which has its own limits and errors.
+ */
+async function download_via_cloud(entry) {
+  const outcome = await transfer(entry.name, "prepare", ({ progress, task }) => bridge.download_project_via_cloud(room_id,
+    { path: entry.path, root: root.value, kind: entry.kind === "directory" ? "folder" : "file" },
+    (task_id) => { task(task_id); return follow_cloud_task(task_id, progress); }));
+  if (outcome.ok) return true;
+  // The plain download takes over, so the failed row would only repeat the notice.
+  clear_transfer(outcome.id);
+  bridge.notify("warning", t("云空间暂时用不了（{reason}），改用普通下载", { reason: outcome.error.message }));
+  return false;
+}
+
 /** Save one folder, with everything under it, to this device as a ZIP. */
 async function download_folder(entry) {
+  if (downloads_via_cloud(entry) && await download_via_cloud(entry)) return;
   bridge.notify("info", t('正在打包“{name}”，完成后浏览器会开始下载。', { name: entry.name }));
   try { await bridge.download_project_folder(room_id, entry.path, root.value); }
   catch (error) { bridge.notify("error", t('下载失败：{value1}', { value1: error.message })); }
 }
 
+// How often a cloud copy's progress is asked for, and how long the page keeps asking before giving up.
+const CLOUD_POLL_MS = 1000, CLOUD_POLL_LIMIT_MS = 2 * 60 * 60 * 1000;
+// The largest file the cloud space takes, and the share of a big upload's bar its transfer to the storage fills (landing
+// it in the folder fills the rest).
+const CLOUD_MAX_BYTES = 2 * 1024 * 1024 * 1024, CLOUD_SEND_SHARE = 0.9;
+
+/**
+ * Follow a task the computer runs for the cloud space (a copy, or a file landing in a project) until it is done, telling
+ * `on_progress(share)` how far it has come. Resolves with the finished task; rejects with its failure.
+ */
+async function follow_cloud_task(task_id, on_progress = () => {}) {
+  const started = Date.now();
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, CLOUD_POLL_MS));
+    // Followed on after this view closes too: the transfer list belongs to the whole page.
+    const state = await bridge.project_cloud_status(task_id);
+    if (state.status === "failed") throw new Error(state.error_text?.template ? t(state.error_text.template, state.error_text.params) : state.error || t('存到云空间失败'));
+    if (state.status === "completed") return state;
+    on_progress(Math.min(0.99, Number(state.progress) || 0));
+    if (Date.now() - started > CLOUD_POLL_LIMIT_MS) throw new Error(t('存到云空间超时，请稍后在云空间里查看是否已完成'));
+  }
+}
+
+/**
+ * Copy one file, or one folder packed as a ZIP, into the account's cloud space; the local file stays. The computer does
+ * the work and answers a task, whose progress shows in the upload list until it is done.
+ */
+async function save_to_cloud(entry) {
+  const outcome = await transfer(entry.name, "copy", async ({ progress, task }) => {
+    const { task_id } = await bridge.save_project_to_cloud(room_id, { path: entry.path, root: root.value, kind: entry.kind === "directory" ? "folder" : "file" });
+    task(task_id);
+    return follow_cloud_task(task_id, progress);
+  });
+  if (outcome.ok) bridge.notify("info", t('“{name}”已存到云空间', { name: entry.name }));
+}
+
+// A cloud space attachment waiting to be landed in a project: it goes into the folder open when "放到这里" is pressed.
+const pending_land = computed(() => view.value.pending_land);
+
+/** Land the waiting attachment in the folder shown; the copy in the cloud space stays. */
+async function land_here() {
+  const waiting = pending_land.value;
+  if (!waiting) return;
+  const target = { root: root.value, path: current_path.value };
+  bridge.clear_pending_land();
+  const outcome = await transfer(waiting.file_name, "land", async ({ progress, task }) => {
+    const { task_id } = await bridge.land_in_project(room_id, { source: waiting, ...target });
+    task(task_id);
+    return follow_cloud_task(task_id, progress);
+  });
+  if (!outcome.ok) return;
+  bridge.notify("info", t('“{name}”已取回到项目', { name: outcome.result?.path || waiting.file_name }));
+  if (!left_page && mode.value === "folder" && root.value === target.root && current_path.value === target.path) read_directory(current_path.value);
+}
+
+/** From the cloud space list: pick this attachment, then open the projects to choose its folder. */
+function land_from_cloud(file) {
+  bridge.choose_landing_folder(file);
+  navigate(() => open_project(current_path.value));
+}
+
 /** Save one file to this device. */
 async function download(entry) {
+  if (downloads_via_cloud(entry) && await download_via_cloud(entry)) return;
   try { await bridge.download_project_file(room_id, entry.path, root.value); }
   catch (error) { bridge.notify("error", t('下载失败：{value1}', { value1: error.message })); }
 }
@@ -381,6 +486,9 @@ function entry_menu(entry) {
   const items = [];
   if (entry.kind === "file") items.push({ label: t('下载'), icon: "i-lucide-download", onSelect: () => download(entry) });
   if (entry.kind === "directory") items.push({ label: t('下载文件夹'), icon: "i-lucide-download", onSelect: () => download_folder(entry) });
+  if (view.value.object_storage && ["file", "directory"].includes(entry.kind)) {
+    items.push({ label: t('存到云空间'), icon: "i-lucide-cloud-upload", onSelect: () => save_to_cloud(entry) });
+  }
   items.push({ label: t('重命名'), icon: "i-lucide-pencil", onSelect: () => start_naming("rename", entry) });
   items.push({ label: t('复制'), icon: "i-lucide-copy", onSelect: () => take(entry, "copy") });
   items.push({ label: t('剪切'), icon: "i-lucide-scissors", onSelect: () => take(entry, "move") });
@@ -423,6 +531,7 @@ function navigate(move) {
 function show_place(place) {
   if (place.mode === "roots") return show_roots();
   if (place.mode === "trash") return show_trash();
+  if (place.mode === "cloud") return cloud_visible.value ? show_cloud() : show_roots();
   account_root.value = place.account;
   root.value = place.account ? place.account.id : place.root;
   open_project(place.path);
@@ -502,9 +611,11 @@ function side_button(event) {
 /** The rarely used tools of the heading: refreshing what is shown, and going into or out of the recycle area. */
 const more_items = computed(() => [
   { label: t('刷新'), icon: "i-lucide-refresh-cw", disabled: loading.value || busy.value,
-    onSelect: () => mode.value === "roots" ? show_roots() : mode.value === "trash" ? show_trash() : (read_directory(current_path.value), sweep_folders()) },
+    onSelect: () => mode.value === "roots" ? show_roots() : mode.value === "trash" ? show_trash() : mode.value === "cloud" ? cloud_drive.value?.reload()
+      : (read_directory(current_path.value), sweep_folders()) },
   mode.value === "trash" ? { label: t('返回文件夹'), icon: "i-lucide-folder-open", onSelect: () => navigate(() => open_project(current_path.value)) }
     : { label: t('回收区'), icon: "i-lucide-trash", onSelect: () => navigate(show_trash) },
+  ...(cloud_visible.value && mode.value !== "cloud" ? [{ label: t('云空间'), icon: "i-lucide-cloud", onSelect: () => navigate(show_cloud) }] : []),
 ]);
 
 // An entry's menu (long press, right click) closes on a press anywhere outside it, which does nothing else, and only one
@@ -561,7 +672,7 @@ function open_entry(entry) {
     @touchstart.passive="time_press" @touchend="time_press" @touchcancel="time_press">
     <header class="project-files-heading">
       <!-- A folder's name is in the path bar below; only the other sections say here what they are. -->
-      <div><h2>{{ t('项目文件') }}</h2><p v-if="mode !== 'folder'">{{ mode === 'roots' ? t('项目与草稿') : t('回收区（保留 30 天）') }}</p></div>
+      <div><h2>{{ t('项目文件') }}</h2><p v-if="mode !== 'folder'">{{ mode === 'roots' ? t('项目与草稿') : mode === 'cloud' ? t('云空间（本账号所有房间共用）') : t('回收区（保留 30 天）') }}</p></div>
       <div class="project-files-tools">
         <!-- Adding files first, then how they are shown; refreshing (the list also refreshes itself) and the recycle
              area, used rarely, sit under "更多操作" (user 2026-11-27, #13813). -->
@@ -596,13 +707,13 @@ function open_entry(entry) {
       </div>
     </div>
 
-    <div v-if="uploads.length" class="project-files-uploads">
-      <div v-for="item in uploads" :key="item.id" class="project-files-upload">
-        <UIcon :name="item.error ? 'i-lucide-circle-alert' : 'i-lucide-upload'" /><span class="project-files-upload-name">{{ item.name }}</span>
-        <span v-if="item.error" class="project-files-upload-error">{{ item.error }}</span><span v-else>{{ Math.round(item.progress * 100) }}%</span>
-        <UButton v-if="item.error" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="t('关闭')" @click="uploads = uploads.filter((entry) => entry.id !== item.id)" />
-      </div>
+    <div v-if="pending_land" class="project-files-land" role="status">
+      <UIcon name="i-lucide-folder-down" /><span>{{ mode === 'folder' ? t('把“{name}”放到当前文件夹？', { name: pending_land.file_name }) : t('打开要放入“{name}”的文件夹', { name: pending_land.file_name }) }}</span>
+      <UButton v-if="mode === 'folder'" :label="t('放到这里')" size="xs" :disabled="busy" @click="land_here" />
+      <UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="bridge.clear_pending_land()" />
     </div>
+
+    <TransferList />
 
     <div ref="explorer" class="project-explorer" :aria-busy="loading || busy">
       <!-- Back and forward stay in place beside the path, which scrolls to its end on a narrow screen (user #13910). -->
@@ -626,6 +737,10 @@ function open_entry(entry) {
           </template>
         </template>
         <template v-else-if="mode === 'trash'"><UIcon name="i-lucide-chevron-right" class="project-crumb-separator" /><button type="button" disabled aria-current="location">{{ t('回收区') }}</button></template>
+        <!-- The cloud space sits beside the projects, not inside them: one list for the whole account. -->
+        <button v-if="cloud_visible" type="button" class="project-cloud-tab" :aria-current="mode === 'cloud' ? 'location' : undefined" :disabled="mode === 'cloud'" :title="t('本账号的云空间')" @click="navigate(show_cloud)">
+          <UIcon name="i-lucide-cloud" />{{ t('云空间') }}
+        </button>
       </nav>
       </div>
 
@@ -665,6 +780,10 @@ function open_entry(entry) {
         </div>
       </template>
 
+      <template v-else-if="mode === 'cloud'">
+        <CloudDrive ref="cloud_drive" @land="land_from_cloud" />
+      </template>
+
       <template v-else-if="mode === 'trash'">
         <div class="project-files-rows">
           <div v-for="item in trash || []" :key="item.id" class="project-file-row is-root">
@@ -687,7 +806,7 @@ function open_entry(entry) {
           <div class="project-file-tile" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable' }">
             <button type="button" :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? t('{value1}（无法读取或指向项目外）', { value1: entry.name }) : entry.name"
               @click="open_entry(entry)">
-              <ProjectFileThumbnail :key="`${entry.size}:${entry.modified_at}`" :entry="entry" :root="root" :icon="entry_icon(entry)" />
+              <ProjectFileThumbnail :key="`${entry.size}:${entry.modified_at}`" :entry="entry" :root="root" :icon="tile_icon(entry)" />
               <span class="project-file-tile-name">{{ entry.name }}</span>
             </button>
             <span v-if="entry.kind !== 'unavailable'" class="project-file-more project-file-tile-menu">
@@ -754,10 +873,10 @@ function open_entry(entry) {
 .project-files-ask p { margin: 0; overflow-wrap: anywhere; }
 .project-files-ask > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .project-files-ask-all { display: inline-flex; align-items: center; gap: 4px; color: var(--ui-text-muted); font-size: 12px; }
-.project-files-uploads { display: grid; gap: 4px; margin-bottom: 10px; font-size: 12px; }
-.project-files-upload { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid var(--ui-border); border-radius: 6px; color: var(--ui-text-muted); }
-.project-files-upload-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ui-text); }
-.project-files-upload-error { color: var(--ui-error); }
+/* The cloud space's entry at the far end of the path bar, apart from the projects' path. */
+.project-cloud-tab { display: inline-flex !important; flex-shrink: 0; gap: 4px; align-items: center; margin-left: auto; }
+.project-files-land { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--ui-border-muted); border-radius: 8px; font-size: 12px; }
+.project-files-land > span { flex: 1; min-width: 0; }
 .project-explorer { overflow: hidden; border: 1px solid var(--ui-border); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); }
 .project-explorer-bar { display: flex; align-items: center; border-bottom: 1px solid var(--ui-border); }
 .project-explorer-steps { display: flex; flex-shrink: 0; align-items: center; padding: 0 2px 0 6px; }

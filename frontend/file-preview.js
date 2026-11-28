@@ -293,6 +293,53 @@ export function document_kind_of(name) {
   return Object.keys(DOCUMENT_KINDS).find((kind) => DOCUMENT_KINDS[kind].includes(extension)) || "";
 }
 
+// The file page's icon view draws its pictures large, where the line icons above turn heavy: there each kind has the
+// coloured icon of the VS Code Icons set (user 2026-11-28, #15174, #15182), by extension. The full names are written
+// out so the build bundles exactly these.
+const TILE_ICONS = {
+  md: "i-vscode-icons-file-type-markdown", markdown: "i-vscode-icons-file-type-markdown",
+  html: "i-vscode-icons-file-type-html", htm: "i-vscode-icons-file-type-html",
+  css: "i-vscode-icons-file-type-css",
+  vue: "i-vscode-icons-file-type-vue",
+  js: "i-vscode-icons-file-type-js-official", mjs: "i-vscode-icons-file-type-js-official", cjs: "i-vscode-icons-file-type-js-official",
+  ts: "i-vscode-icons-file-type-typescript-official",
+  tsx: "i-vscode-icons-file-type-reactts",
+  jsx: "i-vscode-icons-file-type-reactjs",
+  py: "i-vscode-icons-file-type-python",
+  sql: "i-vscode-icons-file-type-sql",
+  sh: "i-vscode-icons-file-type-shell",
+  bat: "i-vscode-icons-file-type-bat",
+  ps1: "i-vscode-icons-file-type-powershell",
+  json: "i-vscode-icons-file-type-json", jsonc: "i-vscode-icons-file-type-json",
+  yaml: "i-vscode-icons-file-type-yaml", yml: "i-vscode-icons-file-type-yaml",
+  toml: "i-vscode-icons-file-type-toml",
+  ini: "i-vscode-icons-file-type-ini",
+  xml: "i-vscode-icons-file-type-xml",
+  log: "i-vscode-icons-file-type-log",
+  txt: "i-vscode-icons-file-type-text", srt: "i-vscode-icons-file-type-text", vtt: "i-vscode-icons-file-type-text", ass: "i-vscode-icons-file-type-text", ssa: "i-vscode-icons-file-type-text", lrc: "i-vscode-icons-file-type-text",
+  pdf: "i-vscode-icons-file-type-pdf2",
+  zip: "i-vscode-icons-file-type-zip",
+  docx: "i-vscode-icons-file-type-word", doc: "i-vscode-icons-file-type-word",
+  xlsx: "i-vscode-icons-file-type-excel", xls: "i-vscode-icons-file-type-excel", ods: "i-vscode-icons-file-type-excel",
+  csv: "i-vscode-icons-file-type-csv", tsv: "i-vscode-icons-file-type-csv",
+  pptx: "i-vscode-icons-file-type-powerpoint", ppt: "i-vscode-icons-file-type-powerpoint",
+  png: "i-vscode-icons-file-type-image", jpg: "i-vscode-icons-file-type-image", jpeg: "i-vscode-icons-file-type-image", gif: "i-vscode-icons-file-type-image", webp: "i-vscode-icons-file-type-image", avif: "i-vscode-icons-file-type-image", bmp: "i-vscode-icons-file-type-image", ico: "i-vscode-icons-file-type-image",
+  svg: "i-vscode-icons-file-type-svg",
+  mp4: "i-vscode-icons-file-type-video", m4v: "i-vscode-icons-file-type-video", webm: "i-vscode-icons-file-type-video", mov: "i-vscode-icons-file-type-video", mkv: "i-vscode-icons-file-type-video", avi: "i-vscode-icons-file-type-video", ogv: "i-vscode-icons-file-type-video", prproj: "i-vscode-icons-file-type-video", fcpxml: "i-vscode-icons-file-type-video", kdenlive: "i-vscode-icons-file-type-video", mlt: "i-vscode-icons-file-type-video", otio: "i-vscode-icons-file-type-video", edl: "i-vscode-icons-file-type-video", aep: "i-vscode-icons-file-type-video", drp: "i-vscode-icons-file-type-video", veg: "i-vscode-icons-file-type-video",
+  mp3: "i-vscode-icons-file-type-audio", wav: "i-vscode-icons-file-type-audio", ogg: "i-vscode-icons-file-type-audio", oga: "i-vscode-icons-file-type-audio", opus: "i-vscode-icons-file-type-audio", m4a: "i-vscode-icons-file-type-audio", aac: "i-vscode-icons-file-type-audio", flac: "i-vscode-icons-file-type-audio",
+};
+
+// Icons of the set drawn too dark to see on the dark theme (brown Markdown, navy audio): lightened there (`is-dark-lift`).
+const DARK_ON_DARK = new Set(["i-vscode-icons-file-type-markdown", "i-vscode-icons-file-type-audio"]);
+
+/** The icon view's picture of a folder or file: `[icon, tint class]`, a coloured icon in place of the line one. */
+export function tile_icon(entry) {
+  if (entry.kind === "directory") return ["i-vscode-icons-default-folder", ""];
+  if (entry.kind === "unavailable") return ["i-lucide-file-lock-2", "is-muted"];
+  const icon = TILE_ICONS[extension_of(entry.name)] || "i-vscode-icons-default-file";
+  return [icon, DARK_ON_DARK.has(icon) ? "is-dark-lift" : ""];
+}
+
 /** Look up the display type of a file by its extension. */
 export function file_type(name) {
   const extension = /\.([^.\\/]+)$/.exec(name)?.[1]?.toLowerCase();

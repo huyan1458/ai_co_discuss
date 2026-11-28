@@ -113,6 +113,11 @@ watch([lookup_key, nearby], async ([key, visible], _, on_cleanup) => {
 const deployable = (file) => /\.html?$/i.test(file.name);
 const deploy_file = (file) => open_deploy(bridge, { room_id: props.roomId, message_id: props.message.id, execution_id: props.message.execution_id || 0, member: props.message.author, file });
 const open_file = (file) => file_preview.open?.(file.path, directories.value[file.root] || "", file.root, file);
+/** Save the file to this device as the file page does (away from the computer, a large one through the cloud space). */
+async function download_file(file) {
+  try { await bridge.download_project_entry(props.roomId, file); }
+  catch (error) { bridge.notify("error", t('下载失败：{value1}', { value1: error.message })); }
+}
 
 /**
  * Show an HTML file in a new tab, sandboxed as the preview shows it: the tab opens at the click and receives the page
@@ -164,6 +169,7 @@ onBeforeUnmount(() => observer?.disconnect());
       <!-- One row of same-sized icon buttons: look (preview, new tab), then, set apart, publish (user 2026-11-26, #12393). -->
       <div class="answer-file-actions">
         <UTooltip :text="t('预览')"><button type="button" class="attachment-download" :aria-label="t('在文件预览中打开 {value1}', { value1: file.path })" @click="open_file(file)"><UIcon name="i-lucide-eye" /></button></UTooltip>
+        <UTooltip :text="t('下载')"><button type="button" class="attachment-download" :aria-label="t('下载 {name}', { name: file.name })" @click="download_file(file)"><UIcon name="i-lucide-download" /></button></UTooltip>
         <UTooltip v-if="/\.html?$/i.test(file.name)" :text="t('在新标签页打开')"><button type="button" class="attachment-download" :aria-label="t('在新标签页打开 {value1}', { value1: file.name })" @click="open_tab(file)"><UIcon name="i-lucide-square-arrow-out-up-right" /></button></UTooltip>
         <template v-if="deployable(file)">
           <span class="answer-file-divider" aria-hidden="true"></span>

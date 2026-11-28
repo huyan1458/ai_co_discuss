@@ -8,6 +8,8 @@ Use the local management panel or the corresponding codiscuss admin commands to 
 - **Overview:**
   - **This computer:** Check the CoDiscuss service status, start, restart, stop, or select **Open site**. When hosting is enabled, this page also shows **Program copies** used by isolated accounts.
   - **This computer / Self-hosted relay:** View the local and linked online site addresses. Select **Bind**, **Unbind**, or **Generate access code**.
+    During an outage, the page shows one offline notice per computer and reports when the connection returns. Unsent messages for the same room share a notice and can each be retried.
+
     **Self-hosted relay** and `codiscuss admin status` show **Relay connected** after a heartbeat reply on the current connection, explain disconnects, retries or consecutive HTTP failures, and show **Status unknown** if the service is stopped or its observations are stale. After 3 minutes without heartbeat confirmation, the service rebuilds that site’s connection. Select **Reconnect now** or run `codiscuss admin site reconnect` to request it immediately.
 
     To pair through your reverse proxy, choose **Other access addresses** on the same row and add its HTTPS origin. See [Reverse proxy on your own domain](remote.md#reverse-proxy-on-your-own-domain).
@@ -30,9 +32,11 @@ Use the local management panel or the corresponding codiscuss admin commands to 
 
 When creating an account, fill in **Project data directory (optional)** or run `codiscuss admin account add alice --project-data-root "D:\CoDiscussData\alice"`. The parent must exist. CoDiscuss creates the account directory with `projects`, `workspace` for rooms without a project, and `drafts` for member drafts. Configuration, credentials, room databases and attachments stay in the account's service directory. Leave the field empty for the default layout.
 
+Choose a different name when creating a hosted account, as `cloud` is reserved for cloud storage.
+
 On the Storage page set the attachment limit to a whole number from 1 to 90 MiB (default 50). Run `codiscuss admin storage attachment-limit 75` to set it, or omit the number to read it. For a self-hosted Python site, put the integer (for example `75`) in `attachment-limit.json` beside the database, or point `DISCUSS_ATTACHMENT_POLICY_FILE` to the file.
 
-**Cloud space (object storage):** Each account has one cloud space on the resource center's object storage, managed by CoDiscuss. Attachments larger than the “Cloud space threshold” (up to 2 GiB each) are kept there; others stay on the computer as ordinary attachments. Large files that you or hosted clients send, and large deliverables from members, are kept there and can be taken from the room even when you are away. Files only come and go as room attachments: there is no upload outside a room and no folders.
+**Cloud space (object storage):** Each account has one cloud space on the resource center's object storage, managed by CoDiscuss. Attachments larger than the “Cloud space threshold” (up to 2 GiB each) are kept there; others stay on the computer as ordinary attachments. Large files that you or hosted clients send, and large deliverables from members, are kept there and can be taken from the room even when you are away. It is also the account's cloud drive: files can be uploaded straight into it under “Cloud space” on the Files page of the room website (see [Rooms](rooms.md)). There are no folders.
 
 Set it up under “Cloud space (object storage)” on the Storage page:
 
@@ -40,10 +44,14 @@ Set it up under “Cloud space (object storage)” on the Storage page:
 - **Retention days:** The default of 0 disables deletion based on retention days. Set 1 to 30 to remove files that many days after upload completes, at which point their cards show “Deleted from cloud space”. Regular cleanup removes attachments that are neither sent nor queued after 24 hours, even if the upload has finished.
 - **Space quota (MiB):** 10240 (10 GiB) by default. Once full, new large uploads are refused with the space used and the quota, until old files are deleted. The administrator can set it for each hosted account; hosted accounts cannot change their own.
 - **Cloud space threshold (MiB):** 20 by default, at most the attachment limit. When the threshold is below the attachment limit, files between the two (20 to 50 MB by default) also go to the cloud space: they have no preview or player in the message, members are not given them automatically when woken, and videos are no longer compressed in the browser, keeping their original quality. To avoid this change, set the threshold equal to the attachment limit.
-- **Manage cloud space:** lists the large files of all the account's rooms (name, size, room, time), with the space used and the quota at the top; select files to delete them. The messages stay, and their cards show “Deleted from cloud space”.
+- **Manage cloud space:** lists every file in the chosen account's cloud space, with the space used and the quota at the top: large attachments, and files saved with “Save to cloud space” from attachments or Files, each with its name, size, time and source (room, message or project path). You can download them, select them to delete, or select “Share” to create or revoke share links for the account's files (the same rules as “Cloud space” on the Files page; see [Rooms](rooms.md)). After a large attachment is deleted its message stays, and its card shows “Deleted from cloud space”. The account itself manages the same list under “Cloud space” on the Files page of the room website (see [Rooms](rooms.md)).
+- **Use the administrator's cloud space** (hosted accounts only): when on, the account keeps no key of its own. This computer signs the account's uploads, downloads and deletions, only within the account's own folder, and enforces its space quota, so AI in the hosted account cannot read the key. The administrator's local service must keep running; when it is not, the cloud space is unavailable. From the command line, use `codiscuss admin storage object --account NAME --use-admin`. Note:
+  - In this mode, turn off versioning on the resource center's bucket. Otherwise deleted files keep old versions that still take space, and the space quota cannot be counted correctly.
+  - When replacing the administrator's key at the same resource center address, use a new key for the original storage directory. CoDiscuss keeps each hosted account's existing usage.
+  - Switching between an own key and “Use the administrator's cloud space” does not move existing files to the other side, and they can no longer be viewed or deleted here afterwards. Before switching, download the files you need and delete the ones you no longer want.
 - “Test connection” checks it works. “Clear” only removes the configuration; the key stays in the key store, and you can delete it under the account's API keys.
 
-With hosting on, switch accounts above the fields to set up and manage a hosted account's cloud space. Hosted accounts can also enter their own key, change the retention days and threshold, and manage their cloud space under “Settings → Account → Cloud space (object storage)” in the room website. When an admin supplied the key, the page shows “Provided by admin”. Their interface does not show the key, but AI members in their account can read that account's key file; give each account its own key.
+With hosting on, switch accounts above the fields to set up and manage a hosted account's cloud space. Hosted accounts can also enter their own key and change the retention days and threshold under “Settings → Account → Cloud space (object storage)” in the room website. They manage their files under “Cloud space” on the Files page. When an admin supplied the key, the page shows “Provided by admin”. Their interface does not show the key, but AI members in their account can read that account's key file; give each account its own key.
 
 From the command line:
 
@@ -52,7 +60,8 @@ From the command line:
 - `--test` tests the connection, and `--clear` clears it.
 - `--retention-days N` (0 to 30, 0 for no automatic deletion), `--quota-mib N` and `--threshold-mib N` set the retention days, space quota and threshold.
 - Add `--account NAME` for a hosted account, or omit it for the administrator.
-- To list and delete files in the cloud space, use `codiscuss admin storage object list` and `codiscuss admin storage object delete`, also with `--account NAME`.
+- Use `codiscuss admin storage object list` to list cloud files or `link ID` to get a temporary download link. `delete ID` moves a drive file to trash. Add `--purge` to delete it permanently. Room attachments and temporary transfers are always deleted immediately. Use `trash` to list trash, `restore ID` to restore a file, or `restore ID --folder` to restore a folder. All these commands accept `--account NAME`.
+- Use `codiscuss admin storage object share ID [--days N]` to create a public link to one file, `shares ID` to list link status and expiry, or `revoke-share ID SHARE_ID` to revoke a link. All three accept `--account NAME`. The full link appears only when created. It expires after 7 days by default, or up to 30 days.
 
 Note:
 

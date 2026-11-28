@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .analytics_dispatch import dispatch_quality
 from .analytics_live import live_snapshot
+from .moss_results import DELEGATED_SENDS
 from .analytics_issues import concurrency_series, issues as attention_issues, unfinished_series
 from .texts import Text
 
@@ -565,6 +566,54 @@ def previous_work(rows, start, end, now):
     return {"execution_seconds": seconds, "peak_rooms": peak_concurrent(rooms)[0], "peak_members": peak_concurrent(members)[0]}
 
 
+MOSS_COUNTERS = ("task_rooms", "project_rooms", "delegations", "reworks", "unreported", "reclaimed")
+MOSS_ACTIVITY = f"""WITH children AS (
+    SELECT r.id,l.other_room_id AS parent,r.created_at,task.room_id IS NOT NULL AS task
+    FROM room_links l JOIN rooms r ON r.id=l.room_id
+    JOIN room_directory d ON d.room_id=l.other_room_id AND d.system_kind='steward'
+    LEFT JOIN moss_task_rooms task ON task.room_id=r.id WHERE l.relation='parent' AND l.message_id=(
+        SELECT MIN(message_id) FROM room_links p WHERE p.room_id=r.id AND p.relation='parent')
+), sent AS ({DELEGATED_SENDS}), archive_history AS (
+    SELECT e.room_id,e.at,c.parent,json_extract(e.data,'$.actor') AS actor,json_extract(e.data,'$.path') AS path,
+           LAG(json_extract(e.data,'$.path'),1,'/restore') OVER (PARTITION BY e.room_id ORDER BY e.at,e.id) AS previous
+    FROM children c JOIN room_events e ON e.room_id=c.id
+    WHERE c.task AND e.kind='api.write' AND json_extract(e.data,'$.path') IN ('/archive','/restore')
+), actions AS (
+    SELECT CASE WHEN task THEN 'task_rooms' ELSE 'project_rooms' END AS kind,unixepoch(created_at) AS at FROM children
+    UNION ALL SELECT 'delegations',unixepoch(m.created_at) FROM sent s
+        JOIN messages m ON m.id=s.message_id
+        JOIN room_directory target ON target.room_id=s.target_room_id AND target.system_kind=''
+        WHERE NOT EXISTS (SELECT 1 FROM children c WHERE c.id=s.target_room_id AND c.parent=s.room_id)
+        AND NOT EXISTS (SELECT 1 FROM moss_task_rooms t WHERE t.room_id=s.target_room_id)
+    UNION ALL SELECT 'reworks',unixepoch(m.created_at) FROM sent s
+        JOIN moss_reworks w ON w.message_id=s.message_id JOIN messages m ON m.id=s.message_id
+    UNION ALL SELECT 'unreported',COALESCE(unixepoch(d.updated_at),(
+            SELECT MAX(NULLIF(e.finished_at,0)) FROM member_requests r JOIN member_executions e ON e.id=r.execution_id
+            WHERE r.message_id=d.reminder_message_id),unixepoch(a.created_at),unixepoch(m.created_at))
+        FROM sent s JOIN moss_delegations d ON d.message_id=s.message_id AND d.state='unreported'
+        JOIN messages m ON m.id=s.message_id LEFT JOIN messages a ON a.id=d.result_message_id
+    UNION ALL SELECT 'reclaimed',h.at/1000 FROM archive_history h
+        WHERE h.path='/archive' AND h.previous<>'/archive' AND EXISTS (
+            SELECT 1 FROM room_members m WHERE m.room_id=h.parent AND h.actor='member:' || m.name)
+)
+SELECT kind,COUNT(*) FROM actions WHERE at>=:start AND at<:end GROUP BY kind"""
+
+
+def moss_snapshot(connection, params, now):
+    """Summarize MOSS's retained history without including it in other analytics."""
+    connection.execute("BEGIN")
+    earliest = connection.execute("""SELECT MIN(unixepoch(r.created_at)) FROM rooms r
+        JOIN room_directory d ON d.room_id=r.id AND d.system_kind='steward'""").fetchone()[0]
+    dates, (_, start, end) = period(params, now, earliest)
+    counts = dict.fromkeys(MOSS_COUNTERS, 0)
+    counts.update(dict(connection.execute(MOSS_ACTIVITY, {"start": start, "end": end}).fetchall()))
+    executions = connection.execute("""SELECT e.created_at,e.finished_at FROM member_executions e
+        JOIN room_directory d ON d.room_id=e.room_id AND d.system_kind='steward'
+        WHERE e.created_at>=? AND e.created_at<?""", (start, end)).fetchall()
+    durations = [finished - created for created, finished in executions if finished and finished >= created]
+    return {"range": dates, **counts, "executions": {"count": len(executions), **distribution(durations)}}
+
+
 def snapshot(connection, params, cache, now):
     """Build one SQLite read snapshot, caching only within the same server and room scope."""
     if params.get("range") == "live":
@@ -573,8 +622,10 @@ def snapshot(connection, params, cache, now):
     if params.get("range") == "all" and "from" not in params and "to" not in params:
         first = connection.execute("""SELECT MIN(r.created_at) FROM member_requests r
             JOIN room_directory d ON d.room_id=r.room_id AND d.system_kind=''""").fetchone()[0]
+        first_wait = connection.execute("""SELECT MIN(w.created_at) FROM room_waits w
+            JOIN room_directory d ON d.room_id=w.room_id AND d.system_kind=''""").fetchone()[0]
         sealed_first = connection.execute("SELECT MIN(day) FROM analytics_sealed_days").fetchone()[0]
-        candidates = [int(first)] if first else []
+        candidates = [int(stamp) for stamp in (first, first_wait) if stamp]
         if sealed_first:
             candidates.append(int(datetime.combine(date.fromisoformat(sealed_first), time.min, timezone.utc).timestamp()))
         earliest = min(candidates) if candidates else None
@@ -616,7 +667,7 @@ def snapshot(connection, params, cache, now):
                   overview=overview(facts, start, end, sealed), previous=overview(facts, previous, start, prior),
                   time={**time_stats(connection, requests, executions, (start, end), now, sealed), **activity},
                   members=members, models=models, workflows=workflow_stats(connection, attempts),
-                  issues=attention_issues(connection, attempts, earlier_attempts, revived, (previous, start, end)),
+                  issues=attention_issues(connection, attempts, earlier_attempts, revived, (previous, start, end, now)),
                   insights=insights(connection, members, start, end))
     result["overview"]["daily"] = daily_overview(dates, facts, executions, sealed_days, now)
     result["time"]["concurrency"]["unfinished"] = unfinished_series(attempts, start, end)

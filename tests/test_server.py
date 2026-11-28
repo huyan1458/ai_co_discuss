@@ -1,5 +1,6 @@
 """Test CLI writes, read-only online instructions, and context provenance."""
 
+import base64
 import hashlib
 import io
 import json
@@ -20,12 +21,13 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from socket import create_connection
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from unittest.mock import patch
 
-from backend.object_storage import DEFAULT_RETENTION_DAYS, QUOTA_NAME, SETTINGS_NAME, configured_storage
+from backend.object_storage import DEFAULT_RETENTION_DAYS, QUOTA_NAME, SETTINGS_NAME, ManagedStorageOffline, configured_storage
 from backend.server import ATTACHMENT_POLICY, DiscussionServer, attachment_path, page_host, connect_db, create_room, expired_rooms, image_size, init_database, require_room, sweep_attachments
 from backend.texts import Text, incoming_text, load_texts, save_text
 
@@ -61,6 +63,7 @@ class DiscussionTests(unittest.TestCase):
             self.database = Path(self.directory.name) / "test.sqlite3"
             init_database(self.database, seed=False)
             self.server = DiscussionServer(("127.0.0.1", 0), self.database)
+            self.server.daemon_threads = False
             self.server.local_site = False  # these tests exercise room credential rules, not the account-free local site
             self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
             self.thread.start()
@@ -342,8 +345,8 @@ class DiscussionTests(unittest.TestCase):
         if self.external:
             return
         self.server.shutdown()
-        self.server.server_close()
         self.thread.join()
+        self.server.server_close()
         self.directory.cleanup()
 
     def create_group_room(self):
@@ -660,7 +663,7 @@ class DiscussionTests(unittest.TestCase):
             response = error
         with response:
             body = response.read().decode()
-            value = json.loads(body) if "application/json" in response.headers.get("Content-Type", "") else body
+            value = json.loads(body) if method != "HEAD" and "application/json" in response.headers.get("Content-Type", "") else body
             return response.status, value
 
     def post(self, text, submission_id, reply_to=None):
@@ -997,6 +1000,823 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual(self.request(f"{base}/retry")[0], 404)
         self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 300)
 
+    def mock_cloud_files(self, objects, attempts):
+        """Fake COS credentials, remote size, signing and deletion with an in-memory object index."""
+        def resource(method, path, params, data):
+            if path == "/upload-credential":
+                name = json.loads(data)["fileName"]
+                attempts.append((method, name))
+                return {"succeed": True, "data": {"url": "https://cos.example/upload", "key": name, "policy": "policy",
+                    "qAk": "dummy-id", "qKeyTime": "1;2", "qSignature": "dummy", "qSignAlgorithm": "sha1"}}
+            name = params["fileName"][0]
+            attempts.append((method, path, name))
+            if path == "/file" and method == "DELETE":
+                if objects.get(name) == -1:
+                    return {"succeed": False, "code": 503}
+                return {"succeed": objects.pop(name, None) is not None, "code": 404}
+            if name not in objects:
+                return {"succeed": False, "code": 404}
+            if path == "/file-info":
+                return {"succeed": True, "data": {"size": objects[name]}}
+            self.assertEqual((path, params["expiresIn"]), ("/presigned-download-url", ["600"]))
+            return {"succeed": True, "data": {"url": "https://cos.example/read", "expiresAt": "2026-12-01T00:10:00Z"}}
+        self.mock_resource_center(resource)
+
+    def test_cloud_transfer_reservation_and_release_are_room_bound_and_idempotent(self):
+        """Temporary transfers are visible to the account, count against quota and release only on confirmation."""
+        objects, attempts = {}, []
+        self.mock_cloud_files(objects, attempts)
+        room_id = self.room["id"]
+        route = f"/api/rooms/{room_id}/cloud-files"
+        payload = {"file_name": "素材.zip", "size": 10, "content_type": "application/zip",
+                   "source_kind": "project_file", "source_ref": "0:assets/素材.zip",
+                   "purpose": "inbound", "source_version": "10-12345", "submission_id": "inbound-draft"}
+        self.assertEqual(self.request(route, {**payload, "purpose": "invalid"})[0], 400)
+        status, result = self.request(route, payload)
+        self.assertEqual(status, 200, result)
+        row = result["cloud_file"]
+        self.assertEqual((row["purpose"], row["source_version"]), ("inbound", "10-12345"))
+        self.assertEqual(datetime.fromisoformat(row["expires_at"]) - datetime.fromisoformat(row["created_at"]), timedelta(days=1))
+        self.assertEqual(self.request(route, payload)[1]["cloud_file"]["id"], row["id"])
+        self.assertEqual(self.request(route, {**payload, "source_version": "different"})[0], 409)
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 10)
+
+        location = result["upload"]["fields"]["key"]
+        objects[location] = 10
+        resource = f"{route}/{row['id']}"
+        self.assertEqual(self.request(resource + "/complete", {})[0], 200)
+        member = self.member_tokens["Claude"]
+        self.assertEqual(self.request(resource + "/content?link=1", token=member)[0], 403)
+        self.assertEqual(self.request(resource + "/release", {}, token=member)[0], 403)
+        self.server.local_site = True
+        with urlopen(self.base + "/api/rooms/cloud-attachments", timeout=5) as response:
+            view = json.load(response)["attachments"][0]
+            self.assertEqual((view["purpose"], view["expires_at"]), ("inbound", row["expires_at"]))
+        objects[location] = -1
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(self.request(resource + "/release", {})[0], 503)
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 10)
+        objects[location] = 10
+        for _ in range(2):
+            self.assertEqual(self.request(resource + "/release", {}), (200, {"released": True}))
+        self.assertEqual(self.request(resource + "/content?link=1")[0], 410)
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 0)
+
+    def test_cloud_file_transfer_sweep_keeps_live_objects_and_retries_failures(self):
+        """Expired transfers are cleared whether complete or pending; regular retained files stay."""
+        objects, attempts = {}, []
+        self.mock_cloud_files(objects, attempts)
+        route = f"/api/rooms/{self.room['id']}/cloud-files"
+        draft = {"file_name": "素材.zip", "size": 10, "content_type": "application/zip",
+                 "source_kind": "project_file", "source_ref": "0:素材.zip"}
+        reservations = {}
+        for key, purpose in (("done", "outbound"), ("pending", "inbound"), ("fresh", "inbound"), ("keep", "keep")):
+            status, body = self.request(route, {**draft, "purpose": purpose, "submission_id": f"sweep-{key}"})
+            self.assertEqual(status, 200, body)
+            record = body["cloud_file"]
+            name = body["upload"]["fields"]["key"]
+            reservations[key] = (record["id"], name)
+            if key in {"done", "keep"}:
+                objects[name] = 10
+                self.assertEqual(self.request(f"{route}/{record['id']}/complete", {})[0], 200)
+        keep_id, keep_name = reservations["keep"]
+        self.assertEqual(self.request(f"{route}/{keep_id}/release", {})[0], 404)
+        done_id, done_name = reservations["done"]
+        pending_id, pending_name = reservations["pending"]
+        objects[done_name] = -1
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.execute("UPDATE cloud_files SET expires_at='2000-01-02T00:00:00+00:00', created_at='2000-01-01T00:00:00+00:00' WHERE id IN (?,?)",
+                               (done_id, pending_id))
+        self.assertEqual(self.request(f"{route}/{done_id}/content?link=1")[0], 410)
+        with self.assertLogs(level="WARNING"):
+            sweep_attachments(self.database)
+        remote_deletes = [item[-1] for item in attempts if item[0] == "DELETE"]
+        self.assertCountEqual(remote_deletes, [done_name, pending_name])
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 30)
+        objects[done_name] = 10
+        sweep_attachments(self.database)
+        self.assertEqual(set(objects), {keep_name})
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 20)
+        with closing(connect_db(self.database)) as connection:
+            rows = {row["id"]: row["cleared_at"] for row in connection.execute("SELECT id,cleared_at FROM cloud_files")}
+        self.assertTrue(rows[done_id] and rows[pending_id])
+        self.assertIsNone(rows[keep_id])
+
+    def test_cloud_file_migration_defaults_existing_records_to_keep(self):
+        """An existing cloud_files table gains the transfer columns without moving a saved file."""
+        if self.external:
+            self.skipTest("Requires a private SQLite database")
+        room = self.room["id"]
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.executescript("""
+                DROP TABLE cloud_files;
+                CREATE TABLE cloud_files (
+                    id TEXT PRIMARY KEY, room_id TEXT REFERENCES rooms(id) ON DELETE SET NULL,
+                    source_kind TEXT NOT NULL, source_ref TEXT NOT NULL,
+                    file_name TEXT NOT NULL, content_type TEXT NOT NULL, size INTEGER NOT NULL, object_name TEXT NOT NULL,
+                    submission_id TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL, stored_at TEXT, cleared_at TEXT,
+                    UNIQUE(room_id,submission_id)
+                );
+            """)
+            connection.execute("""INSERT INTO cloud_files
+                VALUES ('legacy',?,'project_file','0:old.txt','old.txt','text/plain',32,'codiscuss/cloud/legacy/old.txt',
+                        'legacy-id','用户','2000-01-01T00:00:00+00:00','2000-01-01T00:00:00+00:00',NULL)""", (room,))
+        init_database(self.database, seed=False)
+        init_database(self.database, seed=False)
+        with closing(connect_db(self.database)) as connection:
+            row = connection.execute("SELECT purpose,expires_at,source_version,size FROM cloud_files WHERE id='legacy'").fetchone()
+        self.assertEqual(tuple(row), ("keep", None, None, 32))
+
+    def test_cloud_file_local_transfer_routes_forward_only_expected_fields(self):
+        """Both URL forms forward the same action, with the destination site pinned to the server."""
+        if self.external:
+            self.skipTest("Requires the Python local launch entry")
+        self.server.local_launch = True
+        room = self.room["id"]
+        inputs = {
+            "cloud": {"root": 0, "path": "素材", "kind": "folder", "purpose": "outbound"},
+            "cloud-upload": {"root": 0, "path": "素材", "name": "大.zip", "size": 800,
+                             "content_type": "application/zip", "submission_id": "source-01"},
+            "cloud-land": {"attachment_id": "a" * 32, "attachment_room": room, "root": 0, "path": "素材", "conflict": "keep_both"},
+        }
+        headers = {"Content-Type": "application/json", "X-CoDiscuss-Local": "1"}
+        with patch("backend.server.DiscussionHandler.local_command_result", return_value=(200, {"task_id": "receipt"})) as invoke:
+            for action, fields in inputs.items():
+                body = {**fields, "room": room, "token": self.owner, "site": "https://ignored.example", "access_file": "ignored"}
+                for interface in (f"project-files/{action}", f"project-{action}"):
+                    request = Request(self.base + "/api/local/" + interface, json.dumps(body).encode(), headers)
+                    with urlopen(request, timeout=5) as response:
+                        self.assertEqual(json.load(response), {"task_id": "receipt"})
+                    command, forwarded, _, remote = invoke.call_args.args
+                    self.assertEqual(command, "project-" + action)
+                    self.assertEqual(forwarded, {**fields, "room": room, "token": self.owner, "site": self.base})
+                    self.assertFalse(remote)
+
+            self.server.local_site = True
+            website, bridge_token = "https://paired.example", "a" * 64
+            self.server.connections_file = self.database.with_name("site-connections.json")
+            self.server.connections_file.write_text(json.dumps({"sites": {website: {
+                "bridge_hash": hashlib.sha256(bridge_token.encode()).hexdigest(),
+            }}}), encoding="utf-8")
+            paired = {**headers, "X-CoDiscuss-Bridge": bridge_token, "X-CoDiscuss-Bridge-Site": website}
+            for action, fields in inputs.items():
+                body = {**fields, "room": room}
+                request = Request(f"{self.base}/api/local/project-files/{action}", json.dumps(body).encode(), paired)
+                with urlopen(request, timeout=5) as response:
+                    self.assertEqual(json.load(response), {"task_id": "receipt"})
+                command, forwarded, _, remote = invoke.call_args.args
+                self.assertEqual(command, "project-" + action)
+                self.assertTrue(forwarded["token"])
+                self.assertTrue(remote)
+
+    def cloud_land_fixture(self):
+        """Create a sent COS attachment in a differently owned room, with a fake link signer."""
+        objects, attempts = {}, []
+        self.mock_cloud_files(objects, attempts)
+        owner = uuid.uuid4().hex
+        room = self.request("/api/rooms", {"title": "云端来源", "goal": "跨房间取回"}, token=owner)[1]["id"]
+        message = self.request(f"/api/rooms/{room}/messages",
+                               {"author": "用户", "text": "已上传", "submission_id": "landing-source"}, token=owner)[1]["message"]["id"]
+        identifier = uuid.uuid4().hex
+        name = f"codiscuss/{room}/{identifier}/source.zip"
+        objects[name] = 16
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.execute("""INSERT INTO attachments
+                (id,room_id,message_id,file_name,content_type,size,sha256,actor,submission_id,created_at,storage,object_name,stored_at)
+                VALUES (?,?,?,'source.zip','application/zip',16,'','用户','landing-source',
+                        '2026-11-27T00:00:00+00:00','object',?,'2026-11-27T00:00:00+00:00')""",
+                (identifier, room, message, name))
+        self.server.local_launch = True
+        return {"room": self.room["id"], "attachment_room": room, "attachment_id": identifier}
+
+    def cloud_land_request(self, route, body, headers=None):
+        """Send a local JSON request without defaulting to a room token header."""
+        request = Request(self.base + route, json.dumps(body).encode(), {
+            "Content-Type": "application/json", "X-CoDiscuss-Local": "1", **(headers or {}),
+        })
+        try:
+            response = urlopen(request, timeout=5)
+        except HTTPError as error:
+            response = error
+        with response:
+            return response.status, json.load(response)
+
+    def test_cloud_attachment_cross_room_landing_needs_account_authority_and_one_use_grant(self):
+        """A room credential cannot mint the local permit, and concurrent claims open only one link."""
+        target = self.cloud_land_fixture()
+        put = "/api/local/project-files/cloud-land"
+        redeem = f"/api/rooms/{target['room']}/cloud-land/redeem"
+        payload = {**target, "token": self.owner, "attachment_grant": "b" * 64}
+        with patch("backend.server.DiscussionHandler.local_command_result", return_value=(200, {"task_id": "receipt"})) as invoke:
+            self.assertEqual(self.cloud_land_request(put, payload)[0], 403)
+            invoke.assert_not_called()
+            self.server.local_site = True
+            self.assertEqual(self.cloud_land_request(put, payload, {"X-Discussion-Token": self.owner})[0], 403)
+            self.assertEqual(self.cloud_land_request(put, payload), (200, {"task_id": "receipt"}))
+            forwarded = invoke.call_args.args[1]
+            grant = forwarded["attachment_grant"]
+            self.assertNotEqual(grant, payload["attachment_grant"])
+            self.assertEqual(forwarded["token"], self.owner)
+
+        claim = {"attachment_room": target["attachment_room"], "attachment_id": target["attachment_id"], "grant": grant}
+        self.assertEqual(self.cloud_land_request(redeem, {**claim, "attachment_id": "c" * 32})[0], 403)
+        self.assertEqual(self.cloud_land_request("/api/rooms/different-room/cloud-land/redeem", claim)[0], 403)
+        self.assertEqual(self.cloud_land_request(redeem, claim, {"X-Discussion-Token": self.owner})[0], 403)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: self.cloud_land_request(redeem, claim), range(2)))
+        self.assertCountEqual([status for status, _ in results], [200, 403])
+        receipt = next(body for status, body in results if status == 200)
+        self.assertEqual(receipt["attachment"]["room_id"], target["attachment_room"])
+        self.assertEqual(receipt["attachment"]["id"], target["attachment_id"])
+        self.assertEqual(receipt["link"]["url"], "https://cos.example/read")
+        with closing(connect_db(self.database)) as connection:
+            events = [row[0] for row in connection.execute("SELECT data FROM room_events WHERE room_id=?", (target["room"],))]
+        self.assertNotIn(grant, "".join(events))
+
+    def test_cloud_attachment_cross_room_landing_accepts_admin_login(self):
+        """An administrator session permits issuance without implicit local administrator status."""
+        target = self.cloud_land_fixture()
+        self.assertFalse(self.server.local_site)
+        registration = Request(self.base + "/api/admin/register", json.dumps({
+            "username": "TestAdmin", "password": "test-admin-password", "setup_key": self.server.admin_setup_key,
+        }).encode(), {"Content-Type": "application/json"})
+        with urlopen(registration, timeout=5) as response:
+            admin = {"Cookie": response.headers["Set-Cookie"].split(";", 1)[0]}
+        payload = {**target, "token": self.owner}
+        with patch("backend.server.DiscussionHandler.local_command_result", return_value=(200, {"task_id": "receipt"})) as invoke:
+            self.assertEqual(self.cloud_land_request("/api/local/project-files/cloud-land", payload, admin)[0], 200)
+            self.assertRegex(invoke.call_args.args[1]["attachment_grant"], r"^[0-9a-f]{64}$")
+
+    def test_cloud_attachment_cross_room_grants_expire_and_cannot_be_redeemed_over_relay(self):
+        """A paired device may authorize landing, but only the local runner may redeem the grant."""
+        target = self.cloud_land_fixture()
+        self.server.local_site = True
+        website, bridge_token = "https://paired.example", "a" * 64
+        self.server.connections_file = self.database.with_name("site-connections.json")
+        self.server.connections_file.write_text(json.dumps({"sites": {website: {
+            "bridge_hash": hashlib.sha256(bridge_token.encode()).hexdigest(),
+        }}}), encoding="utf-8")
+        paired = {"X-CoDiscuss-Bridge": bridge_token, "X-CoDiscuss-Bridge-Site": website}
+        put = "/api/local/project-files/cloud-land"
+        redeem = f"/api/rooms/{target['room']}/cloud-land/redeem"
+        claim = {key: target[key] for key in ("attachment_room", "attachment_id")}
+        with patch("backend.server.DiscussionHandler.local_command_result", return_value=(200, {"task_id": "receipt"})) as invoke:
+            with patch("backend.server.CLOUD_LAND_GRANT_SECONDS", 0):
+                self.assertEqual(self.cloud_land_request(put, target, paired)[0], 200)
+            expired = invoke.call_args.args[1]["attachment_grant"]
+            self.assertEqual(self.cloud_land_request(redeem, {**claim, "grant": expired})[0], 403)
+            self.assertEqual(self.cloud_land_request(put, target, paired)[0], 200)
+            self.assertTrue(invoke.call_args.args[3])
+            live = invoke.call_args.args[1]["attachment_grant"]
+            self.assertEqual(self.cloud_land_request(redeem, {**claim, "grant": live}, paired)[0], 403)
+            self.assertEqual(self.cloud_land_request(redeem, {**claim, "grant": live})[0], 200)
+
+    def prepare_cloud_drive(self):
+        """Use the loopback account and an isolated fake COS index."""
+        objects, attempts = {}, []
+        self.mock_cloud_files(objects, attempts)
+        self.server.local_site = True
+        return "/api/rooms/cloud-attachments", objects, attempts
+
+    def account_drive_request(self, route, body=None, token=None, method=None):
+        """Send an account request without adding a room credential by default."""
+        headers = {"Content-Type": "application/json"}
+        if token is not None:
+            headers["X-Discussion-Token"] = token
+        request = Request(self.base + route, json.dumps(body).encode() if body is not None else None, headers, method=method)
+        try:
+            response = urlopen(request, timeout=5)
+        except HTTPError as error:
+            response = error
+        with response:
+            return response.status, json.load(response)
+
+    def put_drive_file(self, account, objects, filename, submission, **fields):
+        """Reserve bytes in fake storage, then confirm through the drive API."""
+        status, result = self.account_drive_request(account + "/upload", {
+            "file_name": filename, "content_type": "image/webp", "size": 100, "submission_id": submission, **fields,
+        })
+        self.assertEqual(status, 200, result)
+        identifier, key = result["cloud_file"]["id"], result["upload"]["fields"]["key"]
+        objects[key] = 100
+        self.assertEqual(self.account_drive_request(f"{account}/{identifier}/complete", {})[0], 200)
+        return identifier, key
+
+    def test_cloud_drive_folder_upload_move_and_rename_preserve_object_path(self):
+        """Relative paths merge and a retry after move or rename still uses the original object."""
+        account, objects, attempts = self.prepare_cloud_drive()
+        folder = self.account_drive_request(account + "/folders", {"name": "视频"})[1]["folder"]["id"]
+        relative = "素材/第一集"
+        first, key = self.put_drive_file(account, objects, "我的图 甲.webp", "drive-first",
+                                         folder_id=folder, relative_dir=relative)
+        second, _ = self.put_drive_file(account, objects, "我的图 甲.webp", "drive-second",
+                                        folder_id=folder, relative_dir=relative)
+        self.assertEqual(key, f"codiscuss/cloud/{first}/我的图 甲.webp")
+        target = self.account_drive_request(account + "/folders", {"parent_id": folder, "path": relative})[1]["folder"]["id"]
+        _, content = self.account_drive_request(f"{account}?folder={target}")
+        self.assertEqual([item["name"] for item in content["folder"]["path"]], ["云空间", "视频", "素材", "第一集"])
+        self.assertEqual({item["id"] for item in content["files"]}, {first, second})
+        destination = self.account_drive_request(account + "/folders", {"name": "归档"})[1]["folder"]["id"]
+        self.assertEqual(self.account_drive_request(account + "/move", {"file_ids": [first], "target_id": destination})[1]["moved"], [first])
+        changed = self.account_drive_request(account + "/rename", {"kind": "file", "id": first, "name": "新名.webp"})[1]["file"]
+        self.assertEqual((changed["file_name"], changed["folder_id"]), ("新名.webp", destination))
+        self.assertEqual([row["id"] for row in self.account_drive_request(account + "?folder=root&q=%E6%96%B0%E5%90%8D")[1]["files"]], [first])
+        retry = self.account_drive_request(account + "/upload", {"file_name": "我的图 甲.webp", "content_type": "image/webp",
+                             "size": 100, "submission_id": "drive-first", "folder_id": folder, "relative_dir": relative})[1]
+        self.assertEqual((retry["cloud_file"]["id"], retry["upload"]), (first, None))
+        self.assertEqual([log for log in attempts if log[0] == "POST"], [("POST", name) for name in objects])
+
+    def test_cloud_drive_folder_conflicts_cycle_depth_and_batch_validation(self):
+        """Invalid folder or batch writes do not move a valid selected file."""
+        account, objects, _ = self.prepare_cloud_drive()
+        first, _ = self.put_drive_file(account, objects, "file.webp", "cloud-folder-move")
+        outer = self.account_drive_request(account + "/folders", {"name": "Top"})[1]["folder"]["id"]
+        child = self.account_drive_request(account + "/folders", {"parent_id": outer, "name": "Child"})[1]["folder"]["id"]
+        self.assertEqual(self.account_drive_request(account + "/folders", {"name": "Top"})[0], 409)
+        self.assertEqual(self.account_drive_request(account + "/folders", {"path": "Top/../Other"})[0], 400)
+        self.assertEqual(self.account_drive_request(account + "/rename", {"kind": "folder", "id": child, "name": "B\x85bad"})[0], 400)
+        self.assertEqual(self.account_drive_request(account + "/move", {"file_ids": [first], "folder_ids": [outer], "target_id": child})[0], 400)
+        deep = self.account_drive_request(account + "/folders", {"path": "/".join("ABCDXYZEF")})[1]["folder"]["id"]
+        self.assertEqual(self.account_drive_request(account + "/move", {"folder_ids": [outer], "target_id": deep})[0], 400)
+        self.assertEqual(self.account_drive_request(account + "/folders", {"parent_id": deep, "path": "one/two"})[0], 400)
+        self.assertEqual(self.account_drive_request(account + "/move", {"file_ids": [first, uuid.uuid4().hex], "target_id": child})[0], 404)
+        self.assertEqual(self.account_drive_request(account + "/delete", {"ids": [first] * 501})[0], 400)
+        self.assertEqual([row["id"] for row in self.account_drive_request(account + "?folder=root")[1]["files"]], [first])
+
+    def test_cloud_drive_recycle_tree_merges_and_file_restores_to_root(self):
+        """A recycled tree keeps its bytes and merges into directories with the same name when restored."""
+        account, objects, _ = self.prepare_cloud_drive()
+        top = self.account_drive_request(account + "/folders", {"name": "Top"})[1]["folder"]["id"]
+        first, _ = self.put_drive_file(account, objects, "one.webp", "trash-tree", folder_id=top, relative_dir="Child")
+        standalone, _ = self.put_drive_file(account, objects, "two.webp", "trash-file", folder_id=top)
+        self.assertEqual(self.account_drive_request(account + "/delete", {"id": standalone})[1]["trashed"], [standalone])
+        self.assertEqual(self.account_drive_request(account + "/delete", {"folder_ids": [top]})[1]["trashed"], [top])
+        trash = self.account_drive_request(account + "?folder=trash")[1]
+        self.assertEqual((trash["trash_bytes"], trash["used_bytes"]), (200, 200))
+        self.assertEqual([folder["id"] for folder in trash["folders"]], [top])
+        self.assertEqual([row["id"] for row in trash["files"]], [standalone])
+        self.assertEqual(self.account_drive_request(f"{account}/{first}/content?link=1")[0], 410)
+        self.assertEqual(self.account_drive_request(f"{account}/{first}/shares", {"days": 1})[0], 409)
+        self.assertEqual(self.account_drive_request(account + "/restore", {"ids": [standalone]})[0], 200)
+        self.assertEqual([row["id"] for row in self.account_drive_request(account + "?folder=root")[1]["files"]], [standalone])
+        merger = self.account_drive_request(account + "/folders", {"path": "Top/Child"})[1]["folder"]["id"]
+        self.assertEqual(self.account_drive_request(account + "/restore", {"folder_ids": [top]})[1]["restored"], [top])
+        self.assertEqual([row["id"] for row in self.account_drive_request(account + f"?folder={merger}")[1]["files"]], [first])
+        self.assertEqual(self.account_drive_request(f"{account}/{first}/content?link=1")[0], 200)
+        self.assertEqual(self.account_drive_request(account + "?folder=trash")[1]["trash_bytes"], 0)
+
+    def test_cloud_drive_recycle_sweep_keeps_failures_until_remote_confirmation(self):
+        """Expired folders stay in the recycle bin until remote storage confirms every deletion."""
+        account, objects, attempts = self.prepare_cloud_drive()
+        folder = self.account_drive_request(account + "/folders", {"name": "Expired"})[1]["folder"]["id"]
+        _, success = self.put_drive_file(account, objects, "good.webp", "trash-good", folder_id=folder)
+        _, failure = self.put_drive_file(account, objects, "bad.webp", "trash-bad", folder_id=folder, relative_dir="Child")
+        self.assertEqual(self.account_drive_request(account + "/delete", {"folder_ids": [folder]})[0], 200)
+        sweep_attachments(self.database)
+        self.assertTrue(all(attempt[0] != "DELETE" for attempt in attempts))
+        with closing(connect_db(self.database)) as connection, connection:
+            for table in ("cloud_folders", "cloud_files"):
+                connection.execute(f"UPDATE {table} SET trashed_at='2000-01-01T00:00:00+00:00' WHERE trash_root=?", (folder,))
+        objects[failure] = -1
+        with self.assertLogs(level="WARNING"):
+            sweep_attachments(self.database)
+        self.assertNotIn(success, objects)
+        trash = self.account_drive_request(account + "?folder=trash")[1]
+        self.assertEqual((trash["trash_bytes"], trash["used_bytes"]), (100, 100))
+        self.assertEqual([item["id"] for item in trash["folders"]], [folder])
+        objects[failure] = 100
+        sweep_attachments(self.database)
+        trash = self.account_drive_request(account + "?folder=trash")[1]
+        self.assertEqual((trash["trash_bytes"], trash["used_bytes"], trash["folders"]), (0, 0, []))
+        self.assertNotIn(failure, objects)
+
+    def test_cloud_drive_thumbnail_accepts_raw_and_json_for_active_account_file(self):
+        """The small preview is accepted raw or as a JSON envelope and purged with the file."""
+        account, objects, _ = self.prepare_cloud_drive()
+        first, _ = self.put_drive_file(account, objects, "image.webp", "thumbnail-first")
+        second, _ = self.put_drive_file(account, objects, "another.webp", "thumbnail-second")
+        image = (b"RIFF" + (22).to_bytes(4, "little") + b"WEBPVP8X" + (10).to_bytes(4, "little")
+                 + bytes(10))
+        path = account + f"/{first}/thumbnail"
+        encoded = {"data": base64.b64encode(image).decode()}
+        self.assertEqual(self.account_drive_request(path, encoded, token=self.owner)[0], 403)
+        bad_size = image[:24] + b"\xff\xff\x00" + image[27:]
+        self.assertEqual(self.account_drive_request(path, {"data": base64.b64encode(bad_size).decode()})[0], 400)
+        upload = Request(self.base + path, image, {"Content-Type": "application/octet-stream"})
+        with urlopen(upload, timeout=5) as response:
+            self.assertEqual(json.load(response)["cloud_file"]["thumbnail_url"], path)
+        self.assertEqual(self.account_drive_request(account + f"/{second}/thumbnail", encoded)[0], 200)
+        with urlopen(self.base + path, timeout=5) as response:
+            self.assertEqual((response.headers["Content-Type"], response.read()), ("image/webp", image))
+        self.assertEqual(self.account_drive_request(account + "/delete", {"id": first})[0], 200)
+        self.assertEqual(self.account_drive_request(path)[0], 404)
+        self.assertEqual(self.account_drive_request(account + "/trash/empty", {})[1]["cleared"], [first])
+        self.assertFalse(any(self.database.parent.glob(f"*.attachments/cloud-{first}.thumbnail")))
+
+    def test_cloud_drive_system_entries_are_read_only_and_delete_immediately(self):
+        """Attachments and transfers appear only in their system folders, without drive mutations."""
+        sent = self.cloud_land_fixture()
+        self.server.local_site = True
+        account = "/api/rooms/cloud-attachments"
+        attachment = sent["attachment_id"]
+        route = f"/api/rooms/{sent['room']}/cloud-files"
+        status, result = self.request(route, {"file_name": "remote.zip", "content_type": "application/zip", "size": 16,
+                                      "source_kind": "project_folder", "source_ref": "0:remote", "purpose": "outbound",
+                                      "submission_id": "drive-transfer"})
+        self.assertEqual(status, 200, result)
+        transfer = result["cloud_file"]["id"]
+        transfer_key = result["upload"]["fields"]["key"]
+        with patch("backend.server.verify_object_size"):
+            self.assertEqual(self.request(f"{route}/{transfer}/complete", {})[0], 200)
+        self.assertEqual([row["id"] for row in self.account_drive_request(account + "?folder=rooms")[1]["files"]], [attachment])
+        self.assertEqual([row["id"] for row in self.account_drive_request(account + "?folder=transfers")[1]["files"]], [transfer])
+        self.assertEqual(self.account_drive_request(account + "?folder=root")[1]["files"], [])
+        for identifier in (attachment, transfer):
+            self.assertEqual(self.account_drive_request(account + "/rename", {"kind": "file", "id": identifier, "name": "other"})[0], 404)
+            self.assertEqual(self.account_drive_request(account + "/move", {"file_ids": [identifier]})[0], 404)
+        target = {"room": sent["room"], "cloud_file_id": transfer}
+        self.assertEqual(self.cloud_land_request("/api/local/project-files/cloud-land", target)[0], 404)
+        receipt = self.account_drive_request(account + "/delete", {"ids": [attachment, transfer]})[1]
+        self.assertCountEqual(receipt["cleared"], [attachment, transfer])
+        self.assertEqual((receipt["trashed"], receipt["freed_bytes"], receipt["used_bytes"]), ([], 32, 0))
+        self.assertTrue(transfer_key.endswith("/remote.zip"))
+
+    def test_cloud_drive_permanent_delete_reports_confirmed_and_failed_objects(self):
+        """A provider failure cannot roll back a deletion and cannot release a failed object's quota."""
+        account, objects, _ = self.prepare_cloud_drive()
+        first, first_key = self.put_drive_file(account, objects, "one.webp", "purge-first")
+        second, second_key = self.put_drive_file(account, objects, "two.webp", "purge-second")
+        self.assertEqual(self.account_drive_request(account + "/delete", {"ids": [first, second]})[0], 200)
+        objects[second_key] = -1
+        with self.assertLogs(level="WARNING"):
+            status, result = self.account_drive_request(account + "/trash/empty", method="POST")
+        self.assertEqual((status, result["cleared"], result["failed"], result["used_bytes"]), (503, [first], [second], 100))
+        self.assertNotIn(first_key, objects)
+        self.assertEqual([row["id"] for row in self.account_drive_request(account + "?folder=trash")[1]["files"]], [second])
+        objects[second_key] = 100
+        _, retry = self.account_drive_request(account + "/delete", {"ids": [second], "permanent": True})
+        self.assertEqual((retry["cleared"], retry["used_bytes"]), ([second], 0))
+
+    def test_cloud_drive_purge_batches_allow_repeated_folder_selection(self):
+        """Repeating the same selection skips folders purged on an earlier batch."""
+        from backend.cloud_drive import PURGE_BATCH
+
+        account, objects, _ = self.prepare_cloud_drive()
+        first = self.account_drive_request(account + "/folders", {"name": "First"})[1]["folder"]["id"]
+        second = self.account_drive_request(account + "/folders", {"name": "Second"})[1]["folder"]["id"]
+        put = [self.put_drive_file(account, objects, f"{index}.webp", f"purge-page-{index}",
+                                   folder_id=first if index == 0 else second)[0] for index in range(PURGE_BATCH + 1)]
+        body = {"folder_ids": [first, second], "permanent": True}
+        status, result = self.account_drive_request(account + "/delete", body)
+        self.assertEqual((status, len(result["cleared"]), result["remaining"]), (200, PURGE_BATCH, 1))
+        self.assertEqual(self.account_drive_request(account + "/restore", {"folder_ids": [second]})[0], 409)
+        status, tail = self.account_drive_request(account + "/delete", body)
+        self.assertEqual((status, len(tail["cleared"]), tail["remaining"]), (200, 1, 0))
+        self.assertCountEqual(result["cleared"] + tail["cleared"], put)
+        self.assertEqual(self.account_drive_request(account + "/delete", body)[1]["remaining"], 0)
+
+    def test_cloud_drive_slow_purge_and_sweep_allow_room_writes_without_restoring_selected_file(self):
+        """SQLite accepts a message while COS is stalled, but the selected file cannot be restored."""
+        account, objects, _ = self.prepare_cloud_drive()
+        for mode in ("request", "sweep"):
+            with self.subTest(mode=mode):
+                identifier, _ = self.put_drive_file(account, objects, f"{mode}.webp", f"slow-purge-{mode}")
+                self.assertEqual(self.account_drive_request(account + "/delete", {"id": identifier})[0], 200)
+                if mode == "sweep":
+                    with closing(connect_db(self.database)) as connection, connection:
+                        connection.execute("UPDATE cloud_files SET trashed_at=? WHERE id=?",
+                                           ("2000-01-01T00:00:00+00:00", identifier))
+                started, finished = threading.Event(), threading.Event()
+
+                def remote_delete(client, name):
+                    started.set()
+                    if not finished.wait(5):
+                        raise AssertionError("The room write did not finish while COS was blocked")
+                    objects.pop(name, None)
+
+                with patch("backend.object_storage.ResourceCenter.delete", remote_delete), ThreadPoolExecutor() as pool:
+                    work = (pool.submit(self.account_drive_request, account + "/trash/empty", {})
+                            if mode == "request" else pool.submit(sweep_attachments, self.database))
+                    try:
+                        self.assertTrue(started.wait(3))
+                        posting = pool.submit(self.post, f"still writing during {mode}", f"slow-room-{mode}")
+                        self.assertEqual(posting.result(timeout=2)[0], 201)
+                        restore = pool.submit(self.account_drive_request, account + "/restore", {"ids": [identifier]})
+                        self.assertEqual(restore.result(timeout=2)[0], 409)
+                    finally:
+                        finished.set()
+                    work.result(timeout=5)
+                self.assertEqual(self.account_drive_request(account + "?folder=trash")[1]["trash_bytes"], 0)
+
+    def test_cloud_drive_managed_purge_one_at_a_time(self):
+        """Do not queue multiple deletes behind the per-account administrator signer lock."""
+        from backend.object_storage import AdministratorStorage
+
+        account, objects, _ = self.prepare_cloud_drive()
+        identifiers = [self.put_drive_file(account, objects, f"{index}.webp", f"managed-{index}")[0] for index in range(2)]
+        self.assertEqual(self.account_drive_request(account + "/delete", {"ids": identifiers})[0], 200)
+        client = AdministratorStorage(None)
+        with patch("backend.server.configured_storage", return_value=client), patch.object(client, "delete") as remove:
+            status, first = self.account_drive_request(account + "/trash/empty", {})
+            self.assertEqual((status, len(first["cleared"]), first["remaining"], remove.call_count), (200, 1, 1, 1))
+            status, last = self.account_drive_request(account + "/trash/empty", {})
+            self.assertEqual((status, len(last["cleared"]), last["remaining"], remove.call_count), (200, 1, 0, 2))
+        self.assertCountEqual(first["cleared"] + last["cleared"], identifiers)
+
+    def test_cloud_drive_object_key_replaces_every_percent_and_keeps_extension_under_byte_limit(self):
+        """Stored object keys reserve the account prefix and never truncate inside a Unicode character."""
+        account, objects, _ = self.prepare_cloud_drive()
+        name = "%%2e%%2e%%2f" + "测🚀" * 115 + ".jpeg"
+        identifier, key = self.put_drive_file(account, objects, name, "long-object-name")
+        complete_key = key.replace("codiscuss/", "codiscuss/" + "a" * 32 + "/", 1)
+        self.assertLessEqual(len(complete_key.encode("utf-8")), 850)
+        self.assertTrue(key.startswith(f"codiscuss/cloud/{identifier}/__2e__2e__2f测🚀"))
+        self.assertTrue(key.endswith(".jpeg"))
+        self.assertNotIn("%", key)
+        self.assertEqual(self.account_drive_request(account + "?folder=root")[1]["files"][0]["file_name"], name)
+
+    def test_cloud_drive_upload_is_account_scoped_reserved_once_and_verified(self):
+        """One submission binds a private account file and is idempotent even without a room ID."""
+        objects, attempts = {}, []
+        self.mock_cloud_files(objects, attempts)
+        self.server.local_site = True
+        route = "/api/rooms/cloud-attachments"
+        upload = route + "/upload"
+        draft = {"file_name": "随身材料.zip", "size": 25, "content_type": "application/zip", "submission_id": "drive-test-file"}
+        self.assertEqual(self.request(upload, draft, token=self.owner)[0], 403)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            replies = list(pool.map(lambda _: self.cloud_land_request(upload, draft), range(2)))
+        self.assertEqual([status for status, _ in replies], [200, 200], replies)
+        file = replies[0][1]["cloud_file"]
+        self.assertIsNone(file["room_id"])
+        self.assertEqual((file["source_kind"], file["source_ref"], file["purpose"]), ("upload", draft["file_name"], "keep"))
+        self.assertEqual(replies[1][1]["cloud_file"]["id"], file["id"])
+        self.assertEqual(self.cloud_land_request(upload, {**draft, "size": 26})[0], 409)
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 25)
+
+        complete = f"{route}/{file['id']}/complete"
+        self.assertEqual(self.request(complete, {}, token=self.owner)[0], 403)
+        self.assertEqual(self.cloud_land_request(complete, {})[0], 409)
+        key = replies[0][1]["upload"]["fields"]["key"]
+        objects[key] = 26
+        self.assertEqual(self.cloud_land_request(complete, {})[0], 409)
+        objects[key] = 25
+        for _ in range(2):
+            self.assertTrue(self.cloud_land_request(complete, {})[1]["cloud_file"]["stored"])
+        self.assertIsNone(self.cloud_land_request(upload, draft)[1]["upload"])
+        with urlopen(self.base + file["url"] + "?link=1", timeout=5) as response:
+            self.assertEqual(json.load(response)["size"], 25)
+        room_route = f"/api/rooms/{self.room['id']}/cloud-files/{file['id']}/content?link=1"
+        self.assertEqual(self.request(room_route)[0], 404)
+
+    def test_cloud_drive_landing_grant_names_one_saved_account_file(self):
+        """A U-disk takeback advances only when the account administrator authorizes that exact file."""
+        objects, attempts = {}, []
+        self.mock_cloud_files(objects, attempts)
+        self.server.local_launch = True
+        self.server.local_site = True
+        account = "/api/rooms/cloud-attachments"
+        _, upload = self.cloud_land_request(account + "/upload", {
+            "file_name": "brief.txt", "size": 12, "content_type": "text/plain", "submission_id": "drive-to-project"})
+        file = upload["cloud_file"]
+        room = self.room["id"]
+        body = {"room": room, "cloud_file_id": file["id"], "token": self.owner, "root": 0, "path": ""}
+        put = "/api/local/project-files/cloud-land"
+        claim = f"/api/rooms/{room}/cloud-land/redeem"
+        with patch("backend.server.DiscussionHandler.local_command_result", return_value=(200, {"task_id": "receipt"})) as invoke:
+            self.assertEqual(self.cloud_land_request(put, body)[0], 404)
+            key = upload["upload"]["fields"]["key"]
+            objects[key] = 12
+            self.assertEqual(self.cloud_land_request(f"{account}/{file['id']}/complete", {})[0], 200)
+            self.assertEqual(self.cloud_land_request(put, body, {"X-Discussion-Token": self.owner})[0], 403)
+            self.assertEqual(self.cloud_land_request(put, {**body, "attachment_id": file["id"]})[0], 400)
+            self.assertEqual(self.cloud_land_request(put, body), (200, {"task_id": "receipt"}))
+            forwarded = invoke.call_args.args[1]
+        self.assertEqual(forwarded["cloud_file_id"], file["id"])
+        params = {"cloud_file_id": file["id"], "grant": forwarded["attachment_grant"]}
+        self.assertEqual(self.cloud_land_request(claim, {**params, "cloud_file_id": "b" * 32})[0], 403)
+        status, receipt = self.cloud_land_request(claim, params)
+        self.assertEqual(status, 200, receipt)
+        self.assertEqual((receipt["cloud_file"]["id"], receipt["link"]["size"]), (file["id"], 12))
+        self.assertEqual(self.cloud_land_request(claim, params)[0], 403)
+        self.assertIn(key, objects)
+
+    def test_cloud_file_outbound_reservation_reuses_live_version_and_renews_after_expiry(self):
+        """Expired downloads can be staged again without freeing unconfirmed remote bytes."""
+        objects, attempts = {}, []
+        self.mock_cloud_files(objects, attempts)
+        route = f"/api/rooms/{self.room['id']}/cloud-files"
+        draft = {"file_name": "file.txt", "size": 10, "content_type": "text/plain", "source_kind": "project_file",
+                 "source_ref": "0:file.txt", "source_version": "10-123", "purpose": "outbound", "submission_id": "outbound-file"}
+        status, original = self.request(route, draft)
+        self.assertEqual(status, 200, original)
+        original_id = original["cloud_file"]["id"]
+        original_name = original["upload"]["fields"]["key"]
+        objects[original_name] = 10
+        self.assertEqual(self.request(f"{route}/{original_id}/complete", {})[0], 200)
+        retry = self.request(route, draft)[1]
+        self.assertEqual(retry["cloud_file"]["id"], original_id)
+        self.assertIsNone(retry["upload"])
+        self.assertEqual(self.request(route, {**draft, "source_version": "10-456"})[0], 409)
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.execute("UPDATE cloud_files SET expires_at='2000-01-02T00:00:00+00:00' WHERE id=?", (original_id,))
+        status, renewed = self.request(route, draft)
+        self.assertEqual(status, 200, renewed)
+        self.assertNotEqual(renewed["cloud_file"]["id"], original_id)
+        self.assertEqual(self.request(route, draft)[1]["cloud_file"]["id"], renewed["cloud_file"]["id"])
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 20)
+        sweep_attachments(self.database)
+        self.assertNotIn(original_name, objects)
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 10)
+
+    def test_cloud_file_reservation_completion_and_combined_quota(self):
+        """An owner reserves exactly once; size, room binding and shared quota are checked."""
+        objects, attempts = {}, []
+        self.mock_cloud_files(objects, attempts)
+        self.database.with_name(QUOTA_NAME).write_text("30", encoding="utf-8")
+        room_id = self.room["id"]
+        route = f"/api/rooms/{room_id}/cloud-files"
+        size = 10 * 1024 * 1024
+        draft = {"file_name": "目录.zip", "size": size, "content_type": "application/zip",
+                 "source_kind": "project_folder", "source_ref": "1:src/目录", "submission_id": "folder-1"}
+        self.assertEqual(self.request(route, draft, token=self.member_tokens["Claude"])[0], 403)
+        status, reserved = self.request(route, draft)
+        self.assertEqual(status, 200, reserved)
+        file = reserved["cloud_file"]
+        key = reserved["upload"]["fields"]["key"]
+        self.assertEqual(key, f"codiscuss/cloud/{file['id']}/目录.zip")
+        self.assertEqual((file["source_ref"], file["kind"], file["stored"]), (draft["source_ref"], "cloud_file", False))
+        self.assertNotIn("object_name", file)
+        self.assertEqual(self.request(route, draft)[1]["cloud_file"]["id"], file["id"])
+        self.assertEqual(self.request(route, {**draft, "size": size + 1})[0], 409)
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], size)
+        self.assertEqual(self.request(f"/api/rooms/{room_id}/attachments/object", {
+            "file_name": "too-large.zip", "size": 21 * 1024 * 1024, "content_type": "application/zip",
+            "submission_id": "shared-cap",
+        })[0], 409)
+
+        complete = f"{route}/{file['id']}/complete"
+        self.assertEqual(self.request(complete, {})[0], 409)
+        with patch("backend.server.configured_storage") as configured:
+            configured.return_value.file_size.side_effect = ManagedStorageOffline()
+            status, error = self.request(complete, {})
+            self.assertEqual((status, error["error"]), (503, "云空间暂不可用（管理员服务未运行）"))
+        objects[key] = size - 1
+        self.assertEqual(self.request(complete, {})[0], 409)
+        objects[key] = size
+        self.assertTrue(self.request(complete, {})[1]["cloud_file"]["stored"])
+        self.assertIsNone(self.request(route, draft)[1]["upload"])
+        status, link = self.request(file["url"] + "?link=1")
+        self.assertEqual(status, 200, link)
+        self.assertEqual((link["size"], link["url"]), (size, "https://cos.example/read"))
+        other = self.request("/api/rooms", {"title": "另一个房间", "goal": "验证文件隔离"})[1]["id"]
+        self.assertEqual(self.request(file["url"].replace(room_id, other) + "?link=1")[0], 404)
+
+    def wait_for_cloud_copy(self, status_path):
+        """Read the terminal receipt through the public task endpoint."""
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            status, job = self.request(status_path)
+            self.assertEqual(status, 200, job)
+            if job["status"] != "running":
+                return job
+            time.sleep(0.02)
+        self.fail("Cloud copy did not finish")
+
+    def test_attachment_cloud_copy_streams_original_and_deduplicates_running_requests(self):
+        """The response precedes upload completion and retries do not post another form."""
+        objects, attempts = {}, []
+        self.mock_cloud_files(objects, attempts)
+        base = f"/api/rooms/{self.room['id']}"
+        original = b"kept exactly on disk\n"
+        parameters = urlencode({"actor": "用户", "file_name": "example.txt", "submission_id": "copy-source"})
+        uploaded = self.attachment_request(base + "/attachments?" + parameters, original)
+        source = json.loads(uploaded[2])["attachment"]
+        path = f"{base}/attachments/{source['id']}/cloud-copy"
+        self.assertEqual(self.request(path, {}, token=self.member_tokens["Claude"])[0], 403)
+
+        upload_started, release_upload = threading.Event(), threading.Event()
+        with patch("backend.server.HTTPSConnection") as https:
+            def post_form(method, url, chunks, headers):
+                upload_started.set()
+                if not release_upload.wait(5):
+                    raise TimeoutError()
+                self.assertEqual((method, url), ("POST", "/upload"))
+                body = b"".join(chunks)
+                self.assertEqual(len(body), int(headers["Content-Length"]))
+                self.assertIn(b'name="policy"\r\n\r\npolicy', body)
+                self.assertIn(b'name="file"; filename="file"', body)
+                self.assertIn(b"\r\n\r\n" + original + b"\r\n", body)
+                objects[attempts[-1][1]] = len(original)
+            transport = https.return_value
+            transport.request.side_effect = post_form
+            transport.getresponse.return_value.__enter__.return_value.status = 204
+            try:
+                status, task = self.request(path, {})
+                self.assertEqual((status, task["status"]), (202, "running"))
+                task_id = task["task_id"]
+                status_path = f"{path}/{task_id}"
+                self.assertTrue(upload_started.wait(3))
+                self.assertEqual(self.request(path, {})[1]["task_id"], task_id)
+                self.assertEqual(self.request(status_path)[1]["status"], "running")
+                self.assertEqual(self.request(path)[1]["task_id"], task_id)
+                self.assertEqual(self.request(status_path, token=self.member_tokens["Claude"])[0], 403)
+                unrelated = f"{base}/attachments/{uuid.uuid4().hex}/cloud-copy/{task_id}"
+                self.assertEqual(self.request(unrelated)[0], 404)
+            finally:
+                release_upload.set()
+            done = self.wait_for_cloud_copy(status_path)
+            self.assertEqual((done["status"], done["progress"]), ("completed", 1))
+            copied = done["cloud_file"]
+            self.assertEqual((copied["source_kind"], copied["source_ref"], copied["stored"]),
+                             ("attachment", source["id"], True))
+            self.assertEqual(self.request(path, {}), (200, done))
+            self.assertEqual(self.request(copied["url"] + "?link=1")[0], 200)
+            transport.request.assert_called_once()
+        self.assertEqual(self.attachment_request(source["url"])[2], original)
+        _, remote = self.request(base + "/attachments/object", {
+            "file_name": "already.zip", "size": 30 * 1024 * 1024, "content_type": "application/zip",
+            "submission_id": "already-on-cos",
+        })
+        self.assertEqual(self.request(base + f"/attachments/{remote['attachment']['id']}/cloud-copy", {})[0], 400)
+
+    def test_attachment_cloud_copy_failure_can_retry_same_task(self):
+        """A COS failure is visible by polling, and the next POST reuses the quota reservation."""
+        objects, attempts = {}, []
+        self.mock_cloud_files(objects, attempts)
+        base = f"/api/rooms/{self.room['id']}/attachments"
+        contents = b"retry the same file"
+        query = urlencode({"actor": "用户", "file_name": "example.txt", "submission_id": "retry-async"})
+        uploaded = self.attachment_request(base + "?" + query, contents)
+        source = json.loads(uploaded[2])["attachment"]
+        start = f"{base}/{source['id']}/cloud-copy"
+
+        with patch("backend.server.HTTPSConnection") as https:
+            response = https.return_value.getresponse.return_value.__enter__.return_value
+            response.status = 500
+            status, task = self.request(start, {})
+            self.assertEqual(status, 202, task)
+            task_id = task["task_id"]
+            status_path = f"{start}/{task_id}"
+            failed = self.wait_for_cloud_copy(status_path)
+            self.assertEqual((failed["status"], failed["error"]), ("failed", "对象存储暂不可用"))
+            self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], len(contents))
+
+            def retry_form(method, url, chunks, headers):
+                for _ in chunks:
+                    pass
+                objects[attempts[-1][1]] = len(contents)
+            https.return_value.request.side_effect = retry_form
+            response.status = 204
+            self.assertEqual(self.request(start, {})[1]["task_id"], task_id)
+            self.assertEqual(self.wait_for_cloud_copy(status_path)["cloud_file"]["id"], task_id)
+
+    def test_cloud_files_upgrade_cleanup_and_manage_after_room_is_removed(self):
+        """Migration preserves rooms, stale drafts retry, and saved copies remain manageable."""
+        objects, attempts = {}, []
+        self.mock_cloud_files(objects, attempts)
+        room_id = self.room["id"]
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.execute("DROP TABLE cloud_files")
+        init_database(self.database, seed=False)
+        route = f"/api/rooms/{room_id}/cloud-files"
+        draft = {"file_name": "source.txt", "size": 5, "content_type": "text/plain",
+                 "source_kind": "project_file", "source_ref": "1:source.txt"}
+        reservations = [self.request(route, {**draft, "submission_id": f"reserve-{key}"})
+                        for key in ("fresh", "stale", "stored")]
+        self.assertEqual([status for status, _ in reservations], [200, 200, 200], reservations)
+        fresh, stale, stored = [body for _, body in reservations]
+        stale_id, stale_key = stale["cloud_file"]["id"], stale["upload"]["fields"]["key"]
+        stored_id, stored_key = stored["cloud_file"]["id"], stored["upload"]["fields"]["key"]
+        objects.update({stale_key: -1, stored_key: 5})
+        self.assertEqual(self.request(f"{route}/{stored_id}/complete", {})[0], 200)
+        with closing(connect_db(self.database)) as connection, connection:
+            connection.execute("UPDATE cloud_files SET created_at='2000-01-01T00:00:00+00:00' WHERE id IN (?,?)",
+                               (stale_id, stored_id))
+        with self.assertLogs(level="WARNING"):
+            sweep_attachments(self.database)
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 15)
+        objects.pop(stale_key)
+        sweep_attachments(self.database)
+        self.assertEqual(self.request("/api/attachment-limit")[1]["object_storage_used_bytes"], 10)
+        self.assertEqual(self.request(f"{route}/{stale_id}/complete", {})[0], 404)
+        self.assertEqual(self.request(f"/api/rooms/{room_id}/delete", {"actor": "用户"})[0], 200)
+
+        self.server.local_site = True
+        account = self.base + "/api/rooms/cloud-attachments"
+        with urlopen(account, timeout=5) as listing:
+            files = {item["id"]: item for item in json.load(listing)["attachments"]}
+        self.assertEqual(set(files), {fresh["cloud_file"]["id"], stored_id})
+        file = files[stored_id]
+        self.assertIsNone(file["room_id"])
+        self.assertEqual(file["kind"], "cloud_file")
+        with urlopen(self.base + file["url"] + "?link=1", timeout=5) as response:
+            self.assertEqual(json.load(response)["size"], 5)
+        deletion = Request(account + "/delete", json.dumps({"id": stored_id, "permanent": True}).encode(),
+                           {"Content-Type": "application/json"})
+        with urlopen(deletion, timeout=5) as response:
+            self.assertEqual(json.load(response)["freed_bytes"], 5)
+
     def test_cloud_attachment_reserves_account_quota_and_uses_cloud_threshold(self):
         """Concurrent reservations from different rooms share one cap, and an idempotent retry does not add usage."""
         def resource(method, path, params, data):
@@ -1058,7 +1878,11 @@ class DiscussionTests(unittest.TestCase):
     def test_cloud_attachment_management_requires_account_authority_and_confirms_remote_delete(self):
         """Site management may delete across rooms, while failure preserves the record and quota."""
         attempts = []
+        link = "https://cos.example/file?signature=fixture"
         def resource(method, path, params, data):
+            if (method, path) == ("GET", "/presigned-download-url"):
+                self.assertEqual((params["fileName"], params["expiresIn"]), (["managed-object"], ["600"]))
+                return {"succeed": True, "data": {"url": link, "expiresAt": "2030-01-01T00:00:00Z"}}
             self.assertEqual((method, path), ("DELETE", "/file"))
             attempts.append(params["fileName"][0])
             return {"succeed": len(attempts) > 1, "code": 503}
@@ -1067,12 +1891,14 @@ class DiscussionTests(unittest.TestCase):
         identifier = uuid.uuid4().hex
         with closing(connect_db(self.database)) as connection, connection:
             connection.execute("""INSERT INTO attachments
-                (id,room_id,file_name,content_type,size,sha256,actor,submission_id,created_at,storage,object_name)
-                VALUES (?,?,'large.zip','application/zip',100,'','用户','manage-cloud',CURRENT_TIMESTAMP,'object','managed-object')""",
+                (id,room_id,file_name,content_type,size,sha256,actor,submission_id,created_at,storage,object_name,stored_at)
+                VALUES (?,?,'large.zip','application/zip',100,'','用户','manage-cloud',CURRENT_TIMESTAMP,'object','managed-object',CURRENT_TIMESTAMP)""",
                 (identifier, room_id))
         route = "/api/rooms/cloud-attachments"
+        content = f"/{identifier}/content?link=1"
         for token in (self.owner, self.member_tokens["Claude"]):
             self.assertEqual(self.request(route, token=token)[0], 403)
+            self.assertEqual(self.request(route + content, token=token)[0], 403)
             self.assertEqual(self.request(route + "/delete", {"id": identifier}, token=token)[0], 403)
         def manage(path="", data=None, headers=None):
             headers = {"Content-Type": "application/json", **(headers or {})}
@@ -1085,6 +1911,7 @@ class DiscussionTests(unittest.TestCase):
                 return response.status, json.load(response)
 
         self.assertEqual(manage()[0], 403)
+        self.assertEqual(manage(content)[0], 403)
         self.assertEqual(manage("/delete", {"id": identifier})[0], 403)
         registration = Request(self.base + "/api/admin/register", json.dumps({
             "username": "TestAdmin", "password": "test-admin-password", "setup_key": self.server.admin_setup_key,
@@ -1098,13 +1925,16 @@ class DiscussionTests(unittest.TestCase):
         self.assertEqual((listing["attachments"][0]["id"], listing["attachments"][0]["room_title"],
                           listing["used_bytes"], listing["quota_mib"]), (identifier, "云空间另一房间", 100, 10240))
         self.assertNotIn("object_name", listing["attachments"][0])
+        status, signed = manage(content, headers=admin)
+        self.assertEqual((status, signed["url"], signed["size"], signed["file_name"]), (200, link, 100, "large.zip"))
         with self.assertLogs(level="WARNING"):
             self.assertEqual(manage("/delete", {"id": identifier}, admin)[0], 503)
         self.assertEqual(manage(headers=admin)[1]["used_bytes"], 100)
         self.assertEqual(manage("/delete", {"id": identifier}, admin), (200, {
-            "cleared": [identifier], "freed_bytes": 100, "used_bytes": 0, "quota_mib": 10240,
+            "trashed": [], "cleared": [identifier], "freed_bytes": 100, "remaining": 0, "used_bytes": 0, "quota_mib": 10240,
         }))
         self.assertEqual(manage("/delete", {"id": identifier}, admin)[1]["cleared"], [])
+        self.assertEqual(manage(content, headers=admin)[0], 410)
         self.assertEqual(attempts, ["managed-object", "managed-object"])
         self.assertEqual(manage(headers=admin)[1]["attachments"], [])
         self.server.local_site = True
@@ -1602,7 +2432,7 @@ class DiscussionTests(unittest.TestCase):
         tables = snapshot["tables"]
         self.assertEqual(set(tables), {"rooms", "room_directory", "room_folder_assignments", "topic_folders", "room_creations",
                                       "room_briefs", "room_user_requests", "topic_settings", "discussion_limits", "member_labels", "member_descriptions", "messages", "message_withdrawals", "message_details", "message_summaries", "message_timings", "attachments", "room_modes", "room_members", "member_requests", "member_suggestions", "member_recommendations",
-                                      "scheduler_decisions", "review_plans", "private_chats",
+                                      "scheduler_decisions", "dispatch_feedback", "review_plans", "private_chats",
                                       "discussion_sessions", "discussion_conclusions", "session_requests",
                                       "task_message_sources", "session_state", "session_limits", "stored_texts",
                                       "session_round_budgets", "session_options", "session_pauses"})
@@ -2372,8 +3202,15 @@ class DiscussionTests(unittest.TestCase):
     def test_retired_url_and_invalid_post_do_not_write(self):
         """Old publishing URLs, HEAD, and invalid POST requests cannot publish."""
         query = urlencode({"author": "Codex", "text": "不能误写", "submission_id": "head-test-001"})
-        self.assertEqual(self.request(f"/r/{self.room['id']}/publish?{query}")[0], 410)
-        self.assertEqual(self.request(f"/r/{self.room['id']}/publish?{query}", method="HEAD")[0], 501)
+        path = f"/r/{self.room['id']}/publish?{query}"
+        self.assertEqual(self.request(path)[0], 410)
+        self.assertEqual(self.request(path, method="HEAD"), (404, ""))
+        # High-level HTTP clients hide any body sent in response to HEAD, so check the bytes on the wire.
+        host, port = self.server.server_address
+        with create_connection((host, port), timeout=5) as client, client.makefile("rb") as stream:
+            client.sendall(f"HEAD {path} HTTP/1.0\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n".encode())
+            _, separator, body = stream.read().partition(b"\r\n\r\n")
+        self.assertEqual((separator, body), (b"\r\n\r\n", b""))
         self.assertEqual(self.request(f"/api/rooms/{self.room['id']}/messages", {
             "author": "Codex", "text": "缺少提交编号", "source": "cli",
         })[0], 400)

@@ -79,7 +79,7 @@ Used by room AI members or locally from the terminal to build custom share-card 
 - `codiscuss steward ask discuss-report --room ROOM --note "Include the specified messages and save to the specified local folder"` requests a report on an existing discussion.
 - `codiscuss steward ask codiscuss-draft-cleanup --note "Inspect drafts only; do not delete"` requests a local draft inventory. The service must still be able to dispatch steward tasks.
 - `codiscuss steward ask cloudflare-deploy --confirm` asks the platform steward to deploy or update your own Cloudflare online site. It still asks for approval before each write to Cloudflare.
-- `codiscuss steward history` lists old steward conversations archived after switching software; `codiscuss steward delete ROOM --confirm` deletes one of them.
+- `codiscuss steward history` lists old MOSS conversations archived by earlier software switches (switching software now keeps the conversation); `codiscuss steward delete ROOM --confirm` deletes one of them.
 
 ### Backups, export, and import
 

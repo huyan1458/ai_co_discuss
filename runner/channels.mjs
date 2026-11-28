@@ -16,10 +16,11 @@
  * - `not_ready`: what a test says when the channel is bound but cannot send yet.
  */
 import { mkdirSync, readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { atomic_json } from './files.mjs';
 import { t } from './i18n.mjs';
-import { format_notice } from './notice_text.mjs';
+import { format_notice, plain_text } from './notice_text.mjs';
 import { discord_channel } from './channel_discord.mjs';
 import { feishu_channel } from './channel_feishu.mjs';
 import { onebot_channel } from './channel_onebot.mjs';
@@ -99,12 +100,12 @@ export function notice_sent(home, key) {
  * `sent` (with the `channel` used), `duplicate`, `unbound` or `no_context` (bound, but no enabled channel can send
  * yet). When every ready channel fails, the first failure is thrown.
  */
-export async function send_notice(home, { key = '', room = null, paragraphs, question = null, only = '' }, options = {}) {
+export async function send_notice(home, { key = '', room = null, paragraphs, question = null, only = '', web_only = false, verbatim = false }, options = {}) {
   const channels = only ? [channel_of(only)] : enabled_channels(home);
   const ready = channels.filter(channel => channel.ready(home));
   if (!ready.length) return { status: channels.some(channel => channel.bound(home)) ? 'no_context' : 'unbound' };
-  if (!only && key && notice_sent(home, key)) return { status: 'duplicate' };
-  const text = format_notice(room?.title, paragraphs);
+  if (key && read_store(home).notices.some(item => item.key === key && (only ? item.deliveries?.[only] : Object.keys(item.deliveries || {}).length))) return { status: 'duplicate' };
+  const text = verbatim ? paragraphs.filter(Boolean).join('\n\n') : format_notice(room?.title, paragraphs);
   const deliveries = {};
   let failure = null;
   for (const channel of ready) {
@@ -117,7 +118,7 @@ export async function send_notice(home, { key = '', room = null, paragraphs, que
   if (notice) Object.assign(notice.deliveries, deliveries);
   else {
     notice = { number: store.next_notice, key, site: room?.site || '', room: room?.room || '', sent_at: Date.now(), text, deliveries,
-      ...(question ? { question_id: question.id, version: question.version } : {}) };
+      ...(question ? { question_id: question.id, version: question.version } : {}), ...(web_only ? { web_only: true } : {}) };
     store.notices.push(notice);
     store.next_notice += 1;
   }
@@ -127,39 +128,169 @@ export async function send_notice(home, { key = '', room = null, paragraphs, que
 
 /**
  * The notice a reply on `channel` answers: the quoted one (by the channel's message id, else by its text), else the
- * latest one sent there. A notice without a room (a hosted account's failures, a test) answers to no room, and is never
- * passed over for an older room's: a reply meant for it must not become the owner's message in some other room.
+ * latest one sent there in legacy mode. Unquoted messages with MOSS enabled are new requests.
  */
-function reply_target(store, channel, quoted = [], strict_quote = false) {
+function reply_target(store, channel, quoted = [], strict_quote = false, moss = false) {
   const sent_here = store.notices.filter(notice => notice.deliveries?.[channel]);
   for (const reference of quoted) {
     const found = sent_here.findLast(notice => (reference.id && notice.deliveries[channel].includes(reference.id))
       || (!strict_quote && reference.text && notice.text?.includes(reference.text)));
     if (found) return found;
   }
-  return strict_quote && quoted.length ? null : sent_here.at(-1) || null;
+  return moss || strict_quote && quoted.length ? null : sent_here.at(-1) || null;
 }
 
 /** Route one owner message to its room; returns the receipt to send back. */
-async function route(home, channel, item, on_reply, log) {
-  const target = reply_target(read_store(home), channel.id, item.quoted, item.strict_quote);
+async function route(home, channel, item, on_reply, on_moss, log) {
+  const target = reply_target(read_store(home), channel.id, item.quoted, item.strict_quote, Boolean(on_moss));
   if (!item.text) return item.media ? '目前只能转发文字回复。' : '';
-  if (!target && item.strict_quote && item.quoted?.length) return t('找不到所引用的通知，这条回复没有发回房间。');
-  if (!target) return '已收到。还没有房间给你发过通知，这条回复没有可发往的房间。';
-  if (!target.room) return '已收到。这条通知不对应任何房间，回复不会转发；要回复某个房间，请引用那个房间的通知。';
+  if (target?.web_only) return target.text;
+  if (!target && !on_moss && item.strict_quote && item.quoted?.length) return t('找不到所引用的通知，这条回复没有发回房间。');
+  if (!target && !on_moss) return '已收到。还没有房间给你发过通知，这条回复没有可发往的房间。';
+  if (target && !target.room) return '已收到。这条通知不对应任何房间，回复不会转发；要回复某个房间，请引用那个房间的通知。';
   try {
+    if (!target) return await on_moss({ channel: channel.id, label: channel.label, text: item.text });
     return await on_reply({ site: target.site, room: target.room, text: item.text,
+      ...(on_moss ? { channel: channel.id, label: channel.label } : {}),
       ...(target.question_id ? { question_id: target.question_id, version: target.version } : {}) });
   } catch (error) {
-    log(`${channel.label}回复未能发到房间 ${target.room}：${error.message}`);
-    return `未能发到房间：${error.message}`;
+    log(`${channel.label}回复未能发到房间 ${target?.room || 'MOSS'}：${error.message}`);
+    return t('未能发到房间：{error}', { error: error.message });
   }
 }
 
 /** Receive the owner's replies on every channel until `signal` aborts; `on_reply` posts one and returns a receipt. */
-export async function receive_replies(home, { on_reply, log = () => {}, signal, fetch_impl, websocket_impl } = {}) {
+export async function receive_replies(home, { on_reply, on_moss, log = () => {}, signal, fetch_impl, websocket_impl } = {}) {
   await Promise.all(CHANNELS.map(channel => channel.receive(home, {
-    on_message: item => route(home, channel, item, on_reply, log), log, signal, fetch_impl, websocket_impl })));
+    on_message: item => route(home, channel, item, on_reply, on_moss, log), log, signal, fetch_impl, websocket_impl })));
+}
+
+const MOSS_REPLY_LIMIT = 1600;
+const MOSS_QUEUE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const moss_routes_path = home => join(home, 'notify', 'moss-replies.json');
+const moss_queue_path = home => join(home, 'notify', 'moss-queue-receipts.json');
+
+function saved_moss_queue_receipts(home) {
+  try { return JSON.parse(readFileSync(moss_queue_path(home), 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return { total: 0, recent: [] }; throw error; }
+}
+
+/** Count receipts independently of reply-routing records, which are removed after delivery. */
+export function moss_queue_receipts(home, now = Date.now()) {
+  const { total, recent } = saved_moss_queue_receipts(home);
+  return { total, last_7_days: recent.filter(at => at > now - MOSS_QUEUE_WINDOW_MS && at <= now).length };
+}
+
+function record_moss_queue_receipt(home, now = Date.now()) {
+  const { total, recent } = saved_moss_queue_receipts(home);
+  atomic_json(moss_queue_path(home), { total: total + 1, recent: [...recent.filter(at => at > now - MOSS_QUEUE_WINDOW_MS), now] });
+}
+
+function moss_routes(home) {
+  try { return JSON.parse(readFileSync(moss_routes_path(home), 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+}
+
+function change_moss_routes(home, change) {
+  const routes = moss_routes(home);
+  change(routes);
+  mkdirSync(join(home, 'notify'), { recursive: true, mode: 0o700 });
+  atomic_json(moss_routes_path(home), routes);
+}
+
+export function moss_approval_text(link = '') {
+  const reminder = t('MOSS 需要你在网页确认或回答。');
+  return link ? `${reminder} ${link}` : reminder;
+}
+
+export function moss_setup_text(link) {
+  return t('MOSS 尚未配置，请在网页的 MOSS 页面完成设置。{link}', { link });
+}
+
+function pending_moss_question(room) {
+  return room?.free?.questions?.some(question => question.blocking);
+}
+
+function moss_execution(room, routes, channel) {
+  const execution = room.free?.members?.find(member => member.execution?.capabilities?.steer === true
+    && ['started', 'dispatched'].includes(member.execution.status))?.execution;
+  const inputs = room.free?.requests?.filter(item => item.execution_id === execution?.id) || [];
+  // An answer can contain every input to its turn. Do not steer across channels or into a web-originated turn.
+  if (execution && inputs.length && inputs.every(input =>
+    routes.some(route => route.message_id === input.message_id && route.channel === channel))) return execution;
+  return null;
+}
+
+export async function route_moss_message(home, { config, channel, label, text, request, post }) {
+  const room = await request(config, '');
+  const waiting_question = pending_moss_question(room);
+  const submission_id = randomUUID();
+  const content = `${t('来源渠道：{channel}', { channel: label })}\n\n${text}`;
+  const routes = Object.values(moss_routes(home)).filter(route => route.room === config.room);
+  const execution = waiting_question ? null : moss_execution(room, routes, channel);
+  if (execution) {
+    try {
+      await request(config, `/executions/${execution.id}`, { action: 'interject', text: content, submission_id, live_only: true });
+      return t('已把消息作为插话发给 MOSS。');
+    } catch (error) {
+      if (![400, 409].includes(error.status) && !/^HTTP 40[09]\b/.test(error.message)) throw error;
+    }
+  }
+  const route = { room: config.room, channel };
+  change_moss_routes(home, all => { all[submission_id] = route; });
+  const result = await post(config, { text: content, submission_id }, request);
+  change_moss_routes(home, all => { if (all[submission_id]) Object.assign(all[submission_id], result); });
+  if (!result.queued) return t('已发给 MOSS。');
+  record_moss_queue_receipt(home);
+  return waiting_question ? t('MOSS 正在等你在网页回答一个问题，这条消息已排队')
+    : t('MOSS 正在处理上一件事，你的消息已排队');
+}
+
+async function resolve_moss_routes(home, config, room, request) {
+  const routes = Object.entries(moss_routes(home)).filter(([, route]) => route.room === config.room);
+  for (const [id, route] of routes) {
+    if (route.message_id || room.free?.queued_messages?.items?.some(item => item.id === route.queued)) continue;
+    const result = await request(config, `/messages?submission_id=${encodeURIComponent(id)}`);
+    route.message_id = result.messages?.[0]?.id;
+    if (route.message_id) change_moss_routes(home, all => { if (all[id]) all[id].message_id = route.message_id; });
+  }
+  return routes;
+}
+
+export function moss_question_channels(home, config, room, question_id) {
+  const question = room?.free?.questions?.find(item => item.id === question_id);
+  if (!question) return [];
+  const anchors = new Set([question.message_id, ...(question.refs || [])]);
+  return [...new Set(Object.values(moss_routes(home)).filter(route => route.room === config.room &&
+    anchors.has(route.message_id)).map(route => route.channel))];
+}
+
+function moss_answer_text(message, link, isolated) {
+  if (!isolated) return t('MOSS 已处理，完整回答请在网页查看。{link}', { link });
+  const body = String(message.text || '');
+  if ([...body].length <= MOSS_REPLY_LIMIT) return body;
+  const overview = [...plain_text(message.summary || body)].slice(0, MOSS_REPLY_LIMIT).join('');
+  return `${overview}…\n\n${t('在网页查看完整回答：{link}', { link })}`;
+}
+
+export async function flush_moss_channel_replies(home, { config, room, request, link, send = send_notice }) {
+  if (!room?.free?.requests?.some(item => item.answer_id)) return;
+  const routes = await resolve_moss_routes(home, config, room, request);
+  const requests = room.free.requests;
+  for (const [id, route] of routes) {
+    if (!route.message_id) continue;
+    const answer_id = requests.find(item => item.message_id === route.message_id && item.answer_id)?.answer_id;
+    if (!answer_id) continue;
+    const sources = requests.filter(item => item.answer_id === answer_id);
+    const isolated = sources.every(item => routes.some(([, source]) =>
+      source.message_id === item.message_id && source.channel === route.channel));
+    const message = isolated ? await request(config, `/messages/${answer_id}`) : {};
+    const body = moss_answer_text(message, link, isolated);
+    if (!body) continue;
+    const result = await send(home, { key: `moss:${config.room}:${answer_id}`, only: route.channel,
+      room: { site: config.site, room: config.room, title: room.title }, paragraphs: [body], verbatim: true });
+    if (['sent', 'duplicate'].includes(result.status)) change_moss_routes(home, all => { delete all[id]; });
+  }
 }
 
 /** Every channel's settings state, for the notifications section. */

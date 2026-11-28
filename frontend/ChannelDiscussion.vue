@@ -55,6 +55,7 @@ import { declined, awaiting_member, copy_seat_link as copy_seat } from "./extern
 import GuestPresence from "./GuestPresence.vue";
 import { member_protection, use_guest_state } from "./external-guests.js";
 import RequestStatus from "./RequestStatus.vue";
+import { delegation_state, moss_avatar, moss_running, report_state_label, report_tone } from "./moss.js";
 
 const pending_seat = ref(null), pending_seat_open = ref(false);
 const emit = defineEmits(["detail", "edit"]);
@@ -609,6 +610,36 @@ const READER_INPUT_MS = 1000;
 const SCROLL_ANCHORING = CSS.supports("overflow-anchor", "auto") && !CSS.supports("font", "-apple-system-body");
 const READING_OFFSET = 20;
 const room = computed(() => view.value.room);
+// MOSS's own room reads as one conversation with it (user #15318, after Claude Duet): its greeting and prompt name it.
+const is_moss = computed(() => room.value?.system_kind === "steward");
+// A MOSS answer to a proactive trigger (a system message, template `steward_proactive`) can be muted from its card:
+// the reason goes to this computer's mute list through `steward-mute`, and MOSS leaves that kind out from then on (#15355).
+const proactive_requests = computed(() => is_moss.value
+  ? new Set(view.value.messages.filter((item) => item.texts?.template === "steward_proactive").map((item) => item.id)) : new Set());
+const mute_open = ref(0);
+const mute_reason = ref("");
+const mute_sending = ref(0);
+const muted_answers = reactive(new Set());
+/** "" when the card is not a proactive report, else where its "这条不用告诉我" stands. */
+function mute_state(message) {
+  if (!proactive_requests.value.has(message.request_message_id) || message.author === "用户" || is_share.value) return "";
+  if (muted_answers.has(message.id)) return "done";
+  return mute_sending.value === message.id ? "sending" : mute_open.value === message.id ? "open" : "ready";
+}
+function open_mute(message) { mute_open.value = message.id; mute_reason.value = ""; }
+async function send_mute(message) {
+  const reason = mute_reason.value.trim();
+  if (!reason || mute_sending.value) return;
+  mute_sending.value = message.id;
+  try {
+    await bridge.local_request("steward-mute", { message_id: message.id, reason });
+    muted_answers.add(message.id);
+    mute_open.value = 0;
+    bridge.notify("info", t("已记下，同类提醒不再告诉你"));
+  } catch (error) { bridge.notify("error", error.message); }
+  finally { mute_sending.value = 0; }
+}
+const moss_picture = computed(() => moss_avatar(view.value.rooms.find((item) => item.id === room.value?.id) || room.value, moss_running(room.value)));
 // While an external user is in under the conservative mode, a member that cannot be confined takes no work: its queued
 // cards say so instead of "正在唤醒" (external-guests.js member_protection).
 const guest_state = use_guest_state(bridge, () => (view.value.access?.can_manage && !view.value.share ? room.value?.id : "")).state;
@@ -1023,6 +1054,12 @@ function working_status(message, now) {
 const relay_waits_owner = computed(() => free.value && Boolean(room.value?.speaking_order?.sequence?.waiting_user));
 /** Says in the note line who the draft will reach: the @mentioned members, else the host. */
 const recipient_hint = computed(() => {
+  // MOSS's room has one member and it is MOSS: no host or member names, only whether it is free (#15332 suggestion 3).
+  if (is_moss.value) {
+    const busy = (room.value?.free?.queued_messages?.busy_members || []).length;
+    // The prompt already says 给 MOSS 发消息; the line below speaks only when sending would queue (#15598).
+    return busy ? t('{value1} 正忙，这条先排队；可在排队项上插话或打断', { value1: t("MOSS") }) : "";
+  }
   const named_group = (aliases) => aliases.some((alias) => MENTION_PATTERN(alias).test(draft_prose.value));
   if (free.value && named_group(SEQUENTIAL_ALIASES)) return t('依次发给 {value1}，前一位结束后下一位开始', { value1: in_turn(free_members.value).map((member) => bridge.display_name(member.name)).join(" → ") });
   if (free.value && named_group(ALL_ALIASES)) return t('发给 {value1}', { value1: free_members.value.map((member) => bridge.display_name(member.name)).join("、") });
@@ -2253,10 +2290,18 @@ function unrelated_sent_summary(message, state, args) {
   if (state === 'delivered') return args.id ? t('主持人 {host} 向房间「{title}」发送了消息 #{id}（已送达）', args) : t('主持人 {host} 向房间「{title}」发送了消息（已送达）', args);
   return args.id ? t('主持人 {host} 向房间「{title}」发送了消息 #{id}', args) : t('主持人 {host} 向房间「{title}」发送了消息', args);
 }
-async function open_sent_room(message) {
+async function open_sent_room(message, target = message.relay_sent_message_id) {
   await act('room', message.relay_sent_room);
-  if (view.value.room?.id === message.relay_sent_room && message.relay_sent_message_id) await locate({ id: message.relay_sent_message_id });
+  if (view.value.room?.id === message.relay_sent_room && target) await locate({ id: target });
 }
+// The record that MOSS starts a fresh session here (new brain or new software, #15576): a thin centred line, not a card.
+// Marked by its template, so the wording can change without the page losing it.
+const SESSION_TEMPLATE = "MOSS 从这里开始新会话（{software}）";
+function session_divider(message) {
+  return message.texts?.template === "steward_session" || message.texts?.text?.template === SESSION_TEMPLATE;
+}
+/** Where the child room's result stands, once the program tracks it (sent by MOSS); nothing for a plain relay. */
+function report_label(message) { return report_state_label(message.relay_report_state, is_moss.value); }
 function plain_card(message) {
   return !message.arrangement && !["room_link", "room_relay_sent", "host_action", "notice"].includes(message.source) && !message.cancelled_turn && !message.cancelled_execution
     && !(message.slot_card && !message.failure) && !message.withdrawn;
@@ -2349,7 +2394,7 @@ const rewound_runs = stable_computed(() => contiguous_runs(view.value.messages, 
 const checkin_notices = computed(() => new Map(all_quiet_checkins.value.map(({ message_id, answer_id }) => [message_id, answer_id])));
 const checkin_hosts = computed(() => new Map([...quiet_checkins.value].map(([notice, answer]) => [answer.id, notice])));
 const notice_runs = stable_computed(() => contiguous_runs(view.value.messages,
-  (message) => message.source === "notice" && !checkin_notices.value.has(message.id) && !failure_wakes.value.has(message.id)));
+  (message) => message.source === "notice" && !session_divider(message) && !checkin_notices.value.has(message.id) && !failure_wakes.value.has(message.id)));
 const open_notice_groups = ref(new Set());
 function toggle_notice_group(id) {
   const next = new Set(open_notice_groups.value);
@@ -2386,7 +2431,11 @@ function toggle_rewound(id) {
 /** Slot card id → id of the message it shows under; filled with the layout, read when locating a filtered card. */
 const layout_anchors = new Map();
 const free_layout = computed(() => {
+  // On a live page the trigger may still be cached from before it finished; a fresh page also has its quiet marker.
+  const quiet_proactive = is_moss.value ? new Set(all_executions.value.filter(item => item.status === "completed" && !item.answer_id)
+    .map(item => item.request_message_id)) : new Set();
   const messages = view.value.messages.filter((message) => !rewound_runs.value.hidden.has(message.id) && !notice_runs.value.hidden.has(message.id)
+    && !(proactive_requests.value.has(message.id) && (message.texts?.quiet || quiet_proactive.has(message.id)))
     && !(message.source === "notice" && failure_wakes.value.has(message.id)) && !folded_checkin_answers.value.has(message.id));
   // Work on a taken-back message is no longer shown; a failure there is dropped too.
   const taken_back = new Set(view.value.messages.filter((message) => message.withdrawn).map((message) => message.id));
@@ -2606,9 +2655,21 @@ function track_webkit_gesture(element) {
   const end_pixel = pixel == null ? offsets[range.end] + bottom - last : pixel + bottom - top;
   const end = Math.min(history.length, Math.max(start + 1, row_at(offsets, end_pixel) + 1), start + WINDOW_MAX_ROWS);
   if (start === range.start && end === range.end) return;
-  gesture_window.value = { ...drawn_history, range: { start, end, before, after: offsets.at(-1) - offsets[end] } };
-  // Check the next frame in case shorter actual rows leave more of the viewport to fill.
-  nextTick(queue_track_scroll);
+  // Rows mounted above an exposed spacer take their estimated places, but their real heights differ (an action line is
+  // ~40px against the 200px estimate), so the card the reader saw below the spacer moved by the difference. Mid-fling that
+  // threw the page 150–350px back every few frames and an upward swipe got nowhere (2026-11-28 recording, #15517). The
+  // spacer above takes the difference instead: scrollTop stays the fling's, and that card stays where it was.
+  const kept = top < first && start < range.start && end > range.start ? rows[0] : null;
+  const next = { ...drawn_history, range: { start, end, before, after: offsets.at(-1) - offsets[end] } };
+  gesture_window.value = next;
+  nextTick(() => {
+    if (kept?.isConnected && gesture_window.value === next) {
+      const moved = kept.getBoundingClientRect().top - first;
+      if (Math.abs(moved) >= 1) gesture_window.value = { ...next, range: { ...next.range, before: Math.max(0, before - moved) } };
+    }
+    // Check the next frame in case shorter actual rows leave more of the viewport to fill.
+    queue_track_scroll();
+  });
 }
 
 /** Retarget only when the reader nears the edge of the overscan, so ordinary scrolls keep the DOM intact. */
@@ -4039,6 +4100,7 @@ function message_card(message) {
     armed: armed_cards.has(message.id), menu_open: menu_open_id.value === message.id, locate: view_source_filter.value,
     // Only the owner rates a host dispatch.
     rate_dispatch: Boolean(message.host_dispatch && view.value.access?.can_manage && !is_share.value),
+    mute: mute_state(message),
   };
   // Set after the dependencies are read: a fresh object each time would re-render every card; its text and edge stand in for it.
   // A follow-up's answer says so even once its execution has left the recent list.
@@ -4273,13 +4335,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <ExcerptEditCard v-if="mark_editing" :key="mark_editing.excerpt.id" :class="{ 'is-docked': mark_editing.touch }" :comment="mark_editing.excerpt.comment" :removable="!mark_editing.touch" :context="mark_editing.touch ? mark_context(mark_editing.excerpt) : ''" :style="mark_editing.touch ? docked_sheet_style() : { left: `${mark_editing.left}px`, top: `${mark_editing.top}px` }" @save="save_mark" @cancel="close_mark" @remove="remove_mark" />
     <!-- A locate far back waits for the earlier cards to render; the end of the room stays covered meanwhile so it is not taken for the result. -->
     <div v-if="locating !== null" class="channel-locating" role="status"><UIcon name="i-lucide-loader" class="animate-spin" />{{ locating_label || t('正在定位到 #{value1}…', { value1: locating }) }}</div>
-    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, opened_folded, open_notice_groups, quiet_checkins, notice_runs, mounted_rows, render_window, top_topic_visible, view.has_earlier, view.loading_earlier, view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, scheduler_decisions, host_arrangements, is_running('rewind_and_send'), is_running('skip_turn'), is_running('pause_discussion'), is_running('retry_delivery'), open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
+    <div ref="transcript" v-memo="transcript_memo([fold_area, expanded_rewinds.size, opened_folded, open_notice_groups, quiet_checkins, notice_runs, mounted_rows, render_window, top_topic_visible, view.has_earlier, view.loading_earlier, view.messages_loading, view.messages_failure, sending_previews, failed_sends, message_round_labels, free, session, can_manage, expanded_answers.size, reader.state.message_id, room.title, view.query, view.source_filter, view.authors, view.card_kinds, topic_anchor, end_anchor, request_badges, execution_reports, recommendations, adopting, mute_open, mute_sending, muted_answers.size, proactive_requests.size, scheduler_decisions, host_arrangements, is_running('rewind_and_send'), is_running('skip_turn'), is_running('pause_discussion'), is_running('retry_delivery'), open_working_notes, editing, rewound_runs, retracting_id, armed_cards.size, menu_open_id, stopping_member, allowing, allow_errors, late_answers, has_draft, view.sending_message, routing_messages, speaking_turn, free_shape, excerpt_marks])" class="channel-transcript" :aria-label="t('聊天记录')" @click.capture="keep_toggle_place" @click="open_message_ref" @scroll="schedule_track_scroll" @wheel.passive="resume_tracking($event); stop_following($event)" @touchstart.passive="resume_tracking" @touchmove.passive="stop_following" @touchend.passive="end_touch" @touchcancel.passive="end_touch" @pointerdown="stop_following" @keydown="resume_tracking($event); stop_following($event)">
       <div v-if="view.loading_earlier" class="channel-history-loading channel-loading-skeleton" role="status">
         <UIcon name="i-lucide-loader" class="animate-spin" aria-hidden="true" />
         {{ t('正在读取消息…') }}
       </div>
       <div ref="before_window" aria-hidden="true" :style="{ height: render_window.before + 'px', overflowAnchor: 'none' }" />
-      <div v-if="top_topic_visible" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
+      <div v-if="top_topic_visible && !is_moss" class="channel-message-group channel-topic-group"><TopicCard :ref="(card) => topic_card = card" @edit="emit('edit')" /></div>
       <div v-for="{ message, divider } in mounted_rows" :key="transcript_key(message)" v-measure-row :data-transcript-row="message.id" class="channel-message-group transcript-row" :class="{ 'transcript-row-windowed': !is_share }">
         <USeparator v-if="divider" :label="divider" class="channel-date-divider" />
         <DiscussionEndCard v-if="message.id === end_anchor && !view_query && !view_source_filter" />
@@ -4289,12 +4351,30 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           <template #text>{{ t('主持人安排：{value1}', { value1: host_arrangements.get(message.arrangement.after_message_id)?.find((plan) => plan.id === message.arrangement.id)?.label }) }}<small v-if="message.arrangement.after_message_id">{{ t('耗时 {value1}', { value1: format_elapsed(arrangement_seconds(message.arrangement, view.messages.find((item) => item.id === message.arrangement.after_message_id))) }) }}</small></template>
           <p v-for="turn in message.arrangement.turns" :key="`${message.id}-${turn.expert}-${turn.question}`"><span>{{ bridge.display_name(turn.expert) }}：{{ turn.question }}</span></p>
         </ScheduleCard>
+        <div v-else-if="session_divider(message)" class="channel-session-divider" role="separator" :aria-label="message.text || t('MOSS 从这里开始新会话')"><span>{{ message.text || t("MOSS 从这里开始新会话") }}</span></div>
         <GoalNoticeCard v-else-if="message.source === 'goal'" :message="message" />
-        <ScheduleCard v-else-if="message.source === 'room_relay_sent'" class="channel-relay-sent" icon="i-lucide-send" plain toggle-line :label="t('跨房发送')" :toggle-label="t('展开或收起发出的消息正文')">
+        <!-- In MOSS's room a delegation reads as the piece of work: the child room's title, where it stands, its conclusion,
+             one way in (the result once there is one); the request itself folds below (#15598). Other rooms keep the relay line. -->
+        <section v-else-if="message.source === 'room_relay_sent' && is_moss" class="channel-delegation" :aria-label="message.relay_sent_title || t('已删除的房间')">
+          <header>
+            <UIcon name="i-lucide-send" class="channel-delegation-icon" />
+            <strong><bdi dir="auto">{{ message.relay_sent_title || t('已删除的房间') }}</bdi></strong>
+            <span class="channel-relay-report" :data-state="report_tone(delegation_state(message))">{{ report_state_label(delegation_state(message)) }}</span>
+            <UButton v-if="message.relay_sent_title && !view.share" size="xs" variant="link" :label="message.relay_report_message_id ? t('查看结果') : t('打开房间')" @click.stop="open_sent_room(message, message.relay_report_message_id || undefined)" />
+          </header>
+          <p v-if="message.relay_report_summary" class="channel-delegation-summary">{{ message.relay_report_summary }}</p>
+          <details class="channel-delegation-request"><summary>{{ t('委派内容') }}</summary><div class="markdown-body" v-html="message.rendered_text"></div></details>
+        </section>
+        <template v-else-if="message.source === 'room_relay_sent'">
+        <ScheduleCard class="channel-relay-sent" icon="i-lucide-send" plain toggle-line :label="t('跨房发送')" :toggle-label="t('展开或收起发出的消息正文')">
           <template #text><bdi dir="auto" :title="sent_summary(message)">{{ sent_summary(message) }}</bdi></template>
-          <template #actions><small v-if="!message.relay_sent_title">{{ t('该房间已删除') }}</small><UButton v-else-if="!view.share" size="xs" variant="link" :label="t('打开房间')" @click.stop="open_sent_room(message)" /></template>
+          <template #actions><span v-if="report_label(message)" class="channel-relay-report" :data-state="message.relay_report_state">{{ report_label(message) }}</span><small v-if="!message.relay_sent_title">{{ t('该房间已删除') }}</small><UButton v-else-if="!view.share" size="xs" variant="link" :label="t('打开房间')" @click.stop="open_sent_room(message)" /></template>
           <div class="markdown-body" v-html="message.rendered_text"></div>
         </ScheduleCard>
+        <!-- What the child room sent back, under the card that asked for it; the program delivers it, not the child's host. -->
+        <p v-if="message.relay_report_summary" class="channel-relay-report-summary"><span>{{ t('结论：{summary}', { summary: message.relay_report_summary }) }}</span>
+          <UButton v-if="message.relay_sent_title && message.relay_report_message_id && !view.share" size="xs" variant="link" :label="t('查看结果')" @click.stop="open_sent_room(message, message.relay_report_message_id)" /></p>
+        </template>
         <!-- Unlinking removes the link, so its cards (and the 已解除 card itself) have no room to open. -->
         <ScheduleCard v-else-if="message.source === 'room_link'" class="channel-room-link" icon="i-lucide-link" plain :expandable="false" :label="t('关联房间')">
           <template #text>{{ message.text }}</template>
@@ -4509,8 +4589,6 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UAvatar :src="message_identity(message)?.icon" :icon="message.relay_room && !message_identity(message)?.icon ? 'i-lucide-link' : undefined" :text="message_identity(message)?.initials || '?'" :alt="message_name(message)" size="md" class="channel-avatar" :class="message_identity(message)?.style" />
               <div class="channel-message-meta">
                 <div class="channel-message-author"><strong>{{ message_name(message) }}</strong><UBadge v-if="message.interjection_parent_id" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('插话') }}</UBadge><span class="channel-message-round">{{ card.round_label }}</span><UBadge v-for="badge in card.line.badges.filter((item) => !item.goes)" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UBadge v-if="!QUIET_SOURCES.has(message.source)" size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('运行回执') }}</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求')">{{ t('主动发言') }}</UBadge><UBadge v-if="message.relay_room" :disabled="message.relay_title == null" as="button" type="button" size="xs" color="neutral" variant="soft" class="channel-source channel-relay-source" :title="t('另一房间的主持人经房主凭据在本房间发言；点击打开该房间')" @click="message.relay_title !== null && act('room', message.relay_room)">{{ relay_label(message) }}</UBadge><UBadge v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户') && !message.author?.startsWith('guest:')" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('{value1} 代发', { value1: bridge.display_name(message.submitted_by) }) }}</UBadge><UBadge v-if="message.source === 'auto'" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员结束时没有提交回答，本机服务把它最后一段回复收录为本次回答')">{{ t('自动收录') }}</UBadge><UBadge v-for="badge in card.line.badges.filter((item) => item.goes)" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UBadge v-if="card.waits" size="xs" color="neutral" variant="soft" class="channel-source" :title="card.speaking_expert ? t('{value1} 说完后交给主持人处理', { value1: bridge.display_name(card.speaking_expert) }) : t('等待主持人处理')">{{ t('待主持人处理') }}</UBadge></div>
-                <span v-if="card.model || card.effort" class="channel-message-provenance channel-message-model" :title="[card.model, card.effort].filter(Boolean).join(' · ')"><bdi v-if="card.model" class="channel-model-id">{{ card.model }}</bdi><span v-if="card.effort" class="channel-model-effort">{{ card.model ? ` · ${card.effort}` : card.effort }}</span></span>
-                <TokenUsage v-if="card.usage" :usage="JSON.parse(card.usage)" :title="t('本轮用量')" />
               </div>
               <div class="channel-message-provenance channel-message-facts"><RequestStatus v-if="card.badges?.length" :badges="card.badges" @locate="(id) => locate({ id })" /><time :title="new Date(message.created_at).toLocaleString(locale)">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="t('查看原文 #{value1}', { value1: message.id })" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="card.elapsed !== null" class="channel-message-elapsed">{{ t('耗时 {value1}', { value1: format_elapsed(card.elapsed) }) }}</span></div>
             </div>
@@ -4558,6 +4636,12 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <ExecutionDenials v-if="report.denials?.length" :denials="report.denials" :allowable="allowable" :folded="completed"
                 :busy="card.allowing === report.id" :error="card.allow_errors?.[report.id]" @allow="allow_and_resend(report)" />
             </div>
+            <!-- How the answer came about (model, effort, this turn's tokens) sits at the card's end in grey: read after the answer,
+                 when checking it, not before (#15303); the cache hit rate shows here too (#15466), the breakdown opens from it. -->
+            <div v-if="card.model || card.effort || card.usage" class="channel-message-footer">
+              <span v-if="card.model || card.effort" class="channel-message-provenance channel-message-model" :title="[card.model, card.effort].filter(Boolean).join(' · ')"><bdi v-if="card.model" class="channel-model-id">{{ card.model }}</bdi><span v-if="card.effort" class="channel-model-effort">{{ card.model ? ` · ${card.effort}` : card.effort }}</span></span>
+              <TokenUsage v-if="card.usage" :usage="JSON.parse(card.usage)" :title="t('本轮用量')" />
+            </div>
             <DispatchFeedback v-if="card.rate_dispatch" :message="message" />
             <div v-if="card.recommendation" class="channel-recommendation" :class="`is-${card.recommendation.status}`" :aria-label="t('智能调度推荐')" aria-live="polite">
               <template v-for="item in [card.recommendation]" :key="item.message_id">
@@ -4575,6 +4659,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
                 </template>
               </template>
             </div>
+            <div v-if="card.mute === 'done'" class="channel-proactive-mute is-done"><UIcon name="i-lucide-bell-off" /><span>{{ t("已记下，同类提醒不再告诉你") }}</span></div>
+            <form v-else-if="card.mute === 'open' || card.mute === 'sending'" class="channel-proactive-mute is-open" @submit.prevent="send_mute(message)">
+              <UInput v-model="mute_reason" size="sm" autofocus :maxlength="200" :placeholder="t('为什么不用告诉你？一句话即可')" :aria-label="t('不用告诉你的原因')" :disabled="card.mute === 'sending'" @keydown.esc.prevent="mute_open = 0" />
+              <UButton type="submit" size="sm" :label="t('确定')" :loading="card.mute === 'sending'" />
+              <UButton size="sm" color="neutral" variant="ghost" :label="t('取消')" :disabled="card.mute === 'sending'" @click="mute_open = 0" />
+            </form>
+            <div v-else-if="card.mute" class="channel-proactive-mute"><UButton icon="i-lucide-bell-off" :label="t('这条不用告诉我')" size="xs" color="neutral" variant="link" @click="open_mute(message)" /></div>
             <!-- Inside its own card: between two cards it read as belonging to the next one. -->
             <div v-if="card.locate" class="channel-locate"><UButton :label="t('在原文中定位')" icon="i-lucide-locate" size="xs" color="neutral" variant="link" @click="locate(message)" /></div>
           </template>
@@ -4657,6 +4748,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       </div>
       <div v-if="view.messages_loading && !transcript_messages.length" class="channel-message-group channel-loading-skeleton grid gap-6 py-6" role="status" :aria-label="t('正在读取消息')"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div>
       <div v-else-if="view.messages_failure && !transcript_messages.length" class="channel-empty" role="status"><p>{{ view.messages_failure }}</p><UButton :label="t('重新读取消息')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="act('refresh')" /></div>
+      <div v-else-if="is_moss && !view_query && !view_source_filter && !view.messages_loading && !transcript_messages.length && !free_working.length && !view.sending_preview && !view.failed_sends.length" class="channel-empty is-moss"><img class="moss-avatar" :class="`is-${moss_picture.state}`" :src="moss_picture.src" :title="moss_picture.title" alt="" /><h2>{{ t("我是 MOSS，有什么可以帮你？") }}</h2><p>{{ t("问我各房间现在怎么样、有什么等你处理；平台的安装、部署和配置也可以交给我。") }}</p></div>
       <div v-else-if="!transcript_messages.length && !free_working.length && !view.sending_preview && !view.failed_sends.length" class="channel-empty"><UIcon :name="view_query || view_source_filter ? 'i-lucide-search' : 'i-lucide-hash'" /><h2>{{ view_query || view_source_filter ? t('没有找到消息') : room.title }}</h2><p>{{ view_query || view_source_filter ? t('试试其他关键词，或清除筛选。') : bridge.empty_discussion_message(room) }}</p></div>
     </div>
     <!-- Back from the background: the opening load covers the old cards until the room is read again (state.resuming). -->
@@ -4730,7 +4822,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
       <WeixinFailureNotice :room="room" />
       <QuestionCard v-if="room.free?.questions?.length" :questions="room.free.questions" />
       <QueuedMessages v-if="room.free?.queued_messages" :queue="room.free.queued_messages" :room-id="room.id" />
-      <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="relay_waits_owner ? t('接力在等你回答问题卡…') : t('发消息到 # {value1}', { value1: room.title })" :aria-label="t('留言正文')" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
+      <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="relay_waits_owner ? t('接力在等你回答问题卡…') : is_moss ? t('给 MOSS 发消息') : t('发消息到 # {value1}', { value1: room.title })" :aria-label="t('留言正文')" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length || file_refs.length || excerpts.length" class="attachment-drafts">
             <UPopover v-if="excerpts.length" v-model:open="excerpt_list_open" :content="{ side: 'top', align: 'start' }" @update:open="editing_excerpt = 0">

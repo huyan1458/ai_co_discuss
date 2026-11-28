@@ -159,7 +159,7 @@ const voices = (list) => list.map(([id, label]) => ({ id, label }));
  */
 export const TTS_PROVIDERS = [
   { id: 'local', label: '本机', key_base_url: LOCAL_KEY_URL, legacy_key_base_url: LOCAL_LEGACY_KEY_URL, console_url: 'https://github.com/leemysw/yovoice',
-    note: t('本机显卡运行 Qwen3-TTS，不计费，可在语音设置中选择“让平台主理人安装”'), voices: voices(LOCAL_VOICES),
+    note: t('本机显卡运行 Qwen3-TTS，不计费，可在语音设置中选择“让 MOSS 安装”'), voices: voices(LOCAL_VOICES),
     default_speaker: 'Vivian', context: true, default_context: '语气平静克制，语调平稳，娓娓道来。', region: false, voice_input: false, rate: false, local: true },
   { id: 'volcengine', label: '火山引擎', key_base_url: 'https://openspeech.bytedance.com', console_url: 'https://console.volcengine.com/speech/new',
     note: '约 3 元/万字，语音输入共用此 Key', voices: voices(VOLC_VOICES),
@@ -393,7 +393,7 @@ async function local_choose_port(home, id) {
  */
 async function local_supervise(home, id, { executable, args, env, ready, key, wait_ms = LOCAL_START_MS }, request) {
   const directory = speech_directory(home, id);
-  if (!existsSync(executable)) throw new Error(t('本机服务尚未安装，请在语音设置中选择“让平台主理人安装”'));
+  if (!existsSync(executable)) throw new Error(t('本机服务尚未安装，请在语音设置中选择“让 MOSS 安装”'));
   local_renew(directory);
   const port = await local_choose_port(home, id);
   spawn(process.execPath, [LOCAL_SUPERVISOR, directory, executable, ...args(port)],
@@ -423,7 +423,7 @@ async function local_convert(home, wav) {
     writeFileSync(join(work, 'in.wav'), wav);
     await run_file(join(speech_directory(home, 'tts'), 'cli', 'tools', `ffmpeg${LOCAL_EXE}`), ['-hide_banner', '-loglevel', 'error', '-i', join(work, 'in.wav'),
       '-c:a', 'aac', '-b:a', LOCAL_BIT_RATE, '-movflags', '+faststart', '-f', 'ipod', join(work, 'out.m4a')], { windowsHide: true, timeout: LOCAL_CONVERT_MS })
-      .catch(() => { throw new Error(t('本机语音转码失败，请让平台主理人修复本机朗读')); });
+      .catch(() => { throw new Error(t('本机语音转码失败，请让 MOSS 修复本机朗读')); });
     return readFileSync(join(work, 'out.m4a'));
   } finally { rmSync(work, { recursive: true, force: true }); }
 }
@@ -448,11 +448,11 @@ async function local_once({ home, key, text, speaker, context, silence }, { requ
     if (response.status !== 409 || Date.now() > deadline) break;
     await new Promise(resolve => setTimeout(resolve, LOCAL_BUSY_MS));
   }
-  if (response.status === 401) throw new Error(t('本机语音服务拒绝了令牌，请让平台主理人修复本机朗读，或结束旧的 yovoice 进程后重试'));
+  if (response.status === 401) throw new Error(t('本机语音服务拒绝了令牌，请让 MOSS 修复本机朗读，或结束旧的 yovoice 进程后重试'));
   if (response.status === 409) throw new Error('本机语音一直在忙，请稍后再试');
   if (!response.ok) {
     const code = (await response.json().catch(() => ({}))).error?.code;
-    if (code === '@yovoice.error.modelRequired') throw new Error(t('这个音色的模型尚未安装，请让平台主理人安装'));
+    if (code === '@yovoice.error.modelRequired') throw new Error(t('这个音色的模型尚未安装，请让 MOSS 安装'));
     throw new Error(`本机语音合成失败（HTTP ${response.status}${code ? ` ${code}` : ''}），请查看 ${join(speech_directory(home, 'tts'), 'data', 'logs')}`);
   }
   const audio = await convert(home, wav_with_silence(Buffer.from(await response.arrayBuffer()), silence));
@@ -473,7 +473,7 @@ function local_speak(input, transport) {
  * marks the service on this computer, whose token the setup skill saves.
  */
 export const STT_PROVIDERS = [
-  { id: 'local', label: '本机', key_base_url: LOCAL_STT_KEY_URL, legacy_key_base_url: LOCAL_STT_LEGACY_KEY_URL, note: t('本机显卡运行 Qwen3-ASR，不计费，可在语音设置中选择“让平台主理人安装”'), local: true },
+  { id: 'local', label: '本机', key_base_url: LOCAL_STT_KEY_URL, legacy_key_base_url: LOCAL_STT_LEGACY_KEY_URL, note: t('本机显卡运行 Qwen3-ASR，不计费，可在语音设置中选择“让 MOSS 安装”'), local: true },
   { id: 'volcengine', label: '火山引擎', key_base_url: 'https://openspeech.bytedance.com', note: '用火山引擎「录音文件识别2.0」识别，单次最长 5 分钟' },
   { id: 'openai', label: 'OpenAI', key_base_url: OPENAI_BASE_URL, note: 'gpt-transcribe 识别，与朗读共用 OpenAI Key；官方定于 2027-02-26 停用' },
 ];
@@ -515,7 +515,7 @@ export async function local_transcribe({ home, key, wav }, { request = fetch, st
       try { response = await local_stt_send(home, key, wav, request); }
       catch { throw new Error(`本机语音识别服务已启动但连接失败，请查看 ${join(directory, 'serve.log')}`); }
     }
-    if (response.status === 401) throw new Error(t('本机语音识别服务拒绝了令牌，请让平台主理人修复本机语音输入，或结束旧的 crispasr 进程后重试'));
+    if (response.status === 401) throw new Error(t('本机语音识别服务拒绝了令牌，请让 MOSS 修复本机语音输入，或结束旧的 crispasr 进程后重试'));
     if (!response.ok) throw new Error(`本机语音识别失败（HTTP ${response.status}），请查看 ${join(directory, 'serve.log')}`);
     return String((await response.json()).text || '').trim();
   } finally { local_renew(directory); }

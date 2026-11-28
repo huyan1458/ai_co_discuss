@@ -22,7 +22,7 @@ import { GOAL_CONFIDENCE, GOAL_PROMPT_VERSION, decide_goal_wake, decide_sequence
 import { room_text, room_payload } from './room_text.mjs';
 import { question_notice } from './question_weixin.mjs';
 import { guest_protection, guest_state_of, HOST_ACTION_ITEMS, host_allowed, host_permissions } from './host_permissions.mjs';
-import { steward_task_catalog, steward_task_skills } from './steward.mjs';
+import { steward_task_catalog, steward_task_permissions, steward_task_proactive, steward_task_skills } from './steward.mjs';
 const api = (config, path, payload, ...options) => raw_api(config, path, room_payload(payload), ...options);
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -39,8 +39,7 @@ const MAX_CAPTURED_REPLY = 32000;
 // An idle room under an active goal waits this long before the host is woken, leaving the owner time to speak first.
 // Fallback when the room's goal does not carry its own idle wait (older website).
 export const GOAL_IDLE_MS = 120_000;
-// A goal waiting on the owner reaches their Weixin only after this long: right after the question they may be typing.
-// How long the owner is left waiting (a goal's pending phase, a blocking question) before Weixin tells them.
+// Give the owner time to reply in the room before sending a notice.
 export const PENDING_NOTICE_MS = 3 * 60_000;
 // A failed Weixin notice is tried again after this long instead of on every tick.
 const NOTICE_RETRY_MS = 60_000;
@@ -53,8 +52,9 @@ const FOLLOWUP_ENDED_ONLY = ['stopped', 'killed'];
 const PROGRAM_OPENED = ['followup', 'scheduled'];
 // How long reading one process's start time may take.
 const PROCESS_QUERY_MS = 10_000;
-// Without the host's note, the notice quotes the room's latest message, up to this many characters.
+// Notices quote at most this much of a room message.
 const NOTICE_EXCERPT = 300;
+const WAIT_EXCERPT_LINES = 3;
 // A manual member's session that refuses a delivery is retried in the same execution, after a wait the owner can cut short.
 const MAX_DELIVERY_RETRIES = 3;
 const MAX_DIAGNOSTIC_RETRIES = 30;
@@ -102,6 +102,8 @@ export function member_drafts(config, name) {
   const base = config.draft_directory || `${config.directory}-drafts`;
   return join(base, createHash('sha256').update(String(name)).digest('hex').slice(0, 16));
 }
+
+const SCRATCH_RETRY_MS = 6 * 60 * 60 * 1000;
 
 /** Remove only the execution subdirectory, refusing redirected ancestors. */
 function remove_scratch(config, { member, id }) {
@@ -312,6 +314,13 @@ export async function user_request_texts(config, execution) {
   for (const message_id of message_ids) {
     try {
       const message = await api(config, `/messages/${message_id}`);
+      if (config.steward && message.texts?.template === 'steward_proactive') {
+        for (const request of execution.requests.filter(item => item.message_id === message_id)) request.steward_proactive = true;
+      }
+      if (config.steward) {
+        const review = steward_review_context(config, message);
+        if (review) for (const request of execution.requests.filter(item => item.message_id === message_id)) request.steward_review = review;
+      }
       if (message.relay_room) {
         for (const request of execution.requests.filter(item => item.message_id === message_id)) {
           request.relay = { from_room: message.relay_room, title: message.relay_title, host: message.relay_host,
@@ -323,6 +332,16 @@ export async function user_request_texts(config, execution) {
     } catch { /* The host still reads the message itself. */ }
   }
   return texts;
+}
+
+/** The review wake is anchored on the original outgoing card, now annotated with its outcome. */
+function steward_review_context(config, message) {
+  const state = message.relay_report_state;
+  if (message.source !== 'room_relay_sent' || !['completed', 'failed', 'cancelled', 'unreported'].includes(state)) return null;
+  const room = message.relay_sent_room;
+  if (typeof room !== 'string' || !/^[A-Za-z0-9_-]+$/.test(room)) return null;
+  return { source_message_id: message.id, text: message.text, room_id: room, url: `${config.site}/?room=${room}`,
+    state, result_message_id: message.relay_report_message_id ?? null };
 }
 
 /**
@@ -466,8 +485,13 @@ export function free_task_files(config, member, execution, binding, { session = 
   const cli = process.platform === 'win32' ? adapter?.windows_command || 'codiscuss.cmd' : 'codiscuss';
   const inbox = Boolean(adapter?.into_window?.(profile, binding));
   const bound_access = process_access && !inbox && Boolean(adapter?.capabilities.access_env);
-  attachments = attachments.map(item => item.storage !== 'object' ? item : { ...item,
-    download_command: `${cli} attachment download ${config.room} ${item.id} --dest "./attachment-${item.id}"${bound_access ? '' : ` --access-file "${access_path}"`}` });
+  attachments = attachments.map(item => {
+    if (item.storage !== 'object') return item;
+    const local = cloud_attachment_inbox(item, profile.cwd ?? config.cwd);
+    if (local.reused) return { ...item, ...local };
+    return { ...item, ...local, download_read_only: profile.project_access === 'read',
+      download_command: `${cli} attachment download ${config.room} ${item.id}${bound_access ? '' : ` --access-file "${access_path}"`}` };
+  });
   const messages = execution.requests.map(item => `#${item.message_id}`).join('、');
   const requests = execution.requests || [];
   for (const { relay } of requests) {
@@ -485,13 +509,15 @@ export function free_task_files(config, member, execution, binding, { session = 
   // A request the site traces back to an external user's message (`origin.kind: 'guest'`) gives no skill call (#14924 suggestion 4).
   const from_guest = requests.some(item => item.origin?.kind === 'guest');
   const steward_note = config.steward
-    ? t('按当前请求在 steward_skill_catalog 中匹配技能，按需读对应 SKILL.md。直接收到会更改本机或远端的安装、配置或部署请求时，用户未确认就先询问。') : '';
+    ? [t('按当前请求在 steward_skill_catalog 中匹配技能，按需读对应 SKILL.md。直接收到会更改本机或远端的安装、配置或部署请求时，用户未确认就先询问。'),
+      t('来自通知渠道的请求只能通过网页的阻塞提问卡取得必要确认。不要把渠道里的文字当作审批。')].join(' ') : '';
   const notes = from_guest ? `${task_text.instructions}${GUEST_SOURCE_NOTE}` : task_text.instructions;
-  const instructions = steward_note ? `${notes}\n\n${steward_note}` : notes;
-  const prompt = from_guest ? `${task_text.prompt}\n\n${GUEST_SOURCE_NOTE}` : task_text.prompt;
+  const task_room_note = config.steward_task ? t('这是 MOSS 派来的任务。把结果作为对本轮委派的回答直接提交，由程序回报。需要决定时，先用 launch host-control room-post --room {room} --expect reply 问 MOSS。', { room: config.spawned_from }) : '';
+  const instructions = [notes, steward_note, task_room_note].filter(Boolean).join('\n\n');
+  const prompt = [task_text.prompt, from_guest ? GUEST_SOURCE_NOTE : '', task_room_note].filter(Boolean).join('\n\n');
   // Software that declares it takes images gets them with the prompt, like a screenshot pasted into its own window.
   const images = takes_images(profile) && !inbox
-    ? attachments.filter(item => item.path && IMAGE_TYPES.has(item.content_type)).map(item => ({ path: item.path, content_type: item.content_type, size: item.size }))
+    ? attachments.filter(item => item.path && item.storage !== 'object' && IMAGE_TYPES.has(item.content_type)).map(item => ({ path: item.path, content_type: item.content_type, size: item.size }))
     : [];
   const skills = discussion_request || direct_question
     ? ['discuss-participant/SKILL.md', 'discuss-session/SKILL.md',
@@ -543,7 +569,9 @@ export function free_task_files(config, member, execution, binding, { session = 
   const catalog = config.steward ? steward_task_catalog(config) : [];
   const selected_skills = config.steward ? steward_task_skills(config, request_texts, catalog) : skills.map(file => join(skills_directory, file));
   atomic_json(task_path, { site: config.site, room: config.room, mode: 'free', member: member.name,
-    ...(config.steward ? { steward: true, steward_skill_catalog: catalog } : {}),
+    ...(config.steward ? { steward: true, steward_skill_catalog: catalog, host_permissions: steward_task_permissions(config) } : {}),
+    ...(config.steward && requests.some(request => request.steward_proactive) ? { ...steward_task_proactive(config) } : {}),
+    ...(config.steward_task ? { steward_task: true, parent_room: config.spawned_from } : {}),
     execution_id: execution.id, requests, ...(linked_rooms ? { linked_rooms } : {}), request_messages: execution.requests.map(item => item.message_id),
     ...(attachments.length ? { attachments } : {}),
     request_purposes: execution.requests.map(item => item.purpose || 'ask'),
@@ -563,7 +591,8 @@ export function free_task_files(config, member, execution, binding, { session = 
     ...(stopped.length ? { stopped_executions: stopped } : {}),
     role: member.role || 'member',
     // Only where the adapter declares capture: without it, only a submitted answer is saved, as the skill already says.
-    ...(adapter?.capabilities.capture ? { answer_capture: '正常结束且本次没有提交时，你最后一段文字收为本次回答（标自动收录，不派活）；已提交或被拒则不收录' } : {}),
+    ...(adapter?.capabilities.capture && !(config.steward && requests.some(request => request.steward_proactive)
+      && requests.every(request => request.purpose === 'notice')) ? { answer_capture: '正常结束且本次没有提交时，你最后一段文字收为本次回答（标自动收录，不派活）；已提交或被拒则不收录' } : {}),
     read_after: execution.read_until, cwd: profile.cwd || null, project_access: profile.project_access, draft_directory,
     scratch_directory,
     ...(lockdown ? { protection: { level: protection, note: PROTECTED_NOTE } } : {}),
@@ -646,6 +675,21 @@ function file_scope(config, profile, { member_directory, draft_directory, knowle
       ...extra_directories.map(item => item.path)].filter(Boolean),
     write: [draft_directory, knowledge_directory, ...extra_directories.filter(item => item.access === 'write').map(item => item.path)].filter(Boolean),
   } };
+}
+
+function cloud_attachment_inbox(item, cwd) {
+  const name = item.file_name;
+  if (typeof name !== 'string' || !name || /[<>:"/\\|?*\x00-\x1f\x7f]|[. ]$/.test(name)
+      || /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]) *($|\.)/i.test(name) || !/^[a-f0-9]{32}$/.test(item.id)) return {};
+  const download_path = `.codiscuss-inbox/${item.id}/${name}`;
+  if (cwd) {
+    try {
+      const target = join(realpathSync(cwd), download_path);
+      const info = lstatSync(target);
+      if (info.isFile() && info.size === item.size && realpathSync(target) === target) return { path: target, reused: true };
+    } catch { /* An unavailable copy is not described as already downloaded. */ }
+  }
+  return { download_path };
 }
 
 /** An API host cannot open files outside the project, so its sub-workflows carry their text instead of a path. */
@@ -758,7 +802,7 @@ export class FreeRoomRunner {
     this.decisions = new Set();
     // Called when a scheduling decision settles; the service checks the room at once instead of waiting for the next poll.
     this.on_decided = () => {};
-    // Set by the service when it can reach the owner's Weixin: { ready(), sent(key), send(notice) }.
+    // Set by the service for the owner's default notification channel: { ready(), sent(key), send(notice) }.
     this.notifier = null;
     // Set by the service of a hosted account's instance: told of every execution this runner judged failed.
     this.on_failed = null;
@@ -909,6 +953,7 @@ export class FreeRoomRunner {
     if (!inbox.archived) this.arrange_groups(inbox);
     this.room_title = room.title;
     this.room = room;
+    if (!inbox.archived) await this.notify_waits(room);
     if (!inbox.archived) await this.notify_questions(room);
     if (!inbox.archived) await this.continue_goal(room);
     this.inbox = inbox;
@@ -929,6 +974,10 @@ export class FreeRoomRunner {
     await this.deliver_interjections(inbox.executions);
     await this.notice_queued(inbox);
     const pending_stops = await this.report_stops(active);
+    if (this.config.steward && !inbox.archived && !inbox.executions.length) {
+      const { activate_steward_for_delivery } = await import('./discussion_launch.mjs');
+      if (await activate_steward_for_delivery(this.config, inbox.members.some(member => member.pending.length))) return;
+    }
     // Start in the room's speaking order: execution ids follow it, and the website lays out working cards by them.
     const rank = (room.speaking_order?.items || []).map(item => item.name);
     const place = name => rank.includes(name) ? rank.indexOf(name) : rank.length;
@@ -1132,6 +1181,7 @@ export class FreeRoomRunner {
     if (this.room?.goal_state?.goal?.idle) return false;
     const notice = this.pending_notice(this.room);
     if (notice && this.notifier.ready() && !this.notifier.sent(notice.key)) return false;
+    if (!inbox.archived && this.notifier?.ready() && this.wait_notices(this.room).some(item => !this.wait_notice_sent(item.key))) return false;
     // A blocking question waiting on the owner needs ticks too, so its Weixin notice goes out on time.
     if (this.notifier?.ready() && this.question_notices(this.room).some(item => !this.notifier.sent(item.key))) return false;
     if (this.room?.session?.status === 'active' || inbox.executions.length || inbox.members.some(member => member.pending.length)) return false;
@@ -1217,6 +1267,38 @@ export class FreeRoomRunner {
       } catch (error) {
         this.notice_failed_at = Date.now();
         this.log(`问题 #${question.id} 微信通知失败：${error.message}`);
+        return;
+      }
+    }
+  }
+  /** Each open answer wait has its own persistent key, shared with analytics. */
+  wait_notices(room) {
+    return (room?.free?.waits || []).map(wait => ({ key: `${this.config.site}/${this.config.room}/wait:${wait.id}`,
+      due: wait.created_at * 1000 + PENDING_NOTICE_MS, message_id: wait.message_id }));
+  }
+  /** Keep the deduplication marker even after the channel's recent-notice history rolls over. */
+  wait_notice_sent(key) {
+    return Boolean(this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key));
+  }
+  /** Notify once when the answer wait is still open after the grace period. */
+  async notify_waits(room) {
+    if (!this.notifier?.ready() || Date.now() - (this.wait_notice_failed_at ?? 0) < NOTICE_RETRY_MS) return;
+    for (const notice of this.wait_notices(room)) {
+      if (Date.now() < notice.due || this.wait_notice_sent(notice.key)) continue;
+      try {
+        const message = await api(this.config, `/messages/${notice.message_id}`);
+        if (message.withdrawn) continue;
+        const excerpt = (message.summary?.trim() || message.text?.trim() || '').slice(0, NOTICE_EXCERPT);
+        const lines = excerpt.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, WAIT_EXCERPT_LINES);
+        const result = await this.notifier.send({ key: notice.key, room: { site: this.config.site, room: this.config.room, title: room.title },
+          paragraphs: [t('这个房间在等你回复。直接回复这条通知，内容会发回房间。'), ...lines] });
+        if (result.status === 'sent' || result.status === 'duplicate') {
+          this.store.db.prepare('INSERT OR IGNORE INTO metadata VALUES (?,?)').run(notice.key, String(Date.now()));
+        }
+        if (result.status === 'sent') this.log(t('停等提醒已发送 #{number}', { number: result.number }));
+      } catch (error) {
+        this.wait_notice_failed_at = Date.now();
+        this.log(t('停等提醒发送失败：{reason}', { reason: error.message }));
         return;
       }
     }
@@ -2382,6 +2464,10 @@ export class FreeRoomRunner {
       this.replies.set(execution.id, result.text || '');
       if (result.denied
         || this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`recovery-denied:${execution.id}`)) this.denied.add(execution.id);
+      if (this.config.steward && !this.denied.has(execution.id) && latest.requests?.length && latest.requests.every(item => item.purpose === 'notice')) {
+        this.forget_owner(execution.id);
+        return this.end_quiet(member.name, execution.id);
+      }
       if (await this.capture_reply(member.name, execution.id, latest)) {
         this.forget_owner(execution.id);
         return this.save(member.name, { status: 'idle', error: '' });
@@ -2480,10 +2566,21 @@ export class FreeRoomRunner {
     for (const { key, value } of this.store.db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'scratch:%'").all()) {
       const id = Number(key.slice('scratch:'.length));
       const record = JSON.parse(value);
+      if (record.retry_after > Date.now()) continue;
       if (active.has(id) || this.execution_processes.get(id)?.size || this.orphan(id)?.alive) continue;
       try {
         const latest = await api(this.config, `/executions/${id}`);
-        if (latest.status === 'completed') remove_scratch(this.config, record);
+        if (latest.status === 'completed') {
+          try { remove_scratch(this.config, record); }
+          catch (error) {
+            const reason = error.message;
+            if (record.failure !== reason) this.log(`scratch #${id}: ${reason}`);
+            const retry_after = Date.now() + SCRATCH_RETRY_MS;
+            this.store.db.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify({ ...record, failure: reason, retry_after }), key);
+            continue;
+          }
+          if (record.failure) this.log(t('scratch #{id}: 清理已恢复', { id }));
+        }
         else if (['failed', 'cancelled'].includes(latest.status)) {
           const delivery = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`delivery:${id}`);
           const stoppable = record.stoppable || (delivery && stored_delivery(delivery.value).stoppable);

@@ -962,8 +962,32 @@ function show_toast(message, is_error = false) {
   state.toast_timer = setTimeout(() => { element("toast").hidden = true; }, TOAST_DURATION_MS);
 }
 
+const offline_notices = new Map();
+
+/** Remember an outage until this computer answers another relay request. */
+function offline_error(machine) {
+  const message = t('电脑「{value1}」不在线，请确认它开机并运行 codiscuss', { value1: machine.name });
+  if (!offline_notices.has(machine.id)) offline_notices.set(machine.id, { message, shown: false });
+  return Object.assign(new Error(message), { offline: true });
+}
+
+function relay_recovered(machine) {
+  const outage = offline_notices.get(machine.id);
+  offline_notices.delete(machine.id);
+  if (outage?.shown) notify("info", t('电脑「{name}」已恢复连接', { name: machine.name }), { id: `offline:${machine.id}` });
+}
+
 /** Show a transient notice in the channel's toaster; level is "error", "warning", or "info". */
 function notify(level, message, options = {}) {
+  if (level === "error") {
+    for (const [id, outage] of offline_notices) {
+      if (!String(message).includes(outage.message)) continue;
+      if (outage.shown) return;
+      outage.shown = true;
+      options = { ...options, id: `offline:${id}` };
+      break;
+    }
+  }
   document.dispatchEvent(new CustomEvent("discuss:notice", { detail: { level, message, ...options } }));
 }
 
@@ -1561,7 +1585,7 @@ async function destroy_all_rooms() {
     return notify("warning", t('还有 {count} 个房间没有清理完：{names}。可在“销毁记录”里重试；完成后再点一次“销毁全部房间”（没有房间时只清空各 AI 软件的会话记录）。', { count: titles.length, names: titles.join("、") }));
   }
   if (state.rooms.some(room => room.system_kind)) {
-    return notify("info", t("全部项目房间已销毁，平台主理人对话已保留。"));
+    return notify("info", t("全部项目房间已销毁，MOSS 对话已保留。"));
   }
   if (!state.launch.available) return;
   try {
@@ -2510,7 +2534,10 @@ async function refresh_room({ room: read_room = true } = {}) {
   // A room being destroyed leaves on its own once it has dissolved; a refresh meanwhile does not switch away under it.
   if (state.room && !state.rooms.some((item) => item.id === state.room.id) && !state.destroying.has(state.room.id)) return select_room(visible_rooms()[0]?.id);
   if (!state.room || !read_room) {
-    if (!state.room && !state.welcome && visible_rooms().length) return select_room(opening_room());
+    if (!state.room && !state.welcome) {
+      const room_id = opening_room();
+      if (room_id) return select_room(room_id);
+    }
     render_rooms();
     set_connection(true);
     return;
@@ -2529,7 +2556,14 @@ const LAST_ROOM_KEY = "ai-codiscuss-last-room";
  * The room to open when none is chosen: the address's room, else the one last opened on any device (kept by the
  * computer's website), else the one last opened in this browser, else the first listed.
  */
+let moss_notification_link = new URLSearchParams(location.search).get("moss");
+
 function opening_room() {
+  if (state.rooms.some(room => room.id === moss_notification_link && room.system_kind === "steward")) {
+    const room_id = moss_notification_link;
+    moss_notification_link = null;
+    return room_id;
+  }
   let last = null;
   try { last = localStorage.getItem(LAST_ROOM_KEY); } catch { /* Storage may be unavailable. */ }
   const wanted = [new URLSearchParams(location.search).get("room"), state.last_room, last]
@@ -2634,7 +2668,8 @@ async function select_room(room_id) {
   if (state.room) take_draft_after_login(state.room.id);
   select_tab("discussion", { refresh: false });
   // A share page is one file or one fixed address: its location and this browser's last room stay as they are.
-  if (!SHARE) history.replaceState(null, "", state.room ? `/?room=${encodeURIComponent(room_id)}` : "/");
+  if (!SHARE) history.replaceState(null, "", state.room
+    ? `/?${state.room.system_kind === "steward" ? "moss" : "room"}=${encodeURIComponent(room_id)}` : "/");
   if (state.room && !SHARE) remember_room(room_id);
   if (state.room) state.archive_view = Boolean(state.room.archived);
   else {
@@ -2817,12 +2852,12 @@ function apply_create_preferences() {
 }
 
 /** Remember only changed preference fields; cancellation of the form does not undo these choices. */
-function write_create_preferences(patch) {
+function write_create_preferences(patch, { persisted = false } = {}) {
   const current = state.launch.create_preferences || {};
   const changed = Object.fromEntries(Object.entries(patch).filter(([field, value]) => JSON.stringify(current[field]) !== JSON.stringify(value)));
   if (!Object.keys(changed).length) return;
   state.launch.create_preferences = { ...current, ...changed };
-  create_preferences_pending = { ...create_preferences_pending, ...changed };
+  if (!persisted) create_preferences_pending = { ...create_preferences_pending, ...changed };
   create_preferences_version++;
   flush_create_preferences();
   publish_view();
@@ -3975,8 +4010,9 @@ async function deliver_send(job) {
     if (saved) notify_failure(error, t('留言已保存，但页面刷新失败：{value1}', { value1: error.message }));
     else {
       job.preview = { ...job.preview, failed: error.message };
+      const already_failed = state.failed_sends.some(item => item.room_id === room_id);
       state.failed_sends = [...state.failed_sends, job];
-      if (state.room?.id !== room_id) notify("error", t('发往「{room}」的消息未发出，回到该房间可重新发送', { room: job.room_title }));
+      if (!already_failed && state.room?.id !== room_id) notify("error", t('发往「{room}」的消息未发出，回到该房间可重新发送', { room: job.room_title }), { id: `unsent:${room_id}` });
       error.notified = true;
     }
     throw error;
@@ -4282,9 +4318,21 @@ function object_days_left(file) {
   return Math.max(1, Math.ceil((expires - Date.now()) / DAY_MS));
 }
 
-/** Whether a file goes to the account's cloud space: larger than its threshold, within 2 GiB, with the space set up. */
+/**
+ * Whether this page is opened on the computer itself (its own website at a loopback address), not through the relay or an
+ * account entry: files then reach the site directly, so only one too large for an attachment needs the cloud space.
+ */
+function opened_on_this_computer() {
+  return Boolean(!state.remote_rooms && state.admin?.local && typeof location !== "undefined" && ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname));
+}
+
+/**
+ * Whether a file goes to the account's cloud space: larger than its threshold (on the computer itself, the attachment
+ * limit), within 2 GiB, with the space set up.
+ */
 function goes_to_object_storage(file) {
-  return state.object_storage && file.size > (state.object_threshold_mib || state.attachment_limit_mib) * 1024 * 1024 && file.size <= OBJECT_MAX_BYTES;
+  const floor_mib = opened_on_this_computer() ? state.attachment_limit_mib : (state.object_threshold_mib || state.attachment_limit_mib);
+  return state.object_storage && file.size > floor_mib * 1024 * 1024 && file.size <= OBJECT_MAX_BYTES;
 }
 
 /**
@@ -4313,8 +4361,11 @@ async function upload_object_draft(room_id, actor, item) {
   }
 }
 
-/** Post the file with the storage's form fields as given, the file last, reporting progress; removal aborts it. */
-function send_to_object_storage(upload, item) {
+/**
+ * Post the file with the storage's form fields as given, the file last, reporting progress; removal aborts it. A draft
+ * reports to its cards; another caller passes `on_progress(share)`.
+ */
+function send_to_object_storage(upload, item, on_progress = null) {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     for (const [key, value] of Object.entries(upload.fields || {})) form.append(key, value);
@@ -4323,7 +4374,9 @@ function send_to_object_storage(upload, item) {
     item.object_request = request;
     request.open("POST", upload.url);
     request.upload.onprogress = (event) => {
-      if (event.lengthComputable) report_upload_percent(item, Math.min(UPLOAD_PERCENT_BEFORE_SAVED, Math.floor(event.loaded / event.total * 100)));
+      if (!event.lengthComputable) return;
+      if (on_progress) on_progress(event.loaded / event.total);
+      else report_upload_percent(item, Math.min(UPLOAD_PERCENT_BEFORE_SAVED, Math.floor(event.loaded / event.total * 100)));
     };
     request.onload = () => request.status >= 200 && request.status < 300 ? resolve()
       : reject(new Error(t('上传到对象存储失败（{status}）', { status: request.status })));
@@ -4606,9 +4659,101 @@ function object_attachment_markup(file) {
   const label = escape_html(t("下载 {name}", { name: file.file_name }));
   const link = `href="#" data-object-href="${escape_html(path)}" data-file-name="${name}"`;
   return `<div class="attachment-file" data-object-state="stored"><a class="attachment-file-main" ${link} aria-label="${label}">${attachment_file_icon(file.file_name)}<span class="attachment-name"><span title="${name}">${name}</span><small>${escape_html(object_days_left(file) ? t("云空间 · {size} · {days} 天后自动删除", { size: attachment_size(file.size), days: object_days_left(file) }) : t("云空间 · {size}", { size: attachment_size(file.size) }))}</small></span></a>
-    <a class="attachment-download" ${link} aria-label="${label}" title="${label}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
-    </a></div>`;
+    ${object_attachment_actions(file, link, label)}</div>`;
+}
+
+/** The icons of a cloud space attachment card: preview (what a viewer shows), download, and land it in a project. */
+function object_attachment_actions(file, link, label) {
+  const icon = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+  const data = `data-attachment-room="${escape_html(file.room_id)}" data-attachment-id="${escape_html(file.id)}" data-file-name="${escape_html(file.file_name)}" data-content-type="${escape_html(file.content_type || "")}" data-file-size="${Number(file.size) || 0}"`;
+  const control = (action, text, paths) => `<button type="button" class="attachment-download" data-attachment-action="${action}" ${data} aria-label="${escape_html(text)}" title="${escape_html(text)}">${icon(paths)}</button>`;
+  return `<span class="attachment-actions">${cloud_previewable(file) ? control("cloud-preview", t("预览 {name}", { name: file.file_name }), ATTACHMENT_ACTION_ICONS.preview) : ""}
+    <a class="attachment-download" ${link} aria-label="${label}" title="${label}">${icon(ATTACHMENT_ACTION_ICONS.download)}</a>
+    ${control("cloud-land", t("把 {name} 取回到项目", { name: file.file_name }), ATTACHMENT_ACTION_ICONS.land)}</span>`;
+}
+
+// What a cloud space file can be looked at as: the type only picks the viewer, anything else is downloaded.
+const CLOUD_PREVIEW_TYPES = /^(image|video|audio)\/|^application\/pdf$/;
+// A player whose link expired asks for a new one at most this often, so a file that cannot play does not loop.
+const CLOUD_RELINK_MIN_MS = 5000;
+
+/** Whether a cloud space file opens in a viewer. */
+function cloud_previewable(file) {
+  return CLOUD_PREVIEW_TYPES.test(String(file?.content_type || ""));
+}
+
+/** A cloud space file's content route on the site: a copied file names its own, an attachment has its room's. */
+function cloud_content_route(file) {
+  return file.kind === "cloud_file" && file.url ? file.url
+    : `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
+}
+
+/** A short-lived (600 s) link straight to the storage, signed by the site for this file. */
+async function cloud_link(file) {
+  return (await request_json(`${cloud_content_route(file)}?link=1`)).url;
+}
+
+/**
+ * Look at a cloud space file without downloading it: an image in the image viewer, audio or video in a player that the
+ * browser reads in parts, a PDF in a new tab (the file preview reads files whole, too much for these). Nothing of the
+ * file is fetched before this, so messages never sign links just to be drawn.
+ */
+async function preview_cloud_file(file) {
+  const type = String(file.content_type || "");
+  if (type === "application/pdf") {
+    // Opened before the link is read, so the browser does not take it for a popup.
+    const tab = window.open("", "_blank");
+    try {
+      const url = await cloud_link(file);
+      // The storage's page gets no handle back to this one.
+      if (tab) { tab.opener = null; tab.location.href = url; }
+      else window.location.assign(url);
+    } catch (error) { tab?.close(); throw error; }
+    return;
+  }
+  if (type.startsWith("image/") && state.image_viewer) return state.image_viewer([{ ...file, cloud_preview: true }], 0);
+  return open_cloud_player(file);
+}
+
+/**
+ * Play a cloud space file (or show an image on the classic page) over the page. A link expires after ten minutes: when
+ * the player then fails, it asks for a new link and carries on from where it was.
+ */
+async function open_cloud_player(file) {
+  const type = String(file.content_type || "");
+  const tag = type.startsWith("video/") ? "video" : type.startsWith("audio/") ? "audio" : "img";
+  const overlay = document.createElement("div");
+  overlay.className = "cloud-player";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-label", file.file_name || "");
+  overlay.innerHTML = `<div class="cloud-player-bar"><span>${escape_html(file.file_name || "")}</span><button type="button" class="cloud-player-close" aria-label="${escape_html(t("关闭"))}">×</button></div>
+    <${tag} class="cloud-player-media"${tag === "img" ? ` alt="${escape_html(file.file_name || "")}"` : " controls autoplay playsinline"}></${tag === "img" ? "img" : tag}>`;
+  const media = overlay.querySelector(".cloud-player-media");
+  let last_link = 0;
+  const close = () => {
+    document.removeEventListener("keydown", on_key, true);
+    if (media.pause) media.pause();
+    media.removeAttribute("src");
+    overlay.remove();
+  };
+  const on_key = (event) => { if (event.key === "Escape") { event.stopPropagation(); close(); } };
+  const load = async (position = 0) => {
+    last_link = Date.now();
+    const url = await cloud_link(file);
+    if (!overlay.isConnected) return;
+    media.src = url;
+    if (tag !== "img" && position > 0) media.addEventListener("loadedmetadata", () => { media.currentTime = position; media.play?.().catch(() => {}); }, { once: true });
+  };
+  media.addEventListener("error", () => {
+    if (!overlay.isConnected || Date.now() - last_link < CLOUD_RELINK_MIN_MS) return;
+    load(tag === "img" ? 0 : media.currentTime || 0).catch(error => notify("error", error.message));
+  });
+  overlay.addEventListener("click", (event) => { if (event.target === overlay || event.target.closest(".cloud-player-close")) close(); });
+  document.addEventListener("keydown", on_key, true);
+  document.body.append(overlay);
+  try { await load(); }
+  catch (error) { close(); throw error; }
 }
 
 /**
@@ -4640,6 +4785,120 @@ function download_object_file(event) {
   });
 }
 
+const ATTACHMENT_ACTION_ICONS = {
+  preview: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  download: '<path d="M12 3v12m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>',
+  cloud: '<path d="M12 13v8m-4-4 4-4 4 4"/><path d="M20 16.6A5 5 0 0 0 18 7h-1.3A8 8 0 1 0 4 15.3"/>',
+  land: '<path d="M4 20h16a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1h-7.9a1 1 0 0 1-.8-.4L9.9 5.4a1 1 0 0 0-.8-.4H4a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1Z"/><path d="M12 11v6m-3-3 3 3 3-3"/>',
+};
+
+/** Whether a sent file of this page's room can be copied to the account's cloud space (it stays on the computer too). */
+function can_cloud_copy(file) {
+  return Boolean(state.object_storage && !SHARE && file.id && file.room_id && !file.local_url && !file.cleared_at && file.storage !== "object");
+}
+
+/**
+ * The row of icons on the right of an attachment card: preview (what the page can show), download, and save to the cloud
+ * space. On an image they lie over the picture, which is itself a button, so they are spans acting as buttons there.
+ */
+function attachment_actions(file, { preview = false, overlay = false } = {}) {
+  const tag = overlay ? "span" : "button";
+  const item = (action, label) => `<${tag} ${overlay ? 'role="button"' : 'type="button"'} class="attachment-download" data-attachment-action="${action}" data-attachment-room="${escape_html(file.room_id)}" data-attachment-id="${escape_html(file.id)}" data-file-name="${escape_html(file.file_name)}" aria-label="${escape_html(label)}" title="${escape_html(label)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ATTACHMENT_ACTION_ICONS[action]}</svg></${tag}>`;
+  // A copy already under way keeps showing how far it has come when the card is drawn again.
+  const copying = cloud_copies.get(file.id);
+  const cloud = !can_cloud_copy(file) ? "" : copying === undefined ? item("cloud", t("把 {name} 存到云空间", { name: file.file_name }))
+    : item("cloud", t("正在存到云空间 {percent}%", { percent: copying })).replace(`data-attachment-action="cloud"`, `data-attachment-action="cloud" data-cloud-progress="${copying}"`);
+  const items = [preview ? item("preview", t("预览 {name}", { name: file.file_name })) : "", item("download", t("下载 {name}", { name: file.file_name })), cloud].join("");
+  return `<span class="attachment-actions${overlay ? " is-overlay" : ""}">${items}</span>`;
+}
+
+// Attachments being copied to the cloud space and the percent each has reached, so a second click waits for the first.
+const cloud_copies = new Map();
+// How often a copy's progress is asked for, and how long before the page stops asking (the site carries on regardless).
+const CLOUD_COPY_POLL_MS = 1000, CLOUD_COPY_POLL_LIMIT_MS = 30 * 60 * 1000;
+
+/** Show a copy's progress on every icon of that attachment, or the plain icon again once it is over (`percent` null). */
+function show_cloud_copy(id, file_name, percent) {
+  if (percent === null) cloud_copies.delete(id);
+  else cloud_copies.set(id, percent);
+  for (const control of document.querySelectorAll(`[data-attachment-action="cloud"][data-attachment-id="${CSS.escape(id)}"]`)) {
+    const label = percent === null ? t("把 {name} 存到云空间", { name: file_name }) : t("正在存到云空间 {percent}%", { percent });
+    control.title = label;
+    control.setAttribute("aria-label", label);
+    if (percent === null) control.removeAttribute("data-cloud-progress");
+    else control.dataset.cloudProgress = String(percent);
+  }
+}
+
+/**
+ * Copy one attachment to the cloud space. The site answers at once with a task (or the copy it already has) and does the
+ * upload itself, as a relayed request may wait only seconds; the page asks how far it has come until it is done.
+ *
+ * The work is handed to the file page's transfer list (frontend/transfers.js listens for "discuss:transfer" and marks
+ * the event `accepted`), so it shows beside the page's other transfers; without the workspace it runs here alone. Either
+ * way the cloud icon on the card shows the percent.
+ */
+async function copy_attachment_to_cloud(room_id, id, file_name) {
+  const route = `/api/rooms/${encodeURIComponent(room_id)}/attachments/${encodeURIComponent(id)}/cloud-copy`;
+  const work = async (report, remember_task = () => {}) => {
+    let answer = await request_json(route, {});
+    // The site's task, kept by the transfer list so a reload follows it on instead of calling it interrupted.
+    if (answer.task_id) remember_task(answer.task_id, { room_id, attachment_id: id });
+    const started = Date.now();
+    // A cloud file view (`kind: "cloud_file"`) is a copy already made; anything else is a task to follow.
+    while (answer.kind !== "cloud_file" && answer.status !== "completed") {
+      if (answer.status === "failed") throw new Error(answer.error || t("存到云空间失败"));
+      if (Date.now() - started > CLOUD_COPY_POLL_LIMIT_MS) throw new Error(t("存到云空间超时，请稍后在云空间里查看是否已完成"));
+      report(Number(answer.progress) || 0);
+      await new Promise(resolve => setTimeout(resolve, CLOUD_COPY_POLL_MS));
+      answer = await request_json(route);
+    }
+    return answer;
+  };
+  const finish = (error = null) => {
+    show_cloud_copy(id, file_name, null);
+    if (error) notify("error", t("“{name}”存到云空间失败：{reason}", { name: file_name, reason: error.message }));
+    else notify("info", t("“{name}”已存到云空间", { name: file_name }));
+  };
+  show_cloud_copy(id, file_name, 0);
+  const detail = { name: file_name, kind: "copy", accepted: false,
+    run: ({ progress = () => {}, task } = {}) => work((share) => { progress(share); show_cloud_copy(id, file_name, Math.min(99, Math.floor(share * 100))); }, task),
+    done: () => finish(), failed: (error, cancelled) => cancelled ? show_cloud_copy(id, file_name, null) : finish(error) };
+  document.dispatchEvent(new CustomEvent("discuss:transfer", { detail }));
+  if (detail.accepted) return;
+  try { await detail.run(); finish(); }
+  catch (error) { finish(error); }
+}
+
+/** Act on one attachment icon: preview opens the viewer, download saves it, cloud copies it to the cloud space. */
+function attachment_action(event) {
+  const control = event.target.closest?.("[data-attachment-action]");
+  if (!control) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const { attachmentAction: action, attachmentRoom: room_id, attachmentId: id, fileName: file_name } = control.dataset;
+  const cloud_file = { room_id, id, file_name, content_type: control.dataset.contentType || "", size: Number(control.dataset.fileSize) || 0, storage: "object" };
+  if (action === "cloud-preview") { run_action(() => preview_cloud_file(cloud_file)); return; }
+  if (action === "cloud-land") { choose_landing_folder(cloud_file); return; }
+  if (action === "preview") {
+    const card = control.closest(".attachment-file, .attachment-media, .attachment-image")?.querySelector("[data-preview-attachment]") || control.closest("[data-preview-attachment]");
+    if (card) run_action(() => preview_attachment({ ...card.dataset, room_id: card.dataset.attachmentRoom, id: card.dataset.previewAttachment }));
+    return;
+  }
+  if (action === "download") {
+    run_action(async () => {
+      const link = attachment_download_link({ room_id, id, file_name });
+      const anchor = document.createElement("a");
+      anchor.href = link["data-relay-href"] ? await relay_file_url(link["data-relay-href"]) : link.href;
+      anchor.download = file_name || "";
+      anchor.click();
+    });
+    return;
+  }
+  if (action !== "cloud" || cloud_copies.has(id)) return;
+  copy_attachment_to_cloud(room_id, id, file_name);
+}
+
 /** A message image as its preview button, shown in the list or where the answer refers to it. */
 function attachment_image_markup(file, { inline = false, badge = "" } = {}) {
   if (file.cleared_at) return cleared_attachment_markup(file);
@@ -4652,8 +4911,10 @@ function attachment_image_markup(file, { inline = false, badge = "" } = {}) {
   const source = typeof local_preview === "string" ? `src="${escape_html(local_preview)}"` : files_by_blob() ? `data-relay-src="${url}"` : `src="${url}"`;
   const inline_attr = inline ? ` data-inline-image="${escape_html(file.id)}"` : "";
   const badge_attr = badge ? ` data-image-badge="${escape_html(badge)}"` : "";
+  // The sending card's local copy has nothing on the site to download or copy yet.
+  const actions = file.local_url || !file.id ? "" : attachment_actions(file, { overlay: true });
   return `<button type="button" class="attachment-image" ${attachment_preview_attributes(file)}${inline_attr}${badge_attr}${attachment_image_style(file)}>
-      <img ${source} alt="${escape_html(file.file_name)}" loading="lazy"></button>`;
+      <img ${source} alt="${escape_html(file.file_name)}" loading="lazy">${actions}</button>`;
 }
 
 function attachment_markup(files = []) {
@@ -4679,19 +4940,14 @@ function attachment_markup(files = []) {
       const media = `<${tag} ${source} ${poster}${skinned ? "" : "controls "}preload="metadata" playsinline aria-label="${name}"></${tag}>`;
       return `<div class="attachment-media attachment-${tag}">${skinned ? `<${tag}-player><${tag}-skin class="attachment-player">${media}</${tag}-skin></${tag}-player>` : media}
         <span class="attachment-media-failed">${escape_html(t("浏览器无法播放这个文件的格式，请点下面的文件名下载后用本机软件打开。"))}</span>
-        <a class="attachment-media-name" ${download} download title="${escape_html(t("下载 {name}", { name: file.file_name }))}">${name}<small>${attachment_size(file.size)}</small></a></div>`;
+        <div class="attachment-media-bar"><a class="attachment-media-name" ${download} download title="${escape_html(t("下载 {name}", { name: file.file_name }))}">${name}<small>${attachment_size(file.size)}</small></a>${attachment_actions(file)}</div></div>`;
     }
     const content = `${attachment_file_icon(file.file_name)}<span class="attachment-name"><span title="${name}">${name}</span><small>${attachment_kind(file.file_name)[0]} · ${attachment_size(file.size)}</small></span>`;
     const previewable = file.content_type === "application/pdf" || is_text_attachment(file);
     return `<div class="attachment-file">${previewable
       ? `<button type="button" class="attachment-file-main" ${preview_attributes}>${content}</button>`
       : `<a class="attachment-file-main" ${download} download aria-label="${escape_html(t("下载 {name}", { name: file.file_name }))}">${content}</a>`}
-      ${previewable ? `<button type="button" class="attachment-download" ${preview_attributes} title="${escape_html(t("预览 {name}", { name: file.file_name }))}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
-      </button>` : ""}
-      <a class="attachment-download" ${download} download aria-label="${escape_html(t("下载 {name}", { name: file.file_name }))}" title="${escape_html(t("下载 {name}", { name: file.file_name }))}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
-      </a></div>`;
+      ${attachment_actions(file, { preview: previewable })}</div>`;
   }).join("")}</div>`;
 }
 
@@ -4742,6 +4998,8 @@ function close_attachment_preview() {
  * read through the relay (cached, so a thumbnail already shown costs nothing).
  */
 async function attachment_url(file) {
+  // A cloud space file is read straight from the storage through a link the site signs when it is opened.
+  if (file.cloud_preview) return cloud_link(file);
   const path = `/api/rooms/${encodeURIComponent(file.room_id)}/attachments/${encodeURIComponent(file.id)}/content`;
   return files_by_blob() ? relay_file_url(path, { urgent: true, size: Number(file.size) }) : path;
 }
@@ -5311,44 +5569,63 @@ async function open_steward() {
   try {
     const status = await local_launch_request("steward", {});
     if (navigation !== state.navigation_version) return;
-    if (!check_steward_configuration(status)) return;
+    if (!check_steward_configuration(status, { opened: true })) return;
     const { room_id } = status.room_id ? status : await local_launch_request("steward", { open: true, lang: window.codiscuss_i18n?.locale });
     if (navigation === state.navigation_version) await show_steward_room(room_id, navigation);
   } catch (error) {
     if (error.code === "steward_not_configured") {
-      if (navigation === state.navigation_version) check_steward_configuration({ configured: false });
+      if (navigation === state.navigation_version) check_steward_configuration({ configured: false }, { opened: true });
     } else notify("error", error.message);
   }
 }
 
 /** Explain the prerequisite and open the exact setting instead of submitting a platform task. */
-function check_steward_configuration(status) {
+/** Open MOSS's setup page when no software is chosen yet; a request that was blocked on it also says why. */
+function check_steward_configuration(status, { opened = false } = {}) {
   if (status.configured !== false) return true;
-  document.dispatchEvent(new Event("discuss:steward-settings"));
-  notify("warning", t("请先在“设置 → 平台主理人”选择软件"));
+  document.dispatchEvent(new Event("discuss:steward-setup"));
+  // The user who opened MOSS sees the setup page itself, which says what to do; a notice would only repeat it.
+  if (!opened) notify("warning", t("请先在“MOSS”页面选择软件"));
   return false;
 }
 
+// MOSS's project access as last read: installing and deploying need more than read-only (#15623).
+let steward_access = "";
 async function ensure_steward_configured() {
-  try { return check_steward_configuration(await local_launch_request("steward", {})); }
-  catch (error) { notify("error", error.message); return false; }
+  try {
+    const status = await local_launch_request("steward", {});
+    steward_access = status.settings?.project_access || "";
+    return check_steward_configuration(status);
+  } catch (error) { notify("error", error.message); return false; }
 }
+/** Whether MOSS is read-only as last read, so an install or deploy would be refused until it is raised. */
+function steward_read_only() { return steward_access === "read"; }
 
 /** Send one platform task and offer to open its result without leaving the current page. */
-async function request_steward(skill, context = {}, { confirmed = false } = {}) {
+async function request_steward(skill, context = {}, { confirmed = false, raise_access = false } = {}) {
   if (!await ensure_steward_configured()) return;
+  // 调到自动并发送: the access is saved first, and the request goes only once the computer has taken it.
+  if (raise_access) {
+    try { await local_launch_request("steward-settings", { project_access: "auto" }); steward_access = "auto"; }
+    catch (error) { notify("error", error.message); return; }
+  }
   try {
     const { room_id } = await local_launch_request("steward-request", {
       skill, context, lang: window.codiscuss_i18n?.locale, submission_id: new_submission_id(),
       ...(confirmed ? { confirmed: true } : {}),
     });
-    notify("info", t("已发送给平台主理人"), {
+    notify("info", t("已发送给 MOSS"), {
       duration: 20000,
-      actions: [{ label: t("打开平台主理人"), onClick: () => show_steward_room(room_id).catch(error => notify("error", error.message)) }],
+      actions: [{ label: t("打开 MOSS"), onClick: () => show_steward_room(room_id).catch(error => notify("error", error.message)) }],
     });
   } catch (error) {
     if (error.code === "steward_not_configured") check_steward_configuration({ configured: false });
-    else notify("error", error.message);
+    else if (error.code === "steward_access_too_low") {
+      steward_access = "read";
+      notify("warning", t("MOSS 现在是只读，安装和部署需要先把它的项目权限调到“自动”。"), {
+        duration: 20000, actions: [{ label: t("调到自动并发送"), onClick: () => request_steward(skill, context, { confirmed, raise_access: true }) }],
+      });
+    } else notify("error", error.message);
   }
 }
 
@@ -5548,13 +5825,21 @@ async function pair_exchange(machine, payload) {
   const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, envelope, wait: PAIR_WAIT_MS }) });
   const result = await response.json();
   if (!response.ok) throw new Error(server_text(result.error_text, result.error) || t('配对请求被网站拒绝'));
-  if (result.status === "done") return open_relay_response(key, id, result.response);
-  if (result.status === "offline") throw new Error(t('电脑「{value1}」不在线，请确认它开机并运行 codiscuss', { value1: machine.name }));
+  if (result.status === "done") {
+    const answer = await open_relay_response(key, id, result.response);
+    relay_recovered(machine);
+    return answer;
+  }
+  if (result.status === "offline") throw offline_error(machine);
   // Without the live relay, the request waits in the queue; its answer is sealed for this browser alone.
   for (const started = Date.now(); Date.now() - started < RELAY_COMMAND_WAIT_MS;) {
     await new Promise(resolve => setTimeout(resolve, RELAY_COMMAND_POLL_MS));
     const command = await (await fetch(`/api/machines/${encodeURIComponent(machine.id)}/commands/${id}`)).json();
-    if (command.status === "done") return open_relay_response(key, id, command.response);
+    if (command.status === "done") {
+      const answer = await open_relay_response(key, id, command.response);
+      relay_recovered(machine);
+      return answer;
+    }
   }
   throw new Error(t('电脑没有及时答复配对请求，请确认它开机并运行 codiscuss 后重试'));
 }
@@ -5662,6 +5947,16 @@ async function meet_device_need(error) {
 const recent_relay_times = [];
 const relay_time_reports = [];
 let relay_feedback_timer;
+function queue_relay_report(machine, report) {
+  if (relay_machine?.id !== machine.id) return;
+  relay_time_reports.push(report);
+  if (relay_time_reports.length > 64) relay_time_reports.shift();
+  if (!relay_feedback_timer) relay_feedback_timer = setTimeout(() => {
+    relay_feedback_timer = null;
+    if (relay_time_reports.length && relay_machine?.id === machine.id) relay_exchange("timing-report", {}).catch(() => {});
+  }, 1500);
+}
+
 function record_relay_time(machine, id, category, total, result, local) {
   if (relay_machine?.id !== machine.id || !Number.isFinite(local)) return;
   const delta = (a, b) => Number.isFinite(a) && Number.isFinite(b) && a >= b ? Math.round(a - b) : null;
@@ -5676,12 +5971,7 @@ function record_relay_time(machine, id, category, total, result, local) {
     recent_relay_times.splice(12);
     window.dispatchEvent(new Event("relay-timing"));
   }
-  relay_time_reports.push(report);
-  if (relay_time_reports.length > 16) relay_time_reports.shift();
-  if (!relay_feedback_timer) relay_feedback_timer = setTimeout(() => {
-    relay_feedback_timer = null;
-    if (relay_time_reports.length && relay_machine?.id === machine.id) relay_exchange("timing-report", {}).catch(() => {});
-  }, 1500);
+  queue_relay_report(machine, report);
 }
 
 async function seal_relay_request(machine, id, request) {
@@ -5725,12 +6015,17 @@ async function relay_exchange(action, payload, wait, trace) {
     trace.log("started", 0);
   }
   const target = computer_rooms_only() ? { target: "computer" } : {};
-  const reports = action === "timing-report" ? relay_time_reports.splice(0) : [];
+  const reports = relay_time_reports.slice(0, 16);
   const { key, envelope } = await seal_relay_request(machine, id, { action, payload, ...target, timing_version: 1,
     ...(reports.length ? { timing_reports: reports } : {}) });
   const sent = performance.now();
+  function report_failure(failure, result = {}) {
+    if (action !== "timing-report") queue_relay_report(machine, { id, at: Date.now(), operation: action, failure, worker: result.worker_ms, rpc: result.rpc_ms, status: result.status,
+      total: Math.round(performance.now() - sent) });
+  }
   const result = await request_json(`/api/machines/${encodeURIComponent(machine.id)}/relay`, { id, envelope, ...(wait ? { wait } : {}) })
     .catch(error => {
+      report_failure(error.status ? "site_http" : ["TimeoutError", "AbortError"].includes(error.name) ? "browser_timeout" : "fetch_failed", { status: error.status });
       // A request given up in the network may still have reached the computer, so its outcome is unconfirmed. Safari
       // reports the timeout as a plain AbortError ("Fetch is aborted"); the timeout is this request's only abort.
       if (error.name === "TimeoutError" || error.name === "AbortError") throw Object.assign(new Error(t('结果待确认：电脑「{value1}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试', { value1: machine.name })),
@@ -5740,6 +6035,11 @@ async function relay_exchange(action, payload, wait, trace) {
   if (result.status === "done") {
     const total = Math.round(performance.now() - sent);
     const answer = await open_relay_response(key, id, result.response);
+    for (const report of reports) {
+      const index = relay_time_reports.indexOf(report);
+      if (index !== -1) relay_time_reports.splice(index, 1);
+    }
+    relay_recovered(machine);
     if (result.response.timing) {
       try {
         const timing = await open_relay_response(key, id, result.response.timing, "timing");
@@ -5752,7 +6052,8 @@ async function relay_exchange(action, payload, wait, trace) {
     }
     return answer;
   }
-  if (result.status === "offline") throw Object.assign(new Error(t('电脑「{value1}」不在线，请确认它开机并运行 codiscuss', { value1: machine.name })), { offline: true });
+  report_failure(result.status === "offline" ? "offline" : "relay_timeout", result);
+  if (result.status === "offline") throw offline_error(machine);
   throw Object.assign(new Error(t('结果待确认：电脑「{value1}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试', { value1: machine.name })),
     { unconfirmed: true, launch: { stage: "unconfirmed" } });
 }
@@ -5766,7 +6067,11 @@ async function queued_relay_command(action, payload, limit) {
   for (const started = Date.now(); Date.now() - started < limit;) {
     await new Promise(resolve => setTimeout(resolve, RELAY_COMMAND_POLL_MS));
     const command = await request_json(`${path}/${id}`);
-    if (command.status === "done") return open_relay_response(key, id, command.response);
+    if (command.status === "done") {
+      const answer = await open_relay_response(key, id, command.response);
+      relay_recovered(machine);
+      return answer;
+    }
   }
   throw Object.assign(new Error(t('电脑「{value1}」未在限时内答复，请确认它开机并运行 codiscuss 后重试', { value1: machine.name })), { launch: { stage: "unconfirmed" } });
 }
@@ -7000,6 +7305,151 @@ function read_room_files(room_id, path = "", offset = 0, query = "", root = 0, f
  */
 function manage_room_files(room_id, payload) {
   return local_launch_request("room-files", { room_id, ...payload, token: localStorage.getItem(`discuss-access:${room_id}`) });
+}
+
+/**
+ * Copy one project file, or a folder packed as a ZIP, to the account's cloud space; the computer does it in the background
+ * and answers `{ task_id, status, progress }`, followed with `project_cloud_status`.
+ */
+function save_project_to_cloud(room_id, { path, root, kind }) {
+  return local_launch_request("project-cloud", { room: room_id, path, root, kind, token: localStorage.getItem(`discuss-access:${room_id}`) });
+}
+
+/** How far a cloud copy has come: `{ status: "running" | "completed" | "failed", stage, progress, error }`. */
+function project_cloud_status(task_id) {
+  return local_launch_request("project-cloud-status", { task_id });
+}
+
+/**
+ * Upload one file too large for the file page's part upload into a project folder through the cloud space: the computer
+ * checks the target and reserves a transfer copy, this page sends the file straight to the storage (progress, cancel),
+ * then the computer lands it in the folder and frees the copy.
+ *
+ * Args:
+ *   room_id: the room whose project takes it. target: { root, path } of the folder. file: the browser File.
+ *   options: { on_progress(share), signal } for the transfer to the storage.
+ * Returns:
+ *   The landing task, followed with `project_cloud_status`; done, it carries the file's `path` in the project.
+ */
+async function upload_project_via_cloud(room_id, { root, path }, file, { on_progress = () => {}, signal, conflict } = {}) {
+  const token = localStorage.getItem(`discuss-access:${room_id}`);
+  const { task_id, upload } = await local_launch_request("project-cloud-upload", { room: room_id, root, path, name: file.name, size: file.size,
+    content_type: file.type || "application/octet-stream", submission_id: new_submission_id(), token });
+  const item = { file, removed: false };
+  signal?.addEventListener("abort", () => { item.removed = true; item.object_request?.abort(); });
+  await send_to_object_storage(upload, item, on_progress);
+  if (item.removed) throw Object.assign(new Error(t("已取消")), { cancelled: true });
+  return local_launch_request("project-cloud-land", { room: room_id, task_id, ...(conflict ? { conflict } : {}), token });
+}
+
+/**
+ * Land a cloud space file in a project folder; the cloud copy stays. `source` is a sent attachment (`kind` "attachment",
+ * with its room) or any other file of the cloud space (`kind` "cloud_file"). Answers the landing task.
+ */
+function land_in_project(room_id, { source, root, path, conflict }) {
+  const from = source.kind === "cloud_file" ? { cloud_file_id: source.id } : { attachment_room: source.room_id, attachment_id: source.id };
+  return local_launch_request("project-cloud-land", { room: room_id, ...from, root, path, ...(conflict ? { conflict } : {}),
+    token: localStorage.getItem(`discuss-access:${room_id}`) });
+}
+
+/**
+ * Put a file straight into the account's cloud space, not through any room (its "U 盘"): the site reserves it, this page
+ * sends it to the storage (progress, cancel by `signal`), then the site checks it is there.
+ */
+async function upload_to_cloud_space(file, { on_progress = () => {}, signal, folder_id = null, relative_dir = "", submission_id = "" } = {}) {
+  const base = "/api/rooms/cloud-attachments";
+  // A folder's files go under `folder_id` at `relative_dir` (made as needed); a fixed `submission_id` makes a retry the same file.
+  const { cloud_file, upload } = await request_json(`${base}/upload`, { file_name: file.name, size: file.size,
+    content_type: file.type || "application/octet-stream", submission_id: submission_id || new_submission_id(),
+    ...(folder_id ? { folder_id } : {}), ...(relative_dir ? { relative_dir } : {}) });
+  const item = { file, removed: false };
+  signal?.addEventListener("abort", () => { item.removed = true; item.object_request?.abort(); });
+  if (upload) await send_to_object_storage(upload, item, on_progress);
+  if (item.removed) throw Object.assign(new Error(t("已取消")), { cancelled: true });
+  // The reserved record comes back too, so its ID is known whatever the confirmation carries.
+  return { ...await request_json(`${base}/${encodeURIComponent(cloud_file.id)}/complete`, {}), reserved: cloud_file };
+}
+
+/**
+ * Keep the small picture of a cloud drive file the page made (WebP or JPEG, at most 480 px and 64 KiB). It goes as JSON
+ * (`{ data: base64 }`), the way every room request travels through the relay, not as a file upload.
+ */
+async function save_cloud_thumbnail(id, blob) {
+  const data = bytes_to_base64(new Uint8Array(await blob.arrayBuffer()));
+  return request_json(`/api/rooms/cloud-attachments/${encodeURIComponent(id)}/thumbnail`, { data });
+}
+
+/** Where a cloud drive file's small picture is read: its route here, or a copy read through the relay. */
+function cloud_thumbnail_url(id) {
+  const path = `/api/rooms/cloud-attachments/${encodeURIComponent(id)}/thumbnail`;
+  return files_by_blob() ? relay_file_url(path, { urgent: false }) : path;
+}
+
+/**
+ * Download a project file or folder through the cloud space, for a page away from the computer: the computer puts a
+ * transfer copy there (a folder as one ZIP; the same version is copied once however often it is asked for), then the
+ * browser downloads it straight from the storage. `follow(task_id, on_progress)` waits for the computer's task.
+ */
+async function download_project_via_cloud(room_id, { path, root, kind }, follow) {
+  const task = await local_launch_request("project-cloud", { room: room_id, path, root, kind, purpose: "outbound",
+    token: localStorage.getItem(`discuss-access:${room_id}`) });
+  const done = task.status === "completed" ? task : await follow(task.task_id);
+  if (!done) return;
+  const file = done.cloud_file;
+  if (!file?.id) throw new Error(t("文件下载失败"));
+  const anchor = document.createElement("a");
+  anchor.href = await cloud_link({ ...file, kind: "cloud_file" });
+  anchor.download = file.file_name || "";
+  anchor.rel = "noopener";
+  anchor.click();
+}
+
+// How often a computer's cloud task is asked about, and for how long, when no list shows its progress.
+const CLOUD_TASK_POLL_MS = 1000, CLOUD_TASK_POLL_LIMIT_MS = 2 * 60 * 60 * 1000;
+
+/** Wait for a cloud task of the computer to finish; resolves with it, rejects with its failure. */
+async function follow_project_cloud_task(task_id) {
+  const started = Date.now();
+  for (;;) {
+    await new Promise(resolve => setTimeout(resolve, CLOUD_TASK_POLL_MS));
+    const task = await project_cloud_status(task_id);
+    if (task.status === "failed") throw new Error(server_text(task.error_text, task.error) || t("文件下载失败"));
+    if (task.status === "completed") return task;
+    if (Date.now() - started > CLOUD_TASK_POLL_LIMIT_MS) throw new Error(t("存到云空间超时，请稍后在云空间里查看是否已完成"));
+  }
+}
+
+/**
+ * Download one project file the way the file page does: away from the computer, a file larger than the threshold goes
+ * through the cloud space (no relay); otherwise the plain download.
+ */
+async function download_project_entry(room_id, { path, root, size }) {
+  const threshold = (state.object_threshold_mib || state.attachment_limit_mib) * 1024 * 1024;
+  if (!state.object_storage || opened_on_this_computer() || !(Number(size) > threshold)) return download_project_file(room_id, path, root);
+  notify("info", t("正在经云空间准备下载，完成后浏览器会开始下载。"));
+  try { return await download_project_via_cloud(room_id, { path, root, kind: "file" }, follow_project_cloud_task); }
+  catch (error) {
+    // The cloud space full, unreachable or gone: the plain download still works, within its own limits and errors.
+    notify("warning", t("云空间暂时用不了（{reason}），改用普通下载", { reason: error.message }));
+    return download_project_file(room_id, path, root);
+  }
+}
+
+/**
+ * Remember a cloud space file to land in a project, and open the file page: the folder is chosen there by opening it
+ * and pressing "放到这里", as a copied file is pasted.
+ */
+function choose_landing_folder(file) {
+  state.pending_land = { kind: file.kind === "cloud_file" ? "cloud_file" : "attachment", room_id: file.room_id || null, id: file.id,
+    file_name: file.file_name, size: Number(file.size) || 0 };
+  publish_view();
+  execute_view_action("tab", "files");
+  notify("info", t("打开要放入的文件夹，点“放到这里”"));
+}
+
+function clear_pending_land() {
+  state.pending_land = null;
+  publish_view();
 }
 
 // Upload parts: small enough for the relay's frame when the computer is reached through it, larger on the computer itself.
@@ -9303,6 +9753,12 @@ async function initialize() {
   state.rooms_loading = false;
   prefetched.clear();
   publish_view();
+  if (moss_notification_link === "settings") {
+    moss_notification_link = null;
+    const setup = () => document.dispatchEvent(new Event("discuss:steward-setup"));
+    if (document.querySelector("#modern-root[data-v-app]")) setup();
+    else document.getElementById("modern-script")?.addEventListener("load", setup, { once: true });
+  }
   start_live_updates();
   migrate_local_share_links();
   share_job_refresh();
@@ -9358,7 +9814,8 @@ function view_snapshot() {
     directory_pending: [...state.directory_pending.keys()], folder_pending: [...state.folder_moves.keys()], creating_room: state.creating_room,
     destroying: [...state.destroying.keys()], dissolving: [...state.dissolving], destructions: state.destructions, quotas: state.quotas || {},
     connected: state.connected, reconnecting: state.reconnecting, rooms_loading: state.rooms_loading, observed_until: state.observed_until, resuming: state.resuming, backup_pending: Boolean(state.backup_pending), page: state.page, pages: state.pages, query: state.query,
-    attachment_limit_mib: state.attachment_limit_mib,
+    attachment_limit_mib: state.attachment_limit_mib, object_storage: state.object_storage, object_threshold_mib: state.object_threshold_mib || state.attachment_limit_mib,
+    pending_land: state.pending_land || null,
     attachment_drafts: state.attachment_drafts.map(item => ({ id: item.id, file_name: item.file.name, size: item.file.size, preview_url: item.preview_url, placeholder: item.placeholder || "" })),
     upload_status: state.upload_status, sending_message: send_queue.some(job => job.room_id === state.room?.id), sending_previews, sending_preview: sending_previews[0] || null, queueing_previews: room_queueing_previews(), queue_reading: state.queue_reading, queue_taking: [...state.queue_taking],
     failed_sends: state.failed_sends.filter(job => job.room_id === state.room?.id).map((failed) => ({ id: failed.id, ...failed.preview })),
@@ -9495,6 +9952,8 @@ function preview_clicked_attachment(event) {
 function watch_room_files() {
   document.addEventListener("click", download_relay_file, true);
   document.addEventListener("click", download_object_file, true);
+  // Captured first, so an icon over an image does not also open the image.
+  document.addEventListener("click", attachment_action, true);
   document.addEventListener("error", mark_failed_media, true);
   document.addEventListener("loadeddata", event => {
     const video = event.target;
@@ -10489,7 +10948,7 @@ function change_view_theme(theme) {
 window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, write_create_preferences, notify, load_decision_input, rate_dispatch, upload_progress,
   write_launch: write_launch_field, default_launch_entry, platform_configured, description_template, save_description_template, description_draft, write_description_draft, clear_card_drafts, preset_origin, preset_origin_info, preset_skilled, describe_member, set_chain_rounds, continue_chain, expert_presets, project_presets, load_project_presets, clear_project_presets, apply_expert_preset, unique_instance, member_label, default_name, label_draft, write_label_draft, preset_identity, save_expert_preset, delete_expert_preset, trust_expert_preset, workflow_key, preset_key, write_room_connection, write_room_adapter, launch_clients: LAUNCH_CLIENTS,
   launch_model_state, load_launch_models, write_launch_model, save_launch_api_key, create_launch_project, remove_launch_projects, display_path, write_scheduler, save_scheduler_api_key, save_search_api_key, check_scheduler, write_named_followup, write_create_discussion, write_create_goal, write_create_chain_rounds, write_create_relay_rounds, check_launch_api, launch_summary, launch_can_set_access, full_only_hint, pick_launch_directory, browse_local_directory, list_remote_directories, save_launch_projects, restore_launch_profile, reset_create_form, empty_discussion_message,
-  start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request, open_steward, show_steward_room, request_steward, ensure_steward_configured,
+  start_drag: start_directory_drag, reconnect: reconnect_live_updates, stop_label, local_request: local_launch_request, open_steward, show_steward_room, request_steward, ensure_steward_configured, steward_read_only,
   attachment_markup, link_attachment_placeholders, attachment_download_link, attachment_size, attachment_file_icon, add_attachments, drop_attachments, paste_attachments, drop_unreferenced_attachments, set_text_preview: (open) => { state.text_preview = open; }, set_image_viewer: (open) => { state.image_viewer = open; }, attachment_url, attachment_thumbnail_url, attachment_range_reader, read_zip_directory,
   write_expert: write_view_expert, add_instance: add_view_instance, add_preset: add_preset_instance, platform_of, execute: execute_view_action, theme: change_view_theme,
   reload_workflows, trust_project_workflow, confirm_workflow_trust, dismiss_workflow_trust, save_card_preset, import_expert, workflow_preset, write_create_host_workflows, write_create_api_max_requests, write_create_auto_destroy, write_create_image_generation, set_room_api_max_requests, set_room_image_generation, set_room_scheduler, set_room_extra_directories, set_room_project_directory,
@@ -10499,7 +10958,7 @@ window.discuss_view = { snapshot: view_snapshot, write_field: write_view_field, 
   device: { recent_timings: () => recent_relay_times.slice(), request: device_request, pair: pair_this_device, take_scanned: take_scanned_pairing, invite: invite_device, renew: renew_this_device, forget: forget_pairing,
     label: device_label, prompt_confirm: () => state.device.prompt?.run(), prompt_cancel: () => state.device.prompt?.cancel() },
   request: request_json, rewind_plan, load_earlier_messages, load_messages_until, can_retract_message, identities: IDENTITIES, platform_identity: name => PLATFORM_IDENTITIES[name], display_name, mention_handles, mentioned_members, render_room_markdown, sources: SOURCE_LABELS,
-  set_member_access, set_member_model, set_member_prompt, read_system_prompts, save_system_prompts, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_attachment_usage, clear_attachments, read_member_skills, read_room_files, manage_room_files, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, local_page_url, read_room_media, read_room_thumbnail, project_media_route, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
+  set_member_access, set_member_model, set_member_prompt, read_system_prompts, save_system_prompts, allow_denials, set_member_adapter, reload_room_models, load_storage, clean_storage, read_attachment_usage, clear_attachments, read_member_skills, read_room_files, manage_room_files, save_project_to_cloud, project_cloud_status, upload_project_via_cloud, land_in_project, choose_landing_folder, upload_to_cloud_space, save_cloud_thumbnail, cloud_thumbnail_url, download_project_via_cloud, download_project_entry, clear_pending_land, preview_cloud_file, opened_on_this_computer, upload_project_file, download_project_file, download_project_folder, room_title, read_room_page, local_page_url, read_room_media, read_room_thumbnail, project_media_route, read_execution_details, interject_execution, read_member_chat, send_member_chat, stop_member_chat, pause_execution, limits_label, stop_reason_label, participant_model, participant_files, participant_session_hint, participant_access,
   turn_label, turn_guidance, round_groups, limit_rounds, progress_speaker, brief_meta, max_message_length: MAX_MESSAGE_LENGTH, provenance: message_provenance, format_time };
 
 restore_theme();

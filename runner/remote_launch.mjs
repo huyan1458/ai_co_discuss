@@ -9,6 +9,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { http_result } from './network_log.mjs';
 import { adapter_profile } from './adapters/profiles.mjs';
 import { atomic_json } from './files.mjs';
 import { saved_api_keys } from './discussion_api.mjs';
@@ -31,12 +32,12 @@ const LAUNCH_SCRIPT = fileURLToPath(new URL('./discussion_launch.mjs', import.me
 // What a connected browser may ask the local bridge for, minus the folder dialog nobody would see and pairing itself.
 export const RELAYED_ACTIONS = new Set(['settings', 'launch', 'wipe-histories', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
   'room-member-model', 'room-profiles', 'room-skills', 'room-files', 'share-job', 'room-page', 'room-media', 'execution-details', 'room-restore', 'room-fork', 'models', 'sessions', 'api-key', 'api-check', 'object-storage-settings', 'scheduler-check', 'image-check', 'image-settings', 'tts-settings', 'tts', 'tts-release', 'local-speech', 'stt', 'weixin', 'notify', 'projects', 'presets', 'workflows', 'room-workflow', 'room-settings', 'browse-directory', 'room-invite', 'room-invites', 'room-invite-revoke', 'guest-invite',
-  'storage', 'storage-clean', 'steward', 'steward-settings', 'steward-request', 'steward-history', 'steward-delete', 'site-stage', 'site-publish', 'site-list', 'site-diagnose', 'site-renew', 'site-rollback', 'site-revoke',
+  'project-cloud', 'project-cloud-upload', 'project-cloud-land', 'project-cloud-status', 'storage', 'storage-clean', 'steward', 'steward-settings', 'steward-request', 'steward-history', 'steward-delete', 'steward-duty', 'steward-mute', 'steward-renew', 'site-stage', 'site-publish', 'site-list', 'site-diagnose', 'site-renew', 'site-rollback', 'site-revoke',
   // Rooms on other computers this one was invited to (runner/external_client.mjs): its paired devices manage them as here.
   'invited-list', 'invited-join', 'invited-trust', 'invited-ai', 'invited-pause', 'invited-approve', 'invited-refuse', 'invited-lend', 'invited-leave', 'invited-remove', 'invited-room']);
 export const ROOM_ACTIONS = new Set(['launch', 'room-models', 'room-member', 'room-member-access', 'room-member-allow', 'room-member-adapter',
   'room-member-model', 'room-profiles', 'room-skills', 'room-files', 'share-job', 'room-page', 'room-media', 'execution-details', 'room-restore', 'room-fork', 'room-workflow', 'room-settings', 'workflows',
-  'site-stage', 'site-publish', 'site-list', 'site-diagnose', 'site-renew', 'site-rollback', 'site-revoke',
+  'project-cloud', 'project-cloud-upload', 'project-cloud-land', 'site-stage', 'site-publish', 'site-list', 'site-diagnose', 'site-renew', 'site-rollback', 'site-revoke',
   // Invites to members on other computers: paired devices issue them as this computer does (PLAN §4.2 item 1).
   'room-invite', 'room-invites', 'room-invite-revoke',
   // An external user's link (.dev/plans/临时外部用户/API.md §2): a paired device invites as this computer does.
@@ -179,7 +180,9 @@ export function ready_clients(home) {
   }).map(([name, profile]) => [name, profile.adapter]));
 }
 
-async function machine_request(site, link, path, body, { timeout = SYNC_TIMEOUT_MS, signal, health } = {}) {
+async function machine_request(site, link, path, body, { timeout = SYNC_TIMEOUT_MS, signal, health, home, log } = {}) {
+  const started = Date.now();
+  const operation = path === '/sync' ? 'sync' : path === '/commands/claim' ? 'claim' : 'command_response';
   try {
     const response = await fetch(`${site}/api/machines/${link.id}${path}`, { method: 'POST', redirect: 'error',
       signal: AbortSignal.any([AbortSignal.timeout(timeout), ...(signal ? [signal] : [])]),
@@ -189,9 +192,11 @@ async function machine_request(site, link, path, body, { timeout = SYNC_TIMEOUT_
       throw Object.assign(new Error(`HTTP ${response.status}: ${result?.error || '请求失败'}`), { status: response.status });
     }
     const result = await response.json();
+    if (home) http_result(home, site, operation, Date.now() - started, null, log);
     health?.http(site, link.id);
     return result;
   } catch (error) {
+    if (home && !signal?.aborted) http_result(home, site, operation, Date.now() - started, error, log);
     if (!signal?.aborted) health?.http(site, link.id, error);
     throw error;
   }
@@ -201,7 +206,7 @@ async function machine_request(site, link, path, body, { timeout = SYNC_TIMEOUT_
  * Publish projects, clients and this computer's key to each paired site. Launch tasks a site returns are never run:
  * every remote operation must arrive as a device-signed command, and a site's own answer proves nothing.
  */
-export async function sync_remote_launches(home, { log = () => {}, throttle = false, health } = {}) {
+export async function sync_remote_launches(home, { log, throttle = false, health } = {}) {
   const projects = launch_projects(home).projects.filter(project => project.id).map(({ id, name }) => ({ id, name }));
   const clients = ready_clients(home);
   for (const [site, link] of Object.entries(keyed_links(home).sites)) {
@@ -213,11 +218,11 @@ export async function sync_remote_launches(home, { log = () => {}, throttle = fa
     // (an older website gives none, which keeps 3 seconds); explicit calls after a change always send (#5500).
     const key = [home, site].join('|'), content = JSON.stringify(payload), last = last_syncs.get(key);
     if (throttle && last?.content === content && Date.now() - last.at < last.interval * 1000) continue;
-    try { ({ launches, sync_seconds } = await machine_request(site, link, '/sync', payload, { health })); }
-    catch (error) { log(`${site}: 同步电脑状态失败：${error.message}`); continue; }
+    try { ({ launches, sync_seconds } = await machine_request(site, link, '/sync', payload, { health, log, home: log || health ? home : undefined })); }
+    catch { continue; }
     const interval = Number.isFinite(sync_seconds) ? Math.min(Math.max(sync_seconds, SYNC_MIN_SECONDS), SYNC_MAX_SECONDS) : SYNC_MIN_SECONDS;
     last_syncs.set(key, { content, at: Date.now(), interval, region: link.relay_region ?? 'apac' });
-    if (launches?.length) log(`${site}: 网站返回了 ${launches.length} 个旧格式启动任务，已忽略；远程启动须由已配对设备签名`);
+    if (launches?.length) log?.(`${site}: 网站返回了 ${launches.length} 个旧格式启动任务，已忽略；远程启动须由已配对设备签名`);
   }
 }
 // The last state each service directory sent each site: { content, at, interval }.
@@ -310,8 +315,8 @@ async function answer_command(home, site, link, { id, envelope }, { run, log, he
     }
   }
   catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}) } }; }
-  try { await machine_request(site, link, `/commands/${encodeURIComponent(id)}`, { envelope: await seal(key, response, `${id}:response`) }, { health }); }
-  catch (error) { log(`${site}: 远程命令 ${id} 回传失败：${error.message}`); }
+  try { await machine_request(site, link, `/commands/${encodeURIComponent(id)}`, { envelope: await seal(key, response, `${id}:response`) }, { health, home, log }); }
+  catch { /* machine_request recorded the failed delivery. */ }
 }
 
 /**
@@ -324,8 +329,8 @@ export async function relay_commands(home, { run = run_launch_command, log = () 
   // through its live relay channel needs no D1 polling.
   await Promise.all(Object.entries(machine_links(home).sites).filter(([site, link]) => link.private_key && !skip.has(site)).map(async ([site, link]) => {
     let commands;
-    try { ({ commands } = await machine_request(site, link, '/commands/claim', { wait }, { timeout: wait * 1000 + COMMAND_REQUEST_MARGIN_MS, signal, health })); }
-    catch (error) { if (!signal?.aborted) { log(`${site}: 领取远程命令失败：${error.message}`); on_failure(); } return; }
+    try { ({ commands } = await machine_request(site, link, '/commands/claim', { wait }, { timeout: wait * 1000 + COMMAND_REQUEST_MARGIN_MS, signal, health, home, log })); }
+    catch { if (!signal?.aborted) on_failure(); return; }
     for (const command of commands) {
       // A pairing removed or replaced while the claim waited ends here, as on the live channel.
       const current = machine_links(home).sites[site];

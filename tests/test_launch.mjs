@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { crc32, deflateSync } from 'node:zlib';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, existsSync, symlinkSync, truncateSync } from 'node:fs';
@@ -317,6 +317,330 @@ async function request(site, path, body, headers = {}) {
     outgoing.end(text);
   });
 }
+
+test('project cloud upload returns a pollable task and checks the project and room owner', async t => {
+  const f = await fixture(t);
+  const project = join(f.directory, 'project');
+  mkdirSync(project);
+  writeFileSync(join(project, 'notes.txt'), 'cloud fixture');
+  const launched = await launch_discussion(f.home, { ...f.input, cwd: project }, f.options);
+  const config = load_config(launched.config_path);
+  const route = '/api/local/project-files/cloud', local = { 'X-CoDiscuss-Local': '1' };
+  const input = { room: config.room, root: 0, path: 'notes.txt', kind: 'file' };
+  assert.equal((await request(f.site, route, input)).status, 403);
+  assert.equal((await request(f.site, route, { ...input, path: '../outside' }, local)).status, 400);
+  const denied = await request(f.site, route, { ...input, token: config.members.Codex.token }, local);
+  assert.equal(denied.status, 400);
+  assert.match(denied.body.error, /403/);
+  const { status, body } = await request(f.site, route, input, local);
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.match(body.task_id, /^[a-f0-9]{32}$/);
+  assert.equal(body.status, 'running');
+  let result;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    result = await request(f.site, `${route}/${body.task_id}`, undefined, local);
+    if (result.body.status !== 'running') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.status, 'failed');
+  assert.match(result.body.error, /未配置|not configured/);
+  const alias = await request(f.site, '/api/local/project-cloud-status', { task_id: body.task_id }, local);
+  assert.deepEqual(alias.body, result.body);
+  const paired = 'https://paired.example.invalid', proof = 'b'.repeat(64);
+  writeFileSync(join(f.home, 'site-connections.json'), JSON.stringify({ sites: { [paired]: { bridge_hash: createHash('sha256').update(proof).digest('hex') } } }));
+  const headers = { ...local, 'X-CoDiscuss-Bridge-Site': paired };
+  const polling = `${route}/${body.task_id}`;
+  assert.equal((await request(f.site, polling, undefined, { ...headers, 'X-CoDiscuss-Bridge': 'c'.repeat(64) })).status, 403);
+  assert.deepEqual((await request(f.site, polling, undefined, { ...headers, 'X-CoDiscuss-Bridge': proof })).body, result.body);
+  assert.equal((await request(f.site, `${route}/${'f'.repeat(32)}`, undefined, local)).status, 404);
+  const reserve = { room: config.room, root: 0, path: '', name: 'notes.txt', size: 13, content_type: 'text/plain', submission_id: 'inbound-fixture' };
+  assert.equal((await request(f.site, `${route}-upload`, { ...reserve, path: '../outside' }, local)).status, 400);
+  assert.equal((await request(f.site, `${route}-upload`, reserve, local)).status, 409, 'permission checked and request reached the unconfigured storage backend');
+  const cross_room = { room: config.room, attachment_id: 'a'.repeat(32), attachment_room: 'another-room', root: 0, path: '' };
+  const { room_cloud_land } = await import('../runner/discussion_launch.mjs');
+  const bound = { ...cross_room, site: f.site, token: config.token };
+  await assert.rejects(room_cloud_land(f.home, bound), { http_status: 403 });
+  await assert.rejects(room_cloud_land(f.home, { ...bound, attachment_grant: {} }), { http_status: 403 });
+  const foreign = await request(f.site, `${route}-land`, cross_room, { ...local, 'X-Discussion-Token': config.token });
+  assert.equal(foreign.status, 403);
+
+  const source = await launch_discussion(f.home, { ...f.input, cwd: project,
+    room: { ...f.input.room, title: 'Source', submission_id: randomUUID() } }, f.options);
+  const source_room = load_config(source.config_path).room;
+  const db = new DatabaseSync(join(f.directory, 'site.sqlite3'));
+  try {
+    const { lastInsertRowid: message_id } = db.prepare(`INSERT INTO messages (room_id,author,text,source,submission_id,created_at)
+      VALUES (?, '用户', 'Source attachment', 'user', 'cross-room-message', CURRENT_TIMESTAMP)`).run(source_room);
+    db.prepare(`INSERT INTO attachments (id,room_id,message_id,file_name,content_type,size,sha256,actor,submission_id,created_at,storage,object_name,stored_at)
+      VALUES (?, ?, ?, 'source.txt', 'text/plain', 3, '', '用户', 'cross-room-upload', CURRENT_TIMESTAMP, 'object', 'source-fixture', CURRENT_TIMESTAMP)`)
+      .run(cross_room.attachment_id, source_room, message_id);
+  } finally { db.close(); }
+  const authorized = await request(f.site, `${route}-land`, { ...cross_room, attachment_room: source_room, token: config.token }, local);
+  assert.equal(authorized.status, 200, JSON.stringify(authorized.body));
+  assert.equal(authorized.body.status, 'running');
+  for (let attempt = 0; attempt < 20; attempt++) {
+    result = await request(f.site, `${route}/${authorized.body.task_id}`, undefined, local);
+    if (result.body.status !== 'running') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(result.body.status, 'failed', JSON.stringify(result.body));
+  assert.equal(result.body.error_text?.template, '对象存储暂不可用', 'the actual worker redeemed the source grant without asking COS');
+  assert.equal(Object.hasOwn(result.body, 'attachment_grant'), false);
+});
+
+test('project cloud folder sends a readable ZIP to COS and deletes its temporary archive', async t => {
+  const { cloud_project_source, upload_cloud_project } = await import('../runner/project_cloud.mjs');
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-project-cloud-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const folder = join(directory, '项目'), home = join(directory, 'private');
+  mkdirSync(join(folder, '空目录'), { recursive: true });
+  mkdirSync(home);
+  const content = '初始文件不应删掉';
+  writeFileSync(join(folder, '文件.txt'), content);
+  const source = cloud_project_source(directory, '项目', 'folder');
+  const room = 'abc123', token = 'room-stub', site = 'http://example.invalid', id = 'a'.repeat(32), cloud_id = 'b'.repeat(32);
+  const calls = [], stages = [];
+  const ctx = { room, token, site, id, source, root: 1 };
+  const result = await upload_cloud_project(home, ctx, {
+    progress: (stage, value) => stages.push([stage, value]),
+    fetch_site: async (url, init) => {
+      calls.push(url);
+      assert.equal(new Headers(init.headers).get('X-Discussion-Token'), token);
+      if (url.endsWith('/complete')) return Response.json({ cloud_file: { id: cloud_id, stored: true } });
+      assert.deepEqual(JSON.parse(init.body), { file_name: '项目.zip', size: statSync(join(home, readdirSync(home)[0], 'project.zip')).size,
+        content_type: 'application/zip', source_kind: 'project_folder', source_ref: '1:项目', submission_id: id });
+      return Response.json({ cloud_file: { id: cloud_id }, upload: { url: 'https://cos.example.invalid', fields: { key: 'fixture-key' } } });
+    },
+    fetch_cos: async (url, init) => {
+      calls.push(url);
+      assert.equal(init.headers, undefined);
+      assert.equal(init.body.get('key'), 'fixture-key');
+      const raw = Buffer.from(await init.body.get('file').arrayBuffer());
+      const zip = join(directory, 'test.zip');
+      writeFileSync(zip, raw);
+      const script = 'import json,sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); print(json.dumps([z.namelist(),z.read(next(n for n in z.namelist() if n.endswith(".txt"))).decode()]))';
+      const decoded = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script, zip], { encoding: 'utf8', windowsHide: true });
+      assert.equal(decoded.status, 0, decoded.stderr);
+      const [names, extracted] = JSON.parse(decoded.stdout);
+      assert.deepEqual(names.sort(), ['文件.txt', '空目录/']);
+      assert.equal(extracted, content);
+      return new Response(null, { status: 204 });
+    },
+  });
+  assert.deepEqual(result, { id: cloud_id, stored: true });
+  assert.deepEqual(calls, [`${site}/api/rooms/${room}/cloud-files`, 'https://cos.example.invalid/', `${site}/api/rooms/${room}/cloud-files/${cloud_id}/complete`]);
+  assert.deepEqual(stages.map(([stage]) => stage), ['packing', 'uploading', 'verifying']);
+  assert.deepEqual(readdirSync(home), []);
+  assert.equal(readFileSync(join(folder, '文件.txt'), 'utf8'), content);
+});
+
+test('project cloud outbound reuses the stored version and reserves again when the source changes', async t => {
+  const { cloud_project_source, upload_cloud_project } = await import('../runner/project_cloud.mjs');
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-cloud-outbound-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  mkdirSync(join(directory, 'nested'));
+  const outputs = [];
+  const records = new Map();
+  const transfer = {
+    fetch_site: async (url, init) => {
+      if (url.endsWith('/complete')) {
+        const record = [...records.values()].find(value => url.endsWith(`/${value.id}/complete`));
+        record.stored = true;
+        return Response.json({ cloud_file: record });
+      }
+      const { submission_id, purpose, source_version, source_ref, source_kind } = JSON.parse(init.body);
+      assert.match(submission_id, /^[a-f0-9]{64}$/);
+      assert.equal(purpose, 'outbound');
+      assert.ok(source_version);
+      const prior = records.get(submission_id);
+      if (prior) {
+        assert.deepEqual([source_version, source_ref, source_kind], [prior.source_version, prior.source_ref, prior.source_kind]);
+        return Response.json({ cloud_file: prior, upload: null });
+      }
+      const cloud_file = { id: String(records.size + 1).padStart(32, '0'), source_version, source_ref, source_kind };
+      records.set(submission_id, cloud_file);
+      return Response.json({ cloud_file, upload: { url: 'https://cos.example.invalid', fields: {} } });
+    },
+    fetch_cos: async (_url, { body }) => {
+      outputs.push(await body.get('file').arrayBuffer());
+      return new Response(null, { status: 204 });
+    },
+  };
+  for (const [path, kind] of [['notes.txt', 'file'], ['nested', 'folder']]) {
+    const contents = kind === 'folder' ? join(directory, path, 'notes.txt') : join(directory, path);
+    writeFileSync(contents, 'first version');
+    const run = (id, spelling = path) => upload_cloud_project(directory, {
+      id, site: 'http://example.invalid', room: 'abc123', token: 'test-room', root: 0, purpose: 'outbound',
+      source: cloud_project_source(directory, spelling, kind),
+    }, transfer);
+    const first = await run('1'.repeat(32));
+    assert.deepEqual(await run('2'.repeat(32), `./${path}`), first);
+    writeFileSync(contents, 'second and longer version');
+    const changed = await run('3'.repeat(32));
+    assert.notEqual(changed.source_version, first.source_version);
+    assert.notEqual(changed.id, first.id);
+  }
+  assert.equal(records.size, 4);
+  assert.equal(outputs.length, 4);
+});
+
+test('project cloud landing validates the destination and only releases completed inbound transfers', async t => {
+  const { cloud_landing_target, land_cloud_project, read_cloud_inbound, reserve_cloud_inbound } = await import('../runner/project_cloud.mjs');
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-cloud-landing-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const home = join(directory, 'private'), project = join(directory, 'project'), dest = join(project, 'dest');
+  mkdirSync(home); mkdirSync(dest, { recursive: true });
+  writeFileSync(join(dest, 'notes.txt'), 'old');
+  assert.throws(() => cloud_landing_target(project, '../private', []));
+  assert.throws(() => cloud_landing_target(project, 'dest', [dest]));
+  const target = cloud_landing_target(project, 'dest', []), id = 'a'.repeat(32);
+  const request = { id, site: 'http://127.0.0.1', room: 'abc123', token: 'fixture-token', target, recycle: join(home, 'recycle') };
+  const meta = { id, purpose: 'inbound', file_name: 'notes.txt', size: 3 };
+  const calls = [];
+  const fetch_site = async (url, init) => {
+    const endpoint = new URL(url).pathname.split('/').at(-1);
+    calls.push(endpoint);
+    assert.equal(new Headers(init.headers).get('X-Discussion-Token'), 'fixture-token');
+    if (endpoint === 'cloud-files') {
+      assert.deepEqual(JSON.parse(init.body), { file_name: 'notes.txt', size: 3, content_type: 'text/plain', source_kind: 'project_file',
+        source_ref: '0:dest/notes.txt', submission_id: 'fixture-submission', purpose: 'inbound' });
+      return Response.json({ cloud_file: meta, upload: { url: 'https://cos.example.invalid/upload', fields: { key: 'stub' } } });
+    }
+    if (endpoint === 'complete') return Response.json({ cloud_file: meta });
+    if (endpoint === 'content') return Response.json({ url: 'https://cos.example.invalid/download', size: 3 });
+    if (endpoint === 'release') return Response.json({ released: true });
+    return Response.json({ ...meta, storage: 'object', message_id: 5, stored: true, file_name: 'attachment.txt' });
+  };
+  const reserved = await reserve_cloud_inbound(home, { ...request, root: 0, name: 'notes.txt', size: 3, content_type: 'text/plain', submission_id: 'fixture-submission' }, { fetch_site });
+  assert.equal(reserved.task_id, id);
+  const receipt = read_cloud_inbound(home, { ...request, task_id: id });
+  assert.equal(receipt.folder, target.folder);
+  assert.ok(!JSON.stringify(receipt).includes('fixture-token'));
+  assert.throws(() => read_cloud_inbound(home, { ...request, room: 'other', task_id: id }));
+  const fetch_cos = async (url, init) => { assert.equal(init.headers, undefined); return new Response('new'); };
+  const inbound = { ...request, inbound_id: id, original: receipt };
+  await assert.rejects(land_cloud_project(inbound, { fetch_site, fetch_cos: async () => new Response('x') }));
+  assert.deepEqual(readdirSync(dest), ['notes.txt']);
+  assert.ok(!calls.includes('release'));
+  assert.deepEqual(await land_cloud_project(inbound, { fetch_site, fetch_cos }), { path: 'dest/notes (1).txt' });
+  assert.equal(readFileSync(join(dest, 'notes.txt'), 'utf8'), 'old');
+  assert.equal(readFileSync(join(dest, 'notes (1).txt'), 'utf8'), 'new');
+  assert.equal(calls.at(-1), 'release');
+  assert.deepEqual(await land_cloud_project({ ...request, attachment_id: id }, { fetch_site, fetch_cos }), { path: 'dest/attachment.txt' });
+  assert.equal(calls.filter(item => item === 'release').length, 1);
+});
+
+test('cross-room project cloud landing claims exactly one attachment without a room credential', async t => {
+  const { cloud_landing_target, land_cloud_project } = await import('../runner/project_cloud.mjs');
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-cloud-cross-room-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const target = cloud_landing_target(directory, '', []);
+  const id = 'a'.repeat(32), attachment_id = 'b'.repeat(32), attachment_grant = 'c'.repeat(64);
+  const request = { id, site: 'http://127.0.0.1:8765', room: 'target-room', token: 'target-room-token',
+    attachment_room: 'source-room', attachment_id, target, recycle: join(directory, 'recycle') };
+  const attachment = { id: attachment_id, room_id: 'source-room', file_name: 'notes.txt', size: 3, storage: 'object', stored: true, message_id: 2 };
+  const link = { url: 'https://cos.example.invalid/download', size: 3 };
+  const reads = [];
+  const fetch_cos = async (url, options) => { reads.push(url); assert.equal(options.headers, undefined); return new Response('new'); };
+  let claimed = false;
+  const fetch_site = async (url, init) => {
+    reads.push(String(url));
+    assert.equal(String(url), 'http://127.0.0.1:8765/api/rooms/target-room/cloud-land/redeem');
+    assert.equal(init.method, 'POST');
+    assert.equal(init.redirect, 'error');
+    assert.equal(new Headers(init.headers).get('X-Discussion-Token'), null);
+    assert.deepEqual(JSON.parse(init.body), { attachment_room: 'source-room', attachment_id, grant: attachment_grant });
+    if (claimed) return Response.json({ error: 'Forbidden' }, { status: 403 });
+    claimed = true;
+    return Response.json({ attachment, link });
+  };
+  await assert.rejects(land_cloud_project(request, { fetch_site, fetch_cos }));
+  await assert.rejects(land_cloud_project({ ...request, attachment_grant, site: 'https://example.invalid' }, { fetch_site, fetch_cos }));
+  assert.deepEqual(reads, []);
+  const authorized = { ...request, attachment_grant };
+  assert.deepEqual(await land_cloud_project(authorized, { fetch_site, fetch_cos }), { path: 'notes.txt' });
+  assert.equal(readFileSync(join(directory, 'notes.txt'), 'utf8'), 'new');
+  await assert.rejects(land_cloud_project(authorized, { fetch_site, fetch_cos }), { status: 403 });
+  const mismatched = async () => Response.json({ attachment: { ...attachment, room_id: 'other-room' }, link });
+  await assert.rejects(land_cloud_project(authorized, { fetch_site: mismatched, fetch_cos }));
+  assert.deepEqual(reads, ['http://127.0.0.1:8765/api/rooms/target-room/cloud-land/redeem', link.url,
+    'http://127.0.0.1:8765/api/rooms/target-room/cloud-land/redeem']);
+  assert.deepEqual(readdirSync(directory), ['notes.txt']);
+});
+
+test('project cloud landing redeems an account cloud file without releasing the original', async t => {
+  const { cloud_landing_target, land_cloud_project } = await import('../runner/project_cloud.mjs');
+  const directory = mkdtempSync(join(tmpdir(), 'codiscuss-cloud-account-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const cloud_file_id = 'b'.repeat(32), attachment_grant = 'c'.repeat(64);
+  const request = { id: 'a'.repeat(32), site: 'http://127.0.0.1:8765', room: 'target-room', token: 'target-room-token',
+    cloud_file_id, target: cloud_landing_target(directory, '', []), recycle: join(directory, 'recycle') };
+  const cloud_file = { id: cloud_file_id, room_id: null, file_name: 'empty.txt', size: 0, stored: true };
+  const link = { url: 'https://cos.example.invalid/download', size: cloud_file.size };
+  const seen = [];
+  const fetch_site = async (url, init) => {
+    seen.push(`${init.method} ${url}`);
+    assert.equal(new Headers(init.headers).get('X-Discussion-Token'), null);
+    assert.deepEqual(JSON.parse(init.body), { cloud_file_id, grant: attachment_grant });
+    return Response.json({ cloud_file, link });
+  };
+  const fetch_cos = async (url, init) => {
+    seen.push(url);
+    assert.equal(init.headers, undefined);
+    return new Response(null);
+  };
+  await assert.rejects(land_cloud_project(request, { fetch_site, fetch_cos }));
+  await assert.rejects(land_cloud_project({ ...request, attachment_grant }, {
+    fetch_site: async () => Response.json({ cloud_file: { ...cloud_file, id: 'd'.repeat(32) }, link }), fetch_cos,
+  }));
+  assert.deepEqual(seen, []);
+  assert.deepEqual(await land_cloud_project({ ...request, attachment_grant }, { fetch_site, fetch_cos }), { path: 'empty.txt' });
+  assert.deepEqual(seen, ['POST http://127.0.0.1:8765/api/rooms/target-room/cloud-land/redeem', link.url]);
+  assert.equal(statSync(join(directory, 'empty.txt')).size, 0);
+});
+
+test('project cloud relay can only address submit and status routes', async t => {
+  const { answer_request, room_api } = await import('../runner/relay_channel.mjs');
+  const { machine_link, machine_links, relay_cipher, relayed_command, seal } = await import('../runner/remote_launch.mjs');
+  const { gunzipSync } = await import('node:zlib');
+  const home = mkdtempSync(join(tmpdir(), 'codiscuss-project-cloud-relay-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const path = '/api/local/project-files/cloud', id = 'a'.repeat(32), site = 'https://example.invalid';
+  const requests = [];
+  const fetcher = async (url, init) => { requests.push([new URL(url).pathname, init.method, init.headers['X-CoDiscuss-Local']]); return Response.json({ task_id: id }); };
+  for (const [route, method] of [[path, 'GET'], [`${path}/../files`, 'POST'], [`${path}/${id}`, 'POST'], ['/api/local/project-files', 'POST']]) {
+    assert.equal((await room_api(home, site, { path: route, method }, { fetcher })).status, 400);
+  }
+  assert.equal((await room_api(home, site, { path, method: 'POST', body: { room: 'abc123' } }, { fetcher })).status, 200);
+  assert.equal((await room_api(home, site, { path: `${path}/${id}` }, { fetcher })).status, 200);
+  assert.deepEqual(requests, [[path, 'POST', '1'], [`${path}/${id}`, 'GET', '1']]);
+
+  machine_link(home, site);
+  const link = machine_links(home).sites[site];
+  const ephemeral = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const key = await relay_cipher(await crypto.subtle.exportKey('jwk', ephemeral.privateKey), link.public_key);
+  const { kty, crv, x, y } = await crypto.subtle.exportKey('jwk', ephemeral.publicKey);
+  const device = await pair_test_device(home, link.id);
+  const actions = { 'project-cloud': { room: 'abc123', root: 0, path: 'notes.txt', kind: 'file' },
+    'project-cloud-upload': { room: 'abc123', path: '', name: 'notes.txt', size: 3 }, 'project-cloud-land': { room: 'abc123', task_id: id },
+    'project-cloud-status': { task_id: id } };
+  for (const [action, payload] of Object.entries(actions)) {
+    const request_id = randomUUID();
+    const sealed = await seal(key, await device.seal(request_id, { action, payload, target: 'computer' }), request_id);
+    const response = await answer_request(home, site, link, { id: request_id, envelope: { ...sealed, key: { kty, crv, x, y } } }, { fetcher });
+    const { iv, data } = response.envelope;
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(iv, 'base64'), additionalData: Buffer.from(`${request_id}:response`) }, key, Buffer.from(data, 'base64'));
+    assert.deepEqual(JSON.parse(gunzipSync(Buffer.from(plain))), { status: 200, body: { task_id: id } });
+  }
+  assert.deepEqual(requests.slice(2), [[path, 'POST', '1'], [`${path}-upload`, 'POST', '1'], [`${path}-land`, 'POST', '1'], [`${path}/${id}`, 'GET', '1']]);
+  // A signed queued command uses the launch allowlist when the live channel is unavailable.
+  assert.deepEqual(relayed_command(site, 'project-cloud', { ...actions['project-cloud'], site: 'https://other.invalid', access_file: 'ignored' }).input,
+    { ...actions['project-cloud'], site, entry: 'web' });
+  assert.deepEqual(relayed_command(site, 'project-cloud-status', actions['project-cloud-status']).input, { task_id: id });
+  for (const action of ['project-cloud-upload', 'project-cloud-land'])
+    assert.deepEqual(relayed_command(site, action, actions[action]).input, { ...actions[action], site, entry: 'web' });
+});
 
 test('room files use the saved project and require the authenticated bridge and room owner', async t => {
   const f = await fixture(t);
@@ -1472,6 +1796,158 @@ test('with full host control granted, only the host stops, grants any access and
   assert.ok(!(await api(config, '')).free.members.some(member => member.name === invited.member && member.status === 'active'));
 });
 
+test('MOSS delegates to a project host, receives the answer and can archive only a child', async t => {
+  const f = await fixture(t);
+  save_launch_settings(f.home, { participants: f.input.participants, create_preferences: { members: ['Claude', 'Codex'], host: 'Claude' } });
+  const make_room = async (title, system_kind) => load_config((await launch_discussion(f.home, { site: f.site, entry: 'web',
+    participants: f.input.participants, room: { title, mode: 'free', host: 'Codex', members: ['Codex'], system_kind,
+      submission_id: randomUUID() } }, f.options)).config_path);
+  const moss = await make_room('MOSS', 'steward');
+  const unrelated = await make_room('Unrelated');
+  const access_file = join(f.directory, 'moss-access.json');
+  writeFileSync(access_file, JSON.stringify({ site: f.site, room: moss.room, token: moss.members.Codex.token }));
+  const control = (action, options) => host_control(f.home, action, { access_file, ...options }, f.options);
+  const folder = (await request(f.site, '/api/folders', { name: 'Projects', directories: [f.directory] })).body;
+  assert.deepEqual(await control('folders'), { folders: [{ id: folder.id, name: 'Projects', directories: [f.directory] }] });
+  await assert.rejects(control('create-room', { title: 'Missing folder', folder: 'does-not-exist' }), /host-control folders/);
+  const child = await control('create-room', { title: 'Project', members: 'Codex', host: 'Codex', folder: folder.id });
+  assert.equal(child.host, 'Claude');
+  assert.deepEqual(child.members, ['Claude', 'Codex']);
+  assert.equal(child.folder_id, folder.id);
+  assert.equal((await request(f.site, `/api/rooms/${child.room_id}`)).body.folder_id, folder.id);
+  const unfiled = await control('create-room', { title: 'Uncategorized project' });
+  assert.equal(unfiled.folder_id, null);
+  assert.equal((await request(f.site, `/api/rooms/${unfiled.room_id}`)).body.folder_id, null);
+  const sent = await control('room-post', { room: unrelated.room, text: '@Another only the host should get this', expect: 'reply' });
+  const host = (await api(unrelated, '')).free.members[0];
+  const work = await api(unrelated, '/executions', { member_id: host.id, client_id: randomUUID() });
+  const task = free_task_files(unrelated, host, work, {}, {});
+  await host_control(f.home, 'room-post', { access_file: task.access_path, room: moss.room,
+    reply_to: sent.message_id, text: 'Project report' });
+  assert.ok((await api(moss, '/messages?after=0')).messages.some(message => message.text === 'Project report'));
+  await assert.rejects(control('archive-room', { room: unrelated.room }), { status: 403 });
+  await control('archive-room', { room: child.room_id });
+  assert.equal((await request(f.site, `/api/rooms/${child.room_id}`)).body.archived, true);
+});
+
+test('renewing MOSS keeps its room and message history and does not interrupt an active execution', async t => {
+  const f = await fixture(t);
+  const { steward_command, activate_steward_for_delivery } = await import('../runner/discussion_launch.mjs');
+  save_launch_settings(f.home, { participants: f.input.participants }, { adapter: 'codex_cli', model: 'same-model', skills: [] });
+  writeFileSync(join(f.home, 'local-settings.json'), JSON.stringify({ port: Number(new URL(f.site).port) }));
+  const { room_id } = await steward_command(f.home, 'steward', { open: true }, f.options);
+  const current = () => load_config(read_registry(f.home)[0]);
+  const moss = current();
+  await api(moss, '/messages', { author: '用户', text: 'Keep this request', submission_id: randomUUID() });
+  const old_host = (await api(moss, '')).free.members[0];
+  const run = await api(moss, '/executions', { member_id: old_host.id, client_id: randomUUID() });
+  assert.equal((await steward_command(f.home, 'steward-renew')).busy, true);
+  assert.equal((await api(moss, '')).host, old_host.name);
+  await api(moss, '/messages', { author: old_host.name, text: 'Keep this answer', execution_id: run.id, submission_id: randomUUID() },
+    moss.members[old_host.name].token);
+  assert.equal(await activate_steward_for_delivery(current(), false), true);
+  const fresh = current(), next_host = (await api(fresh, '')).free.members[0];
+  assert.equal(fresh.room, room_id);
+  assert.notEqual(next_host.id, old_host.id);
+  assert.equal(next_host.session_mode, 'new');
+  assert.equal((await api(fresh, '')).labels[next_host.name], 'MOSS');
+  assert.equal(fresh.participants[next_host.name].model, 'same-model');
+  const messages = (await api(fresh, '/messages')).messages;
+  const texts = messages.map(message => message.text);
+  assert.ok(texts.includes('Keep this request') && texts.includes('Keep this answer'));
+  const dividers = messages.filter(message => message.texts?.template === 'steward_session');
+  assert.equal(dividers.length, 1);
+  assert.equal(dividers[0].texts.text.params.software, 'Codex CLI');
+  assert.ok(dividers[0].id > messages.find(message => message.text === 'Keep this answer').id);
+});
+
+test('MOSS task preset runs in a separate workspace and its delivered result opens a review of the original request', async t => {
+  const f = await fixture(t);
+  const { steward_command } = await import('../runner/discussion_launch.mjs');
+  save_launch_settings(f.home, { participants: f.input.participants }, { adapter: 'codex_cli', model: 'review-model', skills: [] });
+  writeFileSync(join(f.home, 'local-settings.json'), JSON.stringify({ port: Number(new URL(f.site).port) }));
+  const { room_id } = await steward_command(f.home, 'steward', { open: true }, f.options);
+  const moss = load_config(read_registry(f.home)[0]);
+  const access_file = join(f.directory, 'moss-task-access.json');
+  writeFileSync(access_file, JSON.stringify({ site: f.site, room: room_id, token: moss.members.Codex.token }));
+  const text = 'Produce a short report';
+  const spawned = await host_control(f.home, 'create-room', { access_file, title: 'Task', preset: 'task', text,
+    cwd: f.directory, host: 'Claude', host_model: 'other-model', access: 'full' }, f.options);
+  assert.equal(spawned.preset, 'task');
+  const child = read_registry(f.home).map(load_config).find(config => config.room === spawned.room_id);
+  assert.equal((await api(child, '')).preset, 'task');
+  const project_host = (await api(child, '')).free.members[0];
+  assert.notEqual(child.cwd, moss.cwd);
+  const run = await api(child, '/executions', { member_id: project_host.id, client_id: randomUUID() });
+  await api(child, '/messages', { author: project_host.name, text: 'The report is ready', execution_id: run.id,
+    submission_id: randomUUID() }, child.members[project_host.name].token);
+  await api(moss, '/inbox');
+  const moss_host = (await api(moss, '')).free.members[0];
+  const review = await api(moss, '/executions', { member_id: moss_host.id, client_id: randomUUID() });
+  await user_request_texts(moss, review);
+  assert.equal(review.requests[0].steward_review.text, text);
+  assert.equal(review.requests[0].steward_review.url, `${f.site}/?room=${spawned.room_id}`);
+
+  writeFileSync(access_file, JSON.stringify({ site: f.site, room: room_id, token: moss.members.Codex.token, execution_id: review.id }));
+  const rework_text = 'Revise the conclusion and report back';
+  const rework = await host_control(f.home, 'room-post', { access_file, room: spawned.room_id, text: rework_text, expect: 'reply' }, f.options);
+  assert.ok(rework.message_id);
+  assert.equal((await api(moss, `/messages/${review.requests[0].message_id}`)).relay_report_state, '');
+  await api(moss, '/messages', { author: moss_host.name, text: 'Requested revisions', execution_id: review.id,
+    submission_id: randomUUID() }, moss.members[moss_host.name].token);
+  const revision = await api(child, '/executions', { member_id: project_host.id, client_id: randomUUID() });
+  await api(child, '/messages', { author: project_host.name, text: 'Updated report', execution_id: revision.id,
+    submission_id: randomUUID() }, child.members[project_host.name].token);
+  const second_review = await api(moss, '/executions', { member_id: moss_host.id, client_id: randomUUID() });
+  await user_request_texts(moss, second_review);
+  assert.notEqual(second_review.requests[0].message_id, review.requests[0].message_id);
+  assert.equal(second_review.requests[0].steward_review.text, rework_text);
+});
+
+test('a proactive MOSS trigger is system-authored, busy-safe, deduplicated and can be muted', async t => {
+  const f = await fixture(t);
+  const { steward_command } = await import('../runner/discussion_launch.mjs');
+  save_launch_settings(f.home, { participants: f.input.participants }, { adapter: 'codex_cli', skills: [] });
+  writeFileSync(join(f.home, 'local-settings.json'), JSON.stringify({ port: Number(new URL(f.site).port) }));
+  const { room_id } = await steward_command(f.home, 'steward', { open: true }, f.options);
+  const config = load_config(read_registry(f.home)[0]);
+  const payload = { author: '用户', text: 'waiting_user http://localhost/?room=project #42',
+    steward_proactive: true, submission_id: randomUUID() };
+  const direct = (body, token) => request(f.site, `/api/rooms/${room_id}/messages`, body, { 'X-Discussion-Token': token });
+  assert.equal((await direct(payload, config.members.Codex.token)).status, 403);
+  const first = await api(config, '/messages', payload);
+  assert.equal(first.message.author, '系统');
+  assert.equal(first.message.texts.template, 'steward_proactive');
+  assert.equal((await api(config, '/messages', payload)).message.id, first.message.id);
+  assert.equal((await api(config, '/messages', { ...payload, submission_id: randomUUID() })).busy, true);
+  const host = (await api(config, '')).free.members[0];
+  const execution = await api(config, '/executions', { member_id: host.id, client_id: randomUUID() });
+  await user_request_texts(config, execution);
+  assert.equal(execution.requests[0].steward_proactive, true);
+  await steward_command(f.home, 'steward-duty', { action: 'add', text: 'Track replies' });
+  const task = free_task_files(config, host, execution, {}, {});
+  const delivered = JSON.parse(readFileSync(task.task_path, 'utf8'));
+  assert.equal(delivered.duties[0].text, 'Track replies');
+  assert.deepEqual(delivered.mutes, []);
+  assert.equal(delivered.answer_capture, undefined);
+  const answer = await api(config, '/messages', { author: 'Codex', text: 'Project needs input',
+    execution_id: execution.id, submission_id: randomUUID() }, config.members.Codex.token);
+  const muted = await steward_command(f.home, 'steward-mute', { message_id: answer.message.id, reason: 'Already handled' });
+  assert.deepEqual(muted.mutes.map(({ text, reason }) => ({ text, reason })), [{ text: 'Project needs input', reason: 'Already handled' }]);
+  assert.equal((await steward_command(f.home, 'steward-mute', { action: 'remove', id: muted.mutes[0].id })).mutes.length, 0);
+  const next = { ...payload, submission_id: randomUUID() };
+  const trigger = await api(config, '/messages', next);
+  const quiet = await api(config, '/executions', { member_id: host.id, client_id: randomUUID() });
+  await api(config, `/executions/${quiet.id}`, { action: 'quiet' });
+  assert.equal((await api(config, `/messages/${trigger.message.id}`)).texts.quiet.template, 'steward_proactive');
+  const repeated = await api(config, '/messages', next);
+  assert.equal(repeated.message.id, trigger.message.id);
+  const history = (await api(config, '/messages')).messages;
+  assert.equal(history.length, 3);
+  assert.equal(history.filter(message => message.author === 'Codex').length, 1);
+  assert.equal(room_id, config.room);
+});
+
 test('an existing room host sends directly to an unrelated room', async t => {
   const f = await fixture(t);
   async function create(title) {
@@ -1533,6 +2009,7 @@ test('a host creates a room inside its project, linked both ways, that cannot cr
   await assert.rejects(create(), /新建房间/);
   await request(f.site, '/api/local/room-workflow', { room_id: config.room, action: 'host', permissions: { items: ['execution', 'roster', 'create_rooms'], room_limit: 1 } }, { 'X-CoDiscuss-Local': '1' });
   await assert.rejects(create({ cwd: '..' }), /子目录/);
+  await assert.rejects(create({ folder: 'some-folder' }), /--folder/);
   await assert.rejects(create({ access: 'root' }), /read、write、auto 或 full/);
   const folder = (await request(f.site, '/api/folders', { name: '项目' })).body.id;
   assert.ok(folder);
@@ -1596,6 +2073,10 @@ test('a host creates a room inside its project, linked both ways, that cannot cr
   await assert.rejects(host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '再来' }), /上限/);
   await api(config, '/messages', { author: '用户', text: '继续', submission_id: randomUUID() });
   assert.ok((await host_control(f.home, 'room-post', { access_file: child_access, room: config.room, text: '再来' })).queued);
+  await api(child, '/archive', { actor: '用户' });
+  const replacement = await create({ submission_id: 'second-room', title: '替补子房间' });
+  assert.notEqual(replacement.room_id, created.room_id);
+  assert.deepEqual(load_config(launched.config_path).spawned_rooms, [{ room: replacement.room_id, submission_id: 'second-room' }]);
 });
 
 test('a workflow bound at creation ends when its members are sent away, resumes with their sessions, and is replaced by another', async t => {
@@ -1953,6 +2434,18 @@ test('syncing publishes this computer\'s state, and launch tasks a site returns 
   assert.equal(link.private_key, undefined, 'the browser forwards the pairing, so it never carries the private key');
   assert.equal(calls.length, 1, 'only the sync itself: nothing is claimed or launched');
   assert.match(logged[0], /已忽略/);
+
+  const log = line => logged.push(line);
+  logged.length = 0;
+  globalThis.fetch = async () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('DNS lookup'), { code: 'ENOTFOUND' }) }); };
+  for (let i = 0; i < 3; i++) await sync_remote_launches(home, { log });
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /ENOTFOUND/);
+  globalThis.fetch = async () => Response.json({});
+  await sync_remote_launches(home, { log });
+  await sync_remote_launches(home, { log });
+  assert.equal(logged.length, 2);
+  assert.match(logged[1], /已恢复.*秒.*3 次/);
 
   unlink_machine(home, 'https://site.test');
   calls.length = 0;

@@ -46,7 +46,7 @@
 
 用 `launch host-control room-post --room 编号 --body-file FILE --expect reply` 交给对方主持人，普通通知用 `--expect none`；短消息可用 `--text`。对方忙时排队，只有父房间能用 `--interrupt` 打断子房间。达到互传上限时，请房主决定是否继续。
 
-跨房请求用 `requests[].relay.reply` 中的命令回答：`launch host-control room-post --room 来源房编号 --reply-to 原消息编号 --body-file 回答.md`。先读原文，在本房权限内处理；发送或排队成功即完成该请求，本房发送卡片保留全文。若先派活，收尾时用原消息编号手动回传。若 `relay.expect` 为 `none`，读完即止。需要超出本房权限时在本房问用户。
+跨房请求用 `requests[].relay.reply` 中的命令回答：`launch host-control room-post --room 来源房编号 --reply-to 原消息编号 --body-file 回答.md`。先读原文，在本房权限内处理；发送或排队成功即完成该请求，本房发送卡片保留全文。若先派活，收尾时用原消息编号手动回传。若 `relay.expect` 为 `none`，读完即止。超出本房权限时在本房问用户，父房间是 MOSS 时按主持技能先问 MOSS。
 
 ## 定时检查
 

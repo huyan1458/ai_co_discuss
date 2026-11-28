@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import timers from 'node:timers/promises';
 import { gzipSync } from 'node:zlib';
 
+import { network_event, network_code, relay_outcome, device_feedback, http_result } from './network_log.mjs';
 import { accept_timing, remember_timing } from './relay_timing.mjs';
 import { atomic_json } from './files.mjs';
 import { network_failure, reconnect_reader } from './relay_health.mjs';
@@ -23,6 +24,7 @@ import { audit, DEVICE_ACTIONS, device_command, open_signed_request } from './de
 import { answer_external, INVITE_COMMANDS, is_external_request, refresh_guest_entries } from './external_gateway.mjs';
 import { site_fetch } from './entry_client.mjs';
 import { entry_settings } from '../gateway/gateway.mjs';
+import { LOCAL_CLOUD_SHARE } from '../backend/cloud_share_routes.mjs';
 
 const RELAY_PROTOCOL = 'codiscuss-relay';
 const BRIDGE_TOKEN_BYTES = 32;
@@ -39,20 +41,22 @@ const TIMER_DELAY_MS = PING_MS * 2;
 // The site gives up on a request after 9 seconds, so the local website must answer before then.
 const LOCAL_TIMEOUT_MS = 8000;
 const EVENT_RETRY_MS = 3000;
-// Diagnostics: a request answered slower than this, or not delivered, is written to the service log (action and route only).
-const SLOW_REQUEST_MS = 3000;
-const SLOW_RELAY_READ_MS = 500;
 const FULL_RELAY_READ_TIMING = process.env.CODISCUSS_RELAY_READ_TIMING === '1';
 // A WebSocket frame on the website is at most 1 MiB; leave room for the envelope around the ciphertext.
 const RESPONSE_MAX_BYTES = 700 * 1024;
 // The website closes the whole connection on a frame over 1 MiB, failing every request on it; a larger answer is
 // replaced by an error so only that request fails.
 const FRAME_MAX_BYTES = 1024 * 1024 - 1024;
-// Diagnostics: answers left unsent beyond this are written to the service log, at most once a minute; a connection
-// filled with large answers (images) holds back every other answer and the heartbeat behind them.
-const BACKLOG_LOG_BYTES = 4 * 1024 * 1024;
-const BACKLOG_LOG_MS = 60000;
 const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions|sites|analytics)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
+const PROJECT_CLOUD = 'project-files/cloud';
+const PROJECT_CLOUD_STATUS = /^project-files\/cloud\/[a-f0-9]{32}$/;
+const PROJECT_CLOUD_WRITES = new Map([['project-cloud', PROJECT_CLOUD],
+  ['project-cloud-upload', `${PROJECT_CLOUD}-upload`], ['project-cloud-land', `${PROJECT_CLOUD}-land`]]);
+const PROJECT_CLOUD_POST_PATHS = new Set(PROJECT_CLOUD_WRITES.values());
+
+function project_cloud_method(action) {
+  return PROJECT_CLOUD_POST_PATHS.has(action) ? 'POST' : PROJECT_CLOUD_STATUS.test(action) ? 'GET' : '';
+}
 const RELAY_READ_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Attachment uploads arrive in parts and are sent to the local website whole, as one browser upload would be.
 const UPLOAD_PATH = /^\/api\/rooms\/[A-Za-z0-9_-]+\/attachments(\/[A-Za-z0-9_-]+\/(import|thumbnail))?(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
@@ -81,14 +85,16 @@ export function bridge_token(home, site) {
   }
   const path = join(home, 'site-connections.json');
   const hashed = createHash('sha256').update(link.bridge_token).digest('hex');
+  const relay_site = Object.keys(links.sites).find(key => links.sites[key]?.id && links.sites[key]?.private_key);
   const settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { sites: {} };
   // The entry also tells the local website that this site reaches it only through the relay, so a browser connection
   // credential kept from before no longer works. A website disconnected meanwhile has lost its pairing: no bridge then.
-  if (settings.sites[site]?.bridge_hash !== hashed) {
+  if (settings.sites[site]?.bridge_hash !== hashed || settings.sites[site]?.machine_id !== link.id || settings.relay_site !== relay_site) {
     const release = acquire_lock(join(home, 'connection-lock'));
     try {
       const latest = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { sites: {} };
-      if (machine_links(home).sites[site]) atomic_json(path, { ...latest, sites: { ...latest.sites, [site]: { ...latest.sites[site], bridge_hash: hashed } } });
+      if (machine_links(home).sites[site]) atomic_json(path, { ...latest, relay_site, sites: { ...latest.sites,
+        [site]: { ...latest.sites[site], bridge_hash: hashed, machine_id: link.id } } });
     } finally { release(); }
   }
   return link.bridge_token;
@@ -115,14 +121,13 @@ function relay_read_route(payload) {
 }
 
 /** Write phase offsets from frame receipt without recording the frame or request data. */
-function log_relay_read(log, timing, status, buffered_bytes) {
-  const elapsed_ms = (timing.sent_at ?? performance.now()) - timing.received_at;
-  if (!FULL_RELAY_READ_TIMING && !timing.failed && elapsed_ms <= SLOW_RELAY_READ_MS) return;
+function log_relay_read(home, site, timing, status, buffered_bytes) {
+  if (!FULL_RELAY_READ_TIMING) return;
   const offset = (at) => at === undefined ? null : Math.round(at - timing.received_at);
   try {
-    log(`relay-read ${JSON.stringify({ request_id: timing.id, route: timing.route, status, received_ms: 0,
+    network_event(home, site, 'relay_read', { request_id: timing.id, route: timing.route, status, received_ms: 0,
       local_request_ms: offset(timing.local_request_at), local_response_ms: offset(timing.local_response_at),
-      sent_ms: offset(timing.sent_at), frame_bytes: timing.frame_bytes ?? null, buffered_bytes })}`);
+      sent_ms: offset(timing.sent_at), frame_bytes: timing.frame_bytes ?? null, buffered_bytes });
   } catch { /* A failed diagnostic write must not interrupt the relay. */ }
 }
 
@@ -132,11 +137,13 @@ function log_relay_read(log, timing, status, buffered_bytes) {
  */
 export async function room_api(home, site, payload, { fetcher = site_fetch, device, timing } = {}) {
   const { method = 'GET', path, body, token, offset = 0, etag } = payload || {};
-  if (!['GET', 'POST'].includes(method) || typeof path !== 'string' || !ROOM_API_PATH.test(path) || path.includes('..')
+  const cloud = typeof path === 'string' && path.startsWith('/api/local/') ? project_cloud_method(path.slice('/api/local/'.length)) : '';
+  if (!['GET', 'POST'].includes(method) || typeof path !== 'string' || !(ROOM_API_PATH.test(path) || cloud === method) || path.includes('..')
       || !Number.isSafeInteger(offset) || offset < 0) {
     return { status: 400, body: { error: '中转请求地址无效' } };
   }
   const headers = bridge_headers(home, site);
+  if (cloud) headers['X-CoDiscuss-Local'] = '1';
   await guard_folder_directories(home, path, method, body, { fetcher, headers });
   if (typeof token === 'string' && token) headers['X-Discussion-Token'] = token;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -233,17 +240,20 @@ export async function room_upload(home, site, payload, { fetcher = site_fetch, n
   const bytes = Buffer.concat(upload.parts);
   if (bytes.length !== size) return { status: 400, body: { error: '附件不完整，请重新上传' } };
   // Kept while the hand-over runs, so a part resent meanwhile waits for the same answer.
+  const started = Date.now();
   const answer = fetcher(`${local_origin(home)}${path}`, { method: 'POST', redirect: 'error', body: bytes,
     headers: { ...bridge_headers(home, site), 'Content-Type': content_type }, signal: AbortSignal.timeout(LOCAL_TIMEOUT_MS) })
     .then(async (response) => ({ status: response.status, body: await response.json() }));
   finished_uploads.set(id, { path, at: now, answer });
   try {
     const result = await answer;
+    http_result(home, site, 'upload', Date.now() - started, result.status >= 400 ? { status: result.status } : null);
     // A refused file is not kept: sending it again is a new attempt.
     if (result.status >= 400) finished_uploads.delete(id);
     return result;
   } catch (error) {
     finished_uploads.delete(id);
+    http_result(home, site, 'upload', Date.now() - started, error);
     throw error;
   }
 }
@@ -329,6 +339,7 @@ export async function answer_request(home, site, link, frame, { run = run_launch
     }
     if (action !== 'timing-report') {
       const measurement = timing ?? {};
+      Object.assign(measurement, { category, device, local_ms: elapsed });
       measurement.frame_bytes = frame_bytes;
       remember_timing(home, site, device, id, category, elapsed, value.status, measurement);
     }
@@ -346,19 +357,26 @@ export async function answer_request(home, site, link, frame, { run = run_launch
     const opened = await open_signed_request(home, id, sealed, link.id);
     request = opened.request;
     const { action, payload, target } = request;
+    const cloud_action = PROJECT_CLOUD_WRITES.get(action)
+      ?? (action === 'project-cloud-status' ? `${PROJECT_CLOUD}/${payload?.task_id}` : action);
+    const cloud_method = project_cloud_method(cloud_action);
     if (timing && action === 'room-api' && RELAY_READ_ID.test(id)) timing.route = relay_read_route(payload);
     claim_relayed_command(home, id, request.sent_at);
     device = opened.device_id;
+    device_feedback(home, site, device, request.timing_reports);
     accept_timing(home, site, device, request.timing_reports);
     response = action === 'timing-report' && device ? { status: 200, body: {} } : DEVICE_ACTIONS.has(action) ? await device_command(home, { site, machine_id: link.id, device_id: device, on_change: () => sync_remote_launches(home) }, action, payload)
       : action === 'computer-site' ? { status: 200, body: { site: local_origin(home) } }
+      : cloud_method ? await room_api(home, site, { method: cloud_method, path: `/api/local/${cloud_action}`, ...(cloud_method === 'POST' ? { body: payload } : {}) }, { fetcher, device })
       : action === 'room-api' ? await room_api(home, site, payload, { fetcher, device, timing })
       : action === 'room-upload' ? await room_upload(home, site, payload, { fetcher })
         : await run_command(home, { ...(target === 'computer' ? computer_command(home, site, action, payload) : relayed_command(site, action, payload)), device }, run);
     if (timing?.local_request_at !== undefined) timing.local_response_at = performance.now();
-  } catch (error) { response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}), ...(error.error_text ? { error_text: error.error_text } : {}) } }; }
+  } catch (error) {
+    if (timing && (error.cause || error.name === 'TimeoutError')) timing.transport = network_code(error);
+    response = { status: 400, body: { error: error.message, ...(error.need ? { need: error.need } : {}), ...(error.error_text ? { error_text: error.error_text } : {}) } }; }
   // Remote writes go to this computer's audit log: kind, route, device and outcome, never content. Reads are not logged.
-  if (request.action && request.action !== 'timing-report' && !(request.action === 'room-api' && (request.payload?.method || 'GET') === 'GET') && !DEVICE_ACTIONS.has(request.action) && request.action !== 'computer-site') {
+  if (request.action && request.action !== 'timing-report' && request.action !== 'project-cloud-status' && project_cloud_method(request.action) !== 'GET' && !(request.action === 'room-api' && (request.payload?.method || 'GET') === 'GET') && !DEVICE_ACTIONS.has(request.action) && request.action !== 'computer-site') {
     audit(home, { event: 'command', action: request.action, route: typeof request.payload?.path === 'string' ? request.payload.path.split('?')[0] : '',
       device: sealed.device_id || null, status: response.status });
   }
@@ -413,18 +431,23 @@ export function entry_proxy(home, { send, buffered = () => 0, signal }) {
   };
   const forward = id => {
     const entry = open.get(id);
-    const settings = entry_settings(home);
-    if (!settings.relay_enabled) { open.delete(id); return refuse(id, 503, '这台电脑没有开启线上中转'); }
+    const settings = entry.cloud_share ? null : entry_settings(home);
+    if (settings && !settings.relay_enabled) { open.delete(id); return refuse(id, 503, '这台电脑没有开启线上中转'); }
     const body = Buffer.concat(entry.parts);
     const headers = {};
     for (const [name, value] of Array.isArray(entry.headers) ? entry.headers : []) {
       const key = String(name).toLowerCase();
-      if (ENTRY_HOP_HEADERS.has(key)) continue;
+      if (ENTRY_HOP_HEADERS.has(key) || entry.cloud_share && key !== 'accept-language') continue;
       headers[key] = headers[key] === undefined ? String(value) : `${headers[key]}, ${value}`;
     }
     Object.assign(headers, { 'x-forwarded-proto': 'https', 'content-length': String(body.length) });
     const path = typeof entry.path === 'string' && entry.path.startsWith('/') && !entry.path.startsWith('//') ? entry.path : '/';
-    const request = http.request({ host: '127.0.0.1', port: settings.port, method: String(entry.method || 'GET'), path, headers }, reply => {
+    if (entry.cloud_share && (entry.method !== 'GET' || body.length !== 0 || !LOCAL_CLOUD_SHARE.test(path))) {
+      open.delete(id);
+      return refuse(id, 404, '');
+    }
+    const port = entry.cloud_share ? local_settings(home).port || 8765 : settings.port;
+    const request = http.request({ host: '127.0.0.1', port, method: String(entry.method || 'GET'), path, headers }, reply => {
       const kept = [];
       for (let index = 0; index < reply.rawHeaders.length; index += 2) {
         if (!ENTRY_HOP_HEADERS.has(reply.rawHeaders[index].toLowerCase())) kept.push([reply.rawHeaders[index], reply.rawHeaders[index + 1]]);
@@ -440,7 +463,9 @@ export function entry_proxy(home, { send, buffered = () => 0, signal }) {
       reply.on('error', () => { open.delete(id); send({ type: 'entry-end', id }); });
     });
     entry.request = request;
-    request.on('error', () => { if (open.delete(id)) refuse(id, 502, '登录入口没有在运行'); });
+    request.on('error', () => {
+      if (open.delete(id)) refuse(id, entry.cloud_share ? 503 : 502, entry.cloud_share ? '' : '登录入口没有在运行');
+    });
     request.end(body);
   };
   return frame => {
@@ -448,7 +473,8 @@ export function entry_proxy(home, { send, buffered = () => 0, signal }) {
     if (typeof id !== 'string') return;
     if (frame.type === 'entry-cancel') { open.get(id)?.request?.destroy(); open.delete(id); return; }
     const part = Buffer.from(String(frame.body || ''), 'base64');
-    if (frame.type === 'entry') open.set(id, { method: frame.method, path: frame.path, headers: frame.headers, parts: [part], size: part.length });
+    if (frame.type === 'entry') open.set(id, { method: frame.method, path: frame.path, headers: frame.headers,
+      cloud_share: frame.cloud_share === true, parts: [part], size: part.length });
     else if (frame.type === 'entry-body' && open.has(id)) { const entry = open.get(id); entry.parts.push(part); entry.size += part.length; }
     else return;
     const entry = open.get(id);
@@ -459,25 +485,33 @@ export function entry_proxy(home, { send, buffered = () => 0, signal }) {
 
 /** Hold one website's relay connection, reconnecting with backoff; `connected` tracks which websites are live. */
 async function hold_channel(home, site, { connected, log, signal, health, watch }) {
-  let delay = RETRY_MIN_MS;
+  let delay = RETRY_MIN_MS, retries = 0, retry_since;
   while (!signal.aborted) {
     // Read the pairing each time: reconnecting the website replaces the token, and disconnecting removes it.
     const link = machine_links(home).sites[site];
     if (!link?.private_key) return;
+    if (retry_since !== undefined) network_event(home, site, 'reconnect', { attempt: ++retries, interval_ms: Date.now() - retry_since });
     health?.attempt(site, link.id);
     const url = `${site.replace(/^http/, 'ws')}/api/machines/${encodeURIComponent(link.id)}/relay`;
+    const attempt_at = Date.now();
     const closed = new Promise(resolve => {
       let socket;
       try { socket = new WebSocket(url, [RELAY_PROTOCOL, `m.${link.token}`]); }
-      catch (error) { health?.channel(site, link.id, 'failed', { kind: network_failure(error) }); return resolve(false); }
+      catch (error) {
+        const code = network_code(error);
+        network_event(home, site, 'connect_failed', { initiator: 'local', reason: 'open_failed', code, close_code: null, duration_ms: Date.now() - attempt_at });
+        if (!retries) log(t('{site} 中转连接已中断（{reason}）', { site: new URL(site).origin, reason: code }));
+        health?.channel(site, link.id, 'failed', { kind: network_failure(error) });
+        return resolve(false);
+      }
       const events = new AbortController();
       let ping, finished = false;
       const stop_socket = () => {
-        finish(opened);
+        finish(opened, { kind: ['watchdog', 'manual'].includes(signal.reason) ? signal.reason : 'stopping', initiator: 'local', code: 1000 });
         try { socket.close(1000, 'stopping'); } catch { /* Already closed. */ }
       };
       const handshake = setTimeout(() => {
-        finish(false, { kind: 'timeout' });
+        finish(false, { kind: 'timeout', initiator: 'local' });
         try { socket.close(); } catch { /* Already closed. */ }
       }, CONNECT_TIMEOUT_MS);
       // The hosted accounts' entry traffic on this connection (entry_proxy).
@@ -487,6 +521,12 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
       const finish = (opened, failure) => {
         if (finished) return;
         finished = true;
+        const reason = failure?.kind || 'unknown';
+        network_event(home, site, opened ? 'disconnected' : 'connect_failed', {
+          initiator: failure?.initiator || 'unknown', reason: failure?.close_reason || reason, close_code: failure?.code || null,
+          code: failure?.transport || null, duration_ms: Date.now() - (opened_at ?? attempt_at)
+        });
+        if (!signal.aborted && (pong_seen || !retries) && reason !== 'heartbeat') log(t('{site} 中转连接已中断（{reason}）', { site: new URL(site).origin, reason: failure?.transport || reason }));
         clearTimeout(handshake);
         clearInterval(ping);
         signal.removeEventListener('abort', stop_socket);
@@ -498,16 +538,18 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
         }
         resolve(pong_seen);
       };
-      let opened = false, awaiting_pong = false, pong_seen = false, backlog_logged = 0;
+      let opened_at, opened = false, awaiting_pong = false, pong_seen = false, backlogged = false;
       let last_pong = 0, probe_started = 0, last_ping = null, missed_pings = 0, previous_buffer = 0, buffer_progress = 0;
       socket.addEventListener('open', () => {
         if (finished || signal.aborted) return;
         clearTimeout(handshake);
         opened = true;
+        try { bridge_token(home, site); } catch { /* An ordinary relayed request can retry writing the connection metadata. */ }
+        opened_at = Date.now();
         last_pong = probe_started = buffer_progress = Date.now();
         health?.channel(site, link.id, 'confirming');
         connected.add(site);
-        log(`${site}: ${t('连接已打开，正在等待网站回应心跳。')}`);
+
         let advertised_limit = policy.default_mib;
         const heartbeat = () => {
           if (socket.readyState !== WebSocket.OPEN) return finish(opened, { kind: 'closed' });
@@ -517,6 +559,10 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
             advertised_limit = limit;
           }
           const now = Date.now(), buffered = socket.bufferedAmount || 0;
+          if ((buffered > ENTRY_BUFFER_HIGH) !== backlogged) {
+            backlogged = buffered > ENTRY_BUFFER_HIGH;
+            network_event(home, site, backlogged ? 'send_backlog' : 'send_drained', { segment: 'link', buffered_bytes: buffered });
+          }
           // A delayed timer after sleep is not a missed network response. Resume probing before judging the link.
           const delayed = last_ping !== null && (now - last_ping > TIMER_DELAY_MS || now < last_ping);
           if (delayed) { missed_pings = 0; probe_started = buffer_progress = now; }
@@ -530,8 +576,9 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
           // Applies before the first pong too (the 2026-11-21 stall); no prior successful connection is required.
           if (!delayed && !draining && missed_pings >= MISSED_PINGS && now - Math.max(last_pong, probe_started) >= SILENCE_MS) {
             log(`${site}: ${t('中转连续 {seconds} 秒未收到心跳回应，重新连接', { seconds: SILENCE_MS / 1000 })}`);
+            finish(opened, { kind: 'heartbeat', initiator: 'local', code: 4000, seconds: SILENCE_MS / 1000 });
             try { socket.close(4000, 'stalled'); } catch { /* Already closing. */ }
-            return finish(opened, { kind: 'heartbeat', seconds: SILENCE_MS / 1000 });
+            return;
           }
           last_ping = now;
           // Do not add more pings behind the same large response; waking from sleep gets one fresh probe.
@@ -539,7 +586,7 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
           awaiting_pong = true;
           try { socket.send('ping'); }
           catch (error) {
-            finish(opened, { kind: network_failure(error) });
+            finish(opened, { kind: network_failure(error), transport: network_code(error), initiator: 'local' });
             try { socket.close(); } catch { /* Already closing. */ }
           }
         };
@@ -556,6 +603,7 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
           last_pong = Date.now();
           missed_pings = 0;
           watch(true);
+          if (!pong_seen) network_event(home, site, 'connected', { handshake_ms: Date.now() - attempt_at });
           if (!pong_seen) log(`${site}: ${t('中转已连接')}`);
           awaiting_pong = false; pong_seen = true;
           health?.channel(site, link.id, 'connected');
@@ -570,6 +618,7 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
         const current = machine_links(home).sites[site];
         if (current?.token !== link.token || current?.private_key?.d !== link.private_key?.d) {
           log(`${site}: 配对已撤销或更换，关闭中转连接`);
+          finish(opened, { kind: 'unpaired', code: 1000, initiator: 'local' });
           return socket.close(1000, 'unpaired');
         }
         const received = Date.now();
@@ -590,38 +639,41 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
               timing.buffered_bytes = socket.bufferedAmount || 0;
             }
           }
-          const route = timing.route || kind.route;
-          const label = `${kind.action}${route ? ` ${route}` : ''} → ${kind.status}`;
-          if (oversized) log(`${site}: 中转回应超过单帧上限，已改为报错：${label}`);
-          const backlog = socket.bufferedAmount || 0;
-          if (open && backlog > BACKLOG_LOG_BYTES && answered - backlog_logged > BACKLOG_LOG_MS) {
-            backlog_logged = answered;
-            log(`${site}: 中转发送积压 ${(backlog / 1048576).toFixed(1)} MB（最近：${label}）`);
-          }
-          if (!open) log(`${site}: 中转回应未送出（连接已断开）：${label}，处理 ${answered - received} ms`);
-          else if (answered - received > SLOW_REQUEST_MS) log(`${site}: 中转请求较慢：${label}，处理 ${answered - received} ms`);
+          if (kind.action !== 'timing-report') relay_outcome(home, site, timing, !open || oversized || kind.status >= 400);
+          if (!open || oversized || kind.status >= 400) network_event(home, site, 'relay_failed', {
+            operation: timing.category || 'other', segment: open ? 'computer' : 'link', elapsed_ms: answered - received,
+            code: !open ? 'SOCKET_CLOSED' : oversized ? 'FRAME_LIMIT' : timing.transport || 'HTTP_' + kind.status
+          });
         } catch (error) {
-          timing.failed = true;
-          log(`${site}: 中转请求 ${frame.id} 无法处理（${Date.now() - received} ms）：${error.message}`);
+          if (kind.action !== 'timing-report') relay_outcome(home, site, timing, true);
+          network_event(home, site, 'relay_failed', { operation: timing.category || 'other', segment: 'unknown',
+            code: network_code(error), elapsed_ms: Date.now() - received });
         }
-        finally { if (timing.route) log_relay_read(log, timing, kind.status, timing.buffered_bytes ?? (socket.bufferedAmount || 0)); }
+        finally { if (timing.route) log_relay_read(home, site, timing, kind.status, timing.buffered_bytes ?? (socket.bufferedAmount || 0)); }
       });
       let socket_failure;
       socket.addEventListener('close', event => {
-        if (opened && !finished && !signal.aborted) log(`${site}: 中转连接断开（${event.code || '无代码'}${event.reason ? ` ${event.reason}` : ''}），稍后重连`);
-        const kind = opened && (!socket_failure || socket_failure === 'network') ? 'closed' : socket_failure || 'network';
-        finish(opened, { kind, code: event.code });
+        const clean = event.wasClean && event.code !== 1006;
+        const reason = ['replaced', 'relay region changed', 'stalled', 'stopping', 'unpaired'].includes(event.reason) ? event.reason : 'closed';
+        finish(opened, { kind: socket_failure ? socket_failure.kind : 'closed', close_reason: reason, transport: socket_failure?.code,
+          code: event.code, initiator: !socket_failure && clean ? 'peer' : 'unknown' });
       });
       socket.addEventListener('error', event => {
-        socket_failure = network_failure(event.error);
-        finish(opened, { kind: socket_failure });
-        try { socket.close(); } catch { /* Already closing. */ }
+        // Prefer the close frame's code when available, but a missing close must not stall the retry.
+        socket_failure = { kind: network_failure(event.error), code: network_code(event.error) };
+        setImmediate(() => {
+          if (finished) return;
+          finish(opened, { kind: socket_failure.kind, transport: socket_failure.code });
+          try { socket.close(); } catch { /* Already closed. */ }
+        });
       });
       signal.addEventListener('abort', stop_socket, { once: true });
     });
     const confirmed = await closed;
     if (signal.aborted) return;
     // A website without the relay refuses the upgrade every time; back off fully so it is only asked now and then.
+    retry_since = Date.now();
+    if (confirmed) retries = 0;
     delay = confirmed ? RETRY_MIN_MS : Math.min(delay * 2, RETRY_MAX_MS);
     await timers.setTimeout(delay, undefined, { signal }).catch(() => {});
   }
@@ -658,7 +710,7 @@ export function start_relay_channels(home, { log = () => {}, signal, health }) {
   }
   function rebuild(site, reason) {
     const link = machine_links(home).sites[site];
-    held.get(site)?.controller.abort();
+    held.get(site)?.controller.abort(reason);
     if (signal.aborted || !link?.private_key) return;
     log(reason === 'watchdog' ? t('{site} 的中转连续 3 分钟未确认，正在重建连接。', { site })
       : t('正在按管理员要求重建 {site} 的中转连接。', { site }));

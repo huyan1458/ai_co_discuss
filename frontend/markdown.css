@@ -152,6 +152,28 @@ html[data-theme="channel-light"] .markdown-body {
 .attachment-download { display: grid; padding: 0; background: none; border: 0; cursor: pointer; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border-radius: 5px; color: #707b8c; text-decoration: none; }
 .attachment-download svg { width: 18px; height: 18px; }
 .attachment-download:hover { color: #3868d9; background: #edf2fc; }
+/* The same row of icons on every attachment card: on a file card at its right, under a player beside the name, and over
+   an image at its top right, shown while the pointer is on the image (always on touch screens) so it never hides it. */
+.attachment-actions { display: flex; flex-shrink: 0; gap: 2px; align-items: center; }
+.attachment-media-bar { display: flex; gap: 8px; align-items: center; justify-content: space-between; min-width: 0; }
+.attachment-media-bar .attachment-download { width: 28px; height: 28px; }
+.attachment-actions.is-overlay { position: absolute; top: 6px; right: 6px; z-index: 1; padding: 2px; border-radius: 7px; background: rgba(15, 17, 23, .62); opacity: 0; transition: opacity .15s; }
+.attachment-actions.is-overlay .attachment-download { width: 28px; height: 28px; color: #f3f5f8; }
+.attachment-actions.is-overlay .attachment-download:hover { color: #fff; background: rgba(255, 255, 255, .16); }
+.attachment-image:hover .attachment-actions.is-overlay, .attachment-image:focus-visible .attachment-actions.is-overlay { opacity: 1; }
+@media (hover: none) { .attachment-actions.is-overlay { opacity: 1; } }
+.channel-sending-message .attachment-actions { display: none; }
+/* A cloud space file played (or shown) over the page from a link the site signs when it is opened (web/app.js
+   `open_cloud_player`): the media fills what the window leaves below the title bar; a click outside it or Esc closes. */
+.cloud-player { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; padding: 16px; background: rgba(8, 10, 14, .86); }
+.cloud-player-bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; width: min(1100px, 100%); color: #f3f5f8; font-size: 13px; }
+.cloud-player-bar > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloud-player-close { flex-shrink: 0; width: 36px; height: 36px; color: #f3f5f8; font-size: 24px; line-height: 1; background: rgba(255, 255, 255, .12); border: 0; border-radius: 8px; cursor: pointer; }
+.cloud-player-media { display: block; max-width: min(1100px, 100%); max-height: calc(100% - 56px); border-radius: 8px; background: #000; }
+audio.cloud-player-media { width: min(560px, 100%); background: none; }
+/* A copy to the cloud space under way: the cloud icon pulses and its title gives the percent. */
+.attachment-download[data-cloud-progress] { color: #3868d9; cursor: progress; animation: attachment-cloud-pulse 1.2s ease-in-out infinite; }
+@keyframes attachment-cloud-pulse { 50% { opacity: .45; } }
 .attachment-drafts { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; margin: 0; padding: 16px 14px 6px; }
 .attachment-drafts:empty { display: none; }
 .attachment-draft-image { position: relative; width: 88px; height: 88px; border-radius: 7px; background: #edf0f4; }

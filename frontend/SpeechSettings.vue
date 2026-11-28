@@ -49,11 +49,15 @@ onMounted(async () => {
 const SERVICES_POLL_MS = 10_000;
 const services = ref({});
 const install_skill = ref("");
+// Installing needs MOSS above read-only: the confirmation says so and raises it before sending (#15623).
+const install_read_only = ref(false);
 async function ask_install(skill) {
-  if (await bridge.ensure_steward_configured()) install_skill.value = skill;
+  if (!await bridge.ensure_steward_configured()) return;
+  install_read_only.value = bridge.steward_read_only();
+  install_skill.value = skill;
 }
 function confirm_install() {
-  if (install_skill.value) bridge.request_steward(install_skill.value, {}, { confirmed: true });
+  if (install_skill.value) bridge.request_steward(install_skill.value, {}, { confirmed: true, raise_access: install_read_only.value });
 }
 let services_timer = 0;
 /** Read whether the local services run; a failed read keeps the last state. */
@@ -207,7 +211,7 @@ onBeforeUnmount(stop_preview);
             </div>
             <p class="fine-print speech-note" :title="service.note">{{ service.note }} · <a :href="service.console_url" target="_blank" rel="noopener">{{ t('控制台') }}</a></p>
             <div class="speech-row"><span>{{ t('密钥') }}</span>
-              <UInput v-if="service.local" disabled :placeholder="own.api_key_ref ? t('已配置，无需填写') : services.tts?.installed === false ? t('尚未安装，请选择“让平台主理人安装”') : t('未配置')" :aria-label="t('本机语音令牌')" size="sm" class="w-full" />
+              <UInput v-if="service.local" disabled :placeholder="own.api_key_ref ? t('已配置，无需填写') : services.tts?.installed === false ? t('尚未安装，请选择“让 MOSS 安装”') : t('未配置')" :aria-label="t('本机语音令牌')" size="sm" class="w-full" />
               <!-- A text field masked by CSS keeps browsers from offering to generate or save a password. -->
               <UInput v-else v-model="typed_keys[service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="own.api_key_ref ? SAVED_MARK : t('粘贴 API Key，只存这台电脑')" :title="own.api_key_ref &amp;&amp; !typed_keys[service.id] ? t('已保存；本机不回传密钥，输入新 Key 可更换') : undefined" :aria-label="`${service.label} API Key`" size="sm" class="w-full" :loading="busy === `key:${service.id}`" :ui="{ base: visible_keys[service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(service)">
                 <template #trailing><UButton :icon="visible_keys[service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[service.id]" :aria-label="visible_keys[service.id] ? t('隐藏密钥') : t('显示密钥')" :aria-pressed="Boolean(visible_keys[service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[service.id] = !visible_keys[service.id]" /></template>
@@ -261,7 +265,7 @@ onBeforeUnmount(stop_preview);
             <div class="speech-row"><span>{{ t('本机进程') }}</span>
               <div class="speech-inline speech-process">
                 <span :class="['speech-process-state', services.tts?.state]" :title="service_label('tts')">{{ service_label('tts') }}</span>
-                <UButton v-if="services.tts?.installed === false" size="xs" color="neutral" variant="soft" :label="t('让平台主理人安装')" @click="ask_install('local-tts-setup')" />
+                <UButton v-if="services.tts?.installed === false" size="xs" color="neutral" variant="soft" :label="t('让 MOSS 安装')" @click="ask_install('local-tts-setup')" />
                 <UButton v-if="services.tts?.state === 'running'" icon="i-lucide-power" :aria-label="t('强行停止本机朗读服务')" :title="t('强行停止本机朗读服务（连同子进程）')" color="error" variant="ghost" size="sm" :loading="busy === 'stop:tts'" :disabled="Boolean(busy)" @click="stop_service('tts')" />
               </div>
             </div>
@@ -271,7 +275,7 @@ onBeforeUnmount(stop_preview);
             </div>
             <p class="fine-print speech-note" :title="stt_service.note">{{ stt_service.note }}</p>
             <div class="speech-row"><span>{{ t('密钥') }}</span>
-              <UInput v-if="stt_service.local" disabled :placeholder="settings.stt_key_ref ? t('已配置，无需填写') : services.stt?.installed === false ? t('尚未安装，请选择“让平台主理人安装”') : t('未配置')" :aria-label="t('本机语音识别令牌')" size="sm" class="w-full" />
+              <UInput v-if="stt_service.local" disabled :placeholder="settings.stt_key_ref ? t('已配置，无需填写') : services.stt?.installed === false ? t('尚未安装，请选择“让 MOSS 安装”') : t('未配置')" :aria-label="t('本机语音识别令牌')" size="sm" class="w-full" />
               <UInput v-else-if="input_service" v-model="typed_keys[input_service.id]" type="text" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" :placeholder="settings.providers[input_service.id]?.api_key_ref ? SAVED_MARK : t('粘贴{value1} API Key', { value1: input_service.label })" :title="settings.providers[input_service.id]?.api_key_ref &amp;&amp; !typed_keys[input_service.id] ? t('已保存；本机不回传密钥，输入新 Key 可更换') : undefined" :aria-label="t('语音输入的{value1} API Key', { value1: input_service.label })" size="sm" class="w-full" :loading="busy === `key:${input_service.id}`" :ui="{ base: visible_keys[input_service.id] ? '' : 'speech-key-masked', trailing: 'pe-0.5' }" @change="save_key(input_service)">
                 <template #trailing><UButton :icon="visible_keys[input_service.id] ? 'i-lucide-eye' : 'i-lucide-eye-off'" :disabled="!typed_keys[input_service.id]" :aria-label="visible_keys[input_service.id] ? t('隐藏密钥') : t('显示密钥')" :aria-pressed="Boolean(visible_keys[input_service.id])" size="xs" color="neutral" variant="link" @click="visible_keys[input_service.id] = !visible_keys[input_service.id]" /></template>
               </UInput>
@@ -280,7 +284,7 @@ onBeforeUnmount(stop_preview);
             <div class="speech-row"><span>{{ t('本机进程') }}</span>
               <div class="speech-inline speech-process">
                 <span :class="['speech-process-state', services.stt?.state]" :title="service_label('stt')">{{ service_label('stt') }}</span>
-                <UButton v-if="services.stt?.installed === false" size="xs" color="neutral" variant="soft" :label="t('让平台主理人安装')" @click="ask_install('local-stt-setup')" />
+                <UButton v-if="services.stt?.installed === false" size="xs" color="neutral" variant="soft" :label="t('让 MOSS 安装')" @click="ask_install('local-stt-setup')" />
                 <UButton v-if="services.stt?.state === 'running'" icon="i-lucide-power" :aria-label="t('强行停止本机语音识别服务')" :title="t('强行停止本机语音识别服务（连同子进程）')" color="error" variant="ghost" size="sm" :loading="busy === 'stop:stt'" :disabled="Boolean(busy)" @click="stop_service('stt')" />
               </div>
             </div>
@@ -290,7 +294,8 @@ onBeforeUnmount(stop_preview);
       </template>
     </UCollapsible>
     <ConfirmDialog :open="Boolean(install_skill)" :title="install_skill === 'local-tts-setup' ? t('安装本机朗读') : t('安装本机语音输入')"
-      :description="t('平台主理人将下载所需组件并更改本机语音设置。')" @update:open="!$event && (install_skill = '')" @confirm="confirm_install" />
+      :description="install_read_only ? t('MOSS 将下载所需组件并更改本机语音设置。MOSS 现在是只读，确认后会先把它的项目权限调到“自动”，再发送。') : t('MOSS 将下载所需组件并更改本机语音设置。')"
+      :confirm-label="install_read_only ? t('调到自动并发送') : undefined" @update:open="!$event && (install_skill = '')" @confirm="confirm_install" />
   </section>
 </template>
 

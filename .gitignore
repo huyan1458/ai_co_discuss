@@ -29,6 +29,9 @@ MEMORY.local.md
 !.agents/steward-skills/notify-setup/
 !.agents/steward-skills/dispatch-analysis/
 !.agents/steward-skills/cloudflare-deploy/
+!.agents/steward-skills/rooms-overview/
+!.agents/steward-skills/codiscuss-help/
+!.agents/steward-skills/moss-core/
 
 # Runtime data
 data/

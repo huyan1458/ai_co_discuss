@@ -158,7 +158,7 @@ export function lockdown_access_guard(args, env = process.env) {
 async function main(args = process.argv.slice(2)) {
   const [command] = args;
   lockdown_access_guard(args);
-  if (['--help', '-h', 'help'].includes(command)) return process.stdout.write(HELP + '\n  ' + t('analytics  查看全房间协作统计') + '\n  ' + t('steward  查看、配置或请求平台主理人') + '\n');
+  if (['--help', '-h', 'help'].includes(command)) return process.stdout.write(HELP + '\n  ' + t('analytics  查看全房间协作统计') + '\n  ' + t('steward  查看、配置或请求MOSS') + '\n');
   if (command === 'service') return service_cli(args.slice(1));
   if (command === 'launch') {
     // A restricted run (子Task5 CONTRACT §5) may not read local files through launch commands.
@@ -183,4 +183,8 @@ async function main(args = process.argv.slice(2)) {
   return website_cli(args);
 }
 
-main().catch(error => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
+main().catch(error => {
+  const prefix = error.code === 'steward_access_too_low' ? `[${error.code}] ` : '';
+  process.stderr.write(`${prefix}${error.message}\n`);
+  process.exitCode = 1;
+});

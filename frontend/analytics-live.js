@@ -72,6 +72,7 @@ export function waiting_title(item) {
   switch (item.kind) {
     case "goal": return t("Goal 等你确认");
     case "question": return t("{member} 在问你", { member: item.member });
+    case "awaiting": return t("{member} 在等你回复", { member: item.member });
     case "rounds": return item.rounds
       ? t("主持人申请再加 {count} 轮，等你批准", { count: item.rounds })
       : t("任务链到了轮数上限，等你决定是否继续");
@@ -83,7 +84,7 @@ export function waiting_title(item) {
 
 export const WAITING_ICONS = {
   goal: "i-lucide-flag", question: "i-lucide-message-circle-question", rounds: "i-lucide-repeat",
-  failed: "i-lucide-circle-x", permission: "i-lucide-shield-alert",
+  failed: "i-lucide-circle-x", permission: "i-lucide-shield-alert", awaiting: "i-lucide-message-circle-more",
 };
 
 /** How long something has waited, or been running, as of the snapshot. */

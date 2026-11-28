@@ -18,7 +18,6 @@ import { private_chat } from "./private-chat.js";
 import { PHASE_LABELS } from "./timeline-model.js";
 import BackgroundTaskList from "./BackgroundTaskList.vue";
 import ContextMeter from "./ContextMeter.vue";
-import TokenUsage from "./TokenUsage.vue";
 import { member_quota } from "./quota.js";
 import { background_events } from "./background-tasks.js";
 
@@ -669,10 +668,9 @@ function recall(event, step) {
       <span v-if="error" class="term-warn">{{ error }}</span>
       <span v-else-if="unsupported" class="term-warn">{{ unsupported }}</span>
       <span v-else-if="ENTER_SENDS">{{ t('enter 发送 · shift+enter 换行 · ↑↓ 历史{value1}', { value1: can_interrupt ? ` · esc ${stop_label}` : "" }) }}</span>
-      <!-- This member's readings under the input, as dsh lays out its session stats: tokens of all its runs here, then its context and quota. -->
+      <!-- This member's context under the input, as dsh lays out its session stats; an account window joins it only when running low. -->
       <span v-if="member?.usage" class="term-stats">
-        <TokenUsage :usage="member.usage.totals" :title="t('本房间累计用量')" />
-        <ContextMeter :usage="member.usage" :quota="member_quota(view, member.name)" />
+        <ContextMeter :usage="member.usage" :quota="member_quota(view, member.name)" mode="full" labelled />
       </span>
     </div>
   </div>

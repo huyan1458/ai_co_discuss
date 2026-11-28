@@ -1,4 +1,5 @@
 import policy from './attachment_policy.json' with { type: 'json' };
+import { CLOUD_SHARE_CODE, CLOUD_SHARE_TOKEN, cloud_share_not_found, local_cloud_share } from './cloud_share_routes.mjs';
 /** The relay Durable Object bound by the Pages website; it lets devices reach the paired computer's rooms. */
 /** How long a device's request waits for the computer before it is reported as unconfirmed; local operations that run longer ask for more. */
 const RELAY_WAIT_MS = 9000;
@@ -46,6 +47,12 @@ export class MachineRelay {
     }
     if (request.method === "POST" && role === "request") return Response.json(await this.relay(await request.json()));
     if (request.method === "POST" && role === "entry") return this.entry(request);
+    if (request.method === "POST" && role === "cloud-share") {
+      const token = request.headers.get("X-Cloud-Share-Token") || "";
+      const code = request.headers.get("X-Cloud-Share-Code");
+      return !request.body && CLOUD_SHARE_TOKEN.test(token) && (code === null || CLOUD_SHARE_CODE.test(code))
+        ? this.entry(request, local_cloud_share(token, code)) : cloud_share_not_found();
+    }
     if (request.method === "GET" && role === "entry-status") return Response.json({ online: this.machine() !== null, limit_mib: this.machine()?.deserializeAttachment()?.limit_mib ?? policy.default_mib });
     if (request.method === "POST" && role === "relocate") {
       for (const id of this.pending.keys()) this.settle(id, { id, status: "offline" });
@@ -102,12 +109,19 @@ export class MachineRelay {
    * path, headers; URI-encoded JSON) with the body as the request's own; the answer streams as it comes, so the entry's
    * live updates (server-sent events) reach the page.
    */
-  async entry(request) {
+  async entry(request, public_share_path = null) {
     const machine = this.machine();
     if (!machine) return new Response(/^zh\b/i.test(request.headers.get("Accept-Language") || "zh") ? OFFLINE_PAGE : OFFLINE_PAGE_EN,
       { status: 503, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", Vary: "Accept-Language" } });
     let meta;
-    try { meta = JSON.parse(decodeURIComponent(request.headers.get("X-Entry-Request") || "")); } catch { return new Response(null, { status: 400 }); }
+    if (public_share_path) {
+      meta = { cloud_share: true, method: 'GET', path: public_share_path,
+        headers: [["accept-language", request.headers.get("Accept-Language") || "zh"]] };
+    } else {
+      try { meta = JSON.parse(decodeURIComponent(request.headers.get("X-Entry-Request") || "")); } catch { return new Response(null, { status: 400 }); }
+      // The ordinary hosted entry cannot ask for the separate anonymous path to the owner's room service.
+      if (!meta || typeof meta !== "object" || meta.cloud_share) return new Response(null, { status: 400 });
+    }
     const limit = machine.deserializeAttachment()?.limit_mib ?? policy.default_mib;
     const maximum = (limit + policy.entry_overhead_mib) * 1024 * 1024;
     const id = crypto.randomUUID();
@@ -116,7 +130,7 @@ export class MachineRelay {
       const timeout = () => this.entry_cancel(id, 504);
       const timer = setTimeout(timeout, ENTRY_HEAD_WAIT_MS);
       this.entries.set(id, { resolve, readable, writer: writable.getWriter(), timer, timeout, started: false });
-      this.send_entry_body(machine, id, meta, request.body, maximum).catch(() => this.entry_cancel(id, 503));
+      this.send_entry_body(machine, id, meta, public_share_path ? null : request.body, maximum).catch(() => this.entry_cancel(id, 503));
     });
   }
 

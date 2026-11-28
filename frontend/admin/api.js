@@ -13,7 +13,7 @@ export async function call(path, body) {
     : { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CoDiscuss-Panel": "1" }, body: JSON.stringify(body) });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error((data.error_text?.template ? t(data.error_text.template, data.error_text.params) : data.error)
-    || t('请求失败（{value1}）', { value1: response.status })), { status: response.status });
+    || t('请求失败（{value1}）', { value1: response.status })), { status: response.status, code: data.code });
   return data;
 }
 

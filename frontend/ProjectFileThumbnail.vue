@@ -60,6 +60,11 @@ function run_thumbnails() {
 <style scoped>
 .project-thumbnail { display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 6px; }
 .project-thumbnail img { width: 100%; height: 100%; object-fit: contain; }
-/* An icon fills most of its box, so a folder's name is not left far below it. */
-.project-file-icon.project-thumbnail-icon { width: 62%; height: 62%; }
+/* A filled icon (`tile_icon`) fills most of its box, so a folder's name is not left far below it. */
+.project-file-icon.project-thumbnail-icon { width: 60%; height: 60%; }
+</style>
+
+<style>
+/* On the dark theme a too-dark icon is lightened, its hue kept (`tile_icon`). */
+html.dark .project-thumbnail-icon.is-dark-lift { filter: invert(1) hue-rotate(180deg); }
 </style>

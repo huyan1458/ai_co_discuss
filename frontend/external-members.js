@@ -173,6 +173,16 @@ export function seat_options(draft, paths) {
 }
 export const INVITE_AFTER_CREATION_MS = 120000;
 
+/**
+ * The online site an invitation link would go through, for an invite card's front, from this computer's service
+ * (`view.launch.invite_site`): `{ value, tone? }`, or null before the service has said.
+ */
+export function invite_relay(state) {
+  if (state?.site) { try { return { value: new URL(state.site).host }; } catch { return { value: state.site }; } }
+  if (state?.problem === "site_required") return { value: t("绑定了多个自建中转，生成链接时选择"), tone: "warn" };
+  return state ? { value: t("未绑定自建中转，无法生成链接"), tone: "danger" } : null;
+}
+
 export function room_operations(bridge) {
   // The room's owner credential when this browser holds one; without it the local website acts as the computer's owner.
   const owner = (room_id) => {

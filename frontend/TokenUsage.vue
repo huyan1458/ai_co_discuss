@@ -12,10 +12,12 @@ const props = defineProps({
   usage: { type: Object, default: null },
   // The panel's title: one turn's use or all of them.
   title: { type: String, default: "" },
+  // The total alone on the button; the cache hit rate is read in the panel.
+  compact: Boolean,
 });
 const total = computed(() => turn_total(props.usage));
 const hit = computed(() => cache_hit(props.usage));
-const label = computed(() => [t('{value1} tok', { value1: tokens(total.value) }), hit.value === null ? "" : t('缓存命中 {value1}%', { value1: hit.value })].filter(Boolean).join(" · "));
+const label = computed(() => [t('{value1} tok', { value1: tokens(total.value) }), hit.value === null || props.compact ? "" : t('缓存命中 {value1}%', { value1: hit.value })].filter(Boolean).join(" · "));
 const rows = computed(() => [
   [t('未缓存输入'), props.usage?.input], [t('缓存读取'), props.usage?.cache_read], [t('缓存写入'), props.usage?.cache_write], [t('输出'), props.usage?.output],
 ].filter(([, count]) => count));
@@ -37,7 +39,8 @@ const rows = computed(() => [
 </template>
 
 <style>
-.token-usage { display: inline-flex; flex: none; align-items: center; gap: 4px; padding: 0 6px; border: 0; border-radius: 6px; background: none; color: var(--ui-text-dimmed); font: inherit; font-size: 11px; font-variant-numeric: tabular-nums; line-height: 18px; white-space: nowrap; cursor: pointer; }
+/* Takes the size and line of the row it sits in, like the context meter, so it lines up with the text around it. */
+.token-usage { display: inline-flex; flex: none; align-items: center; gap: 4px; margin: 0 -4px; padding: 0 4px; border: 0; border-radius: 5px; background: none; color: var(--ui-text-dimmed); font: inherit; font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; }
 .token-usage:hover, .token-usage[aria-expanded="true"] { background: var(--ui-bg-elevated); color: var(--ui-text-muted); }
-.token-usage .iconify { width: 12px; height: 12px; }
+.token-usage .iconify { flex: none; width: 12px; height: 12px; opacity: .8; }
 </style>

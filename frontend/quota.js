@@ -76,11 +76,28 @@ function groups(quota) {
   return [...grouped];
 }
 
+/**
+ * The windows to show, with the 5-hour limit an account does not have written out as such (#15627): a group that
+ * reports a weekly window but no 5-hour one sets no 5-hour limit (Codex answers `secondary: null` for such a plan),
+ * so `5h 不限` is shown rather than leaving the reader to wonder whether it was missed. Open windows have `open: true`.
+ */
+export function shown_windows(quota) {
+  return groups(quota).flatMap(([group, items]) => items.some((item) => item.kind === 'seven_day') && !items.some((item) => item.kind === 'five_hour')
+    ? [{ kind: 'five_hour', minutes: 300, group, open: true }, ...items] : items);
+}
+
+const window_reading = (item) => item.open ? t('{name} 不限', { name: window_label(item) }) : `${window_label(item)} ${percent(item.used)}`;
+
+/** One group's windows in a line, `5h 不限 · 7d 44%`; the group of the model a member uses when given `for_model`. */
+export function quota_line(quota) {
+  return shown_windows(quota).map(window_reading).join(' · ');
+}
+
 /** Short text: `5h 30% · 7d 99%`, groups named where the software keeps several, or the balance; '' when none. */
 export function quota_text(quota) {
   if (!quota) return '';
-  const parts = groups(quota).map(([group, items]) => {
-    const text = items.map((item) => `${window_label(item)} ${percent(item.used)}`).join(' · ');
+  const parts = groups({ windows: shown_windows(quota) }).map(([group, items]) => {
+    const text = items.map(window_reading).join(' · ');
     return group ? `${group} ${text}` : text;
   });
   if (quota.balance) parts.push(t('余额 {amount} {currency}', { amount: quota.balance.amount, currency: quota.balance.currency }));
@@ -109,9 +126,9 @@ export function quota_high(quota) {
 /** One row per usage-limit window (and the balance) for the meter's panel: `{key, name, value, note, level}`. */
 export function quota_rows(quota) {
   if (!quota) return [];
-  const rows = (quota.windows || []).map((item, index) => ({
+  const rows = shown_windows(quota).map((item, index) => ({
     key: `window-${index}`, name: `${item.group ? `${item.group} ` : ''}${window_label(item)}`,
-    value: t('已用 {value1}', { value1: percent(item.used) }), level: used_level(item.used),
+    value: item.open ? t('不限') : t('已用 {value1}', { value1: percent(item.used) }), level: item.open ? '' : used_level(item.used),
     note: item.resets_at ? t('{time} 重置', { time: clock(item.resets_at) }) : '',
   }));
   if (quota.balance) rows.push({ key: 'balance', name: t('余额'), value: `${quota.balance.amount} ${quota.balance.currency}`.trim(), note: '', level: '' });
@@ -127,5 +144,6 @@ export function turn_total(usage) {
 /** The share of input read from cache as a whole percent, or null when no input was counted. */
 export function cache_hit(usage) {
   const input = usage ? (usage.input || 0) + (usage.cache_read || 0) + (usage.cache_write || 0) : 0;
-  return input ? Math.round((usage.cache_read || 0) / input * 100) : null;
+  // Rounded down, so 99.6% does not read as a full 100%.
+  return input ? Math.floor((usage.cache_read || 0) / input * 100) : null;
 }

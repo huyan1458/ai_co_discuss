@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS attachments (
     -- Pixel size as shown (EXIF rotation applied) of PNG/JPEG/GIF/WebP images; 0 when the header gives none,
     -- NULL when not measured yet.
     width INTEGER, height INTEGER,
+    -- The type (image/webp or image/jpeg) of a smaller copy a page made for showing in messages; NULL when none.
+    thumbnail_type TEXT,
+    -- When the owner cleared the original bytes to free space (the record and thumbnail stay); NULL while kept.
+    cleared_at TEXT,
+    storage TEXT, object_name TEXT, stored_at TEXT,
     UNIQUE(room_id, submission_id)
 );
 CREATE TABLE IF NOT EXISTS execution_segments (

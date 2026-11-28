@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
@@ -146,13 +146,15 @@ async function verify_installed_launches(package_path, execute, env, site) {
   assert(room.free.executions.some(execution => execution.status === 'failed'), 'the stub must report its delivered task failed');
   const config = JSON.parse(readFileSync(web.config_path, 'utf8'));
   assert.equal(config.token, web_token);
-  const tasks = readdirSync(config.directory).filter(name => name.endsWith('.task.json'));
+  const key = createHash('sha256').update(web.room.host).digest('hex').slice(0, 16);
+  const directory = join(config.directory, 'members', key);
+  const tasks = readdirSync(directory).filter(name => name.endsWith('.task.json'));
   assert.equal(tasks.length, 1);
-  const delivered = JSON.parse(readFileSync(join(config.directory, tasks[0]), 'utf8'));
+  const delivered = JSON.parse(readFileSync(join(directory, tasks[0]), 'utf8'));
   assert.equal(delivered.cli, process.platform === 'win32' ? 'codiscuss.cmd' : 'codiscuss');
   const receipt = installed_command(execute, cli, ['--site', site, 'execution', 'view', delivered.room, String(delivered.execution_id), '--access-file', web.config_path]);
   assert.equal(receipt.data.result, 'package-integration-complete');
-  assert.equal(JSON.parse(readFileSync(join(config.directory, `free-${delivered.execution_id}.access.json`), 'utf8')).session_id, `package-test-${web.room.id}`);
+  assert.equal(JSON.parse(readFileSync(join(directory, `free-${delivered.execution_id}.access.json`), 'utf8')).session_id, `package-test-${web.room.id}`);
   assert.equal(JSON.parse(readFileSync(join(home, 'rooms.json'), 'utf8')).configs.length, 2);
 }
 
@@ -170,7 +172,7 @@ test('npm tarball installs outside the checkout and launches both entries with p
       'runner/discuss.py', 'runner/discussion_setup.mjs', 'runner/i18n.mjs', 'runner/i18n_en.mjs', '.agents/skills/discuss-host/references/manual.md',
       '.agents/skills/discuss-host/references/launch.md', '.agents/steward-skills/codiscuss-draft-cleanup/scan.py',
       '.agents/steward-skills/discuss-report/assets/Discussion_Report_Template.md']) assert(files.includes(required), required);
-    for (const name of ['local-tts-setup', 'local-stt-setup', 'notify-setup', 'share-card', 'discuss-report', 'codiscuss-draft-cleanup', 'dispatch-analysis', 'cloudflare-deploy']) {
+    for (const name of ['local-tts-setup', 'local-stt-setup', 'notify-setup', 'share-card', 'discuss-report', 'codiscuss-draft-cleanup', 'dispatch-analysis', 'cloudflare-deploy', 'rooms-overview', 'codiscuss-help']) {
       assert(files.includes(`.agents/steward-skills/${name}/SKILL.md`), name);
       assert(!files.some(path => path.startsWith(`.agents/skills/${name}/`)), name);
     }
@@ -200,7 +202,7 @@ test('npm tarball installs outside the checkout and launches both entries with p
     assert.equal(schema.status, 0, schema.stderr);
     const bin = process.platform === 'win32' ? join(prefix, 'codiscuss.cmd') : join(prefix, 'bin/codiscuss');
     const shell = process.platform === 'win32'
-      ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'codiscuss --help'],
+      ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'codiscuss.cmd --help'],
         { cwd: temporary, env: { ...env, CODISCUSS_TEST_BIN: bin }, encoding: 'utf8' })
       : spawnSync(bin, ['--help'], { cwd: temporary, env, encoding: 'utf8' });
     assert.equal(shell.status, 0, shell.stderr);

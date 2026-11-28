@@ -177,7 +177,7 @@ export async function tts_speak(home, input, transport) {
   const settings = tts_settings(home);
   const provider = provider_of(settings.provider);
   const own = settings.providers[provider.id];
-  if (!own.api_key_ref) throw new Error(provider.local ? t('本机语音尚未安装，请在语音设置中选择“让平台主理人安装”')
+  if (!own.api_key_ref) throw new Error(provider.local ? t('本机语音尚未安装，请在语音设置中选择“让 MOSS 安装”')
     : `尚未配置语音：请在设置的“语音”中填写${provider.label} API Key`);
   const speaker = SPEAKER_PATTERN.test(input.speaker || '') ? input.speaker : own.speaker;
   const silence = Math.max(0, Math.min(MAX_SILENCE_MS, Math.round(Number(input.silence_ms) || 0)));

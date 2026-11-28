@@ -40,6 +40,10 @@ OBJECT_TRANSFER_ERRORS = {
     "对象存储下载不完整或无法写入；未保存文件": "The object download was incomplete or could not be written. No file was saved",
     "已从云空间删除": "Deleted from cloud storage",
     "外部成员不支持上传或下载附件": "External members cannot upload or download attachments",
+    "下载附件，默认保存到项目收件箱，已下载的文件直接复用": "Download an attachment to the project inbox by default, reusing an existing verified copy",
+    "项目不可写；请有写权限的成员下载，或请用户选择‘取回到项目’": "The project is not writable. Ask a member with write access to download it, or ask the user to choose Retrieve to project",
+    "已有文件与附件不符，不会覆盖": "The existing file does not match the attachment and will not be overwritten",
+    "默认附件路径不安全，请明确指定 --dest": "The default attachment path is unsafe. Specify --dest explicitly",
 }
 MAX_MESSAGE_ATTACHMENTS = 10
 # Environment variables a hosting AI session exposes its own ID through, with the client name the room records.
@@ -135,6 +139,7 @@ class RequestPlan:
     download_file: str | None = None
     title_query: str | None = None
     limit_mib: int = 0
+    inbox_read_only: bool = False
 
 
 class JoinPreviousStep(argparse.Action):
@@ -429,6 +434,8 @@ def message_commands(subcommands, registry):
                            "做完照常回答（沿用本次凭据），派出的工作结束时以通知交回你；不能与 --continue、--sequential、--next-review 同用")
     post.add_argument("--proactive", action="store_true",
                       help="自由房间成员：不是房间派来的任务、而是你的用户在你自己的窗口里要你发言时用（主持人也可在需要主动说明、派活或补交失效执行的结果时自行使用）；不关联执行或请求，有进行中的执行或讨论进行中不可用；主持人还可同时 --to 派活或 --continue，从这条消息起算新任务链")
+    post.add_argument("--awaiting-user", action="store_true",
+                      help="标记本条回答在等用户回复 / Mark the reply as waiting for the user")
     post.add_argument("--force", action="store_true",
                       help="自由房间主持人：与 --proactive 同用，这次发言与等着你的请求无关、又必须现在说时用：还有待处理的请求也照样发言，这些请求不关闭，之后仍会交给你；发言就是某条普通请求的回答时改用 --also-request 关闭它")
     post.add_argument("--continue", dest="continue_reason", metavar="REASON",
@@ -475,9 +482,9 @@ def attachment_commands(subcommands, registry):
     upload = add_leaf(subcommands, registry, "attachment upload", "上传原文件；之后用 message post --attachment 关联消息", True)
     upload.add_argument("--file", required=True, help="本地原文件路径；大小遵循站点设置")
     upload.add_argument("--submission-id", type=submission_id, help="上传唯一编号；省略时按命令与内容自动生成，同样内容重试得到同一编号")
-    download = add_leaf(subcommands, registry, "attachment download", "下载原文件到显式路径；不覆盖已有文件", True)
+    download = add_leaf(subcommands, registry, "attachment download", attachment_text("下载附件，默认保存到项目收件箱，已下载的文件直接复用"), True)
     download.add_argument("id", type=attachment_id)
-    download.add_argument("--dest", required=True, help="保存文件的完整或相对路径；父目录须已存在")
+    download.add_argument("--dest", help="可选保存路径，父目录须已存在；默认 .codiscuss-inbox/<附件编号>/<原文件名>")
 
 
 def turn_commands(subcommands, registry):
@@ -962,6 +969,8 @@ def plan_message(args):
         payload["force"] = True
     if args.no_handoff:
         payload["no_handoff"] = True
+    if args.awaiting_user:
+        payload["awaiting_user"] = True
     if args.keep_working:
         if not args.to:
             raise CliError("--keep-working 须与 --to 一起使用")
@@ -1031,10 +1040,10 @@ def plan_attachment(args):
         metadata = {"actor": require_actor(args), "file_name": path.name, "submission_id": args.submission_id}
         return RequestPlan(base, "POST", params=metadata, upload_file=str(path))
     if args.action == "download":
-        destination = Path(args.dest)
-        if destination.exists() or not destination.parent.is_dir():
-            raise CliError("--dest 须为不存在的文件路径，且父目录已存在；不会覆盖文件")
-        return RequestPlan(f"{base}/{args.id}/content", params={"download": "1"}, download_file=str(destination))
+        if args.dest is not None and (not args.dest or not Path(args.dest).parent.is_dir()):
+            raise CliError("--dest 的父目录须已存在")
+        return RequestPlan(f"{base}/{args.id}/content", params={"download": "1"}, download_file=args.dest or "",
+                           inbox_read_only=args.dest is None and attachment_inbox_read_only(load_access(args)))
     return RequestPlan(f"{base}/{args.id}")
 
 
@@ -1457,16 +1466,19 @@ def upload_object_attachment(plan, url, timeout, headers, size):
 
 
 def download_object_attachment(destination, link, timeout):
-    """Stream an explicitly authorized object into a new file, removing partial downloads."""
+    """Write to a sibling .part file and publish only after checking its length."""
     url = object_transfer_url(link["url"])
     size = link["size"]
     if type(size) is not int or not 0 <= size <= MAX_OBJECT_BYTES:
         raise CliError(attachment_text("对象存储凭证响应无效"), 3, outcome="unavailable")
     path = Path(destination)
-    created, complete = False, False
+    partial = path.with_name(path.name + ".part")
+    verified = partial.with_name(f".codiscuss-{uuid.uuid4().hex}.part")
+    identity = None
     try:
-        with build_opener(NoRedirect()).open(Request(url), timeout=timeout) as response, path.open("xb") as target:
-            created = True
+        partial.unlink(missing_ok=True)
+        with build_opener(NoRedirect()).open(Request(url), timeout=timeout) as response, partial.open("xb") as target:
+            identity = os.fstat(target.fileno())
             remaining = size
             for chunk in iter(lambda: response.read(FILE_CHUNK_BYTES), b""):
                 remaining -= len(chunk)
@@ -1475,15 +1487,97 @@ def download_object_attachment(destination, link, timeout):
                 target.write(chunk)
             if remaining:
                 raise OSError("Incomplete object")
-        complete = True
+        # Freeze the candidate name before checking identity so a competing retry cannot publish its partial bytes.
+        partial.rename(verified)
+        candidate = verified.stat()
+        if not os.path.samestat(identity, candidate) or candidate.st_size != size:
+            raise OSError("Staged object changed before publishing")
+        # Windows rename refuses an existing target. On POSIX a hard link publishes atomically without overwriting.
+        if os.name == "nt":
+            verified.rename(path)
+        else:
+            os.link(verified, path)
     except (URLError, OSError, HTTPException, ValueError) as error:
         if isinstance(error, HTTPError):
             error.close()
         raise CliError(attachment_text("对象存储下载不完整或无法写入；未保存文件"), 3, outcome="unavailable") from error
     finally:
-        if created and not complete:
-            path.unlink(missing_ok=True)
+        verified.unlink(missing_ok=True)
+        try:
+            if identity is not None and os.path.samestat(identity, partial.stat()):
+                partial.unlink(missing_ok=True)
+        except FileNotFoundError:
+            pass
     return {"path": str(path.resolve()), "size": size, "sha256": ""}
+
+
+def attachment_inbox_read_only(access):
+    """Do not add a new write destination for a restricted or read-only execution."""
+    if os.getenv("CODISCUSS_TOOL_LOCKDOWN") == "1" or access.get("tool_lockdown"):
+        return True
+    scope = access.get("file_scope")
+    if not isinstance(scope, dict):
+        return False
+    writable = [Path(item).resolve() for item in scope.get("write") or [] if isinstance(item, str) and item]
+    return not within(Path.cwd().resolve(), writable)
+
+
+def attachment_inbox_path(plan, attachment):
+    """Use the original leaf filename and reject aliases or redirected private inbox components."""
+    name, identifier = attachment.get("file_name"), plan.path.split("/")[-2]
+    if (not isinstance(name, str) or name in ("", ".", "..") or name[-1] in ". "
+            or re.search(r'[<>:"/\\|?*\x00-\x1f\x7f]', name)
+            or re.fullmatch(r"(?i:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])", name.split(".")[0].rstrip())
+            or not re.fullmatch(r"[a-f0-9]{32}", identifier)):
+        raise CliError(attachment_text("默认附件路径不安全，请明确指定 --dest"), 2)
+    path = Path.cwd().resolve() / ".codiscuss-inbox" / identifier / name
+    if path.resolve() != path:
+        raise CliError(attachment_text("默认附件路径不安全，请明确指定 --dest"), 2)
+    return path
+
+
+def reuse_attachment(path, metadata):
+    """Only reuse a regular file of the declared size and, for ordinary attachments, the same SHA-256."""
+    if not path.exists() and not path.is_symlink():
+        return None
+    error = attachment_text("已有文件与附件不符，不会覆盖")
+    if path.is_symlink() or not path.is_file() or path.stat().st_size != metadata.get("size"):
+        raise CliError(error, 2)
+    digest = ""
+    if metadata.get("storage") != "object":
+        hashed = hashlib.sha256()
+        with path.open("rb") as file:
+            for chunk in iter(lambda: file.read(FILE_CHUNK_BYTES), b""):
+                hashed.update(chunk)
+        digest = hashed.hexdigest()
+        if digest != metadata.get("sha256"):
+            raise CliError(error, 2)
+    return {"path": str(path.resolve()), "size": metadata["size"], "sha256": digest, "reused": True}
+
+
+def prepare_download_path(plan, attachment):
+    """Choose the path after metadata authentication, then reuse or open a private download destination."""
+    default = plan.download_file == ""
+    path = attachment_inbox_path(plan, attachment) if default else Path(plan.download_file)
+    reused = reuse_attachment(path, attachment)
+    if default and reused is None:
+        denied = attachment_text("项目不可写；请有写权限的成员下载，或请用户选择‘取回到项目’")
+        if plan.inbox_read_only:
+            raise CliError(denied, 2)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            marker = path.parent.parent / ".gitignore"
+            if attachment_inbox_path(plan, attachment) != path or marker.is_symlink():
+                raise CliError(attachment_text("默认附件路径不安全，请明确指定 --dest"), 2)
+            try:
+                with marker.open("x", encoding="utf-8") as handle:
+                    handle.write("*\n")
+            except FileExistsError:
+                pass
+        except PermissionError as error:
+            raise CliError(denied, 2) from error
+    plan.download_file = str(path)
+    return reused
 
 
 def http_error(error, plan):
@@ -1639,8 +1733,11 @@ def prepare_attachment_upload(plan, url, timeout, headers):
 
 def send_request(plan, url, timeout, headers=None):
     """Send once it is accepted, retrying only a refused connection, with TLS verification and bounded waiting."""
-    if plan.download_file:
+    if plan.download_file is not None:
         attachment = attachment_request(RequestPlan(plan.path.removesuffix("/content")), url, timeout, headers)
+        reused = prepare_download_path(plan, attachment)
+        if reused is not None:
+            return reused
         if attachment.get("storage") == "object":
             if attachment.get("cleared_at"):
                 raise CliError(attachment_text("已从云空间删除"), 1, http_status=410, outcome="unavailable")
@@ -2088,7 +2185,8 @@ def run(args, registry):
     if getattr(args, "dry_run", False):
         return {"ok": True, "data": {"method": plan.method, "url": url, "body": preview_body(plan.body),
                                    **({"file": plan.upload_file} if plan.upload_file else {}),
-                                   **({"destination": plan.download_file} if plan.download_file else {})},
+                                   **({"destination": plan.download_file or f".codiscuss-inbox/{plan.path.split('/')[-2]}/<原文件名>"}
+                                      if plan.download_file is not None else {})},
                 "meta": {**meta, "dry_run": True, "validation": "仅本地参数；未验证房间、身份或服务端状态"}}
     try:
         prepare_creation_access(args, site, plan)

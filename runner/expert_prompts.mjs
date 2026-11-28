@@ -284,8 +284,12 @@ export function attachments_text(attachments, cli) {
   if (!attachments.length) return '';
   const lines = attachments.map(item => {
     const label = `#${item.message_id} ${item.placeholder} ${item.file_name}`;
-    if (item.download_command)
-      return `${label}（${item.size} 字节，存于对象存储，未自动下载）：需要时运行 ${item.download_command}，并将 --dest 改为可写目录中不存在的文件路径`;
+    if (item.reused) return `${label}：已在 ${item.path}`;
+    if (item.download_read_only) return `${label}（${item.size} 字节，存于云空间）：项目只读，请有写权限的成员下载，或请用户选择“取回到项目”`;
+    if (item.download_command) {
+      const destination = item.download_path ? `，默认保存到当前目录的 ${item.download_path}` : '，请用 --dest 指定安全的项目文件路径';
+      return `${label}（${item.size} 字节，存于云空间，未自动下载）：需要时运行 ${item.download_command}${destination}`;
+    }
     return `${label}：${item.path ? `本机副本 ${item.path}` : `未能取到本机副本（${item.error || '未知原因'}），用 ${cli} attachment download 下载`}`;
   });
   return `\n\n消息附件（消息正文里的 [图片 #n] / [文件 #n] 指对应附件；已能直接看到的图片不必再打开，其余用你的工具读取本机副本，读不了时如实说明）：\n${lines.join('\n')}`;

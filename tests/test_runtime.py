@@ -37,6 +37,7 @@ class RuntimeTests(unittest.TestCase):
             self.database = Path(self.directory.name) / "runtime.db"
             init_database(self.database, seed=False)
             self.server = DiscussionServer(("127.0.0.1", 0), self.database)
+            self.server.daemon_threads = False
             self.server.local_site = False
             self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
             self.thread.start()
@@ -56,8 +57,8 @@ class RuntimeTests(unittest.TestCase):
     def tearDown(self):
         if hasattr(self, "server"):
             self.server.shutdown()
-            self.server.server_close()
             self.thread.join()
+            self.server.server_close()
         self.directory.cleanup()
 
     def request(self, path, payload=None, token=None):

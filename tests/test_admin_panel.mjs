@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
@@ -14,6 +14,7 @@ import { blocking_paths, instance_key_file, os_user_name, place_instance_key, se
 import { tray_script } from '../runner/tray.mjs';
 import { admin_cli } from '../runner/admin_cli.mjs';
 import { read_relay_health, reconnect_reader, relay_health_writer, request_relay_reconnect } from '../runner/relay_health.mjs';
+import { http_result, device_feedback, relay_outcome, network_report } from '../runner/network_log.mjs';
 import { start_relay_channels } from '../runner/relay_channel.mjs';
 import { relay_commands, relayed_command } from '../runner/remote_launch.mjs';
 import { DatabaseSync } from 'node:sqlite';
@@ -100,6 +101,63 @@ test('only a pong on the current socket confirms the relay; HTTP successes canno
   assert.equal(status().state, 'connected');
   assert.equal(status().retries, 0);
   assert.equal(status().last_failure.kind, 'heartbeat');
+  const rows = readFileSync(join(data, 'network.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const down = rows.find(row => row.event === 'disconnected');
+  assert.equal(down.initiator, 'local');
+  assert.equal(down.close_code, 4000);
+  assert.equal(down.reason, 'heartbeat');
+  assert.ok(down.duration_ms >= 75000);
+  assert.equal(rows.filter(row => row.event === 'connected').length, 2);
+  assert.equal(rows.find(row => row.event === 'reconnect').attempt, 1);
+  assert.equal(rows.find(row => row.event === 'http_recovered').count, 2);
+});
+
+test('network report merges histogram counts, outage edges and delayed device failures by UTC interval', async context => {
+  const { data, ops } = fixture();
+  const site = 'https://network.example/?credential=secret', device = 'device';
+  const first = Date.parse('2026-11-01T00:00:00Z');
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: first });
+  const failure = new Error('secret', { cause: { code: 'ENOTFOUND' } });
+  for (let i = 0; i < 3; i++) http_result(data, site, 'sync', 25, failure);
+  http_result(data, site, 'sync', 20);
+  const id = '00000000-0000-4000-8000-000000000001';
+  relay_outcome(data, site, { id, device, local_ms: 10 }, false);
+  device_feedback(data, site, device, [{ id, total: 160, worker: 120, relay: 110 }]);
+  context.mock.timers.tick(300000);
+  const id2 = '00000000-0000-4000-8000-000000000002';
+  relay_outcome(data, site, { id: id2, device, local_ms: 20 }, false);
+  device_feedback(data, site, device, [{ id: id2, total: 100, worker: 80, relay: 70 }]);
+  context.mock.timers.tick(300000);
+  const report = { id: '00000000-0000-4000-8000-000000000003', failure: 'offline', at: Date.now(), total: 88 };
+  device_feedback(data, site, device, [report, report]);
+  context.mock.timers.tick(300000);
+  const { api } = create_panel({ data, ops, key: 'test', port: 0 });
+  let output;
+  const result = await admin_cli(['site', 'network', '--since', new Date(first).toISOString(), '--by', '10m'], {
+    client: async () => (path, body) => api('POST', '/api/' + path, body), print: value => { output = value; } });
+  assert.deepEqual(result.periods.map(v => [v.requests, v.failures]), [[6, 3], [1, 1]]);
+  assert.deepEqual(result.periods[0].segments.link_ms, { n: 2, p50: 50, p90: 100 });
+  assert.equal(result.periods[0].worst_p90, 'link_ms');
+  assert.deepEqual(result.events.map(v => v.event), ['http_failed', 'http_recovered', 'relay_failed']);
+  assert.equal(result.events[0].code, 'ENOTFOUND');
+  assert.equal(result.events[1].count, 3);
+  assert.doesNotMatch(output, /credential|secret/);
+  const hourly = await api('POST', '/api/site/network', { since: new Date(first).toISOString(), by: '1h' });
+  assert.equal(hourly.periods[0].requests, 7);
+  const cut = await api('POST', '/api/site/network', { since: new Date(first).toISOString(), until: new Date(first + 600000).toISOString() });
+  assert.equal(cut.periods.length, 1);
+});
+
+test('network history rotates a complete generation and reports events from both files', () => {
+  const { data } = fixture(), site = 'https://network.example';
+  const at = Date.now() - 1000, file = join(data, 'network.jsonl');
+  const row = JSON.stringify({ at, site, event: 'connected' }) + '\n';
+  writeFileSync(file + '.1', JSON.stringify({ at, site, event: 'expired' }));
+  writeFileSync(file, ' '.repeat(4 * 1024 * 1024 - row.length) + row);
+  http_result(data, site, 'claim', 12, Object.assign(new Error(), { status: 503 }));
+  const result = network_report(data, { until: new Date(Date.now() + 1000).toISOString() });
+  assert.deepEqual(result.events.map(row => row.event), ['connected', 'http_failed']);
+  assert.ok(readFileSync(file).length < 1024);
 });
 
 test('relay requires pong despite inbound traffic and tolerates delayed timers and draining buffers', async context => {
@@ -863,13 +921,13 @@ test('admin storage accounts for members and separate speech models and cleans o
 test('storage analyze uses the same guarded panel route and asks its own local steward for inventory only', async t => {
   const { data, ops } = fixture();
   const requests = [];
-  let allowed = true;
+  let refusal;
   const website = http.createServer(async (req, res) => {
     let body = '';
     for await (const fragment of req) body += fragment;
     requests.push({ url: req.url, local: req.headers['x-codiscuss-local'], body: JSON.parse(body) });
-    res.writeHead(allowed ? 200 : 403, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(allowed ? { room_id: 'steward-test', message_id: requests.length } : { error: 'skill not allowed' }));
+    res.writeHead(refusal?.status || 200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(refusal?.body || { room_id: 'steward-test', message_id: requests.length }));
   });
   await new Promise(resolve => website.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => website.close(resolve)));
@@ -887,10 +945,25 @@ test('storage analyze uses the same guarded panel route and asks its own local s
   assert.equal(requests[0].local, '1');
   assert.equal(requests[0].body.skill, 'codiscuss-draft-cleanup');
   assert.match(requests[0].body.context, /不要删除任何文件|Do not delete any files/);
-  allowed = false;
+  refusal = { status: 403, body: { error: 'skill not allowed' } };
   const refused = await request('/api/storage/steward', { cookie, body: {} });
   assert.equal(refused.status, 403);
   assert.equal((await refused.json()).error, 'skill not allowed');
+  const template = 'MOSS 当前为只读。此技能需要运行命令或写入本机文件。请先在 MOSS 设置中把项目权限调到“自动”，再重试。';
+  const code = 'steward_access_too_low';
+  refusal = { status: 400, body: { error: template, error_text: { template, params: {} }, code } };
+  const read_only = await request('/api/storage/steward', { cookie, body: {} });
+  assert.equal(read_only.status, 400);
+  assert.deepEqual(await read_only.json(), refusal.body);
+  const args = ['storage', 'analyze', '--data', data];
+  const guidance = /只读.*运行命令.*自动|read-only.*run commands.*Auto/;
+  await assert.rejects(admin_cli(args, { print() {} }), { code, message: guidance });
+  const { error, stderr } = await new Promise(resolve => {
+    execFile(process.execPath, ['runner/codiscuss.mjs', 'admin', ...args], (error, _, stderr) => resolve({ error, stderr }));
+  });
+  assert.equal(error?.code, 1);
+  assert.match(stderr, /^\[steward_access_too_low\] /);
+  assert.match(stderr, guidance);
 });
 
 test('the admin command line works the panel with the owner key only, and does what the panel does', async () => {

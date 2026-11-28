@@ -79,7 +79,7 @@
 - `codiscuss steward ask discuss-report --room ROOM --note "整理指定消息范围，保存到所指定的本机目录"` 为已有讨论生成报告。
 - `codiscuss steward ask codiscuss-draft-cleanup --note "盘点草稿，不删除"` 盘点本机草稿。服务必须仍能派发主理人任务。
 - `codiscuss steward ask cloudflare-deploy --confirm` 请平台主理人部署或更新自己的 Cloudflare 线上站点；写入 Cloudflare 前它仍会逐步征求同意。
-- `codiscuss steward history` 列出换软件后存档的旧主理人对话；`codiscuss steward delete ROOM --confirm` 删除其中一个。
+- `codiscuss steward history` 列出以前换软件时存档的旧 MOSS 对话（现在换软件保留原对话，不再存档）；`codiscuss steward delete ROOM --confirm` 删除其中一个。
 
 ### 备份、导出与导入
 

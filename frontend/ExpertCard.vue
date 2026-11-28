@@ -19,7 +19,9 @@ import { LEND_DURATIONS, SCOPES, WAKES, scope_label } from "./external-members.j
 import { profile_quota, quota_peak, quota_text, quota_title } from "./quota.js";
 import { MAX_LABEL } from "./member-actions.js";
 import { adapter_profile, same_session_family } from "../runner/adapters/profiles.mjs";
-import { EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label, access_options, free_task_text } from "../runner/expert_prompts.mjs";
+import { EXPERT_PROMPT_PRESETS, MAX_EXPERT_PROMPT, READ_RULE, access_label as access_source, access_options, free_task_text } from "../runner/expert_prompts.mjs";
+// The runner names the levels in Chinese; the page shows them in its own language.
+const access_label = (level) => t(access_source(level));
 
 const props = defineProps({
   name: { type: String, required: true },
@@ -47,6 +49,7 @@ const props = defineProps({
   projectRoots: { type: Array, default: () => [] },
   roomId: { type: String, default: "" },
   cwd: { type: String, default: "" },
+  settingsOnly: Boolean,
 });
 // Joining only: `{ wake, confined }`, edited on the back like the card's other settings.
 const trust = defineModel("trust", { type: Object, default: null });
@@ -137,7 +140,7 @@ watch(() => profile.value.adapter, (next, previous) => {
 // Software paths and models typed here belong to this browser's computer, so a relayed member keeps the paired computer's settings.
 // A workflow card does not turn over: its software, model, strength and access are set together in the workflow's
 // 专家配置, and its description and prompt from the front.
-const can_flip = computed(() => !preset.value && automatic.value && entry_items.value.length > 0 && !(view.value.launch.relay && !view.value.launch.available));
+const can_flip = computed(() => props.settingsOnly || !preset.value && automatic.value && entry_items.value.length > 0 && !(view.value.launch.relay && !view.value.launch.available));
 const card_label = computed(() => preset.value ? t('编辑 {value1} 的卡片', { value1: props.name }) : t('配置 {value1} 的启动方式', { value1: props.name }));
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch, profile.value));
 const preset_model_input = computed(() => preset.value && !adapter_profile(profile.value.adapter)?.models);
@@ -176,6 +179,7 @@ const platform_missing = computed(() => {
 const quota = computed(() => profile_quota(view.value, profile.value));
 // The front states only what is decided or an exception; placeholders such as "set in the original software" stay off it.
 const facts = computed(() => preset.value ? [
+  ...props.settingsOnly ? [{ label: t('软件'), value: entry_label.value }] : [],
   ...preset.value.needs_platform || platform_missing.value ? [{ label: t('平台'), value: t('本机未配置此软件'), tone: "warn" }] : [],
   models.value.unknown ? { label: t('模型'), value: t('本机没有 {value1}，不能调用；在背面改模型', { value1: profile.value.model }), tone: "warn" }
     : { label: t('模型'), value: profile.value.model || t('软件默认模型') },
@@ -279,7 +283,7 @@ function save_description({ text, label, as_template }) {
 // Desktop only: double-clicking the name edits it in place. A single click on the name waits out the double-click
 // window before flipping, so the card does not turn first; touch screens keep the plain tap.
 const RENAME_CLICK_DELAY = 250;
-const can_rename = !props.joining && typeof window !== "undefined" && window.matchMedia?.("(hover: hover) and (pointer: fine)").matches;
+const can_rename = !props.settingsOnly && !props.joining && typeof window !== "undefined" && window.matchMedia?.("(hover: hover) and (pointer: fine)").matches;
 const renaming = ref(false), rename_draft = ref(""), rename_input = ref(null);
 let name_click_timer = 0;
 
@@ -352,7 +356,7 @@ async function grant_preset_access(event) {
 }
 // An advisor: a member added from a saved global or project preset that keeps skills of its own.
 const skills_preset_info = computed(() => {
-  if (!view.value?.launch.available || props.workflow || props.joining) return null;
+  if (!view.value?.launch.available || props.settingsOnly || props.workflow || props.joining) return null;
   const origin = preset_origin_data.value;
   if (origin) {
     // Every saved preset opens it: one without skills gets its first there and becomes an advisor (user 2026-11-24).
@@ -593,7 +597,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
             </span>
           </span>
           <!-- A workflow card (preset) is read for what it does, so its description fills the middle of the front. -->
-          <p v-if="preset" class="expert-card-summary" :class="{ 'is-empty': !description }" :title="description">{{ description || t('还没有描述') }}</p>
+          <p v-if="preset && !settingsOnly" class="expert-card-summary" :class="{ 'is-empty': !description }" :title="description">{{ description || t('还没有描述') }}</p>
           <dl class="expert-card-facts">
             <div v-for="fact in facts" :key="fact.label"><dt>{{ fact.label }}</dt><dd :class="fact.tone ? ['expert-card-status', `is-${fact.tone}`] : ''" :title="fact.title || fact.value"><i v-if="fact.tone" aria-hidden="true" />{{ fact.value }}</dd></div>
           </dl>
@@ -612,19 +616,20 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         <!-- Outside the front button, so typing in it neither flips the card nor presses the button. -->
         <input v-if="renaming" ref="rename_input" v-model="rename_draft" class="expert-card-rename" :maxlength="MAX_LABEL" :placeholder="bridge.default_name(name)"
           :aria-label="t('{value1} 的显示名称', { value1: name })" @keydown.enter.prevent="finish_rename(true)" @keydown.esc.stop.prevent="finish_rename(false)" @blur="finish_rename(true)" />
-        <span class="expert-card-tools">
+        <span v-if="!settingsOnly" class="expert-card-tools">
           <!-- A card with a back keeps the description beside the prompt there; one without a back has only the front. A manual card has none, as its settings live in the user's own session. -->
           <button v-if="!can_flip && !manual" type="button" :class="{ 'is-set': description }" :aria-label="t('编辑 {value1} 的名称与描述', { value1: name })" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="preset" type="button" :class="{ 'is-set': prompt_text }" :title="prompt_title" :aria-label="t('编辑 {value1} 的专属提示词', { value1: name })" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
           <button v-if="hostable" type="button" class="expert-card-host" :aria-pressed="host" :aria-label="host ? t('{value1} 是主持人', { value1: name }) : t('设 {value1} 为主持人', { value1: name })" :title="host ? t('主持人') : t('设为主持人')" @click="emit('host')"><UIcon name="i-lucide-crown" /></button>
           <button v-if="!joining" type="button" :aria-label="t('移出 {value1}', { value1: name })" :title="t('移出')" @click="emit('remove')"><UIcon name="i-lucide-x" /></button>
         </span>
+        <span v-else-if="$slots['settings-actions']" class="expert-card-tools"><slot name="settings-actions" /></span>
       </div>
       <div v-if="can_flip" class="expert-card-face expert-card-back" :inert="!visible_back" :aria-hidden="!visible_back">
         <!-- nowheel / nopan / nodrag: inside the workflow canvas the wheel and a finger scroll these settings instead of zooming, panning or dragging the card (Vue Flow skips such elements); no effect elsewhere. -->
         <div class="expert-card-back-body nowheel nopan nodrag">
         <div class="expert-card-heading"><strong>{{ member_label }}<span v-if="member_label !== name">{{ name }}</span><span>{{ t('设置') }}</span></strong>
-          <span class="expert-card-heading-tools">
+          <span v-if="!settingsOnly" class="expert-card-heading-tools">
           <button v-if="!joining" type="button" class="expert-card-back-tool" :class="{ 'is-set': description }" :aria-label="t('编辑 {value1} 的名称与描述', { value1: name })" :title="describe_title" @click="describing = true"><UIcon name="i-lucide-user-pen" /></button>
           <button v-if="(preset || profile.adapter) && !joining" type="button" class="expert-card-back-tool" :class="{ 'is-set': prompt_text, 'is-own': prompt_own && prompt_text }" :title="prompt_title" :aria-label="t('编辑 {value1} 的专属提示词', { value1: name })" @click="open_prompt"><UIcon name="i-lucide-scroll-text" /></button>
           <button v-if="skills_preset_info" type="button" class="expert-card-back-tool" :aria-label="t('{value1} 的高级配置', { value1: name })" :title="skills_preset_info.skilled ? t('高级配置：这位顾问的技能') : t('高级配置：给这位专家添加技能，带技能的预设就是顾问')" @click="advanced_open = true"><UIcon name="i-lucide-settings-2" /></button>

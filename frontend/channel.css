@@ -120,7 +120,6 @@ html[data-theme^="channel"] .channel-menu.channel-directory-menu { min-width: 15
 html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon"] { width: 14px; height: 14px; color: var(--ui-text-toned); }
 .channel-directory { width: 100%; }
 .channel-count { min-width: 18px; height: 18px; justify-content: center; padding: 0 3px !important; font-size: var(--channel-nav-meta) !important; font-weight: 400 !important; color: #9ca3b1 !important; background: transparent !important; box-shadow: none !important; }
-.channel-tools-heading { margin-top: 8px; }
 .channel-avatar { border-radius: 50% !important; border: 0; box-shadow: none; font-size: 11px; font-weight: 600; flex-shrink: 0; }
 .channel-avatar.user { background: #0f8f83; color: #fff5df; }
 /* Another computer's AI sits on the same light plate as the brand logos (a purple plate clashed beside them, user
@@ -186,6 +185,12 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
    and "just now" says nothing a working room's dot does not. */
 .channel-room-running { flex-shrink: 0; width: 7px; height: 7px; margin: 0 4px 0 auto; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e99; animation: channel-room-breathe 2s ease-in-out infinite; }
 @keyframes channel-room-breathe { 50% { opacity: .35; box-shadow: 0 0 2px #22c55e33; } }
+/* A room's one-line state in its time's place, as Claude's "Needs input": only what asks for the user is coloured;
+   a working room keeps the breathing dot before a quiet "进行中". */
+.channel-room-attention { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.channel-room-attention[data-attention="waiting_user"] { color: var(--ui-warning); font-weight: 500; }
+.channel-room-attention[data-attention="failed"] { color: var(--ui-error); font-weight: 500; }
+.channel-room-attention[data-attention="running"]::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #22c55e; animation: channel-room-breathe 2s ease-in-out infinite; }
 .channel-room-select > span:not([class*="icon"]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 /* The message count stays visible after a long title, hinting when a room has grown long (user 2026-11-25, #10417). */
 .channel-room-name { display: flex; align-items: baseline; }
@@ -193,6 +198,11 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 /* A pinned room keeps its place; only a pin after the message count sets it apart, so titles stay aligned (user 2026-11-25, #10598, #10639, #10656). */
 .channel-room-name > .channel-room-pin { flex-shrink: 0; align-self: center; width: 12px; height: 12px; min-width: 12px; margin-left: 4px; color: #939dff; transform: rotate(45deg); }
 .channel-room-count { flex-shrink: 0; margin-left: .45em; color: var(--ui-text-dimmed); opacity: .55; font-weight: 400; font-size: .75em; font-variant-numeric: tabular-nums; }
+/* A room MOSS opened leads its name with MOSS's small picture; a task room with a task glyph instead, its words on hover.
+   The end of the row is left to the time or state, so the name keeps its room (#15598). */
+.channel-room-name > .channel-room-mark { flex-shrink: 0; align-self: center; width: 14px; height: 14px; min-width: 14px; margin-right: 6px; }
+.channel-room-name > img.channel-room-mark { object-fit: contain; opacity: .85; }
+.channel-room-name > .channel-room-task { color: var(--channel-accent); }
 .channel-directory-count, .channel-room-time { flex-shrink: 0; margin-left: auto; padding-left: 6px; color: var(--ui-text-dimmed); font-size: var(--channel-nav-meta); font-weight: 400; font-variant-numeric: tabular-nums; }.channel-room-actions, .channel-folder-actions { display: flex; align-items: center; justify-content: flex-end; min-width: 48px; opacity: 0; pointer-events: none; }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button { display: grid; place-items: center; width: 24px; height: 26px; padding: 5px; border-radius: 4px; color: color-mix(in srgb, var(--ui-text-muted) 75%, transparent); background: transparent; box-shadow: none; }
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button:hover, :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button[data-state="open"] { color: var(--ui-text-toned); background: color-mix(in srgb, var(--ui-text) 7%, transparent); }
@@ -493,6 +503,8 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 /* While renaming, the field takes the whole first line (name, crown, model); the lines below stay (user 2026-11-25, #10560). */
 .pb-member-name:has(.member-name-input) > :not(.member-name-input) { display: none; }
 .pb-member-status { display: flex; align-items: center; gap: 6px; color: var(--ui-text-muted); font-size: 12px; }
+/* The member's context and its account's most used window, at the right end of its status line (#15613). */
+.pb-member-status .pb-member-usage { margin-left: auto; }
 .pb-member-status .pb-dot { width: 6px; height: 6px; }
 .pb-member-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pb-member-status small { color: var(--ui-text-dimmed); font-size: 11px; }
@@ -584,6 +596,10 @@ body.progress-drawer-open .file-float { pointer-events: auto; }
 .channel-detail-link [class*="icon"] { width: 12px; height: 12px; }
 .channel-participants { padding: 18px 8px; }
 .channel-rail-board { display: flex; flex: 1 0 auto; flex-direction: column; padding: 0; }
+/* MOSS's settings in the rail or the phone drawer: the page's own padding, and grid rows that shrink to it. */
+:is(.channel-rail-board, .progress-drawer-body) > .moss-rail { min-width: 0; }
+html[data-theme^="channel"] .moss-settings-modal { max-width: min(560px, calc(100vw - 24px)); }
+.steward-settings form > * { min-width: 0; }
 .channel-participants .channel-directory-heading { padding: 0 10px 8px; min-height: 26px; font-size: 11px; }
 .channel-person { display: flex; width: 100%; padding: 7px 10px; gap: 11px; color: #c1c7d2; border-radius: 5px; font-weight: 400; text-align: left; }
 .channel-person:hover { background: #ffffff05; }
@@ -700,6 +716,36 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 .channel-message-container { display: flex !important; align-items: flex-start !important; gap: 14px !important; padding: 0 !important; }
 .channel-message-body { position: relative; flex: 1 !important; min-width: 0 !important; padding: 0 !important; max-width: none !important; }
 .channel-message-byline { display: flex; align-items: center; gap: 10px; min-height: 28px; padding: 0 58px 0 0; margin-bottom: 16px; }
+/* MOSS's room is one conversation, as Claude Duet: its answers lie flat on the page and the user's own words sit in a
+   bubble on the right (user #15318). Only the frame changes; bylines, actions and failure cards stay as in any room. */
+:root[data-theme^="channel"] .channel-body.is-moss .channel-message { margin-bottom: 10px !important; padding: 10px 6px !important; border-color: transparent; background: transparent; box-shadow: none; }
+:root[data-theme^="channel"] .channel-body.is-moss .channel-message[data-author="user"] { width: fit-content !important; max-width: min(85%, 640px); margin-left: auto !important; padding: 12px 16px !important; border-radius: 18px; background: color-mix(in srgb, var(--channel-accent) 14%, var(--ui-bg-elevated)); }
+.channel-body.is-moss .channel-message[data-author="user"] .channel-message-byline { margin-bottom: 6px; }
+:root[data-theme^="channel"] .channel-body.is-moss .channel-message.channel-failed-execution { border-color: color-mix(in srgb, var(--ui-error) 30%, transparent); }
+/* A delegation in MOSS's room: one bordered block, the task's title and state on top, its conclusion as the body. */
+.channel-delegation { display: grid; gap: 6px; margin: 0 16px 14px; padding: 10px 14px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-text) 3%, transparent); }
+.channel-delegation > header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.channel-delegation > header > strong { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.channel-delegation-icon { flex-shrink: 0; width: 15px; height: 15px; color: var(--ui-text-dimmed); }
+.channel-delegation-summary { margin: 0; color: var(--ui-text); font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.channel-delegation-request > summary { width: fit-content; color: var(--ui-text-dimmed); font-size: 12px; cursor: pointer; }
+.channel-delegation-request > .markdown-body { margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--ui-border); color: var(--ui-text-muted); font-size: 13px; }
+/* Where MOSS starts a fresh session: a hairline across the reading column with the words in its middle. */
+.channel-session-divider { display: flex; align-items: center; gap: 12px; width: 100%; max-width: var(--channel-reading-width); margin: 8px auto 20px; padding: 0 32px; color: var(--ui-text-dimmed); font-size: 12px; }
+.channel-session-divider::before, .channel-session-divider::after { content: ""; flex: 1; height: 1px; background: var(--ui-border); }
+.channel-session-divider > span { flex-shrink: 0; max-width: 80%; text-align: center; }
+/* A relayed task's result as the program reports it: a state chip on the send card, the conclusion just below it. */
+.channel-relay-report { flex-shrink: 0; padding: 0 7px; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 7%, transparent); color: var(--ui-text-muted); font-size: 11px; line-height: 18px; white-space: nowrap; }
+.channel-relay-report[data-state="completed"] { background: color-mix(in srgb, var(--ui-success) 16%, transparent); color: var(--ui-success); }
+/* Amber only when the child room waits on the user, as 等你回答 in the room list; a decision MOSS owes takes the accent. */
+.channel-relay-report[data-state="waiting_user"] { background: color-mix(in srgb, var(--ui-warning) 16%, transparent); color: var(--ui-warning); }
+.channel-relay-report[data-state="waiting"] { background: color-mix(in srgb, var(--channel-accent) 16%, transparent); color: var(--channel-accent); }
+.channel-relay-report:is([data-state="failed"], [data-state="unreported"]) { background: color-mix(in srgb, var(--ui-error) 14%, transparent); color: var(--ui-error); }
+.channel-relay-report-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; width: 100%; max-width: var(--channel-reading-width); margin: -6px auto 12px; padding: 0 16px 0 44px; color: var(--ui-text-muted); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+/* "这条不用告诉我" under a proactive MOSS report: a quiet link, opening in place into one line for the reason. */
+.channel-proactive-mute { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--ui-text-dimmed); font-size: 12px; }
+.channel-proactive-mute.is-open > :first-child { flex: 1; min-width: 0; max-width: 360px; }
+.channel-proactive-mute.is-done > [class*="icon"] { width: 13px; height: 13px; }
 .channel-message-byline > .channel-avatar { width: 28px; height: 28px; font-size: 9px; }
 .channel-message-meta { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: 14px; row-gap: 2px; }
 .channel-message-author, .channel-message-provenance { display: flex; align-items: center; flex-wrap: wrap; column-gap: 8px; row-gap: 2px; }
@@ -719,6 +765,9 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 .channel-message-model { display: inline-flex; flex-wrap: nowrap; column-gap: 0; min-width: 0; white-space: nowrap; color: var(--ui-text-toned); }
 .channel-model-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
 .channel-model-effort { flex: none; white-space: pre; }
+/* An answer's provenance at its end: model and effort, then this turn's tokens, one grey line that wraps on a phone. */
+.channel-message-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 6px; color: var(--ui-text-dimmed); font-size: 11px; line-height: 18px; }
+.channel-message-footer .channel-message-model { min-width: 0; max-width: 100%; color: inherit; }
 .channel-message-id { font-size: 11px !important; font-weight: 400; line-height: 15px !important; color: #929aa7; padding: 0 !important; }
 .channel-message-text { margin-top: 2px; color: #d7dbe3; font-size: calc(16px * var(--card-text-scale, 1)); line-height: 1.6; overflow-wrap: anywhere; }
 /* Error/warning text gets its own box so a failure never reads like an answer; same left-bar tint as .access-failure. */
@@ -790,6 +839,18 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 .channel-empty > [class*="icon"] { font-size: 32px; color: #9aa4bc; margin-bottom: 14px; }
 .channel-empty h2 { color: #f1f3f7; font-size: 23px; font-weight: 650; }
 .channel-empty p { color: #a9b1c0; font-size: 14px; margin: 9px 0 22px; }
+/* MOSS at work breathes slowly wherever its picture shows (sidebar, title, greeting). With reduced motion it holds
+   still and wears a small green dot in its corner instead, drawn behind the transparent picture (#15610). */
+.moss-avatar.is-running { animation: moss-breathe 2s ease-in-out infinite; }
+@keyframes moss-breathe { 50% { opacity: .5; transform: scale(.92); } }
+@media (prefers-reduced-motion: reduce) {
+  .moss-avatar.is-running { animation: none; background: radial-gradient(circle at 88% 88%, #22c55e 0 18%, transparent 20%); }
+}
+:root[data-effects="reduced"] .moss-avatar.is-running { animation: none; background: radial-gradient(circle at 88% 88%, #22c55e 0 18%, transparent 20%); }
+/* MOSS greets from the middle of its page, as Claude's welcome does; the composer stays where it always is. */
+.channel-empty.is-moss { align-items: center; text-align: center; }
+.channel-empty.is-moss > img { width: 64px; height: 64px; margin-bottom: 12px; object-fit: contain; }
+.channel-empty.is-moss p { max-width: 30em; }
 /* A phone shows the empty state as a short note right under the topic card, not a large heading floating mid-screen. */
 @media (max-width: 700px) {
   .channel-empty { flex: none; min-height: 0; justify-content: flex-start; padding: 20px 16px 16px; }

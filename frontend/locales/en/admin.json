@@ -1,6 +1,6 @@
 {
-  "让平台主理人分析占用": "Ask the platform steward to analyze storage",
-  "已发送占用分析请求，请到平台主理人对话查看。": "Storage analysis requested. Check the platform steward conversation for the result.",
+  "让 MOSS 分析占用": "Ask MOSS to analyze storage",
+  "已发送占用分析请求，请到 MOSS 对话查看。": "Storage analysis requested. Check MOSS conversation for the result.",
   "已保存": "Saved",
   "单个附件上限（MiB）": "Individual attachment limit (MiB)",
   "其他访问地址": "Other access addresses",
@@ -574,5 +574,9 @@
   "请先填写资源中心地址": "Enter the resource center address first",
   "对方界面不显示 Key，但对方账号里的 AI 成员能读到本账号的密钥文件；请给每个账号单独的 Key。": "Their interface does not show the key, but AI members in their account can read that account’s key file; give each account its own key.",
   "保留天数": "Retention days",
-  "每个账号一份云空间，建在资源中心的对象存储上：大于门槛的附件（最大 2 GiB）存到这里，房间里发的大文件和成员交付的大文件都能从这里取走。只经房间附件进出，可设自动删除，也可在“管理云空间”里手动删除。未配置时只能发送上限以内的附件。存储桶须允许网页所在地址跨域上传。每个账号各用自己的 Key，与 API 密钥一起保存。": "Each account has one cloud space on the resource center's object storage. Attachments over the threshold (up to 2 GiB) are kept there, so large files sent in rooms and large deliverables from members can be taken from it. Files only come and go as room attachments; set automatic deletion or delete them under “Manage cloud space”. Without it only attachments within the limit can be sent. The bucket must allow cross-origin uploads from the web page's address. Each account uses its own key, kept with its API keys."
+  "使用管理员的云空间": "Use the administrator's cloud space",
+  "账号站点尚不支持云空间回收站": "This account's site does not support the cloud drive trash yet",
+  "打开后该账号不保存 Key：上传、下载和删除都由你这台电脑代为签发，只能操作该账号自己的目录，空间上限在这里强制执行；需要你的本机服务一直运行。": "When on, the account keeps no key: this computer signs its uploads, downloads and deletions, only within the account's own folder, and enforces its space quota here. Your local service must keep running.",
+  "每个账号一份云空间，建在资源中心的对象存储上：大于门槛的附件（最大 2 GiB）存到这里，房间里发的大文件和成员交付的大文件都能从这里取走，也可以在房间网页文件页的“云空间”里直接上传，不建文件夹。可设自动删除，也可在“管理云空间”里手动删除。未配置时只能发送上限以内的附件。存储桶须允许网页所在地址跨域上传。每个账号各用自己的 Key，与 API 密钥一起保存。": "Each account has one cloud space on the resource center's object storage. Attachments over the threshold (up to 2 GiB) are kept there, so large files sent in rooms and large deliverables from members can be taken from it; files can also be uploaded straight into it under “Cloud space” on the Files page of the room website. There are no folders. Set automatic deletion or delete files under “Manage cloud space”. Without it only attachments within the limit can be sent. The bucket must allow cross-origin uploads from the web page's address. Each account uses its own key, kept with its API keys.",
+  "MOSS 现在是只读，分析占用要运行命令。请先在网站的 MOSS 设置里把项目权限调到“自动”，再回来重试。": "MOSS is read-only, and analyzing storage runs commands. Raise its project access to “Auto” in MOSS settings on the website, then try again."
 }

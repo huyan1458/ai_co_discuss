@@ -1,4 +1,5 @@
 import { read_relay_region, relay_in_region } from "./worker.mjs";
+import { RELAY_HOSTED_CLOUD_SHARE, cloud_share_not_found } from "./cloud_share_routes.mjs";
 /**
  * The hosted accounts' sign-in entry over the online relay: a Worker on a workers.dev address of its own that hands each
  * request to a computer's relay (backend/updates.mjs, `MachineRelay`), which passes it to that computer's sign-in entry
@@ -65,9 +66,27 @@ function machine_cookie(request) {
   return match ? match[1] : "";
 }
 
+/** A hosted file share selects its account and computer without a sign-in or tracking cookie. */
+async function fetch_cloud_share(request, env, path) {
+  const match = RELAY_HOSTED_CLOUD_SHARE.exec(path);
+  if (request.method !== "GET" || request.body || (request.headers.get("Content-Length") ?? "0") !== "0" ||
+      request.headers.has("Transfer-Encoding") || !match || !env.RELAY) return cloud_share_not_found();
+  const [, machine, account, token, code] = match;
+  const relay = await entry_relay(env, machine);
+  const language = request.headers.get("Accept-Language") || "zh";
+  const path_on_computer = "/cloud-share/" + account + "/" + token + (code ? "/" + code : "");
+  const meta = encodeURIComponent(JSON.stringify({ method: "GET", path: path_on_computer,
+    headers: [["accept-language", language]] }));
+  return relay.fetch("https://relay.internal/", { method: "POST", headers: {
+    "X-Relay-Role": "entry", "X-Entry-Request": meta, "Accept-Language": language,
+  } });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/cloud-share" || url.pathname.startsWith("/cloud-share/"))
+      return fetch_cloud_share(request, env, url.pathname);
     // Whether a computer is connected, for its owner's panel: `/_codiscuss/status?machine=<id>`.
     if (url.pathname === "/_codiscuss/status") {
       const machine = url.searchParams.get("machine") || "";

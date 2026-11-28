@@ -27,16 +27,23 @@ import { use_invited_rooms } from "./external-members.js";
 import { use_analytics_page } from "./analytics-state.js";
 import { locale, t } from "./i18n.js";
 import { expired_label } from "./sites.js";
+import moss_mark from "./moss-idle.png";
 
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions"]);
 const { view, bridge, act, is_running } = inject("discussion");
+const props = defineProps({ stewardSetup: Boolean });
 // While the workflow page, analytics page or an invited room fills the middle, no room row is shown as the open one.
 const { page_open: workflow_library_open } = use_workflow_library();
 const { page_open: invited_open } = use_invited_rooms();
 const { page_open: analytics_open } = use_analytics_page();
-const middle_page = computed(() => workflow_library_open.value || invited_open.value || analytics_open.value);
+const middle_page = computed(() => workflow_library_open.value || invited_open.value || analytics_open.value || props.stewardSetup);
 const project_rooms = computed(() => view.value.rooms.filter((room) => !room.system_kind));
+// Rooms MOSS opened are children of its own room, which the directory never lists: they stand at the top level
+// (their parent is not among the rows) and carry MOSS's small picture instead (#15330).
+const moss_rooms = computed(() => new Set(view.value.rooms.filter((room) => room.system_kind === "steward").map((room) => room.id)));
+const by_moss = (room) => moss_rooms.value.has(room.parent_room_id);
 const rooms = computed(() => project_rooms.value.filter((room) => !room.archived));
+const waiting_count = computed(() => rooms.value.filter(room => room.waiting_user_since > 0).length);
 const archived_count = computed(() => project_rooms.value.filter((room) => room.archived).length);
 const children = computed(() => {
   const by_id = new Map(rooms.value.map(room => [room.id, room]));
@@ -52,12 +59,18 @@ const children = computed(() => {
 const mounted = computed(() => new Set([...children.value.values()].flat().map(room => room.id)));
 const open_room_running = computed(() => (view.value.room?.free?.members || [])
   .some((member) => ["dispatched", "started"].includes(member.execution?.status)));
+// Read by `branches` during setup (its watcher is immediate), so defined before it.
+const ATTENTION_RANK = { awaiting: 4, waiting_user: 3, failed: 2, running: 1 };
+const attention_rank = (state) => ATTENTION_RANK[state?.kind] || 0;
 const branches = computed(() => {
   const result = new Map();
   function visit(room) {
     const group = children.value.get(room.id) || [];
     const descendants = group.map(visit);
+    const own = room_attention(room, room_running(room));
     const branch = { running: room_running(room) || descendants.some(item => item.running),
+      // A folded parent speaks for its children: the one most in need of the user (#15332 suggestion 1).
+      attention: [own, ...descendants.map(item => item.attention)].reduce((best, item) => attention_rank(item) > attention_rank(best) ? item : best, null),
       selected: room.id === view.value.room?.id || descendants.some(item => item.selected),
       time: Math.max(Date.parse(room_speech_at(room) || room.created_at) || 0, ...descendants.map(item => item.time)) };
     result.set(room.id, branch);
@@ -174,7 +187,17 @@ const unconfirmed_launches = computed(() => view.value.launch.recoveries.filter(
 function room_row(room, index, count) {
   return { items: actions(room), active: !middle_page.value && room.id === view.value.room?.id,
     archiving: view.value.archive_pending.includes(room.id), time: room_time(room), title: room_time_title(room),
-    running: room_running(room), destroying: view.value.destroying.includes(room.id) };
+    attention: room_attention(room, room_running(room)), destroying: view.value.destroying.includes(room.id) };
+}
+
+/** The row's one-line state, with the wait timestamp taking precedence over legacy attention. */
+function room_attention(room, running) {
+  if (room.waiting_user_since > 0) return { kind: "awaiting", label: t("在等你") };
+  const { attention } = room;
+  if (attention === "waiting_user") return { kind: attention, label: t("等你回答") };
+  if (attention === "failed") return { kind: attention, label: t("执行失败") };
+  if (attention === "running" || running) return { kind: "running", label: t("进行中") };
+  return null;
 }
 /** Whether a room is at work; the open room's own live state is the fresher one. */
 function room_running(room) {
@@ -184,11 +207,14 @@ function room_running(room) {
 function listed_count(id) {
   return listed_counts.value.get(id) || ROOM_BATCH_COUNT;
 }
-/** The rooms a folder lists now: all of them in manual order, else the latest ones opened so far plus any at work or open. */
+/** List recent rooms and keep branches that are at work, open, or waiting for the user visible. */
 function visible_rooms(folder) {
   const roots = top_rooms(folder);
   if (manual_order.value) return roots;
-  return roots.filter((room, index) => index < listed_count(folder.id) || branches.value.get(room.id).running || branches.value.get(room.id).selected);
+  return roots.filter((room, index) => {
+    const branch = branches.value.get(room.id);
+    return index < listed_count(folder.id) || branch.running || branch.selected || branch.attention?.kind === "awaiting";
+  });
 }
 function top_rooms(folder) {
   const roots = folder.rooms.filter(room => !mounted.value.has(room.id));
@@ -204,7 +230,7 @@ function directory_rows(folder) {
       const folded = kids.length && !expanded;
       rows.push({ room, index, count: group.length, depth, expanded, label,
         highlight: folded && !middle_page.value && branches.value.get(room.id).selected,
-        running: folded && branches.value.get(room.id).running });
+        rollup: folded ? branches.value.get(room.id).attention : null });
       if (expanded) append(kids, depth + 1);
     });
   }
@@ -400,7 +426,7 @@ function actions(room) {
       { label: t("移出文件夹"), icon: "i-lucide-folder-minus", disabled: !room.folder_id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: null }) },
       ...(view.value.folders || []).map((folder) => ({ label: folder.name, icon: "i-lucide-folder", disabled: folder.pending || room.folder_id === folder.id, onSelect: () => act("manage_channel", { id: room.id, action: "folder", folder_id: folder.id }) })),
     ] },
-    ...(room.parent_room_id ? [room.detached
+    ...(room.parent_room_id && !moss_rooms.value.has(room.parent_room_id) ? [room.detached
       ? { label: t("放回父房间"), icon: "i-lucide-corner-down-right", onSelect: () => act("manage_channel", { id: room.id, action: "detach", detached: false }) }
       : { label: t("设为独立房间"), icon: "i-lucide-corner-up-left", onSelect: () => act("manage_channel", { id: room.id, action: "detach", detached: true }) }] : []),
     { label: room.pinned ? t("取消固定") : t("固定房间"), icon: room.pinned ? "i-lucide-pin-off" : "i-lucide-pin", disabled: view.value.directory_pending.includes(`pin:${room.id}`), onSelect: () => act("manage_channel", { id: room.id, action: "pin", pinned: !room.pinned }) },
@@ -414,9 +440,14 @@ function actions(room) {
 
 <template>
   <div class="channel-directory-manager">
-    <UButton :label="t('新建房间')" icon="i-lucide-plus" color="neutral" class="channel-primary-button channel-new-conversation" :disabled="view.directory_pending.includes('create-room')" @click="emit('create', null)" />
     <div class="channel-directory-heading">
-      <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open"><UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ directory_title }}</button>
+      <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open">
+        <UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ directory_title }}
+        <small v-if="waiting_count" class="channel-waiting-count" :title="t('{count} 个房间在等你', { count: waiting_count })">
+          <span class="sr-only">{{ t("{count} 个房间在等你", { count: waiting_count }) }}</span>
+          <span aria-hidden="true">{{ t("{count} 在等你", { count: waiting_count }) }}</span>
+        </small>
+      </button>
       <div class="channel-directory-actions">
         <UTooltip :text="t('新建文件夹')"><UButton icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="xs" :aria-label="t('新建文件夹')" :disabled="view.directory_pending.includes('create-folder')" @click="emit('create-folder')" /></UTooltip>
         <UDropdownMenu :items="directory_actions" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu channel-directory-menu' }"><UButton icon="i-lucide-ellipsis" :aria-label="t('房间目录选项')" :title="t('排列、导入与导出')" size="xs" color="neutral" variant="ghost" /></UDropdownMenu>
@@ -445,13 +476,13 @@ function actions(room) {
        </MemoBlock>
        </template>
        <div v-if="folder_open(folder.id)" :class="folder.id ? 'channel-folder-rooms' : 'channel-root-rooms'" :data-drop-folder="folder.id ? undefined : ''">
-      <MemoBlock v-for="{ room, index, count, depth, expanded, label, highlight, running } in directory_rows(folder)" :key="room.id" :deps="[JSON.stringify(room), index, count, depth, expanded, label, highlight, running, row_state, room_time(room), Boolean(share_link(room)), renaming_id === room.id]">
+      <MemoBlock v-for="{ room, index, count, depth, expanded, label, highlight, rollup } in directory_rows(folder)" :key="room.id" :deps="[JSON.stringify(room), index, count, depth, expanded, label, highlight, rollup?.kind, by_moss(room), row_state, room_time(room), Boolean(share_link(room)), renaming_id === room.id]">
       <template v-for="row in [room_row(room, index, count)]" :key="room.id">
       <UContextMenu :items="row.items" :content="{ onCloseAutoFocus: keep_rename_focus }" :ui="{ content: 'channel-menu channel-topic-menu' }">
         <div class="channel-room-row" :class="{ active: row.active || highlight, 'is-destroying': row.destroying}" :style="{ marginInlineStart: depth ? `calc(${depth} * var(--channel-nav-text, 13px))` : undefined }" :data-drag-room="room.id" :inert="row.destroying || undefined">
           <button class="channel-room-grip" data-drag-handle :aria-label="t('拖动 {name}', { name: room.title })" :title="t('拖动排序；上下方向键移动')"  @pointerdown="bridge.start_drag($event)" @keydown.up.prevent="act('move_channel', { id: room.id, direction: -1, folder_id: room.folder_id || null })" @keydown.down.prevent="act('move_channel', { id: room.id, direction: 1, folder_id: room.folder_id || null })"><UIcon name="i-lucide-grip-vertical" /></button>
           <div class="channel-room-content"><UTooltip v-if="label" :text="label" :ui="{ content: 'channel-topic-tooltip' }"><button class="channel-child-toggle" type="button" :aria-expanded="expanded" :aria-label="label" @click.stop="toggle_parent(room.id)"><UIcon :name="expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" /></button></UTooltip><span v-if="renaming_id === room.id" class="channel-room-rename"><input :ref="set_rename_input" v-model="rename_text" :maxlength="ROOM_TITLE_MAX" :aria-label="t('{name} 的新名称', { name: room.title })" autocomplete="off"
-            @keydown.enter="rename_enter($event, room)" @keydown.esc.prevent.stop="renaming_id = ''" @blur="commit_rename(room)" @click.stop @dblclick.stop @contextmenu.stop /></span><button v-else class="channel-room-select" data-drag-title :title="row.title" :aria-label="room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="bridge.start_drag($event)" @click="select_room($event, room)"><span class="channel-room-name"><span>{{ room.title }}</span><small class="channel-room-count">{{ room.message_count ?? 0 }}</small><UIcon v-if="room.pinned" name="i-lucide-pin" class="channel-room-pin" :aria-label="t('已固定')" /></span><i v-if="row.running || running" class="channel-room-running" :title="t('正在执行')" /><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button></div>
+            @keydown.enter="rename_enter($event, room)" @keydown.esc.prevent.stop="renaming_id = ''" @blur="commit_rename(room)" @click.stop @dblclick.stop @contextmenu.stop /></span><button v-else class="channel-room-select" data-drag-title :title="row.title" :aria-label="row.attention ? undefined : room.title" :aria-current="row.active ? 'page' : undefined" @pointerdown="bridge.start_drag($event)" @click="select_room($event, room)"><span class="channel-room-name"><UIcon v-if="room.preset === 'task'" name="i-lucide-clipboard-check" class="channel-room-mark channel-room-task" :title="t('任务房间：一位成员独立完成一件事，做完由程序回报')" :aria-label="t('任务房间')" /><img v-else-if="by_moss(room)" class="channel-room-mark channel-room-moss" :src="moss_mark" :title="t('由 MOSS 新建')" :alt="t('由 MOSS 新建')" /><span>{{ room.title }}</span><small class="channel-room-count">{{ room.message_count ?? 0 }}</small><UIcon v-if="room.pinned" name="i-lucide-pin" class="channel-room-pin" :aria-label="t('已固定')" /></span><small v-if="rollup || row.attention" class="channel-room-time channel-room-attention" :data-attention="(rollup || row.attention).kind">{{ (rollup || row.attention).label }}</small><small v-else class="channel-room-time" aria-hidden="true">{{ row.time }}</small></button></div>
           <div class="channel-room-actions">
             <UTooltip :text="room.archived ? t('恢复房间') : room.pinned ? t('已固定的房间不能存档') : t('存档房间')" :ui="{ content: 'channel-topic-tooltip' }">
               <UButton :icon="room.archived ? 'i-lucide-archive-restore' : 'i-lucide-archive'" :aria-label="room.archived ? t('恢复 {name}', { name: room.title }) : t('存档 {name}', { name: room.title })" class="channel-room-archive" size="xs" color="neutral" variant="ghost" :disabled="row.archiving || (!room.archived && room.pinned)" @click="emit('manage', { room, action: room.archived ? 'restore' : 'archive' })" />
@@ -527,6 +558,8 @@ function actions(room) {
 </template>
 
 <style scoped>
+.channel-waiting-count { padding-inline: 5px; border-radius: 6px; white-space: nowrap; color: var(--ui-warning); font-size: var(--channel-nav-meta); }
+.channel-room-attention[data-attention="awaiting"] { color: var(--ui-warning); font-weight: 500; }
 .share-jobs { display: grid; gap: .65rem; margin-bottom: 1rem; }
 .share-jobs h3 { font-weight: 600; }
 .share-job { display: grid; gap: .35rem; border-bottom: 1px solid var(--ui-border); padding: .45rem 0 .7rem; }

@@ -48,6 +48,7 @@ class ProtectedInstance(unittest.TestCase):
 
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
         root = Path(self.folder.name)
         self.key_file = root / "entry-key.json"
         self.key = secrets.token_hex(32)
@@ -63,13 +64,13 @@ class ProtectedInstance(unittest.TestCase):
                 os.environ.pop(KEY_FILE_VARIABLE, None)
             else:
                 os.environ[KEY_FILE_VARIABLE] = previous
+        self.server.daemon_threads = False
+        self.addCleanup(self.server.server_close)
         self.port = self.server.server_address[1]
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-    def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.folder.cleanup()
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.thread.join)
+        self.addCleanup(self.server.shutdown)
 
     def connect(self):
         sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)

@@ -49,7 +49,7 @@ docker run -d --name ai-co-discuss -p 127.0.0.1:8875:8765 -e DISCUSS_ADMIN_SETUP
 
 需要 Node.js 24+、npm 和 Cloudflare 账号。`backend/worker.mjs` 打包为 Pages 的 `_worker.js`，绑定 D1 数据库 `DB`（只存绑定的电脑、设备名单与显示名称）和中转 `RELAY`。房间、消息与附件都保存在电脑的本机网站上，线上站点不存。
 
-可从设置的设备配对区域点“让平台主理人部署”，或运行 `codiscuss steward ask cloudflare-deploy --confirm`。主理人准备方案，缺源码时会先征得同意再克隆与本机版本对应的标签。它会在写入 Cloudflare 前逐次列出资源和命令并等你确认，升级前先备份 D1。换主理人软件后可按[主理人手册](guide/steward.md)查看或删除“旧对话”，不会改动已部署的网站。
+可从设置的设备配对区域点“让平台主理人部署”，或运行 `codiscuss steward ask cloudflare-deploy --confirm`。首次使用时先打开“平台主理人”页面选择软件。主理人准备方案，缺源码时会先征得同意再克隆与本机版本对应的标签。它会在写入 Cloudflare 前逐次列出资源和命令并等你确认，升级前先备份 D1。换软件后，在主理人页面右栏的“主理人配置”中可管理“旧对话”。详见[主理人手册](guide/steward.md)。
 
 > [!IMPORTANT]
 > 旧版线上站点自己保存房间。升级前先在旧版线上网页用目录“…”菜单的“导出全部房间”导出，再在本机网站导入；升级后线上不再提供这些房间（D1 里的旧表保留，不删除）。

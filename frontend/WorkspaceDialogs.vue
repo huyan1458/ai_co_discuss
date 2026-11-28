@@ -7,14 +7,13 @@ import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import AccountSettings from "./AccountSettings.vue";
 import ChainRoundsField from "./ChainRoundsField.vue";
 import SpeechSettings from "./SpeechSettings.vue";
-import StewardSettings from "./StewardSettings.vue";
 import SystemPrompts from "./SystemPrompts.vue";
 import WeixinSettings from "./WeixinSettings.vue";
 import LanguagePicker from "./LanguagePicker.vue";
 import { t } from "./i18n.js";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 
-const props = defineProps({ targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] }, foldOptions: { type: Array, default: () => [] }, foldKeepOptions: { type: Array, default: () => [] }, cardTextOptions: { type: Array, default: () => [] }, stewardSettingsRequest: { type: Number, default: 0 } });
+const props = defineProps({ targetRoom: { type: Object, default: null }, targetFolder: { type: Object, default: null }, readingOptions: { type: Array, default: () => [] }, effectOptions: { type: Array, default: () => [] }, foldOptions: { type: Array, default: () => [] }, foldKeepOptions: { type: Array, default: () => [] }, cardTextOptions: { type: Array, default: () => [] } });
 const mode = defineModel({ type: String, default: "" });
 const reading_width = defineModel("readingWidth", { type: String, default: "default" });
 const effects = defineModel("effects", { type: String, default: "full" });
@@ -422,7 +421,6 @@ const keep_open = (event) => event.preventDefault();
           </section>
         </div>
         <SystemPrompts />
-        <StewardSettings :open-request="props.stewardSettingsRequest" />
         <SpeechSettings />
         <WeixinSettings />
       </div>

@@ -15,8 +15,12 @@ import ConfirmDialog from "./ConfirmDialog.vue";
 
 const { bridge } = inject("discussion");
 const confirm_setup = ref(false);
+// Changing this computer's notification setup needs MOSS above read-only (#15623).
+const setup_read_only = ref(false);
 async function ask_setup() {
-  if (await bridge.ensure_steward_configured()) confirm_setup.value = true;
+  if (!await bridge.ensure_steward_configured()) return;
+  setup_read_only.value = bridge.steward_read_only();
+  confirm_setup.value = true;
 }
 const status = ref(null), unavailable = ref(""), busy = ref(""), open = ref(false);
 // The QR code being scanned, drawn here from the content the service returned.
@@ -107,7 +111,7 @@ async function act(action, message) {
       </button>
       <template #content>
         <div class="weixin-settings">
-          <UButton class="justify-self-start" size="xs" color="neutral" variant="soft" :label="t('让平台主理人配置')" @click="ask_setup" />
+          <UButton class="justify-self-start" size="xs" color="neutral" variant="soft" :label="t('让 MOSS 配置')" @click="ask_setup" />
           <p class="fine-print">{{ t('Goal 待你确认、或成员向你提的问题等你 3 分钟未答时提醒你：先用主要渠道发送，发不出去再按顺序换下一个已启用的渠道。你在任一已绑定的渠道回复都能发回房间。') }}</p>
           <ol v-if="channels.length" class="notify-order" :aria-label="t('通知渠道顺序')">
             <li v-for="(item, index) in channels" :key="item.id">
@@ -143,8 +147,9 @@ async function act(action, message) {
         </div>
       </template>
     </UCollapsible>
-    <ConfirmDialog v-model:open="confirm_setup" :title="t('配置通知渠道')" :description="t('平台主理人将引导你配置通知，并可能更改本机的通知设置。')"
-      @confirm="bridge.request_steward('notify-setup', {}, { confirmed: true })" />
+    <ConfirmDialog v-model:open="confirm_setup" :title="t('配置通知渠道')"
+      :description="setup_read_only ? t('MOSS 将引导你配置通知，并可能更改本机的通知设置。MOSS 现在是只读，确认后会先把它的项目权限调到“自动”，再发送。') : t('MOSS 将引导你配置通知，并可能更改本机的通知设置。')"
+      :confirm-label="setup_read_only ? t('调到自动并发送') : undefined" @confirm="bridge.request_steward('notify-setup', {}, { confirmed: true, raise_access: setup_read_only })" />
   </section>
 </template>
 

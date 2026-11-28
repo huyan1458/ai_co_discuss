@@ -10,7 +10,7 @@ test('room-owned reasons carry source templates while replies and truncated text
   assert.deepEqual(room_payload({ reason: reason.slice(0, 4) }), { reason: reason.slice(0, 4) });
 });
 import { DatabaseSync } from 'node:sqlite';
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readdirSync, rmSync, existsSync, readFileSync, symlinkSync, utimesSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readdirSync, rmdirSync, rmSync, unlinkSync, existsSync, readFileSync, symlinkSync, utimesSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
@@ -466,8 +466,10 @@ test('woken messages bring their attachments: local copies by placeholder, image
   const claude = task('Claude'), agy = task('Agy');
   assert.match(claude.prompt, /#9 \[图片 #1\] shot\.png：本机副本 .+shot\.png/);
   assert.match(claude.prompt, /#9 \[文件 #2\] notes\.pdf：未能取到本机副本.+attachment download/);
-  assert.match(claude.prompt, /large\.png（104857600 字节.+attachment download room c{32} --dest/);
-  assert.match(JSON.parse(readFileSync(claude.task_path, 'utf8')).attachments[2].download_command, /attachment download room c{32} --dest/);
+  assert.match(claude.prompt, /large\.png（104857600 字节.+attachment download room c{32}.*\.codiscuss-inbox/);
+  const command = JSON.parse(readFileSync(claude.task_path, 'utf8')).attachments[2].download_command;
+  assert.match(command, /attachment download room c{32}/);
+  assert.doesNotMatch(command, /--dest/);
   assert.doesNotMatch(claude.prompt, /简单消息可跳过技能/);
   assert.deepEqual(claude.images.map(item => item.path), [attachments[0].path]);
   assert.deepEqual(agy.images, []);
@@ -479,6 +481,14 @@ test('woken messages bring their attachments: local copies by placeholder, image
   assert.deepEqual(content.map(block => block.type), ['text', 'image']);
   assert.equal(content[1].source.data, image.toString('base64'));
   assert.equal(JSON.parse(claude_input('看图', [{ ...claude.images[0], size: 4_000_000 }])).message.content.length, 1);
+  config.cwd = config.directory;
+  const cloud_inbox = join(config.cwd, '.codiscuss-inbox', files[2].id);
+  mkdirSync(cloud_inbox, { recursive: true });
+  writeFileSync(join(cloud_inbox, 'large.png'), image);
+  attachments[2].size = image.length;
+  const reused = task('Claude');
+  assert.match(reused.prompt, /large\.png：已在 .+large\.png/);
+  assert.equal(reused.images.length, 1, 'the reused cloud copy is not inlined into the model prompt');
 });
 
 test('object storage admin CLI uses panel routes and never returns the key', async t => {
@@ -531,7 +541,7 @@ test('object storage admin CLI uses panel routes and never returns the key', asy
   assert.notEqual(hosted.api_key_ref, owner.api_key_ref);
   assert.deepEqual(hosted, { ...empty, configured: true, base_url: url, api_key_ref: hosted.api_key_ref, managed: true, retention_days: 30, quota_mib: 128, object_threshold_mib: 29 });
   assert.deepEqual(JSON.parse(readFileSync(join(hosted_home, 'object-storage-settings.json'), 'utf8')),
-    { base_url: url, api_key_ref: hosted.api_key_ref, retention_days: 30, object_threshold_mib: 29 });
+    { mode: 'own', base_url: url, api_key_ref: hosted.api_key_ref, retention_days: 30, object_threshold_mib: 29 });
   assert.equal(JSON.parse(readFileSync(object_quota_path(data, 'demo'), 'utf8')), 128);
   await assert.rejects(account_object_storage(hosted_home, { quota_mib: 99999 }));
   const hosted_path = '/api/accounts/demo/object-storage';
@@ -554,19 +564,28 @@ test('object storage admin CLI uses panel routes and never returns the key', asy
   assert.deepEqual(await admin(), empty);
 });
 
-test('cloud file admin CLI lists and deletes only in the selected instance', async t => {
+test('cloud file admin panel and CLI use the selected instance for trash, restore and purge', async t => {
   const { admin_cli } = await import('../runner/admin_cli.mjs');
   const { create_panel } = await import('../runner/admin_panel.mjs');
   const { account_home, add_account } = await import('../gateway/gateway.mjs');
   const data = mkdtempSync(join(tmpdir(), 'cloud-files-panel-'));
   t.after(() => rmSync(data, { recursive: true, force: true }));
-  const calls = [], id = 'a'.repeat(32);
+  const calls = [], id = 'a'.repeat(32), folder_id = 'b'.repeat(32);
+  const link = account => ({ url: `https://cos.example.invalid/${account}?signature=fixture`, size: 13, file_name: 'notes.txt' });
+  const inventory = { attachments: [{ kind: 'cloud_file', id, source_kind: 'project_file', source_ref: '0:notes.txt' }], used_bytes: 13, quota_mib: 10240 };
+  const trash = { folders: [{ id: folder_id }], files: [{ id }], trash_bytes: 13 };
   const site = async account => {
     const server = createServer(async (request, response) => {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
-      calls.push([account, request.method, request.url, Buffer.concat(chunks).toString()]);
-      response.end(JSON.stringify(request.method === 'POST' ? { cleared: [id] } : { attachments: [], used_bytes: 0, quota_mib: 10240 }));
+      const raw = Buffer.concat(chunks).toString(), payload = raw ? JSON.parse(raw) : null;
+      calls.push([account, request.method, request.url, payload]);
+      let result = inventory;
+      if (request.url.endsWith('/content?link=1')) result = link(account);
+      else if (request.url.endsWith('?folder=trash')) result = account === 'demo' ? trash : inventory;
+      else if (request.url.endsWith('/delete')) result = payload.permanent ? { cleared: [id] } : { trashed: [id] };
+      else if (request.url.endsWith('/restore')) result = { restored: payload.ids ?? payload.folder_ids };
+      response.end(JSON.stringify(result));
     });
     await listen_local(server);
     t.after(() => server.close());
@@ -580,11 +599,33 @@ test('cloud file admin CLI lists and deletes only in the selected instance', asy
   const admin = (...args) => admin_cli(['storage', 'object', '--data', data, ...args], {
     client: async () => (route, body) => api(body === undefined ? 'GET' : 'POST', '/api/' + route, body), print: () => {},
   });
-  assert.deepEqual(await admin('list'), { attachments: [], used_bytes: 0, quota_mib: 10240 });
-  assert.deepEqual(await admin('delete', id, '--account', 'demo'), { cleared: [id] });
+  assert.deepEqual(await admin('list'), inventory);
+  assert.deepEqual(await admin('link', id), link('owner'));
+  assert.deepEqual(await admin('link', id, '--account', 'demo'), link('demo'));
+  await assert.rejects(admin('link', '../account', '--account', 'demo'));
+  await assert.rejects(api('POST', '/api/accounts/demo/object-storage/files/link', { id: ['not-an-id'] }));
+  await assert.rejects(admin('trash', '--purge'));
+  await assert.rejects(admin('delete', id, '--folder'));
+  await assert.rejects(admin('restore', '../account'));
+  await assert.rejects(api('POST', '/api/accounts/demo/object-storage/files/trash', { id }));
+  assert.deepEqual(await api('POST', '/api/storage/object/files/delete', { id }), { trashed: [id] });
+  assert.deepEqual(await admin('delete', id, '--account', 'demo'), { trashed: [id] });
+  await assert.rejects(admin('trash'));
+  assert.deepEqual(await admin('trash', '--account', 'demo'), trash);
+  assert.deepEqual(await admin('restore', id, '--account', 'demo'), { restored: [id] });
+  assert.deepEqual(await admin('restore', folder_id, '--folder'), { restored: [folder_id] });
+  assert.deepEqual(await admin('delete', id, '--purge', '--account', 'demo'), { cleared: [id] });
   assert.deepEqual(calls, [
-    ['owner', 'GET', '/api/rooms/cloud-attachments', ''],
-    ['demo', 'POST', '/api/rooms/cloud-attachments/delete', JSON.stringify({ id })],
+    ['owner', 'GET', '/api/rooms/cloud-attachments', null],
+    ['owner', 'GET', `/api/rooms/cloud-attachments/${id}/content?link=1`, null],
+    ['demo', 'GET', `/api/rooms/cloud-attachments/${id}/content?link=1`, null],
+    ['owner', 'POST', '/api/rooms/cloud-attachments/delete', { ids: [id], permanent: false }],
+    ['demo', 'POST', '/api/rooms/cloud-attachments/delete', { ids: [id], permanent: false }],
+    ['owner', 'GET', '/api/rooms/cloud-attachments?folder=trash', null],
+    ['demo', 'GET', '/api/rooms/cloud-attachments?folder=trash', null],
+    ['demo', 'POST', '/api/rooms/cloud-attachments/restore', { ids: [id] }],
+    ['owner', 'POST', '/api/rooms/cloud-attachments/restore', { folder_ids: [folder_id] }],
+    ['demo', 'POST', '/api/rooms/cloud-attachments/delete', { ids: [id], permanent: true }],
   ]);
 });
 
@@ -3456,6 +3497,9 @@ async function free_fixture(t) {
       if (body?.action === 'retry_start') execution.retry.retry_at = 0;
       if (body?.action === 'segments') { (state.segments ||= []).push(body.segments); if (body.notes) (state.notes ||= []).push(body.notes); }
       result = execution;
+    } else if (/^\/messages\/\d+$/.test(url) && request.method === 'GET') {
+      result = state.messages.find(item => item.id === Number(url.split('/').at(-1)));
+      if (!result) { response.writeHead(404); response.end('{}'); return; }
     } else if (url.startsWith('/messages?before=')) {
       if (state.fail_messages) { response.writeHead(503, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: 'context unavailable' })); return; }
       const params = new URL(request.url, 'http://localhost').searchParams;
@@ -3927,6 +3971,36 @@ test('restarted runner keeps uncertain scratch and accepts a confirmed cancellat
   assert.equal(restarted.reclaim_failed_scratch(), true);
 });
 
+test('completed scratch retries a persistent removal failure only after the saved delay', async t => {
+  const { state, store, config } = await free_fixture(t);
+  const logs = [];
+  const runner = new FreeRoomRunner(config, store, async () => ({ status: 'accepted' }), line => logs.push(line));
+  await runner.tick();
+  state.executions[0].status = 'completed';
+  const scratch = join(member_drafts(config, 'Claude'), '.scratch', '1');
+  rmdirSync(scratch);
+  const outside = join(config.directory, 'outside-scratch');
+  mkdirSync(outside);
+  symlinkSync(outside, scratch, process.platform === 'win32' ? 'junction' : 'dir');
+  const record = () => JSON.parse(store.db.prepare("SELECT value FROM metadata WHERE key='scratch:1'").get().value);
+  const expire = () => store.db.prepare("UPDATE metadata SET value=? WHERE key='scratch:1'").run(JSON.stringify({ ...record(), retry_after: 0 }));
+  await runner.finish_scratch(new Set());
+  assert.ok(record().retry_after > Date.now());
+  const reads = state.calls.length;
+  await runner.finish_scratch(new Set());
+  assert.equal(state.calls.length, reads);
+  expire();
+  await runner.finish_scratch(new Set());
+  assert.equal(logs.filter(line => line.includes('scratch #1:')).length, 1);
+  unlinkSync(scratch);
+  mkdirSync(scratch);
+  expire();
+  await runner.finish_scratch(new Set());
+  assert.equal(existsSync(scratch), false);
+  assert.equal(existsSync(outside), true);
+  assert.ok(logs.some(line => line.includes('清理已恢复')));
+});
+
 test('scratch cleanup accepts a linked service home and rejects a redirected member folder', async t => {
   const { store, config } = await free_fixture(t);
   const root = join(config.directory, 'real-home'), home = join(config.directory, 'linked-home');
@@ -4029,6 +4103,40 @@ for (const [answer, posted] of [[{ choice: 'wait', probabilities: { wait: 0.9, c
     }
   });
 }
+
+test('an answer wait notifies once after the delay if still open, without page activity data', async t => {
+  const { state, store, config } = await free_fixture(t);
+  state.pending = [];
+  const wait = { id: 17, message_id: 12, member: 'Claude', created_at: Math.floor(Date.now() / 1000) };
+  state.room.free = { waits: [wait, { ...wait, id: 18 }] };
+  state.room.latest_id = 13;
+  state.messages = [
+    { id: 12, text: '请确认这个方案。\r\n\r\n第一项\r\n第二项\r\n不要摘录第四行' },
+    { id: 13, text: '更新的无关消息' },
+  ];
+  const sent = [];
+  const runner = new FreeRoomRunner(config, store);
+  runner.notifier = { ready: () => true, sent: key => sent.some(item => item.key === key),
+    send: async notice => { sent.push(notice); return { status: 'sent', number: sent.length }; } };
+  await runner.tick();
+  assert.equal(runner.idle(), false);
+  assert.equal(sent.length, 0);
+
+  state.room.free.waits = [{ ...wait, created_at: wait.created_at - 181 }]; // The second wait is already closed.
+  await runner.tick();
+  const restarted = new FreeRoomRunner(config, store);
+  restarted.notifier = { ...runner.notifier, sent: () => false }; // The old notice is no longer in channel history.
+  await restarted.tick();
+  assert.deepEqual(sent.map(item => item.key), [`${config.site}/${config.room}/wait:17`]);
+  assert.deepEqual(sent[0].paragraphs.slice(1), ['请确认这个方案。', '第一项', '第二项']);
+  assert.deepEqual(sent[0].room, { site: config.site, room: config.room, title: state.room.title });
+  assert.equal(restarted.idle(), true);
+
+  state.messages[0].summary = '  请决定是否上线。  ';
+  state.room.free.waits = [{ ...state.room.free.waits[0], id: 19 }];
+  await restarted.tick();
+  assert.deepEqual(sent[1].paragraphs.slice(1), ['请决定是否上线。']);
+});
 
 test('a goal the host declared pending skips the decision model and reaches Weixin once after the delay', async t => {
   const f = await free_fixture(t);
@@ -4599,12 +4707,16 @@ test('a free member that exits without answering fails only its own execution', 
 test('a turn that carried only program notices ends quietly instead of failing', async t => {
   const { state, store, config } = await free_fixture(t);
   state.pending = [{ id: 1, message_id: 11, purpose: 'notice' }];
-  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => { setImmediate(() => task.on_exit()); return { status: 'accepted' }; });
+  const runner = new FreeRoomRunner(config, store, async (adapter, binding, task) => {
+    setImmediate(() => { task.on_note('Final remark not intended as a reply'); task.on_exit(); });
+    return { status: 'accepted' };
+  });
   await runner.tick();
   await runner.tick();
   assert.equal(state.executions[0].status, 'completed');
   assert.ok(state.calls.includes('POST /executions/1 quiet'));
   assert.equal(state.calls.includes('POST /executions/1 fail'), false);
+  assert.equal(state.posts, undefined);
 });
 
 test('a member whose operations were refused is not captured, even when its session ends plainly', async t => {

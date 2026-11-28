@@ -33,22 +33,76 @@ export function object_storage_fields(attachment_limit_mib = 50) {
  * Args:
  *   ids: attachment IDs. remove: async (id) => { cleared: [...], freed_bytes }, one deletion.
  * Returns:
- *   { cleared, freed_bytes } over all; a failure stops there after the files already deleted are counted.
+ *   { cleared, trashed, freed_bytes } over all (`trashed` went to the recycle bin and freed nothing yet); a failure
+ *   stops there after the files already deleted are counted.
  */
 export async function delete_cloud_files(ids, remove) {
-  const total = { cleared: [], freed_bytes: 0 };
+  // A drive file goes to the recycle bin (`trashed`); a room attachment or transfer copy is gone at once (`cleared`).
+  const total = { cleared: [], trashed: [], freed_bytes: 0 };
   for (const id of ids) {
     try {
       const result = await remove(id);
       total.cleared.push(...(result.cleared || []));
+      total.trashed.push(...(result.trashed || []));
       total.freed_bytes += Number(result.freed_bytes) || 0;
     } catch (failure) {
-      if (!total.cleared.length) throw failure;
+      if (!total.cleared.length && !total.trashed.length) throw failure;
       // What was deleted stays shown as deleted; the rest is reported.
       return { ...total, error: failure.message };
     }
   }
   return total;
+}
+
+/**
+ * Whether the file page shows the account's cloud space: only with the cloud space set up, and only to the account's
+ * administrator (on the computer itself or signed in), as listing it needs that identity.
+ */
+export function cloud_space_visible(view) {
+  return Boolean(view?.object_storage && (view.admin?.local || view.admin?.logged_in));
+}
+
+/**
+ * What to tell after deleting cloud space files: those moved to the recycle bin can be restored for 30 days and free no
+ * space yet; only those deleted for good free space, so only they report it.
+ *
+ * Args:
+ *   result: { cleared, trashed, freed_bytes } from `delete_cloud_files`. format: bytes → text (storage-format.js).
+ * Returns:
+ *   The messages, in order.
+ */
+export function cloud_delete_notices(result, format) {
+  const notices = [];
+  if (result.trashed?.length) notices.push(t("已移到回收站，30 天内可还原"));
+  if (result.cleared?.length) notices.push(t("已释放 {size}", { size: format(Number(result.freed_bytes) || 0) }));
+  return notices;
+}
+
+// A permanent deletion repeats at most this often, so a site that stops making progress cannot keep the page asking.
+const PURGE_MAX_ROUNDS = 1000;
+
+/**
+ * Delete for good in rounds: the site deletes a small batch per request (it frees the storage without holding the
+ * database, and a relayed request must answer within seconds) and says how many are `remaining`; the same request is
+ * made again until none are.
+ *
+ * Args:
+ *   request: async () => { cleared, freed_bytes, remaining }, one round. progress: share → void.
+ * Returns:
+ *   { cleared, freed_bytes } over all rounds. Rejects when a round deletes nothing while some remain.
+ */
+export async function purge_in_batches(request, progress = () => {}) {
+  const total = { cleared: [], freed_bytes: 0 };
+  for (let round = 0; round < PURGE_MAX_ROUNDS; round += 1) {
+    const answer = await request();
+    total.cleared.push(...(answer.cleared || []));
+    total.freed_bytes += Number(answer.freed_bytes) || 0;
+    const remaining = Math.max(0, Number(answer.remaining) || 0);
+    progress(total.cleared.length / Math.max(1, total.cleared.length + remaining));
+    if (!remaining) return total;
+    if (!answer.cleared?.length) throw new Error(t("云空间暂时删不掉剩下的 {count} 个文件，请稍后重试", { count: remaining }));
+  }
+  throw new Error(t("云空间暂时删不掉剩下的文件，请稍后重试"));
 }
 
 /** The values to edit for `fields`, read from a settings answer of the site. */

@@ -22,26 +22,28 @@ import time
 import uuid
 import zipfile
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from http.client import HTTPException, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from .entry_guard import (BROWSER_COOKIE_SECONDS, HELLO_PATH, OPEN_PATH, PUBLIC_PATHS, EntryPolicy, answer_hello, browser_admitted,
                           browser_cookie_name, open_link_key, proof, request_proven)
-from .analytics import seal_room, snapshot as analytics_snapshot
+from .analytics import moss_snapshot, seal_room, snapshot as analytics_snapshot
 from .texts import BoundaryError, ReadError, Text, error_body, incoming_text, load_texts, save_text, text_payload
 from .admin import (AdminError, admin_status, change_password, list_sessions, login_admin, logout_admin, register_admin,
                     revoke_sessions, session_valid, update_profile)
 from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_machine_command, list_machines, machine_command_status,
                             machine_launch_action, machine_sync, pair_machine, remote_launch_status, submit_machine_command,
                             submit_remote_launch)
-from .free_room import (add_member, after_free_message, after_proactive, authorize_free_write, check_answer, execution_action, free_view,
+from .free_room import (active_members, add_member, after_free_message, after_proactive, authorize_free_write, check_answer, execution_action, free_view,
                         inbox, interrupt_for_message, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
                         room_failure_wakes, room_quiet_checkins, save_room_access, view_execution, recent_executions, MAX_MESSAGE_ID)
-from .free_room import convert_suggestion, message_suggestions, save_suggestions, sync_participants
+from .free_room import ROOM_ATTENTION_SQL, ROOM_WAITING_SINCE_SQL, STEWARD_SESSION_TEMPLATE, convert_suggestion, message_suggestions, replace_steward_member, save_suggestions, sync_participants
 from .free_room import account_quotas, report_quota
 from .free_room import HOST_WITHDRAW_RESULT, OWNER_INTERRUPT_RESULT, OWNER_REWIND_RESULT, OWNER_STOP_RESULT, observed_host_versions
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
@@ -58,16 +60,17 @@ from .free_room import review_capability, review_roster, checked_review_plan, sa
 from .free_room import review_ready, advance_review, late_answer, execution_changes, execution_changes_batch, execution_diffs
 from .free_room import checked_sequence, continue_sequence, sequence_view
 from .windows_thumbnail import encode_preview
-from . import questions
+from . import cloud_drive, cloud_shares, moss_results, questions
 from .visual_fences import fold_message_visuals
 from .identity import MAX_ROOM_AGENTS, PARTICIPANTS, default_label, default_label_text, is_ai, is_participant
 from .message_queue import drain as drain_queue, enqueue, enqueue_share, queue_action, queue_split, queue_view
 from .room_import import import_room, imported_attachment
 from .object_storage import (OBJECT_MAX_BYTES, ObjectMissing, StorageUnavailable, configured_storage,
-                             object_storage_quota_mib, object_storage_retention_days, object_storage_threshold_mib)
+                             object_storage_quota_mib, object_storage_retention_days, object_storage_threshold_mib,
+                             storage_http_error)
 from .free_room import save_relay_receipt
 from .room_links import list_links
-from .free_room import require_owner_or_host
+from .free_room import insert_request, require_owner_or_host
 from .runtime import (begin_write, limit_values, owner_proxy_token, require_owner, token_hash,
                      enforce_session_limits, room_limits_view, session_limits_view)
 from .goal_room import goal_action, goal_view
@@ -117,6 +120,12 @@ UNSENT_ATTACHMENT_TTL = timedelta(hours=24)
 ATTACHMENT_SWEEP_SECONDS = 6 * 60 * 60
 BYTES_PER_MIB = 1024 * 1024
 ORPHAN_ATTACHMENT_GRACE_SECONDS = 60 * 60
+CLOUD_COPY_CHUNK_BYTES = 1024 * 1024
+CLOUD_COPY_TIMEOUT_SECONDS = 30
+CLOUD_LAND_GRANT_SECONDS = 60
+CLOUD_COPY_WORKERS = 4
+CLOUD_COPY_FAILED_RESULTS = 128
+MAX_CLOUD_SOURCE_REF = 4096
 MAX_MESSAGE_ATTACHMENTS = 10
 MAX_FILENAME_LENGTH = 255
 # A revision check names at most this many rooms; a runner or page asks only for the rooms it follows.
@@ -128,7 +137,8 @@ MACHINE_COMMAND_POLL_SECONDS = 0.5
 DIRECTORY_OPERATIONS = ("move", "folder", "detach")
 # Local entry commands for external members: the owner's invites (room credential) and this computer's invited records.
 INVITE_COMMANDS = ("guest-invite", "room-invite", "room-invites", "room-invite-revoke")
-STEWARD_COMMANDS = ("steward", "steward-settings", "steward-request", "steward-history", "steward-delete")
+STEWARD_COMMANDS = ("steward", "steward-settings", "steward-request", "steward-history", "steward-delete", "steward-duty", "steward-mute", "steward-renew")
+STEWARD_PROACTIVE_TEMPLATE = "steward_proactive"
 STEWARD_MEMBER_LIMIT = Text("平台主理人房间只能有一名成员，不能新增或邀请成员")
 INVITED_COMMANDS = ("invited-list", "invited-join", "invited-trust", "invited-ai", "invited-pause", "invited-approve", "invited-refuse",
                     "invited-lend", "invited-leave", "invited-remove", "invited-room")
@@ -207,7 +217,7 @@ LEGACY_DISCUSSION_SQL = (Path(__file__).resolve().parent / "migrations" / "drop_
 # and fields whose names look like credentials are replaced, so the log never holds a secret.
 API_LOG_TEXT = 2000
 API_LOG_PAYLOAD = 8000
-API_LOG_SECRET = re.compile(r"token|password|secret|api_?key|credential|authorization", re.IGNORECASE)
+API_LOG_SECRET = re.compile(r"token|password|secret|api_?key|credential|authorization|^grant$", re.IGNORECASE)
 # Lease renewals and phase reports arrive every few seconds per execution; the timeline already keeps their content.
 API_LOG_QUIET_ACTIONS = ("renew", "segments")
 # A room's discussion phase: its open discussion's phase, its last discussion's end, or `discussing` before any discussion.
@@ -298,7 +308,10 @@ EXISTS(SELECT 1 FROM proactive_messages p WHERE p.message_id=messages.id) AS pro
 (SELECT f.source_id FROM execution_followups f WHERE f.execution_id=answered.execution_id) AS followup_of,
 EXISTS(SELECT 1 FROM execution_schedules s WHERE s.execution_id=answered.execution_id) AS scheduled,
 sent.target_room_id AS relay_sent_room, sent.host AS relay_sent_host, sent.target_message_id AS relay_sent_message_id,
-sent.state AS relay_sent_state, relay.expect AS relay_expect, relay.reply_to AS relay_reply_to,
+CASE WHEN report.message_id<>messages.id AND report.state IN ('','waiting','waiting_user') AND sent.state='replied'
+     THEN 'delivered' ELSE sent.state END AS relay_sent_state, relay.expect AS relay_expect, relay.reply_to AS relay_reply_to,
+ report.state AS relay_report_state, report.summary AS relay_report_summary, report.result_message_id AS relay_report_message_id,
+ report.review_message_id AS relay_review_message_id,
 sent.queued_id AS relay_sent_queued_id, sent.interrupted AS relay_sent_interrupted,
 (SELECT r.title FROM rooms r WHERE r.id=sent.target_room_id) AS relay_sent_title,
 (SELECT relation FROM room_links WHERE room_id=messages.room_id AND other_room_id=sent.target_room_id) AS relay_sent_relation,
@@ -314,6 +327,8 @@ CASE WHEN relay.message_id IS NOT NULL THEN (SELECT m.name FROM member_requests 
 FROM messages LEFT JOIN message_details AS details ON details.message_id=messages.id
 LEFT JOIN (SELECT message_id,target_room_id,host,target_message_id,queued_id,interrupted,state FROM room_relay_sends) AS sent
     ON sent.message_id=messages.id
+LEFT JOIN moss_delegations AS report ON report.message_id=COALESCE(
+    (SELECT message_id FROM moss_reworks WHERE root_message_id=messages.id ORDER BY message_id DESC LIMIT 1),messages.id)
 LEFT JOIN message_relays AS relay ON relay.message_id=messages.id
 LEFT JOIN message_withdrawals AS withdrawn ON withdrawn.message_id=messages.id
 LEFT JOIN message_summaries AS summaries ON summaries.message_id=messages.id
@@ -398,6 +413,8 @@ def room_read_view(connection, room, token=""):
     free = room.get("free") or {}
     if free.get("questions"):
         free["questions"] = questions.bounded(free["questions"], boundary)
+    if "waits" in free:
+        free["waits"] = [wait for wait in free["waits"] if wait["message_id"] <= boundary]
     for request in free.get("requests", []):
         _hide_after_boundary(request, boundary, ("message_id", "answer_id", "source_message_id", "after_message_id", "layout_after"))
         _hide_question(request, boundary, reader)
@@ -511,13 +528,21 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+class RoomConnection(sqlite3.Connection):
+    """Keep cross-room invalidations until the request's transaction commits."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.moss_updates = set()
+
+
 def connect_db(database):
     """Open a database connection with named rows and foreign keys enabled."""
     # Each request opens its own connection, whose first statement parses the whole schema. Parsed in parallel,
     # those allocations contend on SQLite's global memory mutex: a runner polling ~20 rooms at once burned several
     # CPU cores on Windows. Parsing them one at a time costs a few milliseconds each.
     with CONNECT_LOCK:
-        connection = sqlite3.connect(database, timeout=10)
+        connection = sqlite3.connect(database, timeout=10, factory=RoomConnection)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         # Deleted rows are overwritten with zeros, so a destroyed room leaves no readable remains in free pages.
@@ -612,6 +637,30 @@ def migrate_guest_cancel_reasons(connection):
     connection.execute(trigger)
 
 
+def migrate_room_waits(connection, tables):
+    """Preserve existing waits and enforce one open wait per member before applying the schema."""
+    if "room_waits" not in tables:
+        return
+    begin_write(connection)
+    if "end_reason" in {row[1] for row in connection.execute("PRAGMA table_info(room_waits)")}:
+        return
+    connection.execute("ALTER TABLE room_waits ADD COLUMN end_reason TEXT NOT NULL DEFAULT '' "
+                       "CHECK(end_reason IN ('','user','superseded','withdrawn','member_removed'))")
+    connection.execute("UPDATE room_waits SET end_reason='user' WHERE ended_at>0 AND end_message_id>0")
+    connection.execute("""UPDATE room_waits SET
+        ended_at=(SELECT created_at FROM message_withdrawals WHERE message_id=room_waits.message_id),
+        end_reason='withdrawn' WHERE ended_at=0 AND message_id IN (SELECT message_id FROM message_withdrawals)""")
+    connection.execute("""UPDATE room_waits SET ended_at=MAX(created_at,CAST(strftime('%s','now') AS INTEGER)),end_reason='withdrawn'
+        WHERE ended_at=0 AND message_id IN (SELECT message_id FROM dispatch_withdrawals)""")
+    connection.execute("""UPDATE room_waits SET ended_at=MAX(created_at,CAST(strftime('%s','now') AS INTEGER)),end_reason='member_removed'
+        WHERE ended_at=0 AND member_id IN (SELECT id FROM room_members WHERE status='removed')""")
+    connection.execute("""WITH next_waits AS MATERIALIZED (
+        SELECT id,LEAD(created_at) OVER (PARTITION BY member_id ORDER BY id) AS superseded_at
+        FROM room_waits WHERE ended_at=0
+    ) UPDATE room_waits SET ended_at=next_waits.superseded_at,end_reason='superseded'
+        FROM next_waits WHERE room_waits.id=next_waits.id AND next_waits.superseded_at IS NOT NULL""")
+
+
 def init_database(database, seed=True):
     """Create durable storage; seed only a brand-new database when requested."""
     database = Path(database)
@@ -646,7 +695,16 @@ def init_database(database, seed=True):
                 for column in ("storage", "object_name", "stored_at"):
                     if column not in columns:
                         connection.execute(f"ALTER TABLE attachments ADD COLUMN {column} TEXT")
-            connection.executescript(SCHEMA)
+            if "cloud_files" in tables:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(cloud_files)")}
+                # The transfer deadline index needs these columns before the schema is applied.
+                for name, declaration in (("purpose", "TEXT NOT NULL DEFAULT 'keep'"),
+                                          ("expires_at", "TEXT"), ("source_version", "TEXT"), *cloud_drive.CLOUD_FILE_MIGRATIONS):
+                    if name not in columns:
+                        connection.execute(f"ALTER TABLE cloud_files ADD COLUMN {name} {declaration}")
+            migrate_room_waits(connection, tables)
+            moss_results.migrate_delegations(connection)
+            connection.executescript(SCHEMA + cloud_shares.SCHEMA)
             migrate_guest_cancel_reasons(connection)
             if "redirect_message_id" not in {row[1] for row in connection.execute("PRAGMA table_info(dispatch_withdrawals)")}:
                 connection.execute("ALTER TABLE dispatch_withdrawals ADD COLUMN redirect_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL")
@@ -743,6 +801,7 @@ def require_room(connection, room_id):
     directory = connection.execute("SELECT archived,detached,pinned,system_kind FROM room_directory WHERE room_id=?", (room_id,)).fetchone()
     room["archived"], room["detached"], room["pinned"] = bool(directory[0]), bool(directory[1]), bool(directory[2])
     room["system_kind"] = directory["system_kind"]
+    room["preset"] = "task" if connection.execute("SELECT 1 FROM moss_task_rooms WHERE room_id=?", (room_id,)).fetchone() else ""
     if room["system_kind"] == "steward" and room["archived"]:
         room["archived_at"] = steward_archived_at(connection, room_id)
     room["folder_id"] = connection.execute("SELECT folder_id FROM room_folder_assignments WHERE room_id=?", (room_id,)).fetchone()[0]
@@ -1131,7 +1190,7 @@ def list_rooms(connection, params=None):
     """Return rooms, optionally locating a single persisted creation request."""
     params = params or {}
     identifier = submission_value(params["submission_id"]) if "submission_id" in params else None
-    where = "WHERE EXISTS (SELECT 1 FROM room_creations WHERE room_id=rooms.id AND submission_id=?)" if identifier else ""
+    where = "WHERE EXISTS (SELECT 1 FROM room_creations WHERE room_id=rooms.id AND submission_id=:submission_id)" if identifier else ""
     rows = connection.execute(f"""SELECT rooms.*, ({PARENT_ROOM}) AS parent_room_id,
         COALESCE(stats.message_count,0) AS message_count,COALESCE(stats.latest_id,0) AS latest_id,
         (SELECT created_at FROM messages WHERE id=stats.latest_id) AS latest_at,
@@ -1140,9 +1199,12 @@ def list_rooms(connection, params=None):
             AND NOT EXISTS (SELECT 1 FROM message_withdrawals w WHERE w.message_id=m.id)
             ORDER BY m.id DESC LIMIT 1) AS latest_speech_at,
         EXISTS (SELECT 1 FROM member_executions e WHERE e.room_id=rooms.id
-            AND e.status IN ('dispatched','started') AND e.lease_until>?) AS running
+            AND e.status IN ('dispatched','started') AND e.lease_until>:now) AS running,
+        {ROOM_ATTENTION_SQL} AS attention,
+        CASE WHEN EXISTS(SELECT 1 FROM moss_task_rooms t WHERE t.room_id=rooms.id) THEN 'task' ELSE '' END AS preset,
+        {ROOM_WAITING_SINCE_SQL} AS waiting_user_since
         FROM rooms LEFT JOIN room_message_stats stats ON stats.room_id=rooms.id {where}
-        GROUP BY rooms.id ORDER BY rooms.created_at, rooms.id""", (int(time.time()), *((identifier,) if identifier else ())))
+        GROUP BY rooms.id ORDER BY rooms.created_at, rooms.id""", {"now": int(time.time()), "submission_id": identifier})
     directory = {row["room_id"]: dict(row) for row in connection.execute("SELECT * FROM room_directory")}
     assignments = {row["room_id"]: row["folder_id"] for row in connection.execute("SELECT room_id,folder_id FROM room_folder_assignments")}
     # Only the public part of a share link, expired ones too (the share site keeps them renewable until the operator
@@ -1151,6 +1213,7 @@ def list_rooms(connection, params=None):
         "SELECT room_id,url,expires_at FROM room_share_links")}
     rooms = [{**dict(row), "archived": bool(directory[row["id"]]["archived"]), "detached": bool(directory[row["id"]]["detached"]),
               "pinned": bool(directory[row["id"]]["pinned"]), "running": bool(row["running"]),
+              "attention": "" if directory[row["id"]]["archived"] else row["attention"] or ("running" if row["running"] else ""),
               "system_kind": directory[row["id"]]["system_kind"],
               "destroy_after_days": directory[row["id"]]["destroy_after_days"], "destroy_from": destroy_from(connection, dict(row), directory[row["id"]]) if directory[row["id"]]["destroy_after_days"] else None,
               "destroy_blocked": destroy_blocked(connection, row["id"]) if directory[row["id"]]["destroy_after_days"] else False,
@@ -2190,12 +2253,21 @@ def require_no_active_steward(connection):
         raise error
 
 
-def is_active_steward_member(connection, token):
-    """Recognize the current steward's member credential without granting it owner rights."""
+def steward_member(connection, token):
+    """Recognize a MOSS credential, including a revoked one so it cannot go through the owner proxy."""
     hashed = token_hash(token)
-    return bool(hashed and connection.execute("""SELECT 1 FROM room_members m
+    if not hashed:
+        return None
+    return connection.execute("""SELECT m.room_id,m.name,(d.archived=0 AND m.status='active' AND m.role='host') AS active
+        FROM room_members m
         JOIN room_directory d ON d.room_id=m.room_id
-        WHERE d.system_kind='steward' AND d.archived=0 AND m.status='active' AND m.token_hash=?""", (hashed,)).fetchone())
+        WHERE d.system_kind='steward' AND m.token_hash=? ORDER BY active DESC LIMIT 1""", (hashed,)).fetchone()
+
+
+def is_active_steward_member(connection, token):
+    """Recognize the current MOSS credential without granting it owner rights."""
+    member = steward_member(connection, token)
+    return bool(member and member["active"])
 
 
 def create_room(connection, payload, control_token=""):
@@ -2208,6 +2280,10 @@ def create_room(connection, payload, control_token=""):
     members = member_values(payload.get("members"))
     if system_kind == "steward" and len(members) != 1:
         raise ValueError(STEWARD_MEMBER_LIMIT)
+    preset = payload.get("preset", "")
+    if preset not in ("", "task") or preset and (system_kind or len(members) != 1 or members[0]["access"] != "runner"
+                                                   or members[0]["session_mode"] != "new"):
+        raise ValueError(Text("任务房间必须是只有一位新会话托管成员的普通房间"))
     payload = {**payload, "experts": {member["name"]: "cli" for member in members}}
     settings = topic_values(payload)
     limits = limit_values(payload["limits"]) if "limits" in payload else None
@@ -2227,6 +2303,8 @@ def create_room(connection, payload, control_token=""):
         request_text += ":folder:" + json.dumps(folder_id, ensure_ascii=False)
     if system_kind:
         request_text += ":system_kind:" + system_kind
+    if preset:
+        request_text += ":preset:" + preset
     begin_write(connection)
     if identifier:
         previous = connection.execute("SELECT * FROM room_creations WHERE submission_id=?", (identifier,)).fetchone()
@@ -2242,6 +2320,8 @@ def create_room(connection, payload, control_token=""):
     connection.execute("INSERT INTO rooms (id,title,goal,created_at) VALUES (?,?,?,?)", (room_id, settings["title"], settings["goal"], utc_now()))
     if system_kind:
         connection.execute("UPDATE room_directory SET system_kind=?,position=0 WHERE room_id=?", (system_kind, room_id))
+    if preset:
+        connection.execute("INSERT INTO moss_task_rooms(room_id) VALUES(?)", (room_id,))
     connection.execute("UPDATE room_folder_assignments SET folder_id=? WHERE room_id=?", (folder_id, room_id))
     if identifier:
         connection.execute("INSERT INTO room_creations (submission_id,room_id,request_text) VALUES (?,?,?)", (identifier, room_id, request_text))
@@ -2588,6 +2668,9 @@ def message_with_attachments(connection, row):
         # The owner retracted it before anyone handled it: only the page that retracted it keeps the text.
         return {**message, "text": "", "summary": "", "suggestions": [], "attachments": []}
     message["texts"] = load_texts(connection, "message", message["id"])
+    template = message["texts"].get("trigger", {}).get("template")
+    if template in (STEWARD_PROACTIVE_TEMPLATE, STEWARD_SESSION_TEMPLATE):
+        message["texts"]["template"] = template
     message["suggestions"] = message_suggestions(connection, message["id"])
     files = with_image_sizes(connection, connection.execute("SELECT * FROM attachments WHERE message_id=? ORDER BY position,id",
                                                             (message["id"],)))
@@ -2783,7 +2866,17 @@ LIVE_CLOUD_ATTACHMENTS = "storage='object' AND object_name IS NOT NULL AND clear
 
 def object_storage_used_bytes(connection):
     """Count all live objects and upload reservations in this account's database."""
-    return connection.execute(f"SELECT COALESCE(SUM(size),0) FROM attachments WHERE {LIVE_CLOUD_ATTACHMENTS}").fetchone()[0]
+    return connection.execute(f"""SELECT
+        (SELECT COALESCE(SUM(size),0) FROM attachments WHERE {LIVE_CLOUD_ATTACHMENTS}) +
+        (SELECT COALESCE(SUM(size),0) FROM cloud_files WHERE cleared_at IS NULL)""").fetchone()[0]
+
+
+def require_cloud_quota(connection, database, size):
+    """Check the account budget under the caller's reservation transaction."""
+    used, quota = object_storage_used_bytes(connection), object_storage_quota_mib(database)
+    if used + size > quota * BYTES_PER_MIB:
+        raise FileExistsError(Text("云空间已用 {used} MiB，上限 {quota} MiB。可以清空回收站后重试。",
+                                   used=f"{used / BYTES_PER_MIB:.2f}", quota=quota))
 
 
 def object_storage_limits(connection, database, attachment_limit):
@@ -2810,18 +2903,190 @@ def reserve_object_attachment(connection, database, room_id, metadata):
     threshold = object_storage_threshold_mib(database, attachment_limit_mib(database))
     if metadata["size"] <= threshold * BYTES_PER_MIB:
         raise ValueError(Text("仅超过 {limit} MiB 的附件使用对象存储", limit=threshold))
-    used, quota = object_storage_used_bytes(connection), object_storage_quota_mib(database)
-    if used + metadata["size"] > quota * BYTES_PER_MIB:
-        raise FileExistsError(Text("云空间已用 {used} MiB，上限 {quota} MiB。请清理云空间后重试。",
-                                   used=f"{used / BYTES_PER_MIB:.2f}", quota=quota))
+    require_cloud_quota(connection, database, metadata["size"])
     identifier = uuid.uuid4().hex
-    safe_name = re.sub(r"[^\w.\-]", "_", metadata["file_name"], flags=re.ASCII)
     record = {**metadata, "id": identifier, "room_id": room_id, "storage": "object",
-              "object_name": f"codiscuss/{room_id}/{identifier}/{safe_name}", "stored_at": None, "created_at": utc_now()}
+              "object_name": cloud_drive.object_key(f"codiscuss/{room_id}/{identifier}/", metadata["file_name"]), "stored_at": None, "created_at": utc_now()}
     connection.execute("""INSERT INTO attachments
         (id,room_id,file_name,actor,submission_id,size,sha256,content_type,created_at,storage,object_name)
         VALUES (:id,:room_id,:file_name,:actor,:submission_id,:size,'',:content_type,:created_at,:storage,:object_name)""", record)
     return dict(connection.execute("SELECT * FROM attachments WHERE id=?", (identifier,)).fetchone())
+
+
+def cloud_file_metadata(payload):
+    """Validate project provenance as display text, never as a path to open."""
+    source_kind, source_ref = payload.get("source_kind"), payload.get("source_ref")
+    purpose, source_version = payload.get("purpose", "keep"), payload.get("source_version")
+    if (purpose not in ("keep", "inbound", "outbound") or source_version is not None
+            and (not isinstance(source_version, str) or not source_version.strip() or len(source_version) > MAX_CLOUD_SOURCE_REF
+                 or re.search(r"[\x00-\x1f\x7f]", source_version))):
+        raise ValueError(Text("云空间文件来源无效"))
+    if (source_kind not in ("project_file", "project_folder") or not isinstance(source_ref, str)
+            or not source_ref.strip() or len(source_ref) > MAX_CLOUD_SOURCE_REF
+            or re.search(r"[\x00-\x1f\x7f]", source_ref)):
+        raise ValueError(Text("云空间文件来源无效"))
+    metadata = object_upload_metadata(payload, "用户")
+    if metadata["submission_id"].startswith(("cloud-copy-", "expired-outbound-")):
+        raise ValueError(Text("云空间文件来源无效"))
+    return {**metadata, "source_kind": source_kind, "source_ref": source_ref,
+            "purpose": purpose, "source_version": source_version}
+
+
+def get_cloud_file(connection, identifier, room_id=None):
+    """Fetch a cloud file with a room constraint when one was specified."""
+    if room_id is None:
+        row = connection.execute("SELECT * FROM cloud_files WHERE id=?", (identifier,)).fetchone()
+    else:
+        row = connection.execute("SELECT * FROM cloud_files WHERE room_id=? AND id=?", (room_id, identifier)).fetchone()
+    if row is None:
+        raise LookupError(Text("附件不存在"))
+    return row
+
+
+def cloud_file_view(connection, row):
+    """Expose provenance and download entry points without revealing the signed object path."""
+    result = dict(row)
+    result.pop("object_name")
+    result["kind"] = "cloud_file"
+    result["stored"] = result["stored_at"] is not None
+    if result.get("thumbnail_type") and not result.get("trashed_at"):
+        result["thumbnail_url"] = f"{cloud_drive.PREFIX}/{result['id']}/thumbnail"
+    identifier, room_id = result["id"], result["room_id"]
+    base = (f"/api/rooms/{room_id}/cloud-files/{identifier}" if room_id is not None
+            else f"/api/rooms/cloud-attachments/{identifier}")
+    result.update(url=base + "/content", download_url=base + "/content?download=1")
+    result["message_id"] = None
+    if room_id is not None and result["source_kind"] == "attachment":
+        source = connection.execute("SELECT message_id FROM attachments WHERE room_id=? AND id=?",
+                                    (room_id, result["source_ref"])).fetchone()
+        if source:
+            result["message_id"] = source["message_id"]
+    return result
+
+
+def reserve_cloud_file(connection, database, room_id, metadata):
+    """Use the same account quota and write lock as ordinary object attachments."""
+    begin_write(connection)
+    metadata = {"purpose": "keep", "source_version": None, "folder_id": None, **metadata}
+    previous = connection.execute("""SELECT * FROM cloud_files WHERE room_id IS ? AND submission_id=?
+        AND (room_id IS NOT NULL OR source_kind='upload')""", (room_id, metadata["submission_id"])).fetchone()
+    if previous is not None:
+        # A relocation or rename of a direct upload does not change its original submission.
+        mutable = {"folder_id"}
+        if metadata["source_kind"] == "upload" or previous["stored_at"] and previous["purpose"] == "keep":
+            mutable.add("file_name")
+        if any(previous[key] != value for key, value in metadata.items() if key not in mutable):
+            raise FileExistsError(Text("这个附件提交编号已被其他文件使用"))
+        cleared = previous["cleared_at"] is not None
+        expired_download = (metadata["purpose"] == "outbound" and
+                            (cleared or previous["expires_at"] is not None and previous["expires_at"] <= utc_now()))
+        if not expired_download and not (cleared and metadata["source_kind"] == "attachment"):
+            if cleared:
+                raise FileExistsError(Text("这个附件提交编号已被其他文件使用"))
+            cloud_drive.require_available(previous)
+            require_cloud_file_fresh(previous)
+            return previous
+    require_cloud_quota(connection, database, metadata["size"])
+    if previous is not None:
+        if previous["cleared_at"]:
+            connection.execute("DELETE FROM cloud_files WHERE id=?", (previous["id"],))
+        else:
+            # Keep the expired object's quota until the remote deletion is confirmed by the sweep.
+            connection.execute("UPDATE cloud_files SET submission_id=? WHERE id=?",
+                               (f"expired-outbound-{previous['id']}", previous["id"]))
+    identifier = uuid.uuid4().hex
+    created = datetime.now(timezone.utc)
+    expires_at = (created + UNSENT_ATTACHMENT_TTL).isoformat(timespec="seconds") if metadata["purpose"] != "keep" else None
+    record = {**metadata, "id": identifier, "room_id": room_id, "created_at": created.isoformat(timespec="seconds"),
+              "expires_at": expires_at, "object_name": cloud_drive.object_key(f"codiscuss/cloud/{identifier}/", metadata["file_name"])}
+    connection.execute("""INSERT INTO cloud_files
+        (id,room_id,source_kind,source_ref,file_name,content_type,size,object_name,submission_id,actor,created_at,
+         purpose,expires_at,source_version,folder_id)
+        VALUES (:id,:room_id,:source_kind,:source_ref,:file_name,:content_type,:size,:object_name,:submission_id,:actor,:created_at,
+                :purpose,:expires_at,:source_version,:folder_id)""", record)
+    return get_cloud_file(connection, identifier, room_id)
+
+
+def verify_object_size(client, record):
+    """Check the remote size rather than trusting the caller's completion signal."""
+    try:
+        size = client.file_size(record["object_name"])
+    except ObjectMissing:
+        raise FileExistsError(Text("对象存储尚未收到文件")) from None
+    if size != record["size"]:
+        raise FileExistsError(Text("对象存储中的文件大小与上传声明不一致"))
+
+
+def require_cloud_file_fresh(record):
+    """Do not issue new upload or download credentials once a transfer's deadline has passed."""
+    if record["expires_at"] is not None and record["expires_at"] <= utc_now():
+        raise AdminError(Text("文件已不在对象存储中"), 410)
+
+
+def finish_cloud_file(connection, client, record):
+    """Verify a cloud copy, then mark it stored if its reservation still exists."""
+    if record["cleared_at"]:
+        raise AdminError(Text("文件已不在对象存储中"), 410)
+    cloud_drive.require_available(record)
+    require_cloud_file_fresh(record)
+    if record["stored_at"]:
+        return record
+    if not client:
+        raise StorageUnavailable()
+    verify_object_size(client, record)
+    with connection:
+        identifier = record["id"]
+        now = utc_now()
+        connection.execute("""UPDATE cloud_files SET stored_at=? WHERE id=? AND cleared_at IS NULL AND stored_at IS NULL
+            AND trashed_at IS NULL AND (expires_at IS NULL OR expires_at>?)""", (now, identifier, now))
+        result = get_cloud_file(connection, identifier)
+        if result["cleared_at"]:
+            raise AdminError(Text("文件已不在对象存储中"), 410)
+        cloud_drive.require_available(result)
+        require_cloud_file_fresh(result)
+        return result
+
+
+def stream_cloud_copy(source, record, upload, progress):
+    """Post signed fields, then stream an exact number of original bytes as the last form part."""
+    target = urlsplit(upload["url"])
+    if target.scheme != "https" or not target.hostname or target.username is not None or target.fragment:
+        raise StorageUnavailable()
+    boundary = uuid.uuid4().hex
+    fields = upload["fields"]
+    prefix = bytearray()
+    for name, value in fields.items():
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or not isinstance(value, str):
+            raise StorageUnavailable()
+        prefix.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode("utf-8"))
+    prefix.extend((f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="file"\r\n'
+                   f'Content-Type: {record["content_type"]}\r\n\r\n').encode("ascii"))
+    suffix = f"\r\n--{boundary}--\r\n".encode("ascii")
+
+    def parts():
+        yield bytes(prefix)
+        remaining = record["size"]
+        while remaining:
+            chunk = source.read(min(CLOUD_COPY_CHUNK_BYTES, remaining))
+            if not chunk:
+                raise StorageUnavailable()
+            remaining -= len(chunk)
+            yield chunk
+            progress("uploading", 0.95 * (1 - remaining / record["size"]))
+        yield suffix
+
+    path = (target.path or "/") + ("?" + target.query if target.query else "")
+    try:
+        with closing(HTTPSConnection(target.hostname, target.port, timeout=CLOUD_COPY_TIMEOUT_SECONDS)) as connection:
+            connection.request("POST", path, parts(), {
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Content-Length": str(len(prefix) + record["size"] + len(suffix)),
+            })
+            with connection.getresponse() as response:
+                if not 200 <= response.status < 300:
+                    raise StorageUnavailable()
+    except (HTTPException, OSError, ValueError):
+        raise StorageUnavailable() from None
 
 
 def get_object_attachment(connection, room_id, identifier):
@@ -2833,9 +3098,49 @@ def get_object_attachment(connection, room_id, identifier):
     return row
 
 
+def cloud_land_target(payload):
+    """Validate a cross-room request's immutable permit binding."""
+    room, source, attachment, cloud_file = (payload.get(key) for key in ("room", "attachment_room", "attachment_id", "cloud_file_id"))
+    if not isinstance(room, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", room):
+        raise ValueError(Text("房间编号无效"))
+    if cloud_file is not None:
+        if source is not None or attachment is not None:
+            raise ValueError(Text("附件编号无效"))
+        identifier = cloud_file
+    else:
+        if not isinstance(source, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", source) or room == source:
+            raise ValueError(Text("房间编号无效"))
+        identifier = attachment
+    if not isinstance(identifier, str) or not re.fullmatch(r"[0-9a-f]{32}", identifier):
+        raise ValueError(Text("附件编号无效"))
+    return room, source, identifier
+
+
+def cloud_land_source(connection, target):
+    """Locate an available cloud file or a sent cloud attachment in this account."""
+    _, source, identifier = target
+    row = (get_cloud_file(connection, identifier) if source is None
+           else get_object_attachment(connection, source, identifier))
+    if (source is not None and not row["message_id"]) or not row["stored_at"] or not row["object_name"] or row["cleared_at"]:
+        raise LookupError(Text("附件不存在"))
+    if source is None:
+        cloud_drive.require_available(row)
+        if row["purpose"] != "keep":
+            raise LookupError(Text("附件不存在"))
+    return row
+
+
 def object_download_result(connection, database, attachment):
     """Sign a stored object only after its attachment has passed room read permissions."""
     row = get_object_attachment(connection, attachment["room_id"], attachment["id"])
+    return stored_object_download(database, row)
+
+
+def stored_object_download(database, row):
+    """Sign a stored object from either table using the configured cloud client."""
+    cloud_drive.require_available(row)
+    if "expires_at" in row.keys():
+        require_cloud_file_fresh(row)
     if not row["object_name"] or row["cleared_at"]:
         raise AdminError(Text("文件已不在对象存储中"), 410)
     if row["stored_at"] is None:
@@ -2847,8 +3152,8 @@ def object_download_result(connection, database, attachment):
         link = client.download(row["object_name"])
     except ObjectMissing:
         raise AdminError(Text("文件已不在对象存储中"), 410) from None
-    except StorageUnavailable:
-        raise AdminError(Text("对象存储暂不可用"), 503) from None
+    except StorageUnavailable as error:
+        raise storage_http_error(error) from None
     return {**link, "size": row["size"], "file_name": row["file_name"]}
 
 
@@ -2872,13 +3177,13 @@ def record_object_attachment_delete_failure(connection, row):
         (row["room_id"], int(time.time() * 1000), json.dumps({"attachment_id": row["id"]}), row["room_id"]))
 
 
-def delete_remote_attachment(database, row, client, *, connection=None):
+def delete_remote_attachment(database, row, client, *, connection=None, raise_failure=False):
     """Delete one COS file and log failure without recording credential details."""
     try:
         if not client:
             raise StorageUnavailable()
         client.delete(row["object_name"])
-    except StorageUnavailable:
+    except StorageUnavailable as error:
         logging.warning("Object attachment cleanup failed: room=%s attachment=%s", row["room_id"], row["id"])
         try:
             if connection is not None:
@@ -2888,6 +3193,8 @@ def delete_remote_attachment(database, row, client, *, connection=None):
                     record_object_attachment_delete_failure(events, row)
         except sqlite3.Error:
             logging.warning("Could not record object attachment cleanup failure")
+        if raise_failure:
+            raise storage_http_error(error) from None
         return False
     return True
 
@@ -2952,7 +3259,8 @@ def sweep_object_attachments(connection, database, expired_drafts):
     client = configured_storage(database)
     # The draft sweep already tried these objects. Retry failures on the next sweep.
     removed = [row for row in rows if row["id"] not in expired_drafts and delete_remote_attachment(database, row, client)]
-    return {row["room_id"] for row in mark_cleared_object_attachments(connection, removed)}
+    with connection:
+        return {row["room_id"] for row in mark_cleared_object_attachments(connection, removed)}
 
 
 def mark_cleared_object_attachments(connection, rows):
@@ -2960,18 +3268,50 @@ def mark_cleared_object_attachments(connection, rows):
     if not rows:
         return []
     cleared = []
-    with connection:
-        begin_write(connection)
-        now = utc_iso_now()
-        for row in rows:
-            changed = connection.execute("UPDATE attachments SET cleared_at=? WHERE id=? AND cleared_at IS NULL",
-                                         (now, row["id"]))
-            if changed.rowcount:
-                cleared.append(row)
-        for room_id in {row["room_id"] for row in cleared}:
-            connection.execute("UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=?",
-                               (room_id,))
+    begin_write(connection)
+    now = utc_iso_now()
+    for row in rows:
+        changed = connection.execute("UPDATE attachments SET cleared_at=? WHERE id=? AND cleared_at IS NULL",
+                                     (now, row["id"]))
+        if changed.rowcount:
+            cleared.append(row)
+    for room_id in {row["room_id"] for row in cleared}:
+        connection.execute("UPDATE room_revisions SET revision=(SELECT MAX(revision)+1 FROM room_revisions) WHERE room_id=?",
+                           (room_id,))
     return cleared
+
+
+def sweep_cloud_file_drafts(connection, database):
+    """Delete abandoned cloud-file uploads on confirmed removal, retaining failures for retry."""
+    cutoff = (datetime.now(timezone.utc) - UNSENT_ATTACHMENT_TTL).isoformat()
+    candidates = connection.execute("""SELECT id FROM cloud_files
+        WHERE purpose='keep' AND stored_at IS NULL AND cleared_at IS NULL AND trashed_at IS NULL AND created_at<?""", (cutoff,)).fetchall()
+    if not candidates:
+        return
+    client = configured_storage(database)
+    for candidate in candidates:
+        with connection:
+            begin_write(connection)
+            row = connection.execute("""SELECT * FROM cloud_files
+                WHERE id=? AND purpose='keep' AND stored_at IS NULL AND cleared_at IS NULL AND trashed_at IS NULL AND created_at<?""",
+                (candidate["id"], cutoff)).fetchone()
+            if row and delete_remote_attachment(database, row, client, connection=connection):
+                connection.execute("DELETE FROM cloud_files WHERE id=?", (row["id"],))
+
+
+def sweep_cloud_transfers(connection, database):
+    """Expire temporary objects only after confirming remote deletion."""
+    now = utc_now()
+    due = "purpose != 'keep' AND cleared_at IS NULL AND expires_at<=?"
+    candidates = connection.execute(f"SELECT id,room_id,object_name FROM cloud_files WHERE {due}", (now,)).fetchall()
+    if not candidates:
+        return
+    client = configured_storage(database)
+    for row in candidates:
+        # Expired reservations cannot be reissued or completed. No writer lock is needed during remote deletion.
+        if delete_remote_attachment(database, row, client):
+            with connection:
+                connection.execute(f"UPDATE cloud_files SET cleared_at=? WHERE id=? AND {due}", (utc_now(), row["id"], now))
 
 
 def sweep_attachments(database, *, expire_objects=True):
@@ -2991,6 +3331,9 @@ def sweep_attachments(database, *, expire_objects=True):
                 connection.executemany("DELETE FROM attachments WHERE id=? AND message_id IS NULL", ((key,) for key in expired))
             sweep_unsent_object_attachments(connection, database, cloud_drafts)
             if expire_objects:
+                sweep_cloud_file_drafts(connection, database)
+                sweep_cloud_transfers(connection, database)
+                cloud_drive.sweep_trash(connection, database)
                 rooms_changed = sweep_object_attachments(connection, database, cloud_drafts)
             root = attachment_path(database, {"id": ""})
             if not root.exists() or root.resolve() != root:
@@ -2999,6 +3342,8 @@ def sweep_attachments(database, *, expire_objects=True):
             with connection:
                 begin_write(connection)
                 registered = {os.path.normcase(row[0]) for row in connection.execute("SELECT id FROM attachments")}
+                registered.update("cloud-" + row[0] for row in connection.execute(
+                    "SELECT id FROM cloud_files WHERE thumbnail_type IS NOT NULL AND cleared_at IS NULL"))
                 cutoff = time.time() - ORPHAN_ATTACHMENT_GRACE_SECONDS
                 for path in root.iterdir():
                     # A thumbnail goes with its original.
@@ -3120,8 +3465,35 @@ def check_captured_reply(payload):
         raise ValueError(Text('自动收录的回答只能关联本次执行 execution_id，不能派活、续跑、引用或带附件'))
 
 
+def awaiting_user_flag(payload, actor):
+    """Validate the flag before writing, leaving normal execution/proactive checks in place."""
+    awaiting_user = payload.get("awaiting_user", False)
+    if type(awaiting_user) is not bool:
+        raise ValueError(Text("awaiting_user 须为布尔值"))
+    if awaiting_user and (actor == "用户" or payload.get("kind") not in (None, "chat")
+                          or (type(payload.get("execution_id")) is not int and payload.get("proactive") is not True)):
+        raise ValueError(Text("awaiting_user 只能用于绑定执行的回答或主动发言"))
+    return awaiting_user
+
+
+def update_room_waits(connection, room_id, message_id, actor, payload):
+    """Close any replaced wait and store the optional new wait at the message timestamp."""
+    message_time = connection.execute("SELECT CAST(strftime('%s',created_at) AS INTEGER) FROM messages WHERE id=?", (message_id,)).fetchone()[0]
+    if actor == "用户":
+        if not payload.get("relay"):
+            connection.execute("""UPDATE room_waits SET ended_at=?,end_message_id=?,end_reason='user'
+                WHERE room_id=? AND ended_at=0""", (message_time, message_id, room_id))
+        return
+    connection.execute("""UPDATE room_waits SET ended_at=?,end_reason='superseded'
+        WHERE member_id=? AND ended_at=0""", (message_time, actor["id"]))
+    if payload.get("awaiting_user"):
+        connection.execute("INSERT INTO room_waits(room_id,message_id,member_id,created_at) VALUES (?,?,?,?)",
+                           (room_id, message_id, actor["id"], message_time))
+
+
 def append_free_message(connection, room, payload, actor):
     """Append a free-room message: the owner's creates requests, a member's completes its execution."""
+    awaiting_user = awaiting_user_flag(payload, actor)
     if payload.get("kind") == "moderation":
         if any(payload.get(field) for field in ("next_review", "review_scope", "review_roster", "sequential", "loop", "parallel", "gates", "detach", "need_rounds", "keep_working")):
             raise ValueError(Text('主持说明不能声明评审授权、依次接力或申请轮数；请在派活时提交'))
@@ -3153,7 +3525,8 @@ def append_free_message(connection, room, payload, actor):
         previous = message_with_attachments(connection, previous)
         if ((previous.get("relay_room") or None) != (payload.get("relay") or {}).get("room_id")
                 or any(previous[key] != renumbered_expected(expected, payload, previous)[key] for key in ("author", "text", "reply_to", "kind", "submitted_by", "summary", "summary_by"))
-                or [item["id"] for item in previous["attachments"]] != identifiers):
+                or [item["id"] for item in previous["attachments"]] != identifiers
+                or awaiting_user != bool(connection.execute("SELECT 1 FROM room_waits WHERE message_id=?", (previous["id"],)).fetchone())):
             raise FileExistsError(Text('这个提交编号已被另一条内容使用，请为新发言生成新编号'))
         check_review_retry(connection, room_id, previous["id"], payload)
         return {"message": previous, "duplicate": True}
@@ -3188,6 +3561,7 @@ def append_free_message(connection, room, payload, actor):
     if expected["source"] != "auto":
         save_suggestions(connection, room_id, cursor.lastrowid, actor, payload)
     save_review_plan(connection, room_id, cursor.lastrowid, review_plan)
+    update_room_waits(connection, room_id, cursor.lastrowid, actor, payload)
     if actor != "用户" and payload.get("proactive") is True:
         # Spoken on its own: it completes no request; only the host's may dispatch.
         after_proactive(connection, room_id, cursor.lastrowid, actor, payload)
@@ -3313,7 +3687,37 @@ def append_message(connection, room_id, payload, actor):
     message_values(payload)
     begin_write(connection)
     room = require_room(connection, room_id)
+    if payload.get("steward_proactive") is True:
+        if "awaiting_user" in payload:
+            raise ValueError(Text("awaiting_user 只能用于绑定执行的回答或主动发言"))
+        return append_steward_trigger(connection, room, payload, actor)
     return append_room_message(connection, room, payload, actor)
+
+
+def append_steward_trigger(connection, room, payload, actor):
+    """Write a narrator message and its single task, only for the idle MOSS room's owner."""
+    if actor != "用户" or room["system_kind"] != "steward" or room["archived"]:
+        raise PermissionError(Text("需要本房间的控制凭据"))
+    room_id, submission = room["id"], payload["submission_id"]
+    old = connection.execute(f"{MESSAGE_QUERY} WHERE room_id=? AND submission_id=?", (room_id, room_id, submission)).fetchone()
+    if old:
+        message = message_with_attachments(connection, old)
+        events = message["texts"].get("text", {}).get("params", {}).get("events", message["text"])
+        if message["texts"].get("template") != STEWARD_PROACTIVE_TEMPLATE or events != payload["text"]:
+            raise FileExistsError(Text('这个提交编号已被另一条内容使用，请为新发言生成新编号'))
+        return {"message": message, "duplicate": True}
+    host = connection.execute("SELECT id FROM room_members WHERE room_id=? AND role='host' AND status='active'", (room_id,)).fetchone()
+    if not host or connection.execute("SELECT 1 FROM member_requests WHERE member_id=? AND status IN ('pending','delivering')", (host["id"],)).fetchone() or connection.execute(
+            "SELECT 1 FROM member_executions WHERE member_id=? AND status IN ('dispatched','started')", (host["id"],)).fetchone():
+        return {"busy": True, "duplicate": True}
+    display = Text("主动汇报触发：{events}", events=payload["text"])
+    message_id = connection.execute("INSERT INTO messages(room_id,author,text,source,submission_id,created_at) VALUES(?, '系统',?,'system',?,?)",
+                                     (room_id, str(display), submission, utc_now())).lastrowid
+    connection.execute("INSERT INTO message_details(message_id,kind,submitted_by) VALUES(?,'notice','系统')", (message_id,))
+    save_text(connection, "message", message_id, "trigger", Text(STEWARD_PROACTIVE_TEMPLATE))
+    save_text(connection, "message", message_id, "text", display)
+    insert_request(connection, room_id, host["id"], message_id, message_id, "notice", "system")
+    return {"message": get_message(connection, room_id, message_id), "duplicate": False}
 
 
 def post_host_relay(connection, host, target, payload, execution_id):
@@ -3325,7 +3729,14 @@ def post_host_relay(connection, host, target, payload, execution_id):
     payload["text"] = message_values(payload)[1]
     begin_write(connection)
     room = require_room(connection, target)
-    begin_write(connection)
+    source = connection.execute("SELECT system_kind FROM room_directory WHERE room_id=?", (room_id,)).fetchone()
+    if source["system_kind"] == "steward":
+        if room["system_kind"] or payload.get("interrupt") is True:
+            raise PermissionError(Text("MOSS 只能给项目房间的主持人留言，不能打断执行"))
+        if not any(member["role"] == "host" for member in active_members(connection, target).values()):
+            raise FileExistsError(Text("目标房间没有在场的主持人"))
+    if delegation := moss_results.delegation_for_reply(connection, target, room_id, incoming.get("reply_to")):
+        return post_moss_report(connection, host, payload, execution_id, delegation)
     request = connection.execute("""SELECT r.id,r.answer_id,m.submission_id,m.text,s.target_message_id,s.queued_id,s.interrupted FROM member_requests r
         JOIN message_relays relay ON relay.message_id=r.message_id
         LEFT JOIN messages m ON m.id=r.answer_id LEFT JOIN room_relay_sends s ON s.message_id=r.answer_id
@@ -3333,10 +3744,9 @@ def post_host_relay(connection, host, target, payload, execution_id):
           AND relay.source_room_id=? AND relay.expect='reply'""",
         (room_id, host["id"], execution_id, incoming.get("reply_to"), target)).fetchone()
     if not request:
-        return append_room_message(connection, room, payload, "用户")
+        return send_new_host_relay(connection, host, room, payload, execution_id)
     # Use the CLI's existing receipt key so a retry produces the same card.
-    signature = json.dumps([target, payload["submission_id"]], separators=(",", ":"), ensure_ascii=False)
-    key = "sent-" + hashlib.sha256(signature.encode()).hexdigest()
+    key = relay_submission_key(target, payload["submission_id"])
     answer = {"execution_id": execution_id, "text": payload["text"]}
     if request["answer_id"]:
         if request["submission_id"] != key:
@@ -3364,6 +3774,58 @@ def post_host_relay(connection, host, target, payload, execution_id):
     return {**result, "answer_id": receipt["message_id"]}
 
 
+def relay_submission_key(target, submission):
+    """Use the runner's sender-receipt key, including when the server writes the receipt first."""
+    signature = json.dumps([target, submission], separators=(",", ":"), ensure_ascii=False)
+    return "sent-" + hashlib.sha256(signature.encode()).hexdigest()
+
+
+def send_new_host_relay(connection, host, room, payload, execution_id):
+    """Track new MOSS delegations and their decision relays without altering ordinary room messages."""
+    source, target = host["room_id"], room["id"]
+    expects_reply = payload["relay"].get("expect", "reply") == "reply"
+    if expects_reply and moss_results.is_child_delegation(connection, source, target):
+        return send_moss_delegation(connection, host, room, payload, execution_id)
+    result = append_room_message(connection, room, payload, "用户")
+    if expects_reply and moss_results.is_child_delegation(connection, target, source):
+        moss_results.register_decision(connection, host, target, payload["submission_id"], execution_id)
+    return result
+
+
+def send_moss_delegation(connection, host, room, payload, execution_id):
+    """Bind the target delivery and its sender card in the same write, even if the runner loses the reply."""
+    target, submission, incoming = room["id"], payload["submission_id"], payload["relay"]
+    result = append_room_message(connection, room, payload, "用户")
+    receipt = save_relay_receipt(connection, host["room_id"], dict(target_room_id=target, host=incoming["host"],
+        member=host["name"], text=payload["text"], submission_id=relay_submission_key(target, submission),
+        target_submission_id=submission, target_message_id=(result.get("message") or {}).get("id"), queued_id=result.get("queued")))
+    if connection.execute("INSERT OR IGNORE INTO moss_delegations(message_id) VALUES(?)", (receipt["message_id"],)).rowcount:
+        moss_results.register_rework(connection, receipt["message_id"], host["id"], target, execution_id)
+    return result
+
+
+def post_moss_report(connection, host, payload, execution_id, delegation):
+    """Treat an explicit child reply as a bound child answer, not a second owner message in MOSS."""
+    child = delegation["child"]
+    key = relay_submission_key(delegation["parent"], payload["submission_id"])
+    answer = {"execution_id": execution_id, "text": payload["text"], "reply_to": delegation["root"],
+              "author": host["name"], "submission_id": key, "kind": "chat"}
+    previous = connection.execute("SELECT 1 FROM messages WHERE room_id=? AND submission_id=?", (child, key)).fetchone()
+    if not previous:
+        if delegation["state"] in moss_results.TERMINAL_STATES:
+            raise FileExistsError(Text("这个请求已回答"))
+        if not connection.execute("""SELECT 1 FROM member_requests WHERE room_id=? AND member_id=? AND execution_id=?
+            AND chain_id=? AND status='delivering'""", (child, host["id"], execution_id, delegation["root"])).fetchone():
+            raise FileExistsError(Text("原执行没有关联的请求"))
+        check_answer(connection, child, host, answer)
+        connection.execute("""UPDATE member_requests SET status='pending',execution_id=NULL
+            WHERE execution_id=? AND status='delivering' AND chain_id<>?""", (execution_id, delegation["root"]))
+    result = append_free_message(connection, require_room(connection, child), answer, host)
+    drain_room_queue(connection, child)
+    review = connection.execute("SELECT review_message_id FROM moss_delegations WHERE message_id=?", (delegation["message_id"],)).fetchone()[0]
+    return {"answer_id": result["message"]["id"], **({"message": {"id": review}} if review else {})}
+
+
 def append_room_message(connection, room, payload, actor):
     """Append to a resolved room under the current write lock."""
     room_id = room["id"]
@@ -3373,6 +3835,8 @@ def append_room_message(connection, room, payload, actor):
         raise FileExistsError(Text("房间已存档，不再投递"))
     if payload.get("interrupt") is not True:
         return append_free_message(connection, room, {**payload, "queue": True}, actor)
+    if "awaiting_user" in payload:
+        raise ValueError(Text("awaiting_user 只能用于绑定执行的回答或主动发言"))
     relay = payload["relay"]
     if actor != "用户" or not isinstance(relay, dict) or not connection.execute(
             "SELECT 1 FROM room_links WHERE room_id=? AND other_room_id=? AND relation='parent'",
@@ -3407,6 +3871,7 @@ def check_queued(payload):
 def drain_room_queue(connection, room_id):
     """Post queued owner messages that may go now; called after writes that can leave the room idle."""
     drain_queue(connection, room_id, post_queued)
+    moss_results.reconcile_delegations(connection, room_id)
 
 
 def rate_scheduler_decision(connection, room_id, decision_id, token, payload):
@@ -4413,6 +4878,131 @@ def update_frame(rooms):
     return f"event: change\ndata: {json.dumps({'rooms': rooms} if rooms else {})}\n\n".encode("utf-8")
 
 
+class CloudCopyJobs:
+    """Share asynchronous copy tasks between this site's local and remote entry points."""
+
+    def __init__(self, database):
+        self.database = database
+        self.lock = threading.Lock()
+        self.running = {}
+        self.failed = collections.OrderedDict()
+        self.workers = ThreadPoolExecutor(max_workers=CLOUD_COPY_WORKERS, thread_name_prefix="cloud-copy")
+
+    def _state(self, connection, record):
+        identifier = record["id"]
+        if record["cleared_at"]:
+            raise AdminError(Text("文件已不在对象存储中"), 410)
+        if record["stored_at"]:
+            return {"task_id": identifier, "status": "completed", "progress": 1,
+                    "cloud_file": cloud_file_view(connection, record)}
+        return self.running.get(identifier) or self.failed.get(identifier)
+
+    def start(self, connection, identifier):
+        """Schedule at most one worker for the reserved file, including concurrent retries."""
+        with self.lock:
+            state = self._state(connection, get_cloud_file(connection, identifier))
+            if state and state["status"] != "failed":
+                return state
+            task = {"task_id": identifier, "status": "running", "stage": "queued", "progress": 0}
+            self.failed.pop(identifier, None)
+            self.running[identifier] = task
+            try:
+                self.workers.submit(self._run, identifier)
+            except RuntimeError:
+                self.running.pop(identifier, None)
+                raise storage_http_error(StorageUnavailable()) from None
+            return task
+
+    def status(self, connection, identifier):
+        """Read the saved result or the current process's progress; an interrupted copy is retryable."""
+        with self.lock:
+            state = self._state(connection, get_cloud_file(connection, identifier))
+            return state or self._failure(identifier, ValueError(Text("电脑上的上传任务已中断，请重试")))
+
+    def _progress(self, identifier, stage, progress):
+        with self.lock:
+            self.running[identifier] = {"task_id": identifier, "status": "running", "stage": stage, "progress": progress}
+
+    @staticmethod
+    def _failure(identifier, error):
+        if isinstance(error, StorageUnavailable):
+            error = storage_http_error(error)
+        details = error_body(error)
+        if details.get("error_text"):
+            details["texts"] = {"error": details["error_text"]}
+        return {"task_id": identifier, "status": "failed", "progress": 0, **details}
+
+    def _copy(self, connection, record):
+        client = configured_storage(self.database)
+        if not client:
+            raise FileExistsError(Text("对象存储未配置"))
+        identifier = record["id"]
+        path = attachment_path(self.database, {"id": record["source_ref"]})
+        if path != path.resolve() or not path.is_file():
+            raise LookupError(Text("附件原文件缺失"))
+        with path.open("rb") as file:
+            if os.fstat(file.fileno()).st_size != record["size"]:
+                raise LookupError(Text("附件原文件缺失"))
+            self._progress(identifier, "uploading", 0)
+            upload = client.upload(record["object_name"], record["size"], record["content_type"])
+            stream_cloud_copy(file, record, upload, lambda stage, fraction: self._progress(identifier, stage, fraction))
+        self._progress(identifier, "verifying", 0.99)
+        finish_cloud_file(connection, client, record)
+
+    def _run(self, identifier):
+        failure = None
+        try:
+            with closing(connect_db(self.database)) as connection:
+                record = get_cloud_file(connection, identifier)
+                if record["cleared_at"]:
+                    raise AdminError(Text("文件已不在对象存储中"), 410)
+                if not record["stored_at"]:
+                    self._copy(connection, record)
+        except (AdminError, FileExistsError, LookupError, StorageUnavailable) as error:
+            failure = self._failure(identifier, error)
+        except OSError:
+            failure = self._failure(identifier, StorageUnavailable())
+        except Exception:
+            logging.exception("Cloud attachment copy failed: %s", identifier)
+            failure = self._failure(identifier, StorageUnavailable())
+        finally:
+            with self.lock:
+                self.running.pop(identifier, None)
+                if failure is not None:
+                    self.failed[identifier] = failure
+                    if len(self.failed) > CLOUD_COPY_FAILED_RESULTS:
+                        self.failed.popitem(last=False)
+
+
+class CloudLandGrants:
+    """Account-local, short-lived, single-use permits to land an exact source attachment."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.pending = {}
+
+    def issue(self, target):
+        """Bind a random permit to the destination room, source room and attachment."""
+        secret = secrets.token_hex(32)
+        now = time.monotonic()
+        with self.lock:
+            self.pending = {key: value for key, value in self.pending.items() if value[0] > now}
+            self.pending[token_hash(secret)] = (now + CLOUD_LAND_GRANT_SECONDS, target)
+        return secret
+
+    def consume(self, secret, target):
+        """Claim a matching permit before contacting storage; a second claim always fails."""
+        if not isinstance(secret, str) or not re.fullmatch(r"[0-9a-f]{64}", secret):
+            return False
+        key = token_hash(secret)
+        with self.lock:
+            entry = self.pending.get(key)
+            if entry is None or entry[0] <= time.monotonic() or entry[1] != target:
+                return False
+            del self.pending[key]
+            return True
+
+
 class DiscussionServer(ThreadingHTTPServer):
     """HTTP server carrying the configured SQLite path."""
 
@@ -4432,6 +5022,8 @@ class DiscussionServer(ThreadingHTTPServer):
         self.analytics_cache = {}
         # The server whose update stream this one shares; a site's local and remote entries see the same changes.
         self.hub = hub or self
+        self.cloud_copies = hub.cloud_copies if hub else CloudCopyJobs(self.database)
+        self.cloud_land_grants = hub.cloud_land_grants if hub else CloudLandGrants()
         self.updates = threading.Condition()
         self.update_version = 0
         # Recent (version, room id or None) pairs, so a stream names the rooms that changed; None means the whole site.
@@ -4478,6 +5070,8 @@ class DiscussionServer(ThreadingHTTPServer):
         with self.hub.updates:
             self.updates_closed = True
             self.hub.updates.notify_all()
+        if self.hub is self:
+            self.cloud_copies.workers.shutdown(wait=False, cancel_futures=True)
         super().server_close()
 
 
@@ -4497,7 +5091,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
     def log_message(self, message_format, *args):
         """Log request paths without message text stored in URL queries."""
-        logging.info("%s %s", self.command, urlsplit(self.path).path)
+        logging.info("%s %s", self.command, cloud_shares.audit_path(urlsplit(self.path).path))
 
     def respond(self, body, status=200, content_type="application/json"):
         """Send a UTF-8 response that browsers and proxies must not cache."""
@@ -4561,7 +5155,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         # Binary assets (WebAssembly, fonts, images) carry no charset; `application/wasm` must stay exact for streaming compile.
         textual = content_type.startswith("text/") or content_type == "application/json"
         self.send_header("Content-Type", f"{content_type}; charset=utf-8" if textual else content_type)
-        self.send_header("Content-Length", str(len(data)))
+        if self.command != "HEAD":
+            self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         if getattr(self, "etag", None):
             self.send_header("ETag", self.etag)
@@ -4580,7 +5175,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 if self.headers.get("Access-Control-Request-Private-Network") == "true":
                     self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
-        self.wfile.write(data)
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
     def read_payload(self, limit=MAX_BODY_BYTES):
         """Read a bounded JSON object from an incoming form API request."""
@@ -4624,7 +5220,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 self.send_payload(*self.deferred_response)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             if elapsed_ms >= SLOW_REQUEST_MS and not self.streaming:
-                logging.warning("slow request %s %s %d ms", method, parsed.path, elapsed_ms)
+                logging.warning("slow request %s %s %d ms", method, cloud_shares.audit_path(parsed.path), elapsed_ms)
 
     def entry_refused(self, method, parsed):
         """Under entry protection: answer a hello, or refuse a request that is neither public nor proven on its connection."""
@@ -4687,6 +5283,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 if parts[:3] == ["api", "local", "page"] and len(parts) >= 5 and method == "GET":
                     return self.serve_page_ticket(parts[3], parts[4:])
                 raise LookupError(Text('地址不存在'))
+            if method == "GET" and (share := cloud_shares.PUBLIC_PATH.fullmatch(parsed.path)):
+                return cloud_shares.redeem(self, share, connect_db, stored_object_download)
             if self.entry_refused(method, parsed):
                 return None
             try:
@@ -4708,14 +5306,18 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 return self.respond((WEB_ROOT / filename).read_bytes(), content_type=content_type)
             if method == "GET" and parsed.path == "/robots.txt":
                 return self.respond("User-agent: *\nAllow: /\n", content_type="text/plain")
-            with closing(connect_db(self.server.database)) as connection, connection:
-                if guest_path(parts):
-                    return self.handle_guest_projection(connection, parts, params, method)
-                if is_external_path(parts):
-                    return self.handle_external_api(connection, parts, params, method)
-                if text_mode and method == "GET":
-                    return self.handle_text(connection, parts, params)
-                return self.handle_api(connection, parts, params, method)
+            with closing(connect_db(self.server.database)) as connection:
+                with connection:
+                    if guest_path(parts):
+                        return self.handle_guest_projection(connection, parts, params, method)
+                    if is_external_path(parts):
+                        return self.handle_external_api(connection, parts, params, method)
+                    if text_mode and method == "GET":
+                        return self.handle_text(connection, parts, params)
+                    response = self.handle_api(connection, parts, params, method)
+                for room in connection.moss_updates:
+                    self.server.hub.notify_update(room)
+                return response
         except AdminError as error:
             return self.respond(error_body(error), error.status)
         except PermissionError as error:
@@ -4865,6 +5467,14 @@ class DiscussionHandler(BaseHTTPRequestHandler):
     def handle_local_launch(self, parts, method):
         """Forward authenticated browser requests to the shared Node entrypoint and pin their website."""
         route = parts[2:]
+        if route[:2] == ["project-files", "cloud"]:
+            return self.handle_local_project_cloud(route[2:], method)
+        if route in (["project-files", "cloud-upload"], ["project-files", "cloud-land"]):
+            return self.handle_local_project_cloud([], method, command="project-" + route[1])
+        if route in (["project-cloud-upload"], ["project-cloud-land"]):
+            return self.handle_local_project_cloud([], method, command=route[0])
+        if route in (["project-cloud"], ["project-cloud-status"]):
+            return self.handle_local_project_cloud([], method, status_alias=route[0] == "project-cloud-status")
         if route == ["share-job"] and method == "POST" and not self.server.local_launch:
             return self.respond({"enabled": False})
         site = self.local_request_site(method)
@@ -5085,6 +5695,80 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         status, result = self.local_command_result(command, payload, configuration_locked, remote)
         return self.respond(result, status)
 
+    def handle_local_project_cloud(self, route, method, *, status_alias=False, command="project-cloud"):
+        """Start or read a private project upload using the same room proof as the file page."""
+        site = self.local_request_site(method)
+        if self.read_only_request() or self.headers.get(ACTING_MEMBER_HEADER):
+            raise PermissionError(Text('需要管理员登录'))
+        task_status = len(route) == 1 and re.fullmatch(r"[a-f0-9]{32}", route[0])
+        if method == "OPTIONS" and (not route or task_status):
+            return self.respond({"ok": True})
+        if status_alias or method == "GET" and task_status:
+            if status_alias:
+                if method != "POST" or self.headers.get_content_type() != "application/json":
+                    raise LookupError(Text('本机入口不存在'))
+                task_id = self.read_payload().get("task_id")
+            else:
+                task_id = route[0]
+            if self.headers.get("X-Discussion-Token"):
+                raise PermissionError(Text('需要管理员登录'))
+            return self.run_local_command("project-cloud-status", {"task_id": task_id})
+        if method != "POST" or route:
+            raise LookupError(Text('本机入口不存在'))
+        if self.headers.get_content_type() != "application/json":
+            raise ValueError(Text('本机操作须使用 application/json'))
+        payload = self.read_payload()
+        room = payload.get("room")
+        if not isinstance(room, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", room):
+            raise ValueError(Text('房间编号无效'))
+        grant = None
+        if command == "project-cloud-land" and (payload.get("cloud_file_id") is not None
+                                                or payload.get("attachment_room") not in (None, room)):
+            grant = self.authorize_cross_room_landing(payload)
+        token = self.headers.get("X-Discussion-Token") or payload.get("token")
+        if not token and not self.bridge_origin:
+            with closing(connect_db(self.server.database)) as connection:
+                self.admin_as_owner(connection, room)
+            token = self.headers.get("X-Discussion-Token")
+        fields = {
+            "project-cloud": ("room", "path", "root", "kind", "purpose"),
+            "project-cloud-upload": ("room", "root", "path", "name", "size", "content_type", "submission_id"),
+            "project-cloud-land": ("room", "task_id", "attachment_id", "attachment_room", "cloud_file_id", "root", "path", "conflict"),
+        }[command]
+        request = {key: payload[key] for key in fields if key in payload}
+        if grant is not None:
+            request["attachment_grant"] = grant
+        return self.run_local_command(command, {**request, "site": site, "token": token}, remote=bool(self.bridged or self.bridge_origin))
+
+    def authorize_cross_room_landing(self, payload):
+        """Use account authority to issue a permit; the supplied room token is for the target only."""
+        target = cloud_land_target(payload)
+        if payload.get("task_id") is not None:
+            raise ValueError(Text("附件编号无效"))
+        with closing(connect_db(self.server.database)) as connection:
+            self.require_cloud_account(connection)
+            if not connection.execute("SELECT 1 FROM rooms WHERE id=?", (target[0],)).fetchone():
+                raise LookupError(Text('房间不存在'))
+            cloud_land_source(connection, target)
+        return self.server.cloud_land_grants.issue(target)
+
+    def claim_local_cloud_landing(self, connection, room_id, method):
+        """Redeem a permit from this computer and return only its authorized attachment and short link."""
+        if method != "POST" or self.headers.get_content_type() != "application/json":
+            raise LookupError(Text('地址不存在'))
+        if (not self.server.local_launch or self.client_address[0] != "127.0.0.1" or not self.local_visitor()
+                or self.bridged or self.read_only_request() or self.headers.get(ACTING_MEMBER_HEADER)
+                or self.headers.get("X-Discussion-Token") is not None):
+            raise PermissionError(Text('需要管理员登录'))
+        payload = self.read_payload()
+        target = cloud_land_target({**payload, "room": room_id})
+        if not self.server.cloud_land_grants.consume(payload.get("grant"), target):
+            raise PermissionError(Text('需要管理员登录'))
+        row = cloud_land_source(connection, target)
+        view = ({"cloud_file": cloud_file_view(connection, row)} if target[1] is None
+                else {"attachment": attachment_view(connection, row)})
+        return self.respond({**view, "link": stored_object_download(self.server.database, row)})
+
     def local_command_result(self, command, payload, configuration_locked=False, remote=False):
         """Run the fixed local Node entrypoint; returns `(status, result)`, 400 with its error when it fails."""
         arguments = ["node", str(ROOT / "runner" / "discussion_launch.mjs"), command]
@@ -5186,7 +5870,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if (not self.server.local_site or self.client_address[0] != "127.0.0.1" or not isinstance(expected, str)
                 or not re.fullmatch(r"[a-f0-9]{64}", credential) or not hmac.compare_digest(token_hash(credential), expected)):
             raise PermissionError(Text('本机中转凭据无效，请在电脑上重新连接网站'))
-        if parts[:1] != ["api"] or parts[1:2] not in (["rooms"], ["folders"], ["revisions"], ["sites"], ["analytics"]):
+        project_cloud = parts[:3] == ["api", "local", "project-files"] and (
+            len(parts) == 4 and parts[3] in {"cloud", "cloud-upload", "cloud-land"}
+            or len(parts) == 5 and parts[3] == "cloud" and re.fullmatch(r"[a-f0-9]{32}", parts[4]))
+        if not project_cloud and (parts[:1] != ["api"] or parts[1:2] not in (["rooms"], ["folders"], ["revisions"], ["sites"], ["analytics"])):
             raise PermissionError(Text('本机中转不允许访问该地址'))
         return True
 
@@ -5223,6 +5910,41 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         # A published link must be revocable before the owner can destroy the room.
         if steward["archived"] and (route != ["share-link"] or self.read_payload().get("link") is not None):
             raise ValueError(Text('房间已存档；恢复后才能继续协作'))
+
+    def steward_member_write(self, connection, parts):
+        """Scope both a MOSS member credential and a runner request carrying it on behalf of that member."""
+        route = parts[3:]
+        target = parts[2] if len(parts) > 2 else None
+        delegated = self.headers.get(ACTING_MEMBER_HEADER, "")
+        token = self.headers.get("X-Discussion-Token", "")
+        member = steward_member(connection, delegated)
+        acting_token = delegated if member else token
+        if member is None:
+            member = steward_member(connection, token)
+        if member is None:
+            return None
+        self.api_actor_override = f"member:{member['name']}"
+        if target == member["room_id"] and acting_token == token and member["active"]:
+            if not (len(route) == 1 and route[0] in (*DIRECTORY_OPERATIONS, *ADMIN_OPERATIONS)):
+                return None  # Own-room member routes still enforce the normal member credential rules.
+        if target == member["room_id"] and route in (["host-room-post"], ["room-link"], ["room-relay-sent"], ["host-actions"]):
+            self.read_payload()
+            begin_write(connection)
+            current = steward_member(connection, acting_token)
+            if current and current["active"] and current["room_id"] == target:
+                return None  # Existing routes still require the source room owner's credential.
+        if target != member["room_id"] and route == ["archive"] and not self.read_only_request():
+            self.read_payload()
+            begin_write(connection)
+            member = steward_member(connection, acting_token)
+            if member and member["active"] and connection.execute(f"""SELECT 1 FROM rooms JOIN room_directory d ON d.room_id=rooms.id
+                    WHERE rooms.id=? AND d.system_kind='' AND ({PARENT_ROOM})=?""", (target, member["room_id"])).fetchone():
+                result = manage_room(connection, target, "archive", {"actor": "用户"})
+                moss_results.reconcile_delegations(connection, target)
+                connection.commit()
+                return result
+        self.read_payload()
+        raise PermissionError(Text('需要本房间的控制凭据'))
 
     def handle_admin_api(self, connection, parts, method):
         """Serve administrator registration, login sessions and profile."""
@@ -5312,6 +6034,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
 
     def handle_api(self, connection, parts, params, method):
         """Handle room, state, and message operations used by the web UI."""
+        if method == "POST" and parts[:2] == ["api", "rooms"]:
+            result = self.steward_member_write(connection, parts)
+            if result is not None:
+                return self.respond(result)
+        if len(parts) == 5 and parts[:2] == ["api", "rooms"] and parts[3:] == ["cloud-land", "redeem"]:
+            # Interpret the permit before implicit local ownership can add a room credential.
+            return self.claim_local_cloud_landing(connection, parts[2], method)
         if parts == ["api", "attachment-limit"] and method == "GET":
             limit = attachment_limit_mib(self.server.database)
             return self.respond({"limit_mib": limit, **object_storage_limits(connection, self.server.database, limit)})
@@ -5319,9 +6048,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond({"ok": True})
         if parts[:2] == ["api", "admin"]:
             return self.handle_admin_api(connection, parts, method)
-        if parts == ["api", "analytics"] and method == "GET":
+        if parts in (["api", "analytics"], ["api", "analytics", "moss"]) and method == "GET":
             if self.headers.get("X-Discussion-Token") is not None or not (self.bridged or self.admin_session(connection)):
                 raise PermissionError(Text('需要管理员身份'))
+            if parts[2:] == ["moss"]:
+                return self.respond(moss_snapshot(connection, params, int(time.time())))
             return self.respond(analytics_snapshot(connection, params, self.server.analytics_cache, int(time.time())))
         if parts == ["api", "scheduler-feedback"] and method == "GET":
             if not self.admin_session(connection):
@@ -5349,7 +6080,9 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if parts == ["api", "sites"] and method == "GET":
             return self.respond(list_all_sites(connection))
         if parts[1:3] == ["rooms", "cloud-attachments"]:
-            return self.handle_cloud_attachments(connection, parts[3:], method)
+            if parts[4:5] == ["shares"]:
+                return cloud_shares.manage(self, connection, parts[3:], method, require_owner)
+            return cloud_drive.handle(self, connection, parts[3:], method)
         if parts == ["api", "rooms"]:
             if method == "GET":
                 limit = attachment_limit_mib(self.server.database)
@@ -5360,7 +6093,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                                      **object_storage_limits(connection, self.server.database, limit)})
             payload = self.read_payload()
             token = self.headers.get("X-Discussion-Token", "")
-            if payload.get("system_kind") == "steward":
+            if payload.get("system_kind") == "steward" or payload.get("preset") == "task":
                 self.require_steward_creator(connection, token)
             room = create_room(connection, payload, token)
             connection.commit()
@@ -5421,6 +6154,19 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         self.refuse_read_only(parts, method)
+        if parts[3:] == ["steward-work"] and method == "GET":
+            return self.read_steward_work(connection, room_id)
+        if parts[3:] == ["steward-member"] and method == "POST":
+            payload = self.read_payload()
+            if self.headers.get(ACTING_MEMBER_HEADER):
+                raise PermissionError(Text('需要本房间的控制凭据'))
+            if self.bridged or self.local_visitor():
+                self.admin_as_owner(connection, room_id)
+            token = self.headers.get("X-Discussion-Token", "")
+            result = replace_steward_member(connection, room_id, token, payload, utc_now())
+            drain_room_queue(connection, room_id)
+            connection.commit()
+            return self.respond(result)
         self.admin_as_owner(connection, room_id)
         token = self.headers.get("X-Discussion-Token", "")
         if method == "POST":
@@ -5436,11 +6182,11 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                 raise ValueError(Text("relay.limit 须为 0–100 的整数，0 表示不限"))
             return self.respond(list_links(connection, room_id, limit))
         if parts[3:] == ["host-room-post"] and method == "POST":
+            begin_write(connection)
             require_owner(connection, room_id, token)
             host = require_member(connection, room_id, self.headers.get(ACTING_MEMBER_HEADER))
             if host["role"] != "host":
                 raise PermissionError(Text("只有房主或当前主持人可以读取"))
-            begin_write(connection)
             if guest_mode_active(connection, room_id):
                 raise guest_error()
             body = self.read_payload()
@@ -5451,6 +6197,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                            interrupt=body.get("interrupt", False), relay=relay)
             result = post_host_relay(connection, host, target, payload, body.get("execution_id"))
             drain_room_queue(connection, target)
+            moss_results.reconcile_delegations(connection, room_id)
             connection.commit()
             self.server.hub.notify_update(target)
             if result.get("answer_id"):
@@ -5598,6 +6345,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.handle_free_api(connection, parts, method)
         if parts[3:4] == ["attachments"]:
             return self.handle_attachments(connection, parts, params, method)
+        if parts[3:4] == ["cloud-files"]:
+            return self.handle_room_cloud_files(connection, room_id, parts[4:], method)
         if parts[3:4] in (["scheduler-decisions"], ["scheduler-routing"], ["dispatch-feedback"]):
             return self.handle_scheduler_api(connection, parts, method)
         if parts[3:] in (["share-link"], ["share-card"]) and method in ("GET", "POST"):
@@ -5646,6 +6395,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(room_backup(connection, room_id))
         if len(parts) == 4 and parts[3] in ("move", "folder", "detach", "pin", "rename", "archive", "restore", "delete", "auto-destroy") and method == "POST":
             result = manage_room(connection, room_id, parts[3], self.read_payload())
+            if parts[3] in ("archive", "delete"):
+                moss_results.reconcile_delegations(connection, room_id)
             connection.commit()
             if parts[3] == "delete":
                 finish_destruction_files(self.server.database, room_id)
@@ -5718,36 +6469,125 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(result)
         raise LookupError(Text('地址不存在'))
 
-    def handle_cloud_attachments(self, connection, route, method):
-        """Manage cloud files across the account using its own administrator authority."""
+    def require_cloud_account(self, connection):
+        """Use the same administrator check for account inventory and cross-room landing."""
         if (self.bridge_origin or self.read_only_request() or self.headers.get("X-Discussion-Token") is not None
                 or self.headers.get(ACTING_MEMBER_HEADER) or not self.admin_session(connection)):
             raise PermissionError(Text('需要管理员登录'))
+
+    def clear_cloud_file(self, connection, row):
+        """Preserve the record and its quota if deleting its bytes fails."""
+        if row["cleared_at"]:
+            return []
         database = self.server.database
-        quota = object_storage_quota_mib(database)
-        if method == "GET" and not route:
-            rows = connection.execute(f"""SELECT a.*,r.title AS room_title FROM attachments a
-                JOIN rooms r ON r.id=a.room_id WHERE {LIVE_CLOUD_ATTACHMENTS} ORDER BY a.created_at DESC,a.id""").fetchall()
-            return self.respond({"attachments": [attachment_view(connection, row) for row in rows],
-                                 "used_bytes": sum(row["size"] for row in rows), "quota_mib": quota})
-        if method != "POST" or route != ["delete"]:
+        delete_remote_attachment(database, row, configured_storage(database), raise_failure=True)
+        with connection:
+            updated = connection.execute("UPDATE cloud_files SET cleared_at=? WHERE id=? AND cleared_at IS NULL",
+                                         (utc_now(), row["id"]))
+            return [row] if updated.rowcount else []
+
+    def authorize_cloud_write(self, connection, room_id):
+        """Require this room's owner or a credential-free request from the account administrator."""
+        token = self.headers.get("X-Discussion-Token", "")
+        if self.headers.get(ACTING_MEMBER_HEADER):
+            raise PermissionError(Text('需要本房间的控制凭据'))
+        if self.has_explicit_room_token or not (self.bridged or self.admin_session(connection)):
+            require_owner(connection, room_id, token)
+        elif not connection.execute("SELECT 1 FROM rooms WHERE id=?", (room_id,)).fetchone():
+            raise LookupError(Text('房间不存在'))
+
+    def handle_room_cloud_files(self, connection, room_id, route, method):
+        """Reserve or complete a project upload, or sign a room-scoped download."""
+        database = self.server.database
+        if method == "GET" and len(route) == 2 and route[1] == "content":
+            row = get_cloud_file(connection, route[0], room_id)
+            if row["purpose"] != "keep":
+                self.authorize_cloud_write(connection, room_id)
+                return self.respond_cloud_link(stored_object_download(database, row))
+            token = self.headers.get("X-Discussion-Token", "")
+            view = cloud_file_view(connection, row)
+            cutoff = attachment_cutoff(connection, room_id, self.request_params, token, content=True)
+            if cutoff is not None and view["message_id"] is not None and view["message_id"] > cutoff:
+                raise BoundaryError(Text('该附件所在的消息超出本请求读取上界 #{until}', until=cutoff),
+                                    code="reading_boundary", read_scope={"request_read_until": cutoff, "boundary_applied": True})
+            return self.respond_cloud_link(stored_object_download(database, row))
+        if method != "POST" or (route and (len(route) != 2 or route[1] not in {"complete", "release"})):
             raise LookupError(Text('地址不存在'))
-        identifier = self.read_payload().get("id")
-        if not isinstance(identifier, str) or not re.fullmatch(r"[0-9a-f]{32}", identifier):
-            raise ValueError(Text('附件编号无效'))
-        row = connection.execute("SELECT * FROM attachments WHERE id=? AND storage='object' AND object_name IS NOT NULL",
-                                 (identifier,)).fetchone()
-        if row is None:
-            raise LookupError(Text('附件不存在'))
-        cleared = []
-        if row["cleared_at"] is None:
-            if not delete_remote_attachment(database, row, configured_storage(database)):
-                raise AdminError(Text("对象存储暂不可用"), 503)
-            cleared = mark_cleared_object_attachments(connection, [row])
-            if cleared:
-                self.server.hub.notify_update(row["room_id"])
-        return self.respond({"cleared": [item["id"] for item in cleared], "freed_bytes": sum(item["size"] for item in cleared),
-                             "used_bytes": object_storage_used_bytes(connection), "quota_mib": quota})
+        self.authorize_cloud_write(connection, room_id)
+        if route:
+            self.read_payload()
+            row = get_cloud_file(connection, route[0], room_id)
+            if route[1] == "release":
+                if row["purpose"] == "keep":
+                    raise LookupError(Text("附件不存在"))
+                self.clear_cloud_file(connection, row)
+                return self.respond({"released": True})
+            return self.complete_cloud_file_upload(connection, row)
+        return self.start_cloud_file_upload(connection, room_id, cloud_file_metadata(self.read_payload()))
+
+    def complete_cloud_file_upload(self, connection, row):
+        """Confirm remote bytes before making a cloud file available."""
+        try:
+            row = finish_cloud_file(connection, configured_storage(self.server.database), row)
+        except StorageUnavailable as error:
+            raise storage_http_error(error) from None
+        return self.respond({"cloud_file": cloud_file_view(connection, row)})
+
+    def start_cloud_file_upload(self, connection, room_id, metadata):
+        """Reserve a file and return its signed upload form to the caller."""
+        database = self.server.database
+        client = configured_storage(database)
+        if not client:
+            raise FileExistsError(Text("对象存储未配置"))
+        row = reserve_cloud_file(connection, database, room_id, metadata)
+        connection.commit()
+        try:
+            upload = None if row["stored_at"] else client.upload(row["object_name"], row["size"], row["content_type"])
+        except StorageUnavailable as error:
+            raise storage_http_error(error) from None
+        return self.respond({"cloud_file": cloud_file_view(connection, row), "upload": upload})
+
+    def copy_attachment_to_cloud(self, connection, room_id, identifier):
+        """Save the original room attachment to a separate cloud record."""
+        self.authorize_cloud_write(connection, room_id)
+        self.read_payload()
+        copy_id = f"cloud-copy-{identifier}"
+        existing = connection.execute("""SELECT * FROM cloud_files
+            WHERE room_id=? AND submission_id=? AND cleared_at IS NULL""", (room_id, copy_id)).fetchone()
+        if existing is not None:
+            state = self.server.cloud_copies.status(connection, existing["id"])
+            if state["status"] != "failed":
+                return self.respond(state, 202 if state["status"] == "running" else 200)
+        attachment = get_attachment(connection, room_id, identifier)
+        if attachment["storage"] == "object":
+            raise ValueError(Text("附件已在云空间"))
+        if attachment["cleared_at"]:
+            raise LookupError(Text('附件已被清理'))
+        database = self.server.database
+        client = configured_storage(database)
+        if not client:
+            raise FileExistsError(Text("对象存储未配置"))
+        path = attachment_path(database, attachment)
+        if path != path.resolve() or not path.is_file():
+            raise LookupError(Text('附件原文件缺失'))
+        metadata = object_upload_metadata({**attachment, "submission_id": copy_id}, "用户")
+        metadata.update(source_kind="attachment", source_ref=identifier)
+        row = reserve_cloud_file(connection, database, room_id, metadata)
+        connection.commit()
+        state = self.server.cloud_copies.start(connection, row["id"])
+        return self.respond(state, 202 if state["status"] == "running" else 200)
+
+    def read_cloud_copy_job(self, connection, room_id, source_id, task_id=None):
+        """Read the task bound to this room and source, optionally pinned to a task ID."""
+        self.authorize_cloud_write(connection, room_id)
+        if task_id is None:
+            record = connection.execute("""SELECT * FROM cloud_files
+                WHERE room_id=? AND submission_id=? AND cleared_at IS NULL""", (room_id, f"cloud-copy-{source_id}")).fetchone()
+        else:
+            record = get_cloud_file(connection, task_id, room_id)
+        if not record or record["source_kind"] != "attachment" or record["source_ref"] != source_id:
+            raise LookupError(Text("附件不存在"))
+        return self.respond(self.server.cloud_copies.status(connection, record["id"]))
 
     def handle_attachments(self, connection, parts, params, method):
         """Handle bounded upload, discovery, metadata, and binary download."""
@@ -5779,6 +6619,10 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             return self.respond(result, 200 if result["duplicate"] else 201)
         if method == "POST" and parts[4:] == ["object"]:
             return self.start_object_upload(connection, room_id)
+        if method == "POST" and len(parts) == 6 and parts[5] == "cloud-copy":
+            return self.copy_attachment_to_cloud(connection, room_id, parts[4])
+        if method == "GET" and len(parts) in (6, 7) and parts[5] == "cloud-copy":
+            return self.read_cloud_copy_job(connection, room_id, parts[4], parts[6] if len(parts) == 7 else None)
         if method == "POST" and len(parts) == 6 and parts[5] == "complete":
             return self.complete_object_upload(connection, room_id, parts[4])
         if method == "POST" and len(parts) == 6 and parts[5] == "discard":
@@ -5806,16 +6650,7 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         if len(parts) == 5:
             return self.respond(attachment)
         if parts[5] == "content" and attachment.get("storage") == "object":
-            result = object_download_result(connection, self.server.database, attachment)
-            if params.get("link") == "1":
-                return self.respond(result)
-            self.send_response(302)
-            self.send_header("Location", result["url"])
-            self.send_header("Content-Length", "0")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Referrer-Policy", "no-referrer")
-            self.end_headers()
-            return None
+            return self.respond_cloud_link(object_download_result(connection, self.server.database, attachment))
         if parts[5] in ("content", "zip") and attachment.get("cleared_at"):
             raise LookupError(Text('附件已被清理'))
         if parts[5] == "content":
@@ -5837,6 +6672,18 @@ class DiscussionHandler(BaseHTTPRequestHandler):
                     else zip_preview(path, entry))
             return self.send_file(None, "application/octet-stream", entry.split("/")[-1], "attachment", data=data)
         raise LookupError(Text('地址不存在'))
+
+    def respond_cloud_link(self, result):
+        """Send a short-lived download link as JSON or redirect a regular browser download."""
+        if self.request_params.get("link") == "1":
+            return self.respond(result)
+        self.send_response(302)
+        self.send_header("Location", result["url"])
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        return None
 
     def start_object_upload(self, connection, room_id):
         """Authorize and reserve an upload before returning a COS credential."""
@@ -5861,8 +6708,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         connection.commit()
         try:
             upload = None if record["stored_at"] else client.upload(record["object_name"], record["size"], record["content_type"])
-        except StorageUnavailable:
-            raise AdminError(Text("对象存储暂不可用"), 503) from None
+        except StorageUnavailable as error:
+            raise storage_http_error(error) from None
         return self.respond({"attachment": attachment_view(connection, record), "upload": upload})
 
     def complete_object_upload(self, connection, room_id, identifier):
@@ -5884,8 +6731,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             size = client.file_size(record["object_name"])
         except ObjectMissing:
             raise FileExistsError(Text("对象存储尚未收到文件")) from None
-        except StorageUnavailable:
-            raise AdminError(Text("对象存储暂不可用"), 503) from None
+        except StorageUnavailable as error:
+            raise storage_http_error(error) from None
         if size != record["size"]:
             raise FileExistsError(Text("对象存储中的文件大小与上传声明不一致"))
         authorize_free_write(connection, room_id, token, "attachments", {"author": record["actor"]})
@@ -6086,6 +6933,17 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         drain_room_queue(connection, parts[3])
         connection.commit()
         return self.respond(result, status)
+
+    def read_steward_work(self, connection, room_id):
+        """Show the steward's cross-room work only to its owner or a trusted local entry."""
+        if self.read_only_request() or self.headers.get(ACTING_MEMBER_HEADER):
+            raise PermissionError(Text('需要本房间的控制凭据'))
+        if self.bridged or self.local_visitor():
+            self.admin_as_owner(connection, room_id)
+        require_owner(connection, room_id, self.headers.get("X-Discussion-Token", ""))
+        if not connection.execute("SELECT 1 FROM room_directory WHERE room_id=? AND system_kind='steward'", (room_id,)).fetchone():
+            raise LookupError(Text('房间不存在'))
+        return self.respond(moss_results.steward_work(connection, room_id))
 
     def handle_free_api(self, connection, parts, method):
         """Runner inbox, per-member executions and the owner's interrupt for free rooms."""

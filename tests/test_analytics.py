@@ -1,7 +1,9 @@
 """End-to-end owner analytics against an isolated collaborative room."""
 import json
+import uuid
 from contextlib import closing
 from datetime import datetime, timezone
+from time import time
 from unittest.mock import patch
 
 from backend.analytics import peak_concurrent, period
@@ -11,6 +13,13 @@ from tests.test_free_room import FreeRoomTests, HostRoomTests
 
 
 class AnalyticsTests(HostRoomTests):
+    def host_reply(self, **extra):
+        """Answer the host's pending work and return the message ID."""
+        execution = self.reserve_for("Claude")[1]["id"]
+        status, result = self.answer(execution, **extra)
+        self.assertEqual(status, 201, result)
+        return result["message"]["id"]
+
     def report(self, query=""):
         self.server.local_site = True
         try:
@@ -33,6 +42,70 @@ class AnalyticsTests(HostRoomTests):
         self.assertEqual(self.request("/api/analytics")[0], 403)
         self.server.local_site = True
         self.assertEqual(self.request("/api/analytics", token=self.tokens["Codex"])[0], 403)
+
+    def metric_message(self, db, room, date, source):
+        """Seed only the persisted message identity and time used by the report."""
+        return db.execute("""INSERT INTO messages(room_id,author,text,source,submission_id,created_at)
+            VALUES(?,'系统','',?,?,?)""", (room, source, uuid.uuid4().hex, date)).lastrowid
+
+    def seed_moss_routes(self, db, stamp, before):
+        """Build retained records for new rooms, historical project sends, one rework and its unreported result."""
+        for room in ("steward", "task", "project", "owner-task"):
+            db.execute("INSERT INTO rooms(id,title,goal,created_at) VALUES(?,?,'',?)", (room, room, before if room == "steward" else stamp))
+            if room != "steward":
+                link = self.metric_message(db, room, stamp, "room_link")
+                db.execute("INSERT INTO room_links VALUES(?,?,'steward','parent','Codex')", (link, room))
+        db.execute("UPDATE room_directory SET system_kind='steward' WHERE room_id='steward'")
+        db.execute("INSERT INTO moss_task_rooms VALUES('task'),('owner-task')")
+        existing = self.room["id"]
+        db.execute("UPDATE rooms SET created_at=? WHERE id=?", (before, existing))
+        for target, expect, date in ((existing, "reply", before), (existing, "reply", stamp), (existing, "none", stamp),
+                                     ("project", "reply", stamp), ("project", "reply", stamp)):
+            incoming = self.metric_message(db, target, date, "user")
+            db.execute("INSERT INTO message_relays(message_id,source_room_id,expect,host) VALUES(?,'steward',?,'Codex')", (incoming, expect))
+            sent = self.metric_message(db, "steward", date, "room_relay_sent")
+            db.execute("""INSERT INTO room_relay_sends(message_id,room_id,target_room_id,target_message_id,host)
+                VALUES(?,'steward',?,?,'Codex')""", (sent, target, incoming))
+            if target == "project":
+                db.execute("INSERT INTO moss_delegations(message_id) VALUES(?)", (sent,))
+        original, rework = [row[0] for row in db.execute("SELECT message_id FROM moss_delegations ORDER BY message_id")]
+        db.execute("INSERT INTO moss_reworks VALUES(?,?)", (rework, original))
+        db.execute("UPDATE moss_delegations SET state='unreported',updated_at=? WHERE message_id=?", (stamp, rework))
+
+    def seed_moss_runs_and_archives(self, db, start):
+        """Preserve exact run samples and accepted archive/restore actions including retries and owner actions."""
+        member = db.execute("""INSERT INTO room_members(room_id,name,adapter,token_hash,role,created_at)
+            VALUES('steward','Codex','codex_cli','hash','host','2026-03-07T00:00:00Z')""").lastrowid
+        for offset, duration in ((-1, 50), (0, 10), (1, 30), (2, 100), (3, None), (23 * 3600, 60)):
+            db.execute("""INSERT INTO member_executions(room_id,member_id,client_id,status,created_at,finished_at)
+                VALUES('steward',?,?,?,?,?)""", (member, str(offset), "completed" if duration else "dispatched", start + offset,
+                                                  start + offset + duration if duration else 0))
+        actions = (("task", "archive", "member:Codex"), ("task", "archive", "member:Codex"),
+                   ("task", "restore", "owner"), ("task", "archive", "member:Codex"),
+                   ("owner-task", "archive", "owner"), ("project", "archive", "member:Codex"))
+        for offset, (room, path, actor) in enumerate(actions):
+            db.execute("INSERT INTO room_events(room_id,at,kind,data) VALUES(?,?,'api.write',?)",
+                       (room, start * 1000 + offset, json.dumps({"path": "/" + path, "actor": actor, "status": 200})))
+
+    def test_moss_metrics_share_analytics_access_and_filter_events_by_local_dates(self):
+        date, before = "2026-03-08T08:00:00Z", "2026-03-08T07:59:59Z"
+        start = int(datetime.fromisoformat(date.replace("Z", "+00:00")).timestamp())
+        with closing(connect_db(self.database)) as db, db:
+            self.seed_moss_routes(db, date, before)
+            self.seed_moss_runs_and_archives(db, start)
+        query = "/api/analytics/moss?from=2026-03-08&to=2026-03-09&tz=America%2FLos_Angeles"
+        self.assertEqual(self.request(query)[0], 403)
+        self.server.local_site = True
+        self.assertEqual(self.request(query, token=self.tokens["Codex"])[0], 403)
+        status, report = self.request(query)
+        self.assertEqual(status, 200, report)
+        self.assertEqual({key: report[key] for key in ("task_rooms", "project_rooms", "delegations", "reworks", "unreported", "reclaimed")},
+                         {"task_rooms": 2, "project_rooms": 1, "delegations": 1, "reworks": 1, "unreported": 1, "reclaimed": 2})
+        self.assertEqual(report["executions"], {"count": 4, "samples": 3, "p50": 30, "p90": 86, "approximate": False})
+        self.assertEqual(self.request("/api/analytics/moss?range=wrong")[0], 400)
+        status, total = self.request("/api/analytics/moss?range=all&tz=UTC")
+        self.assertEqual(status, 200, total)
+        self.assertEqual((total["delegations"], total["executions"]["count"]), (2, 6))
 
     def test_merged_late_answer_stop_and_rewind(self):
         first = FreeRoomTests.say(self, "一", to=["Codex"])[1]["message"]["id"]
@@ -183,6 +256,144 @@ class AnalyticsTests(HostRoomTests):
         self.assertEqual([(item["execution_id"], item["member"]) for item in live["running"]], [(running, "Codex")])
         self.assertEqual([(item["kind"], item["member"]) for item in live["waiting"]], [("failed", "Antigravity")])
         self.assertEqual((live["errors"], len(live["timeline"]["points"]), live["timeline"]["step"]), (1, 60, 60))
+
+    def test_marked_wait_live_and_history_with_delivery_receipt(self):
+        """Live lists two members waiting; history retains starts, owner replies and scoped delivery evidence."""
+        self.say("请看看")
+        first_message = self.host_reply(text="已比对两个方案\n请选一个方案", summary="等你选方案", awaiting_user=True)
+        status, second = self.answer(None, "请确认范围", token=self.codex, author="Codex",
+                                     proactive=True, awaiting_user=True)
+        self.assertEqual(status, 201, second)
+        messages = [first_message, second["message"]["id"]]
+        live = self.report("&range=live")["live"]
+        self.assertEqual({(item["kind"], item["member"], item["message_id"], item["count"]) for item in live["waiting"]},
+                         {("awaiting", "Claude", messages[0], 1), ("awaiting", "Codex", messages[1], 1)})
+        first_at = int(time()) - 350
+        with closing(connect_db(self.database)) as db, db:
+            wait_id = db.execute("SELECT id FROM room_waits WHERE message_id=?", (messages[0],)).fetchone()[0]
+            other_wait_id = db.execute("SELECT id FROM room_waits WHERE message_id=?", (messages[1],)).fetchone()[0]
+            db.execute("UPDATE room_waits SET created_at=? WHERE id=?", (first_at, wait_id))
+        notify = self.database.parent / "notify"
+        notify.mkdir()
+        room = self.room["id"]
+        notice = {"key": f"{self.base}/{room}/wait:{wait_id}", "room": room, "site": self.base,
+                  "sent_at": (first_at + 181) * 1000,
+                  "deliveries": {"telegram": ["test-message"]}}
+        mismatched = {**notice, "key": f"{self.base}/{room}/wait:{other_wait_id}", "site": "https://elsewhere.test",
+                      "sent_at": int(time()) * 1000}
+        (notify / "notices.json").write_text(json.dumps({"notices": [notice, mismatched]}), encoding="utf-8")
+        with patch.dict("os.environ", {"DISCUSS_SERVICE_HOME": str(self.database.parent)}):
+            open_issue, = [item for item in self.report()["issues"] if item["rule"] == "stall"]
+            self.server.analytics_cache.clear()
+            reply = self.say("确定用第一个\n接着做")[1]["message"]["id"]
+            issue, = [item for item in self.report()["issues"] if item["rule"] == "stall"]
+        self.assertFalse(self.report("&range=live")["live"]["waiting"])
+        self.assertEqual((open_issue["events"][0]["end"], open_issue["events"][0]["reply_message_id"]), (0, 0))
+        self.assertEqual((issue["params"], issue["count"], issue["suspected_count"]), ({}, 2, 0))
+        first, second = issue["events"]
+        self.assertEqual((first["start"], first["seconds"], first["message_id"], first["reply_message_id"]),
+                         (first_at, first["end"] - first_at, messages[0], reply))
+        self.assertEqual((first["excerpt"], first["reply"], first["notified"], first["suspected"]),
+                         ("等你选方案", "确定用第一个", True, False))
+        self.assertEqual(first["end_reason"], "user")
+        self.assertFalse(second["notified"])
+
+    def test_non_user_wait_end_has_no_reply(self):
+        """An unmarked answer ends the wait, even if a new wait opens within the same second."""
+        self.say("请看看")
+        first_message = self.host_reply(text="请选一个方案", awaiting_user=True)
+        status, result = self.answer(None, "已有信息，接着做", proactive=True)
+        self.assertEqual(status, 201, result)
+        self.assertFalse(self.report("&range=live")["live"]["waiting"])
+        issue, = [item for item in self.report()["issues"] if item["rule"] == "stall"]
+        event, = issue["events"]
+        self.assertEqual((event["message_id"], event["end_reason"], event["reply_message_id"], event["reply"]),
+                         (first_message, "superseded", 0, ""))
+        self.assertGreater(event["end"], 0)
+        status, next_wait = self.answer(None, "现在有另一个问题", proactive=True, awaiting_user=True)
+        self.assertEqual(status, 201, next_wait)
+        with closing(connect_db(self.database)) as db, db:
+            db.execute("UPDATE room_waits SET created_at=? WHERE message_id=?",
+                       (event["end"], next_wait["message"]["id"]))
+        self.server.analytics_cache.clear()
+        issue, = [item for item in self.report()["issues"] if item["rule"] == "stall"]
+        self.assertEqual(issue["count"], 2)
+
+    def test_replacement_wait_uses_first_start_and_final_reply(self):
+        """An immediate replacement does not double-count a wait or move it to the next day."""
+        self.say("请看看")
+        first = self.host_reply(text="比较完成\n\n选方案？\n可选一或二\n不进摘录", awaiting_user=True)
+        status, replacement = self.answer(None, "换个问法，选第几个？", proactive=True, awaiting_user=True)
+        self.assertEqual(status, 201, replacement)
+        second = replacement["message"]["id"]
+        today = int(time()) // 86400 * 86400
+        with closing(connect_db(self.database)) as db, db:
+            db.execute("UPDATE room_waits SET created_at=?,ended_at=? WHERE message_id=?", (today - 600, today, first))
+            db.execute("UPDATE room_waits SET created_at=? WHERE message_id=?", (today, second))
+        self.assertFalse(any(i["rule"] == "stall" for i in self.report("&range=today")["issues"]))
+        open_issue, = [i for i in self.report()["issues"] if i["rule"] == "stall"]
+        self.assertEqual((open_issue["count"], open_issue["events"][0]["end"]), (1, 0))
+        self.server.analytics_cache.clear()
+        reply = self.say("第二个")[1]["message"]["id"]
+        issue, = [i for i in self.report()["issues"] if i["rule"] == "stall"]
+        event, = issue["events"]
+        self.assertEqual((issue["count"], event["start"], event["message_id"], event["end_reason"]),
+                         (1, today - 600, first, "user"))
+        self.assertEqual((event["excerpt"], event["reply_message_id"], event["reply"]),
+                         ("比较完成 选方案？ 可选一或二", reply, "第二个"))
+
+    def test_historical_wait_requires_a_quiet_gap_and_redispatch(self):
+        """A host answer and prompt redispatch suggest a stall only if no request was in flight."""
+        owner = self.say("请安排")[1]["message"]["id"]
+        answer = self.host_reply(text="请你确认？")
+        reply = self.say("确认")[1]["message"]["id"]
+        dispatch = self.host_reply(to=["Codex"])
+        start = int(time()) - 3600
+        with closing(connect_db(self.database)) as db, db:
+            for message, stamp in ((owner, start - 60), (answer, start), (reply, start + 1900), (dispatch, start + 1910)):
+                created = datetime.fromtimestamp(stamp, timezone.utc).isoformat()
+                db.execute("UPDATE messages SET created_at=? WHERE id=?", (created, message))
+                db.execute("UPDATE member_requests SET created_at=? WHERE message_id=?", (stamp, message))
+        issue, = [item for item in self.report()["issues"] if item["rule"] == "stall"]
+        self.assertEqual((issue["count"], issue["suspected_count"]), (0, 1))
+        event, = issue["events"]
+        self.assertEqual((event["message_id"], event["reply_message_id"], event["seconds"], event["suspected"], event["notified"]),
+                         (answer, reply, 1900, True, False))
+        with closing(connect_db(self.database)) as db, db:
+            db.execute("""INSERT INTO member_requests(room_id,member_id,message_id,created_at)
+                        VALUES(?,?,?,?)""", (self.room["id"], self.member_id("Antigravity"), owner, start - 60))
+        self.server.analytics_cache.clear()
+        self.assertFalse(any(item["rule"] == "stall" for item in self.report()["issues"]))
+
+    def test_suspected_wait_requires_question_punctuation_and_at_most_a_day(self):
+        """An overnight gap is bounded and a statement with only a URL query does not count."""
+        owner = self.say("请安排")[1]["message"]["id"]
+        answer = self.host_reply(text="Which option?")
+        reply = self.say("第一个")[1]["message"]["id"]
+        dispatch = self.host_reply(to=["Codex"])
+        status, result = self.answer(None, "等待你的选择", proactive=True, awaiting_user=True)
+        self.assertEqual(status, 201, result)
+        start = int(time()) - 48 * 3600
+        cases = (("Which option?", 86400, 1), ("Which option?", 86401, 0),
+                 ("下一步见 https://example.org/?step=2", 1900, 0))
+        for text, gap, expected in cases:
+            with self.subTest(text=text, gap=gap):
+                with closing(connect_db(self.database)) as db, db:
+                    for message, stamp in ((owner, start - 60), (answer, start), (reply, start + gap),
+                                           (dispatch, start + gap + 10)):
+                        created = datetime.fromtimestamp(stamp, timezone.utc).isoformat()
+                        db.execute("UPDATE messages SET created_at=? WHERE id=?", (created, message))
+                        db.execute("UPDATE member_requests SET created_at=? WHERE message_id=?", (stamp, message))
+                    db.execute("UPDATE messages SET text=? WHERE id=?", (text, answer))
+                self.server.analytics_cache.clear()
+                issue, = [item for item in self.report()["issues"] if item["rule"] == "stall"]
+                self.assertEqual((issue["count"], issue["suspected_count"]), (1, expected))
+                if expected:
+                    self.server.analytics_cache.clear()
+                    with patch("backend.analytics_issues.RUNS_PER_ISSUE", 1):
+                        limited, = [item for item in self.report()["issues"] if item["rule"] == "stall"]
+                    self.assertEqual(len(limited["events"]), 1)
+                    self.assertFalse(limited["events"][0]["suspected"])
 
     def test_dst_and_concurrency(self):
         instant = datetime(2026, 3, 8, 12, tzinfo=timezone.utc).timestamp()

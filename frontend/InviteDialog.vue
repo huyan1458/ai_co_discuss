@@ -1,12 +1,14 @@
 <script setup>
 /** Invite dialog shared by the discussion board and the free-room board: pick AIs, set up each card, then invite them one by one. */
 import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
+import { renderSVG } from "uqr";
 import ExpertCard from "./ExpertCard.vue";
 import ExternalExpertCard from "./ExternalExpertCard.vue";
 import ExternalGuestCard from "./ExternalGuestCard.vue";
 import PlatformConfigDialog from "./PlatformConfigDialog.vue";
 import RosterAdd from "./RosterAdd.vue";
 import { copy_seat_link, external_of, room_operations, runner_text, seat_options } from "./external-members.js";
+import { guest_error, use_guest_state } from "./external-guests.js";
 import { t } from "./i18n.js";
 
 const props = defineProps({ description: { type: String, default: () => t("新成员由程序按本机软件配置启动，或由你手动启动。") }, workflowId: { type: String, default: "" } });
@@ -45,11 +47,13 @@ const room_directories = computed(() => {
   return models?.room_id === room.value?.id ? [models.project_directory, ...(models.extra_directories || [])].filter(Boolean) : [];
 });
 const EXTERNAL_CHIP = "external:computer";
-// An external user is one person in a browser, one per room: the chip shows a single card that makes its own link.
+// An external user is one person in a browser, one per room: the chip adds a single card, and 邀请 makes its link,
+// shown in the next step with its QR code as an external expert's link is.
 const GUEST_CHIP = "external:guest";
-const guest_card = ref(false);
-// Once the card made its link the dialog's work is done: its dismiss button reads "完成" instead of "取消".
-const guest_generated = ref(false);
+const guest_card = ref(null);
+const invited_guest = ref(null), adding_guest = ref(false), guest_qr = ref(false);
+const guest = use_guest_state(bridge, () => room.value?.id);
+const guest_occupied = computed(() => ["waiting", "active"].includes(guest.state.value?.phase));
 // Instance names of just-invited manual members; the dialog then shows their start step.
 const invited_manual = ref([]);
 // Member ids of just-added external seats, listed beside the manual members in that step.
@@ -58,9 +62,11 @@ const invited_external = ref([]);
 // row turns into its seat when it exists (user 2026-11-19); a failure puts the unadded cards back.
 const adding_seats = ref([]);
 const seat_record = (id) => (room.value.members || []).find((member) => member.id === id);
-const invited_any_seat = computed(() => (invited_manual.value.length || invited_external.value.length || adding_seats.value.length) && !invite_picks.value.length && !external_drafts.value.length);
+const invited_any_seat = computed(() => (invited_manual.value.length || invited_external.value.length || adding_seats.value.length || invited_guest.value || adding_guest.value)
+  && !invite_picks.value.length && !external_drafts.value.length && !guest_card.value);
 const launch_lead = computed(() => {
   const manual = invited_manual.value.length, external = invited_external.value.length + adding_seats.value.length;
+  if (!manual && !external) return t("外部用户的邀请链接已生成，把链接或二维码发给对方；对方打开后进入房间，右栏显示在场卡，可随时断开。");
   if (manual && external) return t("成员已加入：手动成员把启动指令交给各自的 AI 会话，外部专家把邀请链接发给对方；注册或签到后才算到场。");
   if (external) return external > 1 ? t("{count} 个外部专家席位已加好，把邀请链接分别发给对方，对方签到后才算到场。", { count: external })
     : t("外部专家席位已加好，把邀请链接发给对方，对方签到后才算到场。");
@@ -98,7 +104,8 @@ function invite_status(name) {
   return ready ? { text: api ? t("已配置 API") : t("已配置本机软件"), tone: "ready" } : { text: api ? t("待补齐 API 配置") : t("待补齐接入配置"), tone: "warn" };
 }
 // Woken picks need the local service and a runnable entry; manual ones need neither.
-const invite_blocked = computed(() => submitting.value || (!invite_picks.value.length && !external_drafts.value.length && !invite_workflow.value?.existing.length && !Object.keys(invite_workflow.value?.members || {}).length)
+const invite_blocked = computed(() => submitting.value || (!invite_picks.value.length && !external_drafts.value.length && !guest_card.value && !invite_workflow.value?.existing.length && !Object.keys(invite_workflow.value?.members || {}).length)
+  || Boolean(guest_card.value) && (guest_occupied.value || !view.value.launch.available && !view.value.launch.remote)
   || invite_picks.value.some((pick) => pick.mode === "cli" && (!view.value.launch.available || invite_status(pick.name).tone === "warn")));
 // A fresh dialog starts with a clean choice; earlier notices belong to the board.
 // The workflow whose cards this invitation adds: { id, label }; enabled once all its cards have joined.
@@ -115,8 +122,9 @@ watch(inviting, async (open) => {
   invite_workflow.value = null;
   invite_picks.value = [];
   external_drafts.value = [];
-  guest_card.value = false;
-  guest_generated.value = false;
+  guest_card.value = null;
+  invited_guest.value = null;
+  guest_qr.value = false;
   invite_tried.value = false;
   invited_manual.value = [];
   invited_external.value = [];
@@ -172,7 +180,7 @@ const library_items = computed(() => [...invite_choices.value.map((name) => ({ v
 
 /** Add the platform or preset a chip names. */
 function add_library_item(value) {
-  if (value === GUEST_CHIP) { guest_card.value = true; return; }
+  if (value === GUEST_CHIP) { guest_card.value ||= { draft: {} }; return; }
   if (value === EXTERNAL_CHIP) { external_drafts.value = [...external_drafts.value, { id: ++external_seq, draft: {} }]; return; }
   if (value.startsWith(PROJECT_PRESET_PREFIX)) {
     const preset = project_preset(value);
@@ -263,13 +271,14 @@ async function submit_invitation() {
   }
   invited_manual.value = [...invited_manual.value, ...manual_names];
   if (external_drafts.value.length && !invite_picks.value.length) invited_any = await add_external_seats() || invited_any;
+  if (guest_card.value && !invite_picks.value.length && !external_drafts.value.length) await add_guest();
   // The workflow is bound once all its cards joined; a failure leaves the rest picked for a retry.
   if (workflow && Object.keys(workflow.members).length && !invite_picks.value.some((pick) => pick.card)) {
     if (!await act("enable_room_workflow", { id: workflow.id, members: workflow.members })) return await refresh_after(invited_any);
     invite_workflow.value = null;
   }
   // A seat that failed keeps its card here for a retry instead of closing the dialog on it.
-  if (!invite_picks.value.length && !invited_manual.value.length && !invited_external.value.length && !external_drafts.value.length) inviting.value = false;
+  if (!invite_picks.value.length && !invited_manual.value.length && !invited_external.value.length && !external_drafts.value.length && !guest_card.value && !invited_guest.value) inviting.value = false;
   await refresh_after(invited_any);
 }
 
@@ -293,6 +302,29 @@ async function add_external_seats() {
   }
   adding_seats.value = [];
   return added;
+}
+
+/** Make the external user's link; on failure the card stays for a retry and the reason is told. */
+async function add_guest() {
+  const card = guest_card.value;
+  guest_card.value = null;
+  adding_guest.value = true;
+  try {
+    const result = await guest.operations.value.invite(card.draft);
+    // Without a bound online site the link cannot exist.
+    if (!result?.url) throw new Error(result?.reason_text || result?.reason || t("未生成链接：电脑需先绑定线上站点（设置 → 远程访问）"));
+    invited_guest.value = { ...result, label: card.draft.label, svg: renderSVG(result.url, { border: 1 }) };
+  } catch (error) {
+    bridge.notify("error", guest_error(error));
+    guest_card.value = card;
+  } finally { adding_guest.value = false; }
+}
+async function copy_guest() {
+  clearTimeout(launch_copy_timer);
+  launch_copied.value = "";
+  if (!await bridge.execute("copy", invited_guest.value.url)) return;
+  launch_copied.value = "guest";
+  launch_copy_timer = setTimeout(() => { launch_copied.value = ""; }, COPY_FEEDBACK_MS);
 }
 
 /** Invitations skip the per-member reload; the room is read once after the batch, also when it stopped part way. */
@@ -321,6 +353,15 @@ async function refresh_after(invited_any) {
             <small :class="{ 'is-registered': seat_record(id) && !external_of(seat_record(id)).pending }">{{ seat_record(id) && !external_of(seat_record(id)).pending ? t('已签到') : t('待签到') }}</small>
             <UButton :icon="launch_copied === `seat:${id}` ? 'i-lucide-check' : 'i-lucide-link'" :label="launch_copied === `seat:${id}` ? t('已复制') : t('复制邀请链接')" size="sm" :color="launch_copied === `seat:${id}` ? 'success' : 'primary'" variant="soft" class="pb-launch-button" @click="copy_seat(id)" />
           </li>
+          <li v-if="invited_guest || adding_guest" :role="adding_guest ? 'status' : undefined">
+            <UAvatar src="/icons/external-user.svg" :alt="t('外部用户')" size="xs" class="channel-avatar external" />
+            <strong>{{ invited_guest?.label || t('外部用户') }}</strong>
+            <small>{{ adding_guest ? t('正在生成链接…') : t('待打开') }}</small>
+            <UButton v-if="invited_guest" icon="i-lucide-qr-code" :label="guest_qr ? t('收起二维码') : t('二维码')" size="sm" color="neutral" variant="ghost" @click="guest_qr = !guest_qr" />
+            <UButton :icon="launch_copied === 'guest' ? 'i-lucide-check' : 'i-lucide-link'" :label="launch_copied === 'guest' ? t('已复制') : t('复制邀请链接')" size="sm" :color="launch_copied === 'guest' ? 'success' : 'primary'" variant="soft" class="pb-launch-button" :loading="adding_guest" :disabled="!invited_guest" @click="copy_guest" />
+          </li>
+          <!-- eslint-disable-next-line vue/no-v-html -- an SVG this page rendered from the computer's own link -->
+          <li v-if="invited_guest && guest_qr" class="pb-invite-qr" role="img" :aria-label="t('邀请二维码')" v-html="invited_guest.svg" />
           <li v-for="item in adding_seats" :key="`adding-${item.id}`" role="status">
             <UAvatar src="/icons/external-expert.svg" :alt="t('外部专家')" size="xs" class="channel-avatar external" />
             <strong>{{ t('外部专家') }}</strong>
@@ -329,6 +370,7 @@ async function refresh_after(invited_any) {
           </li>
         </ul>
         <p v-if="invited_manual.length" class="fine-print">{{ t("指令含该成员的凭证，只交给对应的会话；关闭后仍可在参与者列表中复制。") }}</p>
+        <p v-if="invited_guest" class="fine-print">{{ t("{time} 前打开有效，只能用一次，绑定第一个打开的浏览器。对方进入后右栏显示在场卡，可随时断开。", { time: bridge.format_time(invited_guest.invite_expires_at) }) }}</p>
         <p v-if="invited_external.length || adding_seats.length" class="fine-print">{{ t("邀请链接只发给要邀请的人；关闭后仍可在输入框上方或成员菜单的“邀请详情”里复制。") }}</p>
         <div class="pb-invite-footer"><UButton :label="t('完成')" class="channel-primary-button" @click="inviting = false" /></div>
       </div>
@@ -339,23 +381,22 @@ async function refresh_after(invited_any) {
           <RosterAdd :label="t('选择 AI（可多选）')" :items="library_items" @add="add_library_item" @configure="configure_platform" @remove="remove_library_preset" />
         </template>
         <p v-for="member in invite_workflow?.existing || []" :key="member.card" class="fine-print">{{ bridge.display_name(member.name) }}{{ t('：') }}{{ record(member.name)?.status === 'away' ? t('确认后请回，保留原会话') : t('已在场，沿用原成员') }}</p>
-        <div v-if="invite_picks.length || external_drafts.length && !invite_workflow" class="pb-invite-cards">
+        <div v-if="invite_picks.length || (external_drafts.length || guest_card) && !invite_workflow" class="pb-invite-cards">
           <div v-for="pick in invite_picks" :key="pick.id" class="pb-invite-pick">
             <ExpertCard :name="pick.name" :mode="pick.mode" :choices="pick.card ? ['cli'] : ['cli', 'manual']" :status="invite_status(pick.name)" :directory="view.launch.room_models?.project_directory || ''" :workflow="pick.card ? invite_workflow?.label || '' : ''" @mode="pick.mode = $event" @remove="invite_picks = invite_picks.filter((item) => item !== pick)" />
             <p v-if="pick_instances.get(pick) !== pick.name" class="fine-print">{{ t("同一 AI 已有实例，将以 {name} 加入，使用独立会话。", { name: pick_instances.get(pick) }) }}</p>
           </div>
           <template v-if="!invite_workflow"><ExternalExpertCard v-for="item in external_drafts" :key="`external-${item.id}`" v-model:draft="item.draft" :paths="room_directories" @remove="external_drafts = external_drafts.filter((entry) => entry !== item)" /></template>
+          <ExternalGuestCard v-if="guest_card && !invite_workflow" v-model:draft="guest_card.draft" :occupied="guest_occupied" @remove="guest_card = null" />
         </div>
-        <ExternalGuestCard v-if="guest_card && !invite_workflow" @remove="guest_card = false; guest_generated = false" @generated="guest_generated = true" />
         <!-- Always rendered once cards exist, so switching a card's mode never changes the dialog height. -->
         <p v-if="invite_picks.length" class="fine-print" :class="{ 'pb-invite-reserved': !(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual')) }" :aria-hidden="!(invite_picks.some((pick) => pick.mode === 'manual') && invite_picks.some((pick) => pick.mode !== 'manual'))">{{ t("手动启动的成员排在程序启动的成员之后加入队列。") }}</p>
         <p v-else-if="submitting" class="pb-invite-empty">{{ t("正在加入成员…") }}</p>
         <p v-else-if="!invite_workflow && !external_drafts.length && !guest_card" class="pb-invite-empty">{{ t("选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。") }}</p>
-        <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available" role="alert" class="fine-print">{{ t("邀请需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
+        <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available || guest_card && !view.launch.available && !view.launch.remote" role="alert" class="fine-print">{{ t("邀请需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
         <div class="pb-invite-footer">
-          <UButton :label="guest_generated && !invite_picks.length && !external_drafts.length ? t('完成') : t('取消')" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />
-          <!-- The external user card makes its own link; with nothing else picked there is nothing to invite here. -->
-          <UButton v-if="!(guest_card && !invite_picks.length && !external_drafts.length && !invite_workflow)" type="submit" icon="i-lucide-user-plus" :label="invite_workflow ? t('确认成员并启用工作流') : invite_picks.length > 1 ? t('邀请 {count} 位', { count: invite_picks.length }) : t('邀请')" class="channel-primary-button" :disabled="invite_blocked" :loading="submitting" />
+          <UButton :label="t('取消')" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />
+          <UButton type="submit" icon="i-lucide-user-plus" :label="invite_workflow ? t('确认成员并启用工作流') : invite_picks.length > 1 ? t('邀请 {count} 位', { count: invite_picks.length }) : t('邀请')" class="channel-primary-button" :disabled="invite_blocked" :loading="submitting" />
         </div>
       </form>
     </template>
@@ -374,6 +415,9 @@ async function refresh_after(invited_any) {
 .pb-invite-launches strong { min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .pb-invite-launches small { padding: 1px 8px; border-radius: 999px; color: var(--ui-warning, #e0a33a); background: color-mix(in srgb, var(--ui-warning, #e0a33a) 14%, transparent); font-size: 11px; }
 .pb-invite-launches small.is-registered { color: var(--ui-success, #3fb27f); background: color-mix(in srgb, var(--ui-success, #3fb27f) 14%, transparent); }
+/* The external user link's QR code: a white plate in both themes so phone cameras read it (as on the invite card). */
+.pb-invite-launches li.pb-invite-qr { justify-content: center; padding: 10px; }
+.pb-invite-qr :deep(svg) { display: block; width: 160px; height: 160px; padding: 6px; border-radius: 8px; background: #fff; }
 .pb-invite-launches li > .pb-launch-button { margin-left: auto; min-width: 112px; justify-content: center; }
 .pb-invite-launches .channel-avatar { flex-shrink: 0; width: 22px; height: 22px; font-size: 9px; }
 .pb-invite-mode { display: flex; align-items: center; gap: 12px; color: var(--ui-text-muted); font-size: 12px; }

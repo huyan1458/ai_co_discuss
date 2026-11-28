@@ -41,6 +41,7 @@ class CliTests(unittest.TestCase):
         database = Path(cls.directory.name) / "cli.sqlite3"
         init_database(database, seed=False)
         cls.server = DiscussionServer(("127.0.0.1", 0), database)
+        cls.server.daemon_threads = False
         cls.thread = threading.Thread(target=cls.server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
         cls.thread.start()
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
@@ -50,8 +51,8 @@ class CliTests(unittest.TestCase):
         """Close only the private test process and temporary storage."""
         if not cls.external:
             cls.server.shutdown()
-            cls.server.server_close()
             cls.thread.join()
+            cls.server.server_close()
         cls.directory.cleanup()
 
     def setUp(self):
@@ -129,8 +130,23 @@ class CliTests(unittest.TestCase):
         saved = self.cli("attachment", "download", self.room, attachment["id"], "--dest", destination)
         self.assertEqual(saved["sha256"], attachment["sha256"])
         self.assertEqual(destination.read_bytes(), data)
-        self.rejected(["attachment", "download", self.room, attachment["id"], "--dest", destination])
-        self.assertEqual(destination.read_bytes(), data)
+        self.assertTrue(self.cli("attachment", "download", self.room, attachment["id"], "--dest", destination)["reused"])
+        args = ("attachment", "download", self.room, attachment["id"])
+        original_dir = Path.cwd()
+        try:
+            os.chdir(self.directory.name)
+            inbox = Path.cwd() / ".codiscuss-inbox"
+            saved = self.cli(*args)
+            path = inbox / attachment["id"] / source.name
+            self.assertEqual(Path(saved["path"]), path)
+            self.assertEqual((inbox / ".gitignore").read_text(encoding="utf-8"), "*\n")
+            self.assertTrue(self.cli(*args)["reused"])
+            incorrect = b"x" * len(data)
+            path.write_bytes(incorrect)
+            self.rejected(args)
+            self.assertEqual(path.read_bytes(), incorrect)
+        finally:
+            os.chdir(original_dir)
 
     def invoke(self, arguments, stdin=None, environment=None):
         """Run the actual entrypoint with UTF-8 streams and no inherited target."""
@@ -744,6 +760,25 @@ class CliContractTests(unittest.TestCase):
                 discuss.external_send(plan, {}, 1)
         proxy.assert_not_called()
 
+    def test_object_attachment_interruption_never_exposes_the_destination(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(discuss, "build_opener") as opener:
+            dest = Path(directory) / "attachment.txt"
+            part = dest.with_name(dest.name + ".part")
+            response = opener.return_value.open.return_value.__enter__.return_value
+
+            def interrupted(_size):
+                self.assertTrue(part.is_file())
+                self.assertFalse(dest.exists())
+                if response.read.call_count == 1:
+                    return b"first chunk"
+                raise KeyboardInterrupt
+
+            response.read.side_effect = interrupted
+            with self.assertRaises(KeyboardInterrupt):
+                discuss.download_object_attachment(dest, {"url": "https://cos.invalid/file", "size": 20}, 3)
+            self.assertFalse(dest.exists())
+            self.assertFalse(part.exists())
+
     def test_object_attachment_transfers_stream_to_cos_without_room_credentials(self):
         """Reserve/complete with the room credential, but send bytes only to the supplied COS endpoint."""
         identifier = "a" * 32
@@ -784,14 +819,20 @@ class CliContractTests(unittest.TestCase):
                     self.reply({"attachment": {"id": identifier, "stored": True}})
 
         with ExitStack() as cleanup:
-            server = cleanup.enter_context(ThreadingHTTPServer(("127.0.0.1", 0), StorageStub))
-            folder = cleanup.enter_context(tempfile.TemporaryDirectory())
+            server = ThreadingHTTPServer(("127.0.0.1", 0), StorageStub)
+            server.daemon_threads = False
+            folder = tempfile.TemporaryDirectory()
+            cleanup.callback(folder.cleanup)
+            cleanup.callback(server.server_close)
             base = f"http://127.0.0.1:{server.server_port}"
             thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
             thread.start()
+            cleanup.callback(thread.join)
             cleanup.callback(server.shutdown)
-            source, dest = Path(folder) / "source.txt", Path(folder) / "dest.txt"
+            source, dest = Path(folder.name) / "source.txt", Path(folder.name) / "dest.txt"
             source.write_bytes(content)
+            stale = dest.with_name(dest.name + ".part")
+            stale.write_bytes(b"interrupted download")
             headers = {"X-Discussion-Token": "fixture-token"}
             upload = discuss.RequestPlan(path, "POST", params={"actor": "用户", "file_name": source.name,
                 "submission_id": "test-object"}, upload_file=str(source))
@@ -799,10 +840,12 @@ class CliContractTests(unittest.TestCase):
             self.assertTrue(discuss.send_request(upload, base + path, 3, headers)["attachment"]["stored"])
             self.assertEqual(discuss.send_request(download, base + download.path, 3, headers)["sha256"], "")
             self.assertEqual(dest.read_bytes(), content)
+            self.assertFalse(stale.exists())
             partial = dest.with_suffix(".partial")
             with self.assertRaises(discuss.CliError):
                 discuss.download_object_attachment(partial, {"url": base + "/short", "size": len(content)}, 3)
             self.assertFalse(partial.exists())
+            self.assertFalse(partial.with_name(partial.name + ".part").exists())
         self.assertEqual([token for _, token, _ in calls], [
             "fixture-token", "fixture-token", None, "fixture-token", "fixture-token", "fixture-token", None, None])
         self.assertEqual(json.loads(calls[1][2]), {"actor": "用户", "file_name": "source.txt",

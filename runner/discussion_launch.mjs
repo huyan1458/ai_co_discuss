@@ -18,6 +18,7 @@ import { room_draft_space } from './room_destruction.mjs';
 import { ISOLATED_ACCOUNT_VARIABLE } from './os_users.mjs';
 import { read_store } from './external_client.mjs';
 import { bundle_project_markdown, bundle_project_page, inside_room, outside_directory, project_media, project_root, project_zip, read_only_enforced, read_project_files, read_project_folders, room_directories, room_directory_entries, search_project_roots } from './project_files.mjs';
+import { cloud_project_source, cloud_landing_target, project_cloud_status, read_cloud_inbound, reserve_cloud_inbound, start_project_cloud } from './project_cloud.mjs';
 import { delete_entry, make_folder, paste_entry, read_text, RecycleArea, rename_entry, save_text, upload_part } from './project_manage.mjs';
 import { guard_remote_request, list_remote_directories, remote_allows, remote_roots } from './remote_policy.mjs';
 import { pairing_origins, list_devices, machine_fingerprint, revoke_device, start_pairing } from './device_auth.mjs';
@@ -44,7 +45,8 @@ import { transfer_workflow, bound_workflow, room_workflow_store, trust_workflow,
 import { assert_shared_home, CONNECTION_FIELDS, configuration_snapshot, read_registry, registered_identity, register_room, service_home, service_pid, start_service } from './discussion_service.mjs';
 import { site_fetch } from './entry_client.mjs';
 import { t } from './i18n.mjs';
-import { post_steward_request, require_steward_skill, require_steward_software, steward_defaults, steward_profile, steward_settings_patch, steward_site, steward_software, steward_status } from './steward.mjs';
+import { post_steward_request, require_steward_access, require_steward_skill, require_steward_software, steward_defaults, steward_profile, steward_room_permissions, steward_settings_patch, steward_site, steward_software, steward_status } from './steward.mjs';
+import { proactive_settings, revise_proactive_list, steward_proactive_tick } from './steward_proactive.mjs';
 import { host_room_limit, without_host_item } from './host_permissions.mjs';
 import { guest_protection, guest_state_of, guest_withheld, HOST_ACTION_ITEMS, HOST_ITEMS, HOST_LEGACY_ITEMS, host_allowed, host_permission_fields, host_permissions, host_refusal, normalize_host_permissions } from './host_permissions.mjs';
 
@@ -151,7 +153,7 @@ scheduler-check 用智能调度配置（provider、model、api_key_ref）向决�
 image-settings 读取这台电脑的生图服务（base_url、图片模型 model、api_key_ref，configured 表示已配置 Key）；内容非空时保存。
 image-check 检查这台电脑已保存的生图服务：用密钥读取地址的模型列表（不生成图片、不计费），核对地址、密钥与所选图片模型；无法确认账号能否实际出图（余额、组织验证）。
 image 成员按任务凭据生图（房间须添加了生图卡片）：REQUEST 为 JSON，必填 action（generate 生成 / edit 改图）与 prompt；可选 size（auto、1024x1024、1536x1024、1024x1536 或 16 倍数的 宽x高）、quality（auto/low/medium/high，2.5、2.6 系列另有 xhigh/max）、n（1–10 张）、output_format（png/jpeg/webp/gif，生成另可 svg）、background（auto/opaque/transparent）、file_name（附件名）、save_path（另存进可写项目）；edit 另需 images（1–16 个 {attachment_id} 或 {file_path}，第一张为主图），可加 mask 或 markup（同样格式，二选一）。图片存为成员的附件，返回附件 ID，再用 message post --attachment 附上。
-${t('tts-settings 读取或保存语音设置。本机组件可在语音设置中选择“让平台主理人安装”。')}（语音服务 provider：local / volcengine / aliyun / azure / openai，语速 speech_rate，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，本机、火山引擎与 OpenAI 另有语气提示 context（各自默认不同），Azure 另有 region；语音输入服务 stt_provider：local / volcengine / openai）。
+${t('tts-settings 读取或保存语音设置。本机组件可在语音设置中选择“让 MOSS 安装”。')}（语音服务 provider：local / volcengine / aliyun / azure / openai，语速 speech_rate，以及 providers.<服务> 的 api_key_ref、speaker、member_voices、file_voice，本机、火山引擎与 OpenAI 另有语气提示 context（各自默认不同），Azure 另有 region；语音输入服务 stt_provider：local / volcengine / openai）。
 tts 用朗读设置把 text（不超过 300 字）合成为音频（本机服务为 m4a，其余为 MP3），返回 base64。
 weixin 微信通知：action 为 status（默认，读取绑定状态）、login（生成扫码内容）、complete（等待扫码确认，约 20 秒）、test（发一条测试通知）或 unbind（解除本机绑定）。Goal 待确认或阻塞提问 3 分钟仍未回复时通知房主，房主在微信回复即作为房主发言发回该房间；只用本机服务目录保存凭据。
 notify 通知渠道：不带 channel 时列出各渠道状态；带 channel（如 weixin）时 action 为 status（默认）、test（只往该渠道发一条测试通知）或该渠道自己的绑定操作（微信为 login、complete、unbind）。房间需要房主处理时，通知发往所有已就绪的渠道，房主在任一渠道回复都会发回对应房间。
@@ -195,10 +197,14 @@ ${t("host-control 主持人代房主控制房间，须房主已为本房间勾�
         ${t("discussion 读取讨论，discussion --do start --goal 目标 --revision REV 开启（上限用房间默认值），--do pause|resume|end --revision REV；")}
         ${t("goal 读取 Goal，goal --do start --goal 目标 --revision REV 开启（预算用房主默认值，默认不限时为 8 次续跑、90 分钟），--do pause|resume|end --revision REV。")}
   ${t("房间：create-room --title 标题 [--goal 目标] [--members 甲,乙] [--host 平台] [--host-model 模型] [--host-effort 档位] [--cwd 子目录] [--access read|write|auto|full] [--text 首条消息 | --body-file FILE] [--submission-id ID]")}
+        ${t('MOSS 专用：folders 列出已有文件夹。先查再用 create-room --folder ID 指定，不指定则未归类。')}
+        ${t('MOSS 专用：create-room --preset task 使用同款软件和模型，在草稿工作区新建单成员任务房间。')}
         ${t("新建一个房间分担工作：成员用本机已配置的软件，项目权限默认只读，目录只能是本房间项目目录或其子目录；不填 --host 时由与你同款的专家主持；")}
         ${t("新房间复制本房间的智能调度、生图、API 上限、连续派活上限与主持人权限（不含新建房间），本房间可新建的数量有上限；两边各留一张链接卡片；重试沿用同一 --submission-id；")}
         ${t("rooms 查看父子房间；room list --query 标题片段 查找站点中的其他房间。")}
         ${t("room-post --room 房间编号 (--text 正文 | --body-file FILE) [--expect reply|none] [--reply-to 消息编号] [--interrupt] [--submission-id ID] 向同站点房间的主持人发言。回复本次执行的跨房请求即完成该请求；只有父房间可打断子房间。")}
+        ${t("archive-room --room 房间编号 仅 MOSS 可存档自己创建的子房间。")}
+        ${t('duty add --text 正文 | duty remove --id ID 仅 MOSS 可新增或移除职责。')}
   ${t("外部用户：guest-disconnect [--guest ID] 立即断开在场或等待入场的外部用户（无需勾选权限，不填 --guest 即当前那位）；外部用户在场期间暂不能改项目权限、模型与接入方式，邀请或请回成员，开启讨论与 Goal，设定时检查，启用或移动工作流，新建房间，向其他房间发言。")}
   ${t("不开放：批准超出上限的轮数、放行工具、改项目目录、撤回回退用户消息、私聊、对主持人自己的其他操作。")}
 workflow-check 按导入规则校验工作流文件夹或单段草稿，返回预览，不保存；workflow-save 校验后保存进工作流库，卡片按声明的项目权限保存；库里已有同 ID 的工作流时须表明来意：--revision 写读取时的修订号（库在那之后被改过就拒绝，什么都不写），或 --overwrite 明确整份覆盖，两样都没有就拒绝。写法见 workflow-creator 技能。
@@ -635,6 +641,53 @@ export async function room_files(home, raw, { trust = false } = {}) {
   return { room_id: input.room_id, root, ...read_project_files(directory, input.path, input.offset) };
 }
 
+/** Start a file-page cloud copy only after checking the room owner's project access. */
+export async function room_project_cloud(home, raw) {
+  const { input, config } = await member_room_context(home, { ...raw, room_id: raw.room });
+  if (!['file', 'folder'].includes(input.kind)) throw new Error(t('云空间来源须为指定类型的普通文件或文件夹'));
+  const purpose = input.purpose ?? 'keep';
+  if (!['keep', 'outbound'].includes(purpose)) throw expert_failure('invalid_cloud_purpose', '云空间用途无效');
+  const root = input.root ?? 0;
+  const source = cloud_project_source(files_root(home, config, root), input.path, input.kind);
+  return start_project_cloud(home, { site: input.site, room: input.room_id, token: input.token, root, source, purpose });
+}
+
+function project_cloud_target(home, config, root, path) {
+  const readonly = room_directory_entries(config).filter(item => item.access === 'read').map(item => item.path);
+  return cloud_landing_target(files_root(home, config, root), path ?? '', readonly);
+}
+
+/** Verify ownership and the writable destination before returning a browser-to-COS form. */
+export async function room_cloud_upload(home, raw) {
+  const { input, config } = await member_room_context(home, { ...raw, room_id: raw.room });
+  const root = input.root ?? 0;
+  const target = project_cloud_target(home, config, root, input.path);
+  return reserve_cloud_inbound(home, { site: input.site, room: input.room_id, token: input.token, root, target,
+    size: input.size, name: input.name, content_type: input.content_type || 'application/octet-stream', submission_id: input.submission_id });
+}
+
+/** Start landing a verified inbound reservation, attachment or account cloud file. */
+export async function room_cloud_land(home, raw) {
+  const { input, config } = await member_room_context(home, { ...raw, room_id: raw.room });
+  const { task_id, attachment_id, attachment_room, attachment_grant, cloud_file_id, conflict } = input;
+  const request = { site: input.site, room: input.room_id, token: input.token };
+  const valid_id = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id);
+  const ids = [task_id, attachment_id, cloud_file_id].filter(id => id !== undefined);
+  if (ids.length !== 1 || !valid_id(ids[0]) || !attachment_id && attachment_room != null
+      || conflict != null && !['replace', 'keep_both'].includes(conflict)) throw expert_failure('invalid_cloud_land', '云空间取回请求无效');
+  const cross_room = attachment_id && attachment_room != null && attachment_room !== input.room_id;
+  const needs_grant = cross_room || cloud_file_id;
+  if (cross_room && (typeof attachment_room !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(attachment_room))
+      || needs_grant && (typeof attachment_grant !== 'string' || !/^[a-f0-9]{64}$/.test(attachment_grant)))
+    throw Object.assign(expert_failure('cloud_attachment_room', '需要管理员登录'), { http_status: 403, details: {} });
+  const original = task_id ? read_cloud_inbound(home, { ...request, task_id }) : null;
+  const target = project_cloud_target(home, config, original ? original.root : input.root ?? 0, original ? original.path : input.path);
+  if (original && (original.base !== target.base || original.folder !== target.folder))
+    throw expert_failure('cloud_target_changed', '云空间上传的目标文件夹已改变');
+  return start_project_cloud(home, { ...request, target, conflict, original, inbound_id: task_id, attachment_id, cloud_file_id,
+    ...(needs_grant ? { attachment_room, attachment_grant } : {}), recycle: recycle_area(home).directory });
+}
+
 /** Share only the computer's own rooms, under the same owner proof as project file reads. */
 export async function room_share_job(home, raw, { trust = false } = {}) {
   if (!sharing_available(home)) return { enabled: false };
@@ -965,6 +1018,8 @@ function validate_create_preferences(input) {
       valid = Number.isInteger(value) && value >= minimum && value <= maximum;
     } else if (field === 'drive') valid = ['free', 'discussion', 'goal'].includes(value);
     else if (field === 'host_project_access') valid = ['read', 'write', 'auto', 'full'].includes(value);
+    else if (field === 'members') valid = Array.isArray(value) && new Set(value).size === value.length && value.every(name => platform_of(name) && clients_of(name));
+    else if (field === 'host') valid = value === '' || Boolean(platform_of(value) && clients_of(value));
     else if (field === 'workflow_id') valid = typeof value === 'string' && (!value || WORKFLOW_ID_PATTERN.test(value));
     else if (field === 'scheduler') valid = valid_scheduler_preference(value);
     else if (field === 'host_permissions') valid = valid_host_permissions(value);
@@ -1310,7 +1365,7 @@ function woken_member(member) { return typeof member === 'string' || !member.acc
 
 /** Free rooms add one private credential per woken member, kept with the room configuration for retries. */
 function free_launch_config(home, input, room, directory, options) {
-  const defaults = room.system_kind === 'steward' ? {} : options.defaults || launch_settings(home).participants;
+  const defaults = room.system_kind === 'steward' || input.steward_task ? {} : options.defaults || launch_settings(home).participants;
   const names = room.members.filter(woken_member).map(member => typeof member === 'string' ? member : member.name);
   const participants = Object.fromEntries(names.map(name => [name, participant_profile(name, defaults, input, false)]));
   for (const [name, profile] of Object.entries(participants)) assert_model_available(home, name, profile);
@@ -1322,6 +1377,7 @@ function free_launch_config(home, input, room, directory, options) {
   return validate_config({ site: input.site, room: room.id || 'preview', token: options.token, mode: 'free', participants, members, api_home: home,
     scheduler: input.scheduler || undefined, cwd: input.cwd, extra_directories: input.extra_directories, project_access: input.project_access || undefined, workflow,
     ...(room.system_kind === 'steward' ? { steward: true, steward_skills: input.steward_skills || [] } : {}),
+    ...(input.steward_task ? { steward_task: true, spawned_from: input.spawned_from } : {}),
     ...host_permission_fields(normalize_host_permissions(input.host_permissions, input.host_workflows === true)), api_max_requests: input.api_max_requests,
     image_generation: input.image_generation === true || undefined,
     data_directory: join(directory, 'runtime'), draft_directory: service_drafts(home, join(directory, 'runtime')) }, directory);
@@ -1426,7 +1482,7 @@ async function member_room_context(home, raw, { trust = false } = {}) {
     return identity?.site === input.site && identity.room === input.room_id;
   });
   if (paths.length !== 1) throw new Error('未找到本房间唯一的已登记配置，请核对本机接入服务');
-  const config = configuration_snapshot(paths[0]).config;
+  const path = paths[0], { config } = configuration_snapshot(path);
   const proof = `${input.site}
 ${input.room_id}
 ${createHash('sha256').update(input.token).digest('hex')}`;
@@ -1435,7 +1491,7 @@ ${createHash('sha256').update(input.token).digest('hex')}`;
     await site_request(input.site, `/api/rooms/${input.room_id}/inbox`, input.token);
     trusted_room_tokens.set(proof, Date.now());
   }
-  return { input, path: paths[0], config };
+  return { input, path, config };
 }
 
 /** Write a manual member's private credential next to the room configuration, never into a receipt. */
@@ -2889,16 +2945,18 @@ export async function room_workflow(home, raw) {
  * The registered room whose present host holds this task's access file.
  * Returns its configuration path, configuration and the site's member list; throws for anyone else.
  */
-async function host_room(home, access_file) {
+async function host_room(home, access_file, allow_steward = false) {
   if (!access_file) throw new Error('凭据用 --access-file 或 DISCUSS_ACCESS_FILE');
   const access = JSON.parse(readFileSync(resolve(access_file), 'utf8').replace(/^﻿/, ''));
   const path = registered_room_path(home, String(access.site || '').replace(/\/$/, ''), access.room);
   if (!path) throw new Error('本机没有登记这个房间');
   const config = configuration_snapshot(path).config;
+  if (config.steward && !allow_steward) throw new Error(t('MOSS 无权管理工作流'));
   const host = Object.keys(config.members || {}).find(name => config.members[name].token === access.token);
   const room = await api(config, '');
   const roster = room.free?.members || [];
   if (!host || !roster.some(member => member.name === host && member.role === 'host' && member.status === 'active')) throw new Error('只有本房间的主持人能运行此命令');
+  if (config.steward) Object.assign(config, host_permission_fields(steward_room_permissions(launch_settings(home))));
   // How the room shows each member (the owner's label, else its platform nickname), so the host names them as it sees them.
   const labels = { ...Object.fromEntries((room.members || []).map(member => [member.name, member.label])), ...room.labels };
   const guest = await guest_state(config);
@@ -3340,16 +3398,7 @@ function edit_room_config(path, change) {
  * rooms, so rooms do not multiply. A card links the two rooms both ways; `--text` is its first message, sent as by
  * `room-post`. A retry passes the same --submission-id and returns the same room.
  */
-async function host_create_room(ctx, o) {
-  const { home, config, host } = ctx;
-  if (!o.title) throw new Error('须用 --title 写明新房间的标题');
-  const created = config.spawned_rooms || [];
-  const submission_id = o.submission_id || randomUUID();
-  if (!/^[A-Za-z0-9_-]{8,100}$/.test(submission_id)) throw new Error('--submission-id 须为 8–100 位字母、数字、下划线或连字符');
-  const retry = created.find(item => item.submission_id === submission_id);
-  if (!retry && created.length >= host_room_limit(config)) {
-    throw new Error(`本房间已新建 ${created.length} 个房间，达到上限 ${host_room_limit(config)}；需要更多请让用户在“主持人权限”里调高上限`);
-  }
+function host_spawn_members({ home, config, host }, o) {
   if (o.access && !PROJECT_ACCESS.includes(o.access)) throw new Error('项目权限须为 read、write、auto 或 full');
   const access = o.access || 'read';
   const host_name = o.host || platform_of(host);
@@ -3371,21 +3420,103 @@ async function host_create_room(ctx, o) {
   }
   if (o.host_model) participants[host_name].model = o.host_model;
   if (o.host_effort) participants[host_name].effort = o.host_effort;
-  const permissions = without_host_item(host_permissions(config), 'create_rooms');
-  const cwd = spawned_directory(config.cwd, o.cwd);
+  return { host_name, names, participants, access };
+}
+
+/** Only the owner's saved room choices determine who joins a MOSS-created room. */
+function steward_spawn_members(home, preferences) {
+  const names = preferences.members?.filter(name => card_platform_ready(home, name)) || [];
+  const host_name = card_platform_ready(home, preferences.host) ? preferences.host : names[0] || configured_platforms(home)[0];
+  if (!host_name) throw new Error(t('尚未配置可用于新房间的 AI 软件'));
+  if (!names.includes(host_name)) names.unshift(host_name);
+  const access = !preferences.host_project_access || preferences.host_project_access === 'read' ? 'read' : 'write';
+  const participants = Object.fromEntries(names.map(name => [name, { ...host_invite_profile(home, name, { access }),
+    cwd: '', session_id: '', source_thread_id: '', project_name: '', project_id: '' }]));
+  return { host_name, names, participants, access };
+}
+
+/** A task room starts the MOSS software in a new, writable scratch workspace, without its session or tools. */
+function steward_task_member(config, host) {
+  const host_name = platform_of(host);
+  const source = config.participants[host];
+  const profile = Object.fromEntries(['adapter', 'model', 'effort', 'executable', 'ipc_directory', 'base_url', 'api_protocol', 'api_key_ref']
+    .filter(field => source[field] !== undefined).map(field => [field, source[field]]));
+  return { host_name, names: [host_name], access: 'write', participants: { [host_name]: { ...profile, project_access: 'write' } } };
+}
+
+/** An omitted directory selects the normal per-room scratch workspace. */
+function steward_spawn_directory(home, wanted) {
+  if (!wanted) return undefined;
+  const saved = launch_projects(home).projects.find(({ path }) => isAbsolute(wanted) && same_directory(path, wanted));
+  if (!saved || !existsSync(saved.path) || !statSync(saved.path).isDirectory()) throw new Error(t('MOSS 只能使用已保存的项目目录，或省略 --cwd 使用草稿工作区'));
+  return realpathSync(saved.path);
+}
+
+/** Keep only known live children; MOSS retains entries it cannot currently verify. */
+async function active_spawned_rooms(ctx, parent_path) {
+  const tracked = ctx.config.spawned_rooms || [];
+  const active = (await Promise.all(tracked.map(async item => {
+    try {
+      const room = await site_request(ctx.config.site, `/api/rooms/${item.room}`);
+      return room.archived ? null : item;
+    } catch (error) {
+      if (error.status === 404) return null;
+      if (ctx.config.steward) return item;
+      throw error;
+    }
+  }))).filter(Boolean);
+  if (active.length !== tracked.length) edit_room_config(parent_path, saved => ({ ...saved, spawned_rooms: active }));
+  return active;
+}
+
+/** List the current site's existing folders without exposing unrelated room data. */
+async function steward_folders({ config }) {
+  const { folders } = await site_request(config.site, '/api/rooms');
+  return { folders: folders.map(({ id, name, directories }) => ({ id, name, directories })) };
+}
+
+async function steward_spawn_folder(ctx, id) {
+  const { folders } = await steward_folders(ctx);
+  if (!folders.some(folder => folder.id === id)) throw new Error(t('找不到文件夹 {id}。请先用 launch host-control folders 查询已有文件夹编号。', { id }));
+  return id;
+}
+
+async function host_create_room(ctx, o) {
+  const { home, config, host } = ctx;
+  if (!o.title) throw new Error('须用 --title 写明新房间的标题');
+  if (o.preset !== undefined && (!config.steward || o.preset !== 'task')) throw new Error(t('只有 MOSS 建房时可以指定 --preset task。'));
+  const task = o.preset === 'task';
+  if (!config.steward && o.folder !== undefined) throw new Error(t('只有 MOSS 建房时可以指定 --folder。普通子房间继承父房间的文件夹。'));
+  const folder_id = config.steward && o.folder !== undefined ? await steward_spawn_folder(ctx, o.folder) : null;
+  const submission_id = o.submission_id || randomUUID();
+  if (!/^[A-Za-z0-9_-]{8,100}$/.test(submission_id)) throw new Error('--submission-id 须为 8–100 位字母、数字、下划线或连字符');
+  const parent_path = registered_room_path(home, config.site, config.room);
+  const created = await active_spawned_rooms(ctx, parent_path);
+  const retry = created.find(item => item.submission_id === submission_id);
+  const settings = config.steward ? launch_settings(home) : null;
+  if (!config.steward && !retry && created.length >= host_room_limit(config)) {
+    throw new Error(t('本房间有 {count} 个未存档的子房间，达到上限 {limit}。存档其中一个后可再建。', { count: created.length, limit: host_room_limit(config) }));
+  }
+  const preferences = settings ? settings.create_preferences || {} : null;
+  const { host_name, names, participants, access } = task ? steward_task_member(config, host)
+    : preferences ? steward_spawn_members(home, preferences) : host_spawn_members(ctx, o);
+  const permissions = task ? { items: [] } : without_host_item(preferences ? normalize_host_permissions(preferences.host_permissions) : host_permissions(config), 'create_rooms');
+  const cwd = task ? undefined : config.steward ? steward_spawn_directory(home, o.cwd) : spawned_directory(config.cwd, o.cwd);
   let extra_directories;
-  if (config.extra_directories?.length) {
+  if (!config.steward && config.extra_directories?.length) {
     try { check_extra_directories(cwd, config.extra_directories); extra_directories = config.extra_directories; } catch {}
   }
   const receipt = await launch_discussion(home, { site: config.site, entry: 'web', cwd, participants,
-    ...(config.scheduler ? { scheduler: config.scheduler } : {}),
-    ...(config.image_generation ? { image_generation: true } : {}),
+    ...(!task && config.scheduler ? { scheduler: config.scheduler } : {}),
+    ...(!task && config.image_generation ? { image_generation: true } : {}),
+    ...(task ? { steward_task: true, spawned_from: config.room, without_saved_tools: true } : {}),
     ...(config.api_max_requests !== undefined ? { api_max_requests: config.api_max_requests } : {}),
     ...(extra_directories ? { extra_directories } : {}),
     host_permissions: permissions, room: { title: o.title, goal: o.goal || '', mode: 'free', host: host_name, submission_id,
-      members: names.map(name => ({ name, access: 'runner' })) } }, { ...ctx.launch_options, inherited_folder: ctx.folder_id });
+      ...(folder_id ? { folder_id } : {}), ...(task ? { preset: 'task' } : {}), members: names.map(name => ({ name, access: 'runner' })) } },
+    { ...ctx.launch_options, inherited_folder: config.steward ? undefined : ctx.folder_id });
   const room_id = receipt.room.id;
-  const parent_path = registered_room_path(home, config.site, config.room);
+  if (receipt.room.archived) throw new Error(t('这次创建的子房间已存档。请使用新的提交编号创建其他房间。'));
   if (!retry) edit_room_config(parent_path, saved => ({ ...saved, spawned_rooms: [...(saved.spawned_rooms || []), { room: room_id, submission_id }] }));
   const label = ctx.labels[host] || host;
   await ctx.call('/room-link', { relation: 'child', room_id, host: label });
@@ -3396,8 +3527,9 @@ async function host_create_room(ctx, o) {
     await site_request(config.site, `/api/rooms/${room_id}/budget`, child.token, { max_rounds: ctx.max_rounds }, caller_only(ctx.headers));
   }
   await site_request(config.site, `/api/rooms/${room_id}/room-link`, child.token, { relation: 'parent', room_id: config.room, host: label }, caller_only(ctx.headers));
-  const first = o.text ? await host_room_post({ ...ctx, config: configuration_snapshot(parent_path).config }, { room: room_id, text: o.text, submission_id: `${submission_id}-first` }) : null;
+  const first = o.text ? await host_room_post(ctx, { room: room_id, text: o.text, submission_id: `${submission_id}-first` }) : null;
   return { room_id, title: receipt.room.title, url: receipt.url, host: host_name, members: names, project_access: access,
+    ...(config.steward ? { folder_id: receipt.room.folder_id ?? null, preset: task ? 'task' : null } : {}),
     cwd: child.cwd || null, ...(first ? { message_id: first.message_id, ...(first.record_error ? { record_error: first.record_error } : {}) } : {}) };
 }
 
@@ -3409,11 +3541,21 @@ async function host_create_room(ctx, o) {
 async function host_room_post(ctx, o) {
   const { home, config, host } = ctx;
   if (!o.text) throw new Error(t('须用 --text 或 --body-file 写明要发的消息'));
+  if (config.steward) {
+    if (!host_allowed(config, 'create_rooms')) throw new Error(host_refusal('create_rooms'));
+    if (o.interrupt || o.member) throw new Error(t('MOSS 只能向项目房间的主持人发消息，不能打断执行或点名成员'));
+    if (!o.room || !/^[A-Za-z0-9_-]+$/.test(o.room)) throw new Error(t('房间编号无效'));
+    const target = await site_request(config.site, `/api/rooms/${o.room}`);
+    if (target.system_kind || target.archived || !target.host || target.host === '用户') {
+      throw new Error(t('MOSS 只能向同站点未存档项目房间的主持人发消息'));
+    }
+  }
   const submission_id = o.submission_id || randomUUID();
   const label = ctx.labels[host] || host;
   const result = await ctx.call('/host-room-post', { target_room_id: o.room, text: o.text, submission_id,
     interrupt: Boolean(o.interrupt), expect: o.expect || (o.reply_to ? 'none' : 'reply'),
-    ...(o.reply_to !== undefined ? { reply_to: Number(o.reply_to), execution_id: ctx.execution_id } : {}),
+    ...(o.reply_to !== undefined ? { reply_to: Number(o.reply_to) } : {}),
+    ...(Number.isInteger(ctx.execution_id) ? { execution_id: ctx.execution_id } : {}),
     limit: launch_settings(home).create_preferences?.relay_rounds ?? 0 });
   const receipt = { room_id: o.room, message_id: result.message?.id ?? null, queued: result.queued ?? null,
     interrupted: Boolean(result.interrupted), ...(result.reason ? { reason: result.reason } : {}) };
@@ -3428,13 +3570,24 @@ async function host_room_post(ctx, o) {
   return receipt;
 }
 
+/** The site checks the acting member and the target's parent before archiving. */
+async function steward_archive_room(ctx, { room }) {
+  if (!room || !/^[A-Za-z0-9_-]+$/.test(room)) throw new Error(t('房间编号无效'));
+  return site_request(ctx.config.site, `/api/rooms/${room}/archive`, ctx.config.members[ctx.host].token, { actor: ctx.host });
+}
+
+const STEWARD_HOST_CONTROLS = new Set(['rooms', 'folders', 'create-room', 'room-post', 'archive-room', 'duty']);
+
 const HOST_CONTROLS = {
+  folders: steward_folders,
   rooms: async ctx => {
     const limit = launch_settings(ctx.home).create_preferences?.relay_rounds || 0;
     return ctx.call(`/room-links?limit=${limit}`);
   },
   'create-room': host_create_room,
   'room-post': host_room_post,
+  'archive-room': steward_archive_room,
+  duty: (ctx, options) => update_steward_list(ctx.home, 'duties', { ...options, action: options.do }),
   stop: (ctx, o) => {
     const target = host_target(ctx, o.member);
     return member_change('stop', target, ctx.call(`/members/${target.id}/interrupt`, {}), ctx.labels);
@@ -3495,9 +3648,22 @@ const HOST_CONTROLS = {
  */
 export async function host_control(home, action, options, launch_options = {}) {
   if (!Object.hasOwn(HOST_CONTROLS, action || '')) throw new Error(`操作须为 ${Object.keys(HOST_CONTROLS).join('、')} 之一`);
-  const { config, roster, labels, host, execution_id, folder_id, max_rounds, protection, guest } = await host_room(home, options.access_file);
+  const context = await host_room(home, options.access_file, true);
+  if (context.config.steward ? !STEWARD_HOST_CONTROLS.has(action) : ['archive-room', 'duty', 'folders'].includes(action)) {
+    throw new Error(t('此房间无权执行操作 {action}', { action }));
+  }
+  const steward_write = context.config.steward && !['rooms', 'folders'].includes(action);
+  const lock = steward_write ? join(home, 'steward-command') : action === 'create-room' ? join(dirname(context.path), 'host-create') : null;
+  const release = lock ? acquire_lock(lock) : null;
+  try {
+    return await run_host_control(home, action, options, launch_options, lock ? await host_room(home, options.access_file, true) : context);
+  } finally { release?.(); }
+}
+
+async function run_host_control(home, action, options, launch_options, context) {
+  const { config, roster, labels, host, execution_id, folder_id, max_rounds, protection, guest } = context;
   if (protection && guest_withheld(action, options)) throw new Error(guest_refusal(action));
-  const needed = HOST_ACTION_ITEMS[action];
+  const needed = config.steward && action === 'room-post' ? 'create_rooms' : HOST_ACTION_ITEMS[action];
   if (needed && !host_allowed(config, needed)) throw new Error(host_refusal(needed));
   if (options.body_file && ['create-room', 'room-post'].includes(action)) {
     if (options.text !== undefined) throw new Error(t('--body-file 与 --text 只能选一项'));
@@ -3660,14 +3826,21 @@ async function create_steward(home, view, prepared, options) {
   const raw = saved?.room?.host === platform && saved.site === steward_site(home) ? saved : {
     entry: 'web', site: steward_site(home), cwd: view.cwd, project_access: profile.project_access,
     without_saved_tools: true, participants: { [platform]: profile }, steward_skills: view.skills,
-    room: { title: t('平台主理人', {}, options.lang || 'zh-CN'), mode: 'free', host: platform,
+    steward_overview_lang: options.lang || 'zh-CN',
+    room: { title: 'MOSS', mode: 'free', host: platform,
       system_kind: 'steward', members: [platform], submission_id: randomUUID() },
   };
   if (raw !== saved) atomic_json(pending, raw);
   const result = await launch_steward_with_recovery(home, raw, options);
+  const config = configuration_snapshot(result.config_path).config;
+  if (raw.steward_skills.includes('rooms-overview')) await post_steward_request(config, {
+    skill: 'rooms-overview', lang: raw.steward_overview_lang, submission_id: `steward-overview-${config.room}`,
+    context: t('请简短说明有几个项目房间、哪些正在进行、哪些等我处理，以及平台还有什么没有配置好。', {},
+      /^en(?:-|$)/i.test(raw.steward_overview_lang || '') ? 'en' : 'zh-CN'),
+  });
   save_launch_settings(home, {}, { room_id: result.room.id });
   rmSync(pending, { force: true });
-  return { path: result.config_path, config: configuration_snapshot(result.config_path).config };
+  return { path: result.config_path, config };
 }
 
 /** A loopback administrator can archive an orphan, but only after checking the conflicting room is a steward. */
@@ -3683,38 +3856,147 @@ async function launch_steward_with_recovery(home, raw, options) {
       if (!room.archived) await site_request(raw.site, `${path}/archive`, undefined, { actor: '用户' });
       return await launch_discussion(home, raw, options);
     } catch (cause) {
-      throw new Error(t('无法恢复平台主理人房间 {room_id}：{reason}', { room_id, reason: cause.message }), { cause });
+      throw new Error(t('无法恢复 MOSS 房间 {room_id}：{reason}', { room_id, reason: cause.message }), { cause });
     }
   }
 }
 
-/** Archive the old software's room before persisting a platform change. The next open creates its successor. */
+/** Replace the execution member when software changes, keeping its room and conversation. */
 async function save_steward_settings(home, input) {
   const patch = steward_settings_patch(input);
+  const roster = input.create_preferences;
+  if (Object.hasOwn(input, 'create_preferences')) {
+    validate_create_preferences(roster);
+    if (Object.keys(roster).some(key => !['members', 'host'].includes(key)) || !Array.isArray(roster.members) ||
+      typeof roster.host !== 'string' || (roster.host !== '' && !roster.members.includes(roster.host))) {
+      throw new Error(t('MOSS 建房成员设置无效，主持人须在成员名单中'));
+    }
+  }
   let settings = launch_settings(home);
   const current = await registered_steward(home, settings.steward?.room_id);
   settings = record_steward_software(home, settings, current);
+  if (patch.proactive) patch.proactive = { ...proactive_settings(settings.steward?.proactive), ...patch.proactive };
+  let busy = false;
   if (current && Object.hasOwn(patch, 'adapter')) {
     const view = steward_defaults(home, { ...settings, steward: { ...settings.steward, ...patch } });
-    const [platform] = steward_software(settings, view.adapter);
-    if (platform && !Object.hasOwn(current.config.participants, platform)) {
-      await api(current.config, '/archive', { actor: '用户' });
-      patch.room_id = null;
+    if (view.adapter && steward_software_changed(current.config, view, settings)) {
+      const prepared = steward_profile(home, { ...settings, steward: { ...settings.steward, ...patch } }, view, participant_profile);
+      assert_model_available(home, prepared.platform, prepared.profile);
+      ({ busy } = await configure_steward(current, view, prepared));
     }
   }
-  const result = save_launch_settings(home, {}, patch);
-  return steward_status(home, result, patch.room_id === null ? null : current?.config.room);
+  const result = save_launch_settings(home, roster ? { create_preferences: roster } : {}, patch);
+  return { ...steward_status(home, result, current?.config.room), ...(roster ? { create_preferences: roster } : {}), ...(busy ? { busy: true } : {}) };
+}
+
+/** Write a duty or feedback record without allowing the caller to replace the settings object. */
+async function update_steward_list(home, field, input) {
+  const settings = launch_settings(home);
+  const proactive = proactive_settings(settings.steward?.proactive);
+  const action = input.action || (field === 'mutes' ? 'add' : '');
+  if (action === 'list' && field === 'duties') return { duties: proactive.duties };
+  if (field === 'mutes' && action === 'add') input = { ...input, text: await steward_mute_text(home, settings, input.message_id) };
+  const updated = revise_proactive_list(proactive, field, action, input);
+  const result = save_launch_settings(home, {}, { proactive: { ...proactive, [field]: updated } });
+  return { [field]: updated, settings: steward_defaults(home, result) };
+}
+
+async function steward_mute_text(home, settings, message_id) {
+  const current = await registered_steward(home, settings.steward?.room_id);
+  const invalid = () => new Error(t('只能屏蔽 MOSS 的主动汇报'));
+  if (!current || !Number.isSafeInteger(Number(message_id)) || Number(message_id) <= 0) throw invalid();
+  const answer = await api(current.config, `/messages/${Number(message_id)}`);
+  if (answer.texts?.template === 'steward_proactive') return answer.text;
+  if (!answer.text || !answer.request_message_id) throw invalid();
+  const trigger = await api(current.config, `/messages/${answer.request_message_id}`);
+  if (trigger.texts?.template !== 'steward_proactive') throw invalid();
+  return answer.text;
+}
+
+/** Poll only the registered MOSS room, without opening a room or mixing in another site's data. */
+export async function poll_steward_proactive(home) {
+  const current = () => proactive_settings(launch_settings(home).steward?.proactive);
+  const settings = launch_settings(home).steward;
+  const proactive = current();
+  const registration = proactive.enabled && proactive.duties.length ? await registered_steward(home, settings?.room_id) : null;
+  await steward_proactive_tick(home, registration?.config, proactive, { current });
+}
+
+/** Check both platform identity and the selected adapter using generic profile metadata. */
+function steward_software_changed(config, view, settings) {
+  const [platform] = steward_software(settings, view.adapter);
+  const [name, profile] = Object.entries(config.participants)[0];
+  return Boolean(platform && (platform_of(name) !== platform || profile.adapter !== view.adapter));
+}
+
+function steward_delivery_changed(config, view, settings) {
+  return steward_software_changed(config, view, settings) || Object.values(config.participants)[0]?.project_access !== view.project_access;
+}
+
+function steward_renew_path(path) { return join(dirname(path), 'steward-renew.json'); }
+
+/** Persist replacement credentials before sending them so a lost response cannot strand the new member. */
+function prepare_steward_member(path, prepared, renew = false) {
+  const pending = renew ? steward_renew_path(path) : join(dirname(path), 'steward-member.json');
+  const saved = existsSync(pending) ? JSON.parse(readFileSync(pending, 'utf8')) : null;
+  const member = saved?.adapter === prepared.profile.adapter && platform_of(saved.name) === prepared.platform ? saved
+    : { name: `${prepared.platform}-${randomUUID().slice(0, 8)}`, token: `${randomUUID()}${randomUUID()}`,
+      adapter: prepared.profile.adapter, access: 'runner', session_mode: 'new' };
+  if (member !== saved) atomic_json(pending, member);
+  return { member, pending };
 }
 
 /** Apply the platform settings for the next execution without replacing the room or its history. */
-function configure_steward(current, view, profile) {
+async function configure_steward(current, view, prepared, renew = false) {
   const { path, config } = current;
-  const name = Object.keys(config.participants)[0];
-  const next = { ...config, cwd: view.cwd, project_access: profile.project_access, steward_skills: view.skills,
-    participants: { [name]: profile } };
-  const normalized = validate_config(next, dirname(path));
+  const { platform, profile } = prepared;
+  const [name, previous] = Object.entries(config.participants)[0];
+  const patch = { cwd: view.cwd, project_access: profile.project_access, steward_skills: view.skills };
+  const switched = platform_of(name) !== platform || previous.adapter !== profile.adapter;
+  const replacement = switched || renew ? prepare_steward_member(path, prepared, renew) : null;
+  const member = replacement?.member;
+  const normalized = validate_config({ ...config, ...patch, members: member ? { [member.name]: { token: member.token } } : config.members,
+    participants: { [member?.name || name]: profile } }, dirname(path));
+  if (member && current.room?.host !== member.name) {
+    const result = await api(config, '/steward-member', { ...member, software_label: adapter_profile(profile.adapter)?.label });
+    if (result.busy === true) return { config, busy: true };
+  }
   if (JSON.stringify(config) !== JSON.stringify(normalized)) atomic_json(path, normalized);
-  return normalized;
+  if (replacement) rmSync(replacement.pending, { force: true });
+  if (switched) rmSync(steward_renew_path(path), { force: true });
+  return { config: normalized, busy: false };
+}
+
+/** Renew the current member without applying a different software, model or workspace from settings. */
+async function renew_steward(current) {
+  const [name, previous] = Object.entries(current.config.participants)[0];
+  const { session_id, source_thread_id, ...profile } = previous;
+  const view = { cwd: current.config.cwd, skills: current.config.steward_skills };
+  return configure_steward(current, view, { platform: platform_of(name), profile }, true);
+}
+
+/** Apply a deferred software change before delivering the next queued room message. */
+export async function activate_steward_for_delivery(config, queued = true) {
+  const home = config.api_home;
+  if (!home) return false;
+  const settings = launch_settings(home);
+  if (settings.steward?.room_id !== config.room) return false;
+  const path = registered_room_path(home, config.site, config.room);
+  const renew = path && existsSync(steward_renew_path(path));
+  if (!renew && (!queued || !steward_delivery_changed(config, steward_defaults(home, settings), settings))) return false;
+  const release = acquire_lock(join(home, 'steward-command'));
+  try {
+    const latest = launch_settings(home);
+    if (latest.steward?.room_id !== config.room) return false;
+    const current = await registered_steward(home, config.room);
+    if (!current) return false;
+    const view = steward_defaults(home, latest);
+    if (existsSync(steward_renew_path(current.path))) return !(await renew_steward(current)).busy;
+    if (!queued || !steward_delivery_changed(current.config, view, latest)) return current.room.host !== Object.keys(config.members)[0];
+    const prepared = steward_profile(home, latest, view, participant_profile);
+    assert_model_available(home, prepared.platform, prepared.profile);
+    return !(await configure_steward(current, view, prepared)).busy;
+  } finally { release(); }
 }
 
 /** List only archived steward rooms and read their single member's software from the website. */
@@ -3724,7 +4006,8 @@ async function steward_history(home) {
   const history = await Promise.all(rooms.filter(room => room.system_kind === 'steward' && room.archived).map(async summary => {
     const room = await site_request(site, `/api/rooms/${summary.id}`).catch(error => { if (error.status !== 404) throw error; return null; });
     if (!room?.archived || room.system_kind !== 'steward') return null;
-    const member = room.free?.members?.[0] || room.members?.[0];
+    const members = room.free?.members || room.members || [];
+    const member = members.find(item => item.name === room.host) || members[0];
     return { room_id: room.id, archived_at: room.archived_at ?? summary.archived_at ?? null, adapter: member?.adapter ?? '' };
   }));
   return { rooms: history.filter(Boolean).sort((left, right) => String(right.archived_at ?? '').localeCompare(String(left.archived_at ?? ''))) };
@@ -3735,7 +4018,7 @@ async function delete_steward_history(home, room_id) {
   if (typeof room_id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(room_id)) throw new Error(t('房间编号无效'));
   const site = steward_site(home), path = `/api/rooms/${room_id}`;
   const room = await site_request(site, path);
-  if (room.system_kind !== 'steward' || !room.archived) throw new Error(t('只能删除已存档的平台主理人房间'));
+  if (room.system_kind !== 'steward' || !room.archived) throw new Error(t('只能删除已存档的 MOSS 房间'));
   await site_request(site, `${path}/delete`, undefined, { actor: '用户', archived_steward_only: true });
   return { room_id, deleted: true };
 }
@@ -3743,35 +4026,44 @@ async function delete_steward_history(home, room_id) {
 /** Serve the privileged local actions, sharing the same implementation with the CLI. */
 export async function steward_command(home, action, input = {}, options = {}) {
   if (process.env.DISCUSS_ACCESS_FILE || process.env.CODISCUSS_TOOL_LOCKDOWN === '1') {
-    throw new Error(t('平台主理人设置和请求只能由用户发起'));
+    throw new Error(t('MOSS 设置和请求只能由用户发起'));
   }
   if (action === 'steward-history') return steward_history(home);
   if (action === 'steward-delete') return delete_steward_history(home, input.room_id);
-  const writing = action === 'steward-settings' || action === 'steward-request' || input.open === true;
+  const writing = ['steward-settings', 'steward-request', 'steward-duty', 'steward-mute', 'steward-renew'].includes(action) || input.open === true;
   const initial = launch_settings(home).steward;
   const release = writing || (initial?.room_id && !initial.adapter) ? acquire_lock(join(home, 'steward-command')) : null;
   try {
     if (action === 'steward-settings') return await save_steward_settings(home, input);
+    if (action === 'steward-duty' || action === 'steward-mute') return await update_steward_list(home, action === 'steward-duty' ? 'duties' : 'mutes', input);
     let settings = launch_settings(home);
     let current = await registered_steward(home, settings.steward?.room_id);
     if (release) settings = record_steward_software(home, settings, current);
+    if (action === 'steward-renew') {
+      if (!current) throw new Error(t('请先打开 MOSS 对话，再开始新会话'));
+      const { busy } = await renew_steward(current);
+      return { ...steward_status(home, settings, current.config.room), busy };
+    }
     const view = steward_defaults(home, settings);
-    const [platform] = steward_software(settings, view.adapter);
-    const switched = current && platform && !Object.hasOwn(current.config.participants, platform);
-    if (!writing) return steward_status(home, settings, switched ? null : current?.config.room);
+    const switched = current && steward_software_changed(current.config, view, settings);
+    if (!writing) return steward_status(home, settings, current?.config.room);
     require_steward_software(view);
-    if (action === 'steward-request') require_steward_skill(settings, input.skill);
+    if (action === 'steward-request') {
+      require_steward_skill(settings, input.skill);
+      require_steward_access(view, input.skill);
+    }
     if (current) rmSync(join(home, 'steward-launch.json'), { force: true });
+    if (current && existsSync(steward_renew_path(current.path))) {
+      const { config, busy } = await renew_steward(current);
+      if (action === 'steward-request') return await post_steward_request(config, input);
+      return { ...steward_status(home, settings, config.room), busy };
+    }
     if (current && !switched && action === 'steward') return steward_status(home, settings, current.config.room);
     const prepared = steward_profile(home, settings, view, participant_profile);
     assert_model_available(home, prepared.platform, prepared.profile);
-    if (switched) {
-      await api(current.config, '/archive', { actor: '用户' });
-      current = null;
-    }
     current ||= await create_steward(home, view, prepared, { ...options, lang: input.lang });
-    if (action === 'steward') return steward_status(home, settings, current.config.room);
-    const config = configure_steward(current, view, prepared.profile);
+    const { config, busy } = await configure_steward(current, view, prepared);
+    if (action === 'steward') return { ...steward_status(home, settings, current.config.room), ...(busy ? { busy: true } : {}) };
     return await post_steward_request(config, input);
   } finally { release?.(); }
 }
@@ -3826,7 +4118,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     expect: { type: 'string' }, 'reply-to': { type: 'string' }, 'host-model': { type: 'string' }, 'host-effort': { type: 'string' }, interrupt: { type: 'boolean' }, 'body-file': { type: 'string' },
     goal: { type: 'string' }, label: { type: 'string' }, description: { type: 'string' }, adapter: { type: 'string' }, 'submission-id': { type: 'string' },
     message: { type: 'string' }, minutes: { type: 'string' }, off: { type: 'boolean' }, list: { type: 'boolean' },
-    title: { type: 'string' }, members: { type: 'string' }, host: { type: 'string' }, cwd: { type: 'string' }, room: { type: 'string' },
+    title: { type: 'string' }, members: { type: 'string' }, host: { type: 'string' }, cwd: { type: 'string' }, room: { type: 'string' }, folder: { type: 'string' },
     guest: { type: 'string' },
   } });
   if (values.help || !positionals.length) return process.stdout.write(command_help(positionals[0]));
@@ -3847,7 +4139,8 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     const { member, order, revision, name, access, model, effort, execution, text, goal, label, description, adapter } = values;
     const result = await host_control(service_home(), positionals[1], { member, order, revision, name, access, model, effort, execution, text, goal,
       label, description, adapter, message: values.message, minutes: values.minutes, off: values.off, list: values.list, do: values.do, submission_id: values['submission-id'],
-      title: values.title, members: values.members, host: values.host, cwd: values.cwd, room: values.room, guest: values.guest, expect: values.expect, reply_to: values['reply-to'], interrupt: values.interrupt, body_file: values['body-file'], host_model: values['host-model'], host_effort: values['host-effort'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE });
+      title: values.title, members: values.members, host: values.host, cwd: values.cwd, room: values.room, guest: values.guest, expect: values.expect, reply_to: values['reply-to'], interrupt: values.interrupt, body_file: values['body-file'], host_model: values['host-model'], host_effort: values['host-effort'], access_file: values['access-file'] || process.env.DISCUSS_ACCESS_FILE,
+      folder: values.folder, preset: values.preset, ...(positionals[1] === 'duty' ? { do: positionals[2], id: values.id } : {}) });
     return process.stdout.write(`${JSON.stringify(result)}
 `);
   }
@@ -3916,7 +4209,7 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
     scheduler_providers: SCHEDULER_PROVIDERS, api_keys: saved_api_keys(home), managed_api_keys: restricted ? managed_api_keys(home) : [], projects: launch_projects(home).projects, projects_restricted: restricted, full_access_only: ADAPTER_IDS.filter(id => adapter_capabilities(id).no_sandbox), workspace: space.workspace, user_home: restricted ? homedir() : '', ...expert_presets(home), ...workflow_library(home) };
   // The online site an invitation would use, so an external expert's card says before the room exists whether a link can be made.
   if (positionals[0] === 'settings') result.invite_site = await (await import('./external_gateway.mjs')).invite_site_state(home);
-  else if (['steward', 'steward-settings', 'steward-request', 'steward-history', 'steward-delete'].includes(positionals[0])) result = await steward_command(home, positionals[0], input || {});
+  else if (['steward', 'steward-settings', 'steward-request', 'steward-history', 'steward-delete', 'steward-duty', 'steward-mute', 'steward-renew'].includes(positionals[0])) result = await steward_command(home, positionals[0], input || {});
   else if (positionals[0] === 'projects') result = input ? save_launch_projects(home, input) : launch_projects(home);
   else if (positionals[0] === 'presets') result = presets_command(home, input || {}, values.remote || restricted);
   else if (['expert-export', 'expert-import'].includes(positionals[0]) && values.scope === 'project') {
@@ -3959,6 +4252,13 @@ export async function launch_main(args = process.argv.slice(2), input_text) {
   else if (positionals[0] === 'room-skills' && input) result = await room_skills(home, input);
   else if (positionals[0] === 'share-job' && input) result = await room_share_job(home, input);
   else if (positionals[0] === 'room-files' && input) result = await room_files(home, input);
+  else if (positionals[0] === 'project-cloud' && input) result = await room_project_cloud(home, input);
+  else if (positionals[0] === 'project-cloud-upload' && input) result = await room_cloud_upload(home, input);
+  else if (positionals[0] === 'project-cloud-land' && input) result = await room_cloud_land(home, input);
+  else if (positionals[0] === 'project-cloud-status' && input) {
+    result = project_cloud_status(home, input.task_id);
+    if (!result) throw Object.assign(expert_failure('cloud_task_missing', '没有这项云空间上传任务'), { http_status: 404, details: {} });
+  }
   else if (positionals[0] === 'room-page' && input) result = await room_page(home, input, { parts: Boolean(values.remote) });
   else if (positionals[0] === 'room-media' && input) result = await room_media(home, input, { parts: Boolean(values.remote) });
   else if (positionals[0] === 'execution-details' && input) result = await execution_details_command(home, input);

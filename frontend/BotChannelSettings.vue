@@ -66,7 +66,7 @@ onBeforeUnmount(() => clearInterval(timer));
       <div class="weixin-actions">
         <UButton v-for="link in guide.links" :key="link.url" :to="link.url" target="_blank" rel="noopener noreferrer" :label="link.label" icon="i-lucide-external-link" size="xs" color="neutral" variant="outline" />
       </div>
-      <p class="fine-print bot-channel-ai">{{ t('如需帮助，请在本页选择“让平台主理人配置”，然后告诉它你想接入 {value1}。', { value1: channel.label }) }}</p>
+      <p class="fine-print bot-channel-ai">{{ t('如需帮助，请在本页选择“让 MOSS 配置”，然后告诉它你想接入 {value1}。', { value1: channel.label }) }}</p>
     </div>
     <form v-if="show_form && (expanded || channel.bound)" class="bot-channel-form" @submit.prevent="act('configure', '', { values })">
       <p v-if="waiting_bind" class="fine-print weixin-warning">{{ t('绑定码已过期，请重新填写凭据以生成新的绑定码。') }}</p>

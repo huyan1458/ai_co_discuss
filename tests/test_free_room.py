@@ -31,6 +31,7 @@ class FreeRoomTests(unittest.TestCase):
         self.database = Path(self.directory.name) / "free.db"
         init_database(self.database, seed=False)
         self.server = DiscussionServer(("127.0.0.1", 0), self.database)
+        self.server.daemon_threads = False
         self.server.local_site = False  # these tests exercise room credential rules, not the account-free local site
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": SERVER_POLL_SECONDS}, daemon=True)
         self.thread.start()
@@ -76,8 +77,8 @@ class FreeRoomTests(unittest.TestCase):
     def tearDown(self):
         """Release the server and temporary files."""
         self.server.shutdown()
-        self.server.server_close()
         self.thread.join()
+        self.server.server_close()
         self.directory.cleanup()
 
     def request(self, path, payload=None, token=None):
@@ -360,6 +361,9 @@ class SingleMemberTests(FreeRoomTests):
         self.request(url, {"action": "delivery", "stoppable": True, "progress": True}, self.owner)
         self.assertEqual(pause()[0], 409, "a delivery that cannot resume is not paused")
         self.request(url, {"action": "delivery", "stoppable": True, "progress": True, "resume": True}, self.owner)
+        self.assertEqual(self.request(url, {"action": "interject", "text": "只实时插话",
+                                           "submission_id": "live-only", "live_only": True}, self.owner)[0], 409)
+        self.assertFalse(self.request(self.path + "/inbox", token=self.owner)[1]["executions"][0]["paused_at"])
         self.assertEqual(pause(self.member)[0], 403)
         self.assertEqual(pause()[0], 200)
         inbox = lambda: self.request(self.path + "/inbox", token=self.owner)[1]["executions"][0]
@@ -2075,6 +2079,103 @@ class HostRoomTests(FreeRoomTests):
 
 class HostTests(HostRoomTests):
     """An AI host routes unnamed messages, dispatches members, and is woken once per finished batch."""
+
+    def test_declared_waits_follow_messages_and_survive_duplicate_submission(self):
+        self.assertEqual(self.say("Cannot mark a user message", awaiting_user=True)[0], 400)
+        self.assertEqual(self.answer(None, awaiting_user=True)[0], 400)
+        self.say("Please proceed")
+        execution_id = self.reserve_for("Claude")[1]["id"]
+        self.assertEqual(self.answer(execution_id, awaiting_user=1)[0], 400)
+        submission = {"awaiting_user": True, "submission_id": uuid.uuid4().hex}
+        status, saved = self.answer(execution_id, **submission)
+        self.assertEqual(status, 201, saved)
+        message_id = saved["message"]["id"]
+        status, saved = self.answer(execution_id, **submission)
+        self.assertEqual(status, 200, saved)
+        self.assertEqual(self.answer(execution_id, **(submission | {"awaiting_user": False}))[0], 409)
+
+        self.work_proactive_wait()
+        waits = self.request(self.path)[1]["free"]["waits"]
+        self.assertEqual([(item["message_id"], item["member"]) for item in waits][:1], [(message_id, "Claude")])
+        self.assertEqual(len(waits), 2)
+        listing = self.request("/api/rooms")[1]["rooms"]
+        room = next(room for room in listing if room["id"] == self.room["id"])
+        self.assertEqual(room["waiting_user_since"], waits[0]["created_at"])
+        self.assertEqual(room["attention"], "waiting_user")
+
+        status, saved = self.say("Please continue")
+        self.assertEqual(status, 201, saved)
+        self.assertEqual(self.request(self.path)[1]["free"]["waits"], [])
+        listing = self.request("/api/rooms")[1]["rooms"]
+        self.assertIsNone(next(room for room in listing if room["id"] == self.room["id"])["waiting_user_since"])
+        events = self.request(f"{self.path}/events", token=self.owner)[1]["events"]
+        opened = [event["data"]["wait_id"] for event in events if event["kind"] == "wait.opened"]
+        closed = [event["data"] for event in events if event["kind"] == "wait.closed"]
+        self.assertEqual(opened, [item["id"] for item in waits])
+        self.assertCountEqual(
+            [(row["wait_id"], row["end_message_id"], row["end_reason"]) for row in closed],
+            [(item["id"], saved["message"]["id"], "user") for item in waits],
+        )
+
+    def assert_wait_closed(self, message_id, reason):
+        events = self.request(f"{self.path}/events", token=self.owner)[1]["events"]
+        closed = [event["data"] for event in events
+                  if event["kind"] == "wait.closed" and event["data"]["message_id"] == message_id]
+        self.assertEqual([(row["end_reason"], row["end_message_id"]) for row in closed], [(reason, 0)])
+
+    def test_wait_replaced_by_next_reply_from_same_member(self):
+        first = self.work_proactive_wait()
+        second = self.work_proactive_wait()
+        waits = self.request(self.path)[1]["free"]["waits"]
+        self.assertEqual([row["message_id"] for row in waits], [second])
+        self.assert_wait_closed(first, "superseded")
+
+        self.work_proactive_wait(awaiting_user=False)
+        self.assertEqual(self.request(self.path)[1]["free"]["waits"], [])
+        self.assert_wait_closed(second, "superseded")
+
+    def test_wait_closed_on_rewind(self):
+        anchor = self.say("Go ahead")[1]["message"]["id"]
+        execution = self.reserve_for("Claude")[1]["id"]
+        waiting = self.answer(execution, awaiting_user=True)[1]["message"]["id"]
+        plan = self.request(f"{self.path}/rewind?message_id={anchor}", token=self.owner)[1]
+        status, result = self.request(f"{self.path}/rewind", {
+            "message_id": anchor, "revision": plan["revision"],
+        }, self.owner)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(self.request(self.path)[1]["free"]["waits"], [])
+        self.assert_wait_closed(waiting, "withdrawn")
+
+    def test_wait_closed_on_dispatch_withdrawal(self):
+        self.say("Go ahead")
+        execution = self.reserve_for("Claude")[1]["id"]
+        status, saved = self.answer(execution, to=["Antigravity"], awaiting_user=True)
+        self.assertEqual(status, 201, saved)
+        waiting = saved["message"]["id"]
+        status, result = self.request(f"{self.path}/dispatches/{waiting}/withdraw", {}, self.owner)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(self.request(self.path)[1]["free"]["waits"], [])
+        self.assert_wait_closed(waiting, "withdrawn")
+
+    def test_wait_closed_on_member_removal(self):
+        waiting = self.work_proactive_wait()
+        status, result = self.request(f"{self.path}/members/{self.member_id('Codex')}", {"action": "remove"}, self.owner)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(self.request(self.path)[1]["free"]["waits"], [])
+        self.assert_wait_closed(waiting, "member_removed")
+
+    def test_wait_flag_rejected_on_special_message_routes(self):
+        self.assertEqual(self.say("trigger", steward_proactive=True, awaiting_user=False)[0], 400)
+        self.assertEqual(self.say("relay", relay={"room_id": "parent", "host": "Claude"},
+                                  interrupt=True, awaiting_user=False)[0], 400)
+
+    def work_proactive_wait(self, awaiting_user=True):
+        status, saved = self.request(f"{self.path}/messages", {
+            "author": "Codex", "text": "Please confirm", "submission_id": uuid.uuid4().hex,
+            "proactive": True, "awaiting_user": awaiting_user,
+        }, self.codex)
+        self.assertEqual(status, 201, saved)
+        return saved["message"]["id"]
 
     def test_host_reads_the_event_log_and_others_executions_without_private_chats_or_message_text(self):
         """The host diagnoses from the log and any member's execution; private chats and message text stay out of its copy."""

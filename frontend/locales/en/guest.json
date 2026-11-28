@@ -1,7 +1,4 @@
 {
-  "15 分钟": "15 minutes",
-  "4 小时": "4 hours",
-  "24 小时": "24 hours",
   "+15 分钟": "+15 minutes",
   "+1 小时": "+1 hour",
   "仅聊天": "Chat only",
@@ -27,9 +24,7 @@
   "称呼": "Name",
   "房间里这样称呼对方；对方进入前可以改。": "What the room calls them; they can change it before entering.",
   "从对方进入房间起算，在场期间可以延长，最长 24 小时。": "Counted from when they enter; you can extend it while they are in, up to 24 hours.",
-  "开放私聊（只读）": "Open private chats (read-only)",
   "保护": "Protection",
-  "对方能发消息并点名任何成员；房间历史全部可见。": "They can send messages and name any member; the whole room history is visible.",
   "{time} 前打开有效，只能用一次，绑定第一个打开的浏览器。对方进入后右栏显示在场卡，可随时断开。": "Open before {time}; it works once and binds to the first browser that opens it. Once they enter, the right panel shows their card, where you can disconnect at any time.",
   "暂停接单：外部用户在场，{reason}": "Not taking work while an external user is in: {reason}",
   "临时只读": "Read-only for now",
@@ -116,5 +111,17 @@
   "作废这个邀请链接，对方打开后无法进入": "Void this invitation link; opening it will no longer let anyone in",
   "被停止的任务不会作废：它退回排队，对方进入后按保守档（只读）重新处理。": "The stopped task is not dropped: it goes back in the queue and runs again under conservative protection (read-only) once they are in.",
   "外部用户发言": "External user's message",
-  "等待入场时邀请已过期，本次访问已结束。": "The invitation expired while you were waiting to enter; this visit has ended."
+  "等待入场时邀请已过期，本次访问已结束。": "The invitation expired while you were waiting to enter; this visit has ended.",
+  "限时": "Time limit",
+  "已有外部用户在场": "An external user is already in",
+  "外部用户的邀请链接已生成，把链接或二维码发给对方；对方打开后进入房间，右栏显示在场卡，可随时断开。": "The external user's invitation link is ready. Send them the link or QR code; once they open it they enter the room, and the right panel shows their card, where you can disconnect at any time.",
+  "正在生成链接…": "Making the link…",
+  "待打开": "Not opened yet",
+  "开放（只读）": "Open (read-only)",
+  "信任档不限制 AI，对方可能诱导越权": "Trust: AIs unlimited, can be misled",
+  "对方可点名任何成员、看全部历史": "Can name any member, see all history",
+  "15分钟": "15 min",
+  "1小时": "1 hr",
+  "4小时": "4 hr",
+  "24小时": "24 hr"
 }

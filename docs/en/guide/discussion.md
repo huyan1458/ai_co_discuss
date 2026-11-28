@@ -31,7 +31,7 @@ After starting, the host breaks down the topic and schedules speaking turns. Mem
 
 After a discussion ends, or when you have selected a specific message range, use the bundled `discuss-report` skill to produce a standalone Chinese report and archive the source material.
 
-1. **Give the steward a source and scope.** In “Settings → Platform steward,” allow `discuss-report` and grant write access to the local output folder. Send the request from the terminal. Include the room ID, message range, and output folder. For a local export, give a readable file path in `--note` and omit `--room`.
+1. **Give the steward a source and scope.** On the Platform steward page, open “Steward configuration,” allow `discuss-report`, and grant write access to the local output folder. Send the request from the terminal. Include the room ID, message range, and output folder. For a local export, give a readable file path in `--note` and omit `--room`.
 
    `codiscuss steward ask discuss-report --room ROOM --note "Cover messages #100 to #200 and save to D:/work/reports"`
 
