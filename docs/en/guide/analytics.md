@@ -4,7 +4,7 @@ See how your work is going across all rooms: how many tasks needed no further in
 
 ## How to open it
 
-- **Desktop**: click "Analytics" at the bottom of the left sidebar, below "Workflows". The page fills the middle area.
+- **Desktop**: click "Analytics" at the top of the sidebar. The page fills the middle area.
 - **Phone and narrow windows**: open the sidebar drawer with the top-left navigation button, then tap "Analytics".
 - **Command line**: run `codiscuss analytics [--range today|7d|30d|all] [--from YYYY-MM-DD --to YYYY-MM-DD] [--scope all|current] [--json]` on the computer for a text summary or the full JSON.
 

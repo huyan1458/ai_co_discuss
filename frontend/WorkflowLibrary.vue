@@ -1,8 +1,8 @@
 <script setup>
 /**
- * The 工作流 page, shown in the middle in place of the room: the workflow chosen in the sidebar's 工作流 list as an
+ * The 工作流 page's canvas, shown in the middle in place of the room: the workflow chosen on the page's list as an
  * infinite canvas, edited in place (cards, arrows), and its SKILL.md docked on the right, the text the host dispatches by.
- * 保存 writes it all at once. The list, new, import, rename, disable and delete live in the sidebar (`workflow-library.js`).
+ * 保存 writes it all at once. The list, new, import, rename, disable and delete live on the list (`WorkflowOverview.vue`).
  * Works with or without a room open; enabling a workflow in a room stays with the message box's "/" and the side panel.
  * A workflow may hold sub-workflows: the list under the toolbar switches the canvas and SKILL.md to one of them.
  */

@@ -39,8 +39,13 @@ export function account_quota(view, account) {
 export function for_model(quota, model) {
   const id = String(model || '').toLowerCase();
   const windows = quota?.windows || [];
-  if (!id || !windows.some((item) => item.models?.some((prefix) => id.startsWith(prefix)))) return quota;
-  return { ...quota, windows: windows.filter((item) => !item.models?.length || item.models.some((prefix) => id.startsWith(prefix))) };
+  const listed = (item) => item.models?.some((prefix) => id.startsWith(prefix));
+  // agy does not always list every model of a group (gemini-4-argon was missing, #15675); then the group named after
+  // the model's family (`gemini` in "Gemini Models") is taken.
+  const family = (item) => Boolean(item.group) && item.group.toLowerCase().includes(id.split(/[-_.]/)[0]);
+  const fits = windows.some(listed) ? listed : windows.some(family) ? family : null;
+  if (!id || !fits) return quota;
+  return { ...quota, windows: windows.filter((item) => (!item.models?.length && !item.group) || fits(item)) };
 }
 
 /** The quota of the account a room member draws on, for the model it last ran with, or null. */
@@ -82,7 +87,9 @@ function groups(quota) {
  * so `5h 不限` is shown rather than leaving the reader to wonder whether it was missed. Open windows have `open: true`.
  */
 export function shown_windows(quota) {
-  return groups(quota).flatMap(([group, items]) => items.some((item) => item.kind === 'seven_day') && !items.some((item) => item.kind === 'five_hour')
+  // Only a single, unnamed group says so: software keeping named groups (agy) may leave out a window it has not counted yet.
+  const single = groups(quota).length === 1;
+  return groups(quota).flatMap(([group, items]) => single && !group && items.some((item) => item.kind === 'seven_day') && !items.some((item) => item.kind === 'five_hour')
     ? [{ kind: 'five_hour', minutes: 300, group, open: true }, ...items] : items);
 }
 

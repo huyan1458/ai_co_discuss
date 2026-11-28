@@ -39,6 +39,16 @@ const items = computed(() => {
   return [...ordered, ...queued.filter((item) => !local_order.value.includes(item.id))];
 });
 const reorderable = computed(() => items.value.length > 1);
+// Requests already posted to members still at work (user 2026-11-28, #15670): they wait for that member's current
+// execution, so they are not reordered or edited; the row being sent or cancelled leaves at once.
+const taking_requests = ref(new Set());
+const waiting = computed(() => (props.queue.waiting_requests || []).filter((request) => !taking_requests.value.has(request.request_id)));
+
+async function act_on_request(action, request) {
+  taking_requests.value = new Set([...taking_requests.value, request.request_id]);
+  try { await act(action, request.request_id); }
+  finally { const left = new Set(taking_requests.value); left.delete(request.request_id); taking_requests.value = left; }
+}
 
 /** Short text for the row: the message, else what it carries. */
 function summary(item) {
@@ -207,11 +217,27 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
 </script>
 
 <template>
-  <div v-if="items.length || pending_rows.length" ref="list" class="queued-messages" :class="{ 'is-dragging': drag }" role="list" :aria-label="t('排队消息')" @touchmove="hold_scroll">
+  <div v-if="items.length || pending_rows.length || waiting.length" ref="list" class="queued-messages" :class="{ 'is-dragging': drag }" role="list" :aria-label="t('排队消息')" @touchmove="hold_scroll">
     <div v-if="queue.paused" class="queued-row queued-paused-row">
       <UIcon name="i-lucide-pause" class="queued-leading" />
       <span class="queued-text">{{ t('已暂停排队：你停止了运行') }}</span>
       <UButton :label="t('继续')" icon="i-lucide-play" size="xs" color="neutral" variant="ghost" @click="act('queue_resume')" />
+    </div>
+    <div v-for="request in waiting" :key="`request-${request.request_id}`" role="listitem" class="queued-row queued-request-row">
+      <span class="queued-leading" aria-hidden="true"><UIcon name="i-lucide-hourglass" /></span>
+      <UTooltip :delay-duration="PREVIEW_DELAY_MS" :ui="{ content: 'queued-tooltip queued-preview' }">
+        <span class="queued-text" tabindex="0"><strong class="queued-relay-source">{{ t('{author} → {member}', { author: bridge.display_name(request.author), member: bridge.display_name(request.member) }) }} · </strong>{{ request.text.replace(/\s+/g, " ").trim() || `#${request.message_id}` }}</span>
+        <template #content><div class="queued-preview-body">{{ request.text || `#${request.message_id}` }}</div></template>
+      </UTooltip>
+      <span class="queued-sending-status">{{ t('#{message} 已发出，等 {member} 做完当前这件后接', { message: request.message_id, member: bridge.display_name(request.member) }) }}</span>
+      <span class="queued-actions">
+        <UTooltip v-for="action in [send_action(request)]" :key="action.label" :text="action.tip" :ui="{ content: 'queued-tooltip' }">
+          <UButton :label="action.label" :aria-label="action.label" :icon="action.icon" size="xs" color="neutral" variant="ghost" class="queued-action queued-send-now" @click.stop="act_on_request('queue_request_send', request)" />
+        </UTooltip>
+        <UTooltip :text="t('取消这条请求，{member} 不再处理它', { member: bridge.display_name(request.member) })" :ui="{ content: 'queued-tooltip' }">
+          <UButton icon="i-lucide-trash-2" size="xs" color="neutral" variant="ghost" class="queued-action" :aria-label="t('取消排队请求')" @click.stop="act_on_request('queue_request_cancel', request)" />
+        </UTooltip>
+      </span>
     </div>
     <!-- Rows glide only to a dropped order: when the row just sent turns into its queued row, nothing above it has moved. -->
     <TransitionGroup name="queued" :move-class="local_order ? 'queued-move' : 'queued-still'">
@@ -303,7 +329,7 @@ onBeforeUnmount(() => { release(); tray_rise?.cancel(); });
   .queued-send-now :deep([data-slot="label"]) { display: none; }
 }
 .queued-sending-status { padding: 0 8px; font-size: 12px; color: var(--ui-text-dimmed); }
-.queued-paused-row { cursor: default; }
+.queued-paused-row, .queued-request-row { cursor: default; }
 .queued-paused-row .queued-text { color: var(--ui-text-muted); }
 .queued-move { transition: transform .16s ease; }
 /* Rows appear at once (a new one takes the sending row's place) and fold away when they leave. */

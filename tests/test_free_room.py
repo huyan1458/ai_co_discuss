@@ -900,6 +900,26 @@ class SingleMemberTests(FreeRoomTests):
             "submission_id": uuid.uuid4().hex, "relay": {"room_id": self.room["id"], "host": "Claude"}, "interrupt": True}, self.owner)
         self.assertEqual(status, 403)
 
+    def test_requests_waiting_for_a_busy_member_are_in_the_queue_and_can_be_sent_or_cancelled(self):
+        """A request made of a member still at work lists in the queue tray; send-now steers it in, cancel drops only it."""
+        self.say("一")
+        running = self.reserve()[1]
+        self.request(f"{self.path}/executions/{running['id']}", {"action": "delivery", "stoppable": True, "progress": True, "steer": True}, self.owner)
+        self.say("二")
+        waiting = self.request(self.path)[1]["free"]["queued_messages"]["waiting_requests"]
+        self.assertEqual([(item["member"], item["text"], item["send_mode"]) for item in waiting], [("Claude", "二", "steer")])
+        sent = self.request(f"{self.path}/queue", {"action": "request_send", "request_id": waiting[0]["request_id"]}, self.owner)
+        self.assertEqual((sent[0], sent[1]["waiting_requests"]), (200, []))
+        inbox = self.request(self.path + "/inbox", token=self.owner)[1]
+        self.assertEqual(len(inbox["executions"][0]["interjections"]), 1)
+        self.say("三")
+        third = self.request(self.path)[1]["free"]["queued_messages"]["waiting_requests"][0]
+        cancelled = self.request(f"{self.path}/queue", {"action": "request_cancel", "request_id": third["request_id"]}, self.owner)
+        self.assertEqual((cancelled[0], cancelled[1]["waiting_requests"]), (200, []))
+        self.assertEqual(self.request(f"{self.path}/queue", {"action": "request_cancel", "request_id": third["request_id"]}, self.owner)[0], 404)
+        statuses = {r["message_id"]: r["status"] for r in self.request(self.path)[1]["free"]["requests"]}
+        self.assertEqual(statuses.get(third["message_id"], "cancelled"), "cancelled")
+
     def test_send_now_interrupts_a_busy_recipient_unless_it_cannot_stop(self):
         """Send-now stops the recipient's turn so the message goes next; an unstoppable recipient keeps it queued."""
         self.say("一", queue=True)

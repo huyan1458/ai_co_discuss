@@ -41,9 +41,10 @@ const label = computed(() => [props.usage?.context_used ? t('上下文已用 {va
   <UPopover v-if="shows_context || shown_peak" :content="{ side: 'top', align: 'start', sideOffset: 6 }">
     <button type="button" class="context-meter" :data-mode="mode" :aria-label="label" @click.stop>
       <span v-if="mode === 'full' && labelled && shows_context" class="context-meter-label">{{ t('上下文') }}</span>
-      <svg v-if="shows_context && fraction !== null" viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+      <svg v-if="shows_context" viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
         <circle class="context-meter-track" cx="7" cy="7" :r="RADIUS" />
-        <circle class="context-meter-fill" :class="level && `is-${level}`" cx="7" cy="7" :r="RADIUS" :stroke-dasharray="`${CIRCUMFERENCE * fraction} ${CIRCUMFERENCE}`" transform="rotate(-90 7 7)" />
+        <!-- Where the window is unknown only the track is drawn, a hollow ring (#15619); the figures are in the panel. -->
+        <circle v-if="fraction !== null" class="context-meter-fill" :class="level && `is-${level}`" cx="7" cy="7" :r="RADIUS" :stroke-dasharray="`${CIRCUMFERENCE * fraction} ${CIRCUMFERENCE}`" transform="rotate(-90 7 7)" />
       </svg>
       <span v-if="shows_context">{{ reading }}</span>
       <span v-if="mode === 'full' && shows_context && usage.context_window" class="context-meter-muted">{{ `${tokens(usage.context_used)} / ${tokens(usage.context_window)}` }}</span>

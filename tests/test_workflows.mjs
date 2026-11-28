@@ -14,7 +14,7 @@ import { run_command } from '../runner/adapters/api_commands.mjs';
 import { open_project } from '../runner/adapters/api_files.mjs';
 import { cached_software_models, check_or_save_workflow, expert_presets, presets_command, export_expert, import_expert, import_expert_to_workflow, launch_discussion, read_expert_source, validate_preset, workflows_command } from '../runner/discussion_launch.mjs';
 import { free_task_files, member_folders, named_workflows } from '../runner/free_runner.mjs';
-import { run_launch_command } from '../runner/remote_launch.mjs';
+import { relayed_command, run_launch_command } from '../runner/remote_launch.mjs';
 
 /** A task file, which sits in its member's own runtime folder. */
 function runtime_file(directory, name) {
@@ -1094,6 +1094,42 @@ test('project and global workflow IDs are independent and project approvals expi
   workflows_command(home, { ...local, action: 'move', id, target_scope: 'global' });
   assert.equal(get_workflow(home, id).label, 'Project');
   assert.equal(existsSync(card), false);
+});
+
+test('one workflow list includes all saved projects through the same paired-device operation', async t => {
+  const home = home_fixture(t), first = home_fixture(t), second = home_fixture(t), empty = home_fixture(t);
+  const unsaved = home_fixture(t), missing = join(home, 'missing-project');
+  const projects = [{ name: '项目甲', path: first }, { name: '项目乙', path: second }, { name: '空项目', path: empty }, { name: '不在了', path: missing }];
+  writeFileSync(join(home, 'launch-projects.json'), JSON.stringify({ projects }));
+  const other_sub = { id: 'review', label: '复核', description: '复核正文', skill: '复核。',
+    agents: [{ card: 'second_review', name: 'Antigravity-second_review' }] };
+  const workflow = { ...NOVEL, sub_workflows: [ADVISOR, other_sub] };
+  const platforms = ['DeepSeek', 'Antigravity', 'Claude', 'Antigravity'];
+  workflows_command(home, { action: 'save', workflow });
+  for (const [cwd, label] of [[first, '甲的工作流'], [second, '乙的工作流'], [unsaved, '未保存项目的工作流']]) {
+    workflows_command(home, { action: 'save', scope: 'project', cwd, workflow: { ...workflow, label } });
+  }
+  const scoped = workflows_command(home, { action: 'list', cwd: first });
+  assert.deepEqual(scoped.workflows.map(item => item.card_platforms), [platforms]);
+  assert.deepEqual(scoped.project_workflows.map(item => item.card_platforms), [platforms]);
+  const input = { action: 'list', all_projects: true };
+  const listed = workflows_command(home, input);
+  const [root] = listed.project_roots;
+  assert.deepEqual(listed.project_roots.map(item => item.name), ['项目甲', '项目乙', '空项目']);
+  assert.deepEqual(listed.workflows.map(item => [item.scope, item.id, item.card_platforms]), [['global', NOVEL.id, platforms]]);
+  assert.deepEqual(listed.project_workflows.map(item => [item.project_name, item.label, item.total_cards, item.sub_workflow_count, item.card_platforms]),
+    [['项目甲', '甲的工作流', 4, 2, platforms], ['项目乙', '乙的工作流', 4, 2, platforms]]);
+  assert.equal(Object.hasOwn(root, 'path'), false);
+  assert.equal(Object.hasOwn(listed.project_workflows[0], 'directory'), false);
+  assert.equal(workflows_command(home, { action: 'get', scope: 'project', project_id: root.id, id: NOVEL.id }, true).label, '甲的工作流');
+
+  const previous = process.env.DISCUSS_SERVICE_HOME;
+  process.env.DISCUSS_SERVICE_HOME = home;
+  t.after(() => { if (previous === undefined) delete process.env.DISCUSS_SERVICE_HOME; else process.env.DISCUSS_SERVICE_HOME = previous; });
+  const relayed = await run_launch_command(relayed_command('http://localhost:8765', 'workflows', input));
+  assert.equal(relayed.status, 200);
+  assert.deepEqual(relayed.body.project_roots, listed.project_roots);
+  assert.deepEqual(relayed.body.project_workflows, listed.project_workflows);
 });
 
 test('external project presets start at read access and readonly roots refuse saves', t => {

@@ -4,7 +4,7 @@ MOSS (formerly Platform steward) is a local AI that handles platform tasks, answ
 
 ## How to use it
 
-1. The top of the sidebar lists “New room,” “MOSS,” “Workflows,” and “Analytics.” Select “MOSS,” pick one AI app under “Choose MOSS software,” and select “Start conversation.” When the conversation is first created, MOSS uses “Room overview,” if allowed, to summarize your project rooms, what needs your attention, and any setup gaps it can verify.
+1. The top of the sidebar lists “New room,” “MOSS,” “Workflows,” and “Analytics.” Select “MOSS,” pick an AI app, and select “Start conversation.” When the conversation is first created, MOSS uses “Room overview,” if allowed, to summarize your project rooms, what needs your attention, and any setup gaps it can verify.
 2. Type a request such as “Which rooms need me?” or “Why did this run fail?” The room overview includes room links and references. Troubleshooting reads the guide, event records, execution details, and relevant logs. For a room-specific task, include the room link or ID. You can also start a request from the relevant page.
    - **Review dispatches.** In Analytics, select “AI analysis” in the dispatch review section. The button appears only when the `dispatch-analysis` skill is available and allowed. The review runs on request only and reports its findings separately from the measured statistics.
    - **Make a room share card.** In the target room’s menu, choose “Share → Make a share card with AI.” The request includes the target room so the steward knows where to find the source material.

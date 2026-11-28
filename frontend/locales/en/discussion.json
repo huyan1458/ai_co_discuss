@@ -3,7 +3,6 @@
   "等待中": "Waiting",
   "等待中：等当前执行结束": "Waiting for the current run to finish",
   "排队中：等当前执行结束": "Queued: waiting for the current run to finish",
-  "{member} 排队中：做完当前这件后接 #{message}": "{member} is queued to take #{message} after finishing the current task",
   "排队中：等上一轮结束": "Queued: waiting for the previous round to finish",
   "正在唤醒": "Waking up",
   "等待开始…": "Waiting to start…",

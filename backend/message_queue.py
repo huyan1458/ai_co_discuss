@@ -25,6 +25,9 @@ QUEUED_FIELDS = ("author", "text", "reply_to", "kind", "submitted_by", "to", "se
 # Queueing is always on (user 2026-11-21, #7060): the old site switch only left messages waiting on a busy member with
 # nothing left to edit, and once off it could not be found again; `composer_settings.queueing` is no longer read.
 QUEUE_ACTIONS = ("send", "edit", "delete", "reorder", "resume")
+# The member requests listed in the tray: their purposes, and how much of the message each row previews.
+WAITING_PURPOSES = ("ask", "route", "group", "all")
+WAITING_PREVIEW_CHARS = 2000
 QUEUE_ERRORS = (ValueError, TypeError, LookupError, PermissionError, FileExistsError)
 
 
@@ -72,10 +75,34 @@ def queue_view(connection, room_id):
         item["send_mode"] = send_mode(connection, room_id, payload)
         items.append(item)
     paused = connection.execute("SELECT 1 FROM queued_message_pauses WHERE room_id=?", (room_id,)).fetchone() is not None
-    busy_members = [row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=? AND status='active'", (room_id,))
+    waiting = waiting_requests(connection, room_id)
+    busy_members =[row["name"] for row in connection.execute("SELECT id,name FROM room_members WHERE room_id=? AND status='active'", (room_id,))
                     if member_busy(connection, row["id"])]
-    return {"items": items, "paused": paused and bool(items), "busy": room_busy(connection, room_id),
+    return {"items": items, "waiting_requests": waiting, "paused": paused and bool(items), "busy": room_busy(connection, room_id),
             "host_busy": host_busy(connection, room_id), "busy_members": busy_members}
+
+
+def waiting_requests(connection, room_id):
+    """Requests already made of members still at work, shown in the queue tray beside the owner's messages (user
+    2026-11-28, #15670): the message is posted, the member takes it once its current execution ends.
+
+    Each carries its `send_mode` (`steer`, `interrupt` or `wait`, as for a queued message) for the owner's "send now",
+    and a preview of the message it answers. Discussion turns and manual members are left out: they do not wait on a
+    running execution of the runner."""
+    rows = connection.execute(f"""SELECT r.id,r.message_id,r.created_by,m.name AS member,msg.author,substr(msg.text,1,?) AS text,
+          c.stoppable,c.steer,c.resume FROM member_requests r
+        JOIN room_members m ON m.id=r.member_id
+        JOIN messages msg ON msg.id=r.message_id
+        JOIN member_executions e ON e.member_id=r.member_id AND e.status IN ('dispatched','started')
+        LEFT JOIN execution_capabilities c ON c.execution_id=e.id
+        WHERE r.room_id=? AND r.status='pending' AND r.execution_id IS NULL AND r.purpose IN ({",".join("?" * len(WAITING_PURPOSES))})
+          AND m.status='active' AND m.access='runner'
+          AND NOT EXISTS(SELECT 1 FROM session_requests s WHERE s.member_request_id=r.id)
+        ORDER BY r.id""", (WAITING_PREVIEW_CHARS, room_id, *WAITING_PURPOSES)).fetchall()
+    return [{"request_id": row["id"], "message_id": row["message_id"], "member": row["member"], "author": row["author"],
+             "created_by": row["created_by"], "text": row["text"],
+             "send_mode": "steer" if row["steer"] or row["resume"] else "wait" if row["stoppable"] == 0 else "interrupt"}
+            for row in rows]
 
 
 def send_mode(connection, room_id, payload):

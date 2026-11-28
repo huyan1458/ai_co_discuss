@@ -7,9 +7,6 @@
   "共议": "CoDiscuss",
   "房间视图": "Room views",
   "工作流": "Workflows",
-  "新建或导入工作流": "New or import workflow",
-  "新建或导入": "New or import",
-  "工作流列表": "Workflow list",
   "未命名工作流": "Untitled workflow",
   "未保存": "Unsaved",
   "新名称": "New name",
@@ -20,7 +17,6 @@
   "「{name}」的更多操作": "More actions for “{name}”",
   "更多操作": "More actions",
   "连接本机服务后管理工作流": "Connect the local service to manage workflows",
-  "暂无工作流": "No workflows yet",
   "账号与设置：{name}": "Account and settings: {name}",
   "，": ", ",
   "网站已连接": "Online",
@@ -530,5 +526,14 @@
   "固定房间": "Pin room",
   "取消固定": "Unpin",
   "已固定": "Pinned",
-  "已固定的房间不能存档": "Pinned rooms can't be archived"
+  "已固定的房间不能存档": "Pinned rooms can't be archived",
+  "有工作流需要处理": "A workflow needs attention",
+  "返回工作流": "Back to workflows",
+  "未命名项目": "Unnamed project",
+  "导入": "Import",
+  "还没有工作流。点右上角“新建”，或导入别人分享的工作流。": "No workflows yet. Choose “New” at the top right, or import one someone shared.",
+  "还没有说明": "No description yet",
+  "{count} 位专家": "{count} experts",
+  "{count} 个子工作流": "{count} sub-workflows",
+  "这个项目还没有工作流": "No workflows in this project yet"
 }

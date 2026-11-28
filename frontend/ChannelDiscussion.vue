@@ -870,7 +870,9 @@ const free_queued = computed(() => {
         text: busy ? t('排队中，等它做完当前工作') : t('等待开始…') });
     }
   }
-  return cards;
+  // A request waiting only for its member's current execution is listed in the queue tray above the composer, not
+  // here (user 2026-11-28, #15670): nothing has happened for it yet.
+  return cards.filter((card) => !card.compact_queue);
 });
 const free_now = ref(Math.floor(Date.now() / 1000));
 /** Each busy or queued member keeps its own card, so the elapsed time ticks while any is shown. */
@@ -2156,7 +2158,7 @@ function latest_member_card(name) {
   const live = items.findLast((item) => item.slot_card && item.author === name && !item.queued && !item.failure && !item.cancelled_turn && !item.cancelled_execution && !item.arrangement);
   if (live) return live;
   const speech = items.findLast((item) => (!item.slot_card && item.author === name && !item.withdrawn && !item.relay_room && !QUIET_MEMBER_SOURCES.has(item.source))
-    || (item.slot_card && item.author === name && item.queued && !item.compact_queue));
+    || (item.slot_card && item.author === name && item.queued));
   if (speech) return speech;
   return items.findLast((item) => item.slot_card && item.author === name && !item.arrangement) || null;
 }
@@ -4442,12 +4444,6 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             <LiveClock v-if="run?.notes || run?.steps" v-slot="{ note_map }"><ExecutionNotes :count="run.notes || 0" :steps="run.steps || 0" :notes="note_map.get(run.id)" :load="() => load_notes(run.id)" :preload="(near) => preload_notes(run.id, near)" /></LiveClock>
           </template></template>
         </UChatMessage>
-        <LiveClock v-else-if="message.slot_card && message.queued && message.compact_queue" v-slot="{ now }">
-          <ScheduleCard :id="`execution-${message.id}`" icon="i-lucide-clock" plain :expandable="false" :label="t('排队中')"
-            :title="t('已等 {value1}', { value1: format_elapsed(Math.max(0, now - Math.floor(message.created_at))) })">
-            <template #text><span class="channel-checkin-line">{{ t('{member} 排队中：做完当前这件后接 #{message}', { member: bridge.display_name(message.author), message: message.request_message_id }) }}</span></template>
-          </ScheduleCard>
-        </LiveClock>
         <!-- Work in progress is a compact card: who and how long, the stage as the main line with the stop key at its end, -->
         <!-- and the notes below as a subordinate thread, folded to the latest note with the count after it. -->
         <div v-else-if="message.slot_card && !message.failure && !message.retry" :id="`execution-${message.id}`" class="channel-working-strip" :class="message.marks?.edge" :data-author="bridge.identities[message.author]?.style">
@@ -4589,6 +4585,7 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <UAvatar :src="message_identity(message)?.icon" :icon="message.relay_room && !message_identity(message)?.icon ? 'i-lucide-link' : undefined" :text="message_identity(message)?.initials || '?'" :alt="message_name(message)" size="md" class="channel-avatar" :class="message_identity(message)?.style" />
               <div class="channel-message-meta">
                 <div class="channel-message-author"><strong>{{ message_name(message) }}</strong><UBadge v-if="message.interjection_parent_id" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('插话') }}</UBadge><span class="channel-message-round">{{ card.round_label }}</span><UBadge v-for="badge in card.line.badges.filter((item) => !item.goes)" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UBadge v-if="!QUIET_SOURCES.has(message.source)" size="xs" color="neutral" variant="soft" class="channel-source">{{ bridge.sources[message.source] }}</UBadge><UBadge v-if="message.kind === 'receipt'" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('运行回执') }}</UBadge><UBadge v-if="message.proactive" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员在自己的窗口里应用户要求主动发言，不是在回答房间的请求')">{{ t('主动发言') }}</UBadge><UBadge v-if="message.relay_room" :disabled="message.relay_title == null" as="button" type="button" size="xs" color="neutral" variant="soft" class="channel-source channel-relay-source" :title="t('另一房间的主持人经房主凭据在本房间发言；点击打开该房间')" @click="message.relay_title !== null && act('room', message.relay_room)">{{ relay_label(message) }}</UBadge><UBadge v-if="message.submitted_by && message.submitted_by !== message.author && !(message.source === 'proxy' && message.submitted_by === '用户') && !message.author?.startsWith('guest:')" size="xs" color="neutral" variant="soft" class="channel-source">{{ t('{value1} 代发', { value1: bridge.display_name(message.submitted_by) }) }}</UBadge><UBadge v-if="message.source === 'auto'" size="xs" color="neutral" variant="soft" class="channel-source" :title="t('成员结束时没有提交回答，本机服务把它最后一段回复收录为本次回答')">{{ t('自动收录') }}</UBadge><UBadge v-for="badge in card.line.badges.filter((item) => item.goes)" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UBadge v-if="card.waits" size="xs" color="neutral" variant="soft" class="channel-source" :title="card.speaking_expert ? t('{value1} 说完后交给主持人处理', { value1: bridge.display_name(card.speaking_expert) }) : t('等待主持人处理')">{{ t('待主持人处理') }}</UBadge></div>
+                <span v-if="card.model || card.effort" class="channel-message-provenance channel-message-model" :title="[card.model, card.effort].filter(Boolean).join(' · ')"><bdi v-if="card.model" class="channel-model-id">{{ card.model }}</bdi><span v-if="card.effort" class="channel-model-effort">{{ card.model ? ` · ${card.effort}` : card.effort }}</span></span>
               </div>
               <div class="channel-message-provenance channel-message-facts"><RequestStatus v-if="card.badges?.length" :badges="card.badges" @locate="(id) => locate({ id })" /><time :title="new Date(message.created_at).toLocaleString(locale)">{{ bridge.format_time(message.created_at) }}</time><UButton :label="`#${message.id}`" color="neutral" variant="link" size="xs" :aria-label="t('查看原文 #{value1}', { value1: message.id })" class="channel-message-id" @click="emit('detail', message.id)" /><span v-if="card.elapsed !== null" class="channel-message-elapsed">{{ t('耗时 {value1}', { value1: format_elapsed(card.elapsed) }) }}</span></div>
             </div>
@@ -4636,10 +4633,8 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <ExecutionDenials v-if="report.denials?.length" :denials="report.denials" :allowable="allowable" :folded="completed"
                 :busy="card.allowing === report.id" :error="card.allow_errors?.[report.id]" @allow="allow_and_resend(report)" />
             </div>
-            <!-- How the answer came about (model, effort, this turn's tokens) sits at the card's end in grey: read after the answer,
-                 when checking it, not before (#15303); the cache hit rate shows here too (#15466), the breakdown opens from it. -->
-            <div v-if="card.model || card.effort || card.usage" class="channel-message-footer">
-              <span v-if="card.model || card.effort" class="channel-message-provenance channel-message-model" :title="[card.model, card.effort].filter(Boolean).join(' · ')"><bdi v-if="card.model" class="channel-model-id">{{ card.model }}</bdi><span v-if="card.effort" class="channel-model-effort">{{ card.model ? ` · ${card.effort}` : card.effort }}</span></span>
+            <!-- This turn's tokens at the card's bottom right, with the cache hit rate (#15466, #15675); the breakdown opens from it. -->
+            <div v-if="card.usage" class="channel-message-footer">
               <TokenUsage v-if="card.usage" :usage="JSON.parse(card.usage)" :title="t('本轮用量')" />
             </div>
             <DispatchFeedback v-if="card.rate_dispatch" :message="message" />

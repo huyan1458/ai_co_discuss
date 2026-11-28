@@ -1027,5 +1027,6 @@
   "不能把文件夹移到自身或子文件夹中": "A folder cannot be moved into itself or one of its subfolders",
   "部分云盘文件未能删除，请重试": "Some cloud drive files could not be deleted; try again",
   "云空间已用 {used} MiB，上限 {quota} MiB。可以清空回收站后重试。": "The cloud space has {used} MiB used of {quota} MiB. You can empty the recycle bin and try again.",
-  "该项目已开始彻底删除，无法还原": "This item is already being permanently deleted and cannot be restored"
+  "该项目已开始彻底删除，无法还原": "This item is already being permanently deleted and cannot be restored",
+  "这条排队请求已开始、已完成或已取消": "This queued request has already started, finished or been cancelled"
 }

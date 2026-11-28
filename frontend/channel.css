@@ -209,14 +209,6 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 :is(.channel-directory-actions, .channel-room-actions, .channel-folder-actions) button [class*="icon"] { width: 13px; height: 13px; }
 .channel-room-row:is(:hover, :focus-within, [data-state="open"]) .channel-room-actions, .channel-room-row:has(.channel-room-actions [aria-expanded="true"]) .channel-room-actions { opacity: 1; pointer-events: auto; }
 .channel-directory-empty { padding: 12px 8px; color: #929ba9; font-size: var(--channel-nav-text); }
-/* Workflow rows reuse the room rows, without the drag grip. */
-.channel-workflow-list .channel-room-row { grid-template-columns: minmax(0, 1fr) auto; padding-left: 8px; }
-.channel-workflow-list .channel-room-row.is-disabled .channel-room-select > span { opacity: .55; }
-.channel-workflow-list .channel-room-row.is-broken .channel-room-select { color: var(--ui-warning, #e0a33a); }
-.channel-workflow-rename { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; }
-.channel-workflow-rename > [class*="icon"] { flex-shrink: 0; width: 17px; height: 17px; color: #808998; }
-.channel-workflow-rename input { flex: 1; min-width: 0; height: 28px; padding: 0 6px; border: 1px solid var(--channel-accent, var(--ui-primary)); border-radius: 6px;
-  background: var(--ui-bg); color: var(--ui-text-highlighted); font-size: var(--channel-nav-text); outline: none; }
 /* A room renamed in place: the field takes the name's place and width, keeping the row's height. */
 .channel-room-rename { display: flex; flex: 1; min-width: 0; padding: 4px 0; }
 .channel-room-rename input { flex: 1; min-width: 0; height: 28px; padding: 0 3px; border: 1px solid var(--channel-accent, var(--ui-primary)); border-radius: 6px;
@@ -721,6 +713,10 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 :root[data-theme^="channel"] .channel-body.is-moss .channel-message { margin-bottom: 10px !important; padding: 10px 6px !important; border-color: transparent; background: transparent; box-shadow: none; }
 :root[data-theme^="channel"] .channel-body.is-moss .channel-message[data-author="user"] { width: fit-content !important; max-width: min(85%, 640px); margin-left: auto !important; padding: 12px 16px !important; border-radius: 18px; background: color-mix(in srgb, var(--channel-accent) 14%, var(--ui-bg-elevated)); }
 .channel-body.is-moss .channel-message[data-author="user"] .channel-message-byline { margin-bottom: 6px; }
+/* A signature in MOSS's room is MOSS (or you) and the time: room labels such as 主持, the source, the round, the model and
+   the message number belong to rooms with several members (#15685). The answer's footer keeps the model and usage. */
+.channel-body.is-moss .channel-message-author > :not(strong), .channel-body.is-moss .channel-message-byline .channel-message-model,
+.channel-body.is-moss .channel-message-facts > :not(time) { display: none; }
 :root[data-theme^="channel"] .channel-body.is-moss .channel-message.channel-failed-execution { border-color: color-mix(in srgb, var(--ui-error) 30%, transparent); }
 /* A delegation in MOSS's room: one bordered block, the task's title and state on top, its conclusion as the body. */
 .channel-delegation { display: grid; gap: 6px; margin: 0 16px 14px; padding: 10px 14px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-text) 3%, transparent); }
@@ -766,7 +762,7 @@ button.channel-topic-bounds:hover { color: var(--ui-text-toned); text-decoration
 .channel-model-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
 .channel-model-effort { flex: none; white-space: pre; }
 /* An answer's provenance at its end: model and effort, then this turn's tokens, one grey line that wraps on a phone. */
-.channel-message-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 6px; color: var(--ui-text-dimmed); font-size: 11px; line-height: 18px; }
+.channel-message-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px 8px; margin-top: 6px; color: var(--ui-text-dimmed); font-size: 11px; line-height: 18px; }
 .channel-message-footer .channel-message-model { min-width: 0; max-width: 100%; color: inherit; }
 .channel-message-id { font-size: 11px !important; font-weight: 400; line-height: 15px !important; color: #929aa7; padding: 0 !important; }
 .channel-message-text { margin-top: 2px; color: #d7dbe3; font-size: calc(16px * var(--card-text-scale, 1)); line-height: 1.6; overflow-wrap: anywhere; }

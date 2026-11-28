@@ -3,10 +3,9 @@ import { computed, inject, onMounted, reactive, ref, watch } from "vue";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { access_label } from "../runner/expert_prompts.mjs";
 import ConfirmDialog from "./ConfirmDialog.vue";
-import ContextMeter from "./ContextMeter.vue";
 import StewardSettings from "./StewardSettings.vue";
 import { delegation_state, report_state_label, report_tone } from "./moss.js";
-import { member_quota, member_usage } from "./quota.js";
+import { context_fraction, member_usage, tokens } from "./quota.js";
 import { t } from "./i18n.js";
 
 /**
@@ -23,7 +22,19 @@ const change_software = ref(false);
 // MOSS's own member in its room: its context in use shows beside 换个新脑子, the same meter as any member's card (#15623).
 const moss_member = computed(() => (view.value.room?.free?.members || []).find((member) => member.status !== "removed"));
 const moss_usage = computed(() => moss_member.value ? member_usage(view.value, moss_member.value.name) : null);
-const moss_quota = computed(() => moss_member.value ? member_quota(view.value, moss_member.value.name) : null);
+// The context in use as a hairline under the model (#15685): its share, and the counts on hover.
+const context = computed(() => {
+  const fraction = context_fraction(moss_usage.value);
+  if (fraction === null) return null;
+  const usage = moss_usage.value;
+  return { percent: Math.round(fraction * 100), tone: fraction >= .9 ? "error" : fraction >= .7 ? "warn" : "",
+    title: t("上下文 {percent}% · {used} / {window}", { percent: Math.round(fraction * 100), used: tokens(usage.context_used), window: tokens(usage.context_window) }) };
+});
+// 换个新脑子 and 更换软件 are rare and weighty, so they wait in 更多 beside 设置.
+const more_items = computed(() => [[
+  { label: t("换个新脑子"), icon: "i-lucide-brain", disabled: !software.value || renewing.value, onSelect: () => { renew_confirm.value = true; } },
+  { label: t("更换软件"), icon: "i-lucide-arrow-left-right", onSelect: () => open_settings(true) },
+]]);
 
 async function load() {
   try { settings.value = (await bridge.local_request("steward", {})).settings; }
@@ -145,15 +156,16 @@ const loaded_work = computed(() => {
         </div>
         <dl>
           <div><dt>{{ t("模型") }}</dt><dd>{{ software.model }}</dd></div>
+          <div v-if="context" class="moss-context" :title="context.title"><dt>{{ t("上下文") }}</dt><dd><span class="moss-context-bar" :data-tone="context.tone" role="meter" :aria-label="context.title" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="context.percent"><i :style="{ width: `${context.percent}%` }" /></span><small>{{ context.percent }}%</small></dd></div>
           <div><dt>{{ t("项目") }}</dt><dd :class="{ 'moss-access-raised': software.raised }">{{ software.access }}<UButton v-if="software.raised" size="xs" variant="link" color="warning" class="moss-access-lower" :label="t('改回只读')" :loading="lowering" @click="lower_confirm = true" /></dd></div>
         </dl>
       </template>
       <p v-else class="fine-print">{{ settings ? t("还没有选择软件") : t("正在读取…") }}</p>
       <div class="moss-software-actions">
         <UButton icon="i-lucide-settings-2" :label="t('设置')" size="sm" color="neutral" variant="soft" @click="open_settings()" />
-        <UButton icon="i-lucide-brain" :label="t('换个新脑子')" size="sm" color="neutral" variant="soft" :loading="renewing" :disabled="!software" @click="renew_confirm = true" />
-        <span v-if="moss_usage?.context_used" class="moss-context"><ContextMeter :usage="moss_usage" :quota="moss_quota" mode="full" labelled /></span>
-        <UButton icon="i-lucide-arrow-left-right" :label="t('更换软件')" size="sm" color="neutral" variant="soft" @click="open_settings(true)" />
+        <UDropdownMenu :items="more_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+          <UButton icon="i-lucide-ellipsis" :label="t('更多')" size="sm" color="neutral" variant="ghost" :loading="renewing" />
+        </UDropdownMenu>
       </div>
     </div>
     <section class="moss-work" :aria-label="t('派出的工作')">
@@ -192,7 +204,7 @@ const loaded_work = computed(() => {
 .moss-software dl > div { display: grid; grid-template-columns: 4.5em minmax(0, 1fr); gap: 8px; }
 .moss-software dt { color: var(--ui-text-dimmed); }
 .moss-software dd { margin: 0; overflow: hidden; color: var(--ui-text-toned); text-overflow: ellipsis; white-space: nowrap; }
-.moss-software-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.moss-software-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .moss-work { display: grid; gap: 6px; }
 .moss-work > h4 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .moss-work ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
@@ -201,7 +213,12 @@ const loaded_work = computed(() => {
 @media (hover: hover) and (pointer: fine) { .moss-work-archive { opacity: 0; } .moss-work li:is(:hover, :focus-within) .moss-work-archive { opacity: 1; } }
 .moss-access-raised { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; white-space: normal !important; color: var(--ui-warning) !important; font-weight: 600; }
 .moss-access-lower { padding: 0 !important; font-weight: 400; }
-.moss-context { display: inline-flex; align-items: center; color: var(--ui-text-muted); font-size: 12px; }
+.moss-software dd:has(.moss-context-bar) { display: flex; align-items: center; gap: 8px; overflow: visible; }
+.moss-context-bar { flex: 1; height: 4px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--ui-text) 10%, transparent); }
+.moss-context-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--channel-accent, var(--ui-primary)); }
+.moss-context-bar[data-tone="warn"] > i { background: var(--ui-warning); }
+.moss-context-bar[data-tone="error"] > i { background: var(--ui-error); }
+.moss-context small { flex-shrink: 0; color: var(--ui-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .moss-work li > button:first-child { flex: 1; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 6px 8px; border-radius: 8px; text-align: left; font-size: 13px; }
 @media (hover: hover) { .moss-work li > button:first-child:hover { background: var(--channel-ghost-hover); } }
 .moss-work li > button.is-archived { opacity: .6; }

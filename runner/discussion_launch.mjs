@@ -2394,6 +2394,18 @@ function library_projects(home, input, restricted = false) {
   });
 }
 
+/** List saved projects independently of the active room, using the same IDs as project-scoped operations. */
+function saved_workflow_projects(home, restricted) {
+  const grant = restricted ? { roots: remote_roots(granted_projects(home)), home } : null;
+  const roots = new Map();
+  for (const { kind, id, name, path } of account_roots(home)) {
+    if (kind !== 'project' || roots.has(id) || !statSync(path, { throwIfNoEntry: false })?.isDirectory()
+        || (grant && !remote_allows(path, grant))) continue;
+    roots.set(id, { id, name, path, readonly: false, primary: false });
+  }
+  return [...roots.values()];
+}
+
 function project_store(home, root) {
   return { service_home: home, project_dir: root.path, project_id: root.id, root };
 }
@@ -2431,7 +2443,8 @@ export function workflows_command(home, input = {}, restricted = false) {
   if (action === 'trust') input = { ...input, scope: 'project' };
   if (restricted && input.folder) throw new Error('其他设备请选择 zip 或文件夹导入工作流');
   if (input.scope && !['global', 'project'].includes(input.scope)) throw new Error('工作流作用域无效');
-  const roots = ['list', 'copy', 'move', 'save-preset'].includes(action) || input.scope === 'project' ? library_projects(home, input, restricted) : [];
+  const roots = action === 'list' && input.all_projects === true ? saved_workflow_projects(home, restricted)
+    : (['list', 'copy', 'move', 'save-preset'].includes(action) || input.scope === 'project' ? library_projects(home, input, restricted) : []);
   if (action === 'list') {
     const global = workflow_library(home);
     const project_workflows = roots.flatMap(root => list_workflows(project_store(home, root), name => card_platform_ready(home, name))

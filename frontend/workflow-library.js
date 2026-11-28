@@ -1,5 +1,5 @@
 /**
- * The workflow library's shared state: the sidebar's 工作流 list and the workflow page in the middle work on the same
+ * The workflow library's shared state: the 工作流 page's list (`WorkflowOverview.vue`) and its canvas work on the same
  * workflow, so the selection, the unsaved draft and the confirmations live here, one copy per page.
  * Workflows are keyed by `(scope, project_id, id)` so project workflows and global workflows with the same ID never collide.
  */
@@ -99,11 +99,29 @@ function create_library({ view, bridge }) {
   const global_workflows = computed(() => (view.value.launch.workflows || []).map((item) => ({ scope: "global", ...item })));
   const project_workflows = computed(() => (view.value.launch.project_workflows || []).map((item) => ({ scope: "project", ...item })));
   const project_roots = computed(() => view.value.launch.project_roots || []);
-  const writable_roots = computed(() => project_roots.value.filter((root) => !root.readonly));
-  const workflows = computed(() => [...project_workflows.value, ...global_workflows.value]);
+  // The workflow page manages every saved project's workflows, not only the open room's (#15679): its own list, read with
+  // `all_projects`, beside the room's (which the message box's "/" keeps using).
+  const all_list = ref(null);
+  const all_global = computed(() => (all_list.value?.workflows || []).map((item) => ({ scope: "global", ...item })));
+  const all_project = computed(() => (all_list.value?.project_workflows || []).map((item) => ({ scope: "project", ...item })));
+  const all_roots = computed(() => all_list.value?.project_roots || []);
+  // Where a workflow can be created or copied: every writable saved project once the page's list is read, else the room's.
+  const writable_roots = computed(() => (all_list.value ? all_roots.value : project_roots.value).filter((root) => !root.readonly));
+  // Every workflow known on this page: the room's and the page's list, one entry per key.
+  const workflows = computed(() => {
+    const seen = new Map();
+    for (const item of [...project_workflows.value, ...global_workflows.value, ...all_project.value, ...all_global.value]) {
+      const key = workflow_key(item);
+      if (!seen.has(key)) seen.set(key, item);
+    }
+    return [...seen.values()];
+  });
 
   // Whether the middle shows the workflow page instead of the room.
   const page_open = ref(false);
+  // The page opens on the list of all workflows (#15672); choosing, creating or importing one shows its canvas, and
+  // 返回工作流 comes back here.
+  const overview = ref(true);
   // The workflow on the canvas: a saved one (`saved_id`, `saved_scope`, `saved_project_id`) or a new/imported draft.
   const draft = ref(null), saved_id = ref(""), saved_scope = ref("global"), saved_project_id = ref("");
   const draft_scope = ref("global"), draft_project_id = ref("");
@@ -168,8 +186,32 @@ function create_library({ view, bridge }) {
     return {
       scope: wf_scope,
       ...(wf_scope === "project" && parsed.project_id ? { project_id: parsed.project_id } : {}),
-      ...(current_room_id.value ? { room_id: current_room_id.value } : {}),
+      ...room_for(wf_scope === "project" ? parsed.project_id : ""),
     };
+  }
+  /**
+   * The open room, only where it bears on the project: a workflow of another saved project is found by its project_id,
+   * and the room would narrow the search to its own projects (#15676).
+   */
+  function room_for(project_id) {
+    if (!current_room_id.value) return {};
+    return !project_id || project_roots.value.some((root) => root.id === project_id) ? { room_id: current_room_id.value } : {};
+  }
+  /** A move or copy sends the room only if both its source and its target belong to the room's projects. */
+  function transfer_params(item, target_scope, target_project_id) {
+    const params = { ...scope_params(item), target_scope, ...(target_scope === "project" && target_project_id ? { target_project_id } : {}) };
+    if (target_scope === "project" && target_project_id && !room_for(target_project_id).room_id) delete params.room_id;
+    return params;
+  }
+  /** Read the page's list of every saved project's workflows; an older computer without it leaves the room's list. */
+  let all_read = 0;
+  async function load_all() {
+    if (!available.value) return;
+    const reading = ++all_read;
+    try {
+      const result = await bridge.local_request("workflows", { action: "list", all_projects: true });
+      if (reading === all_read) all_list.value = { workflows: result.workflows || [], project_workflows: result.project_workflows || [], project_roots: result.project_roots || [] };
+    } catch { if (reading === all_read) all_list.value = null; }
   }
 
   /** Choose where an unsaved draft will be written when saved. */
@@ -221,6 +263,7 @@ function create_library({ view, bridge }) {
 
   /** A new or imported workflow, not yet saved, shown on the page. */
   function edit_draft(value, target = null) {
+    overview.value = false;
     read_version++;
     loading.value = "";
     failure.value = "";
@@ -295,16 +338,37 @@ function create_library({ view, bridge }) {
     const parsed = parse_key(item);
     if (!parsed?.id) return;
     const key = workflow_key(parsed);
-    if (page_open.value && saved_key.value === key && draft.value) return;
-    if (saved_key.value === key && draft.value) { page_open.value = true; return; }
+    if (saved_key.value === key && draft.value) { overview.value = false; page_open.value = true; return; }
     // The choice is taken before the page opens, so opening it does not also load the first workflow in the list.
     guard(() => {
+      overview.value = false;
       saved_id.value = parsed.id;
       saved_scope.value = parsed.scope;
       saved_project_id.value = parsed.scope === "project" ? parsed.project_id : "";
       page_open.value = true;
       open_saved(parsed);
     });
+  }
+
+  /** Open the page on the list of workflows, asking first about unsaved changes on an open canvas. */
+  function open_overview() {
+    load_all();
+    if (page_open.value && overview.value) return;
+    guard(() => {
+      leave_canvas();
+      overview.value = true;
+      page_open.value = true;
+    });
+  }
+  /** From a canvas back to the list (返回工作流); unsaved changes are asked about first. */
+  function back_to_overview() { open_overview(); }
+  /** What leaving a canvas does: a dropped draft is gone, a saved workflow reopens as saved next time. */
+  function leave_canvas() {
+    if (overview.value) return;
+    read_version++;
+    loading.value = "";
+    if (!saved_id.value) draft.value = null;
+    else if (dirty.value) open_saved({ id: saved_id.value, scope: saved_scope.value, project_id: saved_project_id.value });
   }
 
   /** Leave the page for the room, asking first about unsaved changes; `then` runs once it is left. */
@@ -337,7 +401,7 @@ function create_library({ view, bridge }) {
   // Keep a valid selection when the library changes, and open the first workflow when the page opens empty.
   watch([workflows, page_open], ([list, open]) => {
     if (saved_key.value && !list.some((item) => workflow_key(item) === saved_key.value)) open_saved(open ? list[0] || "" : "");
-    else if (open && !draft.value && !loading.value && !failure.value && list.length) open_saved(saved_key.value || list[0]);
+    else if (open && !overview.value && !draft.value && !loading.value && !failure.value && list.length) open_saved(saved_key.value || list[0]);
     if (open) prefetch(list);
   });
   // If an unsaved draft targets a project root that is no longer in the current room, fall back cleanly.
@@ -347,6 +411,7 @@ function create_library({ view, bridge }) {
     }
   });
   watch(available, (value) => { if (value) refresh_list({ force: true }); }, { immediate: true });
+  watch([global_workflows, project_workflows], () => { if (page_open.value) load_all(); });
   watch(page_open, (open) => { if (open) refresh_list(); });
   // Reload workflows whenever the open room or its project directories change.
   watch(() => [current_room_id.value, view.value.launch.room_models?.project_directory || "",
@@ -415,6 +480,7 @@ function create_library({ view, bridge }) {
     loading.value = t("正在导入工作流…");
     failure.value = "";
     retry_read = () => import_files(read);
+    overview.value = false;
     page_open.value = true;
     try {
       const value = await bridge.local_request("workflows", { action: "preview", files: await read() });
@@ -497,7 +563,7 @@ function create_library({ view, bridge }) {
         workflow: saved_id.value ? edited : { ...edited, resources: kept },
         scope: target_scope,
         ...(target_project_id ? { project_id: target_project_id } : {}),
-        ...(current_room_id.value ? { room_id: current_room_id.value } : {}),
+        ...room_for(target_project_id),
         ...base,
         ...(overwrite ? { overwrite: true } : {}),
       });
@@ -567,9 +633,7 @@ function create_library({ view, bridge }) {
       const result = await bridge.local_request("workflows", {
         action: "move",
         id: item.id,
-        ...scope_params(item),
-        target_scope,
-        ...(target_scope === "project" && target_project_id ? { target_project_id } : {}),
+        ...transfer_params(item, target_scope, target_project_id),
       });
       read_cache.delete(key);
       const next_meta = { id: result.id || item.id, scope: result.scope || target_scope, project_id: result.project_id || target_project_id };
@@ -597,9 +661,7 @@ function create_library({ view, bridge }) {
       await bridge.local_request("workflows", {
         action: "copy",
         id: item.id,
-        ...scope_params(item),
-        target_scope,
-        ...(target_scope === "project" && target_project_id ? { target_project_id } : {}),
+        ...transfer_params(item, target_scope, target_project_id),
       });
       await bridge.reload_workflows();
       bridge.notify("info", target_scope === "global"
@@ -702,7 +764,7 @@ function create_library({ view, bridge }) {
   return {
     conflict, reload, refresh_list, available,
     workflows, global_workflows, project_workflows, project_roots, writable_roots,
-    page_open, draft, saved_id, saved_scope, saved_project_id, saved_key,
+    page_open, overview, open_overview, back_to_overview, all_list, all_global, all_project, all_roots, draft, saved_id, saved_scope, saved_project_id, saved_key,
     active_scope, active_project_id, active_project_name, scope_label, draft_readonly, set_draft_target,
     canvas_key, scope, subs, current, reserved, open_scope, enter_sub, add_sub, remove_sub,
     commands_allowed, busy, loading, failure, pending_items, retry: () => retry_read?.(),

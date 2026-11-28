@@ -3,7 +3,7 @@ import { computed, inject, onMounted, reactive, ref } from "vue";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { access_options } from "../runner/expert_prompts.mjs";
 import ConfirmDialog from "./ConfirmDialog.vue";
-import ExpertCard from "./ExpertCard.vue";
+import HelpTip from "./HelpTip.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import RosterAdd from "./RosterAdd.vue";
 import { locale, t } from "./i18n.js";
@@ -39,6 +39,15 @@ const adapters = computed(() => {
 });
 const candidates = computed(() => [...adapters.value.values()].map(item => ({ ...item, selected: item.value === draft.value.adapter })));
 const card_platform = computed(() => adapters.value.get(draft.value.adapter)?.platform || adapter_profile(draft.value.adapter)?.platform);
+// Choosing MOSS's software is one pick, not adding members (#15658): a single-choice row in the new-room chips' look, then a
+// card with the software and its model; model and effort stay at the software's defaults unless 高级 is opened.
+const chosen = computed(() => adapters.value.get(draft.value.adapter) || null);
+const chosen_profile = computed(() => adapter_profile(draft.value.adapter));
+const DEFAULT_EFFORT = "default";
+const effort_items = computed(() => [{ label: t("软件默认强度"), value: DEFAULT_EFFORT }, ...(chosen_profile.value?.efforts || []).map((value) => ({ label: value, value }))]);
+// Project access is no first-run question: read-only by default, raised when an install or deploy asks for it. The
+// settings dialog keeps one control for those who set it by hand.
+const access_items = computed(() => access_options(draft.value.adapter, bridge.full_only_hint(draft.value.adapter)).filter((item) => !item.disabled));
 const changed = computed(() => saved.value ? Object.fromEntries(Object.entries(draft.value)
   .filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(saved.value[key]))) : {});
 
@@ -221,10 +230,31 @@ async function save() {
     <form v-if="saved" class="steward-settings-form" @submit.prevent="submit">
       <section class="steward-group">
         <h4 v-if="!choosing">{{ t("软件") }}</h4>
-        <RosterAdd v-if="(choosing || changing_software) && candidates.length" :label="t('选择 MOSS 软件')" :items="candidates" @add="choose_adapter" />
+        <div v-if="(choosing || changing_software) && candidates.length" class="steward-software-choices" role="radiogroup" :aria-label="t('选择 MOSS 软件')">
+          <button v-for="item in candidates" :key="item.value" type="button" role="radio" :aria-checked="item.selected" :class="{ 'is-selected': item.selected }" @click="choose_adapter(item.value)">
+            <UAvatar :src="item.icon" :text="item.initials" size="2xs" class="channel-avatar" :class="item.style" /><span>{{ item.name }}</span>
+          </button>
+        </div>
         <p v-else-if="choosing && view.launch.available" class="fine-print">{{ t("这台电脑还没有配置可用的 AI 软件。") }}</p>
-        <ExpertCard v-if="card_platform" :key="draft.adapter" v-model:preset="draft" class="w-full max-w-[280px]" :name="card_platform" mode="cli" :status="{}" settings-only />
+        <div v-if="chosen" class="steward-software-card">
+          <div class="steward-software-name"><UAvatar :src="chosen.icon" :text="chosen.initials" size="sm" class="channel-avatar" :class="chosen.style" /><strong>{{ chosen.name }}</strong></div>
+          <dl><div><dt>{{ t("模型") }}</dt><dd>{{ draft.model || t("软件默认模型") }}</dd></div>
+            <div v-if="draft.effort"><dt>{{ t("强度") }}</dt><dd>{{ draft.effort }}</dd></div></dl>
+          <details v-if="chosen_profile?.models || chosen_profile?.efforts" class="steward-advanced">
+            <summary>{{ t("高级") }}</summary>
+            <UFormField v-if="chosen_profile?.models" :label="t('模型')"><UInput :model-value="draft.model || ''" size="sm" class="w-full" :placeholder="t('软件默认模型')" @update:model-value="draft = { ...draft, model: String($event || '').trim() }" /></UFormField>
+            <UFormField v-if="chosen_profile?.efforts" :label="t('强度')"><USelect :model-value="draft.effort || DEFAULT_EFFORT" :items="effort_items" size="sm" class="w-full" @update:model-value="draft = { ...draft, effort: $event === DEFAULT_EFFORT ? '' : $event }" /></UFormField>
+          </details>
+        </div>
+        <p v-if="choosing && candidates.length && !draft.adapter" class="steward-software-hint">{{ t("先选一个软件") }}</p>
         <UButton v-if="!choosing && !changing_software" class="justify-self-start" icon="i-lucide-arrow-left-right" :label="t('更换软件')" size="xs" color="neutral" variant="soft" @click="changing_software = true" />
+      </section>
+      <section v-if="!choosing && access_items.length > 1" class="steward-group">
+        <h4>{{ t("项目权限") }}<HelpTip :text="t('默认只读；要运行命令时会先问你是否调高。')" /></h4>
+        <div class="steward-access" role="radiogroup" :aria-label="t('项目权限')">
+          <button v-for="item in access_items" :key="item.value" type="button" role="radio" :aria-checked="draft.project_access === item.value" :class="{ 'is-selected': draft.project_access === item.value }"
+            :title="item.hint ? t(item.hint) : undefined" @click="draft = { ...draft, project_access: item.value }">{{ t(item.label) }}</button>
+        </div>
       </section>
       <template v-if="!choosing">
         <section class="steward-group">
@@ -232,12 +262,11 @@ async function save() {
           <ProjectDirectoryField v-model="draft.cwd" compact />
         </section>
         <section class="steward-group">
-          <h4>{{ t("新建房间") }}</h4>
+          <h4>{{ t("新建房间") }}<HelpTip :text="t('关闭后 MOSS 不能建房，也不能给其他房间传话。')" /></h4>
           <!-- On unless the user turned it off: an older computer that does not send the setting yet reads as on. -->
           <USwitch :model-value="draft.create_rooms !== false" :label="t('允许 MOSS 新建房间')" @update:model-value="draft = { ...draft, create_rooms: $event }" />
-          <p class="fine-print">{{ t("关闭后 MOSS 不能新建房间，也不能给其他房间的主持人传话。") }}</p>
           <template v-if="draft.create_rooms !== false">
-            <span class="text-sm">{{ t("MOSS 建房时的成员") }}</span>
+            <span class="steward-label">{{ t("MOSS 建房时的成员") }}<HelpTip :text="t('新房间用本机保存的默认模型与强度，项目权限最高为可写。')" /></span>
             <ul v-if="spawn_draft.members.length" class="steward-spawn-members" :aria-label="t('MOSS 建房时的成员')">
               <li v-for="name in spawn_draft.members" :key="name">
                 <img v-if="bridge.identities[bridge.platform_of(name)]?.icon" class="steward-spawn-icon" :src="bridge.identities[bridge.platform_of(name)].icon" alt="" />
@@ -249,13 +278,11 @@ async function save() {
             </ul>
             <p v-else class="steward-spawn-none">{{ spawn_fallback ? t("未指定，将使用 {name}", { name: spawn_fallback }) : t("未指定，将使用第一位本机已配置的 AI") }}</p>
             <RosterAdd :label="t('添加 AI')" :items="spawn_library" @add="add_spawn_member" />
-            <p class="fine-print">{{ t("新房间的成员用本机保存的默认模型与强度；项目权限沿用你保存的新建房间项目权限，最高为可写，未设置时只读。") }}</p>
           </template>
         </section>
         <section class="steward-group">
-          <h4>{{ t("主动汇报") }}</h4>
+          <h4>{{ t("主动汇报") }}<HelpTip :text="t('等你回答时立即告诉你，其他事攒到简报时间；会消耗 MOSS 所用软件的额度。')" /></h4>
           <USwitch :model-value="draft.proactive.enabled" :label="t('让 MOSS 主动汇报')" @update:model-value="set_proactive({ enabled: $event })" />
-          <p class="fine-print">{{ t("默认关闭。开启后，房间等你回答时 MOSS 立即告诉你，其他事攒到简报时间一起说；只在活跃时段内汇报，会消耗 MOSS 所用软件的额度。") }}</p>
           <div v-if="draft.proactive.enabled" class="steward-proactive-times">
             <UFormField :label="t('活跃时段')">
               <div class="steward-proactive-row">
@@ -268,14 +295,14 @@ async function save() {
               <UInput type="time" size="sm" class="steward-proactive-digest" :model-value="draft.proactive.digest_at" :aria-label="t('简报时间')" @update:model-value="$event && set_proactive({ digest_at: $event })" />
             </UFormField>
           </div>
-          <span class="text-sm">{{ t("交代给 MOSS 的职责") }}</span>
+          <span class="steward-label">{{ t("交代给 MOSS 的职责") }}</span>
           <ul v-if="shown_duties.length" class="steward-proactive-list">
             <li v-for="item in shown_duties" :key="item.id"><span>{{ item.text }}</span>
               <UButton icon="i-lucide-x" size="xs" color="neutral" variant="ghost" :aria-label="t('删除职责：{text}', { text: item.text })" @click="dropped_duties.add(item.id)" /></li>
           </ul>
-          <p v-else class="fine-print">{{ draft.proactive.enabled ? t("还没有职责，MOSS 不会主动汇报。在对话里交代一句即可，例如“有房间等我回答时提醒我”，它会记下。") : t("在对话里交代一句即可，例如“有房间等我回答时提醒我”，它会记下。") }}</p>
+          <p v-else class="fine-print">{{ draft.proactive.enabled ? t("还没有职责，MOSS 不会主动汇报。在对话里交代一句，它会记下。") : t("在对话里交代一句，MOSS 会记下。") }}</p>
           <template v-if="shown_mutes.length">
-            <span class="text-sm">{{ t("已屏蔽的提醒") }}</span>
+            <span class="steward-label">{{ t("已屏蔽的提醒") }}</span>
             <ul class="steward-proactive-list">
               <li v-for="item in shown_mutes" :key="item.id"><span>{{ item.text }}<small v-if="item.reason">{{ t("原因：{reason}", { reason: item.reason }) }}</small></span>
                 <UButton icon="i-lucide-x" size="xs" color="neutral" variant="ghost" :aria-label="t('恢复提醒：{text}', { text: item.text })" :title="t('恢复提醒')" @click="dropped_mutes.add(item.id)" /></li>
@@ -316,6 +343,29 @@ async function save() {
 .steward-group > h4 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .steward-history { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--ui-border-muted); }
 .steward-settings-actions { display: flex; gap: 8px; }
+/* One pick among the configured software: the new-room chips' pill look, the chosen one filled (#15658). */
+.steward-software-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.steward-software-choices > button, .steward-access > button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 3px 12px 3px 4px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-toned); font-size: 13px; transition: background .12s, border-color .12s, color .12s; }
+.steward-access > button { padding: 3px 12px; }
+@media (hover: hover) { .steward-software-choices > button:hover, .steward-access > button:hover { border-color: var(--ui-border-accented); color: var(--ui-text-highlighted); } }
+:is(.steward-software-choices, .steward-access) > button.is-selected { border-color: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 70%, transparent); background: color-mix(in srgb, var(--channel-accent, var(--ui-primary)) 16%, transparent); color: var(--ui-text-highlighted); font-weight: 600; }
+.steward-access { display: flex; flex-wrap: wrap; gap: 6px; }
+.steward-software-card { display: grid; gap: 8px; width: min(100%, 320px); padding: 12px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-text) 3%, transparent); text-align: left; }
+.steward-software-name { display: flex; align-items: center; gap: 8px; }
+.steward-software-name > strong { color: var(--ui-text-highlighted); font-size: 14px; }
+.steward-software-card dl { display: grid; gap: 4px; margin: 0; font-size: 12px; }
+.steward-software-card dl > div { display: grid; grid-template-columns: 4em minmax(0, 1fr); gap: 8px; }
+.steward-software-card dt { color: var(--ui-text-dimmed); }
+.steward-software-card dd { margin: 0; overflow: hidden; color: var(--ui-text-toned); text-overflow: ellipsis; white-space: nowrap; }
+.steward-advanced { display: grid; gap: 8px; }
+.steward-advanced > :not(summary) + :not(summary) { margin-top: 10px; }
+/* What stays as text reads one step larger and brighter than the old fine print (#15685). */
+.steward-settings :deep(.fine-print) { color: var(--ui-text-muted); font-size: 13px; line-height: 1.55; }
+.steward-group > h4, .steward-label { display: flex; align-items: center; }
+.steward-label { color: var(--ui-text-toned); font-size: 13px; }
+.steward-advanced > summary { width: fit-content; color: var(--ui-text-dimmed); font-size: 12px; cursor: pointer; }
+.steward-advanced[open] > summary { margin-bottom: 4px; }
+.steward-software-hint { margin: 0; color: var(--ui-text-muted); font-size: 13px; }
 .steward-spawn-members { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .steward-spawn-members li { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 2px 4px 2px 6px; border-radius: 8px; background: color-mix(in srgb, var(--ui-text) 4%, transparent); font-size: 13px; }
 .steward-spawn-members li > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

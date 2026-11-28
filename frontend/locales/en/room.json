@@ -963,9 +963,7 @@
   "信任并启用": "Trust and enable",
   "当前项目": "Current project",
   "只读目录": "Read-only folder",
-  "暂无项目工作流": "No project workflows yet",
   "全局": "Global",
-  "暂无全局工作流": "No global workflows yet",
   "导入到当前项目（{name}）": "Import to current project ({name})",
   "导入到全局": "Import to global",
   "导出「{value1}」（项目）": "Export “{value1}” (Project)",
@@ -1074,5 +1072,9 @@
   "已用 {value1}": "{value1} used",
   "上下文": "Context",
   "账号额度": "Account usage limits",
-  "{name} 不限": "{name} no limit"
+  "{name} 不限": "{name} no limit",
+  "{author} → {member}": "{author} → {member}",
+  "#{message} 已发出，等 {member} 做完当前这件后接": "#{message} sent; {member} takes it after finishing the current task",
+  "取消这条请求，{member} 不再处理它": "Cancel this request; {member} will not handle it",
+  "取消排队请求": "Cancel queued request"
 }

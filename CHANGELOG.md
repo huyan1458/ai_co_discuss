@@ -2,6 +2,11 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.45 (2026-11-27 23:00)
+
+- Changed: "Workflows" is now its own page at the top of the sidebar, listing workflows as cards with "New" and "Import" at the top right.
+- Changed: Messages for a busy member no longer take a card in the conversation; they wait in the queue above the message box, showing who sent them to whom, and each can be cancelled.
+
 ## 0.5.44 (2026-11-27 21:46)
 
 - New: "Cloud space": a drive for each account where you can create folders, upload, preview and download several files at once; deleted items go to the "Recycle bin" and can be restored within 30 days.

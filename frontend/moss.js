@@ -3,6 +3,10 @@ import moss_running_src from "./moss-running.png";
 import moss_waiting_src from "./moss-waiting.png";
 import { t } from "./i18n.js";
 
+// The sidebar and title bar draw MOSS small (`MossMark.vue`, #15685) while the user weighs the drawing against the
+// original picture; false puts the picture back there.
+export const USE_MOSS_MARK = true;
+
 /**
  * MOSS's picture for its room's state: waiting on the user, at work, or idle. No text label; the title says it on hover.
  * @param {object|undefined} room The MOSS room from the room list (`attention`, `running`).

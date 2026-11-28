@@ -10929,6 +10929,8 @@ async function execute_view_action(name, value) {
     queue_send: send_queued, queue_delete: delete_queued, question_answer: question_request,
     queue_reorder: ids => queue_request({ action: "reorder", ids }), queue_resume: () => queue_request({ action: "resume" }),
     queue_edit: edit_queued,
+    queue_request_send: request_id => queue_request({ action: "request_send", request_id }),
+    queue_request_cancel: request_id => queue_request({ action: "request_cancel", request_id }),
     copy_reading: () => copy_text(`${room_site()}/r/${state.room.id}`), copy: copy_text };
   try {
     await actions[name](value);

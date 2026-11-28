@@ -22,6 +22,7 @@ const INBOX_CHECK_MS = 90_000;
 // Claude Code 2.1.332 omits the context window. Only its explicit [1m] model variant tells it (one million tokens); a plain
 // ID is left unknown, as `claude-opus-5-5` was seen holding 257K tokens (2026-11-27, runner log claude-free-9343).
 const CLAUDE_EXTENDED_WINDOW = 1_000_000;
+const CLAUDE_STANDARD_WINDOW = 200_000;
 // How often an open window's session log is read for the end of the turn that took a task.
 const WINDOW_POLL_MS = 3_000;
 // How much of a schedule's prompt marks the turn its fire starts (see `listen_schedules`).
@@ -1377,8 +1378,9 @@ function claude_usage(id, { env, home, log_path, profile } = {}) {
   const usage = message?.usage;
   // The API returns the plain model ID; only the member's own setting says it asked for the 1M variant.
   const extended = [message?.model, profile?.model].some(model => String(model || '').includes('[1m]'));
-  const context = usage && { used: usage.input_tokens + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0),
-    window: extended ? CLAUDE_EXTENDED_WINDOW : 0 };
+  const used = usage ? usage.input_tokens + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0) : 0;
+  // Claude's windows are 200K or 1M: a context past 200K can only be in the 1M one (seen 733K on a plain ID, #15675).
+  const context = usage && { used, window: extended || used > CLAUDE_STANDARD_WINDOW ? CLAUDE_EXTENDED_WINDOW : 0 };
   const turn = entries.length ? claude_turn(entries) : null;
   return context || windows.length || turn ? { context, account: { windows }, turn } : null;
 }

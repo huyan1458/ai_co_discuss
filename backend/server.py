@@ -41,7 +41,7 @@ from .remote_launch import (COMMAND_WAIT_MAX, claim_machine_commands, finish_mac
                             machine_launch_action, machine_sync, pair_machine, remote_launch_status, submit_machine_command,
                             submit_remote_launch)
 from .free_room import (active_members, add_member, after_free_message, after_proactive, authorize_free_write, check_answer, execution_action, free_view,
-                        inbox, interrupt_for_message, interrupt_member, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
+                        inbox, interrupt_for_message, interrupt_member, queue_request_action, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
                         room_failure_wakes, room_quiet_checkins, save_room_access, view_execution, recent_executions, MAX_MESSAGE_ID)
 from .free_room import ROOM_ATTENTION_SQL, ROOM_WAITING_SINCE_SQL, STEWARD_SESSION_TEMPLATE, convert_suggestion, message_suggestions, replace_steward_member, save_suggestions, sync_participants
 from .free_room import account_quotas, report_quota
@@ -6336,7 +6336,12 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             connection.commit()
             return self.respond(result)
         if parts[3:] == ["queue"] and method == "POST":
-            result = queue_action(connection, room_id, token, self.read_payload(), post_queued, check_queued, interrupt_for_message)
+            payload = self.read_payload()
+            if payload.get("action") in ("request_send", "request_cancel"):
+                result = queue_request_action(connection, room_id, token, payload)
+                connection.commit()
+                return self.respond(result)
+            result = queue_action(connection, room_id, token, payload, post_queued, check_queued, interrupt_for_message)
             connection.commit()
             return self.respond(result)
         if parts[3:] == ["executions", "changes"] and method == "GET":

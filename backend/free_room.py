@@ -4745,7 +4745,7 @@ def interrupt_member(connection, room_id, member_id, token, by_host=""):
     return free_view(connection, room_id)
 
 
-def interrupt_for_message(connection, room_id, message_id):
+def interrupt_for_message(connection, room_id, message_id, member_id=None):
     """The owner's "send now" of a queued message to members still at work (user 2026-11-23, #7819): a member whose
     software takes an interjection hears of it in its running turn, which then also answers it; any other is
     interrupted and takes it, with the interrupted work, next.
@@ -4762,7 +4762,8 @@ def interrupt_for_message(connection, room_id, message_id):
         JOIN room_members m ON m.id=r.member_id
         JOIN member_executions e ON e.member_id=r.member_id AND e.status IN ('dispatched','started')
         LEFT JOIN execution_capabilities c ON c.execution_id=e.id
-        WHERE r.room_id=? AND r.message_id=? AND r.status='pending'""", (room_id, message_id)).fetchall()
+        WHERE r.room_id=? AND r.message_id=? AND r.status='pending' AND (? IS NULL OR r.member_id=?)""",
+        (room_id, message_id, member_id, member_id)).fetchall()
     steerable = [row for row in busy if (row["steer"] or row["resume"]) and row["interjections"] < MAX_INTERJECTIONS]
     stopped = [row for row in busy if row not in steerable]
     blocked = [row["name"] for row in stopped if row["stoppable"] == 0]
@@ -4783,6 +4784,30 @@ def interrupt_for_message(connection, room_id, message_id):
     if stopped:
         settle_batches(connection, room_id)
     return bool(busy)
+
+
+def queue_request_action(connection, room_id, token, payload):
+    """The owner acts on a request waiting in the queue tray for a member still at work (user 2026-11-28, #15670):
+    `request_send` hands it to the running execution now (an interjection, or a stop when the software takes none),
+    `request_cancel` cancels that one request; the member's other work and the rest of its batch go on.
+
+    Raises:
+        LookupError: the request has started, finished or been cancelled meanwhile.
+        FileExistsError: the member can neither take an interjection nor be stopped; the request keeps waiting.
+    """
+    require_owner(connection, room_id, token)
+    begin_write(connection)
+    request = connection.execute("""SELECT id,message_id,member_id FROM member_requests
+        WHERE id=? AND room_id=? AND status='pending' AND execution_id IS NULL""", (payload.get("request_id"), room_id)).fetchone()
+    if not request:
+        raise LookupError(Text("这条排队请求已开始、已完成或已取消"))
+    if payload.get("action") == "request_send":
+        interrupt_for_message(connection, room_id, request["message_id"], request["member_id"])
+    else:
+        record_cancel_reasons(connection, "id=?", (request["id"],), "user_stop")
+        connection.execute("UPDATE member_requests SET status='cancelled' WHERE id=?", (request["id"],))
+        settle_batches(connection, room_id)
+    return queue_view(connection, room_id)
 
 
 def withdrawals(connection, room_id):

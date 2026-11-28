@@ -449,7 +449,7 @@ function write_sub_workflows(staging, list, carry) {
  */
 function write_cards(directory, agents, carry = { folders: new Map(), replace: true }) {
   for (const { card, system_prompt, name, skills, knowledge, ...fields } of agents) {
-    const platform = name.slice(0, name.length - card.length - 1);
+    const platform = card_platform({ name, card });
     const text = serialize_markdown({ name: card, platform, ...Object.fromEntries(CARD_FIELDS.slice(1).map(key => [key, fields[key]])) }, system_prompt);
     const saved = carry.folders.get(card);
     if (!saved && skills === undefined && knowledge === undefined) { writeFileSync(join(directory, `${card}.md`), text); continue; }
@@ -690,6 +690,11 @@ export function read_workflow_files(files) {
   return { workflow, ignored: [...new Set(ignored)].sort() };
 }
 
+/** Recover the platform key by removing the normalized card ID suffix. */
+function card_platform({ name, card }) {
+  return name.slice(0, name.length - card.length - 1);
+}
+
 /** Summaries for the library list; a broken folder is listed with its error instead of hiding it. */
 export function list_workflows(home, card_ready = null) {
   return with_workflow_lock(home, () => {
@@ -700,15 +705,18 @@ export function list_workflows(home, card_ready = null) {
       try {
         const workflow = read_saved_workflow(home, id);
         // Cards whose software this computer has not set up: the workflow cannot bring them until they change platform.
-        const unavailable = card_ready ? workflow_cards(workflow).filter(agent => !card_ready(agent.name)).map(agent => ({
-          card: agent.card, label: agent.label || agent.card, platform: agent.name.slice(0, agent.name.length - agent.card.length - 1),
+        const all_cards = workflow_cards(workflow);
+        const unavailable = card_ready ? all_cards.filter(agent => !card_ready(agent.name)).map(agent => ({
+          card: agent.card, label: agent.label || agent.card, platform: card_platform(agent),
           ...(agent.sub_workflow ? { sub_workflow: agent.sub_workflow } : {}) })) : [];
         return { id, label: workflow.label || id, description: workflow.description,
           ...(workflow.author ? { author: workflow.author } : {}),
           ...(workflow.source ? { source: workflow.source } : {}),
-          cards: workflow.agents.length, directory: workflow.directory, ...project_trust(home, workflow),
+          cards: workflow.agents.length, total_cards: all_cards.length, sub_workflow_count: workflow.sub_workflows.length,
+          card_platforms: all_cards.map(card_platform),
+          directory: workflow.directory, ...project_trust(home, workflow),
           ...(unavailable.length ? { unavailable } : {}), ...flag };
-      } catch (error) { return { id, label: id, description: '', cards: 0, error: error.message, ...flag }; }
+      } catch (error) { return { id, label: id, description: '', cards: 0, total_cards: 0, sub_workflow_count: 0, card_platforms: [], error: error.message, ...flag }; }
     });
   });
 }
