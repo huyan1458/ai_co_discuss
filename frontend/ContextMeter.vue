@@ -1,24 +1,20 @@
 <script setup>
 /**
- * How full one member's session context is, drawn as dsh draws it: a 14px ring with the percentage beside it, the
- * tokens alone where the window is unknown. Readings are ranked by whether they call for a decision (#15303): in the
- * default `alert` mode it shows only what needs attention (context or an account window from QUOTA_WARN on), so a
- * card's head stays bare until something must be handled; `full` (a card's end, the private chat) always shows the
- * context, labelled, and adds an account window only once it needs attention. Pressing it opens the full reading:
- * tokens used against the window, then each usage-limit window of the member's account with when it resets.
+ * How full one member's session context is, and nothing else: the context belongs to the member's session, while
+ * usage limits belong to an account and are shown once per account (AccountQuotas; the design language of #15754).
+ * Drawn as dsh draws it, a 12px ring that only ever means context, with the percentage beside it; where the window is
+ * unknown the ring is hollow and the indicator carries no figure. Pressing it opens the details: tokens used against
+ * the window. Three levels of detail by place: `alert` (a name or a working card) only from QUOTA_WARN on, `row` (the
+ * right column's status line) and `full` (a member card's end, the private chat; `labelled` names it) always.
  */
 import { computed } from "vue";
 import { t } from "./i18n.js";
-import { context_fraction, quota_line, quota_peak, quota_rows, tokens, used_level } from "./quota.js";
+import { context_fraction, tokens, used_level } from "./quota.js";
 
 const props = defineProps({
   // The member's usage report from the room view (`free.members[].usage`).
   usage: { type: Object, default: null },
-  // The account quota it draws on, or null.
-  quota: { type: Object, default: null },
-  // `alert`: only once something needs attention; `full`: the context always, labelled; `row` (the right column's
-  // status line, #15613): the context and the account's most used window always, both grey, so every software's
-  // 5h/7d can be seen at a glance.
+  // `alert` | `row` | `full`, see above.
   mode: { type: String, default: "alert" },
   // In `full` mode, name the reading with “上下文” where no label sits beside it.
   labelled: Boolean,
@@ -26,48 +22,35 @@ const props = defineProps({
 const RADIUS = 5.5;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 const fraction = computed(() => context_fraction(props.usage));
-const reading = computed(() => fraction.value === null ? tokens(props.usage?.context_used || 0) : `${Math.round(fraction.value * 100)}%`);
+const percent = computed(() => fraction.value === null ? "" : `${Math.round(fraction.value * 100)}%`);
 const level = computed(() => used_level(fraction.value || 0));
-const peak = computed(() => quota_peak(props.quota));
-// An account window shows on the button only once it needs attention; normally it is read in the panel or the account list.
-// The right column's status line lists every window of the member's group, `5h 不限 · 7d 44%` (#15619, #15627).
-const shown_peak = computed(() => props.mode === "row" && peak.value ? { ...peak.value, text: quota_line(props.quota) } : peak.value?.level ? peak.value : null);
-const shows_context = computed(() => Boolean(props.usage?.context_used) && (props.mode !== "alert" || Boolean(level.value)));
-const rows = computed(() => quota_rows(props.quota));
-const label = computed(() => [props.usage?.context_used ? t('上下文已用 {value1}', { value1: reading.value }) : "", shown_peak.value?.text || ""].filter(Boolean).join(" · "));
+const shown = computed(() => Boolean(props.usage?.context_used) && (props.mode !== "alert" || Boolean(level.value)));
+// The summary spells out an unknown window; the indicator keeps only the hollow ring.
+const summary = computed(() => props.usage?.context_window ? `${tokens(props.usage.context_used)} / ${tokens(props.usage.context_window)}`
+  : t('已用 {used}，窗口大小未知', { used: tokens(props.usage?.context_used || 0) }));
+const label = computed(() => fraction.value === null ? t('上下文已用 {used}，窗口大小未知', { used: tokens(props.usage?.context_used || 0) }) : t('上下文已用 {value1}', { value1: percent.value }));
 </script>
 
 <template>
-  <UPopover v-if="shows_context || shown_peak" :content="{ side: 'top', align: 'start', sideOffset: 6 }">
+  <UPopover v-if="shown" :content="{ side: 'top', align: 'start', sideOffset: 6 }">
     <button type="button" class="context-meter" :data-mode="mode" :aria-label="label" @click.stop>
-      <span v-if="mode === 'full' && labelled && shows_context" class="context-meter-label">{{ t('上下文') }}</span>
-      <svg v-if="shows_context" viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+      <span v-if="mode === 'full' && labelled" class="context-meter-label">{{ t('上下文') }}</span>
+      <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
         <circle class="context-meter-track" cx="7" cy="7" :r="RADIUS" />
-        <!-- Where the window is unknown only the track is drawn, a hollow ring (#15619); the figures are in the panel. -->
         <circle v-if="fraction !== null" class="context-meter-fill" :class="level && `is-${level}`" cx="7" cy="7" :r="RADIUS" :stroke-dasharray="`${CIRCUMFERENCE * fraction} ${CIRCUMFERENCE}`" transform="rotate(-90 7 7)" />
       </svg>
-      <span v-if="shows_context">{{ reading }}</span>
-      <span v-if="mode === 'full' && shows_context && usage.context_window" class="context-meter-muted">{{ `${tokens(usage.context_used)} / ${tokens(usage.context_window)}` }}</span>
-      <span v-if="shown_peak" class="context-meter-peak"><i v-if="shown_peak.level" class="context-meter-dot" :class="`is-${shown_peak.level}`" aria-hidden="true" />{{ shown_peak.text }}</span>
+      <span v-if="percent">{{ percent }}</span>
+      <span v-if="mode === 'full'" class="context-meter-muted">{{ summary }}</span>
     </button>
     <template #content>
       <div class="context-meter-panel">
-        <template v-if="usage?.context_used">
-          <div class="context-meter-head">
-            <span class="context-meter-muted">{{ t('上下文已用') }}</span>
-            <strong v-if="fraction !== null">{{ reading }}</strong>
-            <span class="context-meter-figures">{{ usage.context_window ? `~${tokens(usage.context_used)} / ${tokens(usage.context_window)}` : `~${tokens(usage.context_used)}` }}</span>
-          </div>
-          <div v-if="fraction !== null" class="context-meter-bar"><div :style="{ width: `${fraction * 100}%` }" /></div>
-          <p v-else class="context-meter-muted">{{ t('这款软件不报告上下文窗口大小') }}</p>
-        </template>
-        <dl v-if="rows.length" class="context-meter-rows">
-          <div v-for="row in rows" :key="row.key">
-            <dt>{{ row.name }}</dt>
-            <dd :class="row.level && `is-${row.level}`">{{ row.value }}</dd>
-            <small v-if="row.note">{{ row.note }}</small>
-          </div>
-        </dl>
+        <div class="context-meter-head">
+          <span class="context-meter-muted">{{ t('上下文已用') }}</span>
+          <strong v-if="percent">{{ percent }}</strong>
+          <span class="context-meter-figures">{{ usage.context_window ? `~${tokens(usage.context_used)} / ${tokens(usage.context_window)}` : `~${tokens(usage.context_used)}` }}</span>
+        </div>
+        <div v-if="fraction !== null" class="context-meter-bar"><div :style="{ width: `${fraction * 100}%` }" /></div>
+        <p v-else class="context-meter-muted">{{ t('这款软件不报告上下文窗口大小') }}</p>
       </div>
     </template>
   </UPopover>

@@ -4,6 +4,7 @@ import { adapter_profile } from "../runner/adapters/profiles.mjs";
 import { access_options } from "../runner/expert_prompts.mjs";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import HelpTip from "./HelpTip.vue";
+import ModelEffortPicker from "./ModelEffortPicker.vue";
 import ProjectDirectoryField from "./ProjectDirectoryField.vue";
 import RosterAdd from "./RosterAdd.vue";
 import { locale, t } from "./i18n.js";
@@ -42,9 +43,9 @@ const card_platform = computed(() => adapters.value.get(draft.value.adapter)?.pl
 // Choosing MOSS's software is one pick, not adding members (#15658): a single-choice row in the new-room chips' look, then a
 // card with the software and its model; model and effort stay at the software's defaults unless 高级 is opened.
 const chosen = computed(() => adapters.value.get(draft.value.adapter) || null);
-const chosen_profile = computed(() => adapter_profile(draft.value.adapter));
-const DEFAULT_EFFORT = "default";
-const effort_items = computed(() => [{ label: t("软件默认强度"), value: DEFAULT_EFFORT }, ...(chosen_profile.value?.efforts || []).map((value) => ({ label: value, value }))]);
+// The profile the model list is read with: this computer's software settings for the platform, with MOSS's own choice
+// over them, as the expert card reads a preset's (choosing other software clears model and strength back to its defaults).
+const moss_profile = computed(() => ({ ...(view.value.launch.profiles?.[card_platform.value] || {}), adapter: draft.value.adapter, model: draft.value.model || "", effort: draft.value.effort || "" }));
 // Project access is no first-run question: read-only by default, raised when an install or deploy asks for it. The
 // settings dialog keeps one control for those who set it by hand.
 const access_items = computed(() => access_options(draft.value.adapter, bridge.full_only_hint(draft.value.adapter)).filter((item) => !item.disabled));
@@ -227,6 +228,7 @@ async function save() {
 
 <template>
   <section class="steward-settings">
+    <div class="steward-settings-body" :class="{ 'is-choosing': choosing }">
     <form v-if="saved" class="steward-settings-form" @submit.prevent="submit">
       <section class="steward-group">
         <h4 v-if="!choosing">{{ t("软件") }}</h4>
@@ -238,13 +240,10 @@ async function save() {
         <p v-else-if="choosing && view.launch.available" class="fine-print">{{ t("这台电脑还没有配置可用的 AI 软件。") }}</p>
         <div v-if="chosen" class="steward-software-card">
           <div class="steward-software-name"><UAvatar :src="chosen.icon" :text="chosen.initials" size="sm" class="channel-avatar" :class="chosen.style" /><strong>{{ chosen.name }}</strong></div>
-          <dl><div><dt>{{ t("模型") }}</dt><dd>{{ draft.model || t("软件默认模型") }}</dd></div>
-            <div v-if="draft.effort"><dt>{{ t("强度") }}</dt><dd>{{ draft.effort }}</dd></div></dl>
-          <details v-if="chosen_profile?.models || chosen_profile?.efforts" class="steward-advanced">
-            <summary>{{ t("高级") }}</summary>
-            <UFormField v-if="chosen_profile?.models" :label="t('模型')"><UInput :model-value="draft.model || ''" size="sm" class="w-full" :placeholder="t('软件默认模型')" @update:model-value="draft = { ...draft, model: String($event || '').trim() }" /></UFormField>
-            <UFormField v-if="chosen_profile?.efforts" :label="t('强度')"><USelect :model-value="draft.effort || DEFAULT_EFFORT" :items="effort_items" size="sm" class="w-full" @update:model-value="draft = { ...draft, effort: $event === DEFAULT_EFFORT ? '' : $event }" /></UFormField>
-          </details>
+          <!-- The expert card's own model list, refresh and strength (#15717): one way to choose a model across the site. -->
+          <ModelEffortPicker v-if="card_platform" :key="draft.adapter" :name="card_platform" :profile="moss_profile" portable
+            @model="draft = { ...draft, model: $event === '__default__' ? '' : String($event || '').trim(), effort: '' }"
+            @effort="draft = { ...draft, effort: $event }" @reset="draft = { ...draft, model: '', effort: '' }" />
         </div>
         <p v-if="choosing && candidates.length && !draft.adapter" class="steward-software-hint">{{ t("先选一个软件") }}</p>
         <UButton v-if="!choosing && !changing_software" class="justify-self-start" icon="i-lucide-arrow-left-right" :label="t('更换软件')" size="xs" color="neutral" variant="soft" @click="changing_software = true" />
@@ -320,6 +319,14 @@ async function save() {
         <UButton v-if="!choosing" color="neutral" variant="ghost" :label="t('取消')" :disabled="saving" @click="emit('done')" />
       </div>
     </form>
+    <div v-else class="steward-settings-form" role="status" :aria-label="t('读取中…')">
+      <section v-for="group in (choosing ? 1 : 4)" :key="group" class="steward-group" aria-hidden="true">
+        <USkeleton class="h-4 w-24" />
+        <USkeleton class="h-9 w-full" />
+      </section>
+      <USkeleton class="h-9 w-24" />
+    </div>
+    </div>
     <section v-if="!choosing" class="steward-group steward-history">
       <h4>{{ t("旧对话") }}</h4>
       <p v-if="visible_history && !visible_history.length" class="fine-print">{{ t("没有存档的 MOSS 对话") }}</p>
@@ -338,6 +345,8 @@ async function save() {
 </template>
 
 <style scoped>
+.steward-settings-body { block-size: min(34rem, 58dvh); overflow: auto; scrollbar-gutter: stable; }
+.steward-settings-body.is-choosing { block-size: min(16rem, 45dvh); }
 .steward-settings-form { display: grid; gap: 18px; padding-top: 4px; }
 .steward-group { display: grid; gap: 8px; min-width: 0; }
 .steward-group > h4 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
@@ -353,18 +362,18 @@ async function save() {
 .steward-software-card { display: grid; gap: 8px; width: min(100%, 320px); padding: 12px; border: 1px solid var(--ui-border-muted); border-radius: 10px; background: color-mix(in srgb, var(--ui-text) 3%, transparent); text-align: left; }
 .steward-software-name { display: flex; align-items: center; gap: 8px; }
 .steward-software-name > strong { color: var(--ui-text-highlighted); font-size: 14px; }
-.steward-software-card dl { display: grid; gap: 4px; margin: 0; font-size: 12px; }
-.steward-software-card dl > div { display: grid; grid-template-columns: 4em minmax(0, 1fr); gap: 8px; }
-.steward-software-card dt { color: var(--ui-text-dimmed); }
-.steward-software-card dd { margin: 0; overflow: hidden; color: var(--ui-text-toned); text-overflow: ellipsis; white-space: nowrap; }
-.steward-advanced { display: grid; gap: 8px; }
-.steward-advanced > :not(summary) + :not(summary) { margin-top: 10px; }
 /* What stays as text reads one step larger and brighter than the old fine print (#15685). */
 .steward-settings :deep(.fine-print) { color: var(--ui-text-muted); font-size: 13px; line-height: 1.55; }
 .steward-group > h4, .steward-label { display: flex; align-items: center; }
 .steward-label { color: var(--ui-text-toned); font-size: 13px; }
-.steward-advanced > summary { width: fit-content; color: var(--ui-text-dimmed); font-size: 12px; cursor: pointer; }
-.steward-advanced[open] > summary { margin-bottom: 4px; }
+/* The shared model picker as it sits in MOSS's card: label and control in two columns, its notes and 恢复默认 in the flow. */
+.steward-software-card :deep(.expert-card-field) { display: grid; grid-template-columns: 3em minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-muted); font-size: 12px; }
+.steward-software-card :deep(.expert-card-catalog) { display: flex; gap: 8px; margin-left: calc(3em + 8px); color: var(--ui-text-dimmed); font-size: 11px; overflow-wrap: anywhere; }
+.steward-software-card :deep(.expert-card-catalog > button) { flex-shrink: 0; color: var(--channel-accent); }
+.steward-software-card :deep(.expert-card-note) { margin: 0; color: var(--ui-text-muted); font-size: 12px; }
+.steward-software-card :deep(.expert-card-defaults) { justify-self: start; padding: 0; color: var(--ui-text-muted); font-size: 12px; }
+.steward-software-card :deep(.expert-card-defaults:hover:not(:disabled)) { color: var(--channel-accent); }
+.steward-software-card :deep(.expert-card-defaults:disabled) { opacity: .4; }
 .steward-software-hint { margin: 0; color: var(--ui-text-muted); font-size: 13px; }
 .steward-spawn-members { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .steward-spawn-members li { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 2px 4px 2px 6px; border-radius: 8px; background: color-mix(in srgb, var(--ui-text) 4%, transparent); font-size: 13px; }

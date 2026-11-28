@@ -230,7 +230,7 @@ function reason_class(item) {
 
 <template>
   <div ref="page" v-keep-reading class="content-page invited-page" role="region" :aria-label="t('外部房间')" @scroll.passive="on_scroll">
-    <div v-if="offline" class="invited-lead">
+    <div v-if="offline" class="invited-lead invited-offline-slot">
       <div class="invited-notice" role="status" :title="error">
         <UIcon name="i-lucide-cloud-off" />
         <div>
@@ -316,6 +316,8 @@ function reason_class(item) {
 :global(html[data-theme^="channel"] .content-page.invited-page) { padding: 16px 0 28px; }
 .invited-lead { width: 100%; max-width: var(--channel-reading-width); margin: 0 auto; padding: 0 24px; }
 .invited-lead:empty { display: none; }
+.invited-offline-slot { position: sticky; z-index: 2; top: 0; height: 0; flex: none; pointer-events: none; }
+.invited-offline-slot .invited-notice { background: color-mix(in srgb, var(--ui-warning) 8%, var(--ui-bg)); }
 .invited-scope { margin: 0 0 4px; color: var(--ui-text-dimmed); font-size: 12px; text-align: center; }
 .invited-skeleton { height: 112px; margin-bottom: 14px; border-radius: 10px; }
 /* A request to this AI, or its own message: a rule in the accent colour at the card's start. */

@@ -161,7 +161,7 @@ defineExpose({ reload });
 <template>
   <div class="attachment-cleaner">
     <template v-if="cloud">
-      <p v-if="usage.quota_mib" class="cleaner-usage">{{ t("云空间已用 {used} / 上限 {quota}", { used: format_storage_bytes(usage.used_bytes), quota: format_storage_bytes(usage.quota_mib * MIB) }) }}</p>
+      <p class="cleaner-usage"><template v-if="usage.quota_mib">{{ t("云空间已用 {used} / 上限 {quota}", { used: format_storage_bytes(usage.used_bytes), quota: format_storage_bytes(usage.quota_mib * MIB) }) }}</template><USkeleton v-else-if="loading" class="h-4 w-40" /></p>
       <p class="cleaner-note">{{ t("删除的网盘文件先进回收站，30 天内可以在文件页的“云空间”里还原；房间附件和传输暂存会立即彻底删除，消息仍在，附件卡片标“已从云空间删除”。") }}</p>
     </template>
     <p v-else class="cleaner-note">{{ t("清理后消息仍在，附件卡片保留文件名、大小和图片缩略图并标“已清理”，原文件无法再打开或下载，成员也读不到；此操作无法撤销。") }}</p>
@@ -174,15 +174,15 @@ defineExpose({ reload });
     <div class="cleaner-filters" role="group" :aria-label="t('按时间筛选')">
       <button v-for="[days, label] in AGES" :key="days" type="button" class="cleaner-chip" :aria-pressed="age === days" @click="age = days">{{ label }}</button>
     </div>
-    <p v-if="loading" class="cleaner-empty">{{ t("正在读取附件…") }}</p>
-    <p v-else-if="!shown.length" class="cleaner-empty">{{ kept.length ? t("没有符合条件的附件") : cloud ? t("云空间里没有文件") : t("本房间没有可清理的附件") }}</p>
-    <template v-else>
+    <div class="cleaner-results" :aria-busy="loading">
       <label class="cleaner-row cleaner-all">
-        <input type="checkbox" :checked="all_shown_chosen" @change="toggle_shown">
+        <input type="checkbox" :checked="all_shown_chosen" :disabled="loading || !shown.length" @change="toggle_shown">
         <span>{{ t("全选当前 {count} 项", { count: shown.length }) }}</span>
       </label>
       <ul class="cleaner-list">
-        <li v-for="file in shown" :key="file.id">
+        <li v-if="loading" class="cleaner-empty" role="status">{{ t("正在读取附件…") }}</li>
+        <li v-else-if="!shown.length" class="cleaner-empty">{{ kept.length ? t("没有符合条件的附件") : cloud ? t("云空间里没有文件") : t("本房间没有可清理的附件") }}</li>
+        <template v-else><li v-for="file in shown" :key="file.id">
           <label class="cleaner-row">
             <input type="checkbox" :checked="chosen.has(file.id)" @change="toggle(file.id)">
             <span class="cleaner-name" :title="file.file_name">{{ file.file_name }}</span>
@@ -205,12 +205,12 @@ defineExpose({ reload });
             </button>
           </label>
           <CloudShares v-if="cloud && shares && sharing === file.id" :file="file" :api="shares" @failed="(message) => emit('failed', message)" />
-        </li>
+        </li></template>
       </ul>
-    </template>
-    <p v-if="cleared_count" class="cleaner-empty">{{ cloud ? t("已删除 {count} 项", { count: cleared_count }) : t("已清理 {count} 项", { count: cleared_count }) }}</p>
+    </div>
+    <p class="cleaner-result-note cleaner-empty" role="status"><template v-if="cleared_count">{{ cloud ? t("已删除 {count} 项", { count: cleared_count }) : t("已清理 {count} 项", { count: cleared_count }) }}</template></p>
     <footer class="cleaner-footer">
-      <span>{{ t("已选 {count} 项，将释放 {size}", { count: chosen.size, size: format_storage_bytes(chosen_bytes) }) }}</span>
+      <span :title="t('已选 {count} 项，将释放 {size}', { count: chosen.size, size: format_storage_bytes(chosen_bytes) })">{{ t("已选 {count} 项，将释放 {size}", { count: chosen.size, size: format_storage_bytes(chosen_bytes) }) }}</span>
       <button v-if="cloud" type="button" class="cleaner-clear" :class="{ 'is-confirming': confirming }" :disabled="!chosen.size || clearing" @click="clear_chosen">
         {{ clearing ? t("删除中…") : confirming ? t("确认删除") : t("删除所选") }}
       </button>
@@ -226,7 +226,7 @@ defineExpose({ reload });
 .cleaner-note, .cleaner-empty { margin: 0; opacity: .7; font-size: 12px; line-height: 1.5; }
 .cleaner-search { width: 100%; padding: 5px 9px; color: inherit; font: inherit; background: transparent; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 6px; }
 .cleaner-transfer { flex-shrink: 0; color: #d0892c; font-size: 11px; }
-.cleaner-usage { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cleaner-usage { display: flex; align-items: center; height: 20px; margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cleaner-room { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cleaner-download { display: grid; flex-shrink: 0; width: 26px; height: 26px; padding: 0; color: inherit; background: none; border: 0; border-radius: 5px; opacity: .65; cursor: pointer; place-items: center; }
 .cleaner-download:hover { opacity: 1; background: color-mix(in srgb, currentColor 10%, transparent); }
@@ -234,17 +234,20 @@ defineExpose({ reload });
 .cleaner-download svg { width: 16px; height: 16px; }
 .cleaner-filters { display: flex; flex-wrap: wrap; gap: 6px; }
 .cleaner-chip { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 10px; color: inherit; font: inherit; font-size: 12px; background: transparent; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 999px; cursor: pointer; }
-.cleaner-chip small { opacity: .6; font-variant-numeric: tabular-nums; }
+.cleaner-chip small { width: 8ch; text-align: right; white-space: nowrap; opacity: .6; font-variant-numeric: tabular-nums; }
 .cleaner-chip[aria-pressed="true"] { color: #3973f9; border-color: #3973f9; background: color-mix(in srgb, #3973f9 10%, transparent); }
-.cleaner-list { max-height: min(50vh, 420px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.cleaner-list { height: min(39vh, 320px); margin: 0; padding: 0; overflow-y: auto; scrollbar-gutter: stable; list-style: none; }
+.cleaner-list > .cleaner-empty { padding: 8px 4px; }
+.cleaner-result-note { min-height: 18px; }
 .cleaner-row { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 2px 4px; border-radius: 6px; cursor: pointer; }
 .cleaner-row:hover { background: color-mix(in srgb, currentColor 6%, transparent); }
 .cleaner-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cleaner-meta { flex-shrink: 0; opacity: .55; font-variant-numeric: tabular-nums; }
 .cleaner-size { flex-shrink: 0; width: 76px; text-align: right; font-variant-numeric: tabular-nums; }
 .cleaner-all { opacity: .8; }
-.cleaner-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
-.cleaner-clear { padding: 5px 14px; color: #f05252; font: inherit; font-size: 12px; background: transparent; border: 1px solid #f05252; border-radius: 6px; cursor: pointer; }
+.cleaner-footer { display: grid; grid-template-columns: minmax(0, 1fr) min(42%, 13rem); align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+.cleaner-footer > span { display: -webkit-box; height: 2lh; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.cleaner-clear { min-height: 42px; padding: 4px 8px; color: #f05252; font: inherit; font-size: 12px; background: transparent; border: 1px solid #f05252; border-radius: 6px; cursor: pointer; }
 .cleaner-clear.is-confirming { color: #fff; background: #f05252; }
 .cleaner-clear:disabled { opacity: .45; cursor: default; }
 </style>

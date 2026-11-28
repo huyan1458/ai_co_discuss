@@ -313,12 +313,7 @@ function close_share(open) {
       :content="{ onInteractOutside: (event) => event.preventDefault() }" :ui="{ content: `glass-panel studio-modal channel-folder-modal channel-manage-modal share-dialog${share_phase === 'published' ? ' share-dialog-wide' : ''}`, body: 'dialog-body' }" @update:open="close_share">
       <template v-if="share_phase === 'published'" #title><span class="share-done-title"><UIcon name="i-lucide-circle-check" />{{ t('分享链接已发布') }}</span></template>
       <template #body>
-        <div v-if="share_phase === 'preparing'" class="share-dialog-loading" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ t("正在整理房间：读取消息与执行记录，去掉本机信息…") }}</div>
-        <div v-else-if="share_phase === 'publishing' || share_phase === 'downloading'" class="share-dialog-loading" role="status">
-          <UIcon name="i-lucide-loader-circle" class="animate-spin" />
-          {{ share_phase === 'downloading' ? t('正在生成网页文件…') : share_draft.upload ? t('正在上传附件 {done}/{total}', share_draft.upload) : t('正在上传…') }}
-        </div>
-        <template v-else-if="share_phase === 'published'">
+        <template v-if="share_phase === 'published'">
           <!-- The link first: it is what was asked for, and it is already on the clipboard. -->
           <div class="share-done-link">
             <UIcon name="i-lucide-link-2" class="share-done-link-icon" />
@@ -385,7 +380,7 @@ function close_share(open) {
                 <span class="share-done-copy-badge">{{ copy_source_label }}</span>
               </div>
               <div class="share-done-copy-actions">
-                <UButton v-if="has_custom_copy" size="xs" color="neutral" variant="ghost" icon="i-lucide-rotate-ccw" :label="t('恢复默认')" @click="reset_share_copy" />
+                <UButton size="xs" color="neutral" variant="ghost" icon="i-lucide-rotate-ccw" :label="t('恢复默认')" :disabled="!has_custom_copy" :title="!has_custom_copy ? t('基础文案') : undefined" @click="reset_share_copy" />
                 <UButton size="xs" color="primary" variant="soft" :label="text_copied ? t('已复制') : t('复制文案')" :icon="text_copied ? 'i-lucide-check' : 'i-lucide-copy'" @click="copy_share_text" />
               </div>
             </div>
@@ -399,6 +394,8 @@ function close_share(open) {
           </div>
         </template>
         <template v-else-if="share_draft">
+        <div class="share-dialog-config" :aria-busy="share_phase !== 'ready'">
+        <div class="share-dialog-review" :inert="['publishing', 'downloading'].includes(share_phase)">
         <section class="share-dialog-section">
           <h3>{{ t("分享的内容") }}</h3>
           <p>{{ t("消息、卡片、执行时间线与过程说明，停在此刻；读者只能看，不能操作。") }}</p>
@@ -445,7 +442,12 @@ function close_share(open) {
           <p v-if="share_phase === 'checking'" class="share-dialog-muted">{{ t("正在检查文本类附件…") }}</p>
           <p v-else class="share-dialog-muted">{{ share_draft.files.included ? t("附件原样公开。文本类附件已一并检查；图片、视频和其他文件的内容程序查不了，请自己核对。") : t("不包含时，消息里的附件标记显示为“未包含在分享中”。") }}</p>
         </section>
-        <section class="share-dialog-section">
+        <section v-if="share_phase === 'preparing'" class="share-dialog-section" aria-hidden="true">
+          <USkeleton class="h-4 w-28" />
+          <USkeleton class="h-4 w-full" />
+          <USkeleton class="h-4 w-3/4" />
+        </section>
+        <section v-else class="share-dialog-section">
           <h3>{{ share_spots.length ? t("发出前请核对（{count} 处）", { count: share_spot_total }) : t("发出前请核对") }}</h3>
           <p v-if="!share_spots.length" class="share-dialog-clear"><UIcon name="i-lucide-circle-check" />{{ t("没有找到疑似密钥、令牌或联系方式。正文会原样公开，程序查不全，仍请自己看一遍。") }}</p>
           <template v-else>
@@ -456,6 +458,7 @@ function close_share(open) {
             <p v-if="share_spots.length > SHARE_SPOTS_SHOWN" class="share-dialog-muted">{{ t("另有 {count} 个位置，请在生成的网页里查找。", { count: share_spots.length - SHARE_SPOTS_SHOWN }) }}</p>
           </template>
         </section>
+        </div>
         <div class="share-dialog-choices">
           <div class="share-dialog-choice">
             <UButton :label="t('下载网页文件')" icon="i-lucide-download" color="neutral" variant="outline" block :loading="share_phase === 'downloading'" :disabled="share_phase !== 'ready'" @click="act('share_room')" />
@@ -464,11 +467,18 @@ function close_share(open) {
           <div class="share-dialog-choice">
             <div class="share-dialog-publish">
               <USelect v-model="share_days" @update:model-value="act('share_select_days', $event)" :items="share_day_items" class="share-dialog-days" :disabled="share_phase !== 'ready'" :aria-label="t('分享链接的有效期')" />
-              <UButton :label="share_phase === 'publishing' ? (share_draft?.upload ? t('正在上传附件 {done}/{total}', share_draft.upload) : t('正在上传…')) : share_draft?.linked ? t('更新链接') : t('发布链接')" icon="i-lucide-link-2" color="primary" class="share-dialog-publish-button"
+              <UButton :label="share_draft?.linked ? t('更新链接') : t('发布链接')" icon="i-lucide-link-2" color="primary" class="share-dialog-publish-button"
                 :loading="share_phase === 'publishing'" :disabled="share_phase !== 'ready'" @click="act('share_publish', share_days)" />
             </div>
             <p>{{ t("上传到 AI CoDiscuss 分享站，运营方与审核 AI 能读到全文；到期自动删除，可随时撤销，撤销后缓存副本留到原定到期时才清除。") }}</p>
           </div>
+        </div>
+        <div class="share-dialog-loading" role="status">
+          <template v-if="['preparing', 'publishing', 'downloading'].includes(share_phase)">
+            <UIcon name="i-lucide-loader-circle" class="animate-spin" />
+            {{ share_phase === 'preparing' ? t("正在整理房间：读取消息与执行记录，去掉本机信息…") : share_phase === 'downloading' ? t('正在生成网页文件…') : share_draft.upload ? t('正在上传附件 {done}/{total}', share_draft.upload) : t('正在上传…') }}
+          </template>
+        </div>
         </div>
         </template>
         <UButton v-if="share_draft" :label="t('复制分享卡诊断')" icon="i-lucide-copy" color="neutral" variant="ghost" size="xs" @click="copy_diagnostic" />
@@ -477,7 +487,8 @@ function close_share(open) {
 </template>
 
 <style scoped>
-.share-dialog-loading { display: flex; align-items: center; gap: 8px; padding: 20px 0 28px; color: var(--ui-text-toned); font-size: 13px; }
+.share-dialog-review { block-size: min(250px, 34dvh); overflow: auto; scrollbar-gutter: stable; }
+.share-dialog-loading { display: flex; align-items: center; gap: 8px; min-height: 3.9em; color: var(--ui-text-toned); font-size: 13px; }
 /* Published. The link is one field with its two actions inside it; below, the card on a stage with its texts beside it. */
 .share-done-title { display: inline-flex; align-items: center; gap: 8px; }
 .share-done-title .iconify { width: 18px; height: 18px; color: var(--ui-success); }
@@ -521,16 +532,18 @@ function close_share(open) {
 .share-dialog-field :deep(textarea) { font-size: 13px; line-height: 1.55; resize: none; }
 .share-done-card-actions { display: flex; flex-wrap: wrap; flex-shrink: 0; gap: 8px; margin-top: auto; }
 .share-done-copy-section { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--ui-border-muted); }
-.share-done-copy-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.share-done-copy-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .share-done-copy-title { display: inline-flex; align-items: center; gap: 8px; }
 .share-done-copy-title h3 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }
 .share-done-copy-badge { padding: 1px 7px; border-radius: 999px; background: var(--ui-bg-accented); color: var(--ui-text-muted); font-size: 11px; line-height: 1.5; }
-.share-done-copy-actions { display: flex; align-items: center; gap: 6px; }
+.share-done-copy-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.share-done-copy-actions > button { justify-content: center; white-space: nowrap; }
 .share-done-copy-input :deep(textarea) { font-size: 12.5px; line-height: 1.6; resize: none; scrollbar-width: thin; scrollbar-color: var(--ui-border-accented) transparent; }
 .share-done-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--ui-border-muted); }
 .share-done-foot p { margin: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.5; }
 .share-done-foot button { flex-shrink: 0; }
 @media (max-width: 640px) {
+  .share-done-copy-head { align-items: flex-start; flex-direction: column; }
   .share-done-card { grid-template-columns: 1fr; height: auto; }
   .share-done-stage { height: 260px; }
   .share-done-side { height: 270px; }

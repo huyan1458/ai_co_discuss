@@ -104,6 +104,8 @@
   "网站请求异常": "Website requests failing",
   "中转心跳正常，但向 {host} 发出的 HTTP 请求已连续失败 {count} 次（{reason}）。": "The relay heartbeat is healthy, but {count} consecutive HTTP requests to {host} failed ({reason}).",
   "中转已连接": "Relay connected",
+  "请先绑定线上网站": "Link an online site first",
+  "请先启动本机服务": "Start the local service first",
   "中转连接中": "Relay connecting",
   "正在等待 {host} 确认连接，上次失败原因是{reason}，已重试 {retries} 次。": "Waiting for confirmation from {host}. Last failure: {reason}. Retry count: {retries}.",
   "连接已打开，正在等待网站回应心跳。": "The connection is open. Waiting for the website to acknowledge the heartbeat.",

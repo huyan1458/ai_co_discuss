@@ -16,6 +16,7 @@ import { live_series, use_live_analytics, waited_text, waiting_title, WAITING_IC
 import { entrance, use_spring, wave } from "./analytics-motion.js";
 import { use_workflow_library } from "./workflow-library.js";
 import MossAnalytics from "./MossAnalytics.vue";
+import SubscriptionUsage from "./SubscriptionUsage.vue";
 import { t } from "./i18n.js";
 
 const emit = defineEmits(["open-room", "open-message"]);
@@ -55,7 +56,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("discuss:steward-skills-changed", refresh_steward_skills);
 });
 const report = ref(null);
-const loading = ref(false);
+const loading = ref(true);
 const error = ref("");
 const members_expanded = ref(false);
 const issues_expanded = ref(false);
@@ -72,7 +73,7 @@ let regrow = true;
 const can_copy_image = typeof ClipboardItem !== "undefined" && Boolean(navigator.clipboard?.write);
 const tz = browser_timezone();
 
-// Motion (see analytics-motion.js): `enter` falls 1→0 once when the page opens and staggers the blocks by distance;
+// Motion (see analytics-motion.js): `enter` falls 1→0 once and staggers the fade-in without moving the blocks;
 // `grow` rises 0→1 whenever the period or scope changes and drives every bar; the numbers are springs to their value.
 const enter = use_spring(1);
 const grow = use_spring(0);
@@ -80,7 +81,7 @@ const task_count = use_spring(0);
 const unassisted_percent = use_spring(0);
 const peak_members = use_spring(0);
 const execution_total = use_spring(0);
-const block_style = (index) => entrance(enter.value.value, index);
+const block_style = (index) => ({ opacity: entrance(enter.value.value, index).opacity });
 
 const report_heading = computed(() => PRESETS.find((item) => item.value === preset.value)?.label || "");
 const date_range_label = computed(() => inclusive_date_range(report.value?.range?.from, report.value?.range?.to));
@@ -631,17 +632,32 @@ async function copy_share_card() {
           <UTooltip :text="t('刷新统计')">
             <UButton icon="i-lucide-refresh-cw" size="sm" color="neutral" variant="ghost" :aria-label="t('刷新统计')" :loading="is_live ? live_loading && Boolean(live) : loading && Boolean(report)" @click="refresh(true)" />
           </UTooltip>
-          <button v-if="!is_live" type="button" class="analytics-share-button" :title="t('生成分享图')" :aria-label="t('生成分享图')" :disabled="!report" @click="share_open = true">
+          <!-- Stays in place on “实时”, only disabled: switching periods must not move the controls (#15747). -->
+          <button type="button" class="analytics-share-button" :title="is_live ? t('实时状态不生成分享图，请切到一个时间段') : t('生成分享图')" :aria-label="t('生成分享图')" :disabled="!report || is_live" @click="share_open = true">
             <UIcon name="i-lucide-image" /><span>{{ t("生成分享图") }}</span>
           </button>
         </div>
       </header>
 
-      <template v-if="is_live">
-        <div v-if="!live && !live_error" class="analytics-skeleton" role="status" :aria-label="t('正在加载统计…')">
-          <USkeleton class="h-64 w-full rounded-xl" />
+      <!-- One skeleton for every period and the live view, built from the opening's own blocks so nothing moves when the
+           data arrives (#15751): caption line, four figures, timeline. -->
+      <section v-if="is_live ? !live && !live_error : loading && !report" class="analytics-overview" role="status" :aria-label="t('正在加载统计…')">
+        <p class="analytics-caption"><USkeleton class="analytics-skeleton-line w-1/2" /></p>
+        <div class="analytics-figures">
+          <article v-for="slot in 4" :key="slot" class="analytics-figure">
+            <span class="analytics-figure-label"><USkeleton class="analytics-skeleton-line w-16" /></span>
+            <strong class="analytics-figure-value"><USkeleton class="analytics-skeleton-line is-value w-24" /></strong>
+            <span class="analytics-figure-foot" />
+          </article>
         </div>
-        <section v-else-if="!live" class="analytics-error" role="alert">
+        <div class="analytics-timeline">
+          <div class="analytics-timeline-head" />
+          <div class="analytics-timeline-plot"><USkeleton class="h-full w-full rounded-lg" /></div>
+        </div>
+      </section>
+
+      <template v-else-if="is_live">
+        <section v-if="!live" class="analytics-error" role="alert">
           <UIcon name="i-lucide-circle-alert" />
           <p>{{ live_error }}</p>
           <UButton :label="t('重试')" size="xs" color="neutral" variant="soft" @click="load_live(true)" />
@@ -678,6 +694,10 @@ async function copy_share_card() {
                 </svg>
                 <span v-for="label in timeline.labels" :key="label.x" class="analytics-axis-label" :style="{ left: `${label.x}%` }">{{ label.text }}</span>
               </div>
+            </div>
+            <div v-else class="analytics-timeline">
+              <div class="analytics-timeline-head" />
+              <div class="analytics-timeline-plot is-empty">{{ t("暂无样本") }}</div>
             </div>
           </section>
 
@@ -724,12 +744,6 @@ async function copy_share_card() {
         </template>
       </template>
 
-      <div v-else-if="loading && !report" class="analytics-skeleton" role="status" :aria-label="t('正在加载统计…')">
-        <USkeleton class="h-64 w-full rounded-xl" />
-        <USkeleton class="h-40 w-full rounded-xl" />
-        <USkeleton class="h-72 w-full rounded-xl" />
-      </div>
-
       <section v-else-if="error && !report" class="analytics-error" role="alert">
         <UIcon name="i-lucide-circle-alert" />
         <p>{{ error }}</p>
@@ -772,6 +786,10 @@ async function copy_share_card() {
               </svg>
               <span v-for="label in timeline.labels" :key="label.x" class="analytics-axis-label" :style="{ left: `${label.x}%` }">{{ label.text }}</span>
             </div>
+          </div>
+          <div v-else class="analytics-timeline">
+            <div class="analytics-timeline-head" />
+            <div class="analytics-timeline-plot is-empty">{{ t("暂无样本") }}</div>
           </div>
         </section>
 
@@ -948,11 +966,11 @@ async function copy_share_card() {
               <thead>
                 <tr>
                   <th>{{ t("成员") }}</th>
-                  <th class="num"><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'executions'" @click="model_sort = 'executions'">{{ t("运行") }}<UIcon v-if="model_sort === 'executions'" name="i-lucide-arrow-down" /></button></th>
+                  <th class="num"><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'executions'" @click="model_sort = 'executions'">{{ t("运行") }}<UIcon :class="{ invisible: model_sort !== 'executions' }" aria-hidden="true" name="i-lucide-arrow-down" /></button></th>
                   <th class="num">{{ t("占比") }}</th>
-                  <th><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'failed'" @click="model_sort = 'failed'">{{ t("结果") }}<UIcon v-if="model_sort === 'failed'" name="i-lucide-arrow-down" /></button></th>
-                  <th><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'duration'" @click="model_sort = 'duration'">{{ t("耗时（通常 · 较慢）") }}<UIcon v-if="model_sort === 'duration'" name="i-lucide-arrow-down" /></button></th>
-                  <th class="num"><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'interrupted'" @click="model_sort = 'interrupted'">{{ t("打断 / 重试") }}<UIcon v-if="model_sort === 'interrupted'" name="i-lucide-arrow-down" /></button></th>
+                  <th><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'failed'" @click="model_sort = 'failed'">{{ t("结果") }}<UIcon :class="{ invisible: model_sort !== 'failed' }" aria-hidden="true" name="i-lucide-arrow-down" /></button></th>
+                  <th><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'duration'" @click="model_sort = 'duration'">{{ t("耗时（通常 · 较慢）") }}<UIcon :class="{ invisible: model_sort !== 'duration' }" aria-hidden="true" name="i-lucide-arrow-down" /></button></th>
+                  <th class="num"><button type="button" class="analytics-sort" :aria-pressed="model_sort === 'interrupted'" @click="model_sort = 'interrupted'">{{ t("打断 / 重试") }}<UIcon :class="{ invisible: model_sort !== 'interrupted' }" aria-hidden="true" name="i-lucide-arrow-down" /></button></th>
                   <th>{{ t("失败类型") }}</th>
                 </tr>
               </thead>
@@ -991,13 +1009,17 @@ async function copy_share_card() {
           <p v-else class="analytics-dim analytics-small">{{ t("本期暂无成员执行记录。") }}</p>
         </details>
 
-        <details class="analytics-detail" :style="block_style(5)" @toggle="toggle_dispatch">
+        <details class="analytics-detail analytics-dispatch" :style="block_style(5)" @toggle="toggle_dispatch">
           <summary>
             <h2><UIcon name="i-lucide-chevron-right" class="analytics-detail-chevron" />{{ t("主持人调度得怎样") }}</h2>
             <span class="analytics-dim">{{ dispatch_report ? t("{count} 条主持人派过活的已结束任务链", { count: dispatch_report.ended }) : t("展开后计算") }}</span>
           </summary>
-          <UButton v-if="can_analyze_dispatch" icon="i-lucide-sparkles" color="neutral" variant="soft" size="xs" :label="t('AI 分析')"
-            @click="bridge.request_steward('dispatch-analysis', { preset, scope, timezone: tz, range: report?.range })" />
+          <div class="analytics-dispatch-action">
+            <span :title="can_analyze_dispatch ? undefined : t('主理人的派活分析技能未获准或暂不可用')">
+              <UButton :disabled="!can_analyze_dispatch" icon="i-lucide-sparkles" color="neutral" variant="soft" size="xs" :label="t('AI 分析')"
+                @click="bridge.request_steward('dispatch-analysis', { preset, scope, timezone: tz, range: report?.range })" />
+            </span>
+          </div>
           <p class="analytics-detail-note">{{ t("只看主持人派过活、已经结束的任务链，按主持人模型、程序版本、主持人提示词和主持技能分组，改了提示词、技能或升级后可以前后对比。作废派活：派出后被主持人撤回、被你停止、撤回或回退；浪费 token：作废、失败和其他取消的运行所花的 token；你出手的链：你对主持人派出的运行做过停止、撤回、回退、改派了主持人的活，或链结束时还有失败没处理；改派只记到能认出的部分，实际可能更多。不足 20 条链只显示次数。看不到漏派，例如该并行没并行、该派没派。") }}</p>
           <div v-if="dispatch_loading && !dispatch_report" class="analytics-skeleton"><USkeleton class="h-24 w-full rounded-xl" /></div>
           <p v-else-if="dispatch_error" class="analytics-dim analytics-small">{{ dispatch_error }}</p>
@@ -1095,6 +1117,12 @@ async function copy_share_card() {
           <p v-else class="analytics-calm analytics-calm-plain"><UIcon name="i-lucide-network" />{{ t("这段时间没有按工作流进行的运行。") }}</p>
         </details>
 
+        <!-- Each plan's use across weeks, for choosing a plan next cycle (#15788); not bound to the period picked above. -->
+        <details class="analytics-detail" :style="block_style(7)">
+          <summary><h2><UIcon name="i-lucide-chevron-right" class="analytics-detail-chevron" />{{ t("订阅利用") }}</h2><span class="analytics-dim">{{ t("近 8 周") }}</span></summary>
+          <SubscriptionUsage />
+        </details>
+
         <!-- MOSS's own room is left out of the figures above; its routing has a section of its own (#15623). -->
         <details class="analytics-detail" :style="block_style(7)">
           <summary><h2><UIcon name="i-lucide-chevron-right" class="analytics-detail-chevron" />{{ t("MOSS") }}</h2><span class="analytics-dim">{{ t("分出去的工作") }}</span></summary>
@@ -1177,7 +1205,7 @@ async function copy_share_card() {
 .analytics-page {
   --viz-1: #338ced; --viz-2: #e76624; --viz-3: #00a888; --viz-4: #d28e05; --viz-5: #e24d8b; --viz-6: #0aac23; --viz-other: #6b6f78;
   --viz-up: #3fb27f; --viz-down: #e5797a;
-  flex: 1; min-height: 0; overflow-y: auto;
+  flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; container-type: inline-size;
 }
 :global(:root[data-theme="channel-light"]) .analytics-page {
   --viz-1: #257de0; --viz-2: #f47230; --viz-3: #00b894; --viz-4: #f2a600; --viz-5: #ee7fac; --viz-6: #008a17; --viz-other: #a3a7ae;
@@ -1195,9 +1223,10 @@ async function copy_share_card() {
 .analytics-popover { max-width: 280px; margin: 0; padding: 8px 11px; font-size: 12px; line-height: 1.55; color: var(--ui-text); }
 
 /* Header */
-.analytics-head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 14px 20px; }
+.analytics-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 14px 20px; }
+@container (max-width: 760px) { .analytics-head { grid-template-columns: minmax(0, 1fr); } }
 .analytics-title h1 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 650; letter-spacing: -.01em; color: var(--ui-text-highlighted); }
-.analytics-title p { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 0; font-size: 13px; color: var(--ui-text-toned); font-variant-numeric: tabular-nums; }
+.analytics-title p { block-size: calc(3em + 4px); line-height: 1.5; display: flex; flex-wrap: wrap; align-content: start; gap: 4px 14px; margin: 6px 0 0; font-size: 13px; color: var(--ui-text-toned); font-variant-numeric: tabular-nums; }
 .analytics-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .analytics-segmented { display: inline-flex; padding: 2px; border: 1px solid var(--ui-border-muted); border-radius: 8px; background: var(--ui-bg-muted); }
 .analytics-segmented button { padding: 4px 11px; border: 0; border-radius: 6px; background: transparent; color: var(--ui-text-muted); font-size: 12.5px; line-height: 20px; }
@@ -1209,6 +1238,8 @@ async function copy_share_card() {
 .analytics-share-button:disabled { opacity: .5; }
 .analytics-share-button :deep([class*="icon"]) { width: 15px; height: 15px; }
 .analytics-skeleton { display: grid; gap: 20px; }
+.analytics-skeleton-line { display: inline-block; height: .8em; vertical-align: middle; border-radius: 4px; }
+.analytics-skeleton-line.is-value { height: .75em; }
 .analytics-error { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--ui-error) 35%, var(--ui-border)); border-radius: 12px; background: color-mix(in srgb, var(--ui-error) 8%, transparent); font-size: 13px; }
 .analytics-error p { margin: 0; flex: 1; }
 
@@ -1217,21 +1248,26 @@ async function copy_share_card() {
 
 /* Overview: figures and the timeline lead the page (Fable #14109); the sentence above them is a caption. */
 .analytics-overview { display: grid; gap: 16px; }
-.analytics-caption { margin: -6px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--ui-text-toned); }
+.analytics-caption { margin: -6px 0 0; block-size: 3.2em; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 13.5px; line-height: 1.6; color: var(--ui-text-toned); }
 .analytics-figures { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--ui-border-muted); border-radius: 14px; background: var(--ui-bg-elevated); overflow: hidden; }
 .analytics-figure { display: grid; align-content: start; gap: 6px; padding: 18px 20px 16px; min-width: 0; }
 .analytics-figure + .analytics-figure { border-left: 1px solid var(--ui-border-muted); }
-.analytics-figure-label { font-size: 12px; font-weight: 500; color: var(--ui-text-muted); }
+.analytics-figure-label { block-size: 3em; line-height: 1.5; font-size: 12px; font-weight: 500; color: var(--ui-text-muted); }
 .analytics-figure-value { font-size: 30px; line-height: 1.1; font-weight: 700; letter-spacing: -.02em; color: var(--ui-text-highlighted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .analytics-figure:first-child .analytics-figure-value { color: var(--channel-accent); }
-.analytics-figure-foot { display: flex; flex-wrap: wrap; gap: 2px 10px; min-height: 18px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.analytics-figure-foot { display: flex; flex-wrap: wrap; align-content: start; gap: 2px 10px; block-size: 38px; overflow: hidden; font-size: 12px; font-variant-numeric: tabular-nums; }
 .analytics-change { color: var(--ui-text-toned); }
 .analytics-change.is-up { color: var(--viz-up); }
 .analytics-change.is-down { color: var(--viz-down); }
 .analytics-figure:last-child .analytics-change.is-up { color: var(--viz-up); }
 
 .analytics-timeline { display: grid; gap: 8px; padding: 16px 20px 26px; border: 1px solid var(--ui-border-muted); border-radius: 14px; background: var(--ui-bg-elevated); }
-.analytics-timeline-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px 12px; min-height: 18px; font-size: 12px; color: var(--ui-text-muted); }
+.analytics-timeline-head { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: start; gap: 6px 12px; block-size: 3em; line-height: 1.5; font-size: 12px; color: var(--ui-text-muted); }
+.analytics-timeline-head > :last-child { justify-self: end; }
+@container (max-width: 640px) {
+  .analytics-timeline-head { grid-template-columns: minmax(0, 1fr); block-size: calc(6em + 6px); }
+  .analytics-timeline-head > :last-child { justify-self: start; }
+}
 .analytics-timeline-readout { color: var(--ui-text-highlighted); font-variant-numeric: tabular-nums; }
 .analytics-legend-inline { display: inline-flex; gap: 14px; }
 .analytics-legend-inline > span { display: inline-flex; align-items: center; gap: 6px; }
@@ -1239,6 +1275,7 @@ async function copy_share_card() {
 .analytics-key.is-run { background: var(--channel-accent); }
 .analytics-key.is-fail { background: var(--ui-error); }
 .analytics-timeline-plot { position: relative; height: 180px; cursor: crosshair; }
+.analytics-timeline-plot.is-empty { display: grid; place-items: center; color: var(--ui-text-muted); cursor: default; }
 .analytics-timeline-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .analytics-area { fill: color-mix(in srgb, var(--channel-accent) 22%, transparent); }
 .analytics-line { fill: none; stroke: var(--channel-accent); stroke-width: 2px; stroke-linejoin: round; }
@@ -1305,6 +1342,13 @@ async function copy_share_card() {
 .analytics-detail summary::-webkit-details-marker { display: none; }
 .analytics-detail summary h2 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 15px; font-weight: 600; color: var(--ui-text-highlighted); }
 .analytics-detail summary > span { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.analytics-dispatch summary { display: grid; grid-template-columns: max-content minmax(0, 1fr); }
+.analytics-dispatch summary > span { min-height: 3em; text-align: end; }
+.analytics-dispatch-action { margin-bottom: 8px; }
+@container (max-width: 580px) {
+  .analytics-dispatch summary { grid-template-columns: minmax(0, 1fr); }
+  .analytics-dispatch summary > span { text-align: start; }
+}
 .analytics-detail summary:hover h2 { color: var(--channel-accent); }
 .analytics-detail-chevron { width: 15px; height: 15px; color: var(--ui-text-dimmed); }
 .analytics-detail[open] .analytics-detail-chevron { transform: rotate(90deg); }
@@ -1464,7 +1508,7 @@ async function copy_share_card() {
   .analytics-figure:nth-child(3) { border-left: 0; }
   .analytics-figure:nth-child(n+3) { border-top: 1px solid var(--ui-border-muted); }
   .analytics-figure { padding: 14px 14px 12px; }
-  .analytics-figure-value { font-size: 22px; white-space: normal; }
+  .analytics-figure-value { font-size: 22px; }
   .analytics-timeline { padding: 12px 12px 24px; }
   .analytics-timeline-plot { height: 140px; }
   .analytics-issue-head { padding: 10px 12px; gap: 10px; }

@@ -8,8 +8,7 @@ import { t } from './i18n.js';
 /** Show one participant instance and its actual software configuration boundary. */
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { motion, useSpring } from "motion-v";
-import EffortSlider from "./EffortSlider.vue";
-import ModelRefresh from "./ModelRefresh.vue";
+import ModelEffortPicker from "./ModelEffortPicker.vue";
 import ApiSettings from "./ApiSettings.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberTextDialog from "./MemberTextDialog.vue";
@@ -143,17 +142,10 @@ watch(() => profile.value.adapter, (next, previous) => {
 const can_flip = computed(() => props.settingsOnly || !preset.value && automatic.value && entry_items.value.length > 0 && !(view.value.launch.relay && !view.value.launch.available));
 const card_label = computed(() => preset.value ? t('编辑 {value1} 的卡片', { value1: props.name }) : t('配置 {value1} 的启动方式', { value1: props.name }));
 const models = computed(() => bridge.launch_model_state(props.name, view.value.launch, profile.value));
-const preset_model_input = computed(() => preset.value && !adapter_profile(profile.value.adapter)?.models);
 const configurable = computed(() => Boolean(preset.value || automatic.value && models.value.supported));
 const configuration_note = computed(() => configurable.value && connection.value.length ? t('补齐上方连接后，可在这里选择模型与思考强度。')
   : profile.value.adapter ? t('模型与思考强度在 App 原聊天中选择，本页不覆盖 App 设置。') : t('先选择软件入口。支持启动参数的 CLI 可在这里设置模型与强度。'));
 const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max", ultra: "Ultra" };
-const effort_items = computed(() => {
-  // A preset or a software that lists no models (a model API) offers the levels its profile declares.
-  const facts = adapter_profile(profile.value.adapter);
-  const levels = models.value.efforts || (preset.value || !facts?.models ? facts?.efforts : null);
-  return levels?.length ? [{ label: t('默认强度'), value: "" }, ...levels.map((level) => ({ label: EFFORT_LABELS[level] || level, value: level }))] : null;
-});
 // An empty choice shows what the software's own settings select; only when they say nothing does the software decide.
 // agy's default effort belongs to its default model, so a chosen model keeps its own default instead.
 const default_effort = computed(() => profile.value.adapter === "antigravity_cli" && profile.value.model ? "" : models.value.defaults?.effort);
@@ -675,17 +667,7 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
         </label>
         <ApiSettings v-if="api_mode" :name="name" />
         <template v-else-if="configurable && !connection.length">
-          <div class="expert-card-field">
-            <span>{{ t('模型') }}</span>
-            <UInput v-if="preset_model_input" :model-value="profile.model || ''" :placeholder="t('留空使用默认模型')" :aria-label="t('{value1} 使用的模型', { value1: name })" size="xs" class="w-full" @update:model-value="write_model" />
-            <div v-else class="model-picker"><USelect :model-value="profile.model || '__default__'" :items="models.items" :title="models.source" :ui="{ base: 'model-select', content: 'model-select-menu' }" :aria-label="t('{value1} 使用的模型', { value1: name })" size="xs" class="w-full" @update:model-value="write_model" /><ModelRefresh :loading="models.refreshing" :disabled="!view.launch.available" @refresh="load_models(true)" /></div>
-          </div>
-          <div v-if="models.loading || models.error" class="expert-card-catalog"><span>{{ models.loading ? t('正在读取软件模型列表…') : models.error }}</span><button v-if="!models.loading && models.error && view.launch.available" type="button" @click="load_models(true)">{{ t('重试') }}</button></div>
-          <div v-if="effort_items" class="expert-card-effort">
-            <EffortSlider :caption="t('强度')" :items="effort_items" :model-value="profile.effort || ''" :label="t('{value1} 的思考强度', { value1: name })" @update:model-value="write_setting('effort', $event)" />
-          </div>
-          <p v-else class="expert-card-note">{{ models.effort_note }}</p>
-          <button type="button" class="expert-card-defaults" :title="t('留空使用 CLI 默认值')" :aria-label="t('恢复 {value1} 的默认模型与强度', { value1: name })" :disabled="!profile.model && !profile.effort" @click="reset_model">{{ t('恢复默认') }}</button>
+          <ModelEffortPicker :name="name" :profile="profile" :portable="Boolean(preset)" @model="write_model" @effort="write_setting('effort', $event)" @reset="reset_model" />
         </template>
         <p v-else class="expert-card-note"><UIcon name="i-lucide-monitor" />{{ configuration_note }}</p>
         </div>
@@ -800,13 +782,13 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .expert-card-heading strong { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; color: var(--ui-text-highlighted); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .expert-card-heading strong > span { font-size: 10px; font-weight: 400; color: var(--ui-text-muted); }
-.expert-card-field { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
-.expert-card-catalog { display: flex; align-items: baseline; gap: 8px; margin: -5px 0 0 34px; color: var(--ui-text-dimmed); font-size: 10px; overflow-wrap: anywhere; }
-.expert-card-catalog > span { flex: 1; }
-.expert-card-catalog > button { flex-shrink: 0; color: var(--channel-accent); }
-.expert-card-defaults { position: absolute; left: 8px; bottom: 8px; min-height: 22px; padding: 2px 4px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
-.expert-card-defaults:hover:not(:disabled) { color: var(--channel-accent); }
-.expert-card-defaults:disabled { opacity: .4; }
+.expert-card :deep(.expert-card-field) { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ui-text-dimmed); font-size: 11px; }
+.expert-card :deep(.expert-card-catalog) { display: flex; align-items: baseline; gap: 8px; margin: -5px 0 0 34px; color: var(--ui-text-dimmed); font-size: 10px; overflow-wrap: anywhere; }
+.expert-card :deep(.expert-card-catalog > span) { flex: 1; }
+.expert-card :deep(.expert-card-catalog > button) { flex-shrink: 0; color: var(--channel-accent); }
+.expert-card :deep(.expert-card-defaults) { position: absolute; left: 8px; bottom: 8px; min-height: 22px; padding: 2px 4px; border-radius: 4px; color: var(--ui-text-muted); font-size: 11px; }
+.expert-card :deep(.expert-card-defaults:hover:not(:disabled)) { color: var(--channel-accent); }
+.expert-card :deep(.expert-card-defaults:disabled) { opacity: .4; }
 /* Same shape as the front's tools: dimmed when unset, brighter once set; a prompt the user wrote is accented. */
 .expert-card-heading-tools { display: flex; flex-shrink: 0; align-items: center; gap: 2px; margin: -2px 0; }
 .expert-card-back-tool { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--ui-text-dimmed); }
@@ -820,16 +802,16 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
 .expert-card-naming-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .expert-card-trust { display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--ui-warning, #e0a33a) 45%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--ui-warning, #e0a33a) 8%, transparent); color: var(--ui-warning, #e0a33a); font-size: 11px; line-height: 1.45; cursor: pointer; }
 .expert-card-trust input { flex-shrink: 0; margin-top: 2px; }
-.expert-card-note { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
+.expert-card :deep(.expert-card-note) { display: flex; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 /* Joining: four-character labels (本机权限, 被点名时) on both faces. */
-.expert-card.is-joining .expert-card-facts > div, .expert-card.is-joining .expert-card-field { grid-template-columns: 4.5em minmax(0, 1fr); }
-.expert-card.is-joining .expert-card-catalog { margin-left: calc(4.5em + 8px); }
+.expert-card.is-joining .expert-card-facts > div, .expert-card.is-joining :deep(.expert-card-field) { grid-template-columns: 4.5em minmax(0, 1fr); }
+.expert-card.is-joining :deep(.expert-card-catalog) { margin-left: calc(4.5em + 8px); }
 .expert-card-warning { margin: -4px 0 0 calc(4.5em + 8px); color: var(--ui-warning, #e0a33a); font-size: 11px; line-height: 1.5; }
 /* A manual card is set by the user's own AI session, not this page: a dashed frame and a system-given name. */
 .expert-card.is-manual .expert-card-face { border-style: dashed; }
 .expert-card-manual { display: grid; gap: 4px; width: 100%; color: var(--ui-text-muted); font-size: 11px; line-height: 1.7; }
 .expert-card-manual > p { margin: 0; }
-.expert-card-note > span { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
+.expert-card :deep(.expert-card-note > span) { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
 /* A member with a nickname also shows its ID, which AI messages, @ and records use. */
 /* Narrow card (two per row on a phone): the name moves under the avatar so the corner tools leave it the full
    width, the card grows by that line, and 恢复默认 joins the settings flow instead of sitting under the actions. */
@@ -837,6 +819,6 @@ onBeforeUnmount(() => { document.removeEventListener("pointerdown", close_on_out
   .expert-card-turn { height: 272px; }
   .expert-card-identity { flex-wrap: wrap; row-gap: 6px; padding-right: 0; }
   .expert-card-names { flex-basis: 100%; }
-  .expert-card-defaults { position: static; align-self: flex-start; margin-left: -4px; }
+  .expert-card :deep(.expert-card-defaults) { position: static; align-self: flex-start; margin-left: -4px; }
 }
 </style>

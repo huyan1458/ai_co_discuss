@@ -732,6 +732,23 @@ CREATE TABLE IF NOT EXISTS account_quotas (
     quota TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+-- Changed account quota readings for subscription utilization (retained for 180 days).
+CREATE TABLE IF NOT EXISTS account_quota_history (
+    id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    group_name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    minutes INTEGER NOT NULL,
+    used REAL NOT NULL,
+    resets_at INTEGER NOT NULL,
+    read_at INTEGER NOT NULL,
+    plan TEXT,
+    reset_credits INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_account_quota_history_window
+    ON account_quota_history(account, group_name, kind, minutes, id);
+CREATE INDEX IF NOT EXISTS idx_account_quota_history_read_at ON account_quota_history(read_at);
+
 -- What a member submitted for an execution the user had already voided. Refused as an answer, so it never joins the
 -- transcript or AI reads; kept so the page can show the late work folded, and so a member the runner could not stop
 -- is known to have finished that turn. One per execution; not backed up, like executions.

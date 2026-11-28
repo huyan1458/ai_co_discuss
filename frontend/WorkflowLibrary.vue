@@ -138,24 +138,23 @@ function start_resize(event) {
       <button type="button" role="tab" :aria-selected="pane === 'skill'" :title="t('工作流：主持人照着派活的 SKILL.md')" @click="pane = 'skill'"><UIcon :name="scope ? 'i-lucide-git-branch' : 'i-lucide-file-text'" class="workflow-library-icon" />{{ scope ? t('子工作流') : t('工作流') }}</button>
     </div></div>
     <div v-show="!stacked || pane === 'canvas' || (!draft && !loading)" class="workflow-library-stage">
-      <WorkflowCanvas v-if="draft" ref="canvas" :key="canvas_key" v-model:flow="current.flow" v-model:agents="current.agents" :reserved="reserved" :compact="stacked"
-        :shared="scope ? draft.agents : null" :subs="scope ? null : subs" :readonly="draft_readonly"
-        @update:shared="(value) => { draft.agents = value; }" @open-sub="library.enter_sub" @open-skill="show_skill_text" @configure="(card) => { experts_focus = card; experts_open = true; }">
-        <template #actions="{ iconsOnly, arrange }">
+      <WorkflowCanvas v-if="draft || loading" ref="canvas" :key="draft ? canvas_key : 'loading'" :flow="draft ? current.flow : placeholder.flow" :agents="draft ? current.agents : placeholder.agents" :reserved="reserved" :compact="stacked"
+        :shared="scope && draft ? draft.agents : null" :subs="draft && !scope ? subs : null" :readonly="!draft || draft_readonly"
+        :class="{ 'workflow-library-placeholder': !draft }" :inert="!draft"
+        @update:flow="(value) => { if (draft) current.flow = value; }" @update:agents="(value) => { if (draft) current.agents = value; }"
+        @update:shared="(value) => { if (draft) draft.agents = value; }" @open-sub="library.enter_sub" @open-skill="show_skill_text" @configure="(card) => { experts_focus = card; experts_open = true; }">
+        <template #actions="{ iconsOnly, folded, arrange }">
           <!-- Unsaved drafts in a project room can switch target scope; otherwise the scope shows in the header bar. -->
-          <UDropdownMenu v-if="!saved_id && writable_roots.length" :items="target_scope_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
-            <UButton :icon="active_scope === 'project' ? 'i-lucide-folder' : 'i-lucide-globe'" trailing-icon="i-lucide-chevron-down" :label="iconsOnly ? undefined : scope_label" :aria-label="t('保存归属：{scope}', { scope: scope_label })" :title="t('选择保存位置：当前项目或全局')" :size="stacked ? 'xs' : 'sm'" color="neutral" variant="soft" class="workflow-scope-picker" />
-          </UDropdownMenu>
-          <span v-else-if="draft_readonly" class="workflow-scope-badge is-readonly" :title="t('只读项目目录，不可修改')">
-            <UIcon name="i-lucide-lock" />
-            <span>{{ t('只读') }}</span>
+          <span class="workflow-library-action" :title="!draft ? loading : draft_readonly ? t('只读项目目录，不可修改') : t('保存归属：{scope}', { scope: scope_label })">
+            <UDropdownMenu :items="target_scope_items" :disabled="!draft || Boolean(saved_id) || !writable_roots.length" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+              <UButton :icon="draft_readonly ? 'i-lucide-lock' : active_scope === 'project' ? 'i-lucide-folder' : 'i-lucide-globe'" :aria-label="t('保存归属：{scope}', { scope: scope_label })" :size="stacked ? 'xs' : 'sm'" color="neutral" variant="soft" :disabled="!draft || Boolean(saved_id) || !writable_roots.length" />
+            </UDropdownMenu>
           </span>
-          <UTooltip v-if="!draft_readonly" :text="experts_missing ? t('专家配置：有卡片的软件本机未配置') : t('专家配置：每张卡片的软件、模型、强度与项目权限')"><span class="workflow-library-save">
-            <UButton :icon="experts_missing ? 'i-lucide-triangle-alert' : 'i-lucide-sliders-horizontal'" :label="iconsOnly ? undefined : t('专家配置')" :aria-label="t('专家配置')" :size="stacked ? 'xs' : 'sm'" :color="experts_missing ? 'warning' : 'neutral'" variant="ghost" @click="experts_focus = ''; experts_open = true" /></span></UTooltip>
-          <UTooltip v-if="arrange" :text="t('自动整理')"><UButton icon="i-lucide-wand-sparkles" size="xs" color="neutral" variant="ghost" :aria-label="t('自动整理')" @click="arrange" /></UTooltip>
+          <UTooltip :text="!draft ? loading : draft_readonly ? t('只读项目目录，不可修改') : experts_missing ? t('专家配置：有卡片的软件本机未配置') : t('专家配置：每张卡片的软件、模型、强度与项目权限')"><span class="workflow-library-action">
+            <UButton :icon="experts_missing ? 'i-lucide-triangle-alert' : 'i-lucide-sliders-horizontal'" :label="iconsOnly ? undefined : t('专家配置')" :aria-label="t('专家配置')" :size="stacked ? 'xs' : 'sm'" :color="experts_missing ? 'warning' : 'neutral'" variant="ghost" :disabled="!draft || draft_readonly" @click="experts_focus = ''; experts_open = true" /></span></UTooltip>
+          <UTooltip v-if="folded" :text="!draft ? loading : draft_readonly ? t('只读项目目录，不可修改') : t('自动整理')"><span class="workflow-library-action"><UButton icon="i-lucide-wand-sparkles" size="xs" color="neutral" variant="ghost" :aria-label="t('自动整理')" :disabled="!arrange" @click="arrange?.()" /></span></UTooltip>
           <UTooltip :text="draft_readonly ? t('只读项目目录中的工作流不能修改') : dirty ? t('保存（Ctrl+S）：有未保存的修改') : t('没有未保存的修改')"><span class="workflow-library-save">
-            <!-- Unsaved changes show on the button itself: worded and filled, even where the toolbar is icons only. -->
-            <UButton icon="i-lucide-save" :label="iconsOnly && !dirty ? undefined : t('保存')" :aria-label="t('保存')" :size="stacked ? 'xs' : 'sm'" :class="{ 'channel-primary-button': !stacked || dirty }" :color="stacked && !dirty ? 'primary' : undefined" :variant="stacked && !dirty ? 'ghost' : undefined" :disabled="!dirty || draft_readonly" :loading="busy" @click="library.save()" />
+            <UButton icon="i-lucide-save" :label="iconsOnly ? undefined : t('保存')" :aria-label="t('保存')" :size="stacked ? 'xs' : 'sm'" :class="{ 'channel-primary-button': !stacked || dirty }" :color="stacked && !dirty ? 'primary' : undefined" :variant="stacked && !dirty ? 'ghost' : undefined" :disabled="!draft || !dirty || draft_readonly" :loading="busy" @click="library.save()" />
             <i v-if="dirty && !draft_readonly" class="workflow-library-dirty" /></span></UTooltip>
         </template>
       </WorkflowCanvas>
@@ -177,7 +176,6 @@ function start_resize(event) {
         <WorkflowExperts v-if="!draft_readonly" v-model:open="experts_open" v-model:focus="experts_focus" />
       </template>
       <template v-else-if="loading">
-        <WorkflowCanvas v-model:flow="placeholder.flow" v-model:agents="placeholder.agents" :compact="stacked" class="workflow-library-placeholder" inert />
         <div class="workflow-library-loading" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" /><span>{{ loading }}</span></div>
       </template>
       <div v-else class="workflow-library-empty">
@@ -224,11 +222,7 @@ function start_resize(event) {
 .workflow-library-loading > span { width: 28px; height: 28px; }
 .workflow-library-loading > span:last-child { width: auto; height: auto; }
 .workflow-skill-loading { display: flex; flex-direction: column; gap: 18px; padding: 24px; border-left: 1px solid var(--ui-border-muted); }
-/* Scope badges in the toolbar. */
-.workflow-scope-badge { display: inline-flex; align-items: center; gap: 4px; max-width: 150px; height: 24px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap; }
-.workflow-scope-badge > span { overflow: hidden; text-overflow: ellipsis; }
-.workflow-scope-badge.is-readonly { background: color-mix(in srgb, var(--ui-warning, #e0a33a) 16%, transparent); color: var(--ui-warning, #e0a33a); }
-.workflow-scope-picker { max-width: 170px; }
+.workflow-library-action { display: inline-flex; }
 /* Unsaved changes: a dot on the save button's corner. */
 .workflow-library-save { position: relative; display: inline-flex; }
 .workflow-library-dirty { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border: 2px solid var(--ui-bg-elevated); border-radius: 50%; background: var(--ui-warning, #e0a33a);

@@ -112,7 +112,8 @@ const bar_text = computed(() => state.value?.mode === "trust"
       </div>
     </template>
   </section>
-  <div v-else-if="shown" class="channel-reply-draft channel-queue-hint guest-bar" :class="{ 'is-ending': ending, 'is-trust': phase === 'active' && state.mode === 'trust' }" role="status">
+  <div v-else-if="variant === 'bar'" class="guest-bar-slot">
+  <div v-if="shown" class="channel-reply-draft channel-queue-hint guest-bar" :class="{ 'is-ending': ending, 'is-trust': phase === 'active' && state.mode === 'trust' }" role="status">
     <UIcon name="i-lucide-user-round" />
     <span v-if="phase === 'invited'">{{ t("外部用户邀请待打开 · {time} 前有效", { time: invite_until }) }}</span>
     <span v-else-if="phase === 'waiting'">{{ t("{name} 等待入场：本房间有任务在运行", { name }) }}</span>
@@ -121,6 +122,7 @@ const bar_text = computed(() => state.value?.mode === "trust"
     <UButton v-if="phase === 'invited'" :label="t('作废')" size="xs" color="error" variant="ghost" @click="revoke" />
     <UButton v-if="phase === 'waiting' && !state.stop_for_admission" :label="t('立即停止并接入')" size="xs" color="neutral" variant="ghost" @click="admit" />
     <UButton v-if="phase !== 'invited'" :label="phase === 'active' ? t('立即断开') : t('断开')" size="xs" color="error" variant="ghost" @click="disconnect" />
+  </div>
   </div>
 </template>
 
@@ -143,5 +145,9 @@ const bar_text = computed(() => state.value?.mode === "trust"
 .guest-presence-qr { align-self: center; width: 148px; height: 148px; padding: 6px; border-radius: 8px; background: #fff; }
 .guest-presence-qr :deep(svg) { display: block; width: 100%; height: 100%; }
 .guest-bar > span:not([class*="icon"]) { font-variant-numeric: tabular-nums; }
+.guest-bar-slot { height: 32px; }
+.guest-bar { height: 100%; padding-block: 0; white-space: nowrap; }
+.guest-bar > span:not([class*="icon"]) { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.guest-bar > button { flex-shrink: 0; }
 @media (pointer: coarse) { .guest-presence .expert-card-modes button { min-height: 32px; } }
 </style>

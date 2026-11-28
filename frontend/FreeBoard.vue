@@ -12,6 +12,7 @@ import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import InviteDialog from "./InviteDialog.vue";
 import LinkedRooms from "./LinkedRooms.vue";
 import WorkflowControl from "./WorkflowControl.vue";
+import RoomWorkflowPicker from "./RoomWorkflowPicker.vue";
 import { active_workflow } from "./workflow-state.js";
 import StartDiscussionDialog from "./StartDiscussionDialog.vue";
 import StartGoalDialog from "./StartGoalDialog.vue";
@@ -21,7 +22,7 @@ import SpeakingOrder from "./SpeakingOrder.vue";
 import MemberDescriptionDialog from "./MemberDescriptionDialog.vue";
 import MemberNameEdit from "./MemberNameEdit.vue";
 import { busy, member_actions, project_files } from "./member-actions.js";
-import { member_quota, member_usage } from "./quota.js";
+import { member_quota, member_usage, quota_state } from "./quota.js";
 import ContextMeter from "./ContextMeter.vue";
 import { access_label, access_options } from "../runner/expert_prompts.mjs";
 import MemoBlock from "./memo-block.js";
@@ -81,6 +82,15 @@ const ended_reason = (member) => ENDED_REASONS[member.external?.end_reason] || t
 const workflow = computed(() => active_workflow(view.value.launch.room_models?.workflow, free.value.members));
 const in_workflow = (name) => Boolean(workflow.value?.enabled && Object.values(workflow.value.members || {}).includes(name));
 const invite_workflow_id = ref("");
+// Without one in use, the section offers the room's choices (#15749), to whoever could pick one with "/" as well.
+const can_pick_workflow = computed(() => Boolean(view.value.access?.can_manage && !room.value.archived && !view.value.share
+  && (view.value.launch.available || view.value.launch.remote)));
+/** 管理: the workflow page, on this room's project when it has one. */
+function manage_workflows() {
+  const models = view.value.launch.room_models?.room_id === room.value.id ? view.value.launch.room_models : null;
+  const root = (models?.project_roots || view.value.launch.project_roots || [])[0];
+  document.dispatchEvent(new CustomEvent("discuss:open-workflows", { detail: root?.id ? `project:${root.id}` : "all" }));
+}
 // Closing the section only hides it in this browser; the workflow keeps running. The mark is per room and cleared once
 // the room's settings are read and that workflow is no longer in use, so another or a restarted workflow shows again.
 const WORKFLOW_HIDDEN_PREFIX = "discuss-workflow-hidden:";
@@ -195,6 +205,13 @@ function member_setup(member) {
 /** Ways to let a stopped chain run on: what the host asked for, else one more round or as many as the room's limit. */
 const continue_choices = computed(() => status.value.asked_rounds ? [...new Set([status.value.asked_rounds, 1])]
   : [...new Set([1, free.value.max_rounds || 1])]);
+const continue_actions = computed(() => {
+  const { continue_chain: chain_id, asked_rounds } = status.value;
+  return continue_choices.value.map(rounds => ({
+    label: rounds === asked_rounds ? t('批准 {value1} 轮', { value1: rounds }) : t('继续 {value1} 轮', { value1: rounds }),
+    onSelect: () => continue_chain(chain_id, rounds),
+  }));
+});
 const continuing = ref(0);
 async function continue_chain(chain_id, rounds) {
   continuing.value = rounds;
@@ -454,30 +471,35 @@ watch(() => room.value.id, () => { starting.value = false; });
     <GuestPresence variant="rail" />
     <ProgressBoard v-if="discussion" />
     <section v-else class="pb-status" :class="`is-${status.tone}`" :aria-label="t('房间状态')">
-      <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong>
-        <UButton v-if="status.title === t('处理中') &amp;&amp; view.access?.can_manage" :label="t('全部停止')" size="xs" color="error" variant="soft" class="pb-stop-all" :title="t('停止所有成员正在做的工作，并取消还没投递的请求；发新消息即重新开始')"
-          :loading="is_running('stop_room')" @click="act('stop_room')">
+      <div class="pb-status-line"><span class="pb-dot"></span>
+        <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 6, collisionPadding: 12 }">
+          <button type="button" class="pb-status-trigger" :title="status.detail || status.title"><strong role="status">{{ status.title }}</strong><UIcon name="i-lucide-chevron-down" aria-hidden="true" /></button>
+          <template #content>
+            <div class="pb-status-popover">
+              <p class="pb-popover-note">{{ status.detail || status.title }}</p>
+              <div v-if="rounds_meter" class="pb-meter pb-rounds" :class="{ 'is-warning': status.tone === 'warning' }" :title="t('主持人连续派活的轮数；到上限自动停下，可继续')">
+                <div class="pb-meter-label"><span>{{ t('连续派活') }}</span><b>{{ rounds_meter.text }}</b></div>
+                <div v-if="rounds_meter.ratio != null" class="pb-bar"><i :style="{ width: `${Math.round(rounds_meter.ratio * 100)}%` }"></i></div>
+              </div>
+              <div v-if="checkin" class="pb-checkin" :title="t('主持人给自己设的定时检查：房间还有进行中的工作时按间隔唤醒它查看进展，房间空闲后自动结束')">
+                <span>{{ t('定时检查 · 每 {value1} 分钟 · 下次 {value2}', { value1: checkin.minutes, value2: bridge.format_time(checkin.due_at * 1000) }) }}</span>
+                <UButton v-if="view.access?.can_manage" :label="t('关闭')" size="xs" color="neutral" variant="ghost" :loading="is_running('stop_host_checkin')" @click="act('stop_host_checkin')" />
+              </div>
+            </div>
+          </template>
+        </UPopover>
+        <UDropdownMenu v-if="view.access?.can_manage && !room.archived && status.continue_chain" :items="continue_actions" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }">
+          <UButton :label="t('继续')" icon="i-lucide-play" size="xs" color="success" variant="soft" class="pb-primary-slot pb-continue-chain" :title="status.detail" :loading="Boolean(continuing)" :disabled="Boolean(continuing)" />
+        </UDropdownMenu>
+        <UButton v-else-if="view.access?.can_manage && !room.archived" :label="t('全部停止')" size="xs" color="error" variant="soft" class="pb-primary-slot pb-stop-all" :title="status.title === t('处理中') ? t('停止所有成员正在做的工作，并取消还没投递的请求；发新消息即重新开始') : status.title"
+          :disabled="status.title !== t('处理中')" :loading="is_running('stop_room')" @click="act('stop_room')">
           <template #leading><span v-if="!is_running('stop_room')" class="pb-stop-glyph" aria-hidden="true"></span></template>
         </UButton>
-      </div>
-      <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
-      <div v-if="rounds_meter" class="pb-meter pb-rounds" :title="t('主持人连续派活的轮数；到上限自动停下，可继续')">
-        <div class="pb-meter-label"><span>{{ t('连续派活') }}</span><b>{{ rounds_meter.text }}</b></div>
-        <div v-if="rounds_meter.ratio !== null" class="pb-bar"><i :style="{ width: `${Math.round(rounds_meter.ratio * 100)}%` }"></i></div>
-      </div>
-      <div v-if="checkin" class="pb-checkin" :title="t('主持人给自己设的定时检查：房间还有进行中的工作时按间隔唤醒它查看进展，房间空闲后自动结束')">
-        <span>{{ t('定时检查 · 每 {value1} 分钟 · 下次 {value2}', { value1: checkin.minutes, value2: bridge.format_time(checkin.due_at * 1000) }) }}</span>
-        <UButton v-if="view.access?.can_manage" :label="t('关闭')" size="xs" color="neutral" variant="ghost" :loading="is_running('stop_host_checkin')" @click="act('stop_host_checkin')" />
-      </div>
-      <div v-if="status.continue_chain && view.access?.can_manage" class="pb-chain-actions">
-        <UButton v-for="rounds in continue_choices" :key="rounds" :label="rounds === status.asked_rounds ? t('批准 {value1} 轮', { value1: rounds }) : t('继续 {value1} 轮', { value1: rounds })" icon="i-lucide-play" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="success"
-          :loading="continuing === rounds" :disabled="Boolean(continuing)" @click="continue_chain(status.continue_chain, rounds)" />
       </div>
     </section>
     <section v-if="goal" class="pb-section pb-goal" aria-label="Goal">
       <h4>Goal</h4>
       <div class="pb-goal-status" :class="goal.status !== 'active' ? 'is-paused' : goal.phase === 'pending' ? 'is-warning' : 'is-success'"><span class="pb-dot"></span><span role="status">{{ goal_phase }}</span></div>
-      <p v-if="goal.status === 'active' && goal.phase !== 'doing' && goal.phase_note" class="pb-goal-usage">{{ goal.phase_note }}</p>
       <p class="pb-focus" :class="{ 'is-expanded': goal_expanded }">{{ goal.objective }}</p>
       <button v-if="goal.objective.length > GOAL_PREVIEW_LENGTH" type="button" class="pb-link" @click="goal_expanded = !goal_expanded">{{ goal_expanded ? t('收起') : t('展开') }}</button>
       <p class="pb-goal-usage">{{ goal_usage }}</p>
@@ -489,15 +511,17 @@ watch(() => room.value.id, () => { starting.value = false; });
         <UButton :label="t('结束')" icon="i-lucide-square" size="xs" color="neutral" variant="outline" class="pb-action" data-tone="danger" :title="t('结束 Goal，主持人不再自动推进；正在进行的工作不受影响')"
           :loading="is_running('goal_control')" @click="act('goal_control', 'clear')" />
       </div>
+      <p class="pb-goal-usage pb-goal-phase-note">{{ goal.status === 'active' && goal.phase !== 'doing' ? goal.phase_note : '' }}</p>
     </section>
     <section v-if="task && !discussion" class="pb-section" :aria-label="t('当前任务')">
       <h4>{{ t('当前任务') }}</h4>
       <p class="pb-focus" :class="{ 'is-expanded': task_expanded }">{{ task }}</p>
       <button v-if="task.length > TASK_PREVIEW_LENGTH" type="button" class="pb-link" @click="task_expanded = !task_expanded">{{ task_expanded ? t('收起') : t('展开') }}</button>
     </section>
-    <section v-if="workflow && !workflow_hidden" class="pb-section" :aria-label="t('房间工作流')">
-      <h4>{{ t('工作流') }}</h4>
-      <WorkflowControl :workflow="workflow" dismissible @dismiss="hide_workflow" />
+    <section v-if="workflow ? !workflow_hidden : can_pick_workflow" class="pb-section" :aria-label="t('房间工作流')">
+      <h4 class="pb-workflow-heading">{{ t('工作流') }}<button v-if="can_pick_workflow" type="button" class="pb-link" :title="t('到工作流页新建、导入和修改')" @click="manage_workflows">{{ t('管理') }}</button></h4>
+      <WorkflowControl v-if="workflow" :workflow="workflow" dismissible @dismiss="hide_workflow" />
+      <RoomWorkflowPicker v-else />
     </section>
     <section class="pb-section" :aria-label="t('发言顺序')">
       <h4>{{ t('发言顺序') }}</h4>
@@ -510,7 +534,7 @@ watch(() => room.value.id, () => { starting.value = false; });
             <div class="pb-member-body" :data-member="member.name">
               <div class="pb-member-name"><MemberNameEdit :name="member.name" :editable="can_describe" /><UIcon v-if="member.role === 'host'" name="i-lucide-crown" :title="t('主持人')" /><small translate="no" class="notranslate" :title="member_tag(member, false) || undefined">{{ member_tag(member) }}</small></div>
               <div v-if="member_setup(member) || in_workflow(member.name)" class="pb-member-model" :title="external_of(member) ? external_tag(member, clock, { full: true }) : bridge.participant_session_hint(member.name, room, view.launch.room_models)"><small v-if="in_workflow(member.name)" class="pb-workflow-member" :title="t('来自工作流「{value1}」', { value1: workflow.label })">{{ t('工作流') }}</small>{{ member_setup(member) }}</div>
-              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until || protection_of(member)?.paused ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span><ContextMeter :usage="member_usage(view, member.name)" :quota="member_quota(view, member.name)" mode="row" class="pb-member-usage" /></div>
+              <div class="pb-member-status" :class="`is-${member_tone(member)}`"><span class="pb-dot"></span><span class="pb-member-status-text" :title="member.execution?.status === 'failed' ? member.execution.result : member.held_until || protection_of(member)?.paused ? member_status(member, item.state) : undefined">{{ member_status(member, item.state) }}</span><span v-if="quota_state(member_quota(view, member.name))" class="pb-member-quota">{{ quota_state(member_quota(view, member.name)) }}</span><ContextMeter :usage="member_usage(view, member.name)" mode="row" class="pb-member-usage" /></div>
             </div>
             <UDropdownMenu :open="menu_open === member.name" @update:open="(open) => menu_open = open ? member.name : ''" :items="member_menu(member)" :content="{ align: 'end' }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" class="pb-member-more" :aria-label="t('{value1} 的更多操作', { value1: member.name })" /></UDropdownMenu>
             </div></UContextMenu>
@@ -585,8 +609,25 @@ watch(() => room.value.id, () => { starting.value = false; });
 .pb-goal-status { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .pb-goal-status.is-paused { color: var(--ui-text-muted); }
 .pb-goal > .pb-focus, .pb-goal > .pb-link { margin-left: 16px; }
+.pb-workflow-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pb-workflow-heading > .pb-link { margin-top: 0; font-size: 11px; font-weight: 400; letter-spacing: 0; }
 .pb-goal-usage { margin: 4px 0 0 16px; color: var(--ui-text-muted); font-size: 11px; }
 .pb-goal-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 16px; }
+.pb-goal-actions > * { min-width: 5.25rem; justify-content: center; }
+.pb-status-line { min-height: 26px; }
+.pb-status-trigger { display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 0; cursor: pointer; }
+.pb-status-trigger strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pb-status-trigger > :last-child { flex: none; width: 14px; height: 14px; color: var(--ui-text-muted); }
+.pb-status-line > .pb-primary-slot { flex: 0 0 7rem; min-width: 0; height: 26px; justify-content: center; margin-inline-start: auto; white-space: nowrap; }
+.pb-continue-chain { font-size: 12px; }
+.pb-status-popover { display: grid; gap: 10px; width: min(19rem, calc(100vw - 24px)); max-height: 60dvh; overflow: auto; padding: 12px; }
+.pb-popover-note { margin: 0; color: var(--ui-text-toned); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.pb-status-popover .pb-checkin { margin: 0; }
+.pb-status-popover .pb-rounds.is-warning .pb-bar > i { background: #e5a50a; }
+.pb-goal-phase-note { height: 3.2em; line-height: 1.6; overflow: auto; scrollbar-gutter: stable; }
+@media (pointer: coarse) {
+  .pb-status-line, .pb-status-line > .pb-primary-slot { min-height: 36px; }
+}
 /* Speaking-order rows stay compact: name, then the workflow tag and setup on one line, then the status. */
 .speaking-order-row .pb-member-body { line-height: 1.35; }
 .pb-workflow-member { color: var(--ui-text-muted); font-size: 10px; }

@@ -53,6 +53,8 @@ Set it up under “Cloud space (object storage)” on the Storage page:
 
 With hosting on, switch accounts above the fields to set up and manage a hosted account's cloud space. Hosted accounts can also enter their own key and change the retention days and threshold under “Settings → Account → Cloud space (object storage)” in the room website. They manage their files under “Cloud space” on the Files page. When an admin supplied the key, the page shows “Provided by admin”. Their interface does not show the key, but AI members in their account can read that account's key file; give each account its own key.
 
+When you switch cloud space accounts, the form stays in place and cannot be edited until the selected account's settings load.
+
 From the command line:
 
 - `codiscuss admin storage object` shows the status.
@@ -106,6 +108,7 @@ Every command in the table is prefixed by codiscuss admin and returns JSON. Thes
 
 | Task | Commands |
 | --- | --- |
+| View subscription utilization (8 weeks by default) | `codiscuss admin quota-usage [--weeks N]` |
 | Start, exit, restart, or update (panel need not be running) | `codiscuss admin start`, `stop`, `restart`, `update [check]` |
 | Check status, control service, configure sign-in startup | `status [--full]`, `service start\|stop\|restart`, `autostart on\|off` |
 | Inspect storage usage and clear temporary run files | `storage`, `storage clean`, `storage repair` (preview), `storage repair logs --confirm` |

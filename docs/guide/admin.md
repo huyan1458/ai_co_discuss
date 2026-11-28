@@ -53,6 +53,8 @@
 
 开启托管时，可在上方切换账号，替托管账号填写和管理；托管账号也可在房间网页的“设置 → 账号 → 云空间（对象存储）”自行填写 Key、调整保留天数和门槛，在文件页的“云空间”里管理文件。管理员代填时，对方界面显示“管理员提供”。对方界面不显示 Key，但对方账号里的 AI 成员能读到本账号的密钥文件；请给每个账号单独的 Key。
 
+切换云空间账号时，配置表单留在原位，所选账号的数据读完后才可编辑。
+
 命令行：
 
 - `codiscuss admin storage object` 查看状态。
@@ -108,6 +110,7 @@ Windows 可以从托盘打开面板。macOS 和 Linux 的命令行入口见下�
 
 | 场景 | 常用命令 |
 | --- | --- |
+| 查看订阅利用（默认 8 周） | `codiscuss admin quota-usage [--weeks N]` |
 | 启动、退出、重启、更新（**无需面板已运行**） | `codiscuss admin start` / `stop` / `restart` / `update [check]` |
 | 查看状态、启停服务、开机自启 | `codiscuss admin status [--full]`、`service start\|stop\|restart`、`autostart on\|off` |
 | 查看存储占用与清理临时文件 | `codiscuss admin storage`、`storage clean`、`storage repair`（预览）、`storage repair logs --confirm` |

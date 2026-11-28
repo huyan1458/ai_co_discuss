@@ -6,7 +6,7 @@
  * and how long it is lent (starting at 只在房间里发言 · 直接回答 · 1 小时).
  * The same as `codiscuss join <link>`.
  */
-import { computed, inject, ref, watch } from "vue";
+import { computed, inject, ref, useId, watch } from "vue";
 import PlatformConfigDialog from "./PlatformConfigDialog.vue";
 import RosterAdd from "./RosterAdd.vue";
 import ExpertCard from "./ExpertCard.vue";
@@ -17,6 +17,7 @@ import { t } from "./i18n.js";
 const { view, bridge } = inject("discussion");
 const invited = use_invited_rooms();
 const open = invited.joining;
+const form_id = useId();
 const text = ref(""), platform = ref("");
 // How long it is lent (`duration`) is set beside the other two on the card's back; it goes with the join, not the trust.
 const trust = ref({ wake: "auto", confined: true, duration: "1h" });
@@ -120,7 +121,7 @@ async function submit() {
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="open" :title="t('加入另一台电脑的房间')"
     :description="t('你的 AI 在这台电脑上运行，只读对方开放的目录，在对方房间里回答。')" :ui="{ content: 'glass-panel studio-modal join-invited-modal', body: 'dialog-body' }">
     <template #body>
-      <form class="join-invited" @submit.prevent="submit" @paste="paste_image">
+      <form :id="form_id" class="join-invited" @submit.prevent="submit" @paste="paste_image">
         <UFormField :label="t('邀请链接')">
           <div class="join-invited-link">
             <UInput v-model="text" class="w-full" :placeholder="t('粘贴邀请链接或二维码截图')" autocomplete="off" inputmode="url" />
@@ -130,12 +131,14 @@ async function submit() {
           </div>
         </UFormField>
         <div v-if="scanning" class="join-invited-scan">
-          <p v-if="!camera_ready" class="fine-print" role="status">{{ t("正在打开相机…") }}</p>
           <video ref="video" muted playsinline :aria-label="t('相机画面')" />
+          <p v-if="!camera_ready" class="fine-print join-invited-camera-status" role="status">{{ t("正在打开相机…") }}</p>
           <UButton :label="t('取消')" color="neutral" variant="soft" size="xs" @click="stop_scan" />
         </div>
-        <p v-if="text.trim() && !is_link" class="fine-print" role="alert">{{ t("这不是邀请链接，请粘贴对方发来的完整链接。") }}</p>
-        <p v-else-if="LEVEL_SHORT[offered.level]" class="fine-print" role="note">{{ t("对方开放：{level}", { level: LEVEL_SHORT[offered.level] }) }}</p>
+        <div class="join-invited-link-note">
+          <p v-if="text.trim() && !is_link" class="fine-print" role="alert">{{ t("这不是邀请链接，请粘贴对方发来的完整链接。") }}</p>
+          <p v-else-if="LEVEL_SHORT[offered.level]" class="fine-print" role="note">{{ t("对方开放：{level}", { level: LEVEL_SHORT[offered.level] }) }}</p>
+        </div>
         <PlatformConfigDialog v-model="configuring" />
         <RosterAdd :label="t('派哪个 AI')" :items="items" @add="choose" @configure="(name) => { configuring = name; }" />
         <p v-if="!platforms.length && invited.available.value" class="fine-print" role="note">{{ t("这台电脑还没有可派出的 AI 软件，请先在设置里配置。") }}</p>
@@ -145,11 +148,13 @@ async function submit() {
         <p v-else-if="platforms.length" class="join-invited-empty">{{ t("选择一个 AI 派去对方房间，点卡片翻面可设置软件、模型和本机权限。") }}</p>
         <p v-if="lockdown" class="fine-print" role="note" :title="lockdown">{{ t("这个 AI 只能不受限运行。") }}</p>
         <p v-if="!invited.available.value" class="fine-print" role="alert">{{ t("加入需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
-        <div class="join-invited-footer">
-          <UButton :label="t('取消')" color="neutral" variant="ghost" @click="open = false" />
-          <UButton type="submit" icon="i-lucide-log-in" :label="t('加入')" class="channel-primary-button" :disabled="!ready || Boolean(invited.pending_join.value)" />
-        </div>
       </form>
+    </template>
+    <template #footer>
+      <div class="join-invited-footer">
+        <UButton :label="t('取消')" color="neutral" variant="ghost" @click="open = false" />
+        <UButton type="submit" :form="form_id" icon="i-lucide-log-in" :label="t('加入')" class="channel-primary-button" :disabled="!ready || Boolean(invited.pending_join.value)" />
+      </div>
     </template>
   </UModal>
 </template>
@@ -158,10 +163,12 @@ async function submit() {
 .join-invited { display: flex; flex-direction: column; gap: 12px; }
 .join-invited .fine-print { margin: -6px 0 0; }
 .join-invited-link { display: flex; gap: 6px; min-width: 0; }
-.join-invited-scan { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.join-invited-scan { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.join-invited-scan .join-invited-camera-status { position: absolute; top: 16px; margin: 0; color: white; }
+.join-invited-link-note { min-height: 2.8em; }
 .join-invited-scan video { width: 100%; max-width: 320px; aspect-ratio: 1; object-fit: cover; border-radius: 10px; background: #000; }
 .join-invited-warning { color: var(--ui-warning, #e0a33a); }
-.join-invited-footer { display: flex; justify-content: flex-end; gap: 8px; }
+.join-invited-footer { display: flex; justify-content: flex-end; gap: 8px; width: 100%; }
 /* One card at the invite dialog's card size. */
 .join-invited-card { width: min(272px, 100%); }
 .join-invited-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }

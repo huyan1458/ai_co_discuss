@@ -6020,7 +6020,7 @@ async function relay_exchange(action, payload, wait, trace) {
     ...(reports.length ? { timing_reports: reports } : {}) });
   const sent = performance.now();
   function report_failure(failure, result = {}) {
-    if (action !== "timing-report") queue_relay_report(machine, { id, at: Date.now(), operation: action, failure, worker: result.worker_ms, rpc: result.rpc_ms, status: result.status,
+    if (action !== "timing-report") queue_relay_report(machine, { id, at: Date.now(), operation: action, failure, connection: result.connection, relay_close: result.relay_close, worker: result.worker_ms, rpc: result.rpc_ms, status: result.status,
       total: Math.round(performance.now() - sent) });
   }
   const result = await request_json(`/api/machines/${encodeURIComponent(machine.id)}/relay`, { id, envelope, ...(wait ? { wait } : {}) })
@@ -6052,7 +6052,8 @@ async function relay_exchange(action, payload, wait, trace) {
     }
     return answer;
   }
-  report_failure(result.status === "offline" ? "offline" : "relay_timeout", result);
+  const offline_reason = result.reason === "machine_unregistered" ? "machine_unregistered" : "offline";
+  report_failure(result.status === "offline" ? offline_reason : "relay_timeout", result);
   if (result.status === "offline") throw offline_error(machine);
   throw Object.assign(new Error(t('结果待确认：电脑「{value1}」未在限时内答复，请稍后查看房间，确认是否已生效后再重试', { value1: machine.name })),
     { unconfirmed: true, launch: { stage: "unconfirmed" } });

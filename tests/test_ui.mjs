@@ -28,7 +28,7 @@ vm.createContext = (sandbox = {}, ...rest) => {
 
 test("failed relay observations survive an offline feedback attempt and are acknowledged on reconnection", async () => {
   const machine = { id: "pc", name: "Computer" }, pending = [], sent = [];
-  let result = { status: "offline", worker_ms: 12, rpc_ms: 4 };
+  let result = { status: "offline", reason: "machine_unregistered", worker_ms: 12, rpc_ms: 4 };
   const context = vm.createContext({ relay_machine: machine, crypto, performance, relay_time_reports: pending,
     computer_rooms_only: () => true, seal_relay_request: async (_, id, payload) => { sent.push(payload); return {}; },
     request_json: async () => result, offline_error: () => new Error("offline"), queue_relay_report: (_, row) => pending.push(row),
@@ -41,7 +41,14 @@ test("failed relay observations survive an offline feedback attempt and are ackn
   assert.equal(pending.length, 1);
   result = { status: "done", response: {} };
   await context.relay_exchange("timing-report", {});
-  assert.equal(sent.at(-1).timing_reports[0].failure, "offline");
+  assert.equal(sent.at(-1).timing_reports[0].failure, "machine_unregistered");
+  result = { status: "unknown", connection: "first", relay_close: "unresponsive" };
+  await assert.rejects(context.relay_exchange("room-api", {}), error => error.unconfirmed);
+  assert.equal(pending[0].failure, "relay_timeout");
+  result = { status: "done", response: {} };
+  await context.relay_exchange("timing-report", {});
+  assert.equal(sent.at(-1).timing_reports[0].connection, "first");
+  assert.equal(sent.at(-1).timing_reports[0].relay_close, "unresponsive");
   assert.equal(pending.length, 0);
 });
 
@@ -997,6 +1004,41 @@ test("an attachment's copy remembers the site's task, and a reload follows it at
   assert.deepEqual(routes, ["/api/rooms/one/attachments/a/cloud-copy"]);
   assert.equal(transfers.rows.find(row => row.name === "录像.mp4").status, "done", "followed on, not shown as interrupted");
   delete globalThis.localStorage;
+});
+
+test("the cloud space offers in the shared row menu only what each item allows", async () => {
+  const { cloud_can, plan_cloud_upload } = await import("../frontend/cloud-drive.js");
+  const on = (can) => Object.keys(can).filter(key => can[key]).sort();
+  assert.deepEqual(on(cloud_can({ content_type: "video/mp4" })), ["delete", "download", "land", "move", "preview", "rename", "share"], "a drive file allows everything");
+  assert.deepEqual(on(cloud_can({ kind: "attachment", content_type: "application/zip" })), ["delete", "download", "land", "share"], "a room attachment cannot be renamed or moved");
+  assert.deepEqual(on(cloud_can({ purpose: "outbound" })), ["delete", "download"], "a transfer copy is only downloaded or deleted");
+  assert.deepEqual(on(cloud_can({ content_type: "image/png" }, { in_trash: true })), ["purge", "restore"]);
+  assert.deepEqual(on(cloud_can({ id: "rooms", readonly: true }, { folder: true })), ["open"], "a read-only place has no menu actions");
+  assert.deepEqual(on(cloud_can({ id: "f1" }, { folder: true })), ["delete", "move", "open", "rename"]);
+  const file = (name, size) => ({ file: { name, size }, dir: "" });
+  const plan = plan_cloud_upload([file("a.mp4", 10), file(".DS_Store", 4), file("empty.txt", 0), file("huge.iso", 3 * 1024 ** 3)], 100);
+  assert.deepEqual(plan.accepted.map(item => item.file.name), ["a.mp4"]);
+  assert.deepEqual({ ...plan.skipped }, { empty: 1, large: 1, system: 1 });
+  assert.equal(plan.refusal, "");
+  assert.match(plan_cloud_upload([file("a.mp4", 200)], 100).refusal, /放不下/, "a batch larger than the space left does not start");
+});
+
+test("the file page's selection bar greys out what does not apply and a batch keeps what was done", async () => {
+  const { selection_blocks } = await import("../frontend/cloud-drive.js");
+  const { run_each } = await import("../frontend/transfers.js");
+  const files = (count, item = {}) => Array.from({ length: count }, (_, index) => ({ id: `f${index}`, ...item }));
+  assert.deepEqual(selection_blocks({ files: files(2), folders: [] }), { first: "", move: "", last: "" }, "files of a project folder allow everything");
+  assert.match(selection_blocks({ files: files(1), folders: [{ id: "d" }] }).first, /文件夹不能批量下载/);
+  assert.match(selection_blocks({ files: files(21), folders: [] }).first, /一次最多下载 20 个文件/);
+  assert.equal(selection_blocks({ files: files(20), folders: [] }).first, "");
+  assert.match(selection_blocks({ files: files(1, { kind: "attachment" }), folders: [], cloud: true }).move, /只读文件夹里的文件不能移动/);
+  assert.deepEqual(selection_blocks({ files: files(1), folders: [{ id: "d" }], cloud: true, in_trash: true }), { first: "", move: "回收站里不能移动", last: "" },
+    "the recycle bin restores and deletes for good, and does not move");
+  const done = [], shares = [];
+  const failed = await run_each(["a", "b", "c"], async (item) => { if (item === "b") throw new Error("busy"); done.push(item); }, (share) => shares.push(share));
+  assert.deepEqual(done, ["a", "c"], "one failing does not stop the rest");
+  assert.deepEqual(failed.map(({ item, error }) => [item, error.message]), [["b", "busy"]]);
+  assert.equal(shares.at(-1), 1);
 });
 
 test("deleting in the panel says what went to the recycle bin and frees space only for what is gone", async () => {

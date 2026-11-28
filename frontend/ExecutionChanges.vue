@@ -74,12 +74,15 @@ const counted = computed(() => files.value.some((file) => Number.isInteger(file.
 const summary = computed(() => props.report.change_summary ||
   { count: files.value.length, counted: counted.value, ...totals.value });
 const open = ref(new Set());
-const opened = ref(read_recent(opened_sections, section_key.value));
-const expanded = computed(() => opened.value ?? summary.value.count <= FOLDED_ABOVE);
-watch(section_key, (key) => { opened.value = read_recent(opened_sections, key); });
+const expanded = ref(false);
+watch([section_key, () => summary.value.count > 0], ([key, has_changes]) => {
+  if (!has_changes) return;
+  expanded.value = read_recent(opened_sections, key) ?? summary.value.count <= FOLDED_ABOVE;
+  remember_recent(opened_sections, key, expanded.value);
+}, { immediate: true });
 function toggle_section() {
-  opened.value = !expanded.value;
-  remember_recent(opened_sections, section_key.value, opened.value);
+  expanded.value = !expanded.value;
+  remember_recent(opened_sections, section_key.value, expanded.value);
 }
 async function load_changes() {
   if (boundary.value || inline.value) return;
@@ -247,7 +250,9 @@ function patch_lines(patch) {
       <span v-if="summary.counted" class="execution-changes-count"><b class="is-add">+{{ summary.added }}</b> <b class="is-del">-{{ summary.removed }}</b></span>
       <UIcon name="i-lucide-chevron-down" class="execution-changes-chevron" />
     </button>
-    <p v-if="expanded && list_loading && !details" class="execution-changes-note" role="status">{{ t('正在读取改动…') }}</p>
+    <ul v-if="expanded && list_loading && !details" class="execution-changes-list" :aria-label="t('正在读取改动…')" aria-busy="true">
+      <li v-for="row in summary.count" :key="row" class="execution-changes-row" aria-hidden="true"><USkeleton class="h-3 w-1/2" /></li>
+    </ul>
     <p v-else-if="expanded && (boundary || list_error === 'reading_boundary')" class="execution-changes-note">{{ t('暂不可见') }}</p>
     <p v-else-if="expanded && list_error" class="execution-changes-note">
       {{ t('读取改动失败：{value1}', { value1: list_error }) }}

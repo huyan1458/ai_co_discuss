@@ -243,14 +243,11 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-room-list.is-recent .channel-room-creating { order: -1; }
 .channel-room-more { display: block; width: 100%; padding: 6px 8px; border-radius: 8px; color: var(--ui-text-dimmed); font-size: var(--channel-nav-meta); text-align: left; cursor: pointer; }
 @media (hover: hover) { .channel-room-more:hover { color: var(--ui-text-toned); background: var(--channel-ghost-hover); } }
-.channel-folder-rooms { padding-left: 36px; }
-.channel-root-rooms:has(.channel-child-toggle) { padding-left: 20px; }
-/* A tablet lays out the PC page with a touch row's grip and "…", so the narrow sidebar gives the indent to the name. */
-@media (min-width: 701px) and (hover: none), (min-width: 701px) and (pointer: coarse) { .channel-folder-rooms { padding-left: 8px; } }
+.channel-root-rooms { padding-left: 20px; }
 /* Align the room toggle's center with the folder icon, 30px from the section edge. */
-.channel-folder-rooms:has(.channel-child-toggle) { padding-left: 39px; }
+.channel-folder-rooms { padding-left: 39px; }
 @media (max-width: 700px), (hover: none), (pointer: coarse) {
-  .channel-folder-rooms:has(.channel-child-toggle) { padding-left: 41px; }
+  .channel-folder-rooms { padding-left: 41px; }
 }
 /* Sorted by recent activity a row has no grip, so a filed room's name starts where its folder's name does (42px), with or
    without a toggle; the toggle keeps its center under the folder icon, 30px in (user 2026-11-25, #11361). */
@@ -300,12 +297,12 @@ html[data-theme^="channel"] .channel-directory-menu [data-slot="itemTrailingIcon
 .channel-brief-heading { display: flex; align-items: center; gap: 12px; min-height: 28px; font-size: 12px; color: var(--ui-text-muted); }
 .channel-brief-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 0; border-radius: 4px; color: var(--ui-text-highlighted); font-size: 13px; }
 .channel-brief-toggle > [class*="icon"] { width: 14px; height: 14px; color: var(--ui-text-muted); }
-.channel-brief-update { flex-shrink: 0; margin-left: auto; font-size: 11px; color: var(--ui-text-muted); }
-.channel-host-brief.is-collapsed .channel-brief-heading { display: flex; flex-wrap: nowrap; }
-.channel-host-brief.is-collapsed .channel-brief-toggle { width: 100%; min-width: 0; }
+.channel-brief-toggle { width: 100%; min-width: 0; }
+.channel-brief-toggle:disabled { color: var(--ui-text-muted); cursor: default; }
 .channel-brief-toggle > :is(strong, [class*="icon"]) { flex-shrink: 0; }
 .channel-brief-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; color: var(--ui-text-muted); font-weight: 400; }
-.channel-brief-content { padding: 6px 0 8px 20px; }
+.channel-brief-content { position: absolute; z-index: 1; inset: 100% 12px auto; padding: 12px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-bg-elevated); box-shadow: var(--channel-shadow-bar); }
+.channel-brief-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .channel-brief-text { max-height: 140px; overflow: auto; line-height: 1.75; font-size: 14px; color: var(--ui-text); overflow-wrap: anywhere; }
 .channel-brief-footer { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 20px; margin-top: 8px; color: var(--ui-text-muted); font-size: 11px; line-height: 1.6; }
 .channel-brief-footer small { margin-left: auto; font-size: inherit; }
@@ -497,6 +494,9 @@ html[data-theme^="channel"] .pb-end:hover { border-color: color-mix(in srgb, #f0
 .pb-member-status { display: flex; align-items: center; gap: 6px; color: var(--ui-text-muted); font-size: 12px; }
 /* The member's context and its account's most used window, at the right end of its status line (#15613). */
 .pb-member-status .pb-member-usage { margin-left: auto; }
+/* The account's state, never its figures: those are shown once per account (#15754). */
+.pb-member-quota { flex: none; color: var(--ui-text-dimmed); font-size: 11px; white-space: nowrap; }
+.pb-member-quota::before { content: "·"; margin-right: 6px; }
 .pb-member-status .pb-dot { width: 6px; height: 6px; }
 .pb-member-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pb-member-status small { color: var(--ui-text-dimmed); font-size: 11px; }
@@ -975,6 +975,9 @@ html[data-theme^="channel"] .channel-round-button:active:not(:disabled) { transf
 .channel-note-divider { margin-inline: 6px; color: #677181; }
 .channel-draft-length { white-space: nowrap; font-variant-numeric: tabular-nums; color: #858f9f; }
 .channel-composer-note > span:first-child { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* The account limits sit right of the recipient hint, before the key hints; the hint gives way first (#15745). */
+.channel-composer-note .channel-composer-quota { margin-left: auto; }
+.channel-quota-alert { display: none; }
 .channel-draft-length .is-near-limit { color: #f0b232; }
 /* Shortcut hints only appear while the composer has focus. */
 .channel-key-hint { opacity: 0; transition: opacity .15s; }
@@ -1230,7 +1233,7 @@ html[data-theme^="channel"] .channel-archive-modal .dialog-body { padding: 0 44p
 html[data-theme^="channel"] .channel-archive-toolbar :is(input, button[role="combobox"]) { height: 32px; min-height: 32px; border: 1px solid var(--ui-border-muted); background: transparent; box-shadow: none; font-size: 12px; border-radius: 9px; }
 html[data-theme^="channel"] .channel-archive-toolbar .channel-archive-search input { border-radius: 999px; }
 .channel-archive-toolbar [data-slot="leadingIcon"] { width: 14px; height: 14px; color: var(--ui-text-muted); }
-.channel-archive-results { overflow-y: auto; min-height: 0; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--ui-border-accented) transparent; }
+.channel-archive-results { overflow-y: auto; scrollbar-gutter: stable; min-height: 0; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--ui-border-accented) transparent; }
 .channel-archive-list { padding: 0 16px; margin: 0; border: 1px solid var(--ui-border-muted); border-radius: 16px; list-style: none; }
 .channel-archive-item + .channel-archive-item { border-top: 1px solid var(--ui-border-muted); }
 .channel-archive-row { display: flex; align-items: center; justify-content: space-between; min-height: 62px; gap: 20px; padding: 11px 0; }
@@ -1287,9 +1290,6 @@ html[data-theme^="channel"] .theme-choices small { color: #a1aab9; }
 /* Four choices with longer names do not fit beside the label: they take the full width under it. */
 .channel-setting-wide { grid-template-columns: minmax(0, 1fr); }
 .channel-setting-wide > .channel-reading-options { justify-self: stretch; }
-/* A count limit under its label: the stepper starts at the left, its explanation runs below. */
-.channel-setting-row > .channel-setting-limit { justify-self: stretch; }
-.channel-setting-limit .limit-field-row { justify-content: flex-start; }
 @media (max-width: 520px) {
   .channel-setting-row, .channel-setting-wide { grid-template-columns: minmax(0, 1fr); }
   .channel-setting-row > .channel-reading-options { justify-self: stretch; }
@@ -1395,9 +1395,7 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-tabs [data-slot="trigger"] { flex: 1 0 auto; height: 36px; padding: 0 10px; }
   .channel-host-brief { padding: 8px 16px; }
   .channel-brief-heading { gap: 8px; }
-  .channel-brief-heading .channel-brief-update + .channel-brief-update { margin-left: 0; }
   .channel-brief-text { max-height: 30vh; }
-  .channel-brief-content { padding: 4px 0 6px 20px; }
   .channel-brief-footer { flex-direction: column; gap: 2px; }
   .channel-brief-footer small { margin-left: 0; }
   .channel-brief-text { font-size: 13px; }
@@ -1458,6 +1456,8 @@ html[data-theme^="channel"] .advanced-fields { border-color: #414957; }
   .channel-editor { min-height: 36px; padding: 8px 10px 4px !important; }
   .channel-composer-footer { padding: 0 6px 5px !important; gap: 3px !important; }
   .channel-composer-note { display: none; }
+  .channel-quota-alert { display: flex; height: 22px; padding: 0 4px; overflow: hidden; align-items: center; font-size: 11px; color: #929cad; }
+  .channel-quota-alert .account-quota-pill { max-width: 100%; min-height: 0; overflow: hidden; }
   html[data-theme^="channel"] .content-page { padding: 24px 18px; }
 }
 @media (hover: none) {

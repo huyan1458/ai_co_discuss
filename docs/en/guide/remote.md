@@ -81,6 +81,10 @@ After a change, the computer and paired devices reconnect by themselves; switch 
 
 ## Things to keep in mind
 
+In the network report, `relay_unresponsive` means the relay closed a connection after two consecutive business request timeouts. A `relay_probe_timeout` means the computer started reconnecting after the relay missed an application probe. A `relay_timeout_unreceived` means the computer had a complete receipt history for that connection and had not seen the request when the phone reported its timeout.
+
+In the network report, `machine_unregistered` means the relay could not find the current computer connection. The `heartbeat` source means the computer started reconnecting. The `device_request` source is a later report from the phone.
+
 When the network is unstable, run `codiscuss admin site network --since 24h --by 10m` on the computer to see failures, disconnects and latency by segment. Use ISO timestamps with offsets for `--since` and `--until` to compare two evenings.
 
 Phones support portrait layout only. Tablets support both portrait and landscape.

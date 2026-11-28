@@ -3,9 +3,10 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } fr
 import { file_preview, file_size, file_type, folder_listings, modified_time, shown_folders, tile_icon } from "./file-preview.js";
 import { t } from './i18n.js';
 import ProjectFileThumbnail from "./ProjectFileThumbnail.vue";
-import CloudDrive from "./CloudDrive.vue";
+import CloudShares from "./CloudShares.vue";
+import { selection_blocks, use_cloud_drive, walk_dropped } from "./cloud-drive.js";
 import TransferList from "./TransferList.vue";
-import { clear_transfer, transfer } from "./transfers.js";
+import { clear_transfer, run_each, transfer } from "./transfers.js";
 import { cloud_space_visible } from "./object-storage-fields.js";
 import { moves_sideways, side_swipe } from "./side-swipe.js";
 
@@ -131,10 +132,13 @@ async function read_section(section) {
 const show_roots = () => read_section("roots");
 const show_trash = () => read_section("trash");
 
-// The account's cloud space: one list for the whole account, the same from every room, read by the list itself.
+// The account's cloud space, the last of the directory tabs: one drive for the whole account, the same from every room.
+// It is drawn with this page's own frame (tools, tabs, path bar, columns, row menus); cloud-drive.js gives its data and
+// which actions each item allows, and the controls it does not allow are left out.
 const cloud_visible = computed(() => cloud_space_visible(view.value));
-const cloud_drive = ref(null);
-function show_cloud() {
+const cloud = use_cloud_drive(bridge);
+/** Show a place of the cloud space: "root", a folder's ID, or one of "rooms", "transfers", "trash". */
+function show_cloud(place = cloud.place.value) {
   if (left_page) return;
   listing_request++;
   sweep_run++;
@@ -142,9 +146,95 @@ function show_cloud() {
   section_failure.value = "";
   loading.value = false;
   mode.value = "cloud";
+  cloud.open(place);
 }
 // The cloud space taken away (its settings cleared) leaves the tab for the projects.
 watch(cloud_visible, (visible) => { if (!visible && mode.value === "cloud") show_roots(); });
+const cloud_files_input = ref(null), cloud_folder_input = ref(null);
+const cloud_upload_items = computed(() => [[
+  { label: t("上传文件"), icon: "i-lucide-file-up", onSelect: () => cloud_files_input.value?.click() },
+  { label: t("上传文件夹"), icon: "i-lucide-folder-up", onSelect: () => cloud_folder_input.value?.click() },
+]]);
+function cloud_pick_files(list) {
+  cloud.upload([...list].map((file) => ({ file, dir: "" })));
+  if (cloud_files_input.value) cloud_files_input.value.value = "";
+}
+function cloud_pick_folder(list) {
+  // A picked folder's files carry their path from the picked folder down, the file's own name last.
+  cloud.upload([...list].map((file) => ({ file, dir: (file.webkitRelativePath || "").split("/").slice(0, -1).join("/") })));
+  if (cloud_folder_input.value) cloud_folder_input.value.value = "";
+}
+/** Files and folders dropped on the cloud space go into the folder shown, with their structure. */
+async function cloud_drop(event) {
+  if (mode.value !== "cloud" || !event.dataTransfer?.types.includes("Files")) return;
+  event.preventDefault();
+  if (event.type !== "drop" || cloud.special.value) return;
+  const entries = [...event.dataTransfer.items].map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
+  try { cloud.upload(entries.length ? await walk_dropped(entries) : [...event.dataTransfer.files].map((file) => ({ file, dir: "" }))); }
+  catch (error) { bridge.notify("error", error.message); }
+}
+/** The "…" menu of a cloud space file, with only the actions it allows where it is. */
+function cloud_file_menu(file) {
+  const can = cloud.can(file);
+  if (cloud.in_trash.value) return [[{ label: t("还原"), icon: "i-lucide-undo-2", onSelect: () => cloud.restore([file.id], []) },
+    { label: t("彻底删除"), icon: "i-lucide-trash-2", color: "error", onSelect: () => cloud.remove([file], [], true) }]];
+  return [[
+    ...(can.download ? [{ label: t("下载"), icon: "i-lucide-download", onSelect: () => cloud.download([file]) }] : []),
+    ...(can.rename ? [{ label: t("重命名"), icon: "i-lucide-pencil", onSelect: () => start_naming("cloud-rename", file) }] : []),
+    ...(can.move ? [{ label: t("移动"), icon: "i-lucide-folder-input", onSelect: () => open_cloud_move([file], []) }] : []),
+    ...(can.delete ? [{ label: t("删除"), icon: "i-lucide-trash-2", color: "error", onSelect: () => cloud.remove([file], []) }] : []),
+    ...(can.share ? [{ label: t("分享"), icon: "i-lucide-link", onSelect: () => { cloud_sharing.value = file; } }] : []),
+    ...(can.land ? [{ label: t("取回到项目"), icon: "i-lucide-folder-down", onSelect: () => land_from_cloud(file) }] : []),
+  ]];
+}
+/** The "…" menu of a cloud space folder; a read-only place has none. */
+function cloud_folder_menu(folder) {
+  if (cloud.in_trash.value) return [[{ label: t("还原"), icon: "i-lucide-undo-2", onSelect: () => cloud.restore([], [folder.id]) },
+    { label: t("彻底删除"), icon: "i-lucide-trash-2", color: "error", onSelect: () => cloud.remove([], [folder], true) }]];
+  const can = cloud.can(folder, true);
+  return [[
+    ...(can.rename ? [{ label: t("重命名"), icon: "i-lucide-pencil", onSelect: () => start_naming("cloud-rename-folder", folder) }] : []),
+    ...(can.move ? [{ label: t("移动"), icon: "i-lucide-folder-input", onSelect: () => open_cloud_move([], [folder]) }] : []),
+    ...(can.delete ? [{ label: t("删除"), icon: "i-lucide-trash-2", color: "error", onSelect: () => cloud.remove([], [folder]) }] : []),
+  ]];
+}
+/** Open a cloud file: what a viewer shows is previewed, anything else is downloaded. */
+function open_cloud_file(file) {
+  if (cloud.in_trash.value) return;
+  if (cloud.can(file).preview) cloud.preview(file);
+  else cloud.download([file]);
+}
+const cloud_sharing = ref(null);
+// The folder picker of a move: the items moving and the folder being looked into.
+const cloud_moving = ref(null);
+async function open_cloud_move(files, folders) {
+  cloud_moving.value = { files, folders, at: null, path: [], children: [], loading: true };
+  await browse_cloud_move(null);
+}
+async function browse_cloud_move(id) {
+  const job = cloud_moving.value;
+  job.loading = true;
+  try {
+    const { path, folders } = await cloud.child_folders(id);
+    if (cloud_moving.value !== job) return;
+    // A folder cannot go into itself or below it.
+    const leaving = new Set(job.folders.map((item) => item.id));
+    Object.assign(job, { at: id, path, children: folders.filter((item) => !leaving.has(item.id)) });
+  } catch (error) { bridge.notify("error", error.message); }
+  finally { job.loading = false; }
+}
+// The search box reads the whole cloud space again a moment after typing stops.
+const CLOUD_SEARCH_DELAY_MS = 300;
+let cloud_search_timer = 0;
+function cloud_search() {
+  clearTimeout(cloud_search_timer);
+  cloud_search_timer = setTimeout(() => cloud.reload(), CLOUD_SEARCH_DELAY_MS);
+}
+function finish_cloud_move() {
+  const job = cloud_moving.value;
+  cloud_moving.value = null;
+  cloud.move(job.files.map((item) => item.id), job.folders.map((item) => item.id), job.at);
+}
 
 /** Show a folder the preview's breadcrumb asked for, now or once this list is shown. */
 function take_reveal() {
@@ -254,7 +344,7 @@ async function change(payload, done_message = "") {
 
 /** Start typing a name for a new folder, a new project or a renamed entry. */
 async function start_naming(kind, entry = null) {
-  naming.value = { kind, entry, value: entry?.name || "" };
+  naming.value = { kind, entry, value: entry?.file_name ?? entry?.name ?? "" };
   await nextTick();
   name_input.value?.focus();
   name_input.value?.select();
@@ -266,7 +356,10 @@ async function finish_naming() {
   const name = (value || "").trim();
   if (!name) { naming.value = null; return; }
   naming.value = null;
-  if (kind === "mkdir") await change({ op: "mkdir", path: current_path.value, name });
+  if (kind === "cloud-mkdir") await cloud.mkdir(name);
+  else if (kind === "cloud-rename" && name !== entry.file_name) await cloud.rename(entry, name);
+  else if (kind === "cloud-rename-folder" && name !== entry.name) await cloud.rename(entry, name, true);
+  else if (kind === "mkdir") await change({ op: "mkdir", path: current_path.value, name });
   else if (kind === "rename" && name !== entry.name) await change({ op: "rename", path: entry.path, name });
   else if (kind === "project") {
     busy.value = true;
@@ -283,10 +376,12 @@ function remove(entry) {
   change({ op: "delete", path: entry.path }, t('已移到回收区：{value1}', { value1: entry.name }));
 }
 
-/** Copy or cut one entry for pasting in another folder (of this or another project). */
-function take(entry, kind) {
-  clipboard.value = { mode: kind, root: root.value, root_name: root_name.value, path: entry.path, name: entry.name };
-  bridge.notify("info", kind === "copy" ? t('已复制 {value1}，打开目标文件夹后点“粘贴”', { value1: entry.name }) : t('已剪切 {value1}，打开目标文件夹后点“粘贴”', { value1: entry.name }));
+/** Copy or cut one entry, or several chosen ones, for pasting in another folder (of this or another project). */
+function take(entry, kind) { take_many([entry], kind); }
+function take_many(entries, kind) {
+  const name = entries.length === 1 ? entries[0].name : t('{count} 项', { count: entries.length });
+  clipboard.value = { mode: kind, root: root.value, root_name: root_name.value, name, items: entries.map((entry) => ({ path: entry.path, name: entry.name })) };
+  bridge.notify("info", kind === "copy" ? t('已复制 {value1}，打开目标文件夹后点“粘贴”', { value1: name }) : t('已剪切 {value1}，打开目标文件夹后点“粘贴”', { value1: name }));
 }
 
 /** Ask what to do with a name already taken; resolves "replace", "keep_both" or null. */
@@ -303,14 +398,22 @@ function answer_conflict(choice) {
 async function paste() {
   const item = clipboard.value;
   if (!item) return;
-  const payload = { op: "paste", mode: item.mode, source: { root: item.root, path: item.path }, path: current_path.value };
-  let answer = await change(payload);
-  if (answer?.conflict) {
-    const choice = await ask_conflict(answer.name);
-    if (!choice) return;
-    answer = await change({ ...payload, conflict: choice });
+  // Pasted one after another (the computer takes one entry per request); a name already taken is asked about, and the
+  // answer can stand for the rest.
+  let for_all = null, done = 0;
+  ask_all.value = false;
+  for (const source of item.items) {
+    const payload = { op: "paste", mode: item.mode, source: { root: item.root, path: source.path }, path: current_path.value };
+    let answer = await change(payload);
+    if (answer?.conflict) {
+      const choice = for_all || await ask_conflict(answer.name, item.items.length > 1);
+      if (ask_all.value && choice) for_all = choice;
+      if (!choice) continue;
+      answer = await change({ ...payload, conflict: choice });
+    }
+    if (answer && !answer.conflict) done += 1;
   }
-  if (answer && !answer.conflict && item.mode === "move") clipboard.value = null;
+  if (done === item.items.length && item.mode === "move") clipboard.value = null;
 }
 
 /** Upload the chosen files one by one; names already in the folder are asked about first. */
@@ -516,7 +619,7 @@ const MOUSE_BACK = 3, MOUSE_FORWARD = 4;
 
 /** Where the list is now. */
 function here() {
-  return { mode: mode.value, account: account_root.value, root: root.value, path: current_path.value };
+  return { mode: mode.value, account: account_root.value, root: root.value, path: current_path.value, cloud: cloud.place.value };
 }
 
 /** Move the list somewhere the user chose, remembering where it was; a new move drops the way forward. */
@@ -531,7 +634,7 @@ function navigate(move) {
 function show_place(place) {
   if (place.mode === "roots") return show_roots();
   if (place.mode === "trash") return show_trash();
-  if (place.mode === "cloud") return cloud_visible.value ? show_cloud() : show_roots();
+  if (place.mode === "cloud") return cloud_visible.value ? show_cloud(place.cloud) : show_roots();
   account_root.value = place.account;
   root.value = place.account ? place.account.id : place.root;
   open_project(place.path);
@@ -609,14 +712,118 @@ function side_button(event) {
 }
 
 /** The rarely used tools of the heading: refreshing what is shown, and going into or out of the recycle area. */
-const more_items = computed(() => [
+// In the cloud space the same place holds its recycle bin ("回收站"), and in the bin a way to empty it.
+const more_items = computed(() => mode.value === "cloud" ? [
+  { label: t('刷新'), icon: "i-lucide-refresh-cw", disabled: cloud.loading.value, onSelect: () => cloud.reload() },
+  cloud.in_trash.value ? { label: t('返回云空间'), icon: "i-lucide-cloud", onSelect: () => navigate(() => show_cloud("root")) }
+    : { label: t('回收站'), icon: "i-lucide-trash", onSelect: () => navigate(() => show_cloud("trash")) },
+  ...(cloud.in_trash.value ? [{ label: t('清空回收站'), icon: "i-lucide-trash-2", color: "error", onSelect: () => cloud.empty_trash() }] : []),
+] : [
   { label: t('刷新'), icon: "i-lucide-refresh-cw", disabled: loading.value || busy.value,
-    onSelect: () => mode.value === "roots" ? show_roots() : mode.value === "trash" ? show_trash() : mode.value === "cloud" ? cloud_drive.value?.reload()
-      : (read_directory(current_path.value), sweep_folders()) },
+    onSelect: () => mode.value === "roots" ? show_roots() : mode.value === "trash" ? show_trash() : (read_directory(current_path.value), sweep_folders()) },
   mode.value === "trash" ? { label: t('返回文件夹'), icon: "i-lucide-folder-open", onSelect: () => navigate(() => open_project(current_path.value)) }
     : { label: t('回收区'), icon: "i-lucide-trash", onSelect: () => navigate(show_trash) },
-  ...(cloud_visible.value && mode.value !== "cloud" ? [{ label: t('云空间'), icon: "i-lucide-cloud", onSelect: () => navigate(show_cloud) }] : []),
 ]);
+// The directory tabs: the room's project directories, then the cloud space; shown with one directory too when the
+// cloud space is there, so it has somewhere to sit.
+// It stays in every section of the page (projects list, recycle area, an account folder), with no tab chosen there, so
+// what is below it never moves.
+const show_tabs = computed(() => props.directories.length > 1 || cloud_visible.value);
+/**
+ * Why each of the heading's icons does not apply here, or "" when it does: the icons stay in place and are greyed out
+ * with this as their tooltip.
+ */
+const tool_blocks = computed(() => {
+  if (mode.value === "cloud") {
+    const place = cloud.in_trash.value ? "trash" : cloud.special.value ? "readonly" : "";
+    return {
+      upload: place === "trash" ? t("回收站里不能上传") : place ? t("只读文件夹不能上传") : "",
+      create: place === "trash" ? t("回收站里不能新建文件夹") : place ? t("只读文件夹里不能新建文件夹") : "",
+      layout: "",
+    };
+  }
+  if (mode.value === "roots") return { upload: t("先打开一个项目或草稿再上传"), create: roots.value?.can_create_project ? "" : t("这里不能新建项目"), layout: t("这里只有列表视图") };
+  if (mode.value === "trash") return { upload: t("回收区里不能上传"), create: t("回收区里不能新建文件夹"), layout: t("这里只有列表视图") };
+  return { upload: "", create: "", layout: "" };
+});
+
+// ---- choosing several entries (a project folder or the cloud space) ----
+// Keys: `p:<path>` for a project entry, `f:<id>` / `d:<id>` for a cloud file or folder. Leaving the folder clears them.
+const BATCH_DOWNLOAD_GAP_MS = 400;
+const selected = ref(new Set());
+watch([mode, current_path, root, () => cloud.place.value], () => { selected.value = new Set(); });
+const project_key = (entry) => `p:${entry.path}`;
+const cloud_key = (item, folder = false) => `${folder ? "d" : "f"}:${item.id}`;
+/** The entries of the folder shown that can be chosen: read-only places and unreadable entries cannot. */
+const choosable = computed(() => mode.value === "folder" ? (listing.value?.entries || []).filter((entry) => entry.kind !== "unavailable").map(project_key)
+  : mode.value === "cloud" ? [...cloud.folders.value.filter((item) => !item.readonly).map((item) => cloud_key(item, true)), ...cloud.files.value.map((item) => cloud_key(item))] : []);
+const all_chosen = computed(() => choosable.value.length > 0 && choosable.value.every((key) => selected.value.has(key)));
+function toggle_chosen(key) {
+  const next = new Set(selected.value);
+  next.has(key) ? next.delete(key) : next.add(key);
+  selected.value = next;
+}
+/** Choose every entry of the folder shown, or none. */
+function toggle_all_chosen() { selected.value = all_chosen.value ? new Set() : new Set(choosable.value); }
+/** What is chosen, as `{ files, folders }` of the folder shown. */
+const chosen = computed(() => {
+  if (mode.value === "folder") {
+    const entries = (listing.value?.entries || []).filter((entry) => selected.value.has(project_key(entry)));
+    return { files: entries.filter((entry) => entry.kind === "file"), folders: entries.filter((entry) => entry.kind === "directory") };
+  }
+  if (mode.value === "cloud") return { files: cloud.files.value.filter((item) => selected.value.has(cloud_key(item))), folders: cloud.folders.value.filter((item) => selected.value.has(cloud_key(item, true))) };
+  return { files: [], folders: [] };
+});
+const blocks = computed(() => selection_blocks({ ...chosen.value, cloud: mode.value === "cloud", in_trash: cloud.in_trash.value }));
+
+/**
+ * Run one action over several entries as a row of the transfer list (the computer takes one entry per request), the
+ * failures said together at the end; the ones done stay done.
+ */
+async function run_batch(name, kind, items, work) {
+  let failed = [];
+  await transfer(name, kind, async ({ progress }) => { failed = await run_each(items, work, progress); });
+  if (failed.length) bridge.notify("warning", t("{done} 项完成，{failed} 项失败：{names}", { done: items.length - failed.length, failed: failed.length,
+    names: failed.slice(0, 3).map(({ item, error }) => `${item.name ?? item.file_name}（${error.message}）`).join(", ") }));
+  return failed;
+}
+
+/** Download the chosen files one by one, at most 20; away from the computer a large one goes through the cloud space. */
+async function download_chosen() {
+  const files = chosen.value.files, from = root.value;
+  selected.value = new Set();
+  return run_batch(t("下载 {count} 个文件", { count: files.length }), "download", files, async (item) => {
+    if (mode.value === "cloud") await cloud.save_one(item);
+    else if (!(downloads_via_cloud(item) && await download_via_cloud(item))) await bridge.download_project_file(room_id, item.path, from);
+    await new Promise((resolve) => setTimeout(resolve, BATCH_DOWNLOAD_GAP_MS));
+  });
+}
+
+/** Move the chosen entries: in a project by cutting them for "粘贴" in the folder to go to, in the cloud space by its dialog. */
+function move_chosen() {
+  const { files, folders } = chosen.value;
+  selected.value = new Set();
+  if (mode.value === "cloud") return open_cloud_move(files, folders);
+  take_many([...folders, ...files], "move");
+}
+
+/** Delete the chosen entries: a project's go to its recycle area; the cloud space follows its own rules. */
+async function delete_chosen(permanent = false) {
+  const { files, folders } = chosen.value;
+  selected.value = new Set();
+  if (mode.value === "cloud") return cloud.remove(files, folders, permanent || cloud.in_trash.value);
+  const entries = [...folders, ...files], from = root.value, folder = current_path.value;
+  const failed = await run_batch(t("删除 {count} 项", { count: entries.length }), "delete", entries,
+    async (entry) => { await bridge.manage_room_files(room_id, { root: from, op: "delete", path: entry.path }); });
+  if (!failed.length) bridge.notify("info", t("已移到回收区：{value1}", { value1: t('{count} 项', { count: entries.length }) }));
+  if (root.value === from && current_path.value === folder) read_directory(folder);
+}
+
+function restore_chosen() {
+  const { files, folders } = chosen.value;
+  selected.value = new Set();
+  cloud.restore(files.map((item) => item.id), folders.map((item) => item.id));
+}
 
 // An entry's menu (long press, right click) closes on a press anywhere outside it, which does nothing else, and only one
 // is open at a time. The menu's own open state is not reported by UContextMenu, and on a phone a press outside it was
@@ -672,59 +879,98 @@ function open_entry(entry) {
     @touchstart.passive="time_press" @touchend="time_press" @touchcancel="time_press">
     <header class="project-files-heading">
       <!-- A folder's name is in the path bar below; only the other sections say here what they are. -->
-      <div><h2>{{ t('项目文件') }}</h2><p v-if="mode !== 'folder'">{{ mode === 'roots' ? t('项目与草稿') : mode === 'cloud' ? t('云空间（本账号所有房间共用）') : t('回收区（保留 30 天）') }}</p></div>
+      <!-- The section's name is in the path bar below, so the heading is the same everywhere and nothing moves. -->
+      <div><h2>{{ t('项目文件') }}</h2></div>
       <div class="project-files-tools">
-        <!-- Adding files first, then how they are shown; refreshing (the list also refreshes itself) and the recycle
-             area, used rarely, sit under "更多操作" (user 2026-11-27, #13813). -->
-        <template v-if="mode === 'folder'">
-          <UButton v-if="clipboard" icon="i-lucide-clipboard-paste" color="neutral" variant="soft" size="sm" :label="t('粘贴')" :title="t('粘贴 {value1}', { value1: clipboard.name })" :disabled="busy" @click="paste" />
-          <UButton icon="i-lucide-upload" color="neutral" variant="ghost" size="sm" :aria-label="t('上传文件')" :title="t('上传文件（单个不超过 {limit} MiB）', { limit: view.attachment_limit_mib })" :disabled="busy" @click="file_input?.click()" />
-          <UButton icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="sm" :aria-label="t('新建文件夹')" :title="t('新建文件夹')" :disabled="busy" @click="start_naming('mkdir')" />
-          <input ref="file_input" type="file" multiple hidden @change="upload_files($event.target.files)" />
+        <!-- The same four icons in the same order on every tab and in every folder (user 2026-11-28, #15757): adding files,
+             a new folder, how they are shown, then "更多操作" (refreshing, the recycle area). One that does not apply
+             is greyed out in place, its wrapper saying why (a disabled button shows no tooltip of its own). -->
+        <UButton v-if="clipboard && mode === 'folder'" icon="i-lucide-clipboard-paste" color="neutral" variant="soft" size="sm" :label="t('粘贴')" :title="t('粘贴 {value1}', { value1: clipboard.name })" :disabled="busy" @click="paste" />
+        <span class="project-files-tool" :title="tool_blocks.upload || (mode === 'cloud' ? t('上传文件或文件夹（单个不超过 2 GiB）') : t('上传文件（单个不超过 {limit} MiB）', { limit: view.attachment_limit_mib }))">
+          <UDropdownMenu v-if="mode === 'cloud' && !tool_blocks.upload" :items="cloud_upload_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+            <UButton icon="i-lucide-upload" color="neutral" variant="ghost" size="sm" :aria-label="t('上传')" />
+          </UDropdownMenu>
+          <UButton v-else icon="i-lucide-upload" color="neutral" variant="ghost" size="sm" :aria-label="t('上传文件')" :disabled="Boolean(tool_blocks.upload) || busy" @click="file_input?.click()" />
+        </span>
+        <span class="project-files-tool" :title="tool_blocks.create || (mode === 'roots' ? t('新建项目') : t('新建文件夹'))">
+          <UButton icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="sm" :aria-label="mode === 'roots' ? t('新建项目') : t('新建文件夹')"
+            :disabled="Boolean(tool_blocks.create) || busy" @click="start_naming(mode === 'cloud' ? 'cloud-mkdir' : mode === 'roots' ? 'project' : 'mkdir')" />
+        </span>
+        <span class="project-files-tool" :title="tool_blocks.layout || (layout === 'icons' ? t('列表视图') : t('图标视图'))">
           <UButton :icon="layout === 'icons' ? 'i-lucide-list' : 'i-lucide-layout-grid'" color="neutral" variant="ghost" size="sm"
-            :aria-label="layout === 'icons' ? t('列表视图') : t('图标视图')" :title="layout === 'icons' ? t('列表视图') : t('图标视图')" @click="layout = layout === 'icons' ? 'list' : 'icons'" />
-        </template>
-        <UButton v-if="mode === 'roots' && roots?.can_create_project" icon="i-lucide-folder-plus" color="neutral" variant="ghost" size="sm" :label="t('新建项目')" :disabled="loading || busy" @click="start_naming('project')" />
+            :aria-label="layout === 'icons' ? t('列表视图') : t('图标视图')" :disabled="Boolean(tool_blocks.layout)" @click="layout = layout === 'icons' ? 'list' : 'icons'" />
+        </span>
+        <input ref="file_input" type="file" multiple hidden @change="upload_files($event.target.files)" />
+        <input ref="cloud_files_input" type="file" multiple hidden @change="cloud_pick_files($event.target.files)" />
+        <input ref="cloud_folder_input" type="file" multiple webkitdirectory hidden @change="cloud_pick_folder($event.target.files)" />
         <UDropdownMenu :items="more_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
           <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('更多操作')" :title="t('更多操作')" :loading="loading || busy" />
         </UDropdownMenu>
       </div>
     </header>
 
-    <div v-if="directories.length > 1 && mode === 'folder' && !account_root" class="project-roots" role="tablist" :aria-label="t('项目目录')">
-      <button v-for="(path, index) in directories" :key="path" type="button" role="tab" :aria-selected="index === root" @click="navigate(() => switch_root(index))">
+    <div v-if="show_tabs" class="project-roots" role="tablist" :aria-label="t('项目目录')">
+      <button v-for="(path, index) in directories" :key="path" type="button" role="tab" :aria-selected="mode === 'folder' && !account_root && index === root" @click="navigate(() => switch_root(index))">
         <UIcon :name="index ? 'i-lucide-folder' : 'i-lucide-folder-root'" />{{ folder_name(path) }}
+      </button>
+      <button v-if="cloud_visible" type="button" role="tab" :aria-selected="mode === 'cloud'" :title="t('本账号的云空间，所有房间共用')" @click="mode !== 'cloud' && navigate(() => show_cloud())">
+        <UIcon name="i-lucide-cloud" />{{ t('云空间') }}
       </button>
     </div>
 
-    <div v-if="asking" class="project-files-ask" role="alertdialog" :aria-label="t('文件已存在')">
-      <p>{{ t('“{value1}”已存在。', { value1: asking.name }) }}</p>
-      <div>
-        <UButton :label="t('替换并保留旧版')" color="primary" size="xs" @click="answer_conflict('replace')" />
-        <UButton :label="t('保留两份')" color="neutral" variant="outline" size="xs" @click="answer_conflict('keep_both')" />
-        <UButton :label="t('跳过')" color="neutral" variant="ghost" size="xs" @click="answer_conflict(null)" />
-        <label v-if="asking.many" class="project-files-ask-all"><input v-model="ask_all" type="checkbox" />{{ t('其余都按此处理') }}</label>
-      </div>
-    </div>
-
-    <div v-if="pending_land" class="project-files-land" role="status">
-      <UIcon name="i-lucide-folder-down" /><span>{{ mode === 'folder' ? t('把“{name}”放到当前文件夹？', { name: pending_land.file_name }) : t('打开要放入“{name}”的文件夹', { name: pending_land.file_name }) }}</span>
-      <UButton v-if="mode === 'folder'" :label="t('放到这里')" size="xs" :disabled="busy" @click="land_here" />
-      <UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="bridge.clear_pending_land()" />
-    </div>
+    <UModal :open="Boolean(asking)" :title="t('文件已存在')" :close="false" :dismissible="false">
+      <template #body>
+        <div v-if="asking" class="project-files-ask">
+          <p>{{ t('“{value1}”已存在。', { value1: asking.name }) }}</p>
+          <div>
+            <UButton :label="t('替换并保留旧版')" color="primary" size="xs" @click="answer_conflict('replace')" />
+            <UButton :label="t('保留两份')" color="neutral" variant="outline" size="xs" @click="answer_conflict('keep_both')" />
+            <UButton :label="t('跳过')" color="neutral" variant="ghost" size="xs" @click="answer_conflict(null)" />
+            <label v-if="asking.many" class="project-files-ask-all"><input v-model="ask_all" type="checkbox" />{{ t('其余都按此处理') }}</label>
+          </div>
+        </div>
+      </template>
+    </UModal>
 
     <TransferList />
 
-    <div ref="explorer" class="project-explorer" :aria-busy="loading || busy">
+    <div ref="explorer" class="project-explorer" :aria-busy="loading || busy" @dragover="cloud_drop" @drop="cloud_drop">
+      <!-- With entries chosen, their actions take the path bar's row at its height, so the list below does not move; the
+           actions keep fixed places and the ones that do not apply are greyed out with the reason. -->
+      <div v-if="selected.size" class="project-explorer-bar project-selection-bar" role="toolbar" :aria-label="t('所选项目的操作')">
+        <span class="project-selection-count">{{ t('已选 {count} 项', { count: selected.size }) }}</span>
+        <span class="project-files-tool" :title="blocks.first">
+          <UButton v-if="mode === 'cloud' && cloud.in_trash.value" icon="i-lucide-undo-2" :label="t('还原')" color="neutral" variant="ghost" size="sm" @click="restore_chosen" />
+          <UButton v-else icon="i-lucide-download" :label="t('下载')" color="neutral" variant="ghost" size="sm" :disabled="Boolean(blocks.first)" @click="download_chosen" />
+        </span>
+        <span class="project-files-tool" :title="blocks.move">
+          <UButton icon="i-lucide-folder-input" :label="t('移动')" color="neutral" variant="ghost" size="sm" :disabled="Boolean(blocks.move)" @click="move_chosen" />
+        </span>
+        <span class="project-files-tool" :title="blocks.last">
+          <UButton icon="i-lucide-trash-2" :label="mode === 'cloud' && cloud.in_trash.value ? t('彻底删除') : t('删除')" color="error" variant="ghost" size="sm" @click="delete_chosen()" />
+        </span>
+        <UButton icon="i-lucide-x" :label="t('退出选择')" color="neutral" variant="ghost" size="sm" @click="selected = new Set()" />
+      </div>
       <!-- Back and forward stay in place beside the path, which scrolls to its end on a narrow screen (user #13910). -->
-      <div class="project-explorer-bar">
+      <div v-else class="project-explorer-bar">
       <div class="project-explorer-steps">
         <UButton icon="i-lucide-arrow-left" color="neutral" variant="ghost" size="sm" :aria-label="t('返回上一个位置')" :title="t('返回上一个位置')"
           :disabled="!visited.length" @click="go_back" />
         <UButton icon="i-lucide-arrow-right" color="neutral" variant="ghost" size="sm" class="project-explorer-forward" :aria-label="t('前进')" :title="t('前进')"
           :disabled="!ahead.length" @click="go_forward" />
       </div>
-      <nav ref="path_nav" class="project-explorer-path" :aria-label="t('文件路径')">
+      <nav v-if="mode === 'cloud'" class="project-explorer-path" :aria-label="t('文件路径')">
+        <button type="button" :disabled="cloud.place.value === 'root' && !cloud.searching.value" :aria-current="cloud.place.value === 'root' ? 'location' : undefined" @click="navigate(() => show_cloud('root'))">{{ t('云空间') }}</button>
+        <template v-for="(part, index) in cloud.path.value" :key="part.id">
+          <UIcon name="i-lucide-chevron-right" class="project-crumb-separator" />
+          <button type="button" :disabled="index === cloud.path.value.length - 1" :aria-current="index === cloud.path.value.length - 1 ? 'location' : undefined" @click="navigate(() => show_cloud(part.id))">{{ part.name }}</button>
+        </template>
+      </nav>
+      <div v-if="mode === 'cloud'" class="project-cloud-side">
+        <span class="project-cloud-usage" :title="cloud.usage.value">{{ cloud.usage.value }}</span>
+        <input v-model="cloud.query.value" type="search" class="project-cloud-search" :placeholder="t('搜索云空间')" :aria-label="t('在整个云空间里按名称搜索')" @input="cloud_search">
+      </div>
+      <nav v-else ref="path_nav" class="project-explorer-path" :aria-label="t('文件路径')">
         <button type="button" :aria-current="mode === 'roots' ? 'location' : undefined" :disabled="mode === 'roots'" :title="t('所有项目与草稿')" @click="navigate(show_roots)">
           {{ t('项目') }}
         </button>
@@ -736,11 +982,7 @@ function open_entry(entry) {
             </button>
           </template>
         </template>
-        <template v-else-if="mode === 'trash'"><UIcon name="i-lucide-chevron-right" class="project-crumb-separator" /><button type="button" disabled aria-current="location">{{ t('回收区') }}</button></template>
-        <!-- The cloud space sits beside the projects, not inside them: one list for the whole account. -->
-        <button v-if="cloud_visible" type="button" class="project-cloud-tab" :aria-current="mode === 'cloud' ? 'location' : undefined" :disabled="mode === 'cloud'" :title="t('本账号的云空间')" @click="navigate(show_cloud)">
-          <UIcon name="i-lucide-cloud" />{{ t('云空间') }}
-        </button>
+        <template v-else-if="mode === 'trash'"><UIcon name="i-lucide-chevron-right" class="project-crumb-separator" /><button type="button" disabled aria-current="location" :title="t('回收区（保留 30 天）')">{{ t('回收区') }}</button></template>
       </nav>
       </div>
 
@@ -753,7 +995,7 @@ function open_entry(entry) {
       </form>
 
       <div v-if="mode !== 'folder' && loading && (mode === 'roots' ? !roots : !trash)" class="project-files-rows" role="status" :aria-label="t('正在读取…')">
-        <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
+        <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-check"></span><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
       </div>
       <p v-if="mode !== 'folder' && section_failure" class="project-files-empty">
         <span>{{ section_failure }}</span>
@@ -764,7 +1006,7 @@ function open_entry(entry) {
         <div class="project-files-rows">
           <template v-for="group in [{ key: 'projects', label: t('项目') }, { key: 'drafts', label: t('草稿') }]" :key="group.key">
             <p class="project-files-group">{{ group.label }}</p>
-            <div v-for="item in roots?.[group.key] || []" :key="item.id" class="project-file-row is-root">
+            <div v-for="item in roots?.[group.key] || []" :key="item.id" class="project-file-row is-root"><span class="project-file-check"></span>
               <button type="button" class="project-file-name" @click="navigate(() => open_account_root(item))">
                 <UIcon :name="group.key === 'projects' ? 'i-lucide-folder-kanban' : 'i-lucide-folder-pen'" class="project-file-icon is-folder" /><span>{{ item.name }}</span>
               </button>
@@ -780,13 +1022,87 @@ function open_entry(entry) {
         </div>
       </template>
 
+      <!-- The cloud space in the same columns, rows, tiles and "…" menus as a project folder; read-only places first. -->
       <template v-else-if="mode === 'cloud'">
-        <CloudDrive ref="cloud_drive" @land="land_from_cloud" />
+        <div v-if="layout === 'list'" class="project-files-columns"><span class="project-file-check"><input type="checkbox" :checked="all_chosen" :disabled="!choosable.length" :aria-label="t('全选')" @change="toggle_all_chosen"></span><span aria-hidden="true">{{ t('名称') }}</span><span aria-hidden="true">{{ t('大小') }}</span><span aria-hidden="true">{{ t('修改时间') }}</span></div>
+        <div v-if="layout === 'icons' && (cloud.folders.value.length || cloud.files.value.length)" class="project-files-tiles">
+          <div v-for="folder in cloud.folders.value" :key="`d:${folder.id}`" class="project-file-tile" :class="{ 'is-chosen': selected.has(cloud_key(folder, true)) }">
+            <input v-if="!folder.readonly" type="checkbox" class="project-tile-check" :checked="selected.has(cloud_key(folder, true))" :aria-label="t('选择 {name}', { name: folder.name })" @change="toggle_chosen(cloud_key(folder, true))">
+            <button type="button" :disabled="cloud.in_trash.value" :title="folder.name" @click="navigate(() => show_cloud(folder.id))">
+              <span class="project-cloud-tile-icon"><UIcon name="i-lucide-folder" class="project-file-icon is-folder" /></span>
+              <span class="project-file-tile-name">{{ folder.name }}<small v-if="folder.readonly" class="project-cloud-readonly">{{ t('只读') }}</small></span>
+            </button>
+            <span v-if="cloud_folder_menu(folder)[0].length" class="project-file-more project-file-tile-menu">
+              <UDropdownMenu :items="cloud_folder_menu(folder)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+                <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" :aria-label="t('{value1} 的操作', { value1: folder.name })" />
+              </UDropdownMenu>
+            </span>
+          </div>
+          <div v-for="file in cloud.files.value" :key="`f:${file.id}`" class="project-file-tile" :class="{ 'is-chosen': selected.has(cloud_key(file)) }">
+            <input type="checkbox" class="project-tile-check" :checked="selected.has(cloud_key(file))" :aria-label="t('选择 {name}', { name: file.file_name })" @change="toggle_chosen(cloud_key(file))">
+            <button type="button" :title="file.file_name" @click="open_cloud_file(file)">
+              <span class="project-cloud-tile-icon">
+                <img v-if="cloud.thumbnails[file.id]" :src="cloud.thumbnails[file.id]" alt="" loading="lazy">
+                <UIcon v-else :name="file_type(file.file_name)[1]" class="project-file-icon" />
+              </span>
+              <span class="project-file-tile-name">{{ file.file_name }}</span>
+            </button>
+            <span class="project-file-more project-file-tile-menu">
+              <UDropdownMenu :items="cloud_file_menu(file)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+                <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" :aria-label="t('{value1} 的操作', { value1: file.file_name })" />
+              </UDropdownMenu>
+            </span>
+          </div>
+        </div>
+        <div class="project-files-rows">
+          <template v-if="layout === 'list'">
+            <div v-for="folder in cloud.folders.value" :key="`d:${folder.id}`" class="project-file-row" :class="{ 'is-chosen': selected.has(cloud_key(folder, true)) }">
+              <span class="project-file-check"><input v-if="!folder.readonly" type="checkbox" :checked="selected.has(cloud_key(folder, true))" :aria-label="t('选择 {name}', { name: folder.name })" @change="toggle_chosen(cloud_key(folder, true))"></span>
+              <button type="button" class="project-file-name" :disabled="cloud.in_trash.value" :title="folder.name" @click="navigate(() => show_cloud(folder.id))">
+                <UIcon name="i-lucide-folder" class="project-file-icon is-folder" /><span>{{ folder.name }}</span><small v-if="folder.readonly" class="project-cloud-readonly">{{ t('只读') }}</small>
+              </button>
+              <span class="project-file-size"></span>
+              <span class="project-file-actions">
+                <time v-if="folder.trashed_at || folder.created_at" :datetime="folder.trashed_at || folder.created_at">{{ modified_time(folder.trashed_at || folder.created_at) }}</time>
+                <span v-if="cloud_folder_menu(folder)[0].length" class="project-file-more">
+                  <UDropdownMenu :items="cloud_folder_menu(folder)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+                    <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" :aria-label="t('{value1} 的操作', { value1: folder.name })" />
+                  </UDropdownMenu>
+                </span>
+              </span>
+            </div>
+            <div v-for="file in cloud.files.value" :key="`f:${file.id}`" class="project-file-row" :class="{ 'is-chosen': selected.has(cloud_key(file)) }">
+              <span class="project-file-check"><input type="checkbox" :checked="selected.has(cloud_key(file))" :aria-label="t('选择 {name}', { name: file.file_name })" @change="toggle_chosen(cloud_key(file))"></span>
+              <button type="button" class="project-file-name" :title="file.file_name" @click="open_cloud_file(file)">
+                <img v-if="cloud.thumbnails[file.id]" :src="cloud.thumbnails[file.id]" alt="" class="project-cloud-thumb" loading="lazy">
+                <UIcon v-else :name="file_type(file.file_name)[1]" class="project-file-icon" /><span>{{ file.file_name }}</span>
+              </button>
+              <span class="project-file-size">{{ file_size(file.size) }}</span>
+              <span class="project-file-actions">
+                <time :datetime="file.trashed_at || file.updated_at || file.created_at">{{ modified_time(file.trashed_at || file.updated_at || file.created_at) }}</time>
+                <span class="project-file-more">
+                  <UDropdownMenu :items="cloud_file_menu(file)" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
+                    <UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="xs" :aria-label="t('{value1} 的操作', { value1: file.file_name })" />
+                  </UDropdownMenu>
+                </span>
+              </span>
+            </div>
+          </template>
+          <div v-if="!cloud.listing.value && cloud.loading.value" role="status" :aria-label="t('正在读取云空间…')">
+            <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-check"></span><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
+          </div>
+          <p v-else-if="cloud.listing.value && !cloud.folders.value.length && !cloud.files.value.length" class="project-files-empty">
+            <UIcon :name="cloud.in_trash.value ? 'i-lucide-trash' : 'i-lucide-folder-open'" />{{ cloud.searching.value ? t('没有找到名称里有这些字的文件') : cloud.in_trash.value ? t('回收站是空的') : cloud.special.value ? t('这里没有文件') : t('此文件夹为空，可以上传文件或把文件、文件夹拖到这里') }}
+          </p>
+        </div>
+        <footer v-if="cloud.listing.value" class="project-files-footer">
+          <span>{{ t('{value1} 项', { value1: cloud.folders.value.length + cloud.files.value.length }) }}<template v-if="cloud.in_trash.value"> · {{ t('回收站里的文件保留 30 天，仍占用空间') }}</template></span>
+        </footer>
       </template>
 
       <template v-else-if="mode === 'trash'">
         <div class="project-files-rows">
-          <div v-for="item in trash || []" :key="item.id" class="project-file-row is-root">
+          <div v-for="item in trash || []" :key="item.id" class="project-file-row is-root"><span class="project-file-check"></span>
             <span class="project-file-name" :title="`${item.root_name}/${item.path}`"><UIcon :name="item.kind === 'directory' ? 'i-lucide-folder' : file_type(item.name)[1]" class="project-file-icon" /><span>{{ item.root_name }}/{{ item.path }}</span></span>
             <span class="project-file-size">{{ file_size(item.size) }}</span>
             <span class="project-file-actions">
@@ -799,11 +1115,12 @@ function open_entry(entry) {
       </template>
 
       <template v-else-if="mode === 'folder'">
-        <div v-if="layout === 'list'" class="project-files-columns" aria-hidden="true"><span>{{ t('名称') }}</span><span>{{ t('大小') }}</span><span>{{ t('修改时间') }}</span></div>
+        <div v-if="layout === 'list'" class="project-files-columns"><span class="project-file-check"><input type="checkbox" :checked="all_chosen" :disabled="!choosable.length" :aria-label="t('全选')" @change="toggle_all_chosen"></span><span aria-hidden="true">{{ t('名称') }}</span><span aria-hidden="true">{{ t('大小') }}</span><span aria-hidden="true">{{ t('修改时间') }}</span></div>
         <!-- Tiles change only with the listing; each loads its own thumbnail once it scrolls into view. -->
-        <div v-if="layout === 'icons' && listing?.entries.length" v-memo="[listing, directory, root, busy, menu_epoch]" class="project-files-tiles">
+        <div v-if="layout === 'icons' && listing?.entries.length" v-memo="[listing, directory, root, busy, menu_epoch, selected]" class="project-files-tiles">
           <UContextMenu v-for="entry in listing.entries" :key="`${entry.path}#${menu_epoch}`" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu project-file-menu' }">
-          <div class="project-file-tile" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable' }">
+          <div class="project-file-tile" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable', 'is-chosen': selected.has(project_key(entry)) }">
+            <input v-if="entry.kind !== 'unavailable'" type="checkbox" class="project-tile-check" :checked="selected.has(project_key(entry))" :aria-label="t('选择 {name}', { name: entry.name })" @change="toggle_chosen(project_key(entry))">
             <button type="button" :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? t('{value1}（无法读取或指向项目外）', { value1: entry.name }) : entry.name"
               @click="open_entry(entry)">
               <ProjectFileThumbnail :key="`${entry.size}:${entry.modified_at}`" :entry="entry" :root="root" :icon="tile_icon(entry)" />
@@ -818,10 +1135,11 @@ function open_entry(entry) {
           </UContextMenu>
         </div>
         <!-- Rows change only with the listing; the room's directories arrive as a new array on every view publish. -->
-        <div v-memo="[listing, loading, directory, root, busy, layout, menu_epoch]" class="project-files-rows">
+        <div v-memo="[listing, loading, directory, root, busy, layout, menu_epoch, selected]" class="project-files-rows">
           <template v-if="layout === 'list'">
           <UContextMenu v-for="entry in listing?.entries || []" :key="`${entry.path}#${menu_epoch}`" :disabled="entry.kind === 'unavailable' || busy" :items="entry_menu(entry)" :ui="{ content: 'channel-menu project-file-menu' }">
-          <div class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable' }">
+          <div class="project-file-row" :class="{ 'is-hidden': entry.name.startsWith('.'), 'is-unavailable': entry.kind === 'unavailable', 'is-chosen': selected.has(project_key(entry)) }">
+            <span class="project-file-check"><input v-if="entry.kind !== 'unavailable'" type="checkbox" :checked="selected.has(project_key(entry))" :aria-label="t('选择 {name}', { name: entry.name })" @change="toggle_chosen(project_key(entry))"></span>
             <button type="button" class="project-file-name" :disabled="entry.kind === 'unavailable'" :title="entry.kind === 'unavailable' ? t('{value1}（无法读取或指向项目外）', { value1: entry.name }) : entry.name"
               @click="open_entry(entry)">
               <UIcon :name="entry_icon(entry)[0]" class="project-file-icon" :class="entry_icon(entry)[1]" /><span>{{ entry.name }}</span>
@@ -839,7 +1157,7 @@ function open_entry(entry) {
           </UContextMenu>
           </template>
           <div v-if="!listing && loading" role="status" :aria-label="t('正在读取项目目录')">
-            <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
+            <div v-for="row in 6" :key="row" class="project-file-row" aria-hidden="true"><span class="project-file-check"></span><span class="project-file-name"><USkeleton class="h-4 w-4 shrink-0" /><USkeleton class="h-4 w-2/3" /></span><USkeleton class="h-3 w-12 justify-self-end" /><USkeleton class="h-3 w-24 project-file-date" /></div>
           </div>
           <p v-else-if="!listing" class="project-files-empty"><UButton :label="t('重新读取目录')" icon="i-lucide-refresh-cw" color="neutral" variant="ghost" @click="read_directory(current_path)" /></p>
           <p v-else-if="!listing.entries.length" class="project-files-empty"><UIcon name="i-lucide-folder-open" />{{ t('此文件夹为空') }}</p>
@@ -849,6 +1167,35 @@ function open_entry(entry) {
           <UButton v-if="listing.next_offset !== null" :label="t('加载更多')" color="neutral" variant="ghost" size="xs" :loading="loading" :disabled="loading" @click="read_directory(listing.path, true)" />
         </footer>
       </template>
+    </div>
+
+    <UModal :open="Boolean(cloud_sharing)" :title="cloud_sharing ? t('分享 {name}', { name: cloud_sharing.file_name }) : ''" @update:open="(open) => !open && (cloud_sharing = null)">
+      <template #body><CloudShares v-if="cloud_sharing" :file="cloud_sharing" :api="cloud.share_api" with-code @failed="(message) => bridge.notify('error', message)" /></template>
+    </UModal>
+    <UModal :open="Boolean(cloud_moving)" :title="t('移动到')" @update:open="(open) => !open && (cloud_moving = null)">
+      <template #body>
+        <div v-if="cloud_moving" class="project-cloud-move">
+          <nav class="project-explorer-path">
+            <button type="button" :disabled="!cloud_moving.at" @click="browse_cloud_move(null)">{{ t('云空间') }}</button>
+            <template v-for="part in cloud_moving.path" :key="part.id"><UIcon name="i-lucide-chevron-right" class="project-crumb-separator" /><button type="button" @click="browse_cloud_move(part.id)">{{ part.name }}</button></template>
+          </nav>
+          <p v-if="cloud_moving.loading" class="project-files-empty">{{ t('正在读取…') }}</p>
+          <button v-for="folder in cloud_moving.children" v-else :key="folder.id" type="button" class="project-file-name project-cloud-move-row" @click="browse_cloud_move(folder.id)">
+            <UIcon name="i-lucide-folder" class="project-file-icon is-folder" /><span>{{ folder.name }}</span>
+          </button>
+          <div class="project-cloud-move-foot">
+            <UButton :label="t('取消')" color="neutral" variant="ghost" size="sm" @click="cloud_moving = null" />
+            <UButton :label="t('移到这里')" size="sm" :disabled="cloud_moving.loading" @click="finish_cloud_move" />
+          </div>
+        </div>
+      </template>
+    </UModal>
+    <div v-if="pending_land" class="project-files-land-layer">
+      <div class="project-files-land" role="status">
+        <UIcon name="i-lucide-folder-down" /><span>{{ mode === 'folder' ? t('把“{name}”放到当前文件夹？', { name: pending_land.file_name }) : t('打开要放入“{name}”的文件夹', { name: pending_land.file_name }) }}</span>
+        <UButton v-if="mode === 'folder'" :label="t('放到这里')" size="xs" :disabled="busy" @click="land_here" />
+        <UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" @click="bridge.clear_pending_land()" />
+      </div>
     </div>
   </section>
 
@@ -866,16 +1213,34 @@ function open_entry(entry) {
 .project-roots button { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 4px 10px; border: 1px solid var(--ui-border); border-radius: 6px;
   color: var(--ui-text-muted); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 @media (hover: hover) { .project-roots button:hover { color: var(--ui-text-highlighted); } }
-.project-roots button[aria-selected="true"] { border-color: var(--ui-primary); color: var(--ui-text-highlighted); font-weight: 500; }
+/* Selected by color and border only: a bolder name would widen the tab and push the ones after it (#15798). */
+.project-roots button[aria-selected="true"] { border-color: var(--ui-primary); color: var(--ui-text-highlighted); }
 .project-roots button > span { flex-shrink: 0; width: 13px; height: 13px; }
-.project-files-ask { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; padding: 8px 12px;
-  border: 1px solid var(--ui-warning); border-radius: 8px; font-size: 13px; }
+.project-files-ask { display: grid; gap: 12px; font-size: 13px; }
 .project-files-ask p { margin: 0; overflow-wrap: anywhere; }
 .project-files-ask > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .project-files-ask-all { display: inline-flex; align-items: center; gap: 4px; color: var(--ui-text-muted); font-size: 12px; }
-/* The cloud space's entry at the far end of the path bar, apart from the projects' path. */
-.project-cloud-tab { display: inline-flex !important; flex-shrink: 0; gap: 4px; align-items: center; margin-left: auto; }
-.project-files-land { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--ui-border-muted); border-radius: 8px; font-size: 12px; }
+/* Each heading icon sits in a wrapper that carries its tooltip, also while the icon is greyed out. */
+.project-files-tool { display: inline-flex; }
+/* The cloud space in the same frame: at the path bar's end its search and the space used; read-only folders say so. */
+.project-cloud-side { display: flex; flex-shrink: 0; gap: 10px; align-items: center; padding-right: 10px; }
+.project-cloud-search { width: 180px; padding: 3px 8px; color: inherit; font: inherit; font-size: 12px; background: transparent; border: 1px solid var(--ui-border); border-radius: 6px; }
+.project-cloud-usage { width: 16ch; overflow: hidden; text-overflow: ellipsis; text-align: right; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.project-cloud-readonly { flex-shrink: 0; margin-left: 6px; padding: 0 6px; color: var(--ui-text-muted); font-size: 11px; border: 1px solid var(--ui-border); border-radius: 999px; }
+.project-cloud-thumb { width: 18px; height: 18px; flex-shrink: 0; object-fit: cover; border-radius: 3px; }
+.project-cloud-tile-icon { display: grid; place-items: center; width: 100%; aspect-ratio: 4 / 3; }
+.project-cloud-tile-icon img { width: 100%; height: 100%; object-fit: cover; border-radius: 6px; }
+.project-cloud-tile-icon .project-file-icon { width: 40px; height: 40px; }
+.project-cloud-move { display: flex; flex-direction: column; gap: 4px; }
+.project-cloud-move-row { padding: 6px; border-radius: 6px; }
+.project-cloud-move-row:hover { background: color-mix(in srgb, currentColor 6%, transparent); }
+.project-cloud-move-foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+@media (max-width: 700px) {
+  .project-cloud-search { width: 110px; }
+  .project-cloud-usage { display: none; }
+}
+.project-files-land-layer { position: sticky; z-index: 5; bottom: 12px; height: 0; }
+.project-files-land { position: absolute; right: 0; bottom: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; width: min(100%, 440px); padding: 8px 10px; border: 1px solid var(--ui-border-muted); border-radius: 8px; box-shadow: 0 4px 16px #0002; background: var(--ui-bg); font-size: 12px; }
 .project-files-land > span { flex: 1; min-width: 0; }
 .project-explorer { overflow: hidden; border: 1px solid var(--ui-border); border-radius: 10px; background: color-mix(in srgb, var(--ui-bg-elevated) 45%, transparent); }
 .project-explorer-bar { display: flex; align-items: center; border-bottom: 1px solid var(--ui-border); }
@@ -890,9 +1255,17 @@ function open_entry(entry) {
 .project-files-naming input { flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--ui-border-accented); border-radius: 6px; background: var(--ui-bg); font-size: 13px; }
 .project-files-group { margin: 8px 10px 2px; color: var(--ui-text-dimmed); font-size: 11px; letter-spacing: .02em; }
 
-.project-files-columns, .project-file-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px 168px; align-items: center; gap: 16px; padding: 0 14px; }
+.project-files-columns, .project-file-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) 84px 168px; align-items: center; gap: 16px; padding: 0 14px; }
 .project-files-columns { height: 30px; color: var(--ui-text-dimmed); font-size: 11px; letter-spacing: .02em; border-bottom: 1px solid var(--ui-border); }
-.project-files-columns > :nth-child(2), .project-file-size { text-align: right; }
+.project-files-columns > :nth-child(3), .project-file-size { text-align: right; }
+/* The choice column leads every row of a project folder and the cloud space; rows that cannot be chosen keep it empty. */
+.project-file-check { display: flex; align-items: center; justify-content: center; }
+.project-file-check input, .project-tile-check { width: 14px; height: 14px; margin: 0; accent-color: var(--ui-primary); cursor: pointer; }
+.project-file-row.is-chosen, .project-file-tile.is-chosen { background: color-mix(in srgb, var(--ui-primary) 10%, transparent); }
+.project-tile-check { position: absolute; top: 8px; left: 8px; z-index: 1; }
+/* Takes the place of the path bar, at its height, while anything is chosen. */
+.project-selection-bar { gap: 2px; min-height: 39px; padding: 0 8px 0 12px; }
+.project-selection-count { margin-right: auto; font-size: 13px; font-weight: 600; white-space: nowrap; }
 .project-files-rows { padding: 4px; }
 .project-file-row { width: 100%; height: var(--row-height); text-align: left; font-size: 13px; border-radius: 6px; padding-inline: 10px; }
 @media (hover: hover) { .project-file-row:hover { background: var(--ui-bg-accented); } }
@@ -931,7 +1304,8 @@ function open_entry(entry) {
   .project-explorer-path { min-height: 36px; padding: 4px 8px 4px 2px; font-size: 12px; }
   .project-explorer-steps { padding-left: 2px; }
   .project-explorer-path button { padding: 3px 4px; }
-  .project-files-columns, .project-file-row { grid-template-columns: minmax(0, 1fr) 64px auto; gap: 8px; }
+  .project-files-columns, .project-file-row { grid-template-columns: 16px minmax(0, 1fr) 64px auto; gap: 8px; }
+  .project-selection-bar { min-height: 37px; padding-left: 10px; }
   .project-files-columns > :last-child, .project-file-row time, .project-file-date { display: none; }
   /* Four to a row on a phone, the name right under its picture (user 2026-11-27, #15002: three loose tiles a screen). */
   .project-files-tiles { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 2px; padding: 4px; }

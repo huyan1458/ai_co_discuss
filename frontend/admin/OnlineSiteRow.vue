@@ -96,7 +96,7 @@ const close = (open) => { if (!open) dialog.value = ""; };
     <div class="panel-main">
       <div class="panel-title">{{ t('自建中转') }} <span class="panel-tag" :class="relay.tone">{{ relay.label }}</span></div>
       <span class="panel-sub"><template v-if="site">{{ site }} · </template>{{ usage }}</span>
-      <span v-if="relay.detail" class="panel-sub">{{ relay.detail }}</span>
+      <span class="panel-sub site-relay-detail" :title="relay.detail || undefined">{{ relay.detail }}</span>
     </div>
     <div class="panel-side">
       <template v-if="site">
@@ -166,6 +166,7 @@ const close = (open) => { if (!open) dialog.value = ""; };
 </template>
 
 <style scoped>
+.site-relay-detail { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; block-size: 2lh; }
 .site-form { display: flex; flex-direction: column; gap: 12px; }
 .site-code { height: 72px; padding: 10px 14px; resize: none; font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
 .site-made { font-size: 12px; letter-spacing: 0; }

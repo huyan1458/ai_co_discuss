@@ -683,6 +683,8 @@ def failure_class_of(connection, execution_id):
 
 QUOTA_WINDOW_KINDS = ("five_hour", "seven_day", "other")
 MAX_QUOTA_WINDOWS = 8
+QUOTA_HISTORY_SECONDS = 180 * 86400
+MAX_RESET_CREDITS = 10_000
 MAX_ACCOUNT_LENGTH = 120
 
 
@@ -708,7 +710,7 @@ def checked_quota_window(item):
 
 
 def checked_quota(value):
-    """An account quota as the runner's adapter layer normalized it: `{windows: [{kind, minutes, used, resets_at, group}], balance?}`."""
+    """Validate normalized account windows and optional balance, plan, and reset credits."""
     windows = value.get("windows") if isinstance(value, dict) else None
     if not isinstance(windows, list) or len(windows) > MAX_QUOTA_WINDOWS:
         raise ValueError(Text("quota.windows 须为不超过 {value1} 项的数组", value1=MAX_QUOTA_WINDOWS))
@@ -718,6 +720,13 @@ def checked_quota(value):
         if not isinstance(balance, dict) or not isinstance(balance.get("amount"), str) or not isinstance(balance.get("currency", ""), str):
             raise ValueError(Text("quota.balance 须带字符串 amount 与 currency"))
         result["balance"] = {"amount": balance["amount"][:32], "currency": balance.get("currency", "")[:8]}
+    plan = value.get("plan")
+    if isinstance(plan, str) and plan.strip():
+        result["plan"] = plan.strip()[:64]
+    credits = value.get("reset_credits")
+    available = credits.get("available") if isinstance(credits, dict) else None
+    if type(available) is int and 0 <= available <= MAX_RESET_CREDITS:
+        result["reset_credits"] = {"available": available}
     if not result["windows"] and "balance" not in result:
         raise ValueError(Text("quota 须带 windows 或 balance"))
     return result
@@ -725,9 +734,27 @@ def checked_quota(value):
 
 def save_account_quota(connection, account, quota, now):
     """Keep the latest quota one account showed; every room on this site reads the same row."""
+    quota = checked_quota(quota)
+    previous = connection.execute("SELECT quota FROM account_quotas WHERE account=?", (account,)).fetchone()
+    if previous:
+        saved = json.loads(previous["quota"])
+        for key in ("plan", "reset_credits"):
+            if key in saved:
+                quota.setdefault(key, saved[key])
     connection.execute("""INSERT INTO account_quotas (account,quota,updated_at) VALUES (?,?,?)
         ON CONFLICT(account) DO UPDATE SET quota=excluded.quota,updated_at=excluded.updated_at""",
-                       (account, json.dumps(checked_quota(quota), ensure_ascii=False), now))
+                       (account, json.dumps(quota, ensure_ascii=False), now))
+    connection.execute("DELETE FROM account_quota_history WHERE read_at < ?", (now - QUOTA_HISTORY_SECONDS,))
+    for window in quota["windows"]:
+        key = (account, window["group"], window["kind"], window["minutes"])
+        latest = connection.execute("""SELECT used, resets_at FROM account_quota_history
+            WHERE account=? AND group_name=? AND kind=? AND minutes=? ORDER BY id DESC LIMIT 1""", key).fetchone()
+        reading = (window["used"], window["resets_at"])
+        if latest is None or tuple(latest) != reading:
+            connection.execute("""INSERT INTO account_quota_history
+                (account,group_name,kind,minutes,used,resets_at,read_at,plan,reset_credits)
+                VALUES (?,?,?,?,?,?,?,?,?)""",
+                (*key, *reading, now, quota.get("plan"), quota.get("reset_credits", {}).get("available")))
 
 
 def report_quota(connection, room_id, token, payload):
@@ -798,6 +825,92 @@ def account_quotas(connection, accounts=None):
     rows = connection.execute("SELECT account,quota,updated_at FROM account_quotas").fetchall()
     return {row["account"]: {**json.loads(row["quota"]), "updated_at": row["updated_at"]}
             for row in rows if accounts is None or row["account"] in accounts}
+
+
+QUOTA_WEEK_SECONDS = 7 * 86400
+QUOTA_RESET_DROP = 0.05
+
+
+def quota_weeks(rows, now, limit):
+    """Summarize observed seven-day windows and retain usage before an early reset."""
+    weeks = []
+    previous = None
+    baseline = 0
+    for row in rows:
+        end = row["resets_at"]
+        used = row["used"]
+        if end <= row["read_at"]:
+            continue
+        early_reset = (previous is not None and row["read_at"] < previous["resets_at"]
+                       and previous["used"] - used >= QUOTA_RESET_DROP - 1e-9)
+        if not weeks or row["read_at"] >= weeks[-1]["end"]:
+            weeks.append({"start": end - QUOTA_WEEK_SECONDS, "end": end, "used": 0, "resets": 0,
+                          "capped": False, "complete": end <= now})
+            baseline = previous["used"] if previous and previous["resets_at"] == end and not early_reset else 0
+            carried = 0
+        elif early_reset or row["read_at"] >= previous["resets_at"]:
+            carried = weeks[-1]["used"]
+            baseline = 0
+        week = weeks[-1]
+        week["resets"] += int(early_reset)
+        week["used"] = round(carried + max(0, used - baseline), 8)
+        week["capped"] |= used >= 1
+        previous = row
+    return weeks[-limit:]
+
+
+def quota_five_hour(rows, since, now):
+    """Count each observed five-hour cap once and sum time spent capped in the reporting period."""
+    hits = wait_seconds = 0
+    capped = None
+    for row in rows:
+        if capped and (row["resets_at"] != capped["resets_at"] or capped["used"] - row["used"] >= QUOTA_RESET_DROP - 1e-9):
+            end = min(row["read_at"], capped["resets_at"])
+            wait_seconds += max(0, end - max(since, capped["read_at"]))
+            capped = None
+        if not capped and row["used"] >= 1 and row["resets_at"] > row["read_at"]:
+            capped = row
+            hits += int(row["read_at"] >= since)
+    if capped:
+        wait_seconds += max(0, min(now, capped["resets_at"]) - max(since, capped["read_at"]))
+    return {"hits": hits, "wait_seconds": wait_seconds}
+
+
+def quota_verdict(weeks, hits):
+    """Return the subscription recommendation and required additional weeks."""
+    complete = [week for week in weeks if week["complete"]][-4:]
+    if len(complete) < 3:
+        return "insufficient", 3 - len(complete)
+    if sum(week["capped"] for week in complete) >= 2 or any(week["resets"] for week in complete):
+        return "upgrade", 0
+    if not hits and all(week["used"] < 0.5 for week in complete):
+        return "downgrade", 0
+    return "fit", 0
+
+
+def quota_usage(connection, weeks, now):
+    """Read observed quota utilization grouped by account and model group."""
+    readings = {}
+    for row in connection.execute("""SELECT * FROM account_quota_history
+        WHERE kind IN ('seven_day', 'five_hour') AND read_at >= ? AND read_at <= ? ORDER BY read_at,id""",
+                                  (now - QUOTA_HISTORY_SECONDS, now)):
+        readings.setdefault((row["account"], row["group_name"]), {}).setdefault(row["kind"], []).append(row)
+    latest = account_quotas(connection)
+    for account, quota in latest.items():
+        for window in quota["windows"]:
+            readings.setdefault((account, window["group"]), {})
+    accounts = []
+    for (account, group), kinds in sorted(readings.items()):
+        recent = quota_weeks(kinds.get("seven_day", []), now, weeks)
+        since = recent[0]["start"] if recent else now - weeks * QUOTA_WEEK_SECONDS
+        five_hour = quota_five_hour(kinds.get("five_hour", []), since, now)
+        verdict, weeks_needed = quota_verdict(recent, five_hour["hits"])
+        quota = latest.get(account, {})
+        accounts.append({"account": account, "group": group, "label": f"{account} · {group}" if group else account,
+                         "plan": quota.get("plan", ""), "weeks": recent, "five_hour": five_hour,
+                         "reset_credits": quota.get("reset_credits", {}), "verdict": verdict,
+                         "weeks_needed": weeks_needed})
+    return {"generated_at": now, "accounts": accounts}
 
 
 def quota_held_until(connection, member_id):

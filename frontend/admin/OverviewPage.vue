@@ -118,17 +118,18 @@ watch(refreshed, () => check(true));
         </div>
       </div>
       <OnlineSiteRow />
-      <div v-if="runtime_needs_owner" class="panel-row">
+      <div v-if="state.hosting" class="panel-row runtime-row">
         <div class="panel-tile"><UIcon name="i-lucide-hard-drive-download" /></div>
         <div class="panel-main">
           <div class="panel-title">{{ t('程序副本') }} <span v-if="!runtime.app" class="panel-tag is-gray">{{ t('未安装') }}</span>
             <span v-else-if="runtime_stale" class="panel-tag is-amber">{{ t('v{value1}，落后于本机 v{value2}', { value1: runtime.app_version, value2: state.version }) }}</span>
             <span v-else-if="!runtime_ready" class="panel-tag is-amber">{{ t('缺少 {value1}', { value1: PARTS.filter(([key]) => !runtime[key]).map(([, label]) => label).join("、") }) }}</span>
-            <span v-else class="panel-tag is-amber">{{ t('{value1} 有新版本', { value1: runtime_outdated.join("、") }) }}</span></div>
+            <span v-else-if="runtime_outdated.length" class="panel-tag is-amber">{{ t('{value1} 有新版本', { value1: runtime_outdated.join("、") }) }}</span>
+            <span v-else class="panel-tag is-green">{{ t('已同步') }}</span></div>
           <span class="panel-sub">{{ t('托管账号从这份副本运行。管理面板启动和更新共议时会自动同步；没有同步上时在这里同步。') }}</span>
         </div>
         <div class="panel-side">
-          <button type="button" class="panel-button is-small is-primary" :disabled="installing" @click="install_runtime">
+          <button type="button" class="panel-button is-small is-primary" :disabled="installing || !runtime_needs_owner" :title="!runtime_needs_owner ? t('程序副本已同步') : undefined" @click="install_runtime">
             <UIcon :name="installing ? 'i-lucide-loader' : 'i-lucide-refresh-cw'" :class="{ 'animate-spin': installing }" />{{ runtime.app ? t('同步') : t('安装') }}</button>
         </div>
       </div>
@@ -138,12 +139,12 @@ watch(refreshed, () => check(true));
 
     <h3 class="panel-section-title"><UIcon name="i-lucide-settings" />{{ t('设置') }}</h3>
     <div class="panel-rows">
-      <div class="panel-row">
+      <div class="panel-row version-row">
         <div class="panel-tile"><UIcon name="i-lucide-package" /></div>
         <div class="panel-main">
           <div class="panel-title">{{ t('版本 v{value1}', { value1: update?.current || service.version || state.version }) }} <span v-if="update?.available" class="panel-tag is-blue"><UIcon name="i-lucide-sparkles" />{{ t('可更新到 v{value1}', { value1: update.latest }) }}</span>
             <span v-else-if="update?.latest" class="panel-tag is-green"><UIcon name="i-lucide-check" />{{ t('已是最新') }}</span></div>
-          <span class="panel-sub">{{ update?.error ? t('检查失败：{value1}', { value1: update.error }) : update?.available ? t('更新会重启本机服务，进行中的执行会中断，随后在原会话里续跑') : checking ? t('正在检查…') : t('自动检查 npm 上发布的版本，每小时最多一次') }}</span>
+          <span class="panel-sub version-note" :title="update?.error || undefined">{{ update?.error ? t('检查失败：{value1}', { value1: update.error }) : update?.available ? t('更新会重启本机服务，进行中的执行会中断，随后在原会话里续跑') : checking ? t('正在检查…') : t('自动检查 npm 上发布的版本，每小时最多一次') }}</span>
         </div>
         <div class="panel-side">
           <button v-if="!update?.available" type="button" class="panel-button is-plain is-small" :disabled="checking || Boolean(busy)" @click="check(true)">
@@ -197,6 +198,12 @@ watch(refreshed, () => check(true));
 </template>
 
 <style scoped>
+.runtime-row .panel-title, .version-row .panel-title { flex-wrap: nowrap; overflow: hidden; white-space: nowrap; }
+.runtime-row .panel-button, .version-row .panel-button { min-inline-size: 9rem; justify-content: center; white-space: nowrap; }
+.version-note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; block-size: 3lh; }
+@media (max-width: 560px) {
+  .runtime-row .panel-button, .version-row .panel-button { min-inline-size: 0; inline-size: 7.6rem; padding-inline: 5px; }
+}
 .update-steps { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; font-size: 14px; }
 .update-steps li { display: flex; align-items: flex-start; gap: 8px; overflow-wrap: anywhere; }
 .update-steps li > [class*="icon"] { width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; color: var(--panel-green); }

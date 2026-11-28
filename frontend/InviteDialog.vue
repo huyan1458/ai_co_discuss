@@ -336,6 +336,7 @@ async function refresh_after(invited_any) {
 <template>
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="inviting" :title="t('邀请成员')" :description="description" :ui="{ content: 'glass-panel studio-modal pb-invite-modal', body: 'dialog-body' }">
     <template #body>
+      <div class="pb-invite-content">
       <div v-if="loading" class="pb-invite-cards" role="status" :aria-label="t('正在读取工作流成员')"><USkeleton v-for="card in 2" :key="card" class="pb-invite-skeleton w-full" /></div>
       <div v-else-if="failure" class="pb-invite" role="status"><p>{{ failure }}</p><UButton :label="t('重试')" icon="i-lucide-refresh-cw" color="neutral" variant="soft" @click="choose_workflow(workflowId)" /></div>
       <div v-else-if="invited_any_seat" class="pb-invite" :aria-label="t('启动新成员')">
@@ -372,9 +373,8 @@ async function refresh_after(invited_any) {
         <p v-if="invited_manual.length" class="fine-print">{{ t("指令含该成员的凭证，只交给对应的会话；关闭后仍可在参与者列表中复制。") }}</p>
         <p v-if="invited_guest" class="fine-print">{{ t("{time} 前打开有效，只能用一次，绑定第一个打开的浏览器。对方进入后右栏显示在场卡，可随时断开。", { time: bridge.format_time(invited_guest.invite_expires_at) }) }}</p>
         <p v-if="invited_external.length || adding_seats.length" class="fine-print">{{ t("邀请链接只发给要邀请的人；关闭后仍可在输入框上方或成员菜单的“邀请详情”里复制。") }}</p>
-        <div class="pb-invite-footer"><UButton :label="t('完成')" class="channel-primary-button" @click="inviting = false" /></div>
       </div>
-      <form v-else class="pb-invite" :aria-label="t('邀请专家')" @submit.prevent="invite">
+      <form v-else id="pb-invite-form" class="pb-invite" :aria-label="t('邀请专家')" @submit.prevent="invite">
         <!-- A workflow invitation only confirms the workflow's own cards; the platform and preset rows belong to ordinary invitations. -->
         <template v-if="!invite_workflow">
           <PlatformConfigDialog v-model="configuring" />
@@ -394,11 +394,15 @@ async function refresh_after(invited_any) {
         <p v-else-if="submitting" class="pb-invite-empty">{{ t("正在加入成员…") }}</p>
         <p v-else-if="!invite_workflow && !external_drafts.length && !guest_card" class="pb-invite-empty">{{ t("选择一位或多位 AI（同一 AI 可重复添加），点卡片翻面设置软件、模型与项目权限。") }}</p>
         <p v-if="invite_picks.some((pick) => pick.mode === 'cli') && !view.launch.available || guest_card && !view.launch.available && !view.launch.remote" role="alert" class="fine-print">{{ t("邀请需要本机服务，请在运行 AI 的电脑打开本机网站。") }}</p>
-        <div class="pb-invite-footer">
-          <UButton :label="t('取消')" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />
-          <UButton type="submit" icon="i-lucide-user-plus" :label="invite_workflow ? t('确认成员并启用工作流') : invite_picks.length > 1 ? t('邀请 {count} 位', { count: invite_picks.length }) : t('邀请')" class="channel-primary-button" :disabled="invite_blocked" :loading="submitting" />
-        </div>
       </form>
+      </div>
+      <div class="pb-invite-footer">
+        <UButton v-if="invited_any_seat" :label="t('完成')" class="channel-primary-button" @click="inviting = false" />
+        <template v-else>
+          <UButton :label="t('取消')" color="neutral" variant="ghost" :disabled="submitting" @click="inviting = false" />
+          <UButton type="submit" form="pb-invite-form" icon="i-lucide-user-plus" :label="workflowId || invite_workflow ? t('确认成员并启用工作流') : invite_picks.length > 1 ? t('邀请 {count} 位', { count: invite_picks.length }) : t('邀请')" class="channel-primary-button" :title="loading ? t('正在读取工作流成员') : failure || undefined" :disabled="loading || Boolean(failure) || invite_blocked" :loading="submitting" />
+        </template>
+      </div>
     </template>
   </UModal>
 </template>
@@ -428,5 +432,6 @@ async function refresh_after(invited_any) {
 .pb-invite .fine-print { margin: -6px 0 0; }
 .pb-invite-reserved { visibility: hidden; }
 .pb-invite-empty { margin: 0; padding: 18px 12px; border: 1px dashed var(--ui-border); border-radius: 8px; text-align: center; color: var(--ui-text-muted); font-size: 12px; }
-.pb-invite-footer { display: flex; justify-content: flex-end; gap: 8px; }
+.pb-invite-content { height: min(50dvh, 32rem); overflow: auto; scrollbar-gutter: stable; }
+.pb-invite-footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; }
 </style>

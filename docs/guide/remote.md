@@ -81,6 +81,10 @@ npm 安装默认提供本机站点，没有随包可直接使用的公共线上�
 
 ## 要注意什么
 
+网络报告中的 `relay_unresponsive` 表示中转因连续两次业务超时关闭电脑连接；`relay_probe_timeout` 表示电脑没有收到中转应用层探测的回复，已开始重连。`relay_timeout_unreceived` 表示手机补报超时时，电脑在该连接的完整接收记录里没有找到该请求。
+
+网络报告中的 `machine_unregistered` 表示中转找不到当前电脑连接。来源 `heartbeat` 表示电脑已开始重连，`device_request` 表示手机遇到此状态后补报。
+
 网络不稳时，在电脑上运行 `codiscuss admin site network --since 24h --by 10m` 查看各时段的失败、断线及三段耗时；用带时区的 ISO 时间指定 `--since` 和 `--until` 可对比两个晚上的记录。
 
 手机端仅支持竖屏布局。平板可横屏或竖屏使用。

@@ -18,7 +18,7 @@ import { private_chat } from "./private-chat.js";
 import { PHASE_LABELS } from "./timeline-model.js";
 import BackgroundTaskList from "./BackgroundTaskList.vue";
 import ContextMeter from "./ContextMeter.vue";
-import { member_quota } from "./quota.js";
+import AccountQuotas from "./AccountQuotas.vue";
 import { background_events } from "./background-tasks.js";
 
 const { view, bridge, act } = inject("discussion");
@@ -649,20 +649,22 @@ function recall(event, step) {
     <div class="term-status" :class="{ 'is-running': running_item && !paused }" role="status">
       <span v-if="running_item && !paused" class="term-spin">{{ SPINNER[frame] }}</span><span>{{ status_line }}</span>
     </div>
-    <!-- The background panel takes the input box's place while open, as in Claude Code; the draft is kept. -->
-    <BackgroundTaskList v-if="background_open && background.length" :tasks="background" @close="toggle_background" />
-    <div v-else class="term-input">
+    <!-- The background panel floats above the composer without changing its position. -->
+    <div class="term-composer">
+    <div v-if="background_open && background.length" class="term-background-panel"><BackgroundTaskList :tasks="background" @close="toggle_background" /></div>
+    <div class="term-input">
       <span class="term-caret" aria-hidden="true">&gt;</span>
       <textarea ref="field" v-model="draft" rows="1" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :disabled="Boolean(unsupported) || sending" :placeholder="unsupported ? t('暂不可用') : paused ? t('补充后它接着做…') : running_item ? t('插话引导它…') : t('输入消息…')"
         :aria-label="t('私聊输入')" maxlength="4000" @keydown.enter.exact="on_enter" @keydown.esc.prevent="interrupt"
         @keydown.up="recall($event, -1)" @keydown.down="recall($event, 1)" />
       <!-- Touch keyboards have no Esc and often no Enter that sends, so both keys also have buttons. -->
-      <button v-if="can_interrupt" type="button" class="term-button is-stop" :aria-label="stop_label" :title="`${stop_label}（Esc）`" @click="interrupt"><span class="term-stop-square" /></button>
+      <button type="button" class="term-button is-stop" :aria-label="stop_label" :title="can_interrupt ? `${stop_label}（Esc）` : status_line" :disabled="!can_interrupt" @click="interrupt"><span class="term-stop-square" /></button>
       <button type="button" class="term-button" :aria-label="t('发送')" :title="ENTER_SENDS ? t('发送（Enter）') : t('发送')" :disabled="!draft.trim() || sending || Boolean(unsupported)" @click="send">↑</button>
     </div>
+    </div>
     <!-- Background work is only counted on the message page (#13168); here one line under the input opens it. -->
-    <div v-if="background.length" class="term-background-line">
-      <button type="button" class="term-background-toggle" :class="{ 'is-running': background.some((task) => task.state === 'running') }" :aria-expanded="background_open" @click="toggle_background">{{ background_line }}</button>
+    <div class="term-background-line">
+      <button v-if="background.length" type="button" class="term-background-toggle" :class="{ 'is-running': background.some((task) => task.state === 'running') }" :aria-expanded="background_open" @click="toggle_background">{{ background_line }}</button>
     </div>
     <div class="term-hint">
       <span v-if="error" class="term-warn">{{ error }}</span>
@@ -670,7 +672,8 @@ function recall(event, step) {
       <span v-else-if="ENTER_SENDS">{{ t('enter 发送 · shift+enter 换行 · ↑↓ 历史{value1}', { value1: can_interrupt ? ` · esc ${stop_label}` : "" }) }}</span>
       <!-- This member's context under the input, as dsh lays out its session stats; an account window joins it only when running low. -->
       <span v-if="member?.usage" class="term-stats">
-        <ContextMeter :usage="member.usage" :quota="member_quota(view, member.name)" mode="full" labelled />
+        <ContextMeter :usage="member.usage" mode="full" labelled />
+        <AccountQuotas v-if="member.usage.account" pill :account="member.usage.account" />
       </span>
     </div>
   </div>
@@ -794,18 +797,21 @@ function recall(event, step) {
   background: var(--term-strong); color: var(--term-bg); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
 .term-button:disabled { opacity: .2; cursor: default; }
 .term-button.is-stop { background: var(--term-band); color: var(--term-red); }
+.term-button.is-stop:disabled { color: var(--term-dim); }
 .term-stop-square { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
 /* Background work's event lines reuse the step lines; what it started lists under them like output, the run time is faint. */
 .term-bullet.is-stopped { color: var(--term-dim); }
 .term-event-after { color: var(--term-faint); }
 .term-tree .term-body { overflow: hidden; color: var(--term-dim); white-space: nowrap; text-overflow: ellipsis; }
 /* The line under the input box that opens the background panel, in the column with the hint under it. */
-.term-background-line { width: 100%; max-width: var(--term-width); margin-inline: auto; padding: 6px calc(var(--term-gutter) + 2px) 0; font-size: 12px; line-height: 18px; }
+.term-background-line { width: 100%; max-width: var(--term-width); min-height: 24px; margin-inline: auto; padding: 6px calc(var(--term-gutter) + 2px) 0; font-size: 12px; line-height: 18px; }
+.term-composer { position: relative; }
+.term-background-panel { position: absolute; z-index: 2; inset: auto var(--term-gutter) calc(100% + 8px); max-width: var(--term-width); max-height: 45dvh; margin-inline: auto; overflow: auto; background: var(--term-bg); border: 1px solid var(--term-border); border-radius: 12px; }
 .term-background-toggle { all: unset; cursor: pointer; color: var(--term-dim); }
 .term-background-toggle.is-running { color: var(--term-blue); }
 .term-background-toggle:is(:hover, :focus-visible) { text-decoration: underline; }
 .term-stats { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; font-family: system-ui, sans-serif; }
-.term-hint { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 4px calc(var(--term-gutter) + 2px) calc(10px + env(safe-area-inset-bottom)); color: var(--term-faint); font-size: 11.5px; line-height: 18px; }
+.term-hint { display: flex; align-items: start; gap: 8px; height: calc(50px + env(safe-area-inset-bottom)); overflow: auto; padding: 4px calc(var(--term-gutter) + 2px) calc(10px + env(safe-area-inset-bottom)); color: var(--term-faint); font-size: 11.5px; line-height: 18px; }
 .term-unread { position: absolute; right: max(20px, calc((100% - var(--term-width)) / 2 + 20px)); bottom: 10px; padding: 3px 12px; border: 1px solid var(--term-border); border-radius: 999px;
   background: var(--term-bg); color: var(--term-text); font: inherit; font-size: 12px; cursor: pointer; }
 .term button { touch-action: manipulation; }

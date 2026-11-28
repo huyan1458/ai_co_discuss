@@ -160,7 +160,15 @@ async function save_password() {
 <template>
   <section class="account-settings" aria-labelledby="account-heading">
     <h3 id="account-heading">{{ t('账号') }}</h3>
-    <p v-if="state_key === 'loading'" class="fine-print" role="status">{{ t('正在读取账号状态…') }}</p>
+    <div class="account-settings-body">
+    <div v-if="state_key === 'loading'" class="dialog-form" role="status" :aria-label="t('正在读取账号状态…')">
+      <USkeleton class="h-4 w-3/4" />
+      <div v-for="row in 3" :key="row" class="grid gap-2" aria-hidden="true">
+        <USkeleton class="h-4 w-24" />
+        <USkeleton class="h-9 w-full" />
+      </div>
+      <USkeleton class="ml-auto h-9 w-24" />
+    </div>
     <DeviceSettings v-else-if="state_key === 'unpaired'" />
 
     <form v-else-if="state_key === 'register' || state_key === 'login'" class="dialog-form account-form" :aria-label="state_key === 'register' ? t('设置管理员账号') : t('登录管理员账号')" @submit.prevent="submit_auth">
@@ -260,10 +268,12 @@ async function save_password() {
       </div>
       <p v-if="storage.configured" class="account-storage-note">{{ t("在文件页的“云空间”里管理文件。") }}</p>
     </section>
+    </div>
   </section>
 </template>
 
 <style scoped>
+.account-settings-body { display: grid; align-content: start; gap: 12px; block-size: min(23rem, 48dvh); overflow: auto; scrollbar-gutter: stable; }
 .account-devices { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .account-storage-note { margin: 0; color: var(--ui-text-muted); font-size: 12px; line-height: 1.5; }
 .account-devices h4, .account-form h4 { margin: 0; color: var(--ui-text-highlighted); font-size: 13px; font-weight: 600; }

@@ -218,7 +218,7 @@ test('a page pairs at the computer with a passkey, then runs operations on it en
     if (status >= 400) throw Object.assign(new Error(body.error), { status });
     return body;
   };
-  page_code = vm.runInNewContext([`const MODEL_CATALOG_TIMEOUT_MS = 35000;`, constants, source.slice(start, end), '({ relay_command, pair_this_device, device_credential })'].join('\n'),
+  page_code = vm.runInNewContext([`const MODEL_CATALOG_TIMEOUT_MS = 35000;`, constants, source.slice(source.indexOf("const offline_notices"), source.indexOf("/** Show a transient notice")), source.slice(start, end), '({ relay_command, pair_this_device, device_credential })'].join('\n'),
     { relay_files: new Map(), relay_file_queue: [], relay_cache_checks: new Map(), performance, crypto, TextEncoder, TextDecoder, btoa, atob, setTimeout, Uint8Array, JSON, Date, Object, Error, Promise, Math, request_json, relay_machine: machine,
       t: translate, server_text: (payload, fallback) => payload?.template ? translate(payload.template, payload.params) : fallback,
       fetch: (url, options) => worker.fetch(new Request(new URL(url, 'https://discussion.test'), options), f.env), URL,
@@ -275,7 +275,9 @@ test('a page pairs at the computer with a passkey, then runs operations on it en
 /** A Durable Object state with hibernatable sockets, enough to drive the relay without the Cloudflare runtime. */
 function relay_context() {
   const sockets = [];
+  const records = new Map();
   const ctx = {
+    storage: { kv: { get: key => records.get(key), put: (key, value) => records.set(key, value), delete: key => records.delete(key) } },
     acceptWebSocket: (socket, tags) => { socket.tags = tags; sockets.push(socket); },
     getWebSockets: tag => sockets.filter(socket => (!tag || socket.tags.includes(tag)) && socket.readyState !== 3),
   };
@@ -294,7 +296,7 @@ test('the machine relay hands requests to the computer, answers once, and never 
   const device = socket();
   relay.accept(device, 'device', { id: 'device-1', expires_at: Date.now() + 3600000 });
   assert.deepEqual(device.sent.pop(), { type: 'presence', online: false });
-  assert.deepEqual(await relay.relay({ id: 'request-1', envelope: { data: 'x' } }), { id: 'request-1', status: 'offline' });
+  assert.deepEqual(await relay.relay({ id: 'request-1', envelope: { data: 'x' } }), { id: 'request-1', status: 'offline', reason: 'machine_unregistered' });
 
   const machine = socket();
   relay.accept(machine, 'machine');
@@ -336,9 +338,92 @@ test('the machine relay hands requests to the computer, answers once, and never 
   assert.equal(relay.pending.size, 1, 'a requested longer wait is kept');
   t.mock.timers.tick(1000);
   assert.deepEqual(await long, { id: 'request-5', status: 'unknown' });
+  relay.accept(socket(), 'machine'); // The second timeout retired the previous connection.
   const bounded = relay.relay({ id: 'request-6', envelope: {}, wait: 3600000 });
   t.mock.timers.tick(80000);
   assert.deepEqual(await bounded, { id: 'request-6', status: 'unknown' }, 'no device holds the relay longer than the bound');
+});
+
+test('two consecutive unanswered requests retire only their computer and restore phone delivery after reconnect', async t => {
+  const { ctx, socket } = relay_context();
+  let relay = new MachineRelay(ctx);
+  const pc = socket(), phone = socket(), closes = [];
+  pc.close = (code, reason) => { closes.push([code, reason]); pc.readyState = 3; };
+  relay.accept(pc, 'machine', null, null, true);
+  const { connection } = pc.sent.pop();
+  relay.accept(phone, 'device', { id: 'phone', expires_at: Date.now() + 3600000 });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  async function timeout(id, closes = false) {
+    const result = relay.relay({ id, envelope: {} });
+    t.mock.timers.tick(9000);
+    assert.deepEqual(await result, { id, status: 'unknown', connection, ...(closes ? { relay_close: 'unresponsive' } : {}) });
+  }
+  await timeout('one');
+  const answered = relay.relay({ id: 'answered', envelope: {} });
+  relay.webSocketMessage(pc, JSON.stringify({ type: 'response', id: 'answered', envelope: {} }));
+  assert.equal((await answered).status, 'done');
+  await timeout('two');
+  assert.deepEqual(closes, []);
+  relay = new MachineRelay(ctx); // Hibernation between timeouts must not reset the streak.
+  relay.webSocketMessage(pc, JSON.stringify({ type: 'probe', seq: 7 }));
+  assert.deepEqual(pc.sent.pop(), { type: 'probe-reply', seq: 7 });
+  await timeout('three', true);
+  assert.deepEqual(closes, [[4003, 'unresponsive']]);
+  assert.deepEqual(phone.sent.pop(), { type: 'presence', online: false });
+  const replacement = socket();
+  relay.accept(replacement, 'machine');
+  relay.webSocketClose(pc);
+  const next = relay.relay({ id: 'next', envelope: {} });
+  assert.equal(replacement.sent.pop().id, 'next');
+  relay.webSocketMessage(replacement, JSON.stringify({ type: 'response', id: 'next', envelope: {} }));
+  assert.equal((await next).status, 'done');
+});
+
+test('a delayed close from a replaced computer cannot interrupt the registered computer after hibernation', async () => {
+  const { ctx, socket } = relay_context();
+  const old = socket(), current = socket(), device = socket(), closed = [];
+  old.send = frame => old.sent.push(frame);
+  old.close = (code, reason) => closed.push([code, reason]); // Remains listed and appears writable.
+  let relay = new MachineRelay(ctx);
+  relay.accept(old, 'machine');
+  relay.accept(current, 'machine');
+  relay.accept(device, 'device', { id: 'phone', expires_at: Date.now() + 60000 });
+  relay = new MachineRelay(ctx);
+  const waiting = relay.relay({ id: 'from-phone', envelope: {} });
+  assert.equal(current.sent.pop().id, 'from-phone');
+  const response = JSON.stringify({ type: 'response', id: 'from-phone', envelope: { from: 'old' } });
+  relay.webSocketMessage(old, response);
+  relay.webSocketMessage(old, 'ping');
+  assert.deepEqual(old.sent, ['machine_unregistered']);
+  assert.deepEqual(closed.at(-1), [4002, 'machine unregistered']);
+  relay.webSocketClose(old);
+  relay.webSocketError(old);
+  assert.equal(relay.pending.size, 1);
+  assert.deepEqual(device.sent, [{ type: 'presence', online: true }]);
+  current.send = frame => current.sent.push(frame);
+  relay.webSocketMessage(current, 'ping');
+  assert.equal(current.sent.pop(), 'pong');
+  relay.webSocketMessage(current, JSON.stringify({ type: 'response', id: 'from-phone', envelope: { from: 'current' } }));
+  assert.deepEqual((await waiting).response, { from: 'current' });
+});
+
+test('after hibernation only the durably registered connection can receive requests', () => {
+  const { ctx, socket } = relay_context();
+  const old = socket(), current = socket();
+  old.close = () => {};
+  let relay = new MachineRelay(ctx);
+  relay.accept(old, 'machine');
+  const original = old.deserializeAttachment();
+  relay.accept(current, 'machine');
+  for (const attachment of [null, { role: 'machine' }, original]) {
+    old.serializeAttachment(attachment);
+    relay = new MachineRelay(ctx);
+    assert.equal(relay.machine(), current);
+    relay.webSocketClose(old);
+    assert.equal(new MachineRelay(ctx).machine(), current);
+  }
+  current.serializeAttachment(null);
+  assert.equal(new MachineRelay(ctx).machine(), null);
 });
 
 test('the machine relay stops telling revoked or expired devices what changes', () => {
@@ -698,7 +783,17 @@ test('only a signed relay location moves both entrypoints, with APAC for legacy 
   clock += 31_000;
   await check('auto');
   const { read_relay_region } = await import('../backend/worker.mjs');
+  const unavailable = { ...f.env, DB: { prepare(sql) {
+    if (sql.includes("json_extract(body, '$.relay_region')")) throw new Error('unavailable');
+    return f.env.DB.prepare(sql);
+  } } };
+  const before = calls.length;
+  const upgrade = new Request(`https://site.test/api/machines/${link.id}/relay`, { headers: {
+    Upgrade: 'websocket', 'Sec-WebSocket-Protocol': 'codiscuss-relay, m.' + link.token } });
+  assert.equal((await worker.fetch(upgrade, unavailable)).status, 503);
+  assert.equal((await entry.fetch(new Request(`https://entry.test/_codiscuss/status?machine=${link.id}`), unavailable)).status, 503);
+  assert.equal(calls.length, before, 'neither entrypoint contacts another region when the lookup fails');
   await f.env.DB.prepare("UPDATE machine_devices SET body=json_set(body,'$.relay_region','unknown') WHERE machine_id=?").bind(link.id).run();
   assert.equal(await read_relay_region(f.env, link.id), 'apac');
-  assert.equal(await read_relay_region({ DB: { prepare() { throw new Error('unavailable'); } } }, link.id), 'apac');
+  await assert.rejects(read_relay_region({ DB: { prepare() { throw new Error('unavailable'); } } }, link.id), { status: 503 });
 });

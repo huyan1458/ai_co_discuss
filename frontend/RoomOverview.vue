@@ -27,7 +27,8 @@ import MemberNameEdit from "./MemberNameEdit.vue";
 import ExternalMemberDialog from "./ExternalMemberDialog.vue";
 import MemoBlock from "./memo-block.js";
 import { member_actions, project_files } from "./member-actions.js";
-import { account_quota, member_quota, member_usage, quota_rows } from "./quota.js";
+import { member_quota, member_usage, quota_state } from "./quota.js";
+import AccountQuotas from "./AccountQuotas.vue";
 import ContextMeter from "./ContextMeter.vue";
 import { access_label, access_options, MAX_EXPERT_PROMPT } from "../runner/expert_prompts.mjs";
 import { adapter_profile } from "../runner/adapters/profiles.mjs";
@@ -42,11 +43,6 @@ const CODEX_OPTIONS = [{ value: "codex_cli", label: "CLI" }, { value: "codex", l
 const ADAPTER_LABELS = { api: "API", codex: "App", antigravity: "App" };
 const room = computed(() => view.value.room);
 const free = computed(() => !["active", "paused"].includes(room.value.session?.status));
-// Each account the present members draw on, once, with every window and when it resets; a model API's key reference loses its prefix.
-const account_rows = computed(() => [...new Set((room.value.free?.members || []).filter((member) => member.status === "active")
-  .map((member) => member.usage?.account).filter(Boolean))]
-  .map((account) => ({ account, name: account.replace(/^api:/, ""), rows: quota_rows(account_quota(view.value, account)) }))
-  .filter((item) => item.rows.length));
 const saved = computed(() => view.value.launch.room_models?.room_id === room.value.id ? view.value.launch.room_models : null);
 // While an external user is in under the conservative mode, a member reads as temporarily read-only or paused, here as in the rail.
 const guest_state = use_guest_state(bridge, () => (view.value.access?.can_manage && !view.value.share ? room.value?.id : "")).state;
@@ -489,12 +485,12 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
 <template>
   <section class="merged-section room-overview" :aria-label="t('成员与设置')">
     <!-- The room's project directories lead the page: every member works in them. One row each, the main one locked once set. -->
-    <section v-if="saved?.registered" class="overview-section overview-project" :aria-label="t('项目目录')">
+    <section class="overview-section overview-project" :aria-label="t('项目目录')">
       <header class="overview-project-head"><UIcon name="i-lucide-folder-tree" /><h3>{{ t("项目目录") }}</h3>
-        <span class="overview-muted" :class="{ 'overview-phone-hidden': saved.project_directory }">{{ saved.project_directory
+        <span v-if="saved?.registered" class="overview-muted" :class="{ 'overview-phone-hidden': saved.project_directory }">{{ saved.project_directory
           ? t('成员按自己的项目权限读写其他目录，在别处工作的成员只读。改动从各成员下一次执行起生效，会话保留。')
           : t('主目录只能设置一次，之后不能更改。已在房间的成员保留原会话，按自己的项目权限读写它；之后邀请的成员在其中工作。') }}</span></header>
-      <div class="overview-directories">
+      <div v-if="saved?.registered" class="overview-directories">
         <template v-if="saved.project_directory">
           <!-- Shaped like the extra directory rows below, but locked: the lock replaces the project picker, copy replaces removal. -->
           <div class="overview-main-box" :title="t('主目录，设置后不能更改')"><span class="overview-main-prefix"><UIcon name="i-lucide-lock" /></span>
@@ -504,22 +500,22 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
         </template>
         <ProjectDirectoryField v-else-if="directories_editable" v-model="main_draft" compact :placeholder="t('为本房间设置项目目录的完整路径')" :disabled="saving_directories" />
         <span v-else class="overview-muted">{{ t("未指定") }}</span>
-        <div v-if="directories_changed" class="overview-directories-actions">
-          <UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" :disabled="saving_directories" @click="reset_directories" />
-          <UButton :label="t('保存')" size="xs" class="channel-primary-button" :loading="saving_directories" @click="save_directories" />
+        <div v-if="directories_editable" class="overview-directories-actions">
+          <UButton :label="t('取消')" color="neutral" variant="ghost" size="xs" :disabled="!directories_changed || saving_directories" @click="reset_directories" />
+          <UButton :label="t('保存')" size="xs" class="channel-primary-button" :disabled="!directories_changed" :loading="saving_directories" @click="save_directories" />
         </div>
+      </div>
+      <div v-else class="overview-directories">
+        <USkeleton v-if="view.launch.available && (!saved || saved.loading)" class="h-9 w-full" aria-hidden="true" />
+        <span v-else class="overview-muted">{{ t("未指定") }}</span>
       </div>
     </section>
     <div class="page-heading overview-heading"><div><h2>{{ t("成员与设置") }}</h2><p class="overview-phone-hidden">{{ t("成员的接入、权限与全部操作，以及房间的协作设置；右栏成员菜单是同样操作的快捷入口。") }}</p></div><UButton v-if="!room.archived" icon="i-lucide-plus" :label="t('邀请 AI 加入')" variant="outline" color="neutral" class="channel-surface-button" :disabled="!view.access?.can_manage" @click="inviting = true" /></div>
     <section class="overview-section">
       <h3 class="overview-phone-hidden">{{ t("成员") }}</h3>
       <!-- Usage limits belong to an account, not a member: each account the members draw on is listed once here (#15303). -->
-      <ul v-if="account_rows.length" class="overview-quotas" :aria-label="t('账号额度')">
-        <li v-for="item in account_rows" :key="item.account"><strong>{{ item.name }}</strong>
-          <span v-for="row in item.rows" :key="row.key"><i v-if="row.level" class="context-meter-dot" :class="`is-${row.level}`" aria-hidden="true" />{{ `${row.name} ${row.value}` }}<small v-if="row.note">{{ row.note }}</small></span>
-        </li>
-      </ul>
-      <p v-if="local_state" class="overview-local" role="status">{{ local_state.text }}<button v-if="local_state.retry" type="button" class="subtle-link" @click="bridge.reload_room_models()">{{ t("重试") }}</button></p>
+      <AccountQuotas />
+      <p class="overview-local" role="status">{{ local_state?.text }}<button v-if="local_state?.retry" type="button" class="subtle-link" @click="bridge.reload_room_models()">{{ t("重试") }}</button></p>
       <template v-for="group in member_groups" :key="group.away">
       <button v-if="group.away" type="button" class="away-divider" :aria-expanded="!folded_away_rooms.has(room.id)" @click="folded_away_rooms.has(room.id) ? folded_away_rooms.delete(room.id) : folded_away_rooms.add(room.id)">
         <UIcon :name="folded_away_rooms.has(room.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" />{{ t('已离开 {value1}', { value1: group.members.length }) }}
@@ -534,12 +530,13 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
               @pointercancel="finish_drag($event, true)" @lostpointercapture="finish_drag($event, true)"
               @keydown.up.prevent="commit_move(member.name, movable_names.indexOf(member.name) - 1)" @keydown.down.prevent="commit_move(member.name, movable_names.indexOf(member.name) + 1)"><UIcon name="i-lucide-grip-vertical" /></button>
             <UAvatar :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="md" class="channel-avatar" :class="bridge.identities[member.name]?.style" />
-            <div class="member-card-name"><strong><MemberNameEdit :name="member.name" :editable="Boolean(view.access?.can_manage)" /><ContextMeter :usage="member_usage(view, member.name)" :quota="member_quota(view, member.name)" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
+            <div class="member-card-name"><strong><MemberNameEdit :name="member.name" :editable="Boolean(view.access?.can_manage)" /></strong><small v-if="room.descriptions?.[member.name]" :title="room.descriptions[member.name]">{{ room.descriptions[member.name] }}</small></div>
             <!-- The host's crown sits where the other cards offer 设为主持人, so every card shows it in one place. -->
             <span v-if="member.role === 'host'" class="member-card-host is-current" :title="t('主持人')"><UIcon name="i-lucide-crown" /><span data-slot="label">{{ t('主持人') }}</span></span>
             <UButton v-else-if="actions(member).host" class="member-card-host" :title="actions(member).host.label" :icon="actions(member).host.icon" :label="actions(member).host.label" size="xs" variant="ghost" color="neutral" :disabled="actions(member).host.disabled" @click="actions(member).host.onSelect()" />
             <UBadge v-if="in_workflow(member.name)" color="neutral" variant="outline" size="sm" :title="t('来自工作流「{name}」，提示词按工作流卡片发送', { name: workflow.label })">{{ t("工作流") }}</UBadge>
             <UBadge :color="unregistered(member) || protection_of(member)?.paused ? 'warning' : member.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm" :title="protection_of(member)?.paused ? t('外部用户在场，保守保护下暂停接单：{reason}', { reason: protection_of(member).reason }) : undefined">{{ unregistered(member) ? (member.access === 'external' ? t('待签到') : t('待注册')) : member.status === 'active' && protection_of(member)?.paused ? t('暂停接单') : STATUS_LABELS[member.status] || member.status }}</UBadge>
+            <span v-if="quota_state(member_quota(view, member.name))" class="overview-muted member-card-quota">{{ quota_state(member_quota(view, member.name)) }}</span>
           </header>
           <dl class="member-card-facts">
             <template v-if="external_of(live(member))">
@@ -574,7 +571,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
               <span v-else class="overview-muted" :title="files(member).hint">{{ files(member).text }}</span>
             </dd></div>
             <!-- The context at the card's end, always; it moves up beside the name only once it runs low (#15303). -->
-            <div v-if="member_usage(view, member.name)?.context_used"><dt>{{ t("上下文") }}</dt><dd><ContextMeter :usage="member_usage(view, member.name)" :quota="member_quota(view, member.name)" mode="full" /></dd></div>
+            <div v-if="member_usage(view, member.name)?.context_used"><dt>{{ t("上下文") }}</dt><dd><ContextMeter :usage="member_usage(view, member.name)" mode="full" /></dd></div>
             </template>
             <div v-if="saved?.participants?.[member.name]?.outside_directory" class="overview-outside" :title="bridge.display_path(saved.participants[member.name].outside_directory)">
               <UIcon name="i-lucide-triangle-alert" /><span>{{ t('在 {path} 工作，房间目录{access}', { path: bridge.display_path(saved.participants[member.name].outside_directory), access: saved.participants[member.name].outside_enforced ? t('只读') : t('只读（仅任务要求，程序拦不住）') }) }}</span></div>
@@ -685,7 +682,7 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
         <form v-if="model_edit" class="overview-model-form" @submit.prevent="save_model">
           <label v-if="model_typed"><span>{{ t("模型 ID") }}</span><UInput v-model.trim="model_edit.draft.model" :aria-label="t('{name} 使用的模型 ID', { name: model_edit.name })" class="w-full" /></label>
           <label v-else><span>{{ t("模型") }}</span><div class="model-picker"><USelect :model-value="model_edit.draft.model || '__default__'" :items="model_state.items" :title="model_state.source" size="sm" :ui="{ base: 'model-select', content: 'model-select-menu' }" :aria-label="t('{name} 使用的模型', { name: model_edit.name })" class="w-full" @update:model-value="pick_model" /><ModelRefresh :loading="model_state.refreshing" :disabled="!view.launch.available" @refresh="bridge.load_launch_models(model_edit.name, true, model_edit.draft)" /></div></label>
-          <p v-if="!model_typed && (model_state.loading || model_state.error)" class="overview-muted">{{ model_state.loading ? t('正在读取软件模型列表…') : model_state.error }}</p>
+          <p v-if="!model_typed" class="overview-muted overview-model-status" role="status">{{ model_state.loading ? t('正在读取软件模型列表…') : model_state.error }}</p>
           <EffortSlider v-if="model_efforts" :caption="t('强度')" :items="model_efforts" :model-value="model_edit.draft.effort" :label="t('{name} 的思考强度', { name: model_edit.name })" @update:model-value="model_edit.draft.effort = $event" />
           <p v-else class="overview-muted">{{ model_state.effort_note }}</p>
           <div class="overview-model-actions">
@@ -777,11 +774,6 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
 .member-card-facts dd { display: flex; align-items: center; min-height: 28px; margin: 0; color: var(--ui-text); }
 .overview-model { gap: 2px; min-width: 0; }
 /* An external member's second row: how long it is lent takes the first two columns, its open directories the third. */
-.overview-quotas { display: grid; gap: 4px; margin: 0 0 12px; padding: 0; list-style: none; font-size: 12px; color: var(--ui-text-muted); }
-.overview-quotas li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
-.overview-quotas strong { min-width: 6em; color: var(--ui-text); font-weight: 500; }
-.overview-quotas span { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.overview-quotas small { margin-left: 4px; color: var(--ui-text-dimmed); font-size: 11px; }
 .member-card-facts > .overview-span { grid-column: 1 / span 2; }
 /* External members that ended, under the cards: one quiet line each, with a way to invite them back. */
 .overview-ended { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
@@ -831,7 +823,9 @@ watch(() => room.value.id, () => { if (view.value.launch.available) bridge.load_
 .overview-main-tag { flex-shrink: 0; align-self: center; margin-right: 8px; padding: 1px 6px; border-radius: 4px; background: var(--ui-bg-accented, rgba(255,255,255,.06)); color: var(--ui-text-muted); font-size: 11px; }
 .overview-directories-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .overview-address code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.overview-local { display: flex; gap: 10px; margin: 0 0 8px; color: var(--ui-text-muted); font-size: 12px; }
+.overview-local { display: flex; align-items: start; gap: 10px; height: 2.6em; overflow: auto; margin: 0 0 8px; color: var(--ui-text-muted); font-size: 12px; }
+.overview-project { height: 11rem; overflow: auto; scrollbar-gutter: stable; }
+.overview-model-status { height: 2.6em; overflow: auto; }
 .overview-result { margin: 8px 0 0; color: var(--ui-text-muted); font-size: 12px; }
 /* Same card as the members above, one setting per row. */
 .overview-settings { margin: 0; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg-elevated); font-size: 13px; }

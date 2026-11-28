@@ -171,7 +171,7 @@ onMounted(() => {
         <div class="panel-brand"><img class="panel-mark" :src="MARK" alt="" /><h1>{{ t('共议') }}</h1><small>{{ t('管理面板') }}<template v-if="version"> · v{{ version }}</template></small></div>
         <nav class="panel-tabs" :aria-label="t('管理页面')">
           <button v-for="item in pages" :key="item.key" type="button" class="panel-tab" :class="{ 'is-active': page === item.key }" :aria-current="page === item.key ? 'page' : undefined" @click="choose(item.key)">
-            <UIcon :name="item.icon" />{{ item.label }}<span v-if="item.key === 'storage' && storage_warning" class="panel-tab-dot" :title="storage_warning_reason || t('存储占用接近上限')" aria-hidden="true"></span>
+            <UIcon :name="item.icon" />{{ item.label }}<span v-if="item.key === 'storage'" class="panel-tab-dot" :class="{ invisible: !storage_warning }" :title="storage_warning_reason || t('存储占用接近上限')" aria-hidden="true"></span>
           </button>
         </nav>
         <div class="panel-tools">

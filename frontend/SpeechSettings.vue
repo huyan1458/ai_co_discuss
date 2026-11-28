@@ -289,7 +289,15 @@ onBeforeUnmount(stop_preview);
               </div>
             </div>
           </template>
-          <p v-else class="fine-print">{{ t('正在读取语音设置…') }}</p>
+          <div v-else role="status" :aria-label="t('正在读取语音设置…')">
+            <template v-for="group in [9, 3]" :key="group">
+              <USkeleton class="my-2 h-4 w-14" />
+              <div v-for="row in group" :key="row" class="speech-row speech-skeleton-row" aria-hidden="true">
+                <USkeleton class="h-3 w-10" />
+                <USkeleton class="h-8 w-full" />
+              </div>
+            </template>
+          </div>
         </div>
       </template>
     </UCollapsible>
@@ -308,7 +316,8 @@ onBeforeUnmount(stop_preview);
 @media (max-width: 480px) { .speech-header small { display: none; } }
 .speech-header span.is-ready { color: var(--ui-success); }
 .speech-header > :last-child { align-self: center; color: var(--ui-text-dimmed); }
-.speech-settings { display: grid; gap: 10px; padding-top: 10px; }
+.speech-settings { display: grid; align-content: start; gap: 10px; block-size: min(36rem, 60dvh); overflow: auto; scrollbar-gutter: stable; padding-top: 10px; }
+.speech-skeleton-row { margin-bottom: 10px; }
 .speech-settings h4 { margin: 4px 0 0; color: var(--ui-text-muted); font-size: 12px; font-weight: 600; }
 .speech-settings .fine-print { margin: 0; }
 .speech-settings a { color: var(--ui-primary); text-decoration: underline; }

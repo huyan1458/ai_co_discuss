@@ -7,7 +7,7 @@ import { t } from './i18n.js';
  * that moment (replayed from the log) and the other records about the same request, execution or message. It does not
  * look inside the AI software: the execution waterfall shows phases. Owner only.
  */
-import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { EVENT_GROUPS, EXECUTION_STATUS, PURPOSES, REQUEST_STATUS, event_entities, event_text, state_at } from "./timeline-model.js";
 
 const emit = defineEmits(["detail"]);
@@ -18,6 +18,8 @@ const members = ref({});
 const more = ref(false);
 const error = ref("");
 const selected = ref(null);
+const inspector_close = ref(null);
+let selected_trigger = null;
 const filter = ref("");
 const reading = ref(false);
 let read_version = 0;
@@ -91,37 +93,52 @@ const related = computed(() => {
   return keys.size ? rows.value.filter((row) => row.event.id !== selected.value && event_entities(row.event).some((key) => keys.has(key))) : [];
 });
 
-function select(row) { selected.value = selected.value === row.event.id ? null : row.event.id; }
+async function select(row, event) {
+  if (selected.value === row.event.id) return close_inspector();
+  selected_trigger = event.currentTarget;
+  selected.value = row.event.id;
+  await nextTick();
+  if (selected_trigger && getComputedStyle(selected_trigger).visibility === "hidden") inspector_close.value?.focus({ preventScroll: true });
+}
+async function close_inspector() {
+  selected.value = null;
+  await nextTick();
+  selected_trigger?.focus({ preventScroll: true });
+  selected_trigger = null;
+}
 /** Step the inspector to the previous or next shown row, so a moment can be replayed record by record. */
 function step(offset) {
   const position = rows.value.findIndex((row) => row.event.id === selected.value) + offset;
   if (rows.value[position]) selected.value = rows.value[position].event.id;
 }
 function on_key(event) {
-  if (!selected.value || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+  if (!selected.value || !["Escape", "ArrowUp", "ArrowDown"].includes(event.key)) return;
   event.preventDefault();
-  step(event.key === "ArrowUp" ? -1 : 1);
+  if (event.key === "Escape") {
+    event.stopPropagation();
+    close_inspector();
+  } else step(event.key === "ArrowUp" ? -1 : 1);
 }
 </script>
 
 <template>
   <section class="merged-section event-log" :aria-label="t('事件记录')" @keydown="on_key">
     <div class="page-heading"><div><h2>{{ t('事件记录') }}</h2><p>{{ t('网站如实记下的用户与程序的每次写入（含被拒的）及其引起的状态变化，按发生顺序排列；点一行看原始记录、此刻仍未结束的请求与执行，以及同一对象的其他记录。AI 可用') }} <code>codiscuss room events</code> {{ t('读取同一份记录。') }}</p></div></div>
-    <div v-if="reading && !events.length" class="grid gap-3 py-4" role="status" :aria-label="t('正在读取事件记录')"><USkeleton v-for="row in 8" :key="row" class="h-5" :class="row % 3 ? 'w-full' : 'w-2/3'" /></div>
-    <p v-else-if="error" role="alert" class="fine-print ev-error">{{ error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" :loading="reading" @click="load()" /></p>
-    <p v-else-if="!events.length" class="fine-print">{{ t('还没有事件记录。此功能上线前的历史没有记录。') }}</p>
-    <div v-if="events.length" class="ev" :class="{ 'has-inspector': selected_event }">
+    <div class="ev" :class="{ 'has-inspector': selected_event }">
       <div class="ev-ledger">
         <header class="ev-head">
           <span class="ev-title">{{ t('{value1} 条记录', { value1: rows.length }) }}</span>
-          <button v-if="filter" type="button" class="ev-chip is-active" @click="filter = ''">{{ t('只看 {value1} ✕', { value1: entity_label(filter) }) }}</button>
-          <UButton v-if="more && !filter" :label="t('加载更早')" color="neutral" variant="link" size="xs" :loading="reading" @click="load('older')" />
+          <span class="ev-filter-slot"><button v-if="filter" type="button" class="ev-chip is-active" @click="filter = ''">{{ t('只看 {value1} ✕', { value1: entity_label(filter) }) }}</button></span>
+          <UButton :label="t('加载更早')" color="neutral" variant="link" size="xs" :disabled="!more || Boolean(filter)" :loading="reading" @click="load('older')" />
         </header>
-        <ol class="ev-rows" role="listbox" :aria-label="t('事件')">
+        <div v-if="reading && !events.length" class="ev-rows" role="status" :aria-label="t('正在读取事件记录')"><div v-for="row in 8" :key="row" class="ev-row"><USkeleton class="h-5 w-14" /><USkeleton class="h-5 w-8" /><USkeleton class="h-5 w-2/3" /></div></div>
+        <p v-else-if="error" role="alert" class="fine-print ev-error">{{ error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" :loading="reading" @click="load()" /></p>
+        <p v-else-if="!events.length" class="fine-print ev-error">{{ t('还没有事件记录。此功能上线前的历史没有记录。') }}</p>
+        <ol v-if="events.length" class="ev-rows" role="listbox" :aria-label="t('事件')">
           <template v-for="row in rows" :key="row.event.id">
             <li v-if="row.boundary" class="ev-turn" aria-hidden="true">{{ t('第 {value1} 轮', { value1: row.turn }) }}</li>
             <li role="option" tabindex="0" class="ev-row" :class="[`is-${row.group}`, { 'is-rejected': row.event.kind === 'api.rejected', 'is-selected': row.event.id === selected, 'is-after': selected_event && row.index > selected_index }]"
-              :aria-selected="row.event.id === selected" @click="select(row)" @keydown.enter="select(row)">
+              :aria-selected="row.event.id === selected" @click="select(row, $event)" @keydown.enter="select(row, $event)">
               <time class="ev-time">{{ clock(row.event.at) }}</time>
               <span class="ev-tag">{{ row.label }}</span>
               <span class="ev-text">{{ row.text }}</span>
@@ -135,7 +152,7 @@ function on_key(event) {
           <span class="ev-actions">
             <button type="button" class="ev-icon" :aria-label="t('上一条')" @click="step(-1)">↑</button>
             <button type="button" class="ev-icon" :aria-label="t('下一条')" @click="step(1)">↓</button>
-            <button type="button" class="ev-icon" :aria-label="t('关闭')" @click="selected = null">✕</button>
+            <button ref="inspector_close" type="button" class="ev-icon" :aria-label="t('关闭')" @click="close_inspector">✕</button>
           </span>
         </header>
         <div v-keep-reading class="ev-body">
@@ -170,21 +187,25 @@ function on_key(event) {
 
 <style scoped>
 :global(html[data-theme^="channel"] .content-page > .event-log) { max-width: 1280px; }
-.ev {
+.ev, .ev-inspector {
   --ev-border: var(--ui-border-muted);
   --ev-muted: var(--ui-text-muted);
   --ev-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
-  display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 4px; font-size: 13px; line-height: 20px;
+  font-size: 13px; line-height: 20px;
 }
-.ev.has-inspector { grid-template-columns: minmax(0, 1fr) minmax(280px, 420px); }
+.event-log { container-type: inline-size; }
+.ev { display: grid; grid-template-columns: minmax(0, 1fr) clamp(280px, 36%, 420px); align-items: start; gap: 12px; margin-top: 4px; }
 .ev-ledger, .ev-inspector { min-width: 0; border: 1px solid var(--ev-border); border-radius: 10px; background: var(--ui-bg-muted); }
-.ev-inspector { position: sticky; top: 8px; align-self: start; max-height: calc(100vh - 160px); display: flex; flex-direction: column; }
+.ev-inspector { position: sticky; top: 8px; max-height: calc(100dvh - 180px); display: flex; flex-direction: column; box-shadow: var(--channel-shadow-float, 0 8px 24px #0004); }
 .ev-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; border-bottom: 1px solid var(--ev-border); }
+.ev-ledger > .ev-head { display: grid; grid-template-columns: 13ch minmax(0, 1fr) max-content; }
+.ev-ledger .ev-title, .ev-filter-slot > button { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .ev-title { font-weight: 600; font-family: var(--ev-mono); font-size: 12px; }
 .ev-actions { display: inline-flex; gap: 4px; margin-left: auto; }
 .ev-icon { width: 24px; height: 24px; border-radius: 6px; color: var(--ev-muted); }
 .ev-icon:hover { background: var(--channel-ghost-hover, color-mix(in oklab, var(--ui-text) 6%, transparent)); color: var(--ui-text); }
-.ev-error { color: var(--ui-error); }
+.ev-error { padding: 0 14px; }
+.ev-error[role="alert"] { color: var(--ui-error); }
 .ev-rows { margin: 0; padding: 4px 0; list-style: none; }
 .ev-turn { margin: 6px 14px 2px; padding-top: 6px; border-top: 2px solid var(--ev-border); color: var(--ev-muted); font-size: 11px; font-family: var(--ev-mono); }
 .ev-row { display: grid; grid-template-columns: 92px 40px minmax(0, 1fr); align-items: baseline; gap: 8px; padding: 2px 14px; cursor: pointer; }
@@ -216,5 +237,10 @@ function on_key(event) {
 .ev-link:hover { text-decoration: underline; }
 .ev-raw { margin: 0; padding: 8px; overflow: auto; border-radius: 6px; background: color-mix(in oklab, var(--ui-text) 5%, transparent); font-family: var(--ev-mono); font-size: 11px; line-height: 16px; }
 @media (hover: none) { .ev-row { padding-block: 6px; } }
-@media (max-width: 640px) { .ev-row { grid-template-columns: max-content 32px minmax(0, 1fr); } .ev.has-inspector { grid-template-columns: minmax(0, 1fr); } }
+@container (max-width: 660px) {
+  .ev { grid-template-columns: minmax(0, 1fr); }
+  .ev-ledger, .ev-inspector { grid-area: 1 / 1; }
+  .ev.has-inspector .ev-ledger { visibility: hidden; }
+  .ev-row { grid-template-columns: max-content 32px minmax(0, 1fr); }
+}
 </style>

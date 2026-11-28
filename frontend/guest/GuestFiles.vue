@@ -64,8 +64,8 @@ const size = (bytes) => bytes == null ? "" : bytes < 1024 ? `${bytes} B` : bytes
 </template>
 
 <style scoped>
-.guest-files { box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; height: 100%; padding: 12px max(16px, calc((100% - 960px) / 2)); overflow-y: auto; }
-.guest-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; color: var(--ui-text-muted); font-size: 13px; }
+.guest-files { box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; height: 100%; padding: 12px max(16px, calc((100% - 960px) / 2)); overflow-y: auto; scrollbar-gutter: stable both-edges; }
+.guest-crumbs { display: flex; flex: none; align-items: center; gap: 4px; color: var(--ui-text-muted); font-size: 13px; white-space: nowrap; overflow: auto hidden; scrollbar-width: none; }
 .guest-crumbs button { color: var(--ui-primary); }
 .guest-crumbs b { color: var(--ui-text-highlighted); }
 .guest-files ul { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }

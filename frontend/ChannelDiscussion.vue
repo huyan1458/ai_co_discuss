@@ -10,8 +10,7 @@ const execution_notes = module_ref(new Map());
 </script>
 
 <script setup>
-import { member_quota, member_usage } from "./quota.js";
-import ContextMeter from "./ContextMeter.vue";
+import AccountQuotas from "./AccountQuotas.vue";
 import TokenUsage from "./TokenUsage.vue";
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import ScheduleCard from "./ScheduleCard.vue";
@@ -1861,6 +1860,26 @@ async function pick_workflow(option, start, end) {
   await replace_draft(start, replace_end(end, " "), workflow_insertion(option.workflow));
   mention_context.value = null;
 }
+
+/**
+ * A workflow picked in the right column (`RoomWorkflowPicker.vue`, #15749) lands here as if picked with "/": the same
+ * checks and trust prompt, its `/id` appended to whatever is already typed.
+ */
+async function pick_listed_workflow({ detail }) {
+  if (!can_pick_workflow.value || !detail?.id) return;
+  const same = (item) => item.id === detail.id && (item.scope || "global") === (detail.scope || "global") && (item.scope !== "project" || item.project_id === detail.project_id);
+  mention_context.value = null;
+  const option = workflow_options.value.find((item) => same(item.workflow));
+  if (!option) return bridge.notify("warning", t('这个工作流已不在本房间可用的列表里'));
+  if (option.enabled) return bridge.notify("info", t('本房间已启用工作流「{value1}」', { value1: option.workflow.label }));
+  if (option.disabled) return bridge.notify("warning", option.disabled);
+  const typed = text.value || "";
+  if (option.workflow.needs_trust) { slash_trust.value = { workflow: option.workflow, start: typed.length, end: typed.length }; return; }
+  const insertion = workflow_insertion(option.workflow);
+  await replace_draft(typed.length, typed.length, `${typed && !/\s$/.test(typed) ? " " : ""}${insertion}${/\s$/.test(insertion) ? "" : " "}`);
+}
+onMounted(() => document.addEventListener("discuss:pick-workflow", pick_listed_workflow));
+onBeforeUnmount(() => document.removeEventListener("discuss:pick-workflow", pick_listed_workflow));
 
 /** Write the mode's command in place of the typed "/…"; one that needs text after it keeps the caret there. */
 async function pick_mode(option, start, end) {
@@ -3767,31 +3786,45 @@ onBeforeUnmount(() => editor_observer.disconnect());
 // a taller or shorter composer (lines, files, notes cleared on send) keeps the latest card in view while the page follows
 // the end. Written straight to the element inside the observer, which runs after layout and before paint: no Vue
 // re-render of the room, and padding and scroll change in the same frame, so sending does not flash.
-const composer_dock = ref(null);
+const composer_dock = ref(null), composer_float = ref(null);
 // The room kept below the last card goes by whole steps: a composer a pixel or two taller or shorter (font rounding, a
 // hint line, the browser's toolbars on a phone) changes nothing, where an exact copy moved the cards with every pixel.
 const COMPOSER_ROOM_STEP = 24;
-let composer_height = -1;
+let composer_height = -1, composer_overlay_height = 0;
+
+function follow_composer_resize() {
+  if (!follow_tail.value || !transcript.value) return;
+  if (reader_busy()) { follow_pending = true; arm_settle(); }
+  else write_scroll(transcript.value, follow_destination(transcript.value));
+}
+
 const dock_observer = new ResizeObserver(([entry]) => {
-  // The question card floats: the dock stays see-through down to the card's lower edge and turns solid only below it.
-  const card = entry.target.querySelector(".question-card");
-  const float = card ? Math.ceil(card.getBoundingClientRect().bottom - entry.target.getBoundingClientRect().top) : 0;
-  entry.target.style.setProperty("--channel-float-height", `${float}px`);
   const height = Math.ceil(entry.target.offsetHeight / COMPOSER_ROOM_STEP) * COMPOSER_ROOM_STEP;
   if (height === composer_height) return;
   composer_height = height;
   entry.target.parentElement?.style.setProperty("--channel-composer-height", `${height}px`);
-  if (!follow_tail.value || !transcript.value) return;
-  if (reader_busy()) { follow_pending = true; arm_settle(); }
-  else write_scroll(transcript.value, follow_destination(transcript.value));
+  follow_composer_resize();
 });
 onMounted(() => composer_dock.value && dock_observer.observe(composer_dock.value));
+
+function update_composer_overlay_height(height) {
+  if (height === composer_overlay_height) return;
+  composer_overlay_height = height;
+  conversation.value?.style.setProperty("--channel-composer-overlay-height", `${height}px`);
+  follow_composer_resize();
+}
+
+const float_observer = new ResizeObserver(([entry]) => update_composer_overlay_height(entry.target.offsetHeight));
+watch(composer_float, (element, previous) => {
+  if (previous) float_observer.unobserve(previous);
+  if (element) float_observer.observe(element);
+  else update_composer_overlay_height(0);
+});
 /** On a phone the comment sheet is at least as tall as the composer, so it covers it whole (two input boxes never show at once). */
 function docked_sheet_style() {
   const dock = composer_dock.value;
   if (!dock) return {};
-  const float = parseFloat(dock.style.getPropertyValue("--channel-float-height")) || 0;
-  return { minHeight: `${dock.offsetHeight - float}px` };
+  return { minHeight: `${dock.offsetHeight}px` };
 }
 // Cards that fill in after the messages (run reports, scheduler cards, process notes, a card measured once it nears the
 // screen) make the transcript taller without changing the messages, so a room just opened ended short of its end
@@ -3920,7 +3953,7 @@ function record_annotation(event) {
     entry: form.classList.contains("is-inline") ? "list" : form.classList.contains("excerpt-edit") ? "mark" : "selection",
     docked: form.classList.contains("is-docked"), width, height });
 }
-onBeforeUnmount(() => dock_observer.disconnect());
+onBeforeUnmount(() => { dock_observer.disconnect(); float_observer.disconnect(); });
 onBeforeUnmount(stop_scrub);
 
 const COPY_FEEDBACK_MS = 2000;
@@ -4296,7 +4329,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <div v-if="room_drop" class="channel-room-drop" aria-hidden="true"><span><UIcon name="i-lucide-hash" />{{ t('松开以引用房间「{title}」', { title: room_drop.title }) }}</span></div>
     <div v-else-if="member_drop && member_dragged" class="channel-room-drop" aria-hidden="true"><span><UIcon name="i-lucide-user" />{{ t('松开以引用成员「{name}」', { name: member_dragged.name }) }}</span></div>
   <ExternalMemberDialog v-model:open="pending_seat_open" :member="pending_seat" />
-    <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span>{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }} · {{ view.messages_loading ? t('正在筛选…') : t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
+    <div v-if="view.query || view.source_filter" class="channel-filter-summary"><span class="channel-filter-description">{{ [view.query && `“${view.query}”`, [view.host_only && t('主持人'), ...view.authors.map((name) => bridge.display_name(name)), view.mention_only && `@${bridge.display_name('用户')}`, view.card_kinds.length && t('{value1} 类卡片', { value1: view.card_kinds.length })].filter(Boolean).join('、')].filter(Boolean).join(' · ') }}</span><span class="channel-filter-count" role="status">
+      <span :class="{ invisible: !view.messages_loading }" :aria-hidden="!view.messages_loading">{{ t('正在筛选…') }}</span>
+      <span :class="{ invisible: view.messages_loading }" :aria-hidden="view.messages_loading">{{ t('{value1} 条结果', { value1: view.source_filter ? transcript_messages.length : view.total }) }}</span></span><UButton :label="t('清除筛选')" size="xs" variant="link" color="neutral" @click="search = ''; act('filter', { query: '', mention: false, host: false, authors: [], kinds: [] })" /></div>
     <nav v-if="navigation_sections.length || navigation_working.length" ref="message_map" class="channel-message-map" :style="{ '--nav-entry-height': `${NAV_ENTRY_HEIGHT}px` }" :aria-label="t('发言快速导航')" @scroll.passive="track_navigation_scroll" @wheel.stop.passive="browse_navigation" @pointerleave="close_preview" @focusout="close_preview" @keydown.esc.stop="close_preview" @contextmenu="navigation_context_menu" @pointerdown="start_scrub" @pointermove="move_scrub" @pointerup="end_scrub" @pointercancel="end_scrub">
       <div class="channel-map-track">
         <div v-for="section in nav_windows" :key="section.top" class="channel-map-round" :style="{ '--round-message-count': section.count }">
@@ -4454,7 +4489,6 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <div class="channel-message-meta">
                 <div class="channel-message-author"><strong>{{ bridge.display_name(message.author) }}</strong><UBadge v-for="badge in message.marks?.badges || []" :key="badge.key" size="xs" color="neutral" variant="soft" class="channel-source channel-line-badge" :title="badge.title">{{ badge.label }}</UBadge><UTooltip v-if="message.background" :text="t('后台进行：主持人没有等它，接着在做别的')"><UIcon name="i-lucide-split" class="channel-working-background" role="img" :aria-label="t('后台进行：主持人没有等它')" /></UTooltip></div>
                 <span v-if="message.model || message.effort" class="channel-message-provenance channel-message-model" :title="[message.model, message.effort].filter(Boolean).join(' · ')"><bdi v-if="message.model" class="channel-model-id">{{ message.model }}</bdi><span v-if="message.effort" class="channel-model-effort">{{ message.model ? ` · ${message.effort}` : message.effort }}</span></span>
-                <ContextMeter :usage="member_usage(view, message.author)" :quota="member_quota(view, message.author)" />
               </div>
               <div class="channel-message-provenance channel-message-facts"><span v-if="message.replaced && !message.attempt" :title="replaced_title(message.replaced)">{{ t('重试') }}</span><time v-if="message.created_at" :title="new Date(message.created_at * 1000).toLocaleString(locale)">{{ bridge.format_time(message.created_at * 1000) }}</time><LiveClock v-slot="{ now }"><span class="channel-message-elapsed">{{ working_elapsed(message, now) }}</span></LiveClock></div>
             </div>
@@ -4633,9 +4667,9 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
               <ExecutionDenials v-if="report.denials?.length" :denials="report.denials" :allowable="allowable" :folded="completed"
                 :busy="card.allowing === report.id" :error="card.allow_errors?.[report.id]" @allow="allow_and_resend(report)" />
             </div>
-            <!-- This turn's tokens at the card's bottom right, with the cache hit rate (#15466, #15675); the breakdown opens from it. -->
+            <!-- This turn's tokens at the card's bottom right (#15675); the cache hit rate and the breakdown open from it (#15780). -->
             <div v-if="card.usage" class="channel-message-footer">
-              <TokenUsage v-if="card.usage" :usage="JSON.parse(card.usage)" :title="t('本轮用量')" />
+              <TokenUsage v-if="card.usage" :usage="JSON.parse(card.usage)" :title="t('本轮用量')" compact />
             </div>
             <DispatchFeedback v-if="card.rate_dispatch" :message="message" />
             <div v-if="card.recommendation" class="channel-recommendation" :class="`is-${card.recommendation.status}`" :aria-label="t('智能调度推荐')" aria-live="polite">
@@ -4749,14 +4783,16 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
     <!-- Back from the background: the opening load covers the old cards until the room is read again (state.resuming). -->
     <div v-if="view.resuming" class="channel-resume-loading" role="status" :aria-label="t('正在读取消息')"><div class="channel-message-group channel-loading-skeleton grid gap-6 py-6"><div v-for="row in 3" :key="row" class="grid gap-3"><USkeleton class="h-5 w-28" /><USkeleton class="h-4 w-full" /><USkeleton class="h-4 w-2/3" /></div></div></div>
     <!-- The opening load (state.resuming) covers the cards, so nothing to jump to or quote shows over it. -->
-    <div v-if="!view.resuming && ((transcript_messages.length && (!follow_tail || send_clipped)) || listen_here?.touch || reader.state.message_id || peek_origin)" class="channel-latest-dock">
+    <div v-if="!view.resuming && (listen_here?.touch || reader.state.message_id || peek_origin)" class="channel-latest-dock">
       <button v-if="listen_here?.touch" type="button" class="channel-listen-pill" @mousedown.prevent @click="start_quote"><UIcon name="i-lucide-message-square-quote" />{{ t('添加到对话') }}</button>
       <button v-if="listen_here?.touch && listen_here.speech" type="button" class="channel-listen-pill" :aria-label="t('从选中处开始朗读')" @mousedown.prevent @click="listen_from_selection"><UIcon name="i-lucide-headphones" />{{ t('听当前') }}</button>
       <span v-if="reader.state.message_id && reader.state.loading" class="channel-listen-pill" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ t('加载中') }}</span>
       <button v-else-if="reader.state.message_id" type="button" class="channel-listen-pill" :class="{ 'is-on': reader.state.following }" :aria-pressed="reader.state.following" :title="reader.state.following ? t('手动滚动即取消跟随') : t('页面跟随朗读位置滚动')" @click="reader.state.following ? (reader.state.following = false) : reader.follow()"><UIcon name="i-lucide-locate-fixed" />{{ reader.state.following ? t('跟随中') : t('跟随') }}</button>
       <button v-if="reader.state.reading" type="button" class="channel-listen-pill" :aria-label="t('停止朗读')" @click="reader.stop()"><UIcon name="i-lucide-square" />{{ t('停止') }}</button>
       <button v-if="peek_origin" type="button" class="channel-listen-pill" @click="return_from_peek"><UIcon name="i-lucide-undo-2" />{{ t('返回原位置') }}</button>
-      <UButton v-if="transcript_messages.length && (!follow_tail || send_clipped)" icon="i-lucide-arrow-down" color="neutral" variant="outline" :aria-label="t('回到最新消息')" class="channel-latest-button" @click="return_to_latest" />
+    </div>
+    <div v-if="!view.resuming && transcript_messages.length" class="channel-latest-anchor">
+      <UButton icon="i-lucide-arrow-down" color="neutral" variant="outline" :aria-label="t('回到最新消息')" :title="follow_tail && !send_clipped ? t('已在最新消息') : t('回到最新消息')" :disabled="follow_tail && !send_clipped" class="channel-latest-button" @click="return_to_latest" />
     </div>
     <div ref="composer_dock" class="channel-composer-dock"><div v-if="view.share || view.destroying.includes(view.room?.id)" class="channel-composer-column channel-share-composer">
       <UChatPrompt model-value="" disabled :autofocus="false" :rows="1" :placeholder="view.share ? t('这是只读分享，不能在这里发消息') : t('房间正在销毁，不能再发消息')" :aria-label="t('留言正文')" variant="outline" color="neutral" class="channel-composer" :ui="{ base: 'channel-editor', footer: 'channel-composer-footer' }">
@@ -4814,9 +4850,16 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           </div>
         </template>
       </UPopover>
-      <WeixinFailureNotice :room="room" />
-      <QuestionCard v-if="room.free?.questions?.length" :questions="room.free.questions" />
-      <QueuedMessages v-if="room.free?.queued_messages" :queue="room.free.queued_messages" :room-id="room.id" />
+      <div ref="composer_float" class="channel-composer-float">
+        <WeixinFailureNotice :room="room" />
+        <QuestionCard v-if="room.free?.questions?.length" :questions="room.free.questions" />
+        <QueuedMessages v-if="room.free?.queued_messages" :queue="room.free.queued_messages" :room-id="room.id" />
+        <!-- Phones hide the note line under the box; there the same entry sits in one fixed line above it, the same height
+             whether or not an account runs low, its details in a popover (#15829, layout stability). -->
+        <div class="channel-quota-alert"><AccountQuotas pill /></div>
+        <div v-for="unregistered_member in unregistered_members" :key="unregistered_member.name" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ unregistered_member.access === 'external' ? t('{value1} 待签到：把邀请链接发给对方', { value1: bridge.display_name(unregistered_member.name) }) : t('{value1} 待注册：在其会话中粘贴启动指令', { value1: bridge.display_name(unregistered_member.name) }) }}</span><UButton v-if="view.access?.can_manage && unregistered_member.access === 'external'" :label="t('邀请详情')" size="xs" color="neutral" variant="ghost" @click="pending_seat = unregistered_member; pending_seat_open = true" /><UButton v-if="view.access?.can_manage && unregistered_member.access === 'external'" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'"  aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_seat_link(unregistered_member)"><span class="channel-launch-copy-label"><span :class="{ 'is-hidden': launch_copied === unregistered_member.name }">{{ t('复制邀请链接') }}</span><span :class="{ 'is-hidden': launch_copied !== unregistered_member.name }">{{ t('已复制') }}</span></span></UButton><UButton v-if="view.access?.can_manage && unregistered_member.access !== 'external'" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'"  aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)"><span class="channel-launch-copy-label"><span :class="{ 'is-hidden': launch_copied === unregistered_member.name }">{{ t('复制启动指令') }}</span><span :class="{ 'is-hidden': launch_copied !== unregistered_member.name }">{{ t('已复制') }}</span></span></UButton></div>
+        <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'"  aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)"><span class="channel-launch-copy-label"><span :class="{ 'is-hidden': launch_copied === speaking_member.name }">{{ t('复制启动指令') }}</span><span :class="{ 'is-hidden': launch_copied !== speaking_member.name }">{{ t('已复制') }}</span></span></UButton></div>
+      </div>
       <UChatPrompt ref="prompt" v-model="text" :submit-on-enter="ENTER_SENDS" :enterkeyhint="ENTER_SENDS ? 'send' : 'enter'" :autofocus="false" :rows="1" :maxrows="EDITOR_MAX_ROWS" :placeholder="relay_waits_owner ? t('接力在等你回答问题卡…') : is_moss ? t('给 MOSS 发消息') : t('发消息到 # {value1}', { value1: room.title })" :aria-label="t('留言正文')" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" :aria-expanded="!!mention_context" :aria-controls="mention_context ? 'channel-mention-list' : undefined" :aria-activedescendant="mention_context && mention_active ? `channel-mention-${mention_options.indexOf(mention_active)}` : undefined" variant="outline" color="neutral" class="channel-composer" :class="{ 'has-mentions': mention_mirror }" :ui="{ header: 'channel-composer-header', base: 'channel-editor', footer: 'channel-composer-footer' }" @submit="send">
         <template #header>
           <div v-if="view.attachment_drafts.length || file_refs.length || excerpts.length" class="attachment-drafts">
@@ -4864,8 +4907,6 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
             </div>
           </div>
           <GuestPresence variant="bar" />
-          <div v-for="unregistered_member in unregistered_members" :key="unregistered_member.name" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-user-round-x" /><span>{{ unregistered_member.access === 'external' ? t('{value1} 待签到：把邀请链接发给对方', { value1: bridge.display_name(unregistered_member.name) }) : t('{value1} 待注册：在其会话中粘贴启动指令', { value1: bridge.display_name(unregistered_member.name) }) }}</span><UButton v-if="view.access?.can_manage && unregistered_member.access === 'external'" :label="t('邀请详情')" size="xs" color="neutral" variant="ghost" @click="pending_seat = unregistered_member; pending_seat_open = true" /><UButton v-if="view.access?.can_manage && unregistered_member.access === 'external'" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'"  aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_seat_link(unregistered_member)"><span class="channel-launch-copy-label"><span :class="{ 'is-hidden': launch_copied === unregistered_member.name }">{{ t('复制邀请链接') }}</span><span :class="{ 'is-hidden': launch_copied !== unregistered_member.name }">{{ t('已复制') }}</span></span></UButton><UButton v-if="view.access?.can_manage && unregistered_member.access !== 'external'" :icon="launch_copied === unregistered_member.name ? 'i-lucide-check' : 'i-lucide-copy'"  aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(unregistered_member.name)"><span class="channel-launch-copy-label"><span :class="{ 'is-hidden': launch_copied === unregistered_member.name }">{{ t('复制启动指令') }}</span><span :class="{ 'is-hidden': launch_copied !== unregistered_member.name }">{{ t('已复制') }}</span></span></UButton></div>
-          <div v-if="queue_hint" class="channel-reply-draft channel-queue-hint"><UIcon name="i-lucide-clock" /><span>{{ queue_hint }}</span><UButton v-if="is_manual_member(speaking_member) && view.access?.can_manage" :icon="launch_copied === speaking_member.name ? 'i-lucide-check' : 'i-lucide-copy'"  aria-live="polite" size="xs" color="neutral" variant="ghost" class="channel-launch-copy" @click="copy_launch(speaking_member.name)"><span class="channel-launch-copy-label"><span :class="{ 'is-hidden': launch_copied === speaking_member.name }">{{ t('复制启动指令') }}</span><span :class="{ 'is-hidden': launch_copied !== speaking_member.name }">{{ t('已复制') }}</span></span></UButton></div>
           <div v-if="view.reply_to" class="channel-reply-draft"><UIcon name="i-lucide-corner-up-left" /><span>{{ t('回复 #{value1}', { value1: view.reply_to }) }}</span><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" :aria-label="t('取消回复')" @click="act('cancel_reply')" /></div>
         </template>
         <div v-if="mention_mirror" ref="mirror" class="channel-editor channel-editor-mirror" aria-hidden="true" v-html="mention_mirror"></div>
@@ -4881,13 +4922,13 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
           </template>
           <template v-else>
             <label class="channel-attach-button"><UIcon name="i-lucide-paperclip" class="size-4" aria-hidden="true" /><input type="file" multiple class="channel-attach-input" :aria-label="t('添加附件')" :title="t('图片、PDF 或其他文件 · 每个最多 {limit} MiB', { limit: view.attachment_limit_mib })" @click="open_attachment_picker" @change="pick_attachments"></label>
-            <UTooltip v-if="speech_ready" :text="broadcast.on.value ? t('关闭语音播报') : t('语音播报：新回复自动朗读摘要')"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': broadcast.on.value }" :aria-pressed="broadcast.on.value" :aria-label="broadcast.on.value ? t('关闭语音播报') : t('开启语音播报')" @click="broadcast.toggle()" /></UTooltip>
+            <UTooltip :text="!speech_ready ? t('语音播报暂不可用') : broadcast.on.value ? t('关闭语音播报') : t('语音播报：新回复自动朗读摘要')"><UButton type="button" icon="i-lucide-radio" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-broadcast-button" :class="{ 'is-on': speech_ready && broadcast.on.value }" :disabled="!speech_ready" :title="speech_ready ? undefined : t('语音播报暂不可用')" :aria-pressed="speech_ready && broadcast.on.value" :aria-label="broadcast.on.value ? t('关闭语音播报') : t('开启语音播报')" @click="broadcast.toggle()" /></UTooltip>
             <UTooltip :text="ENTER_SENDS ? t('语音输入 · 也可按住空格说话') : t('按住说话，或轻点开始')"><UButton type="button" icon="i-lucide-mic" color="neutral" variant="ghost" size="sm" class="channel-voice-button channel-voice-mic" :aria-label="t('语音输入')" @pointerdown="voice_press.pointerdown" @click="voice_press.click" @contextmenu.prevent /></UTooltip>
             <UButton type="button" icon="i-lucide-arrow-up" color="neutral" size="sm" class="channel-primary-button channel-round-button channel-send" :aria-label="t('发送')" :title="t('发送 · Enter')" :disabled="!has_draft" @click="send" />
           </template>
         </template>
       </UChatPrompt>
-      <div class="channel-composer-note"><span>{{ recipient_hint }}</span><span class="channel-draft-length"><span v-if="text_length" :class="{ 'is-near-limit': near_length_limit }">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span></span><span class="channel-key-hint"><kbd>Enter</kbd> {{ t('发送') }}<span class="channel-note-divider">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> {{ t('换行') }}</span></span></div>
+      <div class="channel-composer-note"><span>{{ recipient_hint }}</span><span class="channel-composer-quota"><AccountQuotas pill /></span><span class="channel-draft-length"><span v-if="text_length" :class="{ 'is-near-limit': near_length_limit }">{{ text_length }} / {{ bridge.max_message_length }}<span class="channel-note-divider">·</span></span><span class="channel-key-hint"><kbd>Enter</kbd> {{ t('发送') }}<span class="channel-note-divider">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> {{ t('换行') }}</span></span></div>
     </div></div>
     <UModal :open="Boolean(active_trust_prompt)" :title="active_trust_prompt ? t('信任项目工作流「{name}」', { name: active_trust_prompt.label || active_trust_prompt.id }) : ''"
       :description="t('这个项目工作流来自项目目录，尚未在这台电脑上确认信任。启用前请核对以下权限与命令：')"
@@ -4923,6 +4964,19 @@ function copy_message(message) { act("copy", `${view.value.room_site}/r/${room.v
 </template>
 
 <style scoped>
+.channel-conversation .channel-composer-dock { overflow: visible; z-index: 3; }
+.channel-conversation .channel-transcript { padding-bottom: calc(var(--channel-composer-height, 0px) + var(--channel-composer-overlay-height, 0px) + 28px + var(--visual-tail-space, 0px)); }
+.channel-composer-column { position: relative; }
+.channel-composer-column > .channel-composer-float { position: absolute; inset-inline: 16px 52px; bottom: 100%; z-index: 1; max-height: 70dvh; overflow-y: auto; overscroll-behavior: contain; pointer-events: none; }
+.channel-composer-float > * { pointer-events: auto; }
+.channel-composer-float > :deep(.queued-messages) { margin-bottom: 0; border-bottom: 1px solid var(--ui-border); border-radius: 12px; }
+.channel-conversation .channel-latest-dock { z-index: 4; flex-wrap: wrap; justify-content: center; margin-inline: 48px; }
+.channel-latest-anchor { position: absolute; grid-area: 2 / 2 / 3 / 3; right: 12px; bottom: 12px; z-index: 4; }
+.channel-filter-summary { gap: 8px; }
+.channel-filter-description { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; block-size: 2lh; }
+.channel-filter-count { display: grid; flex: none; inline-size: 13ch; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.channel-filter-count > span { grid-area: 1 / 1; text-align: end; overflow: hidden; text-overflow: ellipsis; }
+.channel-filter-summary > button { flex: none; white-space: nowrap; }
 /* Keep any child's trailing margin inside the measured box, independent of card style. */
 .channel-message-group.transcript-row { display: flow-root; }
 .channel-history-loading { position: sticky; z-index: 1; top: var(--channel-topbar-height, 0px); height: 0; text-align: center; pointer-events: none; }

@@ -100,12 +100,12 @@ function size(bytes) {
         <dl class="external-member-facts">
           <div v-if="external_ai(live)"><dt>{{ t("对方的 AI") }}</dt><dd>{{ t("{name}（对方自报）", { name: external_ai(live) }) }}</dd></div>
           <div><dt>{{ t("对方能看到") }}</dt><dd>{{ LEVEL_SHORT[info.level] }}</dd></div>
-          <div v-if="info.level === 'read'"><dt>{{ t("开放目录") }}</dt><dd :title="info.directories.join('、')">{{ info.directories.join("、") || "—" }}</dd></div>
+          <div><dt>{{ t("开放目录") }}</dt><dd class="external-member-directories" :title="info.level === 'read' ? info.directories.join('、') : undefined">{{ info.level === 'read' ? info.directories.join("、") || "—" : "—" }}</dd></div>
           <div v-if="!info.pending"><dt>{{ t("剩余时间") }}</dt><dd>{{ info.ended ? t("已结束") : [remaining_label(info.expires_at) || "—", t("对方设定")].join(" · ") }}</dd></div>
         </dl>
         <section v-if="!info.ended" class="external-member-actions" :aria-label="t('调整')">
           <div class="external-member-buttons">
-            <UButton v-if="!info.pending && info.level === 'read'" :label="t('改为只看消息')" icon="i-lucide-eye-off" size="xs" color="neutral" variant="outline" class="pb-action" :loading="busy === 'downgrade'" :disabled="Boolean(busy)" @click="change('downgrade', { scope: 'discuss' }, t('已降为只讨论，之后不能再读项目文件'))" />
+            <UButton :label="t('改为只看消息')" icon="i-lucide-eye-off" size="xs" color="neutral" variant="outline" class="pb-action" :title="LEVEL_SHORT[info.level]" :loading="busy === 'downgrade'" :disabled="Boolean(busy) || info.pending || info.level !== 'read'" @click="change('downgrade', { scope: 'discuss' }, t('已降为只讨论，之后不能再读项目文件'))" />
             <UButton :label="info.pending ? t('移除席位') : t('撤销授权')" icon="i-lucide-ban" size="xs" color="error" variant="soft" :disabled="Boolean(busy)" @click="confirming = true" />
           </div>
         </section>
@@ -139,6 +139,7 @@ function size(bytes) {
 .external-member-facts > div { display: grid; grid-template-columns: 7em minmax(0, 1fr); gap: 8px; }
 .external-member-facts dt { color: var(--ui-text-dimmed); white-space: nowrap; }
 .external-member-facts dd { margin: 0; color: var(--ui-text-toned); overflow-wrap: anywhere; }
+.external-member-facts .external-member-directories { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .external-member-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-block: 1px solid var(--ui-border-muted); }
 .external-member-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .external-member-label { color: var(--ui-text-dimmed); font-size: 11px; }
@@ -152,7 +153,7 @@ function size(bytes) {
 .external-member-error { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; color: var(--ui-error); font-size: 12px; }
 .external-member-error > span:first-child { flex-shrink: 0; width: 14px; height: 14px; }
 .external-member-error > span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.external-member-list { display: flex; flex-direction: column; max-height: 300px; margin: 0 0 8px; padding: 0; overflow-y: auto; list-style: none; border: 1px solid var(--ui-border-muted); border-radius: 8px; scrollbar-width: thin; }
+.external-member-list { display: flex; flex-direction: column; max-height: 300px; margin: 0 0 8px; padding: 0; overflow-y: auto; list-style: none; border: 1px solid var(--ui-border-muted); border-radius: 8px; scrollbar-width: thin; scrollbar-gutter: stable; }
 .external-member-list li { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 30px; padding: 4px 10px; font-size: 12px; }
 .external-member-list li + li { border-top: 1px solid var(--ui-border-muted); }
 .external-member-time { color: var(--ui-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }

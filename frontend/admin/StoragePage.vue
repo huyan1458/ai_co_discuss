@@ -144,21 +144,26 @@ function show_object_storage(result) {
   object_storage.value = result;
   object_url.value = result.base_url || "";
 }
+let object_read = 0;
 async function load_object_storage() {
-  const account = object_account.value;
+  const revision = ++object_read;
   object_storage.value = null;
+  object_url.value = "";
+  object_values.value = {};
   try {
     const result = await call(object_paths.value.config);
-    if (account === object_account.value) show_object_storage(result);
-  } catch (failure) { notify("error", failure.message); }
+    if (revision === object_read) show_object_storage(result);
+  } catch (failure) { if (revision === object_read) notify("error", failure.message); }
 }
 /** Save a newly entered key for the address shown, then bind the configuration to it; SecretKeyInput reports failures. */
 async function save_object_key(api_key) {
   const { config, keys } = object_paths.value;
+  const revision = object_read;
   const base_url = object_url.value.trim();
   if (!base_url) throw new Error(t("请先填写资源中心地址"));
   const { api_key_ref } = await call(keys, { base_url, api_key });
-  show_object_storage(await call(config, { base_url, api_key_ref }));
+  const result = await call(config, { base_url, api_key_ref });
+  if (revision === object_read) show_object_storage(result);
   notify("info", t("已保存"));
 }
 // The cloud space's number settings (retention days, quota, threshold), each saved on its own when its field is left.
@@ -199,8 +204,12 @@ function cloud_deleted(result) {
 watch(object_account, () => { cloud_open.value = false; });
 async function object_action(action, request) {
   if (object_busy.value) return;
+  const revision = object_read;
   object_busy.value = action;
-  try { return await request(); }
+  try {
+    const result = await request();
+    if (revision === object_read) return result;
+  }
   catch (failure) { notify("error", failure.message); }
   finally { object_busy.value = ""; }
 }
@@ -242,45 +251,43 @@ watch(refreshed, () => load_storage());
       </span>
     </h3>
 
-    <form v-if="attachment_mib !== null" class="panel-row" @submit.prevent="save_limit">
-      <label>{{ t("单个附件上限（MiB）") }} <input v-model.number="attachment_mib" type="number" required min="1" max="90" step="1"></label>
-      <button class="panel-button" type="submit">{{ t("保存") }}</button>
+    <form class="panel-row" @submit.prevent="attachment_mib !== null && save_limit()">
+      <label>{{ t("单个附件上限（MiB）") }} <input v-model.number="attachment_mib" type="number" required min="1" max="90" step="1" :disabled="attachment_mib === null"></label>
+      <button class="panel-button" type="submit" :disabled="attachment_mib === null" :title="attachment_mib === null ? t('读取中…') : undefined">{{ t("保存") }}</button>
     </form>
     <h3 class="panel-section-title">
       <UIcon name="i-lucide-cloud-upload" />{{ t("云空间（对象存储）") }}
-      <span v-if="object_storage" class="panel-tag" :class="object_storage.configured ? 'is-green' : 'is-gray'">{{ object_storage.configured ? t("已配置") : t("未配置") }}</span>
-      <span v-if="object_account && object_storage?.configured" class="panel-tag" :class="object_storage.managed ? 'is-blue' : 'is-gray'">{{ object_storage.managed ? t("管理员提供") : t("账号自行填写") }}</span>
+      <span class="panel-tag" :class="object_storage?.configured ? 'is-green' : 'is-gray'">{{ !object_storage ? t("读取中…") : object_storage.configured ? t("已配置") : t("未配置") }}</span>
+      <span v-if="state.hosting && state.accounts.length" class="panel-tag" :class="[object_storage?.managed ? 'is-blue' : 'is-gray', { invisible: !object_account || !object_storage?.configured }]">{{ object_storage?.managed ? t("管理员提供") : t("账号自行填写") }}</span>
     </h3>
     <p class="panel-guide">{{ t("每个账号一份云空间，建在资源中心的对象存储上：大于门槛的附件（最大 2 GiB）存到这里，房间里发的大文件和成员交付的大文件都能从这里取走，也可以在房间网页文件页的“云空间”里直接上传，不建文件夹。可设自动删除，也可在“管理云空间”里手动删除。未配置时只能发送上限以内的附件。存储桶须允许网页所在地址跨域上传。每个账号各用自己的 Key，与 API 密钥一起保存。") }}</p>
     <div v-if="state.hosting && state.accounts.length" class="panel-chips storage-object-accounts" role="group" :aria-label="t('配置哪个账号的对象存储')">
       <button type="button" class="panel-chip" :class="{ 'is-active': !object_account }" @click="object_account = ''">{{ t("管理员") }}</button>
       <button v-for="account in state.accounts" :key="account.name" type="button" class="panel-chip" :class="{ 'is-active': object_account === account.name }" @click="object_account = account.name">{{ account.name }}</button>
     </div>
-    <div v-if="object_storage" class="panel-row storage-object-form">
-      <label v-if="object_account" class="panel-field storage-object-mode">
-        <span><input type="checkbox" :checked="object_admin_mode" :disabled="Boolean(object_busy)" @change="save_object_mode($event.target.checked)"> {{ t("使用管理员的云空间") }}</span>
+    <fieldset class="panel-row storage-object-form" :disabled="!object_storage" :aria-busy="!object_storage">
+      <label v-if="state.hosting && state.accounts.length" class="panel-field storage-object-mode" :class="{ invisible: !object_account }">
+        <span><input type="checkbox" :checked="object_admin_mode" :disabled="!object_account || Boolean(object_busy)" @change="save_object_mode($event.target.checked)"> {{ t("使用管理员的云空间") }}</span>
         <small>{{ t("打开后该账号不保存 Key：上传、下载和删除都由你这台电脑代为签发，只能操作该账号自己的目录，空间上限在这里强制执行；需要你的本机服务一直运行。") }}</small>
       </label>
-      <template v-if="!object_admin_mode">
-        <label class="panel-field">{{ t("资源中心地址") }}<input v-model.trim="object_url" class="panel-input" type="url" placeholder="https://…" spellcheck="false"></label>
-        <div class="panel-field">{{ t("Key") }}
-          <SecretKeyInput :key="`${object_account}\u0000${object_storage.api_key_ref || ''}\u0000${object_key_saved}`" :save="save_object_key" :saved="object_key_saved" :disabled="!object_url.trim()" :label="t('对象存储 Key')" :placeholder="t('填写 Key，失焦或回车保存')" size="sm" @error="(failure) => notify('error', failure.message)" />
-          <small v-if="object_account">{{ t("对方界面不显示 Key，但对方账号里的 AI 成员能读到本账号的密钥文件；请给每个账号单独的 Key。") }}</small>
-        </div>
-      </template>
+      <label class="panel-field" :class="{ invisible: object_admin_mode }">{{ t("资源中心地址") }}<input v-model.trim="object_url" class="panel-input" type="url" placeholder="https://…" spellcheck="false" :disabled="object_admin_mode"></label>
+      <div class="panel-field" :class="{ invisible: object_admin_mode }">{{ t("Key") }}
+        <SecretKeyInput :key="`${object_account}\u0000${object_storage?.api_key_ref || ''}\u0000${object_key_saved}`" :save="save_object_key" :saved="object_key_saved" :disabled="!object_storage || object_admin_mode || !object_url.trim()" :label="t('对象存储 Key')" :placeholder="t('填写 Key，失焦或回车保存')" size="sm" @error="(failure) => notify('error', failure.message)" />
+        <small v-if="state.hosting && state.accounts.length" :class="{ invisible: !object_account }">{{ t("对方界面不显示 Key，但对方账号里的 AI 成员能读到本账号的密钥文件；请给每个账号单独的 Key。") }}</small>
+      </div>
       <label v-for="field in object_fields" :key="field.key" class="panel-field">{{ field.label }}
         <input v-model.number="object_values[field.key]" class="panel-input storage-object-number" type="number" :min="field.min" :max="field.max" step="1" :disabled="Boolean(object_busy)" @change="save_object_field(field)">
         <small>{{ field.help }}</small></label>
       <div class="storage-object-actions">
-        <button class="panel-button is-outline" type="button" :disabled="!object_storage.configured || Boolean(object_busy)" @click="test_object_storage">
-          <UIcon v-if="object_busy === 'test'" name="i-lucide-loader" class="animate-spin" />{{ t("测试连接") }}
+        <button class="panel-button is-outline" type="button" :disabled="!object_storage?.configured || Boolean(object_busy)" :title="!object_storage?.configured ? t('未配置') : undefined" @click="test_object_storage">
+          <UIcon name="i-lucide-loader" :class="object_busy === 'test' ? 'animate-spin' : 'invisible'" />{{ t("测试连接") }}
         </button>
-        <button class="panel-button is-outline" type="button" :disabled="!object_storage.configured" @click="cloud_open = !cloud_open">{{ cloud_open ? t("收起云空间") : t("管理云空间") }}</button>
-        <button class="panel-button is-outline storage-danger" type="button" :disabled="!object_storage.configured || Boolean(object_busy)" @click="clear_object_storage">{{ t("清除") }}</button>
+        <button class="panel-button is-outline" type="button" :disabled="!object_storage?.configured" :title="!object_storage?.configured ? t('未配置') : undefined" @click="cloud_open = !cloud_open">{{ cloud_open ? t("收起云空间") : t("管理云空间") }}</button>
+        <button class="panel-button is-outline storage-danger" type="button" :disabled="!object_storage?.configured || Boolean(object_busy)" :title="!object_storage?.configured ? t('未配置') : undefined" @click="clear_object_storage">{{ t("清除") }}</button>
       </div>
-      <AttachmentCleaner v-if="cloud_open && object_storage.configured" :key="object_account" cloud :load="() => call(cloud_paths.list)" :clear="delete_cloud" :download="download_cloud" :shares="cloud_shares"
+      <AttachmentCleaner v-if="cloud_open && object_storage?.configured" :key="object_account" cloud :load="() => call(cloud_paths.list)" :clear="delete_cloud" :download="download_cloud" :shares="cloud_shares"
         @cleared="cloud_deleted" @failed="(message) => notify('error', message)" />
-    </div>
+    </fieldset>
     <div v-if="!snapshot && loading" class="panel-rows" role="status" :aria-label="t('正在统计存储占用…')">
       <div class="panel-row">
         <USkeleton class="panel-tile" />
@@ -442,7 +449,7 @@ watch(refreshed, () => load_storage());
       </div>
       <div v-else class="panel-rows">
         <template v-for="room in snapshot.rooms" :key="room.key || room.room_id">
-          <div class="panel-row">
+          <div class="panel-row storage-draft-room">
             <div class="panel-tile"><UIcon name="i-lucide-message-square" /></div>
             <div class="panel-main">
               <div class="panel-title">
@@ -466,7 +473,7 @@ watch(refreshed, () => load_storage());
                 <UIcon :name="expanded.has(room.key || room.room_id) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" />
                 {{ expanded.has(room.key || room.room_id) ? t("收起成员") : t("成员（{count}）", { count: room.members.length }) }}
               </button>
-              <button v-if="room.scratch_bytes > 0" type="button" class="panel-button is-outline is-small" :disabled="cleaning.has(room.room_id || room.key)" @click="clean_temp(room)">
+              <button type="button" class="panel-button is-outline is-small" :disabled="!room.scratch_bytes || cleaning.has(room.room_id || room.key)" :title="!room.scratch_bytes ? t('没有可清理的已结束执行临时文件') : undefined" @click="clean_temp(room)">
                 <UIcon :name="cleaning.has(room.room_id || room.key) ? 'i-lucide-loader' : 'i-lucide-trash-2'" :class="{ 'animate-spin': cleaning.has(room.room_id || room.key) }" />
                 {{ t("清理临时文件") }}
               </button>
@@ -491,11 +498,15 @@ watch(refreshed, () => load_storage());
 .storage-danger { color: var(--panel-red); }
 .storage-head-actions { display: flex; align-items: center; gap: 6px; }
 .storage-banner { margin-bottom: 12px; }
-.storage-object-form { flex-direction: column; align-items: stretch; gap: 12px; max-width: 520px; }
+.storage-object-form { flex-direction: column; align-items: stretch; gap: 12px; min-width: 0; max-width: 520px; margin: 0; padding-inline: 0; border: 0; }
 .storage-object-accounts { margin-bottom: 8px; }
-.storage-object-actions { display: flex; gap: 8px; }
+.storage-object-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .storage-object-number { max-width: 140px; }
 .storage-object-mode > span { display: inline-flex; gap: 6px; align-items: center; }
+@media (max-width: 640px) {
+  .storage-draft-room { flex-wrap: wrap; }
+  .storage-draft-room > .panel-side { width: 100%; justify-content: flex-end; }
+}
 .storage-bar { height: 5px; width: 100%; max-width: 360px; margin: 2px 0; overflow: hidden; border-radius: 999px; background: var(--panel-tint); }
 .storage-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--panel-blue); transition: width .2s ease; }
 .storage-bar.is-warning > i { background: var(--panel-amber); }

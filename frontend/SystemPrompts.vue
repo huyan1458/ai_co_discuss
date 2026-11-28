@@ -22,6 +22,9 @@ const platform_label = (name) => name === "Custom" ? t("自定义 API") : bridge
 const rows = computed(() => [{ key: PROGRAM, label: t("所有成员"), text: prompts.value.program || "" },
   { key: HOST, label: t("主持人"), text: prompts.value.host || "" },
   ...Object.keys(API_PROVIDERS).map((name) => ({ key: name, label: platform_label(name), text: prompts.value.platforms?.[name] || "" }))]);
+const blocked_reason = computed(() => unavailable.value
+  ? t('系统提示词保存在这台电脑上，需要连接本机服务或已配对电脑：{value1}', { value1: unavailable.value })
+  : !loaded.value ? t('读取中…') : "");
 const current = computed(() => rows.value.find((row) => row.key === editing.value) || { label: "", text: "" });
 const set_count = computed(() => rows.value.filter((row) => row.text).length);
 // What each fixed rule is for, in words for people; the model gets the original text, shown folded below it.
@@ -73,16 +76,13 @@ async function save() {
       </button>
       <template #content>
         <div class="prompts-settings">
-          <p v-if="unavailable" class="fine-print">{{ t('系统提示词保存在这台电脑上，需要连接本机服务或已配对电脑：{value1}', { value1: unavailable }) }}</p>
-          <template v-else-if="loaded">
-            <p class="fine-print">{{ t('排在成员的专属提示词之前，下次唤醒起生效；手动启动和外部成员不带。不修改各软件自己的 CLAUDE.md、AGENTS.md。') }}</p>
-            <div v-for="row in rows" :key="row.key" class="prompts-row">
-              <span>{{ row.label }}</span>
-              <p :class="{ 'is-empty': !row.text }" :title="row.text">{{ row.text ? row.text.split('\n')[0] : t('未设置') }}</p>
-              <UButton :label="t('编辑')" color="neutral" variant="ghost" size="xs" :aria-label="t('编辑 {value1} 的系统提示词', { value1: row.label })" @click="edit(row.key)" />
-            </div>
-          </template>
-          <p v-else class="fine-print">{{ t('读取中…') }}</p>
+          <p class="fine-print prompts-note" :title="blocked_reason || undefined">{{ unavailable ? blocked_reason : t('排在成员的专属提示词之前，下次唤醒起生效；手动启动和外部成员不带。不修改各软件自己的 CLAUDE.md、AGENTS.md。') }}</p>
+          <div v-for="row in rows" :key="row.key" class="prompts-row">
+            <span>{{ row.label }}</span>
+            <USkeleton v-if="!loaded && !unavailable" class="h-4 w-2/3" />
+            <p v-else :class="{ 'is-empty': !row.text || unavailable }" :title="blocked_reason || row.text">{{ unavailable ? '—' : row.text ? row.text.split('\n')[0] : t('未设置') }}</p>
+            <UButton :label="t('编辑')" color="neutral" variant="ghost" size="xs" :disabled="Boolean(blocked_reason)" :title="blocked_reason || undefined" :aria-label="t('编辑 {value1} 的系统提示词', { value1: row.label })" @click="edit(row.key)" />
+          </div>
         </div>
       </template>
     </UCollapsible>
@@ -103,6 +103,7 @@ async function save() {
 .prompts-header > :last-child { align-self: center; color: var(--ui-text-dimmed); }
 .prompts-settings { display: grid; gap: 6px; padding-top: 10px; }
 .prompts-settings .fine-print { margin: 0 0 4px; }
+.prompts-note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; block-size: 4lh; overflow: hidden; }
 .prompts-row { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; align-items: center; gap: 10px; color: var(--ui-text-dimmed); font-size: 12px; }
 .prompts-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prompts-row p { margin: 0; overflow: hidden; color: var(--ui-text); text-overflow: ellipsis; white-space: nowrap; }

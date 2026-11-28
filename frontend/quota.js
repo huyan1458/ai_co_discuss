@@ -13,6 +13,17 @@ const WINDOW_LABELS = { five_hour: '5h', seven_day: '7d' };
 export const tokens = (count) => count >= 999_500 ? `${(count / 1e6).toFixed(1).replace(/\.0$/, '')}M` : count >= 1000 ? `${Math.round(count / 1000)}K` : String(count);
 const percent = (fraction) => `${Math.round(fraction * 100)}%`;
 const clock = (seconds) => new Date(seconds * 1000).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+// A reset within a day reads as a time of day, a later one with its weekday (#15754).
+const DAY_SECONDS = 86400;
+export const reset_time = (seconds) => new Date(seconds * 1000).toLocaleString([], seconds - Date.now() / 1000 < DAY_SECONDS
+  ? { hour: '2-digit', minute: '2-digit' } : { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+// A reading older than this says how old it is; a fresher one says nothing about it.
+const STALE_SECONDS = 30 * 60;
+function read_age(updated_at) {
+  const age = Date.now() / 1000 - (updated_at || 0);
+  if (!updated_at || age < STALE_SECONDS) return '';
+  return age < 7200 ? t('{value1} 分钟前读取', { value1: Math.floor(age / 60) }) : t('{value1} 小时前读取', { value1: Math.floor(age / 3600) });
+}
 
 /** One room member's latest usage report `{account, context_used, context_window, updated_at}`, or null. */
 export function member_usage(view, name) {
@@ -83,13 +94,13 @@ function groups(quota) {
 
 /**
  * The windows to show, with the 5-hour limit an account does not have written out as such (#15627): a group that
- * reports a weekly window but no 5-hour one sets no 5-hour limit (Codex answers `secondary: null` for such a plan),
+ * reports a weekly window but no 5-hour one sets no 5-hour limit (Codex answers `secondary: null` for such a plan; agy
+ * lists no `5h` bucket in such a group),
  * so `5h 不限` is shown rather than leaving the reader to wonder whether it was missed. Open windows have `open: true`.
  */
 export function shown_windows(quota) {
-  // Only a single, unnamed group says so: software keeping named groups (agy) may leave out a window it has not counted yet.
-  const single = groups(quota).length === 1;
-  return groups(quota).flatMap(([group, items]) => single && !group && items.some((item) => item.kind === 'seven_day') && !items.some((item) => item.kind === 'five_hour')
+  // agy too: its Gemini group lists only a weekly bucket while its other group keeps a 5-hour one (2026-11-28, #15731).
+  return groups(quota).flatMap(([group, items]) => items.some((item) => item.kind === 'seven_day') && !items.some((item) => item.kind === 'five_hour')
     ? [{ kind: 'five_hour', minutes: 300, group, open: true }, ...items] : items);
 }
 
@@ -117,7 +128,7 @@ export function quota_title(quota) {
   const lines = (quota.windows || []).map((item) => {
     const name = `${item.group ? `${item.group} ` : ''}${window_label(item)}`;
     return item.resets_at
-      ? t('{name} 已用 {value1}，{time} 重置', { name, value1: percent(item.used), time: clock(item.resets_at) })
+      ? t('{name} 已用 {value1}，{time} 重置', { name, value1: percent(item.used), time: reset_time(item.resets_at) })
       : t('{name} 已用 {value1}', { name, value1: percent(item.used) });
   });
   if (quota.balance) lines.push(t('余额 {amount} {currency}', { amount: quota.balance.amount, currency: quota.balance.currency }));
@@ -136,10 +147,11 @@ export function quota_rows(quota) {
   const rows = shown_windows(quota).map((item, index) => ({
     key: `window-${index}`, name: `${item.group ? `${item.group} ` : ''}${window_label(item)}`,
     value: item.open ? t('不限') : t('已用 {value1}', { value1: percent(item.used) }), level: item.open ? '' : used_level(item.used),
-    note: item.resets_at ? t('{time} 重置', { time: clock(item.resets_at) }) : '',
+    note: item.resets_at ? t('{time} 重置', { time: reset_time(item.resets_at) }) : '',
   }));
   if (quota.balance) rows.push({ key: 'balance', name: t('余额'), value: `${quota.balance.amount} ${quota.balance.currency}`.trim(), note: '', level: '' });
-  if (rows.length && quota.updated_at) rows[rows.length - 1].note = [rows[rows.length - 1].note, t('读取于 {time}', { time: clock(quota.updated_at) })].filter(Boolean).join(' · ');
+  const age = read_age(quota.updated_at);
+  if (rows.length && age) rows[rows.length - 1].note = [rows[rows.length - 1].note, age].filter(Boolean).join(' · ');
   return rows;
 }
 
@@ -153,4 +165,31 @@ export function cache_hit(usage) {
   const input = usage ? (usage.input || 0) + (usage.cache_read || 0) + (usage.cache_write || 0) : 0;
   // Rounded down, so 99.6% does not read as a full 100%.
   return input ? Math.floor((usage.cache_read || 0) / input * 100) : null;
+}
+
+/** The accounts the room's present members draw on, once each and with a reading: `[{account, name, quota}]`. */
+export function room_accounts(view) {
+  return [...new Set((view?.room?.free?.members || []).filter((member) => member.status === 'active')
+    .map((member) => member.usage?.account).filter(Boolean))]
+    .map((account) => ({ account, name: account.replace(/^api:/, ''), quota: account_quota(view, account) }))
+    .filter((item) => item.quota && (item.quota.windows?.length || item.quota.balance));
+}
+
+/**
+ * What a member's line says of its account's limits: a state, never figures, which stay with the account (rule four of
+ * #15754). '' while every window is below QUOTA_WARN, `额度紧张` from there, `额度已用尽 · 14:00 恢复` once one is used up.
+ */
+export function quota_state(quota) {
+  const windows = (quota?.windows || []).filter((item) => !item.open);
+  const spent = windows.filter((item) => item.used >= 1).sort((left, right) => right.resets_at - left.resets_at)[0];
+  if (spent) return spent.resets_at ? t('额度已用尽 · {time} 恢复', { time: reset_time(spent.resets_at) }) : t('额度已用尽');
+  return windows.some((item) => item.used >= QUOTA_WARN) ? t('额度紧张') : '';
+}
+
+/** Each account's tightest window, `Claude 5h 44%`, with its level; a balance-only account shows its balance. */
+export function account_peaks(view) {
+  return room_accounts(view).map((item) => {
+    const peak = quota_peak(item.quota);
+    return { account: item.account, level: peak?.level || '', text: `${item.name} ${peak ? peak.text : quota_text(item.quota)}` };
+  });
 }

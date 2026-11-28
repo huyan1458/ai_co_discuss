@@ -70,7 +70,7 @@ async function finish() {
 <template>
   <section class="pb-status" :class="`is-${status.tone}`" :aria-label="t('讨论状态')">
     <div class="pb-status-line"><span class="pb-dot"></span><strong role="status">{{ status.title }}</strong></div>
-    <p v-if="status.detail" class="pb-status-detail">{{ status.detail }}</p>
+    <p class="pb-status-detail pb-fixed-detail" :title="status.detail">{{ status.detail }}</p>
     <div class="pb-meters">
       <div v-for="meter in meters" :key="meter.label" class="pb-meter">
         <div class="pb-meter-label"><span>{{ meter.label }}</span><b>{{ meter.text }}</b></div>
@@ -78,17 +78,23 @@ async function finish() {
       </div>
     </div>
   </section>
+  <section v-if="!room.archived" class="pb-actions pb-discussion-actions" :aria-label="t('讨论操作')">
+    <UButton v-if="paused" icon="i-lucide-play" :label="t('继续')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="success" :disabled="!can_control" :loading="is_running('restart_discussion')" @click="act('restart_discussion')" />
+    <UButton v-else icon="i-lucide-pause" :label="t('暂停')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="warning" :title="t('停止本次讨论执行，继续时由主持人重新安排')" :disabled="!can_control" :loading="is_running('pause_discussion')" @click="act('pause_discussion')" />
+    <UButton icon="i-lucide-skip-forward" :label="t('跳过')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="info" :title="paused ? t('讨论已暂停') : turn ? t('跳过 {value1} 本次发言', { value1: bridge.display_name(turn.expert) }) : t('等待主持人安排下一步')" :disabled="!can_control || !turn || paused" :loading="is_running('skip_turn')" @click="act('skip_turn')" />
+    <UButton icon="i-lucide-flag" :label="t('结束')" size="sm" color="neutral" variant="outline" class="pb-action pb-end" data-tone="danger" :disabled="!can_control" @click="ending = true" />
+  </section>
   <section v-if="focus" class="pb-section" :aria-label="t('当前焦点')">
     <h4>{{ t('当前焦点') }}</h4><p class="pb-focus" :class="{ 'is-expanded': focus_expanded }">{{ focus }}</p>
     <button v-if="focus.length > FOCUS_PREVIEW_LENGTH" type="button" class="pb-link" @click="focus_expanded = !focus_expanded">{{ focus_expanded ? t('收起') : t('展开') }}</button>
-  </section>
-  <section v-if="!room.archived" class="pb-actions" :aria-label="t('讨论操作')">
-    <UButton v-if="paused" icon="i-lucide-play" :label="t('继续')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="success" :disabled="!can_control" :loading="is_running('restart_discussion')" @click="act('restart_discussion')" />
-    <UButton v-else icon="i-lucide-pause" :label="t('暂停')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="warning" :title="t('停止本次讨论执行，继续时由主持人重新安排')" :disabled="!can_control" :loading="is_running('pause_discussion')" @click="act('pause_discussion')" />
-    <UButton v-if="turn && !paused" icon="i-lucide-skip-forward" :label="t('跳过')" size="sm" color="neutral" variant="outline" class="pb-action" data-tone="info" :title="t('跳过 {value1} 本次发言', { value1: bridge.display_name(turn.expert) })" :disabled="!can_control" :loading="is_running('skip_turn')" @click="act('skip_turn')" />
-    <UButton icon="i-lucide-flag" :label="t('结束')" size="sm" color="neutral" variant="outline" class="pb-action pb-end" data-tone="danger" :disabled="!can_control" @click="ending = true" />
   </section>
   <UModal :content="{ onInteractOutside: (event) => event.preventDefault() }" v-model:open="ending" :title="t('结束讨论')" :description="t('当前发言安排会被取消，已有消息全部保留。')" :ui="{ content: 'glass-panel studio-modal', body: 'dialog-body' }">
     <template #body><div class="progress-ending"><button type="button" class="progress-ending-option" @click="finish"><strong>{{ t('结束讨论') }}</strong><span>{{ t('保留全部记录；需要总结时可直接请主持人写一份。') }}</span></button></div></template>
   </UModal>
 </template>
+
+<style scoped>
+.pb-fixed-detail { block-size: 3.2em; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.pb-actions.pb-discussion-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.pb-discussion-actions > .pb-action { justify-content: center; min-width: 0; }
+</style>

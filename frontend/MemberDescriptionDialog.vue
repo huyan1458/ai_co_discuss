@@ -39,8 +39,8 @@ watch(open, (value) => {
   as_template.value = false;
 }, { immediate: true });
 const trimmed = computed(() => draft.value.trim());
-const source = computed(() => shown.value.template && trimmed.value !== shown.value.template
-  ? { tag: t('{value1} 的默认描述', { value1: shown.value.platform }), text: shown.value.template, action: t('填入') } : null);
+const source = computed(() => shown.value.template
+  ? { tag: t('{value1} 的默认描述', { value1: shown.value.platform }), text: shown.value.template, action: t('填入'), disabled: trimmed.value === shown.value.template } : null);
 // Saving an empty or already-default text as the default changes nothing.
 const can_template = computed(() => Boolean(shown.value.platform && trimmed.value && trimmed.value !== shown.value.template));
 const label_changed = computed(() => label_draft.value.trim() !== shown.value.label);
@@ -48,7 +48,7 @@ const changed = computed(() => trimmed.value !== shown.value.text || label_chang
 const note = computed(() => as_template.value && can_template.value ? t('之后添加 {value1} 时自动填入这段描述', { value1: shown.value.platform })
   : trimmed.value ? t('标签或一段话都行，Ctrl + Enter 保存') : t('留空表示不提供描述'));
 watch(can_template, (value) => { if (!value) as_template.value = false; });
-const snippets = computed(() => SNIPPETS.filter((snippet) => !draft.value.includes(snippet) && draft.value.length + snippet.length < MAX_DESCRIPTION));
+const snippet_disabled = (snippet) => draft.value.includes(snippet) || draft.value.length + snippet.length >= MAX_DESCRIPTION;
 
 /** Append one kind of work to the description, separated from what is already there. */
 function add_snippet(snippet) {
@@ -73,12 +73,12 @@ function save() {
       </label>
     </template>
     <template #below>
-      <div v-if="snippets.length" class="member-snippets" :aria-label="t('常见分工')">
-        <button v-for="snippet in snippets" :key="snippet" type="button" @click="add_snippet(snippet)"><UIcon name="i-lucide-plus" />{{ snippet }}</button>
+      <div class="member-snippets" :aria-label="t('常见分工')">
+        <button v-for="snippet in SNIPPETS" :key="snippet" type="button" :disabled="snippet_disabled(snippet)" @click="add_snippet(snippet)"><UIcon name="i-lucide-plus" />{{ snippet }}</button>
       </div>
     </template>
     <template #extra>
-      <UCheckbox v-if="can_template" v-model="as_template" size="sm" :label="t('存为 {value1} 的默认描述', { value1: shown.platform })" />
+      <UCheckbox v-if="shown.platform" v-model="as_template" :disabled="!can_template" size="sm" :label="t('存为 {value1} 的默认描述', { value1: shown.platform })" />
     </template>
   </MemberTextDialog>
 </template>
@@ -87,6 +87,7 @@ function save() {
 .member-label-field { display: grid; gap: 6px; color: var(--ui-text-muted); font-size: 12px; }
 .member-label-field > small { color: var(--ui-text-dimmed); font-size: 11px; }
 .member-snippets { display: flex; flex-wrap: wrap; gap: 6px; }
+.member-snippets > button:disabled { opacity: .5; cursor: default; }
 .member-snippets > button { display: inline-flex; align-items: center; gap: 3px; padding: 0 8px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-muted); font-size: 11px; line-height: 20px; }
 .member-snippets > button:hover { border-color: var(--channel-accent); color: var(--channel-accent); }
 .member-snippets > button > span { width: 11px; height: 11px; }

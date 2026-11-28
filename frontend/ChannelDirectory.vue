@@ -31,6 +31,10 @@ import moss_mark from "./moss-idle.png";
 
 const emit = defineEmits(["select", "manage", "create", "create-folder", "manage-folder", "delete-folder", "archive-folder", "archives", "destructions"]);
 const { view, bridge, act, is_running } = inject("discussion");
+const directory_hovered = ref(false);
+const directory_focused = ref(false);
+let pointer_focus = false;
+const held_directory = ref(null);
 const props = defineProps({ stewardSetup: Boolean });
 // While the workflow page, analytics page or an invited room fills the middle, no room row is shown as the open one.
 const { page_open: workflow_library_open } = use_workflow_library();
@@ -79,14 +83,20 @@ const branches = computed(() => {
   rooms.value.filter(room => !mounted.value.has(room.id)).forEach(visit);
   return result;
 });
-watch([children, branches], () => {
+watch([children, branches, held_directory], () => {
   if (!rooms.value.length && view.value.rooms_loading) return;
+  const held = held_directory.value;
   for (const [parent, group] of children.value) {
     if (folded_parents.has(parent)) continue;
+    if (held) {
+      const previous = held.children.get(parent);
+      if (group.some(room => !previous?.includes(room.id))) open_parents.value.add(parent);
+      continue;
+    }
     if (group.some(room => branches.value.get(room.id)?.running || branches.value.get(room.id)?.selected
       || (known_children && !known_children.has(room.id)))) open_parents.value.add(parent);
   }
-  if (rooms.value.length || known_children) known_children = mounted.value;
+  if (!held && (rooms.value.length || known_children)) known_children = mounted.value;
 }, { immediate: true });
 function toggle_parent(id) {
   if (open_parents.value.delete(id)) folded_parents.add(id);
@@ -211,20 +221,70 @@ function listed_count(id) {
 function visible_rooms(folder) {
   const roots = top_rooms(folder);
   if (manual_order.value) return roots;
+  const held = held_directory.value?.folders.get(folder.id);
+  const limit = listed_count(folder.id) + added_root_count(folder, roots);
   return roots.filter((room, index) => {
+    if (held_directory.value) return index < limit || held?.visible.has(room.id);
     const branch = branches.value.get(room.id);
-    return index < listed_count(folder.id) || branch.running || branch.selected || branch.attention?.kind === "awaiting";
+    return index < limit || branch.running || branch.selected || branch.attention?.kind === "awaiting";
   });
 }
 function top_rooms(folder) {
   const roots = folder.rooms.filter(room => !mounted.value.has(room.id));
-  return manual_order.value ? roots : roots.sort((a,b) => branches.value.get(b.id).time - branches.value.get(a.id).time);
+  const held = held_directory.value?.folders.get(folder.id);
+  if (manual_order.value) return roots;
+  roots.sort((a,b) => branches.value.get(b.id).time - branches.value.get(a.id).time);
+  return held ? ordered_snapshot(held.order, roots) : roots;
 }
+
+/** Put newcomers first and keep the previous order of rooms already in the group. */
+function ordered_snapshot(ids, live_rooms) {
+  const by_id = new Map(live_rooms.map(room => [room.id, room]));
+  const existing = ids.flatMap(id => {
+    const room = by_id.get(id);
+    by_id.delete(id);
+    return room ? [room] : [];
+  });
+  return [...by_id.values(), ...existing];
+}
+
+/** Newly visible rooms do not consume the previous list's quota while it is held. */
+function added_root_count(folder, roots) {
+  if (!held_directory.value) return 0;
+  const held = held_directory.value.folders.get(folder.id);
+  return held ? roots.filter(room => !held.ids.has(room.id)).length : roots.length;
+}
+
+/** Defer automatic reordering and expansion while a pointer or focus is in the directory. */
+watch([directory_hovered, directory_focused, manual_order], ([hovered, focused, manual]) => {
+  if (manual || (!hovered && !focused)) {
+    held_directory.value = null;
+  } else if (!held_directory.value) {
+    held_directory.value = {
+      folders: new Map(folders.value.map(folder => {
+        const order = top_rooms(folder).map(room => room.id);
+        const listed = new Set(order.slice(0, listed_count(folder.id)));
+        const visible = new Set(visible_rooms(folder).map(room => room.id).filter(id => !listed.has(id)));
+        return [folder.id, { order, ids: new Set(order), visible }];
+      })),
+      children: new Map([...children.value].map(([id, group]) => [id, group.map(room => room.id)])),
+    };
+  }
+}, { flush: "sync" });
+
+/** Mouse focus can linger after pointerleave, so only keyboard focus keeps the hold. */
+function directory_focus_out(event) {
+  if (event.currentTarget.contains(event.relatedTarget)) return;
+  pointer_focus = false;
+  directory_focused.value = false;
+}
+
 function directory_rows(folder) {
   const rows = [];
   function append(group, depth) {
     group.forEach((room, index) => {
-      const kids = children.value.get(room.id) || [];
+      const live_kids = children.value.get(room.id) || [];
+      const kids = held_directory.value ? ordered_snapshot(held_directory.value.children.get(room.id) || [], live_kids) : live_kids;
       const expanded = open_parents.value.has(room.id);
       const label = kids.length && (expanded ? t("收起子房间") : t("展开 {count} 个子房间", { count: kids.length }));
       const folded = kids.length && !expanded;
@@ -247,8 +307,9 @@ function list_toggle_label(folder) {
 function toggle_room_list(folder) {
   const next = new Map(listed_counts.value);
   const visible = new Set(visible_rooms(folder));
-  const hidden = top_rooms(folder).flatMap((room, index) => (visible.has(room) ? [] : [index]));
-  if (hidden.length) next.set(folder.id, hidden[Math.min(ROOM_BATCH_COUNT, hidden.length) - 1] + 1);
+  const roots = top_rooms(folder);
+  const hidden = roots.flatMap((room, index) => (visible.has(room) ? [] : [index]));
+  if (hidden.length) next.set(folder.id, hidden[Math.min(ROOM_BATCH_COUNT, hidden.length) - 1] + 1 - added_root_count(folder, roots));
   else next.delete(folder.id);
   listed_counts.value = next;
 }
@@ -439,7 +500,10 @@ function actions(room) {
 </script>
 
 <template>
-  <div class="channel-directory-manager">
+  <div class="channel-directory-manager" @pointerenter="directory_hovered = $event.pointerType === 'mouse' || $event.pointerType === 'pen'" @pointerleave="directory_hovered = false"
+    @pointerdown.capture="pointer_focus = true; directory_focused = false"
+    @keydown.capture="pointer_focus = false; directory_focused = true"
+    @focusin="directory_focused = !pointer_focus && $event.target.matches(':focus-visible')" @focusout="directory_focus_out">
     <div class="channel-directory-heading">
       <button type="button" class="channel-section-toggle" :aria-expanded="rooms_open" @click="rooms_open = !rooms_open">
         <UIcon :name="rooms_open ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" />{{ directory_title }}

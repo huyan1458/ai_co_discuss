@@ -31,7 +31,7 @@ export async function read_relay_region(env, machine) {
   try {
     const row = await env.DB?.prepare("SELECT json_extract(body, '$.relay_region') AS region FROM machine_devices WHERE machine_id=?").bind(machine).first();
     region = row?.region;
-  } catch { /* Keep the legacy relay available if D1 is temporarily unavailable. */ }
+  } catch { throw new HttpError(503, "暂时无法读取电脑的中转地区，请稍后重试"); }
   return valid_region(region);
 }
 

@@ -51,15 +51,26 @@ async function sync() {
 <template>
   <div class="flows">
     <div class="flows-head">
-      <span>{{ t('工作流') }}
-        <span v-if="behind" class="panel-tag is-blue"><UIcon name="i-lucide-sparkles" />{{ t('{value1} 个可同步', { value1: missing.length + outdated.length }) }}</span>
-        <span v-else-if="result && !result.error" class="panel-tag is-green"><UIcon name="i-lucide-check" />{{ t('已是最新') }}</span>
-        <small>{{ loading ? t('正在检查…') : t('房间中可启用的多人分工流程，在共议网站侧栏编辑、停用') }}</small></span>
-      <button v-if="!behind" type="button" class="panel-icon-button" :class="{ 'is-spinning': loading }" :disabled="loading"
-        :title="t('检查随包工作流')" :aria-label="t('检查随包工作流')" @click="load(true)"><UIcon name="i-lucide-refresh-cw" /></button>
-      <button v-else type="button" class="panel-icon-button flows-sync" :disabled="loading || syncing"
-        :title="t('同步到最新版')" :aria-label="t('同步到最新版')" @click="confirming = true">
-        <UIcon :name="syncing ? 'i-lucide-loader' : 'i-lucide-download'" :class="{ 'animate-spin': syncing }" /></button>
+      <div class="flows-heading">
+        <div class="flows-title">{{ t('工作流') }}
+          <span class="flows-badge" role="status">
+            <span v-if="loading" class="panel-tag is-gray">{{ t('正在检查…') }}</span>
+            <span v-else-if="behind" class="panel-tag is-blue"><UIcon name="i-lucide-sparkles" />{{ t('{value1} 个可同步', { value1: missing.length + outdated.length }) }}</span>
+            <span v-else-if="result && !result.error" class="panel-tag is-green"><UIcon name="i-lucide-check" />{{ t('已是最新') }}</span>
+          </span>
+        </div>
+        <small :title="t('房间中可启用的多人分工流程，在共议网站侧栏编辑、停用')">{{ t('房间中可启用的多人分工流程，在共议网站侧栏编辑、停用') }}</small>
+      </div>
+      <div class="flows-actions">
+        <button type="button" class="panel-icon-button" :class="{ 'is-spinning': loading }" :disabled="loading || syncing"
+          :title="t('检查随包工作流')" :aria-label="t('检查随包工作流')" @click="load(true)"><UIcon name="i-lucide-refresh-cw" /></button>
+        <span :title="loading ? t('正在检查…') : !behind ? (result && !result.error ? t('已是最新') : t('暂不可用')) : t('同步到最新版')">
+          <button type="button" class="panel-icon-button flows-sync" :disabled="!behind || loading || syncing"
+            :aria-label="t('同步到最新版')" @click="confirming = true">
+            <UIcon :name="syncing ? 'i-lucide-loader' : 'i-lucide-download'" :class="{ 'animate-spin': syncing }" />
+          </button>
+        </span>
+      </div>
     </div>
     <p v-if="result?.error" class="panel-note is-amber"><UIcon name="i-lucide-circle-alert" />{{ result.error }}</p>
     <p v-else-if="!result" class="flows-empty">{{ t('读取中…') }}</p>
@@ -98,8 +109,12 @@ async function sync() {
 <style scoped>
 .flows { display: flex; flex-direction: column; gap: 4px; }
 .flows-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--panel-muted); font-size: 13px; font-weight: 500; }
-.flows-head .panel-tag { margin-left: 6px; }
-.flows-head small { margin-left: 6px; color: var(--panel-faint); font-weight: 400; }
+.flows-heading { min-width: 0; }
+.flows-title { display: flex; align-items: center; gap: 6px; height: 24px; white-space: nowrap; }
+.flows-badge { display: flex; align-items: center; }
+.flows-head small { display: -webkit-box; height: 32px; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--panel-faint); font-weight: 400; line-height: 16px; }
+.flows-actions { display: inline-flex; flex-shrink: 0; gap: 4px; }
+.flows-actions > span { display: inline-flex; }
 .flows-empty { margin: 0; padding: 12px 4px; border-top: 1px solid var(--panel-line); color: var(--panel-faint); font-size: 13px; }
 .flows-row { display: flex; align-items: center; gap: 12px; padding: 12px 4px; border-top: 1px solid var(--panel-line); }
 .flows-icon { width: 20px; height: 20px; flex-shrink: 0; color: var(--panel-muted); }
@@ -107,7 +122,7 @@ async function sync() {
 .flows-text strong { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
 .flows-text small { overflow: hidden; color: var(--panel-faint); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
 .flows-status { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; padding: 8px 4px; color: var(--panel-amber); font-size: 13px; }
-.flows-sync { background: var(--panel-blue); color: #fff; }
+.flows-sync:not(:disabled) { background: var(--panel-blue); color: #fff; }
 .flows-sync:hover:not(:disabled) { background: #2563eb; color: #fff; }
 .flows-confirm { margin: 0 0 8px; font-size: 14px; }
 </style>

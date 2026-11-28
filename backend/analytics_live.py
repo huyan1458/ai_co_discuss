@@ -1,10 +1,10 @@
 """The statistics page's “实时” view: what the AI is doing now, what it did in the last hour, and what waits for the owner.
 
 2026-11-27, #14994, reworked after #15198. Unlike the periods, nothing here is compared or cached: it is read fresh on
-each refresh. Things that wait for the owner include a marked answer, a Goal waiting
-for confirmation, a member's question to the owner, a chain held at its round limit, a failed request not yet retried,
-and a run blocked by a permission denial. A failure, denial or held chain stops waiting once the owner has written in
-that room again (they moved on), and the same member's repeats in one room are one item with a count (#15198).
+each refresh. Only what blocks work until the owner acts is listed (#15793): a marked answer, a Goal waiting for
+confirmation, a member's question to the owner, and a chain held at its round limit. Failed runs and permission denials
+are left to the period's issues: a run that ended is not a wait. A held chain stops waiting once the owner has written
+in that room again (they moved on) or after a day, and repeats by one member in one room are one item with a count.
 System rooms (the platform steward) and archived rooms are left out, as everywhere on the statistics page.
 """
 import re
@@ -14,7 +14,7 @@ from .analytics_issues import concurrency_series, not_finished, unfinished_serie
 
 WINDOW = 3600
 MINUTE = 60
-RECENT_FAILURE = 86400
+STALE_WAIT = 86400
 RECENT_LIMIT = 40
 TASK_LIMIT = 80
 
@@ -88,27 +88,12 @@ def waiting_for_owner(connection, now):
               for row in connection.execute(f"""SELECT w.room_id,w.created_at,w.message_id,coalesce(l.label,m.name) AS label
                   FROM room_waits w {ROOMS.format('w')} JOIN room_members m ON m.id=w.member_id
                   LEFT JOIN member_labels l ON l.room_id=w.room_id AND l.name=m.name WHERE w.ended_at=0""")]
-    items += [{"kind": "rounds", "room_id": r["room_id"], "since": None, "message_id": r["message_id"] or r["chain_id"],
+    items += [{"kind": "rounds", "room_id": r["room_id"], "since": r["since"], "message_id": r["message_id"] or r["chain_id"],
                "rounds": r["asked_rounds"]}
-              for r in connection.execute(f"""SELECT h.* FROM free_chain_holds h {ROOMS.format('h')}
-                  WHERE (h.message_id>0 OR h.asked_rounds>0) AND NOT {MOVED_ON.format('max(h.message_id,h.chain_id)', 'h.room_id')}""")]
-    items += [{"kind": "failed", "room_id": r["room_id"], "since": r["created_at"], "message_id": r["message_id"],
-               "member": r["label"]}
-              for r in connection.execute(f"""SELECT r.room_id,r.message_id,r.created_at,coalesce(l.label,m.name) AS label
-                  FROM member_requests r {ROOMS.format('r')} JOIN room_members m ON m.id=r.member_id
-                  LEFT JOIN member_labels l ON l.room_id=r.room_id AND l.name=m.name
-                  WHERE r.status='failed' AND r.created_at>=? AND NOT {MOVED_ON.format('r.message_id', 'r.room_id')}""",
-                                          (now - RECENT_FAILURE,))]
-    # A denial only waits while it is the member's latest run in the room and the owner has not written there since.
-    items += [{"kind": "permission", "room_id": r["room_id"], "since": r["created_at"], "message_id": r["message_id"],
-               "member": r["label"]}
-              for r in connection.execute(f"""SELECT e.room_id,e.created_at,coalesce(l.label,m.name) AS label,{FIRST_MESSAGE} AS message_id
-                  FROM member_executions e {ROOMS.format('e')} JOIN room_members m ON m.id=e.member_id
-                  LEFT JOIN member_labels l ON l.room_id=e.room_id AND l.name=m.name
-                  JOIN execution_denials x ON x.execution_id=e.id AND x.denials NOT IN ('','[]','{{}}')
-                  WHERE e.created_at>=? AND NOT EXISTS(SELECT 1 FROM member_executions later
-                      WHERE later.room_id=e.room_id AND later.member_id=e.member_id AND later.id>e.id)
-                    AND NOT {MOVED_ON.format(f'coalesce({FIRST_MESSAGE},0)', 'e.room_id')}""", (now - RECENT_FAILURE,))]
+              for r in connection.execute(f"""SELECT h.*,CAST(strftime('%s',m.created_at) AS INTEGER) AS since
+                  FROM free_chain_holds h {ROOMS.format('h')} JOIN messages m ON m.id=max(h.message_id,h.chain_id)
+                  WHERE (h.message_id>0 OR h.asked_rounds>0) AND CAST(strftime('%s',m.created_at) AS INTEGER)>=?
+                    AND NOT {MOVED_ON.format('max(h.message_id,h.chain_id)', 'h.room_id')}""", (now - STALE_WAIT,))]
     return sorted(merged(items), key=lambda item: (item["since"] is None, item["since"] or 0))
 
 

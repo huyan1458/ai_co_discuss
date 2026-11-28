@@ -14,7 +14,7 @@ import { blocking_paths, instance_key_file, os_user_name, place_instance_key, se
 import { tray_script } from '../runner/tray.mjs';
 import { admin_cli } from '../runner/admin_cli.mjs';
 import { read_relay_health, reconnect_reader, relay_health_writer, request_relay_reconnect } from '../runner/relay_health.mjs';
-import { http_result, device_feedback, relay_outcome, network_report } from '../runner/network_log.mjs';
+import { http_result, device_feedback, relay_outcome, network_report, track_relay_connection } from '../runner/network_log.mjs';
 import { start_relay_channels } from '../runner/relay_channel.mjs';
 import { relay_commands, relayed_command } from '../runner/remote_launch.mjs';
 import { DatabaseSync } from 'node:sqlite';
@@ -128,7 +128,7 @@ test('network report merges histogram counts, outage edges and delayed device fa
   relay_outcome(data, site, { id: id2, device, local_ms: 20 }, false);
   device_feedback(data, site, device, [{ id: id2, total: 100, worker: 80, relay: 70 }]);
   context.mock.timers.tick(300000);
-  const report = { id: '00000000-0000-4000-8000-000000000003', failure: 'offline', at: Date.now(), total: 88 };
+  const report = { id: '00000000-0000-4000-8000-000000000003', failure: 'machine_unregistered', at: Date.now(), total: 88 };
   device_feedback(data, site, device, [report, report]);
   context.mock.timers.tick(300000);
   const { api } = create_panel({ data, ops, key: 'test', port: 0 });
@@ -138,7 +138,7 @@ test('network report merges histogram counts, outage edges and delayed device fa
   assert.deepEqual(result.periods.map(v => [v.requests, v.failures]), [[6, 3], [1, 1]]);
   assert.deepEqual(result.periods[0].segments.link_ms, { n: 2, p50: 50, p90: 100 });
   assert.equal(result.periods[0].worst_p90, 'link_ms');
-  assert.deepEqual(result.events.map(v => v.event), ['http_failed', 'http_recovered', 'relay_failed']);
+  assert.deepEqual(result.events.map(v => v.event), ['http_failed', 'http_recovered', 'machine_unregistered']);
   assert.equal(result.events[0].code, 'ENOTFOUND');
   assert.equal(result.events[1].count, 3);
   assert.doesNotMatch(output, /credential|secret/);
@@ -146,6 +146,17 @@ test('network report merges histogram counts, outage edges and delayed device fa
   assert.equal(hourly.periods[0].requests, 7);
   const cut = await api('POST', '/api/site/network', { since: new Date(first).toISOString(), until: new Date(first + 600000).toISOString() });
   assert.equal(cut.periods.length, 1);
+});
+
+test('a timeout is marked unreceived only with a complete receipt history for its exact connection', () => {
+  const { data } = fixture(), site = 'https://probe.example';
+  const arrived = track_relay_connection(data, site, 'registered');
+  const ids = [1, 2, 3].map(i => '00000000-0000-4000-8000-00000000000' + i);
+  arrived(ids[0]);
+  const reports = ids.map((id, i) => ({ id, failure: 'relay_timeout', connection: i === 2 ? 'unknown' : 'registered' }));
+  device_feedback(data, site, 'phone', reports);
+  const events = readFileSync(join(data, 'network.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(events.map(row => row.event), ['relay_failed', 'relay_timeout_unreceived', 'relay_failed']);
 });
 
 test('network history rotates a complete generation and reports events from both files', () => {
@@ -161,7 +172,7 @@ test('network history rotates a complete generation and reports events from both
 });
 
 test('relay requires pong despite inbound traffic and tolerates delayed timers and draining buffers', async context => {
-  for (const scenario of ['request', 'entry', 'first-pong', 'sleep', 'draining', 'stuck-buffer']) {
+  for (const scenario of ['request', 'entry', 'first-pong', 'sleep', 'draining', 'stuck-buffer', 'lost-probe', 'relay-close']) {
     await context.test(scenario, async context => {
       const { data } = fixture(), site = 'https://heartbeat.example';
       writeFileSync(join(data, 'machine-links.json'), JSON.stringify({ sites: { [site]: { id: 'test', private_key: {}, token: 'test' } } }));
@@ -185,7 +196,28 @@ test('relay requires pong despite inbound traffic and tolerates delayed timers a
       const socket = sockets[0];
       socket.dispatchEvent(new Event('open'));
       const tick = () => { now += 15_000; context.mock.timers.tick(15_000); };
-      if (scenario === 'sleep') {
+      if (scenario === 'relay-close') {
+        socket.dispatchEvent(new MessageEvent('message', { data: 'pong' }));
+        socket.dispatchEvent(Object.assign(new Event('close'), { code: 4003, reason: 'unresponsive', wasClean: true }));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(sockets.length, 2);
+        assert.match(readFileSync(join(data, 'network.jsonl'), 'utf8'), /relay_unresponsive/);
+      } else if (scenario === 'lost-probe') {
+        const message = data => socket.dispatchEvent(new MessageEvent('message', { data }));
+        message(JSON.stringify({ type: 'probe-ready', connection: 'first' }));
+        message('pong');
+        tick();
+        message(JSON.stringify({ type: 'probe-reply', seq: 1 }));
+        for (let index = 0; index < 12; index++) { message('pong'); tick(); }
+        assert.ok(socket.frames.includes(JSON.stringify({ type: 'probe', seq: 2 })));
+        message('pong'); // Transport responds while the application reply never arrives.
+        message(JSON.stringify({ type: 'probe-reply', seq: 1 }));
+        tick();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(socket.readyState, 3);
+        assert.equal(sockets.length, 2);
+        assert.match(readFileSync(join(data, 'network.jsonl'), 'utf8'), /relay_probe_timeout/);
+      } else if (scenario === 'sleep') {
         now += 600_000;
         context.mock.timers.tick(180_000);
         assert.equal(socket.readyState, 1, 'neither overdue heartbeat nor watchdog may disconnect on wake');
@@ -257,6 +289,14 @@ test('relay retry caps the wait at 30 seconds and sends a heartbeat when the rec
   restored.dispatchEvent(new MessageEvent('message', { data: 'pong' }));
   health.flush();
   assert.equal(read_relay_health(data, bound, process.pid).state, 'connected');
+  restored.dispatchEvent(new MessageEvent('message', { data: 'machine_unregistered' }));
+  restored.dispatchEvent(Object.assign(new Event('close'), { code: 4002, reason: 'machine unregistered' }));
+  await settled();
+  assert.equal(sockets.length, 7, 'registration loss reconnects without advancing the retry timer');
+  const incidents = readFileSync(join(data, 'network.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+    .filter(row => row.event === 'machine_unregistered');
+  assert.equal(incidents.length, 1);
+  assert.equal(incidents[0].source, 'heartbeat');
 });
 
 test('relay watchdog and manual reconnect rebuild only the addressed binding', async context => {

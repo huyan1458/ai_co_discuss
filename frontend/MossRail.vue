@@ -149,18 +149,16 @@ const loaded_work = computed(() => {
 <template>
   <section class="moss-rail" :aria-label="t('MOSS')">
     <div class="moss-software">
-      <template v-if="software">
         <div class="moss-software-name">
-          <UAvatar :src="software.identity.icon" :text="software.identity.initials" size="sm" class="channel-avatar" :class="software.identity.style" />
-          <strong>{{ software.name }}</strong>
+          <UAvatar v-if="software" :src="software.identity.icon" :text="software.identity.initials" size="sm" class="channel-avatar" :class="software.identity.style" />
+          <USkeleton v-else class="size-8 shrink-0 rounded-full" />
+          <strong>{{ software?.name || (settings ? t("还没有选择软件") : t("正在读取…")) }}</strong>
         </div>
         <dl>
-          <div><dt>{{ t("模型") }}</dt><dd>{{ software.model }}</dd></div>
-          <div v-if="context" class="moss-context" :title="context.title"><dt>{{ t("上下文") }}</dt><dd><span class="moss-context-bar" :data-tone="context.tone" role="meter" :aria-label="context.title" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="context.percent"><i :style="{ width: `${context.percent}%` }" /></span><small>{{ context.percent }}%</small></dd></div>
-          <div><dt>{{ t("项目") }}</dt><dd :class="{ 'moss-access-raised': software.raised }">{{ software.access }}<UButton v-if="software.raised" size="xs" variant="link" color="warning" class="moss-access-lower" :label="t('改回只读')" :loading="lowering" @click="lower_confirm = true" /></dd></div>
+          <div><dt>{{ t("模型") }}</dt><dd>{{ software?.model || "—" }}</dd></div>
+          <div class="moss-context" :title="context?.title"><dt>{{ t("上下文") }}</dt><dd><template v-if="context"><span class="moss-context-bar" :data-tone="context.tone" role="meter" :aria-label="context.title" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="context.percent"><i :style="{ width: `${context.percent}%` }" /></span><small>{{ context.percent }}%</small></template><template v-else>—</template></dd></div>
+          <div><dt>{{ t("项目") }}</dt><dd :class="{ 'moss-access-raised': software?.raised }">{{ software?.access || "—" }}<UButton v-if="software?.raised" size="xs" variant="link" color="warning" class="moss-access-lower" :label="t('改回只读')" :loading="lowering" @click="lower_confirm = true" /></dd></div>
         </dl>
-      </template>
-      <p v-else class="fine-print">{{ settings ? t("还没有选择软件") : t("正在读取…") }}</p>
       <div class="moss-software-actions">
         <UButton icon="i-lucide-settings-2" :label="t('设置')" size="sm" color="neutral" variant="soft" @click="open_settings()" />
         <UDropdownMenu :items="more_items" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }">
@@ -202,6 +200,7 @@ const loaded_work = computed(() => {
 .moss-software-name > strong { overflow: hidden; color: var(--ui-text-highlighted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .moss-software dl { display: grid; gap: 4px; margin: 0; font-size: 12px; }
 .moss-software dl > div { display: grid; grid-template-columns: 4.5em minmax(0, 1fr); gap: 8px; }
+.moss-software dl > div:last-child { min-height: 2.9em; }
 .moss-software dt { color: var(--ui-text-dimmed); }
 .moss-software dd { margin: 0; overflow: hidden; color: var(--ui-text-toned); text-overflow: ellipsis; white-space: nowrap; }
 .moss-software-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; }

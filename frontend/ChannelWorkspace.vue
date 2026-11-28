@@ -13,8 +13,7 @@ import RoomOverview from "./RoomOverview.vue";
 import StewardSettings from "./StewardSettings.vue";
 import MossRail from "./MossRail.vue";
 import WorkflowOverview from "./WorkflowOverview.vue";
-import { USE_MOSS_MARK, moss_avatar, moss_running } from "./moss.js";
-import MossMark from "./MossMark.vue";
+import { moss_avatar, moss_running } from "./moss.js";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
 import EventLog from "./EventLog.vue";
 import ProjectFiles from "./ProjectFiles.vue";
@@ -136,6 +135,8 @@ const nav_docked = computed(() => rail_inline.value && !nav_collapsed.value);
 // The rail and channel tools stay in place without a room so the layout never jumps; room-only controls are disabled.
 // A file preview docked beside the messages takes the rail's place until it closes; the rail's own setting is kept.
 const show_rail = computed(() => (invited_page.value || !workflow_page.value && !analytics_page.value && !steward_setup.value && view.value.tab === "discussion") && !rail_collapsed.value && !file_preview.dock_width);
+const reserve_rail = computed(() => show_rail.value || (!middle_page.value && Boolean(room.value) && !rail_collapsed.value && !file_preview.dock_width));
+const message_tools = computed(() => Boolean(room.value) && view.value.tab === "discussion");
 const rail_toggles = computed(() => rail_inline.value && !file_preview.dock_width);
 const info_label = computed(() => steward_room.value ? t("MOSS 配置") : rail_toggles.value && (invited_page.value || view.value.tab === "discussion") ? (rail_collapsed.value ? t("展开房间概览") : t("收起房间概览")) : t("讨论进度"));
 const LIVE_EXECUTION = ["dispatched", "started"];
@@ -197,7 +198,7 @@ const brief_preview = computed(() => {
   return template.content.textContent.replace(/\s+/g, " ").trim();
 });
 const topbar = ref(null);
-// Only the collapsed height offsets the transcript; the expanded brief floats over messages instead of pushing them.
+// The floating brief does not change the height of the header.
 const topbar_height = ref(0);
 let topbar_observer = null;
 const rail_drag = ref(null);
@@ -228,7 +229,7 @@ onMounted(() => document.addEventListener("pointerdown", collapse_brief_outside)
 onMounted(() => { for (const type of ["pointerup", "pointercancel"]) document.addEventListener(type, close_drawer_on_touch); });
 onBeforeUnmount(() => { for (const type of ["pointerup", "pointercancel"]) document.removeEventListener(type, close_drawer_on_touch); });
 onMounted(() => {
-  topbar_observer = new ResizeObserver(([entry]) => { if (brief_collapsed.value) topbar_height.value = Math.round(entry.target.offsetHeight); });
+  topbar_observer = new ResizeObserver(([entry]) => { topbar_height.value = Math.round(entry.target.offsetHeight); });
   topbar_observer.observe(topbar.value);
 });
 onBeforeUnmount(() => topbar_observer?.disconnect());
@@ -281,6 +282,7 @@ watch(() => MERGED_TABS[view.value.tab], (merged) => { if (merged) act("tab", me
 watch(() => steward_room.value && ["private", "overview"].includes(view.value.tab), (hidden) => { if (hidden) act("tab", "discussion"); }, { immediate: true });
 // A room shows the brief bar only while a discussion is running or paused; afterwards the rail opens the consensus dialog.
 const show_brief = computed(() => !!room.value && (!free_room.value || ["active", "paused"].includes(room.value.session?.status)));
+watch([show_brief, () => room.value?.id, () => view.value.tab], () => { brief_collapsed.value = true; });
 const consensus_open = ref(false);
 const editing_context = ref(false);
 const rendered_state = computed(() => room.value?.state_text ? bridge.render_room_markdown(room.value.state_text) : "");
@@ -342,13 +344,28 @@ function open_steward_setup() {
     steward_setup.value = true;
   });
 }
+/** 管理 in a room's workflow section: the workflow page on that room's project (the event's detail is the filter). */
+function manage_workflows(event) {
+  info_open.value = false;
+  open_workflows();
+  workflow_library.open_overview(event.detail);
+}
+/** A workflow picked in the right column goes into the message box: show the messages and close the phone's drawer. */
+function show_picked_workflow() {
+  info_open.value = false;
+  if (view.value.tab !== "discussion") act("tab", "discussion");
+}
 onMounted(() => {
   document.addEventListener("discuss:open-steward", open_steward);
   document.addEventListener("discuss:steward-setup", open_steward_setup);
+  document.addEventListener("discuss:open-workflows", manage_workflows);
+  document.addEventListener("discuss:pick-workflow", show_picked_workflow);
 });
 onBeforeUnmount(() => {
   document.removeEventListener("discuss:open-steward", open_steward);
   document.removeEventListener("discuss:steward-setup", open_steward_setup);
+  document.removeEventListener("discuss:open-workflows", manage_workflows);
+  document.removeEventListener("discuss:pick-workflow", show_picked_workflow);
 });
 
 /** From the analytics page: open a room and show the message that asked for one run, once that room is on screen. */
@@ -557,7 +574,7 @@ function resize_nav_by_key(event) {
 </script>
 
 <template>
-  <div class="channel-shell" :class="{ 'channel-share': share, 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': !nav_docked, 'channel-has-rail': show_rail }" :style="layout_style">
+  <div class="channel-shell" :class="{ 'channel-share': share, 'channel-resizing': rail_drag || nav_drag, 'channel-nav-collapsed': !nav_docked, 'channel-has-rail': reserve_rail }" :style="layout_style">
     <ChannelSidebar v-if="nav_docked"  :steward-setup="steward_setup" :inert="share ? true : undefined" @select="choose_room" @manage="manage_room" @create="create_channel" @create-folder="create_folder" @manage-folder="edit_folder" @delete-folder="remove_folder" @archive-folder="archive_folder" @archives="open_archives" @destructions="nav_open = false; modal = 'destructions'" @workflows="open_workflows" @invited="open_invited" @analytics="open_analytics" @settings="open_settings" />
     <div v-if="nav_docked" class="channel-nav-resizer" role="separator" tabindex="0" :aria-label="t('调整房间栏宽度')" aria-orientation="vertical" aria-controls="channel-sidebar" :aria-valuemin="NAV_MIN" :aria-valuemax="nav_max" :aria-valuenow="effective_nav_width" :aria-valuetext="t('{count} 像素', { count: effective_nav_width })" :title="t('拖动调整房间栏宽度，也可使用方向键')" @pointerdown="start_nav_resize" @pointermove="resize_nav" @pointerup="finish_nav_resize" @pointercancel="finish_nav_resize" @lostpointercapture="finish_nav_resize" @keydown="resize_nav_by_key"></div>
 
@@ -589,11 +606,11 @@ function resize_nav_by_key(event) {
             <span class="channel-header-context">{{ t("全房间行为分析") }}</span>
           </template>
           <template v-else-if="steward_setup">
-            <span class="channel-title-icon"><MossMark v-if="USE_MOSS_MARK" class="channel-moss-title" /><img v-else class="channel-moss-title" :src="moss_setup.src" alt="" /></span>
+            <span class="channel-title-icon"><img class="channel-moss-title" :src="moss_setup.src" alt="" /></span>
             <div class="channel-title"><div class="channel-title-copy"><h1>{{ t("MOSS") }}</h1></div></div>
           </template>
           <template v-else>
-            <span class="channel-title-icon"><template v-if="room?.system_kind === 'steward'"><MossMark v-if="USE_MOSS_MARK" class="channel-moss-title" :state="moss_title.state" :title="moss_title.title" /><img v-else class="channel-moss-title moss-avatar" :class="`is-${moss_title.state}`" :src="moss_title.src" :title="moss_title.title" :alt="moss_title.title" /></template><UIcon v-else name="i-lucide-hash" /></span>
+            <span class="channel-title-icon"><img v-if="room?.system_kind === 'steward'" class="channel-moss-title moss-avatar" :class="`is-${moss_title.state}`" :src="moss_title.src" :title="moss_title.title" :alt="moss_title.title" /><UIcon v-else name="i-lucide-hash" /></span>
             <div class="channel-title"><div class="channel-title-copy"><h1 :title="room?.system_kind === 'steward' ? t('MOSS') : room?.title || creating_title">{{ room?.system_kind === 'steward' ? t('MOSS') : room?.title || creating_title || t('共议') }}</h1></div><UBadge v-if="room?.archived" color="neutral" variant="subtle" size="sm">{{ t("已存档") }}</UBadge></div>
           </template>
           <span v-if="room && !middle_page && !steward_room" class="channel-header-context">{{ tabs.find((item) => item.value === view.tab)?.label }}<span>·</span>{{ t("{count} 条记录", { count: room.message_count }) }}<template v-if="created_label"><span>·</span><time :datetime="room.created_at" :title="new Date(room.created_at).toLocaleString(locale, { hour12: false })">{{ created_label }}</time></template></span>
@@ -603,13 +620,13 @@ function resize_nav_by_key(event) {
               <span v-if="work_status.members.length" class="channel-work-avatars"><UAvatar v-for="member in work_status.members" :key="member.id" :src="bridge.identities[member.name]?.icon" :text="bridge.identities[member.name]?.initials" :alt="member.name" size="2xs" class="channel-avatar" :class="bridge.identities[member.name]?.style" /></span>
               <span class="channel-work-text" role="status">{{ work_status.text }}</span><span class="pb-dot"></span>
             </span>
-            <form v-if="!share && !middle_page && view.tab === 'discussion'" class="channel-search" @submit.prevent="act('filter', { query: search })">
-              <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" :placeholder="t('搜索消息')" :aria-label="t('搜索讨论记录')" :disabled="!room" class="channel-search-input">
-                <template #trailing><UButton v-if="search || view.query" icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="channel-search-clear" :aria-label="t('清除搜索')" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" :aria-label="t('搜索')" :disabled="!room" /></template>
+            <form v-if="!share && !middle_page" class="channel-search" :title="message_tools ? undefined : t('请在消息标签使用搜索和筛选')" @submit.prevent="message_tools && act('filter', { query: search })">
+              <UInput v-model="search" icon="i-lucide-search" variant="none" size="sm" :placeholder="t('搜索消息')" :aria-label="t('搜索讨论记录')" :disabled="!message_tools" class="channel-search-input">
+                <template #trailing><UButton icon="i-lucide-x" color="neutral" variant="ghost" size="xs" class="channel-search-clear" :aria-label="t('清除搜索')" :disabled="!message_tools || !(search || view.query)" @click="search = ''; act('filter', { query: '' })" /><UButton type="submit" icon="i-lucide-corner-down-left" color="neutral" variant="ghost" size="xs" :aria-label="t('搜索')" :disabled="!message_tools" /></template>
               </UInput>
             </form>
             <!-- Not modal: a modal menu blocks taps outside it, so on phones the filter icon could not close it again (user 2026-11-25, #10412). -->
-            <UDropdownMenu :modal="false" v-if="!share && !middle_page && view.tab === 'discussion'" :items="source_filter_items" :disabled="!room" :content="source_filter_content" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" :aria-label="t('筛选消息与卡片')" :title="t('筛选消息与卡片')" :disabled="!room" /></UDropdownMenu>
+            <span v-if="!share && !middle_page" class="inline-flex" :title="message_tools ? t('筛选消息与卡片') : t('请在消息标签使用搜索和筛选')"><UDropdownMenu :modal="false" :items="source_filter_items" :disabled="!message_tools" :content="source_filter_content" :ui="{ content: 'channel-menu channel-source-menu' }"><UButton icon="i-lucide-list-filter" :variant="view.source_filter ? 'soft' : 'ghost'" color="neutral" size="sm" class="channel-icon-button channel-source-filter" :aria-pressed="view.source_filter" :aria-label="t('筛选消息与卡片')" :disabled="!message_tools" /></UDropdownMenu></span>
           </div>
           <UTooltip v-if="!workflow_page && !analytics_page && !steward_setup" :text="info_label"><UButton icon="i-lucide-panel-right" color="neutral" variant="ghost" size="sm" class="channel-icon-button channel-panel-toggle channel-info-button" :aria-label="info_label" :disabled="!room && !invited_page && !(rail_inline && view.tab === 'discussion')" :aria-expanded="rail_toggles && (invited_page || view.tab === 'discussion') ? show_rail : info_open" @click="toggle_info" /></UTooltip>
           <UTooltip v-else-if="workflow_page && !workflow_overview && !workflow_stacked && (workflow_draft || workflow_loading)" :text="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md：主持人照它派活')"><UButton icon="i-lucide-panel-right" label="SKILL.md" color="neutral" variant="ghost" size="sm" class="channel-workflow-skill-toggle channel-panel-toggle" :aria-label="workflow_skill_open ? t('收起 SKILL.md') : t('展开 SKILL.md')" :aria-expanded="workflow_skill_open" :aria-pressed="workflow_skill_open" aria-controls="workflow-skill-panel" @click="workflow_library.set_skill_open(!workflow_skill_open)" /></UTooltip>
@@ -617,15 +634,15 @@ function resize_nav_by_key(event) {
         <div v-if="(room || creating_preview) && !middle_page" class="channel-tabbar">
           <UTabs v-model="selected_tab" :items="room ? tabs : creating_tabs" :content="false" variant="pill" color="neutral" size="sm" class="channel-tabs" :aria-label="t('房间视图')" />
         </div>
-        <section v-if="show_brief && !middle_page" class="channel-host-brief" :class="{ 'is-collapsed': brief_collapsed }" :aria-label="t('主持简报')">
+        <section v-if="room && !middle_page && !steward_room" class="channel-host-brief" :aria-label="t('主持简报')">
           <div class="channel-brief-inner">
             <div class="channel-brief-heading">
-              <button type="button" class="channel-brief-toggle" :aria-label="brief_collapsed ? t('展开主持简报') : t('收起主持简报')" :aria-expanded="!brief_collapsed" aria-controls="channel-brief-content" @click="toggle_brief"><UIcon :name="brief_collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><strong>{{ t("主持简报") }}{{ brief_collapsed ? t('：') : '' }}</strong><span v-if="brief_collapsed" class="channel-brief-preview">{{ brief_preview }}</span></button>
-              <template v-if="!brief_collapsed"><UButton :label="t('详细共识与讨论记录')" color="neutral" variant="link" size="xs" class="channel-brief-update" @click="open_consensus()" /><UButton v-if="!share" :label="t('编辑')" color="neutral" variant="link" size="xs" class="channel-brief-update" @click="open_consensus(true)" /></template>
+              <button type="button" class="channel-brief-toggle" :disabled="!show_brief" :title="show_brief ? undefined : t('暂无主持简报')" :aria-label="brief_collapsed ? t('展开主持简报') : t('收起主持简报')" :aria-expanded="!brief_collapsed" aria-controls="channel-brief-content" @click="toggle_brief"><UIcon :name="brief_collapsed ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'" /><strong>{{ t("主持简报") }}</strong><span class="channel-brief-preview">{{ show_brief ? brief_preview : t("暂无主持简报") }}</span></button>
             </div>
-            <div v-show="!brief_collapsed" id="channel-brief-content" class="channel-brief-content">
+            <div v-show="show_brief && !brief_collapsed" id="channel-brief-content" class="channel-brief-content">
               <div class="channel-brief-text markdown-body" @click="open_message_ref($event, open_detail)" v-html="room.rendered_brief"></div>
               <div class="channel-brief-footer"><span v-if="!free_room" class="channel-brief-status">{{ bridge.progress_speaker(room) }}</span><small>{{ bridge.brief_meta(room) }}</small></div>
+              <div class="channel-brief-actions"><UButton :label="t('详细共识与讨论记录')" color="neutral" variant="link" size="xs" @click="open_consensus()" /><UButton v-if="!share" :label="t('编辑')" color="neutral" variant="link" size="xs" @click="open_consensus(true)" /></div>
             </div>
           </div>
         </section>

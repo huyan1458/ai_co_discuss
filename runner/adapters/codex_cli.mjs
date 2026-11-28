@@ -585,7 +585,7 @@ function recover_turn(record) {
   return { status: 'completed', exact: true, text: ends[0].last_agent_message || '' };
 }
 
-function codex_limits(limits) {
+function codex_limits(limits, reset_credits) {
   const windows = [];
   for (const item of [limits?.primary, limits?.secondary]) {
     const percent = item?.used_percent ?? item?.usedPercent;
@@ -594,7 +594,8 @@ function codex_limits(limits) {
     const kind = minutes === 300 ? 'five_hour' : minutes === 10080 ? 'seven_day' : 'other';
     windows.push({ kind, minutes, used: percent / 100, resets_at: item.resets_at ?? item.resetsAt });
   }
-  return windows.length ? { windows } : null;
+  return windows.length ? { windows, plan: limits.planType ?? limits.plan_type,
+    reset_credits: reset_credits && { available: reset_credits.availableCount } } : null;
 }
 
 /** Difference between the cumulative counters immediately before and at the end of the identified turn. */
@@ -647,7 +648,10 @@ export function codex_quota(profile, { env = process.env, spawn_process = spawn 
       const reply = json_line(line);
       if (!reply || ![0, 1].includes(reply.id)) return;
       if (reply.error) return finish(null, null);
-      if (reply.id === 1) return finish(null, codex_limits(reply.result?.rateLimits));
+      if (reply.id === 1) {
+        const result = reply.result;
+        return finish(null, codex_limits(result?.rateLimits, result?.rateLimitResetCredits ?? result?.rateLimits?.rateLimitResetCredits));
+      }
       send({ method: 'initialized', params: {} });
       send({ id: 1, method: 'account/rateLimits/read', params: {} });
     },

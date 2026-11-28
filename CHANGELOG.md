@@ -2,6 +2,14 @@
 
 This changelog records major changes by npm package version. Entries before 0.5.0 cover selected milestones. The Chinese edition is available in `CHANGELOG.zh-CN.md`. The version number at the top left of the website links to the changelog.
 
+## 0.5.46 (2026-11-28 02:04)
+
+- New: The "Analytics" page adds "Subscription use": how much of each subscription you used over the past 8 weeks, how often you hit limits, and whether to upgrade or downgrade.
+- New: The room list can switch between "Manual order" and "Recent activity".
+- New: Select several items in project folders and the cloud space to download, move or delete them together.
+- Changed: The cloud space now lives in the "Files" tab and works like a project folder; the line under the message box shows each account's tightest quota.
+- Changed: Typing `/` to pick a workflow lists the project's workflows first, then the global ones.
+
 ## 0.5.45 (2026-11-27 23:00)
 
 - Changed: "Workflows" is now its own page at the top of the sidebar, listing workflows as cards with "New" and "Import" at the top right.

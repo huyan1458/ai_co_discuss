@@ -285,8 +285,10 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
                   :title="t('导出这位专家：没有技能是一个 md，有技能是一个压缩包（取工作流里的技能）')" @click="export_card" />
               </span>
             </header>
-            <p v-if="missing(current.agent)" class="workflow-experts-missing" :title="t('本机未配置 {value1}，换一个本机已配置的软件才能运行', { value1: bridge.default_name(platform(current.agent)) })"><UIcon name="i-lucide-triangle-alert" /><span>{{ t('本机未配置 {value1}，换一个本机已配置的软件才能运行', { value1: bridge.default_name(platform(current.agent)) }) }}</span></p>
-            <p v-else-if="model_missing(current.agent)" class="workflow-experts-missing" :title="t('本机的 {value1} 没有模型 {value2}，不能调用：在下面“模型”里改成列表里的（或用软件默认），改完保存', { value1: bridge.default_name(platform(current.agent)), value2: current.agent.model })"><UIcon name="i-lucide-triangle-alert" /><span>{{ t('本机没有模型 {value1}，不能调用', { value1: current.agent.model }) }}</span></p>
+            <div class="workflow-experts-status" role="status">
+              <p v-if="missing(current.agent)" class="workflow-experts-missing" :title="t('本机未配置 {value1}，换一个本机已配置的软件才能运行', { value1: bridge.default_name(platform(current.agent)) })"><UIcon name="i-lucide-triangle-alert" /><span>{{ t('本机未配置 {value1}，换一个本机已配置的软件才能运行', { value1: bridge.default_name(platform(current.agent)) }) }}</span></p>
+              <p v-else-if="model_missing(current.agent)" class="workflow-experts-missing" :title="t('本机的 {value1} 没有模型 {value2}，不能调用：在下面“模型”里改成列表里的（或用软件默认），改完保存', { value1: bridge.default_name(platform(current.agent)), value2: current.agent.model })"><UIcon name="i-lucide-triangle-alert" /><span>{{ t('本机没有模型 {value1}，不能调用', { value1: current.agent.model }) }}</span></p>
+            </div>
             <UTabs v-model="tab" :items="tabs" :content="false" variant="link" size="sm" class="workflow-experts-tabs" :aria-label="t('专家配置分区')" />
             <div v-if="tab === 'basic'" class="workflow-experts-pane">
               <label class="workflow-experts-field">
@@ -361,7 +363,8 @@ watch([open, () => entries.value.map((entry) => entry.agent.name).join()], ([sho
 .workflow-experts-name :deep(input) { padding-inline: 0; font-size: 17px; font-weight: 600; }
 .workflow-experts-title small { overflow: hidden; color: var(--ui-text-dimmed); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-experts-actions { display: flex; flex-shrink: 0; align-items: center; gap: 6px; }
-.workflow-experts-missing { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ui-warning, #e0a33a); font-size: 12px; }
+.workflow-experts-status { min-height: 18px; }
+.workflow-experts-missing { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ui-warning, #e0a33a); font-size: 12px; line-height: 18px; }
 /* One line: the full sentence (how to fix it) is the tooltip; the model field below shows the fix. */
 .workflow-experts-missing > span:last-child { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .workflow-experts-missing > span:first-child { flex-shrink: 0; }

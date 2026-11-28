@@ -145,7 +145,7 @@ const html = (message) => render_markdown(message.text || "", handles.value);
       <p v-if="working.length" class="guest-working" role="status"><UIcon name="i-lucide-loader-circle" class="animate-spin" />{{ t("{names} 正在处理…", { names: working.join("、") }) }}</p>
     </div>
     <form class="guest-composer" @submit.prevent="submit">
-      <div v-if="members.length" class="guest-mentions" :aria-label="t('点名成员')">
+      <div class="guest-mentions" :aria-label="t('点名成员')">
         <button v-for="member in members" :key="member.id" type="button" @click="mention(member)">@{{ member.label }}</button>
       </div>
       <div class="guest-compose-row">
@@ -172,7 +172,7 @@ const html = (message) => render_markdown(message.text || "", handles.value);
 .guest-message-plain { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .guest-withdrawn { margin: 0; color: var(--ui-text-dimmed); font-style: italic; }
 .guest-composer { display: flex; flex-direction: column; gap: 6px; padding: 8px 16px 12px; border-top: 1px solid var(--ui-border); }
-.guest-mentions { display: flex; gap: 4px; overflow-x: auto; }
+.guest-mentions { display: flex; align-items: flex-start; gap: 4px; height: 30px; overflow-x: auto; scrollbar-width: thin; }
 .guest-mentions button { flex: none; padding: 2px 8px; border: 1px solid var(--ui-border); border-radius: 999px; color: var(--ui-text-toned); font-size: 12px; }
 .guest-mentions button:hover { background: var(--ui-bg-elevated); }
 .guest-working { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ui-text-muted); font-size: 12px; }

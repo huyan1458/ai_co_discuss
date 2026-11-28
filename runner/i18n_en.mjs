@@ -149,6 +149,7 @@ export default {
   "analytics  查看全房间协作统计": "analytics  Show collaboration statistics across rooms",
   "用法：codiscuss analytics [--range today|7d|30d|all] [--scope all|current] [--from YYYY-MM-DD --to YYYY-MM-DD] [--json]": "Usage: codiscuss analytics [--range today|7d|30d|all] [--scope all|current] [--from YYYY-MM-DD --to YYYY-MM-DD] [--json]",
   "需要管理员身份": "Administrator access required",
+  "  quota-usage [--weeks N]  查看订阅利用情况": "  quota-usage [--weeks N]  Show subscription utilization",
   "统计日期范围或时区无效": "Invalid analytics date range or time zone",
   "读取统计失败": "Could not read analytics",
   "统计期间 {from} 至 {to}（结束日不含），含 {rooms} 个现存房间和 {sealed} 个已销毁房间。": "Period {from} to {to} (exclusive), including {rooms} current and {sealed} destroyed rooms.",

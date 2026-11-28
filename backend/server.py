@@ -44,7 +44,7 @@ from .free_room import (active_members, add_member, after_free_message, after_pr
                         inbox, interrupt_for_message, interrupt_member, queue_request_action, member_action, member_capability, member_values, migrate_free_tables, reserve_execution,
                         room_failure_wakes, room_quiet_checkins, save_room_access, view_execution, recent_executions, MAX_MESSAGE_ID)
 from .free_room import ROOM_ATTENTION_SQL, ROOM_WAITING_SINCE_SQL, STEWARD_SESSION_TEMPLATE, convert_suggestion, message_suggestions, replace_steward_member, save_suggestions, sync_participants
-from .free_room import account_quotas, report_quota
+from .free_room import account_quotas, quota_usage, report_quota
 from .free_room import HOST_WITHDRAW_RESULT, OWNER_INTERRUPT_RESULT, OWNER_REWIND_RESULT, OWNER_STOP_RESULT, observed_host_versions
 from .free_room import adopt_recommendation, recommend_member, register_member, require_member
 from .private_chat import chat_action, member_chat
@@ -5873,7 +5873,8 @@ class DiscussionHandler(BaseHTTPRequestHandler):
         project_cloud = parts[:3] == ["api", "local", "project-files"] and (
             len(parts) == 4 and parts[3] in {"cloud", "cloud-upload", "cloud-land"}
             or len(parts) == 5 and parts[3] == "cloud" and re.fullmatch(r"[a-f0-9]{32}", parts[4]))
-        if not project_cloud and (parts[:1] != ["api"] or parts[1:2] not in (["rooms"], ["folders"], ["revisions"], ["sites"], ["analytics"])):
+        if not project_cloud and parts != ["api", "quota-usage"] and (
+                parts[:1] != ["api"] or parts[1:2] not in (["rooms"], ["folders"], ["revisions"], ["sites"], ["analytics"])):
             raise PermissionError(Text('本机中转不允许访问该地址'))
         return True
 
@@ -6054,6 +6055,13 @@ class DiscussionHandler(BaseHTTPRequestHandler):
             if parts[2:] == ["moss"]:
                 return self.respond(moss_snapshot(connection, params, int(time.time())))
             return self.respond(analytics_snapshot(connection, params, self.server.analytics_cache, int(time.time())))
+        if parts == ["api", "quota-usage"] and method == "GET":
+            if self.headers.get("X-Discussion-Token") is not None or not (self.bridged or self.admin_session(connection)):
+                raise PermissionError(Text('需要管理员身份'))
+            weeks = params.get("weeks", "8")
+            if not re.fullmatch(r"(?:[1-9]|1[0-9]|2[0-6])", weeks):
+                raise ValueError(Text("{value1} 须为 {value2}–{value3} 的整数", value1="weeks", value2=1, value3=26))
+            return self.respond(quota_usage(connection, int(weeks), int(time.time())))
         if parts == ["api", "scheduler-feedback"] and method == "GET":
             if not self.admin_session(connection):
                 raise AdminError(Text('需要登录管理员账号'), 401)

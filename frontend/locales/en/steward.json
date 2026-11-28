@@ -113,8 +113,6 @@
   "MOSS 已改回只读": "MOSS is read-only again",
   "改回只读": "Make read-only",
   "MOSS 将只能读取，不能运行命令或改本机文件；之后安装、部署、占用盘点时会先问你是否调高。": "MOSS will only read: it can't run commands or change files on this computer. Installing, deploying or a storage inventory will ask you to raise it first.",
-  "软件默认强度": "Software default effort",
-  "高级": "Advanced",
   "先选一个软件": "Choose a software first",
   "上下文 {percent}% · {used} / {window}": "Context {percent}% · {used} / {window}",
   "更多": "More",
@@ -124,6 +122,5 @@
   "等你回答时立即告诉你，其他事攒到简报时间；会消耗 MOSS 所用软件的额度。": "Tells you at once when you're needed and saves the rest for the digest; uses the quota of MOSS's software.",
   "还没有职责，MOSS 不会主动汇报。在对话里交代一句，它会记下。": "No duties yet, so MOSS won't report. Tell it one in the conversation and it will note it.",
   "在对话里交代一句，MOSS 会记下。": "Tell MOSS a duty in the conversation and it will note it.",
-  "全部工作流": "All workflows",
   "在房间里用输入框的“/”或右栏启用。": "Turn one on in a room with “/” in the message box or from the side panel."
 }

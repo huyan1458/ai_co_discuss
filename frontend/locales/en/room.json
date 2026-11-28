@@ -589,6 +589,9 @@
   "讨论操作": "Discussion actions",
   "停止本次讨论执行，继续时由主持人重新安排": "Stop this discussion's runs; the host reschedules on resume",
   "跳过": "Skip",
+  "已设为不限": "Set to unlimited",
+  "当前未缩放": "Already at full view",
+  "请先开始回放": "Start playback first",
   "跳过 {value1} 本次发言": "Skip {value1}'s turn",
   "结束讨论": "End discussion",
   "当前发言安排会被取消，已有消息全部保留。": "The current speaking assignment will be cancelled. All messages are kept.",
@@ -1076,5 +1079,13 @@
   "{author} → {member}": "{author} → {member}",
   "#{message} 已发出，等 {member} 做完当前这件后接": "#{message} sent; {member} takes it after finishing the current task",
   "取消这条请求，{member} 不再处理它": "Cancel this request; {member} will not handle it",
-  "取消排队请求": "Cancel queued request"
+  "取消排队请求": "Cancel queued request",
+  "账号额度：{value1}": "Account usage limits: {value1}",
+  "已用 {used}，窗口大小未知": "{used} used, window size unknown",
+  "上下文已用 {used}，窗口大小未知": "Context {used} used, window size unknown",
+  "{value1} 分钟前读取": "Read {value1} minutes ago",
+  "{value1} 小时前读取": "Read {value1} hours ago",
+  "额度已用尽 · {time} 恢复": "Limit used up · back at {time}",
+  "额度已用尽": "Limit used up",
+  "额度紧张": "Limit running low"
 }

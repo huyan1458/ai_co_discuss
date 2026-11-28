@@ -84,20 +84,28 @@ async function copy(text) {
 </script>
 
 <template>
-  <p v-if="!ways_on.length" class="panel-note entry-state"><UIcon name="i-lucide-info" />{{ t('登录入口没有开启自建中转或 Cloudflare 隧道，其他设备打不开') }}</p>
-  <p v-else-if="!entry.running" class="panel-note is-amber entry-state"><UIcon name="i-lucide-triangle-alert" /><span>{{ t('登录入口未运行，使用者暂时无法登录') }}</span>
-    <button type="button" class="panel-button is-primary is-small" :disabled="Boolean(entry_busy)" @click="entry_act('start', {}, t('登录入口已启动'))">{{ t('启动') }}</button></p>
+  <div class="panel-note entry-state" :class="{ 'is-amber': ways_on.length && !entry.running }">
+    <UIcon :name="ways_on.length && !entry.running ? 'i-lucide-triangle-alert' : 'i-lucide-info'" />
+    <div class="entry-status-copy">
+      <span :class="{ invisible: ways_on.length }">{{ t('登录入口没有开启自建中转或 Cloudflare 隧道，其他设备打不开') }}</span>
+      <span :class="{ invisible: !ways_on.length || entry.running }">{{ t('登录入口未运行，使用者暂时无法登录') }}</span>
+      <span :class="{ invisible: !ways_on.length || !entry.running }">{{ t('登录入口已启动') }}</span>
+    </div>
+    <button type="button" class="panel-button is-primary is-small" :disabled="!ways_on.length || entry.running || Boolean(entry_busy)"
+      :title="!ways_on.length ? t('登录入口没有开启自建中转或 Cloudflare 隧道，其他设备打不开') : entry.running ? t('登录入口已启动') : undefined"
+      @click="entry_act('start', {}, t('登录入口已启动'))">{{ t('启动') }}</button>
+  </div>
   <div class="entry-grid">
     <EntryWayCard icon="i-lucide-monitor" :title="t('本地网页')" :tag="t('不支持')" unsupported :note="t('托管账号只能从自建中转或 Cloudflare 隧道登录。')" />
     <EntryWayCard v-for="item in WAYS" :key="item.key" :icon="item.icon" :title="item.label" :active="enabled(item.key)" :tag="way_state(item.key).label" :tone="way_state(item.key).tag"
       :mark="item.key === default_way ? t('默认') : ''" :note="item.key === 'relay' && prepared('relay') ? t('使用本机的自建中转。') : item.note" :value="detail(item.key)?.text || ''" :hint="detail(item.key)?.state?.hint || ''">
-      <template v-if="prepared(item.key)" #corner>
-        <USwitch :model-value="enabled(item.key)" :loading="entry_busy === item.key" :disabled="Boolean(entry_busy)" :aria-label="t('开启或关闭{value1}', { value1: item.label })" @update:model-value="(on) => toggle_way(item, on)" />
+      <template #corner>
+        <USwitch :model-value="enabled(item.key)" :loading="entry_busy === item.key" :disabled="!prepared(item.key) || Boolean(entry_busy)" :title="!prepared(item.key) ? way_state(item.key).label : undefined" :aria-label="t('开启或关闭{value1}', { value1: item.label })" @update:model-value="(on) => toggle_way(item, on)" />
       </template>
       <template #actions>
         <!-- Binding is the computer's (shared with the administrator's entry); the same dialog as "本机 → 自建中转" opens here. -->
-        <button v-if="item.key === 'relay' && !prepared('relay')" type="button" class="panel-button is-outline is-small" @click="binding++"><UIcon name="i-lucide-link" />{{ t('绑定') }}</button>
-        <button v-if="enabled(item.key) && detail(item.key)?.address" type="button" class="panel-button is-outline is-small" @click="copy(detail(item.key).address)"><UIcon name="i-lucide-copy" />{{ t('复制地址') }}</button>
+        <button v-if="item.key === 'relay'" type="button" class="panel-button is-outline is-small" :disabled="prepared('relay')" :title="prepared('relay') ? t('已绑定') : undefined" @click="binding++"><UIcon name="i-lucide-link" />{{ t('绑定') }}</button>
+        <button type="button" class="panel-button is-outline is-small" :disabled="!enabled(item.key) || !detail(item.key)?.address" :title="!enabled(item.key) || !detail(item.key)?.address ? way_state(item.key).label : undefined" @click="copy(detail(item.key).address)"><UIcon name="i-lucide-copy" />{{ t('复制地址') }}</button>
         <RelayReconnect v-if="item.key === 'tunnel'" tunnel :disabled="entry_busy === 'tunnel'" />
         <button v-if="item.key === 'tunnel'" type="button" class="panel-button is-small" :class="prepared(item.key) ? 'is-plain' : 'is-outline'" @click="configure"><UIcon :name="prepared(item.key) ? 'i-lucide-pencil' : 'i-lucide-settings-2'" />{{ prepared(item.key) ? t('修改') : t('配置') }}</button>
       </template>
@@ -106,4 +114,10 @@ async function copy(text) {
   <TunnelDialog v-model:open="tunnel_open" />
 
 </template>
+
+<style scoped>
+.entry-status-copy { display: grid; flex: 1; min-width: 0; }
+.entry-status-copy > span { grid-area: 1 / 1; }
+.entry-state > button { flex-shrink: 0; }
+</style>
 

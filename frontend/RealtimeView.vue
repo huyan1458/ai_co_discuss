@@ -311,13 +311,13 @@ onBeforeUnmount(pause);
         <!-- Icon and words on a wide page, the icon alone on a phone (#8456); the words stay as the title and label. -->
         <button type="button" class="rt-tool" :title="t('缩小')" :aria-label="t('缩小')" :disabled="!zoomed" @click="zoom_by(1 / BUTTON_ZOOM)"><UIcon name="i-lucide-zoom-out" /></button>
         <button type="button" class="rt-tool" :title="t('放大')" :aria-label="t('放大')" @click="zoom_by(BUTTON_ZOOM)"><UIcon name="i-lucide-zoom-in" /></button>
-        <button v-if="zoomed" type="button" class="rt-tool is-text" :title="t('还原 {value1}×', { value1: zoom_level })" :aria-label="t('还原 {value1}×', { value1: zoom_level })" @click="reset_zoom">
+        <button type="button" class="rt-tool is-text rt-reset" :disabled="!zoomed" :title="zoomed ? t('还原 {value1}×', { value1: zoom_level }) : t('当前未缩放')" :aria-label="t('还原 {value1}×', { value1: zoom_level })" @click="reset_zoom">
           <UIcon name="i-lucide-locate-fixed" /><span class="rt-label">{{ t('还原 {value1}×', { value1: zoom_level }) }}</span><span class="rt-short">{{ zoom_level }}×</span></button>
-        <button type="button" class="rt-tool is-text" :title="play_label" :aria-label="play_label" @click="playing ? pause() : play()">
+        <button type="button" class="rt-tool is-text rt-play" :title="play_label" :aria-label="play_label" @click="playing ? pause() : play()">
           <UIcon :name="playing ? 'i-lucide-pause' : 'i-lucide-play'" /><span class="rt-label">{{ play_label }}</span></button>
-        <button v-if="position != null" type="button" class="rt-tool is-text" :class="{ 'is-active': follow_active }" :aria-pressed="follow_active" :title="t('回放时自动缩放并跟着回放线走')" :aria-label="t('跟随')" @click="toggle_follow">
+        <button type="button" class="rt-tool is-text" :disabled="position == null" :class="{ 'is-active': follow_active }" :aria-pressed="follow_active" :title="position == null ? t('请先开始回放') : t('回放时自动缩放并跟着回放线走')" :aria-label="t('跟随')" @click="toggle_follow">
           <UIcon name="i-lucide-crosshair" /><span class="rt-label">{{ t('跟随') }}</span></button>
-        <button v-if="position != null" type="button" class="rt-tool is-text" :title="t('结束回放')" :aria-label="t('结束回放')" @click="stop_replay">
+        <button type="button" class="rt-tool is-text" :disabled="position == null" :title="position == null ? t('请先开始回放') : t('结束回放')" :aria-label="t('结束回放')" @click="stop_replay">
           <UIcon name="i-lucide-square" /><span class="rt-label">{{ t('结束回放') }}</span></button>
       </span>
     </div>
@@ -343,9 +343,9 @@ onBeforeUnmount(pause);
         </template>
       </div>
     </div>
-    <div v-if="position != null" class="rt-player">
-      <span class="rt-player-time">{{ when(position) }}</span>
-      <input type="range" class="rt-scrub" min="0" :max="span" step="1000" :value="position - model.start" :aria-label="t('回放位置')" @input="scrub" />
+    <div class="rt-player" :class="{ 'is-idle': position == null }" :inert="position == null">
+      <span class="rt-player-time" :title="when(position ?? model.start)">{{ when(position ?? model.start) }}</span>
+      <input type="range" class="rt-scrub" min="0" :max="span" step="1000" :value="position == null ? 0 : position - model.start" :aria-label="t('回放位置')" @input="scrub" />
       <span class="rt-speeds" role="group" :aria-label="t('回放速度')">
         <button v-for="value in REPLAY_SPEEDS" :key="value" type="button" class="rt-tool is-text" :class="{ 'is-active': speed === value }" @click="speed = value">{{ speed_label(value) }}</button>
       </span>
@@ -364,16 +364,23 @@ onBeforeUnmount(pause);
 .rt-short { display: none; }
 /* A phone-wide view keeps the icons; the zoom keeps its number so the level still shows. */
 @container (max-width: 640px) { .rt-label { display: none; } .rt-short { display: inline; } }
-.rt-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-bottom: 10px; }
+.rt-bar { display: grid; gap: 6px 12px; margin-bottom: 10px; }
 .rt-summary, .rt-key { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; color: var(--wf-muted); font-size: 12px; }
 .rt-summary { color: var(--wf-muted); font-variant-numeric: tabular-nums; }
 .rt-summary .is-lead { color: var(--wf-text); font-weight: 600; }
 /* On a narrow screen whole buttons wrap to the next line; their words never break (#8454). */
 .rt-tools, .rt-speeds { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.rt-tools { justify-content: flex-end; }
 .rt-tool { display: inline-flex; align-items: center; justify-content: center; gap: 4px; flex: none; white-space: nowrap; min-width: 24px; height: 22px; padding: 0 6px; border: 1px solid var(--wf-border); border-radius: 5px; background: transparent; color: var(--wf-text);
   font: inherit; font-size: 12px; cursor: pointer; font-variant-numeric: tabular-nums; }
 .rt-tool:hover:not(:disabled) { border-color: var(--wf-accent); }
 .rt-tool:disabled { opacity: 0.4; cursor: default; }
+.rt-reset { inline-size: 14ch; }
+.rt-play { inline-size: 20ch; }
+@container (max-width: 640px) {
+  .rt-reset { inline-size: 10ch; }
+  .rt-play { inline-size: auto; }
+}
 .rt-tool.is-active { border-color: var(--wf-accent); color: var(--wf-accent); }
 .rt-key { margin-top: 10px; align-items: center; }
 .rt-key span { display: inline-flex; align-items: center; gap: 5px; }
@@ -402,7 +409,8 @@ onBeforeUnmount(pause);
 .rt-task:hover { border-color: var(--wf-accent); }
 .rt-task span { display: block; overflow: hidden; text-overflow: ellipsis; }
 .rt-player { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; font-size: 12px; }
-.rt-player-time { min-width: 90px; color: var(--wf-text); font-variant-numeric: tabular-nums; }
+.rt-player.is-idle { visibility: hidden; }
+.rt-player-time { flex: 0 0 16ch; color: var(--wf-text); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rt-scrub { flex: 1; min-width: 120px; accent-color: var(--wf-accent); cursor: pointer; }
 .rt-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--tone, var(--wf-plain)); }
 .rt-swatch.is-idle { background: repeating-linear-gradient(135deg, transparent 0 2px, color-mix(in oklab, var(--ui-text) 30%, transparent) 2px 3px); }

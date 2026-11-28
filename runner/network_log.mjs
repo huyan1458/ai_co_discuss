@@ -112,9 +112,21 @@ export function http_result(home, site, operation, elapsed_ms, error, log) {
 }
 
 const receipts = new Map();
-const FAILURE_SEGMENTS = new Map([['offline', 'link'], ['relay_timeout', 'unknown'], ['browser_timeout', 'unknown'], ['fetch_failed', 'unknown'], ['site_http', 'site']]);
+const FAILURE_SEGMENTS = new Map([['machine_unregistered', 'link'], ['offline', 'link'], ['relay_timeout', 'unknown'], ['browser_timeout', 'unknown'], ['fetch_failed', 'unknown'], ['site_http', 'site']]);
 
-/** Join the computer observation and the signed device feedback without double counting retries of that feedback. */
+// Negative evidence requires coverage from the start of the exact socket and a complete retained set.
+const connections = new Map();
+/** Track frame IDs from socket registration, before dispatch or authentication. */
+export function track_relay_connection(home, site, connection) {
+  const state = { ids: new Set(), complete: true };
+  connections.set(JSON.stringify([home, site, connection]), state);
+  if (connections.size > 32) connections.delete(connections.keys().next().value);
+  return id => {
+    state.ids.add(id);
+    if (state.ids.size > 4096) { state.complete = false; state.ids.delete(state.ids.values().next().value); }
+  };
+}
+
 function receipt(home, site, device, id, at) {
   const key = JSON.stringify([home, site, device, id]);
   if (!receipts.has(key)) {
@@ -153,7 +165,13 @@ export function device_feedback(home, site, device, reports) {
       const valid_ms = value => Number.isInteger(value) && value >= 0 && value <= 600000 ? value : null;
       const elapsed_ms = valid_ms(report.total), worker_ms = valid_ms(report.worker);
       if (elapsed_ms !== null && worker_ms !== null) observe(home, site, { request: false, at: seen.at, mobile_ms: elapsed_ms - worker_ms });
-      network_event(home, site, 'relay_failed', { operation, segment: FAILURE_SEGMENTS.get(report.failure), code: report.failure,
+      const connection = report.failure === 'relay_timeout' && typeof report.connection === 'string'
+        && connections.get(JSON.stringify([home, site, report.connection]));
+      if (report.failure === 'relay_timeout' && report.relay_close === 'unresponsive')
+        network_event(home, site, 'relay_unresponsive', { source: 'device_request', segment: 'link', close_code: 4003 }, at);
+      const unreceived = connection?.complete && !connection.ids.has(report.id);
+      const event = unreceived ? 'relay_timeout_unreceived' : report.failure === 'machine_unregistered' ? 'machine_unregistered' : 'relay_failed';
+      network_event(home, site, event, { source: 'device_request', operation, segment: unreceived ? 'link' : FAILURE_SEGMENTS.get(report.failure), code: report.failure,
         elapsed_ms, worker_ms, rpc_ms: valid_ms(report.rpc), http_status: Number.isInteger(report.status) && report.status >= 400 && report.status <= 599 ? report.status : null }, at);
     } else {
       const seen = receipts.get(key);

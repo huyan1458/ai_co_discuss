@@ -108,6 +108,19 @@ export function transfer(name, kind, run, options = {}) {
   });
 }
 
+/**
+ * Do `work` for each item one after another; one failing does not stop or undo the others.
+ * Returns the failures as `[{ item, error }]`; `progress` is told the share done after each item.
+ */
+export async function run_each(items, work, progress = () => {}) {
+  const failed = [];
+  for (const [index, item] of items.entries()) {
+    try { await work(item); } catch (error) { failed.push({ item, error }); }
+    progress((index + 1) / items.length);
+  }
+  return failed;
+}
+
 /** Clear finished, cancelled and interrupted rows (failed ones stay until tried again or cleared one by one). */
 export function clear_finished() {
   transfers.rows = transfers.rows.filter((row) => row.status === "queued" || row.status === "running" || row.status === "failed");

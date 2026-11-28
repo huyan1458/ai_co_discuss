@@ -409,10 +409,6 @@ const summary = computed(() => {
 <template>
   <div class="create-discussion">
     <form id="create-discussion-form" v-keep-reading class="create-scroll dialog-form" @submit.prevent="submit">
-      <div v-if="needs_connection" class="create-connect" role="status">
-        <p><UIcon name="i-lucide-plug-zap" />{{ t("本机服务未连接，连接后才能唤醒本机 AI。在运行 AI 的电脑上执行下面的命令并完成网页授权，连上后自动检测。") }}</p>
-        <div class="create-connect-command"><code>{{ view.launch.connect_command }}</code><UButton icon="i-lucide-copy" :aria-label="t('复制本机连接命令')" variant="ghost" color="neutral" @click="act('copy', view.launch.connect_command)" /></div>
-      </div>
       <section class="create-section">
         <h3><span>1</span>{{ t("这次做什么") }}</h3>
         <UFormField class="create-title-field" :label="t('话题名称')" required><UInput :model-value="value('title')" :maxlength="80" required autofocus size="lg" :placeholder="t('这次要一起做什么？')" class="w-full" @update:model-value="write('title', $event)" /></UFormField>
@@ -488,6 +484,10 @@ const summary = computed(() => {
       </details>
     </form>
     <footer class="create-footer">
+      <div v-if="needs_connection" class="create-connect" role="status">
+        <p><UIcon name="i-lucide-plug-zap" />{{ t("本机服务未连接，连接后才能唤醒本机 AI。在运行 AI 的电脑上执行下面的命令并完成网页授权，连上后自动检测。") }}</p>
+        <div class="create-connect-command"><code>{{ view.launch.connect_command }}</code><UButton icon="i-lucide-copy" :aria-label="t('复制本机连接命令')" variant="ghost" color="neutral" @click="act('copy', view.launch.connect_command)" /></div>
+      </div>
       <div class="create-footer-row">
         <span class="create-summary" :class="{ 'is-blocked': blocker }" :title="blocker || summary" role="status"><UIcon v-if="blocker" name="i-lucide-circle-alert" />{{ blocker ? t("还差：{reason}", { reason: blocker }) : selected_names.length || driven ? summary : "" }}</span>
         <UButton :label="t('取消')" color="neutral" variant="ghost" @click="emit('cancel')" />
@@ -552,7 +552,7 @@ const summary = computed(() => {
 .create-footer { flex-shrink: 0; padding: 14px 26px 16px; border-top: 1px solid var(--ui-border-muted); }
 .create-footer-row { display: flex; align-items: center; gap: 8px; }
 .create-summary { flex: 1; min-width: 0; overflow: hidden; color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
-.create-connect { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb, #e0b44a 45%, transparent); border-radius: 8px; background: color-mix(in srgb, #e0b44a 8%, transparent); font-size: 12px; }
+.create-connect { display: flex; flex-direction: column; gap: 10px; max-height: 30dvh; overflow: auto; margin-bottom: 8px; padding: 12px; border: 1px solid color-mix(in srgb, #e0b44a 45%, transparent); border-radius: 8px; background: color-mix(in srgb, #e0b44a 8%, transparent); font-size: 12px; }
 .create-connect p { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--ui-text-toned); line-height: 1.6; }
 .create-connect p > [class*="icon"] { flex-shrink: 0; width: 14px; height: 14px; margin-top: 3px; color: light-dark(#9a6700, #e0b44a); }
 .create-connect-command { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; background: var(--ui-bg-elevated); }

@@ -93,6 +93,7 @@ API 密钥、技能、工作流、系统提示词（目标同上）
 
 结果以 JSON 输出。--data 指定管理员服务目录（默认 ~/.codiscuss）。
 `) + t('  room-links A    查看父子房间') + '\n' + t('  storage [clean | repair [logs --confirm]]  查看用量、安全清理或深度修理日志') + '\n'
+  + t('  quota-usage [--weeks N]  查看订阅利用情况') + '\n'
   + t('  storage attachment-limit [MiB]  查看或调整单个附件上限') + '\n'
   + t('  storage analyze  让 MOSS 盘点共议占用') + '\n'
   + t('  storage object [--account NAME] [[--url URL --key-file FILE|- | --use-admin] [--retention-days N] [--quota-mib N] [--threshold-mib N] | --test | --clear]  管理云空间') + '\n'
@@ -494,7 +495,7 @@ function cloud_share_command(call, path, action, days) {
 export async function admin_cli(args, { client = panel_client, print = text => process.stdout.write(text) } = {}) {
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: {
     subdomains: { type: 'boolean' }, data: { type: 'string' }, help: { type: 'boolean', short: 'h' }, 'no-isolate': { type: 'boolean' }, 'no-start': { type: 'boolean' },
-    since: { type: 'string' }, until: { type: 'string' }, by: { type: 'string' },
+    since: { type: 'string' }, until: { type: 'string' }, by: { type: 'string' }, weeks: { type: 'string' },
     'project-data-root': { type: 'string' },
     confirm: { type: 'boolean' },
     url: { type: 'string' }, 'key-file': { type: 'string' }, 'use-admin': { type: 'boolean' }, 'retention-days': { type: 'string' }, test: { type: 'boolean' }, clear: { type: 'boolean' }, account: { type: 'string' },
@@ -521,6 +522,11 @@ export async function admin_cli(args, { client = panel_client, print = text => p
     return result;
   }
   const call = await with_elevation(await client(data), data);
+  if (command === 'quota-usage' && !rest.length) {
+    const result = await call('site/quota-usage', { weeks: values.weeks });
+    print(`${JSON.stringify(result, null, 2)}\n`);
+    return result;
+  }
   if (command === 'room-links') {
     if (rest.length !== 1 || rest.some(id => !/^[a-zA-Z0-9_-]{1,64}$/.test(id))) throw new Error(HELP);
     const result = await call(`room-links/${command}`, { room: rest[0] });

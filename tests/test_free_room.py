@@ -149,6 +149,54 @@ class SingleMemberTests(FreeRoomTests):
         shown = self.request(self.path)[1]["free"]["executions"][0]
         self.assertEqual((shown["model"], shown["effort"]), ("claude-sonnet-5-5", "high"))
 
+    def test_quota_usage_tracks_changed_windows_and_retains_early_reset_demand(self):
+        """The admin gets a grouped summary with distinct cap hits and reset usage restored."""
+        now = int(time.time())
+        week = free_room.QUOTA_WEEK_SECONDS
+        end = now - 100
+        quota = {"plan": "promax", "reset_credits": {"available": 3},
+                 "windows": [{"kind": "seven_day", "minutes": 10080, "group": "Gemini Models", "used": 1, "resets_at": end},
+                             {"kind": "five_hour", "minutes": 300, "group": "Gemini Models", "used": 1, "resets_at": end}]}
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.row_factory = sqlite3.Row
+            for read_at in (now - 200, now - 190):
+                free_room.save_account_quota(connection, "Antigravity", quota, read_at)
+            quota["windows"][0]["used"] = 0.6
+            free_room.save_account_quota(connection, "Antigravity", quota, now - 180)
+            count = connection.execute("SELECT COUNT(*) FROM account_quota_history").fetchone()[0]
+            self.assertEqual(count, 3)
+            connection.commit()
+        self.assertEqual(self.request("/api/quota-usage")[0], 403)
+        self.assertEqual(self.request("/api/quota-usage", token=self.owner)[0], 403)
+        self.server.local_site = True
+        status, result = self.request("/api/quota-usage?weeks=8")
+        self.assertEqual(status, 200, result)
+        bridge_key = "a" * 64
+        site = "https://paired.example"
+        connections = Path(self.directory.name) / "connections.json"
+        connections.write_text(json.dumps({"sites": {site: {"bridge_hash": hashlib.sha256(bridge_key.encode()).hexdigest()}}}),
+                               encoding="utf-8")
+        self.server.connections_file = connections
+        headers = {"X-CoDiscuss-Bridge": bridge_key, "X-CoDiscuss-Bridge-Site": site}
+        with urlopen(Request(self.base + "/api/quota-usage", headers=headers), timeout=10) as response:
+            self.assertEqual(json.loads(response.read())["accounts"], result["accounts"])
+        self.assertEqual(result["accounts"], [{
+            "account": "Antigravity", "group": "Gemini Models", "label": "Antigravity · Gemini Models",
+            "plan": "promax", "reset_credits": {"available": 3}, "verdict": "insufficient", "weeks_needed": 2,
+            "weeks": [{"start": end - week, "end": end, "used": 1.6, "resets": 1, "capped": True, "complete": True}],
+            "five_hour": {"hits": 1, "wait_seconds": 100},
+        }])
+
+    def test_quota_usage_verdicts(self):
+        """Recommendations depend on finished weeks, short caps, and early resets."""
+        cases = [(2, 0.4, 0, 0, ("insufficient", 1)), (3, 0.4, 0, 0, ("downgrade", 0)),
+                 (3, 0.4, 0, 1, ("fit", 0)), (4, 0.5, 0, 0, ("fit", 0)),
+                 (4, 1, 0, 0, ("upgrade", 0)), (3, 0.4, 1, 0, ("upgrade", 0))]
+        for count, used, resets, hits, expected in cases:
+            with self.subTest(expected=expected, hits=hits):
+                weeks = [{"complete": True, "used": used, "capped": used == 1, "resets": resets} for _ in range(count)]
+                self.assertEqual(free_room.quota_verdict(weeks, hits), expected)
+
     def test_usage_reports_show_member_context_and_shared_account_quota(self):
         """Only the owner reports; a member's context follows its execution, the account quota is shared by every room."""
         self.say("写一段", to=["Claude"])

@@ -62,7 +62,7 @@ const time = (value) => value ? new Date(value).toLocaleString([], { month: "num
 </template>
 
 <style scoped>
-.guest-list { box-sizing: border-box; height: 100%; padding: 12px max(16px, calc((100% - 960px) / 2)); overflow-y: auto; }
+.guest-list { box-sizing: border-box; height: 100%; padding: 12px max(16px, calc((100% - 960px) / 2)); overflow-y: auto; scrollbar-gutter: stable both-edges; }
 .guest-list h2 { margin: 0 0 10px; color: var(--ui-text-highlighted); font-size: 15px; }
 .guest-list ul { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .guest-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 8px 10px; border: 1px solid var(--ui-border-muted); border-radius: 6px; }

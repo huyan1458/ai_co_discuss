@@ -6,9 +6,15 @@ import { call } from './api.js';
 const props = defineProps({ disabled: Boolean, tunnel: Boolean });
 const { state, reload, notify } = inject('panel');
 const busy = ref(false);
+const idle_label = computed(() => props.tunnel ? t('重新连接') : t('立即重连'));
 
 const reason = computed(() => {
-  if (!props.tunnel) return '';
+  if (!props.tunnel) {
+    if (!state.value.online_site) return t('请先绑定线上网站');
+    if (!state.value.service?.pid) return t('请先启动本机服务');
+    const health = state.value.relay_health;
+    return health?.state === 'connected' && !health.http_failures ? t('中转已连接') : '';
+  }
   const entry = state.value.entry;
   if (!entry?.tunnel) return t('请先配置 Cloudflare 隧道');
   if (!entry.tunnel_enabled) return t('请先开启 Cloudflare 隧道');
@@ -32,7 +38,19 @@ async function reconnect() {
 </script>
 
 <template>
-  <button v-if="tunnel || (state.online_site && state.service?.pid && (state.relay_health?.state !== 'connected' || state.relay_health.http_failures))"
-    type="button" class="panel-button is-outline is-small" :disabled="disabled || busy || Boolean(reason)" @click="reconnect">{{ busy ? t('正在重新连接…') : tunnel ? t('重新连接') : t('立即重连') }}</button>
-  <small v-if="reason" class="panel-sub">{{ reason }}</small>
+  <span class="relay-reconnect" :title="reason || undefined">
+    <button type="button" class="panel-button is-outline is-small" :disabled="disabled || busy || Boolean(reason)"
+      :aria-description="reason || undefined" @click="reconnect">
+      <span aria-hidden="true">{{ t('正在重新连接…') }}</span>
+      <span aria-hidden="true">{{ idle_label }}</span>
+      <span>{{ busy ? t('正在重新连接…') : idle_label }}</span>
+    </button>
+  </span>
 </template>
+
+<style scoped>
+.relay-reconnect { display: inline-flex; flex: none; }
+.relay-reconnect > button { display: inline-grid; text-align: center; white-space: nowrap; }
+.relay-reconnect > button > span { grid-area: 1 / 1; }
+.relay-reconnect > button > span[aria-hidden] { visibility: hidden; }
+</style>

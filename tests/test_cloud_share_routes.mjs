@@ -44,9 +44,9 @@ test('online and hosted public links reach only the selected local file endpoint
   const gateway = await listening(t, create_gateway({ data }));
   writeFileSync(join(data, 'local-settings.json'), JSON.stringify({ port: owner }));
   save_entry_settings(data, { port: gateway, relay_enabled: false });
-  const socket = { deserializeAttachment: () => ({ role: 'machine' }),
+  const socket = { readyState: 1, deserializeAttachment: () => ({ role: 'machine', connection: 'current' }),
     send: value => receive(JSON.parse(value)) };
-  const relay = new MachineRelay({ getWebSockets: role => role === 'machine' ? [socket] : [] });
+  const relay = new MachineRelay({ storage: { kv: { get: () => 'current' } }, getWebSockets: role => role === 'machine' ? [socket] : [] });
   const receive = entry_proxy(data, { send: frame => relay.entry_frame(frame) });
   const env = { RELAY: {
     idFromName: id => id,

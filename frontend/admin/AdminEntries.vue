@@ -27,7 +27,7 @@ async function open_local() {
     <EntryWayCard icon="i-lucide-monitor" :title="t('本地网页')" :active="Boolean(service.url)" :tag="service.url ? t('可用') : t('未运行')" :tone="service.url ? 'is-green' : 'is-gray'"
       :note="t('在这台电脑上打开，不需要账号。')" :value="service.url">
       <template #actions>
-        <button v-if="service.url" type="button" class="panel-button is-outline is-small" @click="open_local"><UIcon name="i-lucide-external-link" />{{ t('打开') }}</button>
+        <button type="button" class="panel-button is-outline is-small" :disabled="!service.url" :title="!service.url ? t('未运行') : undefined" @click="open_local"><UIcon name="i-lucide-external-link" />{{ t('打开') }}</button>
       </template>
     </EntryWayCard>
     <EntryWayCard icon="i-lucide-cloud" :title="t('自建中转')" :active="Boolean(online_site)" :tag="relay.label" :tone="relay.tone"
@@ -35,6 +35,7 @@ async function open_local() {
       :hint="relay.detail">
       <template #actions>
         <a v-if="online_site" class="panel-button is-outline is-small" :href="online_site" target="_blank" rel="noopener"><UIcon name="i-lucide-external-link" />{{ t('打开') }}</a>
+        <button v-else type="button" class="panel-button is-outline is-small" disabled :title="t('未绑定')"><UIcon name="i-lucide-external-link" />{{ t('打开') }}</button>
         <RelayReconnect />
       </template>
     </EntryWayCard>

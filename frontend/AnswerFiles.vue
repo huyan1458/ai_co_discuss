@@ -49,10 +49,17 @@ const lookup_key = computed(() => {
 const message_key = computed(() => JSON.stringify([props.roomId, props.message.id, props.startedAt, candidates.value]));
 const files = ref([]);
 const nearby = ref(false);
+const settled_key = ref("");
 const shown_files = computed(() => {
   const attached = new Set(props.attachments.map((file) => String(file.file_name).toLowerCase()));
   return files.value.filter((file) => !attached.has(file.name.toLowerCase()));
 });
+const awaiting_paths = computed(() => {
+  if (!lookup_key.value || settled_key.value === lookup_key.value || files.value.length) return [];
+  const attached = new Set(props.attachments.map((file) => String(file.file_name).toLowerCase()));
+  return candidates.value.filter((path) => !attached.has(leaf_name(path).toLowerCase()));
+});
+const leaf_name = (path) => path.split(/[/\\]/).at(-1);
 const anchor = ref(null);
 let observer = null;
 
@@ -97,13 +104,16 @@ async function delivered(named_list) {
 // A completed lookup is reused; a failed request must retry on the next visit.
 watch([lookup_key, nearby], async ([key, visible], _, on_cleanup) => {
   const cached = found_files.get(key);
+  settled_key.value = cached ? key : "";
   files.value = cached ?? found_files.get(message_key.value) ?? [];
   if (!key || cached || !visible) return;
   let active = true;
   on_cleanup(() => { active = false; });
   let results;
-  try { results = await delivered(candidates.value); } catch { return; }
+  try { results = await delivered(candidates.value); }
+  catch { if (active) settled_key.value = key; return; }
   if (!active) return;
+  settled_key.value = key;
   files.value = results.filter(Boolean);
   found_files.set(key, files.value);
   found_files.set(message_key.value, files.value);
@@ -157,7 +167,11 @@ onBeforeUnmount(() => observer?.disconnect());
 </script>
 
 <template>
-  <div ref="anchor" class="answer-files">
+  <div ref="anchor" class="answer-files" :aria-busy="awaiting_paths.length > 0">
+    <div v-for="path in awaiting_paths" :key="path" class="attachment-file answer-file answer-file-placeholder" aria-hidden="true">
+      <USkeleton class="size-8 shrink-0" />
+      <USkeleton class="h-4 w-1/2" />
+    </div>
     <div v-for="file in shown_files" :key="`${file.root}/${file.path}`" class="attachment-file answer-file">
       <button type="button" class="attachment-file-main" :title="file.path" :aria-label="t('打开文件 {value1}', { value1: file.name })" @click="open_file(file)">
         <span class="answer-file-icon" v-html="bridge.attachment_file_icon(file.name)"></span>
@@ -187,6 +201,7 @@ onBeforeUnmount(() => observer?.disconnect());
 .answer-files:not(:empty) { margin-top: 10px; }
 .answer-file-icon { display: contents; }
 .answer-file { background: transparent; border-color: color-mix(in srgb, currentColor 14%, transparent); }
+.answer-file-placeholder { gap: 10px; padding: 12px; }
 .answer-file:hover { background: color-mix(in srgb, currentColor 4%, transparent); }
 .answer-file .attachment-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .answer-file-actions { display: flex; flex: none; align-items: center; gap: 2px; }

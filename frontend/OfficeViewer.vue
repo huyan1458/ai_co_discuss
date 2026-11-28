@@ -246,10 +246,17 @@ onBeforeUnmount(() => { version++; detach_pinch?.(); release(); });
   <div ref="root" class="office-viewer">
     <iframe v-if="kind === 'docx'" ref="docx_frame" class="office-viewer-frame" sandbox="allow-same-origin" referrerpolicy="no-referrer" :srcdoc="DOCX_FRAME" :title="t('Word 文档预览')" @load="frame_loaded = true"></iframe>
     <template v-else-if="kind === 'sheet'">
-      <nav v-if="sheets.length > 1" class="office-viewer-sheets" :aria-label="t('工作表')">
-        <button v-for="(item, index) in sheets" :key="item.name" type="button" :aria-pressed="sheet === index" @click="sheet !== index && (state = 'loading', sheet = index)">{{ item.name }}</button>
-      </nav>
-      <p v-if="sheets[sheet]?.cut" class="office-viewer-note">{{ t('只显示前 5000 行；完整内容请下载后查看。表格只显示数值与合并单元格，不含样式与图表。') }}</p>
+      <div class="office-viewer-sheet-bar">
+        <nav class="office-viewer-sheets" :aria-label="t('工作表')">
+          <button v-for="(item, index) in sheets" :key="item.name" type="button" :aria-pressed="sheet === index" @click="sheet !== index && (state = 'loading', sheet = index)">{{ item.name }}</button>
+        </nav>
+        <span class="office-viewer-sheet-info">
+          <UPopover v-if="sheets[sheet]?.cut" :content="{ align: 'end', sideOffset: 4 }">
+            <UButton icon="i-lucide-info" size="xs" variant="ghost" color="neutral" :aria-label="t('只显示前 5000 行；完整内容请下载后查看。表格只显示数值与合并单元格，不含样式与图表。')" />
+            <template #content><p class="office-viewer-note">{{ t('只显示前 5000 行；完整内容请下载后查看。表格只显示数值与合并单元格，不含样式与图表。') }}</p></template>
+          </UPopover>
+        </span>
+      </div>
       <iframe v-if="sheets.length" ref="sheet_frame" :key="sheet" class="office-viewer-frame" sandbox="allow-same-origin" referrerpolicy="no-referrer" :srcdoc="SHEET_STYLE + (sheets[sheet]?.html || '')" :title="t('表格预览')" @load="scale_sheet(); state = 'ready'"></iframe>
     </template>
     <div v-else-if="kind === 'pdf'" ref="pdf_host" class="office-viewer-pages" tabindex="0" :aria-label="t('PDF 页面')"></div>
@@ -272,10 +279,12 @@ onBeforeUnmount(() => { version++; detach_pinch?.(); release(); });
 .office-viewer-cover { position: absolute; inset: 0; z-index: 1; background: var(--ui-bg); }
 .office-viewer-failed { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 24px; color: var(--ui-text-muted); font-size: 13px; }
 .office-viewer-failed p { margin: 0; max-width: 520px; }
-.office-viewer-sheets { display: flex; gap: 4px; padding: 6px 8px; overflow-x: auto; border-bottom: 1px solid var(--ui-border); }
+.office-viewer-sheet-bar { display: flex; flex: 0 0 36px; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--ui-border); }
+.office-viewer-sheets { display: flex; flex: 1; min-width: 0; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.office-viewer-sheet-info { display: flex; flex: 0 0 28px; justify-content: center; }
 .office-viewer-sheets button { flex-shrink: 0; padding: 2px 10px; border-radius: 4px; color: var(--ui-text-muted); font-size: 12px; }
 .office-viewer-sheets button[aria-pressed="true"] { color: var(--ui-text-highlighted); background: var(--ui-bg-accented); }
-.office-viewer-note { margin: 0; padding: 4px 10px; color: var(--ui-text-muted); font-size: 12px; }
+.office-viewer-note { max-width: min(320px, 85vw); margin: 0; padding: 8px 10px; color: var(--ui-text-muted); font-size: 12px; }
 .office-viewer-fade-leave-active { transition: opacity .25s ease; }
 .office-viewer-fade-leave-to { opacity: 0; }
 </style>

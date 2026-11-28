@@ -41,7 +41,7 @@ Room work can run on several lines in parallel. Labels at the top of a card show
   - “Relay, back to the host at the end”: hand work from one member to the next in order, then return the final result to the host.
   - If an assignment also includes background members, it shows “Also in the background: {value1}”.
 - **Rate the host’s assignments.** A host assignment card ends with “Rate dispatch”. Room owners can click 👍 (“Good dispatch”) or 👎 (“Poor dispatch”); clicking it again withdraws the rating. With 👎 you can add “Who should it have gone to” and a reason, or leave both blank. Hosts and members who can read the room can see ratings. Share pages omit them. When you destroy a room on a personal site, rated assignments are kept with nearby messages and final outcomes for later review. Hosted accounts delete these records with the room.
-- **Continuous assignment limit.** A message can let the host continue for up to 10 rounds by default. At the limit, it stops automatically. Select “Continue” in the sidebar to proceed. If the host requests more rounds in advance, the sidebar shows its reason. Select “Approve” to allow the requested continuation.
+- **Continuous assignment limit.** A message can let the host continue for up to 10 rounds by default. At the limit, it stops automatically. Select “Continue” on the right sidebar’s status row, then choose how many rounds to add. If the host requests more rounds in advance, select the current status to see the reason. To grant the request, select “Continue” and choose “Approve.”
 
 ### 3. Manage queued messages
 

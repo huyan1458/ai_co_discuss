@@ -1287,26 +1287,38 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div v-if="!folded_actions" class="project-editor-file-actions">
-          <div v-if="can_scale" class="project-editor-font" role="group" :aria-label="t('字号')">
-            <button type="button" :title="t('缩小字号')" :aria-label="t('缩小字号')" :disabled="font_scale <= FONT_SCALE_MIN" @click="change_font_scale(-1)"><UIcon name="i-lucide-a-arrow-down" /></button>
-            <button type="button" class="project-editor-font-value" :title="t('恢复默认字号')" :aria-label="t('恢复默认字号')" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
-            <button type="button" :title="t('放大字号')" :aria-label="t('放大字号')" :disabled="font_scale >= FONT_SCALE_MAX" @click="change_font_scale(1)"><UIcon name="i-lucide-a-arrow-up" /></button>
+          <div class="project-editor-font" role="group" :aria-label="t('字号')" :title="can_scale ? undefined : t('当前预览方式不支持此操作')">
+            <button type="button" :title="t('缩小字号')" :aria-label="t('缩小字号')" :disabled="!can_scale || font_scale <= FONT_SCALE_MIN" @click="change_font_scale(-1)"><UIcon name="i-lucide-a-arrow-down" /></button>
+            <button type="button" class="project-editor-font-value" :title="t('恢复默认字号')" :aria-label="t('恢复默认字号')" :disabled="!can_scale" @click="change_font_scale(0)">{{ Math.round(font_scale * 100) }}%</button>
+            <button type="button" :title="t('放大字号')" :aria-label="t('放大字号')" :disabled="!can_scale || font_scale >= FONT_SCALE_MAX" @click="change_font_scale(1)"><UIcon name="i-lucide-a-arrow-up" /></button>
           </div>
-          <UButton v-if="tab?.media?.preview" icon="i-lucide-image" color="neutral" variant="ghost" size="sm" :title="t('查看原图')" :aria-label="t('查看原图')" :loading="tab.loading_original" :disabled="tab.loading_original" @click="show_original" />
-          <UButton v-if="document_kind === 'zip'" icon="i-lucide-download" color="neutral" variant="ghost" size="sm" :title="t('下载')" :aria-label="t('下载')" @click="download_current_file" />
-          <UButton v-if="can_edit" icon="i-lucide-pencil" color="neutral" variant="ghost" size="sm" :title="t('编辑')" :aria-label="t('编辑此文件')" :loading="tab.starting_edit" :disabled="tab.starting_edit" @click="start_edit" />
-          <UButton v-if="showing_source" icon="i-lucide-wrap-text" color="neutral" :variant="wrap ? 'soft' : 'ghost'" size="sm" :aria-pressed="wrap"
-            :title="wrap ? t('关闭自动换行') : t('自动换行')" :aria-label="t('自动换行')" @click="wrap = !wrap" />
-          <UButton v-if="can_read" :icon="reader.state.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" color="neutral" variant="ghost" size="sm"
-            :title="reader.state.reading ? t('停止朗读') : t('朗读')" :aria-label="reader.state.reading ? t('停止朗读') : t('从头朗读此文件')" @click="reader.state.reading ? reader.stop() : read_file()" />
-          <UButton v-if="can_open_html" icon="i-lucide-external-link" color="neutral" variant="ghost" size="sm" :title="t('在新标签页打开')" :aria-label="t('在新标签页打开')" @click="open_html_tab" />
-          <div v-if="can_render" class="project-editor-modes" role="group" :aria-label="t('显示方式')">
-            <button type="button" :aria-pressed="!source" :title="t('预览')" @click="source = false"><UIcon name="i-lucide-eye" class="project-mode-icon" /><span>{{ t('预览') }}</span></button>
-            <button type="button" :aria-pressed="source" :title="t('源码')" @click="source = true"><UIcon name="i-lucide-code-xml" class="project-mode-icon" /><span>{{ t('源码') }}</span></button>
+          <span class="project-editor-tool" :title="tab?.media?.preview || document_kind === 'zip' ? undefined : t('当前预览方式不支持此操作')">
+            <UButton v-if="document_kind === 'zip'" icon="i-lucide-download" color="neutral" variant="ghost" size="sm" :title="t('下载')" :aria-label="t('下载')" @click="download_current_file" />
+            <UButton v-else icon="i-lucide-image" color="neutral" variant="ghost" size="sm" :title="t('查看原图')" :aria-label="t('查看原图')" :loading="tab?.loading_original" :disabled="!tab?.media?.preview || tab.loading_original" @click="show_original" />
+          </span>
+          <span class="project-editor-tool" :title="can_edit ? undefined : t('当前预览方式不支持此操作')">
+            <UButton icon="i-lucide-pencil" color="neutral" variant="ghost" size="sm" :title="t('编辑')" :aria-label="t('编辑此文件')" :loading="tab?.starting_edit" :disabled="!can_edit || tab?.starting_edit" @click="start_edit" />
+          </span>
+          <span class="project-editor-tool" :title="showing_source ? undefined : t('当前预览方式不支持此操作')">
+            <UButton icon="i-lucide-wrap-text" color="neutral" :variant="wrap ? 'soft' : 'ghost'" size="sm" :aria-pressed="wrap" :disabled="!showing_source"
+              :title="wrap ? t('关闭自动换行') : t('自动换行')" :aria-label="t('自动换行')" @click="wrap = !wrap" />
+          </span>
+          <span class="project-editor-tool" :title="can_read ? undefined : t('当前预览方式不支持此操作')">
+            <UButton :icon="reader.state.reading ? 'i-lucide-square' : 'i-lucide-volume-2'" color="neutral" variant="ghost" size="sm" :disabled="!can_read"
+              :title="reader.state.reading ? t('停止朗读') : t('朗读')" :aria-label="reader.state.reading ? t('停止朗读') : t('从头朗读此文件')" @click="reader.state.reading ? reader.stop() : read_file()" />
+          </span>
+          <span class="project-editor-tool" :title="can_open_html ? undefined : t('当前预览方式不支持此操作')">
+            <UButton icon="i-lucide-external-link" color="neutral" variant="ghost" size="sm" :disabled="!can_open_html" :title="t('在新标签页打开')" :aria-label="t('在新标签页打开')" @click="open_html_tab" />
+          </span>
+          <div class="project-editor-modes" role="group" :aria-label="t('显示方式')" :title="can_render ? undefined : t('当前预览方式不支持此操作')">
+            <button type="button" :disabled="!can_render" :aria-pressed="!source" :title="t('预览')" @click="source = false"><UIcon name="i-lucide-eye" class="project-mode-icon" /><span>{{ t('预览') }}</span></button>
+            <button type="button" :disabled="!can_render" :aria-pressed="source" :title="t('源码')" @click="source = true"><UIcon name="i-lucide-code-xml" class="project-mode-icon" /><span>{{ t('源码') }}</span></button>
           </div>
         </div>
         <div class="project-editor-window-actions">
-          <UDropdownMenu v-if="folded_actions && file_menu.length" :items="file_menu" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('文件操作')" :title="t('字号、朗读、显示方式')" :loading="tab?.starting_edit || tab?.loading_original" /></UDropdownMenu>
+          <span v-if="folded_actions" class="project-editor-tool" :title="file_menu.length ? undefined : t('当前预览方式不支持此操作')">
+            <UDropdownMenu :items="file_menu" :disabled="!file_menu.length" :content="{ align: 'end', sideOffset: 4 }" :ui="{ content: 'channel-menu' }"><UButton icon="i-lucide-ellipsis" color="neutral" variant="ghost" size="sm" :aria-label="t('文件操作')" :title="t('字号、朗读、显示方式')" :disabled="!file_menu.length" :loading="tab?.starting_edit || tab?.loading_original" /></UDropdownMenu>
+          </span>
           <UButton v-if="can_dock" :icon="docked ? 'i-lucide-picture-in-picture-2' : 'i-lucide-panel-right'" color="neutral" variant="ghost" size="sm" :title="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" :aria-label="docked ? t('切换为悬浮窗口') : t('切换为右侧分屏')" @click="toggle_dock" />
           <UButton :icon="narrow ? 'i-lucide-chevron-down' : 'i-lucide-minus'" color="neutral" variant="ghost" size="sm" :title="t('收起到屏幕边缘（手机上也可下拉收起）')" :aria-label="t('收起预览')" @click="fold" />
           <UButton v-if="!narrow" icon="i-lucide-x" color="neutral" variant="ghost" size="sm" :title="shown_tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" :aria-label="shown_tabs.length > 1 ? t('关闭全部文件') : t('关闭预览')" @click="close_all" />
@@ -1464,6 +1476,7 @@ onBeforeUnmount(() => {
 .project-editor-tab:is(.is-active, :hover, :focus-within) .project-editor-tab-close { opacity: 1; }
 .project-editor-tab-close:hover { background: var(--ui-bg-accented); color: var(--ui-text); }
 .project-editor-file-actions, .project-editor-window-actions { display: flex; align-items: center; gap: 6px; }
+.project-editor-tool { display: inline-flex; flex-shrink: 0; }
 .project-editor-file-actions { grid-area: file; padding-left: 6px; border-left: 1px solid var(--ui-border); }
 .project-editor-file-actions:empty { display: none; }
 .project-editor-window-actions { grid-area: window; padding: 0 6px; }
@@ -1478,6 +1491,7 @@ onBeforeUnmount(() => {
 .project-editor-font button:disabled { opacity: .4; cursor: default; }
 .project-editor-font-value { min-width: 40px !important; }
 .project-editor-modes button:hover { color: var(--ui-text); }
+.project-editor-modes button:disabled { opacity: .45; cursor: default; }
 .project-editor-modes button[aria-pressed="true"] { background: var(--ui-bg); color: var(--ui-text-highlighted); box-shadow: 0 1px 2px #0000003d; }
 .project-editor-breadcrumbs { grid-area: crumbs; display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; min-width: 0; padding: 0 14px; overflow-x: auto; scrollbar-width: none; font-size: 12px; color: var(--ui-text-muted); }
 .project-editor-breadcrumbs > * { flex-shrink: 0; }
@@ -1557,7 +1571,7 @@ onBeforeUnmount(() => {
   .project-editor-head > .project-editor-window-actions { background: transparent; border-bottom: 0; }
   .project-editor-window-actions { gap: 4px; padding: 0 4px; border-left: 0 !important; }
   /* 40px touch targets; the file name is already on its tab, so the breadcrumbs end at its folder. */
-  .project-editor-window-actions > button { justify-content: center; width: 40px; height: 40px; padding: 0; }
+  .project-editor-window-actions > button, .project-editor-window-actions > .project-editor-tool > button { justify-content: center; width: 40px; height: 40px; padding: 0; }
   /* Each folder fills the row's height, so it is a full touch target rather than its text line. */
   .project-editor-breadcrumbs { gap: 0; padding: 0 6px; font-size: 13px; }
   .project-editor-breadcrumbs button { height: 40px; padding: 0 8px; }
@@ -1585,7 +1599,9 @@ onBeforeUnmount(() => {
 @media (min-width: 641px) and (min-height: 501px) and (pointer: coarse) {
   .project-editor-head { grid-template-rows: 44px 30px; }
   .project-editor-head.is-tight { grid-template-rows: 44px 44px; }
-  .project-editor-head :is(.project-editor-file-actions, .project-editor-window-actions) > button { justify-content: center; width: 40px; height: 40px; padding: 0; }
+  .project-editor-head :is(.project-editor-file-actions, .project-editor-window-actions) > :is(button, .project-editor-tool) { justify-content: center; }
+  .project-editor-head :is(.project-editor-file-actions, .project-editor-window-actions) > button,
+  .project-editor-tool > button { width: 40px; height: 40px; padding: 0; }
   .project-editor-modes button { height: 36px; padding: 0 12px; }
   .project-editor-font button { height: 40px; min-width: 36px; }
   .project-editor-tab-close { width: 28px; height: 28px; opacity: 1; }

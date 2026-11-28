@@ -1,0 +1,8 @@
+{
+  "name": "local-relay-hibernation-check",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-14",
+  "workers_dev": false,
+  "durable_objects": { "bindings": [{ "name": "RELAY", "class_name": "RelayCheck" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RelayCheck"] }]
+}

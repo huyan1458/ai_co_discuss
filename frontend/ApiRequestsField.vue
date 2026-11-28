@@ -23,15 +23,13 @@ watch(() => props.modelValue, (value) => { if (value !== UNLIMITED) finite.value
     <span class="limit-field-row">
       <span v-if="title" class="limit-field-title">{{ title }}</span>
       <span class="limit-field-controls">
-        <template v-if="modelValue !== UNLIMITED">
-          <NumberStepper :model-value="modelValue" :max="MAX_API_MAX_REQUESTS" :step="REQUESTS_STEP" :label="t('API 成员每次执行的模型请求上限')" :disabled="disabled"
-            @update:model-value="emit('update:modelValue', $event)" />
-          <span>{{ t('次') }}</span>
-        </template>
+        <NumberStepper :model-value="modelValue === UNLIMITED ? finite : modelValue" :max="MAX_API_MAX_REQUESTS" :step="REQUESTS_STEP" :label="t('API 成员每次执行的模型请求上限')" :disabled="disabled || modelValue === UNLIMITED" :title="modelValue === UNLIMITED ? t('已设为不限') : undefined"
+          @update:model-value="emit('update:modelValue', $event)" />
+        <span>{{ t('次') }}</span>
         <UCheckbox :model-value="modelValue === UNLIMITED" :disabled="disabled" :label="t('不限')" :aria-label="t('API 请求次数不限')" :ui="{ root: 'items-center' }" @update:model-value="emit('update:modelValue', $event ? UNLIMITED : finite)" />
       </span>
     </span>
-    <small class="limit-field-help">{{ t('API 成员每次执行最多调用模型几次，读写文件、读房间各算一次；快到上限会先提交已完成的部分。') }}<template v-if="modelValue === UNLIMITED">{{ t('不限时会持续产生费用，只能手动停止。') }}</template></small>
+    <small class="limit-field-help">{{ t('API 成员每次执行最多调用模型几次，读写文件、读房间各算一次；快到上限会先提交已完成的部分。') }}<span :class="{ invisible: modelValue !== UNLIMITED }">{{ t('不限时会持续产生费用，只能手动停止。') }}</span></small>
   </span>
 </template>
 

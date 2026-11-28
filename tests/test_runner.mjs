@@ -124,12 +124,18 @@ test('Codex reads account limits over stdio without opening a conversation', asy
     const request = JSON.parse(chunk);
     calls.push(request.method);
     if (request.id === undefined) return;
-    const result = request.id === 0 ? {} : { rateLimits: { secondary: { windowDurationMins: 10080, usedPercent: 82, resetsAt: 5000 } } };
+    const result = request.id === 0 ? {} : {
+      rateLimits: { planType: 'promax', secondary: { windowDurationMins: 10080, usedPercent: 82, resetsAt: 5000 } },
+      rateLimitResetCredits: { availableCount: 3, credits: [{ status: 'available' }] },
+    };
     queueMicrotask(() => child.stdout.write(JSON.stringify({ id: request.id, result }) + '\n'));
   });
-  const quota = await adapter_of('codex_cli').quota({}, { spawn_process: () => child });
+  const { account_quota } = await import('../runner/adapters/index.mjs');
+  const quota = await account_quota({ adapter: 'codex_cli' }, { spawn_process: () => child });
+  assert.equal(quota.plan, 'promax');
+  assert.deepEqual(quota.reset_credits, { available: 3 });
   assert.deepEqual(calls, ['initialize', 'initialized', 'account/rateLimits/read']);
-  assert.deepEqual(quota.windows, [{ kind: 'seven_day', minutes: 10080, used: 0.82, resets_at: 5000 }]);
+  assert.deepEqual(quota.windows, [{ kind: 'seven_day', minutes: 10080, used: 0.82, resets_at: 5000, group: '', models: [] }]);
 });
 
 const codex_test_home = mkdtempSync(join(tmpdir(), 'codex-home-'));

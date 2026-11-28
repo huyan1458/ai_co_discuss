@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import timers from 'node:timers/promises';
 import { gzipSync } from 'node:zlib';
 
-import { network_event, network_code, relay_outcome, device_feedback, http_result } from './network_log.mjs';
+import { network_event, network_code, relay_outcome, device_feedback, http_result, track_relay_connection } from './network_log.mjs';
 import { accept_timing, remember_timing } from './relay_timing.mjs';
 import { atomic_json } from './files.mjs';
 import { network_failure, reconnect_reader } from './relay_health.mjs';
@@ -26,6 +26,7 @@ import { site_fetch } from './entry_client.mjs';
 import { entry_settings } from '../gateway/gateway.mjs';
 import { LOCAL_CLOUD_SHARE } from '../backend/cloud_share_routes.mjs';
 
+const APP_PROBE_MS = 180_000;
 const RELAY_PROTOCOL = 'codiscuss-relay';
 const BRIDGE_TOKEN_BYTES = 32;
 const RETRY_MIN_MS = 2000;
@@ -47,7 +48,7 @@ const RESPONSE_MAX_BYTES = 700 * 1024;
 // The website closes the whole connection on a frame over 1 MiB, failing every request on it; a larger answer is
 // replaced by an error so only that request fails.
 const FRAME_MAX_BYTES = 1024 * 1024 - 1024;
-const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions|sites|analytics)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
+const ROOM_API_PATH = /^\/api\/(rooms|folders|revisions|sites|analytics|quota-usage)(\/[A-Za-z0-9_.~-]+)*(\?[A-Za-z0-9_.~%=&,:+-]*)?$/;
 const PROJECT_CLOUD = 'project-files/cloud';
 const PROJECT_CLOUD_STATUS = /^project-files\/cloud\/[a-f0-9]{32}$/;
 const PROJECT_CLOUD_WRITES = new Map([['project-cloud', PROJECT_CLOUD],
@@ -494,9 +495,10 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
     health?.attempt(site, link.id);
     const url = `${site.replace(/^http/, 'ws')}/api/machines/${encodeURIComponent(link.id)}/relay`;
     const attempt_at = Date.now();
+    let reconnect_immediately = false;
     const closed = new Promise(resolve => {
       let socket;
-      try { socket = new WebSocket(url, [RELAY_PROTOCOL, `m.${link.token}`]); }
+      try { socket = new WebSocket(url, [RELAY_PROTOCOL, `m.${link.token}`, 'codiscuss-probe-v1']); }
       catch (error) {
         const code = network_code(error);
         network_event(home, site, 'connect_failed', { initiator: 'local', reason: 'open_failed', code, close_code: null, duration_ms: Date.now() - attempt_at });
@@ -538,6 +540,7 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
         }
         resolve(pong_seen);
       };
+      let arrivals, probe_seq = 0, outstanding_probe = null, last_probe = 0;
       let opened_at, opened = false, awaiting_pong = false, pong_seen = false, backlogged = false;
       let last_pong = 0, probe_started = 0, last_ping = null, missed_pings = 0, previous_buffer = 0, buffer_progress = 0;
       socket.addEventListener('open', () => {
@@ -584,7 +587,24 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
           // Do not add more pings behind the same large response; waking from sleep gets one fresh probe.
           if (buffered > ENTRY_BUFFER_HIGH && awaiting_pong && !delayed) return;
           awaiting_pong = true;
-          try { socket.send('ping'); }
+          try {
+            if (arrivals) {
+              if (delayed) { outstanding_probe = null; last_probe = now - APP_PROBE_MS; }
+              if (outstanding_probe !== null && !draining && now - last_probe >= PING_MS) {
+                reconnect_immediately = true;
+                network_event(home, site, 'relay_probe_timeout', { segment: 'link', elapsed_ms: now - last_probe });
+                finish(opened, { kind: 'timeout', close_reason: 'probe timeout', code: 4004, initiator: 'local' });
+                socket.close(4004, 'probe timeout');
+                return;
+              }
+              if (!draining && outstanding_probe === null && now - last_probe >= APP_PROBE_MS) {
+                outstanding_probe = ++probe_seq;
+                last_probe = now;
+                socket.send(JSON.stringify({ type: 'probe', seq: outstanding_probe }));
+              }
+            }
+            socket.send(arrivals ? 'link_ping' : 'ping');
+          }
           catch (error) {
             finish(opened, { kind: network_failure(error), transport: network_code(error), initiator: 'local' });
             try { socket.close(); } catch { /* Already closing. */ }
@@ -598,6 +618,11 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
       socket.addEventListener('message', async event => {
         if (finished || signal.aborted) return;
         const received_at = performance.now();
+        if (event.data === 'machine_unregistered') {
+          registration_lost();
+          try { socket.close(4002, 'machine unregistered'); } catch { /* Already closing. */ }
+          return;
+        }
         if (event.data === 'pong') {
           if (!awaiting_pong) return;
           last_pong = Date.now();
@@ -612,6 +637,12 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
         if (typeof event.data !== 'string') return;
         let frame;
         try { frame = JSON.parse(event.data); } catch { return; }
+        if (frame.type === 'probe-ready' && !arrivals && typeof frame.connection === 'string') {
+          arrivals = track_relay_connection(home, site, frame.connection);
+          last_probe = Date.now() - APP_PROBE_MS;
+          return;
+        }
+        if (frame.type === 'probe-reply' && frame.seq === outstanding_probe) { outstanding_probe = null; return; }
         if (typeof frame.type === 'string' && frame.type.startsWith('entry')) return entry(frame);
         if (frame.type !== 'request' || typeof frame.id !== 'string' || !frame.envelope) return;
         // Disconnecting or re-pairing the website ends this connection at once, not at its next reconnect.
@@ -621,6 +652,7 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
           finish(opened, { kind: 'unpaired', code: 1000, initiator: 'local' });
           return socket.close(1000, 'unpaired');
         }
+        arrivals?.(frame.id);
         const received = Date.now();
         const timing = { id: frame.id, received_at };
         health?.request(site, link.id);
@@ -651,10 +683,23 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
         }
         finally { if (timing.route) log_relay_read(home, site, timing, kind.status, timing.buffered_bytes ?? (socket.bufferedAmount || 0)); }
       });
+      function registration_lost() {
+        reconnect_immediately = true;
+        network_event(home, site, 'machine_unregistered', { source: 'heartbeat', segment: 'link' });
+        finish(opened, { kind: 'closed', close_reason: 'machine unregistered', code: 4002, initiator: 'peer' });
+      }
       let socket_failure;
       socket.addEventListener('close', event => {
+        if (event.code === 4002 && event.reason === 'machine unregistered' && !finished && !signal.aborted) {
+          registration_lost();
+          return;
+        }
+        if (event.code === 4003 && event.reason === 'unresponsive' && !finished && !signal.aborted) {
+          reconnect_immediately = true;
+          network_event(home, site, 'relay_unresponsive', { source: 'relay', segment: 'link', close_code: 4003 });
+        }
         const clean = event.wasClean && event.code !== 1006;
-        const reason = ['replaced', 'relay region changed', 'stalled', 'stopping', 'unpaired'].includes(event.reason) ? event.reason : 'closed';
+        const reason = ['replaced', 'relay region changed', 'machine unregistered', 'unresponsive', 'stalled', 'stopping', 'unpaired'].includes(event.reason) ? event.reason : 'closed';
         finish(opened, { kind: socket_failure ? socket_failure.kind : 'closed', close_reason: reason, transport: socket_failure?.code,
           code: event.code, initiator: !socket_failure && clean ? 'peer' : 'unknown' });
       });
@@ -674,6 +719,7 @@ async function hold_channel(home, site, { connected, log, signal, health, watch 
     // A website without the relay refuses the upgrade every time; back off fully so it is only asked now and then.
     retry_since = Date.now();
     if (confirmed) retries = 0;
+    if (reconnect_immediately && !retries) continue;
     delay = confirmed ? RETRY_MIN_MS : Math.min(delay * 2, RETRY_MAX_MS);
     await timers.setTimeout(delay, undefined, { signal }).catch(() => {});
   }

@@ -43,7 +43,8 @@
  *     `seven_day` or `other`, `minutes` the window length (0 unknown), `used` the fraction used (0..1), `resets_at` Unix
  *     seconds (0 unknown), `group` the software's own name for the models sharing it ('' when one group), `models` the
  *     model ID prefixes in that group (empty when it applies to every model);
- *     `balance` `{amount, currency}` (strings) for a prepaid model API;
+ *     `balance` `{amount, currency}` (strings) for a prepaid model API, `plan` (string) and `reset_credits`
+ *     `{available}` (integer) when the software reports them;
  *   - optional `skills(profile, options)` lists installed skills `{id, label, description, prompt}` without a model turn;
  *   - optional `chat(config, binding, task, spawn_process, user_home)` for a private chat turn whose software a usual
  *     delivery cannot follow (an App, an open window, the model API): same result as `deliver`, and it reports through
@@ -352,7 +353,10 @@ function checked_quota(quota) {
   })).sort((left, right) => (left.minutes || Infinity) - (right.minutes || Infinity)).slice(0, 8);
   const balance = quota.balance && typeof quota.balance.amount === 'string'
     ? { amount: quota.balance.amount.slice(0, 32), currency: String(quota.balance.currency || '').slice(0, 8) } : null;
-  return windows.length || balance ? { windows, ...(balance && { balance }) } : null;
+  const plan = typeof quota.plan === 'string' ? quota.plan.trim().slice(0, 64) : '';
+  const available = quota.reset_credits?.available;
+  const reset_credits = Number.isInteger(available) && available >= 0 && available <= 10_000 ? { available } : null;
+  return windows.length || balance ? { windows, ...(balance && { balance }), ...(plan && { plan }), ...(reset_credits && { reset_credits }) } : null;
 }
 
 /** Public model metadata only; failures leave the original-software default available to the UI. */

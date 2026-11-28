@@ -1123,23 +1123,23 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
       <!-- Top left: one group per job, side by side (zoom sits top right). -->
       <Panel position="top-left" class="workflow-canvas-tools">
         <div class="workflow-canvas-toolbar">
-          <UTooltip v-if="!readonly" :text="t('添加节点：成员、主持人、用户、条件分支或子工作流（也可从圆点拖线到空白处）')"><UButton icon="i-lucide-plus" :label="icons_only ? undefined : t('添加节点')" :aria-label="t('添加节点')" :size="tool_size" color="neutral" variant="ghost" @click="open_add" /></UTooltip>
-          <slot v-if="foldable" name="actions" :icons-only="icons_only" :arrange="readonly ? undefined : arrange" />
+          <UTooltip :text="readonly ? t('只读项目目录，不可修改') : t('添加节点：成员、主持人、用户、条件分支或子工作流（也可从圆点拖线到空白处）')"><span class="workflow-canvas-tool"><UButton icon="i-lucide-plus" :label="icons_only ? undefined : t('添加节点')" :aria-label="t('添加节点')" :size="tool_size" color="neutral" variant="ghost" :disabled="readonly" @click="open_add" /></span></UTooltip>
+          <slot v-if="foldable" name="actions" :icons-only="icons_only" :folded="true" :arrange="readonly ? undefined : arrange" />
         </div>
         <template v-if="!foldable">
-          <div v-if="!readonly" class="workflow-canvas-toolbar">
-            <UTooltip :text="t('撤销 (Ctrl+Z)')"><UButton v-if="!readonly" icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" /></UTooltip>
-            <UTooltip :text="t('重做 (Ctrl+Shift+Z)')"><UButton v-if="!readonly" icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" /></UTooltip>
-            <UTooltip :text="t('自动整理')"><UButton icon="i-lucide-wand-sparkles" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('自动整理')" @click="arrange" /></UTooltip>
+          <div class="workflow-canvas-toolbar" :title="readonly ? t('只读项目目录，不可修改') : undefined">
+            <UTooltip :text="t('撤销 (Ctrl+Z)')"><UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="readonly || !past.length" @click="undo" /></UTooltip>
+            <UTooltip :text="t('重做 (Ctrl+Shift+Z)')"><UButton icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="readonly || !future.length" @click="redo" /></UTooltip>
+            <UTooltip :text="t('自动整理')"><UButton icon="i-lucide-wand-sparkles" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('自动整理')" :disabled="readonly" @click="arrange" /></UTooltip>
           </div>
           <div v-if="$slots.actions" class="workflow-canvas-toolbar"><slot name="actions" :icons-only="icons_only" /></div>
         </template>
       </Panel>
       <!-- Top right: zoom, with the minimap below it on a desktop; a phone puts undo / redo here and folds zoom into one button. -->
       <Panel position="top-right" class="workflow-canvas-corner">
-        <div v-if="foldable" class="workflow-canvas-toolbar">
-          <UButton v-if="!readonly" icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="!past.length" @click="undo" />
-          <UButton v-if="!readonly" icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="!future.length" @click="redo" />
+        <div v-if="foldable" class="workflow-canvas-toolbar" :title="readonly ? t('只读项目目录，不可修改') : undefined">
+          <UButton icon="i-lucide-undo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('撤销')" :disabled="readonly || !past.length" @click="undo" />
+          <UButton icon="i-lucide-redo-2" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('重做')" :disabled="readonly || !future.length" @click="redo" />
           <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 6 }" :ui="{ content: 'workflow-canvas-zoom' }">
             <UButton icon="i-lucide-scan-search" :size="tool_size" color="neutral" variant="ghost" :aria-label="t('缩放画布')" />
             <template #content>
@@ -1208,6 +1208,7 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
 .workflow-icon { flex-shrink: 0; width: 14px; height: 14px; }
 /* The groups stand apart in a row, and wrap when the canvas is too narrow for them. */
 .workflow-canvas-tools { display: flex; flex-wrap: wrap; gap: 8px; max-width: calc(100% - 30px); }
+.workflow-canvas-tool { display: inline-flex; }
 .workflow-canvas-toolbar { display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--ui-border-muted); border-radius: 10px;
   background: var(--ui-bg-elevated); box-shadow: 0 6px 20px rgb(0 0 0 / .14); }
 /* Zoom above the minimap; the minimap is its own Vue Flow panel, laid out here in the column instead. */
@@ -1221,7 +1222,8 @@ function drag_stop() { dragging = false; layered.value = true; stored.value = li
   background: var(--ui-bg-elevated); color: var(--ui-text-muted); font-size: 12px; white-space: nowrap; }
 /* Phone: the hint stands on the main line / sub-workflow switch (38px tall), stops short of the tools in the bottom-right
    corner, and wraps as running text when it has to. */
-.workflow-canvas.is-phone .workflow-canvas-tools { flex-direction: column; align-items: flex-start; max-width: none; }
+.workflow-canvas.is-phone .workflow-canvas-tools { flex-direction: column; align-items: flex-start; max-width: calc(100% - 144px); }
+.workflow-canvas.is-phone .workflow-canvas-tools > .workflow-canvas-toolbar { flex-wrap: wrap; max-width: 100%; }
 .workflow-canvas.is-layered :deep(.vue-flow__transformationpane) { will-change: transform; }
 
 /* Start: a small card, its drag bar on top like every node's. */

@@ -1025,10 +1025,7 @@ const selected_notes = computed(() => {
 <template>
   <section ref="section_element" class="merged-section execution-timeline" :aria-label="t('执行时间线')">
     <div v-if="!compact" class="page-heading"><div><h2>{{ t('执行时间线') }}</h2><p>{{ t('每次执行的时间花在哪、谁在等谁；点名字看详情。') }}</p></div></div>
-    <div v-if="reading && !timeline" class="grid gap-4 py-4" role="status" :aria-label="t('正在读取执行时间线')"><div v-for="row in 6" :key="row" class="flex items-center gap-6"><USkeleton class="h-5 w-24 shrink-0" /><USkeleton class="h-6" :class="row % 2 ? 'w-2/3' : 'w-1/3'" /></div></div>
-    <p v-else-if="error" role="alert" class="fine-print wf-error">{{ error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" :loading="reading" @click="load(true)" /></p>
-    <p v-if="timeline && !timeline.executions.length" class="fine-print">{{ t('还没有执行记录。') }}</p>
-    <div v-if="timeline?.executions.length" ref="wf_element" class="wf" :class="{ 'is-compact': compact }"
+    <div ref="wf_element" class="wf" :class="{ 'is-compact': compact }"
       :style="{ '--wf-depth-px': `${compact ? COMPACT_DEPTH_PX : DEPTH_PX}px`, '--wf-controls-h': replaying && !overview ? `${controls_height}px` : '0px' }">
       <header class="wf-head">
         <div class="wf-head-line">
@@ -1036,30 +1033,28 @@ const selected_notes = computed(() => {
             <button v-for="mode in VIEW_MODES" :key="mode.value" type="button" role="tab" :aria-selected="view_mode === mode.value"
               :class="{ 'is-active': view_mode === mode.value }" @click="view_mode = mode.value">{{ mode.label }}</button>
           </span>
-          <span v-if="!overview && replaying" class="wf-state is-replay">{{ t('回放中 · {value1}', { value1: clock(view_time) }) }}</span>
-          <span v-else-if="!overview" class="wf-state" :class="{ 'is-live': digest.running.length }">{{ digest.running.length ? t('{value1} 个进行中', { value1: digest.running.length }) : t('均已结束') }}</span>
+          <span class="wf-state" :class="{ 'is-replay': !overview && replaying, 'is-live': !overview && !replaying && digest.running.length, 'is-placeholder': overview || !timeline?.executions.length }">{{ replaying ? t('回放中 · {value1}', { value1: clock(view_time) }) : digest.running.length ? t('{value1} 个进行中', { value1: digest.running.length }) : t('均已结束') }}</span>
         </div>
-        <p v-if="view_mode === 'tasks' && headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
       </header>
 
-      <div v-if="!overview" ref="controls_element" class="wf-controls" :class="{ 'is-sticky': replaying }">
+      <div ref="controls_element" class="wf-controls" :class="{ 'is-sticky': replaying && !overview }">
         <div class="wf-toolbar">
-          <p v-if="headline.length" class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
-          <span class="wf-tools">
+          <p class="wf-headline"><span v-for="(part, index) in headline" :key="index" :class="part.tone && `is-${part.tone}`">{{ part.text }}</span></p>
+          <span class="wf-tools" :inert="overview || !timeline?.executions.length" :class="{ 'is-inactive': overview || !timeline?.executions.length }" :title="overview ? VIEW_MODES[0].label : !timeline?.executions.length ? t('正在读取执行时间线') : undefined">
             <!-- Icon and words on a wide page, the icon alone on a phone (matching RealtimeView); the words stay as title and label. -->
             <button type="button" class="wf-tool" :title="t('缩小')" :aria-label="t('缩小')" :disabled="!zoomed" @click="zoom_by(1 / BUTTON_ZOOM)"><UIcon name="i-lucide-zoom-out" /></button>
             <button type="button" class="wf-tool" :title="t('放大')" :aria-label="t('放大')" @click="zoom_by(BUTTON_ZOOM)"><UIcon name="i-lucide-zoom-in" /></button>
-            <button v-if="zoomed" type="button" class="wf-tool is-text" :title="t('还原 {value1}×', { value1: zoom_level })" :aria-label="t('还原 {value1}×', { value1: zoom_level })" @click="reset_zoom">
+            <button type="button" class="wf-tool is-text" :disabled="!zoomed" :title="t('还原 {value1}×', { value1: zoom_level })" :aria-label="t('还原 {value1}×', { value1: zoom_level })" @click="reset_zoom">
               <UIcon name="i-lucide-locate-fixed" /><span class="wf-tool-label">{{ t('还原 {value1}×', { value1: zoom_level }) }}</span><span class="wf-tool-short">{{ zoom_level }}×</span></button>
-            <button v-if="can_replay || replaying" type="button" class="wf-tool is-text" :title="play_label" :aria-label="play_label" @click="replay.playing ? pause() : play()">
+            <button type="button" class="wf-tool is-text" :disabled="!can_replay && !replaying" :title="play_label" :aria-label="play_label" @click="replay.playing ? pause() : play()">
               <UIcon :name="replay.playing ? 'i-lucide-pause' : 'i-lucide-play'" /><span class="wf-tool-label">{{ play_label }}</span></button>
-            <button v-if="replaying" type="button" class="wf-tool is-text" :class="{ 'is-active': follow_active }" :aria-pressed="follow_active" :title="t('回放时自动缩放并跟着回放线走')" :aria-label="t('跟随')" @click="toggle_follow">
+            <button type="button" class="wf-tool is-text" :disabled="!replaying" :class="{ 'is-active': replaying && follow_active }" :aria-pressed="replaying && follow_active" :title="t('回放时自动缩放并跟着回放线走')" :aria-label="t('跟随')" @click="toggle_follow">
               <UIcon name="i-lucide-crosshair" /><span class="wf-tool-label">{{ t('跟随') }}</span></button>
-            <button v-if="replaying" type="button" class="wf-tool is-text" :title="t('结束回放')" :aria-label="t('结束回放')" @click="stop_replay">
+            <button type="button" class="wf-tool is-text" :disabled="!replaying" :title="t('结束回放')" :aria-label="t('结束回放')" @click="stop_replay">
               <UIcon name="i-lucide-square" /><span class="wf-tool-label">{{ t('结束回放') }}</span></button>
           </span>
         </div>
-        <div v-if="replaying" class="wf-player">
+        <div class="wf-player" :class="{ 'is-placeholder': !replaying || overview }" :inert="!replaying || overview">
           <span class="wf-player-time">{{ player_time }}</span>
           <input type="range" class="wf-scrub" min="0" :max="bounds.duration" step="100" :value="replay.position" :aria-label="t('回放位置')" @input="scrub" />
           <span class="wf-speeds" role="group" :aria-label="t('回放速度')">
@@ -1068,6 +1063,10 @@ const selected_notes = computed(() => {
         </div>
       </div>
 
+      <div v-if="reading && !timeline" class="grid gap-4 p-4" role="status" :aria-label="t('正在读取执行时间线')"><div v-for="row in 6" :key="row" class="flex items-center gap-6"><USkeleton class="h-5 w-24 shrink-0" /><USkeleton class="h-6" :class="row % 2 ? 'w-2/3' : 'w-1/3'" /></div></div>
+      <p v-else-if="error" role="alert" class="fine-print wf-error">{{ error }}<UButton :label="t('重试')" color="neutral" variant="link" size="xs" :loading="reading" @click="load(true)" /></p>
+      <p v-else-if="timeline && !timeline.executions.length" class="fine-print">{{ t('还没有执行记录。') }}</p>
+      <template v-if="timeline?.executions.length">
       <section v-if="attention.length" class="wf-now" :aria-label="t('需要关注')">
         <button v-for="row in attention" :key="row.key" type="button" class="wf-now-card"
           :class="[`is-${row.item.state}`, { 'is-stalled': row.item.state === 'running' && card_status(row).tone === 'warn' }]" @click="focus_row(row)">
@@ -1256,6 +1255,7 @@ const selected_notes = computed(() => {
         <span v-if="member_tone.size > 1">{{ t('颜色区分成员，深浅区分模型与工具') }}</span>
         <span v-if="axis.folds.length && !compact"><i class="wf-swatch is-fold" aria-hidden="true"></i>{{ t('已折叠 {value1} 段超过 {value2} 分钟的空闲', { value1: axis.folds.length, value2: FOLD_GAP_MS / 60000 }) }}</span>
       </footer>
+      </template>
     </div>
   </section>
 </template>
@@ -1335,8 +1335,14 @@ const selected_notes = computed(() => {
 /* Zoom and replay bar: same position, button style and narrow-screen icon-only behaviour as RealtimeView. */
 .wf-controls { display: grid; gap: 8px; padding: 12px 16px 10px; border-bottom: 1px solid var(--wf-border); background: var(--wf-surface); }
 .wf-controls.is-sticky { position: sticky; top: var(--wf-sticky-top, 0px); z-index: 4; }
-.wf-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.wf-toolbar { display: grid; gap: 6px; }
+.wf-toolbar .wf-headline { height: 40px; overflow: auto; scrollbar-gutter: stable; }
+.wf-toolbar .wf-tools.is-inactive { opacity: .4; }
+.wf-state.is-placeholder, .wf-player.is-placeholder { visibility: hidden; }
+.wf-head-line .wf-state { width: 11em; overflow: hidden; white-space: nowrap; }
 .wf-tools, .wf-speeds { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.wf-tools { display: grid; grid-template-columns: 2rem 2rem repeat(4, minmax(0, 6.5rem)); justify-content: start; }
+.wf-tools .wf-tool-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .wf-tool-short { display: none; }
 .wf-tool { display: inline-flex; align-items: center; justify-content: center; gap: 4px; flex: none; white-space: nowrap; min-width: 24px; height: 22px; padding: 0 6px; border: 1px solid var(--wf-border); border-radius: 5px; background: transparent; color: var(--wf-text);
   font: inherit; font-size: 12px; cursor: pointer; font-variant-numeric: tabular-nums; }
@@ -1628,7 +1634,10 @@ const selected_notes = computed(() => {
   .wf-end { padding-right: 10px; }
 }
 /* A phone-wide view keeps the icons; the zoom keeps its number so the level still shows (matching RealtimeView). */
-@container wf (max-width: 640px) { .wf-tool-label { display: none; } .wf-tool-short { display: inline; } }
+@container wf (max-width: 640px) {
+  .wf-tool-label { display: none; } .wf-tool-short { display: inline; }
+  .wf-tools { grid-template-columns: repeat(2, 2.25rem) minmax(3.75rem, 1fr) repeat(3, 2.25rem); }
+}
 /* Phones (decided by the page's own width, in script): the same one axis as on a PC, idle folded, a few clock ticks on
    top, so every bar reads left to right in time and a dispatch steps down. Each execution is two lines: when, who and how
    long, then its bar; running and failed rows add where their time went. A tap opens the row's own detail, at its own

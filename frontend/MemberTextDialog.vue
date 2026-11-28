@@ -59,7 +59,7 @@ function save() {
         <div v-if="source && !readonly" class="member-text-source">
           <UIcon name="i-lucide-bookmark" />
           <p><b>{{ source.tag }}</b>{{ source.text }}</p>
-          <button type="button" @click="draft = source.text">{{ source.action }}</button>
+          <button type="button" :disabled="source.disabled" @click="draft = source.text">{{ source.action }}</button>
         </div>
         <div v-if="caption" class="member-text-caption"><span>{{ caption }}</span><small>{{ hint }}</small></div>
         <UTextarea v-model="draft" :rows="rows" :maxlength="max" autoresize :maxrows="rows * 2" autofocus class="w-full" :aria-label="label" :placeholder="placeholder" :readonly="readonly"
@@ -96,6 +96,7 @@ function save() {
 .member-text-source b { margin-right: 6px; color: var(--ui-text-toned); font-weight: 500; }
 .member-text-source > button { padding: 0 6px; border-radius: 4px; color: var(--channel-accent); font-size: 12px; line-height: 20px; white-space: nowrap; }
 .member-text-source > button:hover { background: var(--ui-bg-accented); }
+.member-text-source > button:disabled { opacity: .5; cursor: default; }
 .member-text-caption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin-top: 4px; margin-bottom: -2px; color: var(--ui-text-muted); font-size: 12px; }
 .member-text-caption > small { color: var(--ui-text-dimmed); font-size: 11px; }
 .member-text-meta { display: flex; justify-content: space-between; gap: 12px; margin-top: -2px; color: var(--ui-text-dimmed); font-size: 11px; }

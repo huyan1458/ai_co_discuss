@@ -987,6 +987,7 @@ export function create_panel({ data, key, port, ops = {}, sessions = new Set() }
       return { region: body.region };
     }
     if (method === 'POST' && section === 'site' && name === 'network') return network_report(data, body);
+    if (method === 'POST' && section === 'site' && name === 'quota-usage') return panel_quota_usage(data, body);
     if (method === 'POST' && section === 'site' && name === 'reconnect') {
       const bound = bound_site(data), service = op.service_overview(data);
       if (!bound) throw panel_error('尚未绑定自建中转');
@@ -1734,6 +1735,17 @@ function panel_url(state) {
 function site_url(data) {
   try { return `http://127.0.0.1:${JSON.parse(readFileSync(join(data, 'local-settings.json'), 'utf8')).port || 8765}/`; }
   catch { return 'http://127.0.0.1:8765/'; }
+}
+
+async function panel_quota_usage(data, { weeks } = {}) {
+  const url = new URL('api/quota-usage', site_url(data));
+  if (weeks !== undefined) url.searchParams.set('weeks', weeks);
+  const key_file = owner_key_file(data);
+  const response = await site_fetch(url.href, { redirect: 'error', signal: AbortSignal.timeout(10_000),
+    headers: { 'X-CoDiscuss-Local': '1' } }, existsSync(key_file) ? { key_file } : undefined);
+  const result = await response.json();
+  if (!response.ok) throw Object.assign(new Error(result.error), { status: response.status, error_text: result.error_text });
+  return result;
 }
 
 /** Request a storage inventory without deletion via this panel owner's local website. */

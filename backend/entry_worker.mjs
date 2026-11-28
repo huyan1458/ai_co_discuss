@@ -84,6 +84,15 @@ async function fetch_cloud_share(request, env, path) {
 
 export default {
   async fetch(request, env) {
+    try { return await forward_entry(request, env); }
+    catch (error) {
+      if (error.status !== 503) throw error;
+      return Response.json({ error: error.message, error_text: error.error_text }, { status: 503, headers: { "Cache-Control": "no-store" } });
+    }
+  }
+};
+
+async function forward_entry(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/cloud-share" || url.pathname.startsWith("/cloud-share/"))
       return fetch_cloud_share(request, env, url.pathname);
@@ -118,5 +127,4 @@ export default {
     const streamed = !["GET", "HEAD"].includes(request.method);
     return relay.fetch("https://relay.internal/", { method: "POST", headers: { "X-Relay-Role": "entry", "X-Entry-Request": meta, "Accept-Language": request.headers.get("Accept-Language") || "zh" },
       ...(streamed ? { body: request.body, duplex: "half" } : {}) });
-  },
-};
+}

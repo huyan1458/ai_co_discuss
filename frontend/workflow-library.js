@@ -122,6 +122,9 @@ function create_library({ view, bridge }) {
   // The page opens on the list of all workflows (#15672); choosing, creating or importing one shows its canvas, and
   // 返回工作流 comes back here.
   const overview = ref(true);
+  // Which workflows the list shows: "all", "global" or `project:<id>` (#15749). 管理 in a room's right column opens the
+  // page on that room's project; the sidebar keeps whatever was last chosen.
+  const overview_filter = ref("all");
   // The workflow on the canvas: a saved one (`saved_id`, `saved_scope`, `saved_project_id`) or a new/imported draft.
   const draft = ref(null), saved_id = ref(""), saved_scope = ref("global"), saved_project_id = ref("");
   const draft_scope = ref("global"), draft_project_id = ref("");
@@ -153,7 +156,21 @@ function create_library({ view, bridge }) {
   const pending_items = ref(new Set());
   let read_version = 0, retry_read = null;
   // Workflows as last read, keyed by composite key: switching shows the copy at once and checks it afterwards.
-  const read_cache = new Map();
+  // `cache_tick` counts its changes, so a card's thumbnail (`flow_of`) is drawn as soon as its workflow has been read.
+  const cache_tick = ref(0);
+  const read_cache = new (class extends Map {
+    set(key, value) { cache_tick.value++; return super.set(key, value); }
+    delete(key) { cache_tick.value++; return super.delete(key); }
+  })();
+  const flows = new Map();
+  /** The canvas of a workflow already read (`{ nodes, edges }`), or null until it is; for the list's thumbnails. */
+  function flow_of(item) {
+    cache_tick.value;
+    const key = workflow_key(item), raw = read_cache.get(key);
+    if (!raw) return null;
+    if (flows.get(key)?.raw !== raw) flows.set(key, { raw, flow: JSON.parse(raw).flow || null });
+    return flows.get(key).flow;
+  }
   // The workflow whose deletion awaits confirmation (its composite key), and the action waiting on "放弃未保存的修改？".
   const deleting = ref(""), leaving = ref(null);
   // Why the open workflow cannot simply be saved: "changed" or "exists".
@@ -351,7 +368,8 @@ function create_library({ view, bridge }) {
   }
 
   /** Open the page on the list of workflows, asking first about unsaved changes on an open canvas. */
-  function open_overview() {
+  function open_overview(filter) {
+    if (typeof filter === "string") overview_filter.value = filter;
     load_all();
     if (page_open.value && overview.value) return;
     guard(() => {
@@ -764,13 +782,13 @@ function create_library({ view, bridge }) {
   return {
     conflict, reload, refresh_list, available,
     workflows, global_workflows, project_workflows, project_roots, writable_roots,
-    page_open, overview, open_overview, back_to_overview, all_list, all_global, all_project, all_roots, draft, saved_id, saved_scope, saved_project_id, saved_key,
+    page_open, overview, overview_filter, open_overview, back_to_overview, flow_of, prefetch, all_list, all_global, all_project, all_roots, draft, saved_id, saved_scope, saved_project_id, saved_key,
     active_scope, active_project_id, active_project_name, scope_label, draft_readonly, set_draft_target,
     canvas_key, scope, subs, current, reserved, open_scope, enter_sub, add_sub, remove_sub,
     commands_allowed, busy, loading, failure, pending_items, retry: () => retry_read?.(),
     deleting, deleting_label, leaving, renaming, rename_text, inputs,
     skill_request, skill_open, set_skill_open, stacked, dirty, add_items,
-    guard, discard, select, close_page, on_zip, on_folder, save,
+    guard, discard, select, create_blank, close_page, on_zip, on_folder, save,
     remove, move_workflow, copy_workflow, item_menu, start_rename, commit_rename,
   };
 }

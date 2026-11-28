@@ -414,10 +414,9 @@ const keep_open = (event) => event.preventDefault();
             <div class="channel-reading-options channel-access-options" role="group" aria-labelledby="channel-host-access-label"><UButton v-for="option in HOST_ACCESS_OPTIONS" :key="option.value" :label="option.label" color="neutral" variant="ghost" :disabled="!view.launch.available" :class="{ chosen: host_access === option.value }" :aria-pressed="host_access === option.value" @click="bridge.write_create_preferences({ host_project_access: option.value })" /></div>
             <p class="fine-print">{{ view.launch.available ? t("新建房间时主持人的项目权限；软件不支持时为只读。") : t("连接本机服务后可设置。") }}</p>
           </section>
-          <section v-if="view.launch.available || view.launch.remote" class="channel-setting-row channel-setting-wide">
+          <section v-if="view.launch.available || view.launch.remote" class="channel-setting-row">
             <h3>{{ t("关联房间互传上限") }}</h3>
-            <ChainRoundsField class="channel-setting-limit" :name="t('关联房间互传条数')" :unit="t('条')" :model-value="view.create_relay_rounds ?? 0" @update:model-value="bridge.write_create_relay_rounds($event)"
-              :help="t('任意两个关联房间之间，两边主持人从你上次发言起最多互传几条消息；对所有关联房间生效。')" />
+            <ChainRoundsField no-help :name="t('关联房间互传条数')" :unit="t('条')" :model-value="view.create_relay_rounds ?? 0" @update:model-value="bridge.write_create_relay_rounds($event)" />
           </section>
         </div>
         <SystemPrompts />

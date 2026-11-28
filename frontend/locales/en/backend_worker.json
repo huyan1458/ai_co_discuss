@@ -3,6 +3,7 @@
   "未隔离的账号正在运行（{value1}），它们以你的身份运行，开启自建中转或 Cloudflare 隧道前请先停止或隔离": "Accounts without isolation are running ({value1}). They run as you; stop or isolate them before turning on the self-hosted relay or the Cloudflare Tunnel.",
   "线上网站地址格式不对，例如 https://xxx.pages.dev": "Invalid online site address, e.g. https://xxx.pages.dev",
   "托管账号入口的自建中转还开着，请先关闭它": "The hosted accounts’ self-hosted relay is still on. Turn it off first",
+  "暂时无法读取电脑的中转地区，请稍后重试": "The computer’s relay region could not be read. Try again shortly.",
   "中转地区无效": "Invalid relay region",
   "请求内容过大": "Request body is too large",
   "请求必须是 JSON 对象": "Request must be a JSON object",

@@ -97,8 +97,8 @@ for (const transport of ['pages', 'direct']) test('guest browser exchanges and p
 });
 
 test('revocation discards a waiting guest poll before forwarding the answer', async () => {
-  const machine = { send() {} };
-  const relay = new MachineRelay({ getWebSockets: role => role === 'machine' ? [machine] : [] });
+  const machine = { readyState: 1, deserializeAttachment: () => ({ role: 'machine', connection: 'current' }), send() {} };
+  const relay = new MachineRelay({ storage: { kv: { get: () => 'current' } }, getWebSockets: role => role === 'machine' ? [machine] : [] });
   const answer = relay.relay({ id: 'waiting', envelope: {}, guest: { id: 'guest', expires_at: Date.now() + 30000 } });
   relay.devices([]);
   assert.deepEqual(await answer, { id: 'waiting', status: 'revoked', reason: 'disconnected' });

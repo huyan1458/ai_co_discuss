@@ -22,10 +22,10 @@ defineProps({
       <span class="way-corner"><slot name="corner" /></span>
     </header>
     <h4 class="way-title">{{ title }}<span v-if="mark" class="way-mark">{{ mark }}</span></h4>
-    <p class="way-note">{{ note }}</p>
-    <code v-if="value" class="way-value" :title="value">{{ value }}</code>
-    <small v-if="hint" class="way-hint">{{ hint }}</small>
-    <footer v-if="$slots.actions" class="way-actions"><slot name="actions" /></footer>
+    <p class="way-note" :title="note">{{ note }}</p>
+    <code class="way-value" :class="{ invisible: !value }" :title="value">{{ value || '—' }}</code>
+    <small class="way-hint" :title="hint">{{ hint }}</small>
+    <footer class="way-actions"><slot name="actions" /></footer>
   </article>
 </template>
 
@@ -48,10 +48,9 @@ defineProps({
 .way.is-unsupported .way-title { color: var(--panel-muted); }
 .way-mark { margin-left: 8px; padding: 1px 7px; border-radius: 6px; background: var(--panel-blue); color: #fff; font-size: 11px; font-weight: 500; vertical-align: 1px; }
 .way-note { margin: 0; color: var(--panel-muted); font-size: 12px; line-height: 1.6; }
+.way-note, .way-hint { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; block-size: 2lh; overflow: hidden; }
 .way.is-unsupported .way-note { color: var(--panel-faint); }
 .way-value { overflow: hidden; margin-top: 10px; padding: 5px 8px; border-radius: 8px; background: var(--panel-tint); color: #374151; font: 12px ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: nowrap; text-overflow: ellipsis; }
 .way-hint { margin-top: 6px; color: var(--panel-amber); font-size: 12px; line-height: 1.5; }
-.way-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: auto; padding-top: 12px; }
-/* One above the other, a card needs only the height of what it says. */
-@media (max-width: 760px) { .way { min-height: 0; } }
+.way-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; min-height: 46px; margin-top: auto; padding-top: 12px; }
 </style>
